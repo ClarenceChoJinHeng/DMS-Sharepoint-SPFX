@@ -1,0 +1,21 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "3a8f2e6d-1b4c-4a7f-8e9d-2c5b7f3a1e6d",
+  "alias": "ApprovalDocumentWebPart",
+  "componentType": "WebPart",
+  "version": "*",
+  "manifestVersion": 2,
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart"],
+  "supportsThemeVariants": true,
+  "preconfiguredEntries": [
+    {
+      "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+      "group": { "default": "Other" },
+      "title": { "default": "Approval Document" },
+      "description": { "default": "Document approval review panel for DMS" },
+      "officeFabricIconFontName": "PageCheckedIn",
+      "properties": {}
+    }
+  ]
+}

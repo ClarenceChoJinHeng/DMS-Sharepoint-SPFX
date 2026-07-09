@@ -1,0 +1,53 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "approval-document-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/approvalDocument/ApprovalDocumentWebPart.js",
+          "manifest": "./src/webparts/approvalDocument/ApprovalDocumentWebPart.manifest.json"
+        }
+      ]
+    },
+    "hide-app-bar-extension": {
+      "components": [
+        {
+          "entrypoint": "./lib/extensions/hideAppBar/HideAppBarApplicationCustomizer.js",
+          "manifest": "./src/extensions/hideAppBar/HideAppBarApplicationCustomizer.manifest.json"
+        }
+      ]
+    },
+    "form-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/form/FormWebPart.js",
+          "manifest": "./src/webparts/form/FormWebPart.manifest.json"
+        }
+      ]
+    },
+    "folder-manager-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/folderManager/FolderManagerWebPart.js",
+          "manifest": "./src/webparts/folderManager/FolderManagerWebPart.manifest.json"
+        }
+      ]
+    },
+    "onboarding-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/onboarding/OnboardingWebPart.js",
+          "manifest": "./src/webparts/onboarding/OnboardingWebPart.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {
+    "FormWebPartStrings": "lib/webparts/form/loc/{locale}.js",
+    "FolderManagerWebPartStrings": "lib/webparts/folderManager/loc/{locale}.js",
+    "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js",
+    "ControlStrings": "node_modules/@pnp/spfx-controls-react/lib/loc/{locale}.js"
+  }
+}

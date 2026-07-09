@@ -1,0 +1,32 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/spfx-serve.schema.json",
+  "port": 4321,
+  "https": true,
+  "initialPage": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/_layouts/15/workbench.aspx",
+  "serveConfigurations": {
+    "default": {
+      "pageUrl": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/_layouts/15/workbench.aspx"
+    },
+    "approvalDocument": {
+      "pageUrl": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/SitePages/ApprovalDocument.aspx?itemId=1"
+    },
+    "hideAppBar": {
+      "pageUrl": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/Staging/Forms/AllItems.aspx",
+      "customActions": {
+        "c1d2e3f4-a5b6-47c8-d9e0-f1a2b3c4d5e6": {
+          "location": "ClientSideExtension.ApplicationCustomizer",
+          "properties": {}
+        }
+      }
+    },
+    "uploadCommand": {
+      "pageUrl": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/Staging/Forms/AllItems.aspx",
+      "customActions": {
+        "c2fd5b59-02ed-4892-87f2-2418fefb4980": {
+          "location": "ClientSideExtension.ListViewCommandSet.CommandBar",
+          "properties": {}
+        }
+      }
+    }
+  }
+}

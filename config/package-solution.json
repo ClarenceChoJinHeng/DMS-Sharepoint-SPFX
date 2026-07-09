@@ -1,0 +1,65 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "sd-gatrie-client-side-solution",
+    "id": "4c93b50e-03c1-4005-a280-add0da86c86f",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "webApiPermissionRequests": [
+      {
+        "resource": "Microsoft Graph",
+        "scope": "User.Read.All"
+      },
+      {
+        "resource": "Microsoft Graph",
+        "scope": "Sites.Read.All"
+      },
+      {
+        "resource": "Microsoft Graph",
+        "scope": "GroupMember.Read.All"
+      },
+      {
+        "resource": "Microsoft Graph",
+        "scope": "Group.Read.All"
+      }
+    ],
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.23.0"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "sd-gatrie description"
+      },
+      "longDescription": {
+        "default": "sd-gatrie description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "sd-gatrie Feature",
+        "description": "The feature that activates elements of the sd-gatrie solution.",
+        "id": "cf0be485-9c38-49ac-8bf3-b874346aa7d8",
+        "version": "1.0.0.0",
+        "componentIds": [
+          "21b82fca-081a-4ce4-bbe6-a83f2fce63a3",
+          "c1d2e3f4-a5b6-47c8-d9e0-f1a2b3c4d5e6",
+          "3a8f2e6d-1b4c-4a7f-8e9d-2c5b7f3a1e6d",
+          "02007994-7d63-4178-9a43-2b6ec96f9e44",
+          "7b3e9c14-2a8d-4f61-9b0e-5d3c8a1f4e72"
+        ]
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/sd-gatrie.sppkg"
+  }
+}

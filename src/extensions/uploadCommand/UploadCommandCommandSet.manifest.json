@@ -1,0 +1,16 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/command-set-extension-manifest.schema.json",
+  "id": "c2fd5b59-02ed-4892-87f2-2418fefb4980",
+  "alias": "UploadCommandCommandSet",
+  "componentType": "Extension",
+  "extensionType": "ListViewCommandSet",
+  "version": "*",
+  "manifestVersion": 2,
+  "requiresCustomScript": false,
+  "items": {
+    "UPLOAD_DOCUMENT": {
+      "title": { "default": "Upload Document" },
+      "type": "command"
+    }
+  }
+}

@@ -1,0 +1,275 @@
+SD Guthrie DMS Modules 
+
+ 
+
+Creation of Dedicated SharePoint Site 
+
+Description 
+Creation of a dedicated SharePoint Online site specifically for the Document Management System (DMS). This site will serve as the centralized repository for document storage, approval workflow, metadata management, and access control. 
+
+Scope Includes 
+
+Site provisioning 
+
+Site-level security groups (Admin, Approver, Uploader, Reader) 
+
+Creation of required document libraries (e.g. Staging & Final) 
+
+Basic site configuration 
+
+Purpose 
+To ensure security isolation, better governance, and easier permission management. 
+
+ 
+
+Configure Metadata Columns 
+
+Description 
+Configuration of mandatory metadata fields in document libraries to ensure structured classification of documents. 
+
+Examples of metadata fields 
+
+Document Type 
+
+Department / Business Unit 
+
+Year / Period 
+
+Document Date 
+
+Project Name 
+
+Confidentiality Level 
+
+Vendor (if applicable) 
+
+Purpose 
+To ensure consistency, improve searchability, and support governance. 
+
+ 
+
+Controlled Vocabulary (Term Store) 
+
+Description 
+Implementation of centralized managed metadata using SharePoint Term Store to enforce controlled dropdown values across document libraries. 
+
+Scope Includes 
+
+Creation of Term Groups 
+
+Creation of Term Sets (e.g., Department, Document Type) 
+
+Setup of dropdown-based selection 
+
+Purpose 
+To eliminate inconsistent data entry and ensure standardized classification. 
+
+ 
+
+Enable Versioning & File Type Restrictions 
+
+Description 
+Configuration of document library settings to: 
+
+Enable version control (optional) 
+
+Restrict unsupported or risky file types (e.g., EXE, BAT) 
+
+Allow only approved document formats 
+
+Purpose 
+To maintain document integrity and enhance security. 
+
+ 
+
+Naming Convention Enforcement 
+
+Description 
+Implementation of standardized file naming structure based on defined business rules. Naming logic may be enforced through metadata. 
+
+Example Format 
+[Department]_[DocType]_[Project]_[Year].pdf 
+
+Purpose 
+To ensure uniform file naming and prevent inconsistencies. 
+
+Staging Upload Mechanism 
+
+Description 
+Configuration of a staging document library where all uploads are first submitted for review before being approved and moved to the final repository. 
+
+Scope Includes 
+
+Separate staging library 
+
+Mandatory metadata capture 
+
+Controlled upload permissions 
+
+Purpose 
+To ensure only approved documents are stored in the final repository. 
+
+ 
+
+Approval Workflow Automation 
+
+Description 
+Development of automated approval workflow using Power Automate to manage document review process. 
+
+Process Flow 
+Uploader → Approver → System action 
+
+If Approved 
+
+Document moved to final library 
+
+Permissions updated (read-only) 
+
+Notification sent 
+
+If Rejected 
+
+Notification sent to uploader 
+
+Document removed or marked rejected 
+
+Purpose 
+To enforce governance and approval compliance. 
+
+ 
+
+ 
+
+ 
+
+ 
+
+Escalation & Reminder Logic 
+
+Description 
+Configuration of automated reminder and escalation mechanism for pending approvals. 
+
+Scope Includes 
+
+Reminder email after defined number of days 
+
+Optional escalation to secondary approver 
+
+Email / Teams notifications 
+
+Purpose 
+To prevent approval delays and improve process efficiency. 
+
+ 
+
+Duplicate & Conflict Detection 
+
+Description 
+Implementation of validation logic to detect: 
+
+Duplicate filenames 
+
+Metadata conflicts 
+
+Existing document records 
+
+System will: 
+
+Prevent overwrite 
+
+Allow versioning only  
+
+Purpose 
+To avoid data duplication and maintain document integrity. 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+Role-Based Access Control (RBAC) 
+
+Description 
+Configuration of role-based permission model to control access and actions. 
+
+Typical Roles 
+
+Admin - Full control 
+
+Approver - Review & approve 
+
+Uploader - Upload to staging 
+
+Reader - Read-only access 
+
+Purpose 
+To ensure security and department-level isolation. 
+
+ 
+
+Audit Logging 
+
+Description 
+Enable audit logging to track user activities such as: 
+
+Uploads 
+
+Approvals 
+
+Edits 
+
+Deletions 
+
+Access events 
+
+Purpose 
+To support compliance, governance, and audit requirements. 
+
+ 
+
+Retention Policy Configuration 
+
+Description 
+Configuration of document retention rules based on organizational policy. 
+
+Scope Includes 
+
+Define retention duration 
+
+Apply retention labels 
+
+Prevent unauthorized deletion (if required) 
+
+Purpose 
+To ensure regulatory compliance and data lifecycle control. 
+
+ 
+
+ Search & Retrieval 
+
+Description 
+Enable advanced document search functionality leveraging SharePoint indexing. 
+
+Features 
+
+Search by document title 
+
+Search within document content (PDF/Office) 
+
+Filter by metadata (Department, Year, Document Type, etc.) 
+
+Pre-configured library views 
+
+Purpose 
+To allow efficient retrieval of documents. 
+
+ 

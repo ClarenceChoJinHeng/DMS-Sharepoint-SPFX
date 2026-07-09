@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "02007994-7d63-4178-9a43-2b6ec96f9e44",
+  "alias": "FolderManagerWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "Folder Admin" },
+    "description": { "default": "Admin tool — toggle between renaming Staging/Documents folders and creating new folders with M365 group permissions" },
+    "officeFabricIconFontName": "FolderOpen",
+    "properties": {}
+  }]
+}
