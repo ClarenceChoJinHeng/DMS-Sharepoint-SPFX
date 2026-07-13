@@ -2,6 +2,7 @@ import * as React from "react";
 import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFormProps } from "./IFormProps";
+import { lookupFolderMapping } from "../../../shared/dmsFolderMap";
 
 /* ----------------------------------------------------------------------------
  * CONFIG — hardcoded values are fallbacks only; live values load from DMS Settings SP list
@@ -46,12 +47,6 @@ const toSpDate = (iso: string): string => {
   return `${Number(m)}/${Number(d)}/${y}`;
 };
 
-// Term Store labels and manually-typed SharePoint folder names can silently
-// diverge by a non-breaking space ( ) or trailing/leading whitespace —
-// visually identical, byte-different, and enough to break an exact path match.
-// Normalize both to plain spaces before building any folder path.
-const normalizePathSegment = (label: string): string =>
-  label.replace(/ /g, " ").trim();
 
 type TermOption     = { id: string; label: string };
 type ToastType = "error" | "success";
@@ -368,6 +363,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }
     }
 
+    // TEMP: simulate SDG-IT-Uploader membership for visual testing — REVERT before shipping
+    groupNames.push("sdg-it-uploader");
+
     const uploaderGroups = groupNames.filter((g) => g.includes("uploader"));
     // Strip all non-alphanumeric chars and lowercase — used on both sides so
     // hyphens, spaces, and casing differences never cause a mismatch.
@@ -451,7 +449,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       setModeParents(parentMap);
 
       const { dept, admin } = await detectDepartment(depts);
-      setIsAdmin(admin);
+      setIsAdmin(false); // TEMP: force non-admin view — REVERT before shipping
       setAllDepts(depts);
       setDetectedDept(dept);
       setDeptLoading(false);
@@ -607,36 +605,40 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     // nested chain from the department down to it (e.g. Sub-1/Sub-2/Sub-3).
     const selectedSubTeam = selectedChoice.term;
 
-    const currentMode = modes.find((m) => m.key === uploadMode);
-    const subfolder = currentMode?.stagingFolder ?? uploadMode;
-    const serverRelative = context.pageContext.web.serverRelativeUrl;
-    // parentMatch modes (e.g. Project) use the term set's parent label ("Account")
-    // as the folder name, not the Department term label ("Account D").
-    let folderDeptLabel = detectedDept.label;
-    if (currentMode?.lookupStyle === "parentMatch") {
-      const parents = modeParents[uploadMode] ?? [];
-      const match = parents.find((p) =>
-        detectedDept.label.toLowerCase().includes(p.label.toLowerCase()),
-      );
-      if (match) folderDeptLabel = match.label;
-    }
-    folderDeptLabel = normalizePathSegment(folderDeptLabel);
-    // Nested subcategory chain becomes real nested folders — e.g. picking
-    // Sub-1 > Sub-2 > Sub-3 uploads into .../Account D/Sub-1/Sub-2/Sub-3/.
-    const subTeamSegments = selectedChoice.path
-      .map((t) => normalizePathSegment(t.label))
-      .join("/");
-    const libraryPath = `${serverRelative}/${settings.stagingLibrary}/${subfolder}/${folderDeptLabel}/${subTeamSegments}`;
-    const fileUrl = `${libraryPath}/${finalName}`;
-
+    // Resolve the destination folder by its stable UniqueId (rename-proof),
+    // NOT by a name-built path. The selected leaf term is the lookup key.
     setBusy(true);
+    setStatus("Locating destination folder…");
+
+    const mapping = await lookupFolderMapping(
+      context.spHttpClient,
+      siteUrl,
+      selectedSubTeam.id,
+    ).catch((e: unknown) => {
+      console.error("Folder map lookup error:", e);
+      return null;
+    });
+    if (!mapping || !mapping.folderUniqueId) {
+      showToast(
+        `This folder hasn't been mapped yet. Ask an administrator to register it in the reconciliation tool. (term ${selectedSubTeam.label})`,
+        "error",
+      );
+      setStatus("");
+      setBusy(false);
+      return;
+    }
+    const folderId = mapping.folderUniqueId;
+    let uploadedServerRelativeUrl = "";
+
     setStatus("Checking for duplicates…");
 
     try {
+      // Duplicate check — GetFolderById targets the folder by UniqueId, so a
+      // rename of that folder does not affect this lookup.
       const existsRes: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)?@f='${encodeURIComponent(fileUrl)}'`,
+        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')?$select=Exists`,
         SPHttpClient.configurations.v1,
-        { headers: { Accept: "application/json" } },
+        { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (existsRes.ok) {
         showToast(
@@ -654,51 +656,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setStatus("Uploading…");
 
     try {
-      // Path passed as an OData parameter alias (@f), not an inline quoted
-      // literal — SharePoint's OData parser is unreliable with very long,
-      // deeply-encoded (many %2F) inline literals but handles the same value
-      // fine via an alias. Matches the pattern already proven in FolderManager.tsx.
-      const folderRes = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeURIComponent(libraryPath)}'`,
-        SPHttpClient.configurations.v1,
-        { headers: { Accept: "application/json" } },
-      );
-      if (!folderRes.ok) {
-        // Surface SharePoint's actual error instead of a generic message —
-        // a 404 means genuinely not found, but 400/413/etc. point at a
-        // request-shape problem (e.g. the encoded URL itself) rather than data.
-        // Read the body ONCE as text — a Response stream can't be read twice,
-        // so trying .json() then .text() as a fallback silently loses the body.
-        let detail = `HTTP ${folderRes.status}`;
-        try {
-          const bodyText = await folderRes.text();
-          try {
-            const errJson = JSON.parse(bodyText);
-            const spMsg =
-              errJson?.error?.message?.value ?? errJson?.error?.message;
-            detail += spMsg
-              ? ` — ${spMsg}`
-              : bodyText
-                ? ` — ${bodyText.slice(0, 300)}`
-                : "";
-          } catch {
-            if (bodyText) detail += ` — ${bodyText.slice(0, 300)}`;
-          }
-        } catch {
-          /* body already consumed or unreadable */
-        }
-        console.error("Folder check failed:", libraryPath, detail);
-        showToast(
-          `This folder hasn't been set up in SharePoint yet (${detail}): "${libraryPath}". Contact your administrator.`,
-          "error",
-        );
-        setStatus("");
-        setBusy(false);
-        return;
-      }
-
+      // Upload directly into the folder resolved by UniqueId. No name-path
+      // existence probe is needed — GetFolderById either resolves (folder
+      // still exists under its current name/location) or 404s (deleted).
       const uploadRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?@f='${encodeURIComponent(libraryPath)}'`,
+        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
         SPHttpClient.configurations.v1,
         { body: file },
       );
@@ -721,16 +683,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         } catch {
           /* body already consumed or unreadable */
         }
-        console.error("Upload failed:", fileUrl, detail);
-        showToast(
-          `Upload failed (${detail}). Please try again or contact your administrator.`,
-          "error",
-        );
+        console.error("Upload failed:", folderId, detail);
+        // A 404 here means the mapped folder no longer exists (deleted after mapping).
+        const hint =
+          uploadRes.status === 404
+            ? " The mapped folder may have been deleted — ask an administrator to re-run the reconciliation tool."
+            : "";
+        showToast(`Upload failed (${detail}).${hint}`, "error");
         return;
       }
+      const uploadJson = await uploadRes.json();
+      uploadedServerRelativeUrl = uploadJson.ServerRelativeUrl;
 
       const itemRes: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeURIComponent(fileUrl)}'`,
+        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeURIComponent(uploadedServerRelativeUrl)}'`,
         SPHttpClient.configurations.v1,
       );
       if (!itemRes.ok) {
@@ -774,6 +740,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         });
       }
 
+      // TEMP DIAGNOSTIC — remove after debugging blank-metadata issue.
+      // Logs the item we're tagging and the EXACT payload we send. If any
+      // FieldValue below is "" the tag will silently blank that column.
+      console.log("[DMS DEBUG] item.Id =", item.Id);
+      console.table(formValues);
+
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
         SPHttpClient.configurations.v1,
@@ -787,6 +759,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         return;
       }
       const metaJson = await metaRes.json();
+      // TEMP DIAGNOSTIC — SharePoint echoes each field's stored value or its
+      // exception here. This is the ground truth for whether tagging worked.
+      console.log("[DMS DEBUG] validateUpdateListItem response:", JSON.stringify(metaJson));
       const fieldError = (metaJson.value ?? []).find(
         (v: { HasException?: boolean }) => v.HasException,
       );
