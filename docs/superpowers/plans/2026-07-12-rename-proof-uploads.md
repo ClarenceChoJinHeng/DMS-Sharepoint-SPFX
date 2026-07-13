@@ -50,38 +50,56 @@ This is a one-time tenant setup step, run in the browser console on the site (sa
 
 Open the site `https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground`, press F12 → Console, paste and run:
 
+Fields are created with `CreateFieldAsXml` (`odata=verbose`) — the plain-object `/fields` form fails with HTTP 400 ("does not contain a property with property names defined by the type"). `Options: 8` (AddFieldInternalNameHint) forces the internal name to equal `Name`, avoiding `_x0020_` encoding. List creation tolerates an "already exists" (HTTP 500) so the script is safe to re-run.
+
 ```js
 (async () => {
   const web = "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground";
+  const list = "DMS Folder Map";
   const digest = await fetch(`${web}/_api/contextinfo`, {
     method: "POST", headers: { Accept: "application/json;odata=nometadata" }
   }).then(r => r.json()).then(d => d.FormDigestValue);
 
-  const post = (url, body) => fetch(`${web}${url}`, {
+  // 1. Create the list (BaseTemplate 100 = generic list). Ignore 500 = already exists.
+  console.log("create list:", await fetch(`${web}/_api/web/lists`, {
     method: "POST",
     headers: {
       "Accept": "application/json;odata=nometadata",
       "Content-Type": "application/json;odata=nometadata",
       "X-RequestDigest": digest
     },
-    body: JSON.stringify(body)
-  }).then(async r => ({ status: r.status, text: await r.text() }));
+    body: JSON.stringify({ Title: list, BaseTemplate: 100, Description: "Term GUID -> folder UniqueId map for rename-proof uploads" })
+  }).then(async r => ({ status: r.status, text: (await r.text()).slice(0, 200) })));
 
-  // 1. Create the list (BaseTemplate 100 = generic list)
-  console.log("create list:", await post("/_api/web/lists",
-    { Title: "DMS Folder Map", BaseTemplate: 100, Description: "Term GUID -> folder UniqueId map for rename-proof uploads" }));
+  // 2. Add fields via CreateFieldAsXml (verbose). Options 8 = AddFieldInternalNameHint.
+  const addField = (schemaXml) => fetch(
+    `${web}/_api/web/lists/getbytitle('${list}')/fields/createfieldasxml`,
+    {
+      method: "POST",
+      headers: {
+        "Accept": "application/json;odata=verbose",
+        "Content-Type": "application/json;odata=verbose",
+        "X-RequestDigest": digest
+      },
+      body: JSON.stringify({
+        parameters: {
+          __metadata: { type: "SP.XmlSchemaFieldCreationInformation" },
+          SchemaXml: schemaXml,
+          Options: 8
+        }
+      })
+    }
+  ).then(async r => ({ status: r.status, text: (await r.text()).slice(0, 200) }));
 
-  const fieldsUrl = "/_api/web/lists/getbytitle('DMS Folder Map')/fields";
-  // 2. Add text fields (internal name == title because no spaces)
   for (const name of ["TermGuid", "FolderUniqueId", "FolderUrl"]) {
-    console.log(`field ${name}:`, await post(fieldsUrl,
-      { Title: name, FieldTypeKind: 2, MaxLength: 255 })); // 2 = Single line of text
+    console.log(`field ${name}:`, await addField(
+      `<Field Type='Text' DisplayName='${name}' Name='${name}' StaticName='${name}' />`
+    ));
   }
-  // 3. Add the Section choice field
-  console.log("field Section:", await post(fieldsUrl, {
-    Title: "Section", FieldTypeKind: 6, // 6 = Choice
-    Choices: { results: ["Departments", "Projects"] }
-  }));
+  console.log("field Section:", await addField(
+    `<Field Type='Choice' DisplayName='Section' Name='Section' StaticName='Section'>` +
+    `<CHOICES><CHOICE>Departments</CHOICE><CHOICE>Projects</CHOICE></CHOICES></Field>`
+  ));
   console.log("DONE — verify in List Settings");
 })();
 ```
