@@ -363,9 +363,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }
     }
 
-    // TEMP: simulate SDG-IT-Uploader membership for visual testing — REVERT before shipping
-    groupNames.push("sdg-it-uploader");
-
     const uploaderGroups = groupNames.filter((g) => g.includes("uploader"));
     // Strip all non-alphanumeric chars and lowercase — used on both sides so
     // hyphens, spaces, and casing differences never cause a mismatch.
@@ -449,7 +446,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       setModeParents(parentMap);
 
       const { dept, admin } = await detectDepartment(depts);
-      setIsAdmin(false); // TEMP: force non-admin view — REVERT before shipping
+      setIsAdmin(admin);
       setAllDepts(depts);
       setDetectedDept(dept);
       setDeptLoading(false);
