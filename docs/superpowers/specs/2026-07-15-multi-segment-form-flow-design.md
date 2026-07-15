@@ -108,9 +108,18 @@ The form does not care who wrote the rows — schema + reader are fixed regardle
 - Then the common tail: Year/Period, Document Date, Document Type, Confidentiality, Vendor, Details.
 
 **On upload:**
-- Resolve the destination folder by **UniqueId** (rename-proof — via the existing DMS Folder Map / reconciliation output).
-- Upload the raw `File`/`Blob` (never FormData).
-- Tag columns: for each level, write its `column` ← selected term **label** (text) **and** `<column>_Tid` ← the term **GUID**; `BusinessSegment` / `BusinessSegment_Tid` ← active segment label + GUID; plus the tail columns. Columns not used by the active mode stay blank.
+- Resolve the destination **Unit** folder by **UniqueId** (rename-proof — via the existing DMS Folder Map / reconciliation output). The Unit level is the deepest *permissioned* folder.
+- **Ensure-create the `{Year}` then `{Document Type}` subfolders** under the resolved Unit folder (create if missing). These inherit the Unit's broken-inheritance permissions automatically, so isolation is preserved with no extra grants.
+- Upload the raw `File`/`Blob` (never FormData) into the `{Year}/{Document Type}` folder.
+- Tag columns: for each level, write its `column` ← selected term **label** (text) **and** `<column>_Tid` ← the term **GUID**; `BusinessSegment` / `BusinessSegment_Tid` ← active segment label + GUID; plus the tail columns (Year/Period, Document Type, etc.). Columns not used by the active mode stay blank.
+
+**Folder path model:**
+```
+Staging / {StagingFolder} / {segment term chain … → Unit} / {Year} / {Document Type} / file
+```
+- `{StagingFolder} … Unit` = pre-created + permissioned (the isolation boundary, resolved by UniqueId).
+- `{Year}` / `{Document Type}` = created on demand per upload, named by value, inherit the Unit's ACL.
+- Year and Document Type are **both** folder levels **and** tagged columns (same value, two purposes).
 
 ---
 
