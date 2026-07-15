@@ -110,3 +110,45 @@ export async function writeFolderMapping(
     throw new Error(`Write mapping failed: HTTP ${res.status} ${body.slice(0, 200)}`);
   }
 }
+
+/** Get a folder's CURRENT server-relative URL from its stable UniqueId. */
+export async function resolveFolderServerUrl(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  uniqueId: string,
+): Promise<string | null> {
+  const res: SPHttpClientResponse = await spHttpClient.get(
+    `${siteUrl}/_api/web/GetFolderById(guid'${uniqueId}')?$select=ServerRelativeUrl`,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  if (!res.ok) return null;
+  const d = await res.json();
+  return d.ServerRelativeUrl ?? null;
+}
+
+/**
+ * Ensure a subfolder `name` exists directly under `parentServerRelativeUrl`.
+ * Idempotent: creates it, or resolves the existing one on 409/exists.
+ * Returns the child's UniqueId + ServerRelativeUrl, or null on failure.
+ */
+export async function ensureFolder(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  parentServerRelativeUrl: string,
+  name: string,
+): Promise<{ uniqueId: string; serverRelativeUrl: string } | null> {
+  const childPath = `${parentServerRelativeUrl}/${name}`;
+  const addRes: SPHttpClientResponse = await spHttpClient.post(
+    `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@u)?@u='${encodeURIComponent(childPath)}'&$select=UniqueId,ServerRelativeUrl`,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  if (addRes.ok) {
+    const d = await addRes.json();
+    return { uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl };
+  }
+  // Already exists (or transient) — try to resolve it by path.
+  const existing = await resolveFolderByPath(spHttpClient, siteUrl, childPath);
+  return existing;
+}
