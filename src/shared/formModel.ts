@@ -69,3 +69,32 @@ export function sanitizeFolderSegment(name: string): string {
   if (!name) return "";
   return name.replace(ILLEGAL_FOLDER_CHARS, "").replace(/\s+/g, " ").trim();
 }
+
+export interface LevelSelection {
+  column: string; // logical key
+  label: string;
+  id: string;
+}
+export interface SpFormValue {
+  FieldName: string;
+  FieldValue: string;
+}
+
+/**
+ * Build validateUpdateListItem field pairs for the chosen levels:
+ * one text pair for the internal-name column, one for its `<name>_Tid` sibling.
+ * Skips selections whose column isn't in columnMap or whose label is blank.
+ */
+export function buildLevelFormValues(
+  columnMap: Record<string, string>,
+  selections: LevelSelection[],
+): SpFormValue[] {
+  const out: SpFormValue[] = [];
+  for (const s of selections) {
+    const internal = columnMap[s.column];
+    if (!internal || !s.label) continue;
+    out.push({ FieldName: internal, FieldValue: s.label });
+    out.push({ FieldName: `${internal}_Tid`, FieldValue: s.id });
+  }
+  return out;
+}

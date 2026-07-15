@@ -1,4 +1,11 @@
-import { parseLevels, Level, matchUserPaths, GroupMapRow, sanitizeFolderSegment } from "./formModel";
+import {
+  parseLevels,
+  Level,
+  matchUserPaths,
+  GroupMapRow,
+  sanitizeFolderSegment,
+  buildLevelFormValues,
+} from "./formModel";
 
 describe("parseLevels", () => {
   it("parses a valid Levels JSON array", () => {
@@ -60,5 +67,41 @@ describe("sanitizeFolderSegment", () => {
   it("returns '' for empty/whitespace input", () => {
     expect(sanitizeFolderSegment("   ")).toBe("");
     expect(sanitizeFolderSegment("")).toBe("");
+  });
+});
+
+describe("buildLevelFormValues", () => {
+  const columnMap: Record<string, string> = {
+    Department: "Department",
+    Unit: "Unit",
+    BusinessSegment: "Business_x0020_Segment",
+  };
+  it("emits a label value and a _Tid value per selection", () => {
+    const result = buildLevelFormValues(
+      columnMap,
+      [
+        { column: "Department", label: "Group Finance", id: "t-gf" },
+        { column: "Unit", label: "Tax", id: "t-tax" },
+      ],
+    );
+    expect(result).toEqual([
+      { FieldName: "Department", FieldValue: "Group Finance" },
+      { FieldName: "Department_Tid", FieldValue: "t-gf" },
+      { FieldName: "Unit", FieldValue: "Tax" },
+      { FieldName: "Unit_Tid", FieldValue: "t-tax" },
+    ]);
+  });
+  it("uses the mapped internal name and skips unmapped columns", () => {
+    const result = buildLevelFormValues(columnMap, [
+      { column: "BusinessSegment", label: "Group Head Office", id: "set-gho" },
+      { column: "Nope", label: "x", id: "y" },
+    ]);
+    expect(result).toEqual([
+      { FieldName: "Business_x0020_Segment", FieldValue: "Group Head Office" },
+      { FieldName: "Business_x0020_Segment_Tid", FieldValue: "set-gho" },
+    ]);
+  });
+  it("skips selections with a blank label", () => {
+    expect(buildLevelFormValues(columnMap, [{ column: "Unit", label: "", id: "t" }])).toEqual([]);
   });
 });
