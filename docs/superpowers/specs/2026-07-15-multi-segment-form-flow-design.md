@@ -110,30 +110,30 @@ The form does not care who wrote the rows — schema + reader are fixed regardle
 **On upload:**
 - Resolve the destination folder by **UniqueId** (rename-proof — via the existing DMS Folder Map / reconciliation output).
 - Upload the raw `File`/`Blob` (never FormData).
-- Tag columns: each level's `column` ← selected term **label** (text); `BusinessSegment` ← active segment label; plus the tail columns. Columns not used by the active mode stay blank.
+- Tag columns: for each level, write its `column` ← selected term **label** (text) **and** `<column>_Tid` ← the term **GUID**; `BusinessSegment` / `BusinessSegment_Tid` ← active segment label + GUID; plus the tail columns. Columns not used by the active mode stay blank.
 
 ---
 
 ## 4. Metadata columns (Staging library)
 
-Distinct **plain-text** columns, shared where labels repeat:
+Each level stores **two** plain-text columns: a **visible label** column (searchable, clean in views) and a **companion GUID** column `<column>_Tid` (hidden, for rename-safe re-matching). Columns are shared where labels repeat.
 
-| Column (internal) | Used by |
-|---|---|
-| `BusinessSegment` | all business-segment modes (stores segment label) |
-| `Department` | GHO, SDGI, Projects |
-| `Unit` | GHO, Projects |
-| `Region` | Upstream |
-| `Estate_Mill` | Upstream |
-| `Refinery` | SDGI |
-| `IT_Operating_Unit` | I&T |
-| `Project_Name` | Projects |
+| Label column (internal) | GUID column | Used by |
+|---|---|---|
+| `BusinessSegment` | `BusinessSegment_Tid` | all business-segment modes (segment label) |
+| `Department` | `Department_Tid` | GHO, SDGI, Projects |
+| `Unit` | `Unit_Tid` | GHO, Projects |
+| `Region` | `Region_Tid` | Upstream |
+| `Estate_Mill` | `Estate_Mill_Tid` | Upstream |
+| `Refinery` | `Refinery_Tid` | SDGI |
+| `IT_Operating_Unit` | `IT_Operating_Unit_Tid` | I&T |
+| `Project_Name` | `Project_Name_Tid` | Projects |
 
-Existing tail columns unchanged: `Year_x002f_Period`, `DocumentDate`, `Department_x0020_Type` (Document Type), `Confidentiality_x0020_Level`, `Vendor`, `_ExtendedDescription` (Details).
+16 columns total (8 label + 8 GUID). Existing tail columns unchanged: `Year_x002f_Period`, `DocumentDate`, `Department_x0020_Type` (Document Type), `Confidentiality_x0020_Level`, `Vendor`, `_ExtendedDescription` (Details).
 
-**Why text, not taxonomy:** a managed-metadata column binds to exactly one term set, so a *shared* `Department` column can't accept GHO **and** SDGI **and** Projects departments. Correctness is already enforced by (a) the folder path the file lands in and (b) the form's dropdowns being built from the term store. The column is only a searchable record of the choice. Text columns are crawled by search, filterable, sortable, and viewable — everything needed here except the MMD refiner panel, which the folder tree already replaces.
+**Why text, not taxonomy:** a managed-metadata column binds to exactly one term set, so a *shared* `Department` column can't accept GHO **and** SDGI **and** Projects departments. Correctness is already enforced by (a) the folder path the file lands in and (b) the form's dropdowns being built from the term store. The label column is a searchable record of the choice; the `_Tid` column is the stable identity. Text columns are crawled by search, filterable, sortable, and viewable — everything needed here except the MMD refiner panel, which the folder tree already replaces.
 
-**Caveat:** if a term is later renamed, previously-tagged text columns keep the old label (the folder/UniqueId routing stays correct regardless). Acceptable for search metadata; note for admins.
+**Rename safety:** if a term is later renamed, the label column keeps the old word but the `_Tid` GUID column still matches the term (and the folder/UniqueId routing stays correct regardless). The `_Tid` columns exist precisely so search/re-tagging survives renames.
 
 ---
 
@@ -145,7 +145,7 @@ Existing tail columns unchanged: `Year_x002f_Period`, `DocumentDate`, `Departmen
 | `src/webparts/reconciliation/components/Reconciliation.tsx` | Already path-based; add the 5 modes to `DEFAULT_MODES` (fallback) |
 | DMS Config list (data) | Add/replace 5 mode rows with `Side` + `Levels`; retire `LookupStyle`/`SubTeamLabel` |
 | DMS Group Map list (data) | New list, hand-filled |
-| Staging library (data) | Create 8 text columns above |
+| Staging library (data) | Create 16 text columns above (8 label + 8 `_Tid`) |
 | `CLAUDE.md` + code fallbacks | Update term-set GUIDs, mode defaults, column names |
 
 ---
@@ -154,7 +154,7 @@ Existing tail columns unchanged: `Year_x002f_Period`, `DocumentDate`, `Departmen
 
 1. ✅ Term Store restructured into 5 sets *(done)*.
 2. Rebind / retire the old `Department` taxonomy column binding (old dept set `eaba82e5-…`).
-3. Create the 8 plain-text level columns on Staging.
+3. Create the 16 plain-text columns on Staging (8 label + 8 `_Tid` GUID).
 4. Capture the 5 new term set GUIDs.
 5. Update DMS Config: 5 mode rows (`Side`, `TermSetGuid`, `StagingFolder`, `Levels`).
 6. Create the DMS Group Map list; fill rows as unit groups are created.
@@ -167,5 +167,4 @@ Existing tail columns unchanged: `Year_x002f_Period`, `DocumentDate`, `Departmen
 
 - **Documents library** columns + reader groups — later pass (mirror this model).
 - **Home page** entry point / navigation — later.
-- Exact **internal names** of the 8 new columns to confirm against the live `/fields` API after creation (SharePoint may freeze encoded names).
-- Whether `BusinessSegment` should also be a hidden GUID field for future rename-proof search (currently label-only).
+- Exact **internal names** of the 16 new columns to confirm against the live `/fields` API after creation (SharePoint may freeze encoded names — e.g. `_Tid` or `/` handling).
