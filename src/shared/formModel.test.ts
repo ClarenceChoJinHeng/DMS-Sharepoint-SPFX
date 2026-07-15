@@ -1,4 +1,4 @@
-import { parseLevels, Level, matchUserPaths, GroupMapRow } from "./formModel";
+import { parseLevels, Level, matchUserPaths, GroupMapRow, sanitizeFolderSegment } from "./formModel";
 
 describe("parseLevels", () => {
   it("parses a valid Levels JSON array", () => {
@@ -46,5 +46,19 @@ describe("matchUserPaths", () => {
   it("returns [] when nothing matches", () => {
     expect(matchUserPaths(rows, ["none"])).toEqual([]);
     expect(matchUserPaths([], ["g-tax"])).toEqual([]);
+  });
+});
+
+describe("sanitizeFolderSegment", () => {
+  it("removes illegal folder characters and trims", () => {
+    expect(sanitizeFolderSegment('In*voice:2026?')).toBe("Invoice2026");
+    expect(sanitizeFolderSegment("  2026  ")).toBe("2026");
+  });
+  it("collapses internal whitespace to single spaces", () => {
+    expect(sanitizeFolderSegment("Board   Papers")).toBe("Board Papers");
+  });
+  it("returns '' for empty/whitespace input", () => {
+    expect(sanitizeFolderSegment("   ")).toBe("");
+    expect(sanitizeFolderSegment("")).toBe("");
   });
 });

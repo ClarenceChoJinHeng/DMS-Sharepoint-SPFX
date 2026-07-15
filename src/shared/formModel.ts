@@ -61,3 +61,11 @@ export function matchUserPaths(rows: GroupMapRow[], userGroupIds: string[]): Use
     .filter((r) => wanted.has((r.groupId ?? "").trim().toLowerCase()))
     .map((r) => ({ segment: r.segment, unitTermGuid: r.unitTermGuid, role: r.role }));
 }
+
+const ILLEGAL_FOLDER_CHARS = /[\\/:*?"<>|#%]/g;
+
+/** Make a term label safe to use as a single folder name. Returns "" if nothing remains. */
+export function sanitizeFolderSegment(name: string): string {
+  if (!name) return "";
+  return name.replace(ILLEGAL_FOLDER_CHARS, "").replace(/\s+/g, " ").trim();
+}
