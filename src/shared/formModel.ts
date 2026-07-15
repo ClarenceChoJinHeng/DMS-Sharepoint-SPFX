@@ -53,3 +53,11 @@ export function parseLevels(json: string): Level[] {
     )
     .map((e) => ({ label: e.label, column: e.column }));
 }
+
+/** Return the UserPath for every group the user belongs to, in row order. */
+export function matchUserPaths(rows: GroupMapRow[], userGroupIds: string[]): UserPath[] {
+  const wanted = new Set(userGroupIds.map((id) => (id ?? "").trim().toLowerCase()));
+  return rows
+    .filter((r) => wanted.has((r.groupId ?? "").trim().toLowerCase()))
+    .map((r) => ({ segment: r.segment, unitTermGuid: r.unitTermGuid, role: r.role }));
+}

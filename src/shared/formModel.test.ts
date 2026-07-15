@@ -1,4 +1,4 @@
-import { parseLevels, Level } from "./formModel";
+import { parseLevels, Level, matchUserPaths, GroupMapRow } from "./formModel";
 
 describe("parseLevels", () => {
   it("parses a valid Levels JSON array", () => {
@@ -20,5 +20,31 @@ describe("parseLevels", () => {
   it("drops entries missing label or column", () => {
     const json = '[{"label":"Region","column":"Region"},{"label":"x"},{"column":"y"}]';
     expect(parseLevels(json)).toEqual([{ label: "Region", column: "Region" }]);
+  });
+});
+
+describe("matchUserPaths", () => {
+  const rows: GroupMapRow[] = [
+    { groupId: "g-tax", groupName: "DMS_GF_TAX_UPL", segment: "set-gho", unitTermGuid: "t-tax", role: "UPL" },
+    { groupId: "g-treas", groupName: "DMS_GF_TREAS_UPL", segment: "set-gho", unitTermGuid: "t-treas", role: "UPL" },
+    { groupId: "g-est", groupName: "DMS_UP_EAST_UPL", segment: "set-up", unitTermGuid: "t-east", role: "UPL" },
+  ];
+
+  it("returns the paths for the user's matched group ids", () => {
+    expect(matchUserPaths(rows, ["g-tax", "g-est", "unrelated"])).toEqual([
+      { segment: "set-gho", unitTermGuid: "t-tax", role: "UPL" },
+      { segment: "set-up", unitTermGuid: "t-east", role: "UPL" },
+    ]);
+  });
+
+  it("is case-insensitive and trims group ids on both sides", () => {
+    expect(matchUserPaths(rows, [" G-TAX "])).toEqual([
+      { segment: "set-gho", unitTermGuid: "t-tax", role: "UPL" },
+    ]);
+  });
+
+  it("returns [] when nothing matches", () => {
+    expect(matchUserPaths(rows, ["none"])).toEqual([]);
+    expect(matchUserPaths([], ["g-tax"])).toEqual([]);
   });
 });
