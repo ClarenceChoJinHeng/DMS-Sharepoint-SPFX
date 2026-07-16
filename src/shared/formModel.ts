@@ -80,21 +80,30 @@ export interface SpFormValue {
   FieldValue: string;
 }
 
+/** Maps a logical column key to the two real Staging field internal names. */
+export interface ColumnPair {
+  label: string; // internal name of the text label column
+  tid: string;   // internal name of the term-GUID column
+}
+
 /**
  * Build validateUpdateListItem field pairs for the chosen levels:
- * one text pair for the internal-name column, one for its `<name>_Tid` sibling.
- * Skips selections whose column isn't in columnMap or whose label is blank.
+ * one text pair for the label column, one for its term-GUID (Tid) column.
+ * The two internal names come explicitly from columnMap — SharePoint does NOT
+ * follow a `<label>_Tid` convention (e.g. label `Business_x0020_Segment` pairs
+ * with tid `BusinessSegmentTid`). Skips selections whose column isn't in
+ * columnMap or whose label is blank.
  */
 export function buildLevelFormValues(
-  columnMap: Record<string, string>,
+  columnMap: Record<string, ColumnPair>,
   selections: LevelSelection[],
 ): SpFormValue[] {
   const out: SpFormValue[] = [];
   for (const s of selections) {
-    const internal = columnMap[s.column];
-    if (!internal || !s.label) continue;
-    out.push({ FieldName: internal, FieldValue: s.label });
-    out.push({ FieldName: `${internal}_Tid`, FieldValue: s.id });
+    const pair = columnMap[s.column];
+    if (!pair || !pair.label || !s.label) continue;
+    out.push({ FieldName: pair.label, FieldValue: s.label });
+    if (pair.tid) out.push({ FieldName: pair.tid, FieldValue: s.id });
   }
   return out;
 }

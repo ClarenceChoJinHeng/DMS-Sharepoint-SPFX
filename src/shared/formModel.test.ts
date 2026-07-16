@@ -5,6 +5,7 @@ import {
   GroupMapRow,
   sanitizeFolderSegment,
   buildLevelFormValues,
+  ColumnPair,
 } from "./formModel";
 
 describe("parseLevels", () => {
@@ -71,12 +72,12 @@ describe("sanitizeFolderSegment", () => {
 });
 
 describe("buildLevelFormValues", () => {
-  const columnMap: Record<string, string> = {
-    Department: "Department",
-    Unit: "Unit",
-    BusinessSegment: "Business_x0020_Segment",
+  const columnMap: Record<string, ColumnPair> = {
+    Department: { label: "Department", tid: "DepartmentTid" },
+    Unit: { label: "Unit", tid: "UnitTid" },
+    BusinessSegment: { label: "Business_x0020_Segment", tid: "BusinessSegmentTid" },
   };
-  it("emits a label value and a _Tid value per selection", () => {
+  it("emits a label value and a tid value per selection using explicit tid names", () => {
     const result = buildLevelFormValues(
       columnMap,
       [
@@ -86,19 +87,19 @@ describe("buildLevelFormValues", () => {
     );
     expect(result).toEqual([
       { FieldName: "Department", FieldValue: "Group Finance" },
-      { FieldName: "Department_Tid", FieldValue: "t-gf" },
+      { FieldName: "DepartmentTid", FieldValue: "t-gf" },
       { FieldName: "Unit", FieldValue: "Tax" },
-      { FieldName: "Unit_Tid", FieldValue: "t-tax" },
+      { FieldName: "UnitTid", FieldValue: "t-tax" },
     ]);
   });
-  it("uses the mapped internal name and skips unmapped columns", () => {
+  it("uses the mapped internal names and skips unmapped columns", () => {
     const result = buildLevelFormValues(columnMap, [
       { column: "BusinessSegment", label: "Group Head Office", id: "set-gho" },
       { column: "Nope", label: "x", id: "y" },
     ]);
     expect(result).toEqual([
       { FieldName: "Business_x0020_Segment", FieldValue: "Group Head Office" },
-      { FieldName: "Business_x0020_Segment_Tid", FieldValue: "set-gho" },
+      { FieldName: "BusinessSegmentTid", FieldValue: "set-gho" },
     ]);
   });
   it("skips selections with a blank label", () => {
