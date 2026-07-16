@@ -28,32 +28,58 @@ Workbench: `https://dcidigitalcom.sharepoint.com/_layouts/workbench.aspx?debugMa
 | `src/webparts/form/components/IFormProps.ts` | Props interface (context only) |
 | `Form.reference.tsx` (project root, outside src/) | Backup of original prototype — NOT compiled |
 
-## Term Set GUIDs (DMS Metadata group, sandbox tenant)
+## Multi-Segment Model (current — replaces the old 2-mode Department/Project cascade)
+The form is now **data-driven over "modes"** loaded from the `DMS Config` list. Each mode
+has a `Side` (`BusinessSegment` | `Project`), a term-set GUID, and a `Levels` JSON chain
+(variable depth, e.g. `[{"label":"Department","column":"Department"},{"label":"Unit","column":"Unit"}]`).
+The 5 intended modes: 4 Business Segments (Group Head Office, Upstream, SDGI, I&T) + Group-led Projects.
+- **Pilot scope (now):** only **Group Head Office (GHO)** is live. Its term set GUID is the
+  `DEFAULT_MODES` fallback in both `Form.tsx` and `Reconciliation.tsx`. The other 4 term-set
+  GUIDs are not yet captured — add them to `DEFAULT_MODES` + DMS Config when onboarded.
+- **User path auto-detection:** the form reads the user's Entra group Object IDs via Graph
+  `/me/memberOf`, matched against the **`DMS Group Map`** list (`GroupId`, `Segment`, `UnitTermGuid`,
+  `Role`). Names are cosmetic — matching is by Object ID (so existing `SDG-*` groups are reused
+  without renaming). Only unit-level rows are needed; the form walks the term ancestry
+  (`loadTermPath`) to reconstruct Segment→Dept→Unit from just the unit term GUID.
+- **Folder routing:** the deepest (leaf) level = the permissioned **Unit** folder, resolved by
+  UniqueId via DMS Folder Map. `Year` + `Document Type` subfolders are **ensure-created on demand**
+  under the Unit folder and inherit its ACL.
+
 ```
 documentType:    0540e66e-7cb3-47ac-b0ef-4e3069387394
-department:      eaba82e5-3e5f-4719-9a76-091f034ad407
 yearPeriod:      f7c578a1-e0e5-42ff-9e0c-d748cba42ede
 confidentiality: 032534ab-9285-4b42-98c6-5c7b0df1f066
 vendor:          cb3c0ab7-a959-4200-9b7b-d1e13397d240
-project:         94ce322b-4515-4fda-8f50-35709f1f521d  ← SEPARATE term set under DMS Metadata group.
-                 Structure: top-level terms mirror dept names (Account, Finance, HR, IT)
-                 and sub-terms are the actual projects (e.g. Project > Account > AI Engineer).
-                 DMS Config uses lookupStyle "parentMatch": pick dept → match parent label → load children.
+Group Head Office (business-segment set): efa87c6a-9536-4f7c-910f-011bf7413b80
+  Structure: Set → Department terms (e.g. Group Legal, Risk & Compliance) → Unit terms
+  (Group Compliance/GCO, Group Risk, Group Legal). Levels = [Department, Unit].
 ```
+> The old single `department` term set (`eaba82e5-…`) and the `project` term set
+> (`94ce322b-…`, lookupStyle "parentMatch") are **retired** by the multi-segment model.
 > WARN: Handover PDF lists e1163337-93bb-4b6e-847e-346f51cc6806 for Project Name — this GUID does NOT exist in the tenant. Do not use it.
 
 ## Staging Library — Column Internal Names
 Verified against live `/fields` API. Do NOT guess from display names.
 ```
 Department_x0020_Type      <- "Document Type" (created as "Department Type", frozen internal name)
-Department                 <- TaxonomyFieldTypeMulti
 Year_x002f_Period
 DocumentDate               <- DateTime, no space encoding
-Project_x0020_Name         <- bound to the Project term set (verify GUID in Term Store)
 Confidentiality_x0020_Level
 Vendor
 _ExtendedDescription       <- built-in doc Description (Note) — used for "Details" field
+
+# Multi-segment level columns (plain text, label + term-GUID pairs). Written via
+# buildLevelFormValues + LEVEL_COLUMNS in Form.tsx. GUID cols have NO "_Tid" suffix —
+# SharePoint stripped the spaces (verified against /fields):
+Business_x0020_Segment / BusinessSegmentTid   <- "Business Segment" + its Tid
+Department             / DepartmentTid         <- clean "Department" name (old taxonomy col removed)
+Unit                  / UnitTid
+# Add Region/Estate·Mill/Refinery/I&T·Operating·Unit/Project·Name (+ their Tid) when
+# the other 4 segments are onboarded; keep LEVEL_COLUMNS in sync.
 ```
+> The old taxonomy `Department` (TaxonomyFieldTypeMulti) and `Project_x0020_Name` columns
+> are retired by the multi-segment model. The plain-text `Department` above is a NEW column
+> that reuses the freed internal name.
 
 ## Critical Rules / Gotchas
 1. **DocumentDate** — send as `M/D/YYYY` (US site locale). ISO `YYYY-MM-DD` is rejected. Use `toSpDate()` in Form.tsx.

@@ -25,10 +25,10 @@ interface Mode {
 }
 
 // Fallback modes — mirror Form.tsx DEFAULT_MODES. Reconciliation only needs
-// the term set + staging folder per mode.
+// the term set + staging folder per mode. Pilot slice: Group Head Office only;
+// add the other four segments here once their term sets are onboarded.
 const DEFAULT_MODES: Mode[] = [
-  { key: "department", termSetGuid: "eaba82e5-3e5f-4719-9a76-091f034ad407", stagingFolder: "Departments" },
-  { key: "project", termSetGuid: "94ce322b-4515-4fda-8f50-35709f1f521d", stagingFolder: "Projects" },
+  { key: "gho", termSetGuid: "efa87c6a-9536-4f7c-910f-011bf7413b80", stagingFolder: "Group Head Office" },
 ];
 
 type TermLite = { id: string; label: string };
