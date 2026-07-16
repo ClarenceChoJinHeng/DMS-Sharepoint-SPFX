@@ -54,7 +54,7 @@ Today the list holds **unit-only** rows. Generalise it to **one row per (group �
 | `GroupName` | cosmetic label |
 | `Segment` | the mode's term-set GUID (scopes the row to a mode) |
 | `TermGuid` | the term this group represents. **For a Segment-tier row, `TermGuid = the term-set GUID`** (segment membership). For every other tier it is the term's GUID. |
-| `Role` | `MEMBER` (membership tiers, incl. Segment and intermediates), `UPL` (leaf uploader), `APR` (approver — used by the approver tooling, not this form) |
+| `Role` | `MEMBER` (membership tiers, incl. Segment and intermediates), `UPL` (leaf uploader), `APR` (approver — used by the approver tooling, not this form), `GLOBAL` (global uploader — bypasses tier detection, may upload anywhere; `Segment`/`TermGuid` ignored) |
 
 > `Level` is intentionally **not** a required column — the term ancestry walk determines each
 > term's tier. A `Level` note column may be added for human maintainability but the algorithm
@@ -70,8 +70,11 @@ Example (GHO / Group Legal, Risk & Compliance / GCO):
 
 ## Detection algorithm
 
-Inputs: the user's Entra group Object IDs (`/me/memberOf`), all DMS Group Map rows, the modes.
+Inputs: the user's Entra group Object IDs (`/me/memberOf`), all DMS Group Map rows, the modes,
+and the site-admin flag.
 
+0. **Privileged short-circuit:** if the user is a site admin **or** belongs to any `GLOBAL`-role
+   group → skip steps 1–4, enable the full manual cascade (all modes + all terms).
 1. `memberTerms` = { `TermGuid` of every row whose `GroupId` ∈ user's groups } (any role — a UPL
    row also proves membership of its leaf term).
 2. `uploaderLeaves` = rows where `Role = UPL` and `GroupId` ∈ user's groups → candidate leaves,
@@ -96,8 +99,10 @@ Inputs: the user's Entra group Object IDs (`/me/memberOf`), all DMS Group Map ro
   *"Your account isn't fully provisioned to upload (you need membership at every level plus the
   unit uploader role). Contact your administrator."*
 - **Year / Document Type / Confidentiality / Document Date / Vendor** stay user-editable.
-- **Site admins** bypass detection and get the full manual cascade (all modes + all terms) for
-  management/testing. (Admin uploads are still constrained by SharePoint folder ACLs.)
+- **Privileged users bypass detection** and get the full manual cascade (all modes + all terms),
+  i.e. may upload anywhere. Privileged = a **site admin** *or* a member of a **`GLOBAL`-role**
+  group in DMS Group Map. (Uploads are still constrained by SharePoint folder ACLs.) `GLOBAL` is
+  purely data-driven — add/remove a list row, no code change.
 
 ## Folder routing (unchanged)
 

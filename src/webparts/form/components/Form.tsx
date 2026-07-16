@@ -9,12 +9,13 @@ import {
 } from "../../../shared/dmsFolderMap";
 import {
   parseLevels,
-  matchUserPaths,
+  collectMembership,
+  isChainAuthorized,
   sanitizeFolderSegment,
   buildLevelFormValues,
   Level,
   GroupMapRow,
-  UserPath,
+  Membership,
   ColumnPair,
 } from "../../../shared/formModel";
 
@@ -85,6 +86,11 @@ type UploadMode = {
   levels: Level[];
   sortOrder: number;
 };
+
+// A fully authorised upload path for a restricted (non-privileged) user:
+// the mode plus the resolved term chain [top … leaf], every tier of which the
+// user is a member of, with the leaf held under the UPL role.
+type ValidPath = { modeKey: string; chain: TermOption[] };
 
 type OptionMap = {
   documentType: TermOption[];
@@ -197,12 +203,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   const [options, setOptions] = useState<OptionMap>(EMPTY_OPTIONS);
   const [deptLoading, setDeptLoading] = useState<boolean>(true);
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  // Privileged = site admin OR a GLOBAL-role uploader: bypasses tier detection
+  // and gets the full manual cascade (may upload anywhere).
+  const [privileged, setPrivileged] = useState<boolean>(false);
 
   // Generic N-level cascade state: one option list + one selected term id per level.
   const [levelChoices, setLevelChoices] = useState<TermOption[][]>([]);
   const [levelValues, setLevelValues] = useState<string[]>([]);
-  const [userPaths, setUserPaths] = useState<UserPath[]>([]);
+  // Restricted users: their fully-authorised upload paths (segment→…→leaf).
+  const [validPaths, setValidPaths] = useState<ValidPath[]>([]);
 
   const [modes, setModes] = useState<UploadMode[]>([]);
   const [uploadMode, setUploadMode] = useState<string>("");
@@ -443,29 +452,86 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setLevelChoices(choices);
   };
 
-  // Pre-fill all levels from a detected UserPath (walk the term ancestry).
-  const prefillFromPath = async (
-    mode: UploadMode,
-    path: UserPath,
-  ): Promise<void> => {
-    const chain = await loadTermPath(mode.termSetGuid, path.unitTermGuid); // [top..leaf]
-    const choices: TermOption[][] = [];
-    const values: string[] = [];
-    choices[0] = await loadTermSet(mode.termSetGuid).catch(
-      () => [] as TermOption[],
-    );
-    for (let i = 0; i < chain.length && i < mode.levels.length; i++) {
-      values[i] = chain[i].id;
-      if (i + 1 < mode.levels.length) {
-        choices[i + 1] = await loadTermChildren(
+  /* ---------- Restricted (tiered-detection) cascade ----------------------- */
+
+  // Hard-check every uploader leaf against the term tree: keep only the leaves
+  // whose whole ancestor chain (and, for Business Segment modes, the segment
+  // itself) the user is a member of. Returns the authorised paths.
+  const resolveValidPaths = async (
+    loadedModes: UploadMode[],
+    membership: Membership,
+  ): Promise<ValidPath[]> => {
+    const out: ValidPath[] = [];
+    for (const leaf of membership.uploaderLeaves) {
+      const mode = loadedModes.find((m) => m.termSetGuid === leaf.segment);
+      if (!mode) continue;
+      const chain = await loadTermPath(mode.termSetGuid, leaf.termGuid).catch(
+        () => [] as TermOption[],
+      );
+      const requireSegment = mode.side === "BusinessSegment";
+      if (
+        isChainAuthorized(
+          chain.map((c) => c.id),
           mode.termSetGuid,
-          chain[i].id,
-        ).catch(() => [] as TermOption[]);
+          membership.memberTerms,
+          requireSegment,
+        )
+      ) {
+        out.push({ modeKey: mode.key, chain });
       }
     }
+    return out;
+  };
+
+  // Derive per-level options + values for a restricted user from their valid
+  // paths: at each tier, offer only the terms their paths allow given the
+  // choices so far; a tier with a single option is auto-selected (locked).
+  const restrictedCascade = (
+    paths: ValidPath[],
+    mode: UploadMode,
+    current: string[],
+  ): { choices: TermOption[][]; values: string[] } => {
+    const chains = paths
+      .filter((p) => p.modeKey === mode.key)
+      .map((p) => p.chain);
+    const choices: TermOption[][] = [];
+    const values: string[] = [];
+    for (let i = 0; i < mode.levels.length; i++) {
+      const consistent = chains.filter((ch) =>
+        values.slice(0, i).every((v, j) => ch[j]?.id === v),
+      );
+      const seen = new Set<string>();
+      const opts: TermOption[] = [];
+      for (const ch of consistent) {
+        const t = ch[i];
+        if (t && !seen.has(t.id)) {
+          seen.add(t.id);
+          opts.push(t);
+        }
+      }
+      choices[i] = opts;
+      if (opts.length === 1) values[i] = opts[0].id; // auto-lock
+      else {
+        const prior = current[i] ?? "";
+        values[i] = opts.some((o) => o.id === prior) ? prior : "";
+      }
+    }
+    return { choices, values };
+  };
+
+  const applyRestrictedMode = (
+    paths: ValidPath[],
+    mode: UploadMode,
+    current: string[],
+  ): void => {
+    const { choices, values } = restrictedCascade(paths, mode, current);
     setLevelChoices(choices);
     setLevelValues(values);
   };
+
+  // A tier is locked when the user's paths leave exactly one option for it.
+  const isLevelLocked = (i: number): boolean =>
+    !privileged && (levelChoices[i]?.length ?? 0) <= 1;
 
   /* ---------- Init -------------------------------------------------------- */
 
@@ -487,10 +553,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       );
       const loadedModes = usable.length > 0 ? usable : DEFAULT_MODES;
       setModes(loadedModes);
-      setIsAdmin(admin);
 
-      const paths = matchUserPaths(groupMap, userGroupIds);
-      setUserPaths(paths);
+      const membership = collectMembership(groupMap, userGroupIds);
+      const isPrivileged = admin || membership.isGlobalUploader;
+      setPrivileged(isPrivileged);
 
       const [docTypes, years, confs, vendors] = await Promise.all([
         loadTermSet(loadedSettings.termSets.documentType).catch(
@@ -513,25 +579,30 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         vendor: vendors,
       });
 
-      // Default toggle = BusinessSegment; default mode = first matched segment
-      // path, else the first BusinessSegment mode.
-      const bsModes = loadedModes.filter(
-        (m: UploadMode) => m.side === "BusinessSegment",
-      );
-      const firstPath = paths.find((p) =>
-        bsModes.some((m: UploadMode) => m.termSetGuid === p.segment),
-      );
-      const defaultMode =
-        (firstPath &&
-          bsModes.find(
-            (m: UploadMode) => m.termSetGuid === firstPath.segment,
-          )) ??
-        bsModes[0] ??
-        loadedModes[0];
-      if (defaultMode) {
-        setUploadMode(defaultMode.key);
-        if (firstPath) await prefillFromPath(defaultMode, firstPath);
-        else await initCascade(defaultMode);
+      if (isPrivileged) {
+        // Full manual cascade over the whole term set; default to first BS mode.
+        const bsModes = loadedModes.filter(
+          (m: UploadMode) => m.side === "BusinessSegment",
+        );
+        const defaultMode = bsModes[0] ?? loadedModes[0];
+        if (defaultMode) {
+          setUploadMode(defaultMode.key);
+          await initCascade(defaultMode);
+        }
+      } else {
+        // Restricted: resolve the user's authorised paths and lock the cascade.
+        const paths = await resolveValidPaths(loadedModes, membership);
+        setValidPaths(paths);
+        const offerable = new Set(paths.map((p) => p.modeKey));
+        const defaultMode =
+          loadedModes.find(
+            (m: UploadMode) =>
+              m.side === "BusinessSegment" && offerable.has(m.key),
+          ) ?? loadedModes.find((m: UploadMode) => offerable.has(m.key));
+        if (defaultMode) {
+          setUploadMode(defaultMode.key);
+          applyRestrictedMode(paths, defaultMode, []);
+        }
       }
       setDeptLoading(false);
     };
@@ -550,13 +621,30 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setStatus("");
     const mode = modes.find((m) => m.key === modeKey);
     if (!mode) return;
-    const path = userPaths.find((p) => p.segment === mode.termSetGuid);
-    if (path) prefillFromPath(mode, path).catch(() => initCascade(mode));
-    else
+    if (privileged) {
       initCascade(mode).catch(() => {
         setLevelChoices([]);
         setLevelValues([]);
       });
+    } else {
+      applyRestrictedMode(validPaths, mode, []);
+    }
+  };
+
+  // Level dropdown change: free choice for privileged (walk the term store);
+  // for restricted users, re-derive the locked cascade from their valid paths.
+  const handleLevelChange = (
+    mode: UploadMode,
+    idx: number,
+    termId: string,
+  ): void => {
+    if (privileged) {
+      onLevelChange(mode, idx, termId).catch(() => undefined);
+      return;
+    }
+    const values = levelValues.slice(0, idx);
+    values[idx] = termId;
+    applyRestrictedMode(validPaths, mode, values);
   };
 
   const toTaxValue = (opts: TermOption[], id: string): string => {
@@ -1043,19 +1131,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
         {deptLoading ? (
           <p className="dms-dept-loading">Loading your access&hellip;</p>
-        ) : userPaths.length === 0 && !isAdmin ? (
+        ) : !privileged && validPaths.length === 0 ? (
           <div className="dms-dept-error">
-            Your account isn&apos;t mapped to any unit. Contact your
-            administrator before uploading.
+            Your account isn&apos;t fully provisioned to upload — you need
+            membership at every level plus the unit uploader role. Contact your
+            administrator.
           </div>
         ) : null}
 
-        {/* Business Segment | Project toggle — sides driven by DMS Config */}
+        {/* Business Segment | Project toggle — a side shows only if the user can
+            actually upload there (privileged users see every configured side). */}
         <div className="dms-radio-group">
           <p>Upload into:</p>
           {(["BusinessSegment", "Project"] as const).map((side) => {
-            const first = modes.find((m) => m.side === side);
-            if (!first) return null;
+            const sideModes = modes.filter((m) => m.side === side);
+            const offerable = privileged
+              ? sideModes
+              : sideModes.filter((m) =>
+                  validPaths.some((p) => p.modeKey === m.key),
+                );
+            if (offerable.length === 0) return null;
             const active = activeMode()?.side === side;
             return (
               <label key={side}>
@@ -1063,7 +1158,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   type="radio"
                   name="sideToggle"
                   checked={active}
-                  onChange={() => switchMode(first.key)}
+                  onChange={() => switchMode(offerable[0].key)}
                 />
                 {side === "BusinessSegment" ? "Business Segment" : "Project"}
               </label>
@@ -1071,11 +1166,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           })}
         </div>
 
-        {/* Segment picker — shown only when the active side has more than one mode */}
+        {/* Segment picker — only when the active side offers more than one mode. */}
         {(() => {
           const side = activeMode()?.side;
           const sideModes = modes.filter((m) => m.side === side);
-          if (sideModes.length <= 1) return null;
+          const offerable = privileged
+            ? sideModes
+            : sideModes.filter((m) =>
+                validPaths.some((p) => p.modeKey === m.key),
+              );
+          if (offerable.length <= 1) return null;
           return (
             <label className="dms-field">
               <span>Segment</span>
@@ -1083,7 +1183,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 value={uploadMode}
                 onChange={(e) => switchMode(e.target.value)}
               >
-                {sideModes.map((m) => (
+                {offerable.map((m) => (
                   <option key={m.key} value={m.key}>
                     {m.label}
                   </option>
@@ -1092,6 +1192,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             </label>
           );
         })()}
+
+        {/* Restricted users: read-only breadcrumb of the resolved location. */}
+        {!privileged && activeMode() && (
+          <div className="dms-dept-badge">
+            <span className="dept-label">Uploading to:</span>
+            <span className="dept-name">
+              {[
+                activeMode()?.label,
+                ...(activeMode()?.levels ?? []).map(
+                  (_lvl, i) =>
+                    (levelChoices[i] ?? []).find(
+                      (o) => o.id === levelValues[i],
+                    )?.label,
+                ),
+              ]
+                .filter(Boolean)
+                .join(" › ")}
+            </span>
+          </div>
+        )}
 
         <div className="dms-grid">
           {renderSelect(
@@ -1134,10 +1254,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               levelValues[i] ?? "",
               (v) => {
                 const md = activeMode();
-                if (md) onLevelChange(md, i, v).catch(() => undefined);
+                if (md) handleLevelChange(md, i, v);
               },
               levelChoices[i] ?? [],
-              deptLoading || (i > 0 && !levelValues[i - 1]),
+              deptLoading ||
+                isLevelLocked(i) ||
+                (i > 0 && !levelValues[i - 1]),
               "--",
               true,
             ),

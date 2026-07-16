@@ -1,7 +1,8 @@
 import {
   parseLevels,
   Level,
-  matchUserPaths,
+  collectMembership,
+  isChainAuthorized,
   GroupMapRow,
   sanitizeFolderSegment,
   buildLevelFormValues,
@@ -44,29 +45,70 @@ describe("parseLevels", () => {
   });
 });
 
-describe("matchUserPaths", () => {
+describe("collectMembership", () => {
+  // GHO chain: segment(set-gho) -> dept(t-lrc) -> unit(t-gco).
   const rows: GroupMapRow[] = [
-    { groupId: "g-tax", groupName: "DMS_GF_TAX_UPL", segment: "set-gho", unitTermGuid: "t-tax", role: "UPL" },
-    { groupId: "g-treas", groupName: "DMS_GF_TREAS_UPL", segment: "set-gho", unitTermGuid: "t-treas", role: "UPL" },
-    { groupId: "g-est", groupName: "DMS_UP_EAST_UPL", segment: "set-up", unitTermGuid: "t-east", role: "UPL" },
+    { groupId: "g-seg", groupName: "GHO Segment", segment: "set-gho", termGuid: "set-gho", role: "MEMBER" },
+    { groupId: "g-lrc", groupName: "LRC Dept", segment: "set-gho", termGuid: "t-lrc", role: "MEMBER" },
+    { groupId: "g-gco-upl", groupName: "GCO Uploaders", segment: "set-gho", termGuid: "t-gco", role: "UPL" },
+    { groupId: "g-risk-upl", groupName: "Risk Uploaders", segment: "set-gho", termGuid: "t-risk", role: "UPL" },
+    { groupId: "g-global", groupName: "Global Uploaders", segment: "", termGuid: "", role: "GLOBAL" },
   ];
 
-  it("returns the paths for the user's matched group ids", () => {
-    expect(matchUserPaths(rows, ["g-tax", "g-est", "unrelated"])).toEqual([
-      { segment: "set-gho", unitTermGuid: "t-tax", role: "UPL" },
-      { segment: "set-up", unitTermGuid: "t-east", role: "UPL" },
-    ]);
+  it("collects member terms and uploader leaves for the user's groups", () => {
+    const m = collectMembership(rows, ["g-seg", "g-lrc", "g-gco-upl"]);
+    expect(m.memberTerms).toEqual(new Set(["set-gho", "t-lrc", "t-gco"]));
+    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
+    expect(m.isGlobalUploader).toBe(false);
+  });
+
+  it("flags a global uploader and ignores its (empty) term", () => {
+    const m = collectMembership(rows, ["g-global"]);
+    expect(m.isGlobalUploader).toBe(true);
+    expect(m.uploaderLeaves).toEqual([]);
+    expect(m.memberTerms.size).toBe(0);
   });
 
   it("is case-insensitive and trims group ids on both sides", () => {
-    expect(matchUserPaths(rows, [" G-TAX "])).toEqual([
-      { segment: "set-gho", unitTermGuid: "t-tax", role: "UPL" },
-    ]);
+    const m = collectMembership(rows, [" G-GCO-UPL "]);
+    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
   });
 
-  it("returns [] when nothing matches", () => {
-    expect(matchUserPaths(rows, ["none"])).toEqual([]);
-    expect(matchUserPaths([], ["g-tax"])).toEqual([]);
+  it("returns empty membership when nothing matches", () => {
+    const m = collectMembership(rows, ["none"]);
+    expect(m.memberTerms.size).toBe(0);
+    expect(m.uploaderLeaves).toEqual([]);
+    expect(m.isGlobalUploader).toBe(false);
+  });
+});
+
+describe("isChainAuthorized", () => {
+  const memberTerms = new Set(["set-gho", "t-lrc", "t-gco"]);
+
+  it("authorises when every chain term + the segment are members (BS mode)", () => {
+    expect(isChainAuthorized(["t-lrc", "t-gco"], "set-gho", memberTerms, true)).toBe(true);
+  });
+
+  it("rejects when an intermediate tier is missing", () => {
+    // user is not a member of the department term
+    const partial = new Set(["set-gho", "t-gco"]);
+    expect(isChainAuthorized(["t-lrc", "t-gco"], "set-gho", partial, true)).toBe(false);
+  });
+
+  it("rejects when segment membership is required but absent", () => {
+    const noSeg = new Set(["t-lrc", "t-gco"]);
+    expect(isChainAuthorized(["t-lrc", "t-gco"], "set-gho", noSeg, true)).toBe(false);
+  });
+
+  it("skips the segment check for Project mode (no segment tier)", () => {
+    // chain = [project, dept, unit]; no term-set membership needed
+    const proj = new Set(["p-1", "d-1", "u-1"]);
+    expect(isChainAuthorized(["p-1", "d-1", "u-1"], "set-proj", proj, false)).toBe(true);
+  });
+
+  it("rejects an empty chain and is case-insensitive", () => {
+    expect(isChainAuthorized([], "set-gho", memberTerms, true)).toBe(false);
+    expect(isChainAuthorized(["T-LRC", "T-GCO"], "SET-GHO", memberTerms, true)).toBe(true);
   });
 });
 

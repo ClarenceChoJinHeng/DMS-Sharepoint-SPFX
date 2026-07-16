@@ -134,22 +134,42 @@ code uses them verbatim, so this is what makes the solution portable with zero c
 
 ---
 
-## 4. DMS Group Map list — who sees which unit
+## 4. DMS Group Map list — tiered access
 
 List: **DMS Group Map**. Columns (all Single line of text unless noted): `GroupId`,
-`GroupName`, `Segment` (term-set GUID), `UnitTermGuid`, `Role` (Choice `UPL`|`APR`).
+`GroupName`, `Segment` (term-set GUID), `TermGuid`, `Role` (Choice `MEMBER`|`UPL`|`APR`|`GLOBAL`).
 
-One row per (security group × unit). **Matching is by `GroupId` = Entra Object ID** — names are
-cosmetic, so existing groups can be reused without renaming. Only **unit-level** rows are needed;
-the form walks the term ancestry to reconstruct Segment → Dept → Unit.
+**Matching is by `GroupId` = Entra Object ID** — names are cosmetic, so existing groups can be
+reused by Object ID. Upload is a **hard check across every tier**: to upload to a leaf the user
+must be a **`MEMBER`** at every tier above it (segment → intermediate) **and** hold the leaf's
+**`UPL`** group. A plain member (no `UPL`) is view-only. See
+`2026-07-16-tiered-group-detection-design.md` for the full model.
 
-Example (sandbox GHO / Group Legal, Risk & Compliance):
+**One row per (security group × tier):**
 
-| GroupId (Object ID) | GroupName | Segment | UnitTermGuid | Role |
+- **Segment tier** (Business Segment modes): `TermGuid` = **the term-set GUID**, `Role = MEMBER`.
+- **Intermediate tiers** (Department / Region / Refinery / Project Name …): `TermGuid` = that
+  term's GUID, `Role = MEMBER`.
+- **Leaf tier** (Unit / Estate·Mill / Department / Operating Unit): `TermGuid` = the leaf term,
+  `Role = UPL` (uploader) or `APR` (approver — used by the approver tooling, not this form).
+- **Global uploader** (optional): one row, `Role = GLOBAL`, `Segment`/`TermGuid` left blank —
+  members may upload anywhere (like a site admin). Purely additive; delete the row to revoke.
+
+> Each leaf must have its **own distinct** `UPL` group (own Object ID). Reusing one uploader
+> group across leaves would let a member upload everywhere.
+
+Example (sandbox GHO → Group Legal, Risk & Compliance → GCO):
+
+| GroupName | GroupId (Object ID) | Segment | TermGuid | Role |
 |---|---|---|---|---|
-| ‹object-id› | GCO Uploaders | ‹gho-guid› | ‹GCO unit term guid› | UPL |
-| ‹object-id› | GCO Approvers | ‹gho-guid› | ‹GCO unit term guid› | APR |
-| … | … | … | … | … |
+| GHO Segment Members | ‹object-id› | ‹gho-set› | ‹gho-set› | MEMBER |
+| LRC Dept Members | ‹object-id› | ‹gho-set› | ‹lrc-term› | MEMBER |
+| GCO Unit Uploaders | ‹object-id› | ‹gho-set› | ‹gco-term› | UPL |
+| GCO Unit Approvers | ‹object-id› | ‹gho-set› | ‹gco-term› | APR |
+| Global Uploaders (opt.) | ‹object-id› | | | GLOBAL |
+
+> Projects has no Segment tier — its top tier is Project Name (a `MEMBER` row on the
+> Project-Name term), then Department (`MEMBER`), then Unit (`UPL`).
 
 ---
 

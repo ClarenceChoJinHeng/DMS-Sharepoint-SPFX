@@ -24,21 +24,34 @@ export interface ModeV2 {
   sortOrder: number;
 }
 
-/** One row of the DMS Group Map list. */
+/**
+ * One row of the DMS Group Map list. A row maps a security group (by Entra
+ * Object ID) to a term at some tier of a mode's chain.
+ *  - Segment-tier rows: `termGuid` == the term-set GUID (segment membership).
+ *  - Intermediate/leaf rows: `termGuid` == the term's GUID.
+ */
 export interface GroupMapRow {
-  groupId: string;      // Entra Object ID — the match key
+  groupId: string; // Entra Object ID — the match key
   groupName: string;
-  segment: string;      // term set GUID
-  unitTermGuid: string;
-  role: string;         // "UPL" | "APR" | ""
+  segment: string; // term set GUID (which mode this row scopes to)
+  termGuid: string; // term GUID, or the term-set GUID for a Segment-tier row
+  role: string; // "MEMBER" | "UPL" | "APR" | "GLOBAL" | ""
 }
 
-/** A user's resolved path from a matched group. */
-export interface UserPath {
-  segment: string;      // term set GUID (identifies the mode)
-  unitTermGuid: string;
-  role: string;
+/** A candidate leaf the user holds the UPL (uploader) role for. */
+export interface UploaderLeaf {
+  termGuid: string;
+  segment: string; // term-set GUID of the leaf's mode
 }
+
+/** What the user's group memberships resolve to, before term-tree validation. */
+export interface Membership {
+  memberTerms: Set<string>; // every term (or term-set) GUID the user is a member of, normalised
+  uploaderLeaves: UploaderLeaf[]; // the user's UPL-role leaves
+  isGlobalUploader: boolean; // user holds a GLOBAL-role group -> upload anywhere
+}
+
+const normGuid = (g: string): string => (g ?? "").trim().toLowerCase();
 
 /** Safely parse a DMS Config `Levels` JSON string into Level[]. Never throws. */
 export function parseLevels(json: string): Level[] {
@@ -65,12 +78,52 @@ export function parseLevels(json: string): Level[] {
     });
 }
 
-/** Return the UserPath for every group the user belongs to, in row order. */
-export function matchUserPaths(rows: GroupMapRow[], userGroupIds: string[]): UserPath[] {
-  const wanted = new Set(userGroupIds.map((id) => (id ?? "").trim().toLowerCase()));
-  return rows
-    .filter((r) => wanted.has((r.groupId ?? "").trim().toLowerCase()))
-    .map((r) => ({ segment: r.segment, unitTermGuid: r.unitTermGuid, role: r.role }));
+/**
+ * Reduce the DMS Group Map to the current user's memberships:
+ *  - `memberTerms`: every term/term-set GUID whose group the user is in (any role);
+ *  - `uploaderLeaves`: the leaves the user holds the UPL role for;
+ *  - `isGlobalUploader`: true if the user is in any GLOBAL-role group.
+ * Matching is case-insensitive and trimmed on both sides.
+ */
+export function collectMembership(
+  rows: GroupMapRow[],
+  userGroupIds: string[],
+): Membership {
+  const wanted = new Set(userGroupIds.map(normGuid));
+  const memberTerms = new Set<string>();
+  const uploaderLeaves: UploaderLeaf[] = [];
+  let isGlobalUploader = false;
+  for (const r of rows) {
+    if (!wanted.has(normGuid(r.groupId))) continue;
+    const role = (r.role ?? "").trim().toUpperCase();
+    if (role === "GLOBAL") {
+      isGlobalUploader = true;
+      continue; // GLOBAL rows carry no term
+    }
+    if (r.termGuid) memberTerms.add(normGuid(r.termGuid));
+    if (role === "UPL") {
+      uploaderLeaves.push({ termGuid: r.termGuid, segment: r.segment });
+    }
+  }
+  return { memberTerms, uploaderLeaves, isGlobalUploader };
+}
+
+/**
+ * Hard-check a candidate path: the user must be a member of every term in the
+ * chain [top … leaf], and — for Business Segment modes — of the segment
+ * (term set) itself. Returns true only when the whole chain is authorised.
+ */
+export function isChainAuthorized(
+  chainTermGuids: string[],
+  termSetGuid: string,
+  memberTerms: Set<string>,
+  requireSegmentMembership: boolean,
+): boolean {
+  if (chainTermGuids.length === 0) return false;
+  if (requireSegmentMembership && !memberTerms.has(normGuid(termSetGuid))) {
+    return false;
+  }
+  return chainTermGuids.every((g) => memberTerms.has(normGuid(g)));
 }
 
 const ILLEGAL_FOLDER_CHARS = /[\\/:*?"<>|#%]/g;
