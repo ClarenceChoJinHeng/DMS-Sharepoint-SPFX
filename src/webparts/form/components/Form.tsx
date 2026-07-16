@@ -1214,39 +1214,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         )}
 
         <div className="dms-grid">
-          {renderSelect(
-            "Document Type",
-            true,
-            documentType,
-            setDocumentType,
-            options.documentType,
-          )}
-
-          <label className="dms-field">
-            <span>
-              Document Date <em className="req">*</em>
-            </span>
-            <input
-              type="date"
-              value={documentDate}
-              max={(() => {
-                const d = new Date();
-                const mm = d.getMonth() + 1;
-                const day = d.getDate();
-                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
-              })()}
-              onChange={(e) => setDocumentDate(e.target.value)}
-            />
-          </label>
-
-          {renderSelect(
-            "Vendor (if applicable)",
-            false,
-            vendor,
-            setVendor,
-            options.vendor,
-          )}
-
+          {/* --- File-path fields, in folder order:
+                 Segment (above) -> level(s) -> Year -> Document Type --- */}
           {(activeMode()?.levels ?? []).map((lvl, i) =>
             renderSelect(
               lvl.label,
@@ -1266,6 +1235,40 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           )}
 
           {renderSelect(
+            "Year / Period",
+            true,
+            yearPeriod,
+            setYearPeriod,
+            options.yearPeriod,
+          )}
+
+          {renderSelect(
+            "Document Type",
+            true,
+            documentType,
+            setDocumentType,
+            options.documentType,
+          )}
+
+          {/* --- Other metadata (not part of the folder path) --- */}
+          <label className="dms-field">
+            <span>
+              Document Date <em className="req">*</em>
+            </span>
+            <input
+              type="date"
+              value={documentDate}
+              max={(() => {
+                const d = new Date();
+                const mm = d.getMonth() + 1;
+                const day = d.getDate();
+                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+              })()}
+              onChange={(e) => setDocumentDate(e.target.value)}
+            />
+          </label>
+
+          {renderSelect(
             "Confidentiality Level",
             true,
             confidentiality,
@@ -1274,11 +1277,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           )}
 
           {renderSelect(
-            "Year / Period",
-            true,
-            yearPeriod,
-            setYearPeriod,
-            options.yearPeriod,
+            "Vendor (if applicable)",
+            false,
+            vendor,
+            setVendor,
+            options.vendor,
           )}
         </div>
       </div>
