@@ -5,6 +5,12 @@
 export interface Level {
   label: string;   // shown to the user, e.g. "Estate/Mill"
   column: string;  // logical column key, mapped to a real field in Form.tsx LEVEL_COLUMNS
+  // Config-driven override: the REAL Staging internal names for this level's
+  // label + term-GUID columns. When present (from DMS Config Levels JSON) these
+  // win over the LEVEL_COLUMNS fallback — so a client tenant needs no code change,
+  // just the right internal names in config.
+  labelCol?: string;
+  tidCol?: string;
 }
 
 /** A configured upload mode (one term set + its level chain). */
@@ -51,7 +57,12 @@ export function parseLevels(json: string): Level[] {
         typeof (e as Level).label === "string" &&
         typeof (e as Level).column === "string",
     )
-    .map((e) => ({ label: e.label, column: e.column }));
+    .map((e) => {
+      const lvl: Level = { label: e.label, column: e.column };
+      if (typeof e.labelCol === "string") lvl.labelCol = e.labelCol;
+      if (typeof e.tidCol === "string") lvl.tidCol = e.tidCol;
+      return lvl;
+    });
 }
 
 /** Return the UserPath for every group the user belongs to, in row order. */
@@ -74,6 +85,10 @@ export interface LevelSelection {
   column: string; // logical key
   label: string;
   id: string;
+  // Optional explicit internal names (from DMS Config Levels JSON). When set,
+  // they override the columnMap lookup for this selection.
+  labelCol?: string;
+  tidCol?: string;
 }
 export interface SpFormValue {
   FieldName: string;
@@ -89,10 +104,13 @@ export interface ColumnPair {
 /**
  * Build validateUpdateListItem field pairs for the chosen levels:
  * one text pair for the label column, one for its term-GUID (Tid) column.
- * The two internal names come explicitly from columnMap — SharePoint does NOT
- * follow a `<label>_Tid` convention (e.g. label `Business_x0020_Segment` pairs
- * with tid `BusinessSegmentTid`). Skips selections whose column isn't in
- * columnMap or whose label is blank.
+ *
+ * Internal names resolve config-first: a selection's own `labelCol`/`tidCol`
+ * (supplied by DMS Config Levels JSON) win; otherwise fall back to `columnMap`
+ * keyed by the logical `column`. SharePoint does NOT follow a `<label>_Tid`
+ * convention (e.g. label `Business_x0020_Segment` pairs with tid
+ * `BusinessSegmentTid`), so both names are always explicit. Skips selections
+ * with no resolvable label column or a blank label.
  */
 export function buildLevelFormValues(
   columnMap: Record<string, ColumnPair>,
@@ -100,10 +118,12 @@ export function buildLevelFormValues(
 ): SpFormValue[] {
   const out: SpFormValue[] = [];
   for (const s of selections) {
-    const pair = columnMap[s.column];
-    if (!pair || !pair.label || !s.label) continue;
-    out.push({ FieldName: pair.label, FieldValue: s.label });
-    if (pair.tid) out.push({ FieldName: pair.tid, FieldValue: s.id });
+    const fallback = columnMap[s.column];
+    const labelCol = s.labelCol || fallback?.label;
+    const tidCol = s.tidCol || fallback?.tid;
+    if (!labelCol || !s.label) continue;
+    out.push({ FieldName: labelCol, FieldValue: s.label });
+    if (tidCol) out.push({ FieldName: tidCol, FieldValue: s.id });
   }
   return out;
 }

@@ -33,11 +33,15 @@ const FIELDS = {
   details: "_ExtendedDescription",
 };
 
-// Logical Levels `column` key -> the two real Staging internal names (label + term GUID).
-// Verified against the live /fields API: SharePoint did NOT append "_Tid" — the GUID
-// columns are BusinessSegmentTid / DepartmentTid / UnitTid (spaces stripped). Only the
-// three GHO-pilot columns exist today; add Region/EstateMill/Refinery/etc. when those
-// segments are onboarded and their columns created.
+// FALLBACK map: logical Levels `column` key -> the two real Staging internal
+// names (label + term GUID). The preferred, portable source is each level's
+// own labelCol/tidCol in DMS Config Levels JSON — those win over this table
+// (see buildLevelFormValues), so a client tenant needs no code change here.
+// Verified against the live /fields API (GHO pilot): SharePoint did NOT append
+// "_Tid" — the GUID columns are BusinessSegmentTid / DepartmentTid / UnitTid
+// (spaces stripped). BusinessSegment is injected by the form (not a config
+// level), so it must stay here. Add the other segments' verified names too if
+// you want them to work from the offline DEFAULT_MODES fallback.
 const LEVEL_COLUMNS: Record<string, ColumnPair> = {
   BusinessSegment: { label: "Business_x0020_Segment", tid: "BusinessSegmentTid" },
   Department: { label: "Department", tid: "DepartmentTid" },
@@ -96,9 +100,14 @@ const EMPTY_OPTIONS: OptionMap = {
   vendor: [],
 };
 
-// Fallback if DMS Config is missing or not yet updated with Side/Levels.
-// Pilot slice: Group Head Office only (real term-set GUID). Add the other four
-// segments here once their term sets + Staging columns are onboarded.
+// Fallback if DMS Config is missing/unreachable. DMS Config is the source of
+// truth at runtime — these built-in modes only serve an offline fallback.
+//   - Group Head Office has a real term-set GUID (verified in the sandbox).
+//   - The other four carry REPLACE-* placeholder GUIDs: swap them for the real
+//     term-set GUIDs (or, preferably, drive everything from DMS Config so no
+//     code edit is needed). Each level's real Staging column internal names are
+//     supplied per-level via DMS Config Levels JSON (labelCol/tidCol); the
+//     logical `column` key here resolves via LEVEL_COLUMNS as a fallback only.
 const DEFAULT_MODES: UploadMode[] = [
   {
     key: "gho",
@@ -111,6 +120,52 @@ const DEFAULT_MODES: UploadMode[] = [
       { label: "Unit", column: "Unit" },
     ],
     sortOrder: 1,
+  },
+  {
+    key: "upstream",
+    label: "Group Upstream Operations",
+    side: "BusinessSegment",
+    termSetGuid: "REPLACE-UPSTREAM-TERMSET-GUID",
+    stagingFolder: "Group Upstream Operations",
+    levels: [
+      { label: "Region", column: "Region" },
+      { label: "Estate/Mill", column: "EstateMill" },
+    ],
+    sortOrder: 2,
+  },
+  {
+    key: "sdgi",
+    label: "Group SDGI Operations",
+    side: "BusinessSegment",
+    termSetGuid: "REPLACE-SDGI-TERMSET-GUID",
+    stagingFolder: "Group SDGI Operations",
+    levels: [
+      { label: "Refinery", column: "Refinery" },
+      { label: "Department", column: "Department" },
+    ],
+    sortOrder: 3,
+  },
+  {
+    key: "it",
+    label: "Group Innovation & Technology",
+    side: "BusinessSegment",
+    termSetGuid: "REPLACE-IT-TERMSET-GUID",
+    stagingFolder: "Group Innovation & Technology",
+    levels: [{ label: "I&T Operating Unit", column: "ITOperatingUnit" }],
+    sortOrder: 4,
+  },
+  {
+    key: "projects",
+    label: "Group-led Projects",
+    side: "Project",
+    termSetGuid: "REPLACE-PROJECTS-TERMSET-GUID",
+    stagingFolder: "Group-led Projects",
+    levels: [
+      { label: "Project Name", column: "ProjectName" },
+      { label: "Department", column: "Department" },
+      { label: "Unit", column: "Unit" },
+    ],
+    sortOrder: 5,
   },
 ];
 
@@ -725,7 +780,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       const item = await itemRes.json();
 
       // One label + one term-GUID pair per level, plus the Business Segment
-      // column (the mode's segment label / term-set GUID).
+      // column (the mode's segment label / term-set GUID). Each level carries
+      // its real Staging internal names (labelCol/tidCol) from DMS Config when
+      // present; buildLevelFormValues falls back to LEVEL_COLUMNS otherwise.
       const selections = (mode.levels ?? []).map((lvl, i) => {
         const opt = (levelChoices[i] ?? []).find(
           (o) => o.id === levelValues[i],
@@ -734,12 +791,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           column: lvl.column,
           label: opt?.label ?? "",
           id: opt?.id ?? "",
+          labelCol: lvl.labelCol,
+          tidCol: lvl.tidCol,
         };
       });
       selections.unshift({
         column: "BusinessSegment",
         label: mode.label,
         id: mode.termSetGuid,
+        labelCol: undefined,
+        tidCol: undefined,
       });
 
       const formValues: Array<{ FieldName: string; FieldValue: string }> = [

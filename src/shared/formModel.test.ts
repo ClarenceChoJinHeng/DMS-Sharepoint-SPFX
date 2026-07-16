@@ -29,6 +29,19 @@ describe("parseLevels", () => {
     const json = '[{"label":"Region","column":"Region"},{"label":"x"},{"column":"y"}]';
     expect(parseLevels(json)).toEqual([{ label: "Region", column: "Region" }]);
   });
+
+  it("carries optional labelCol/tidCol internal-name overrides", () => {
+    const json =
+      '[{"label":"Project Name","column":"ProjectName","labelCol":"Project_x0020_Name","tidCol":"ProjectNameTid"}]';
+    expect(parseLevels(json)).toEqual([
+      {
+        label: "Project Name",
+        column: "ProjectName",
+        labelCol: "Project_x0020_Name",
+        tidCol: "ProjectNameTid",
+      },
+    ]);
+  });
 });
 
 describe("matchUserPaths", () => {
@@ -104,5 +117,37 @@ describe("buildLevelFormValues", () => {
   });
   it("skips selections with a blank label", () => {
     expect(buildLevelFormValues(columnMap, [{ column: "Unit", label: "", id: "t" }])).toEqual([]);
+  });
+
+  it("prefers a selection's own labelCol/tidCol over the columnMap", () => {
+    const result = buildLevelFormValues(columnMap, [
+      {
+        column: "Department",
+        label: "Group Finance",
+        id: "t-gf",
+        labelCol: "ClientDept",
+        tidCol: "ClientDeptTid",
+      },
+    ]);
+    expect(result).toEqual([
+      { FieldName: "ClientDept", FieldValue: "Group Finance" },
+      { FieldName: "ClientDeptTid", FieldValue: "t-gf" },
+    ]);
+  });
+
+  it("uses labelCol/tidCol even when the column isn't in the columnMap", () => {
+    const result = buildLevelFormValues(columnMap, [
+      {
+        column: "Region",
+        label: "East",
+        id: "t-east",
+        labelCol: "Region",
+        tidCol: "RegionTid",
+      },
+    ]);
+    expect(result).toEqual([
+      { FieldName: "Region", FieldValue: "East" },
+      { FieldName: "RegionTid", FieldValue: "t-east" },
+    ]);
   });
 });
