@@ -2,24 +2,46 @@ import * as React from "react";
 import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFormProps } from "./IFormProps";
-import { lookupFolderMapping } from "../../../shared/dmsFolderMap";
+import {
+  lookupFolderMapping,
+  resolveFolderServerUrl,
+  ensureFolder,
+} from "../../../shared/dmsFolderMap";
+import {
+  parseLevels,
+  matchUserPaths,
+  sanitizeFolderSegment,
+  buildLevelFormValues,
+  Level,
+  GroupMapRow,
+  UserPath,
+  ColumnPair,
+} from "../../../shared/formModel";
 
 /* ----------------------------------------------------------------------------
- * CONFIG — hardcoded values are fallbacks only; live values load from DMS Settings SP list
+ * CONFIG — hardcoded values are fallbacks only; live values load from DMS Config SP list
  * -------------------------------------------------------------------------- */
 
 const FIELDS = {
   // Internal name frozen as "Department_x0020_Type" (created as "Department Type",
   // then display-renamed to "Document Type" — verified against live Staging fields API).
   documentType: "Department_x0020_Type",
-  department: "Department",
   yearPeriod: "Year_x002f_Period",
   documentDate: "DocumentDate",
-  deptSubTeam: "Department_x0020_Team",
-  projectSubTeam: "Project_x0020_Name",
   confidentiality: "Confidentiality_x0020_Level",
   vendor: "Vendor",
   details: "_ExtendedDescription",
+};
+
+// Logical Levels `column` key -> the two real Staging internal names (label + term GUID).
+// Verified against the live /fields API: SharePoint did NOT append "_Tid" — the GUID
+// columns are BusinessSegmentTid / DepartmentTid / UnitTid (spaces stripped). Only the
+// three GHO-pilot columns exist today; add Region/EstateMill/Refinery/etc. when those
+// segments are onboarded and their columns created.
+const LEVEL_COLUMNS: Record<string, ColumnPair> = {
+  BusinessSegment: { label: "Business_x0020_Segment", tid: "BusinessSegmentTid" },
+  Department: { label: "Department", tid: "DepartmentTid" },
+  Unit: { label: "Unit", tid: "UnitTid" },
 };
 
 const ILLEGAL_NAME_CHARS = /[\\/:*?"<>|#%&{}~]/g;
@@ -47,22 +69,16 @@ const toSpDate = (iso: string): string => {
   return `${Number(m)}/${Number(d)}/${y}`;
 };
 
-
-type TermOption     = { id: string; label: string };
+type TermOption = { id: string; label: string };
 type ToastType = "error" | "success";
-
-// A single entry in the flattened subcategory dropdown. `path` is the full
-// ancestor chain (excluding the department itself) down to and including this
-// term — used to rebuild the real nested folder path on upload.
-type SubTeamNode = { term: TermOption; path: TermOption[] };
 
 type UploadMode = {
   key: string;
   label: string;
+  side: "BusinessSegment" | "Project";
   termSetGuid: string;
   stagingFolder: string;
-  lookupStyle: "direct" | "parentMatch";
-  subTeamLabel: string;
+  levels: Level[];
   sortOrder: number;
 };
 
@@ -80,32 +96,27 @@ const EMPTY_OPTIONS: OptionMap = {
   vendor: [],
 };
 
-// Fallback if DMS Config list is missing or unreachable — preserves existing behaviour.
+// Fallback if DMS Config is missing or not yet updated with Side/Levels.
+// Pilot slice: Group Head Office only (real term-set GUID). Add the other four
+// segments here once their term sets + Staging columns are onboarded.
 const DEFAULT_MODES: UploadMode[] = [
   {
-    key: "department",
-    label: "Department",
-    termSetGuid: "eaba82e5-3e5f-4719-9a76-091f034ad407",
-    stagingFolder: "Departments",
-    lookupStyle: "direct",
-    subTeamLabel: "Department Team",
+    key: "gho",
+    label: "Group Head Office",
+    side: "BusinessSegment",
+    termSetGuid: "efa87c6a-9536-4f7c-910f-011bf7413b80",
+    stagingFolder: "Group Head Office",
+    levels: [
+      { label: "Department", column: "Department" },
+      { label: "Unit", column: "Unit" },
+    ],
     sortOrder: 1,
-  },
-  {
-    key: "project",
-    label: "Project",
-    termSetGuid: "94ce322b-4515-4fda-8f50-35709f1f521d",
-    stagingFolder: "Projects",
-    lookupStyle: "parentMatch",
-    subTeamLabel: "Sub Project",
-    sortOrder: 2,
   },
 ];
 
 type DmsSettings = {
   termSets: {
     documentType: string;
-    department: string;
     yearPeriod: string;
     confidentiality: string;
     vendor: string;
@@ -117,7 +128,6 @@ type DmsSettings = {
 const DEFAULT_SETTINGS: DmsSettings = {
   termSets: {
     documentType: "0540e66e-7cb3-47ac-b0ef-4e3069387394",
-    department: "eaba82e5-3e5f-4719-9a76-091f034ad407",
     yearPeriod: "f7c578a1-e0e5-42ff-9e0c-d748cba42ede",
     confidentiality: "032534ab-9285-4b42-98c6-5c7b0df1f066",
     vendor: "cb3c0ab7-a959-4200-9b7b-d1e13397d240",
@@ -131,21 +141,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [options, setOptions] = useState<OptionMap>(EMPTY_OPTIONS);
-  const [detectedDept, setDetectedDept] = useState<TermOption | null>(null);
   const [deptLoading, setDeptLoading] = useState<boolean>(true);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [allDepts, setAllDepts] = useState<TermOption[]>([]);
-  const [adminSelectedDept, setAdminSelectedDept] = useState<string>("");
-  // Nested subcategory chain (e.g. Account D > Sub-1 > Sub-2 > ... > Sub-6),
-  // flattened into one list for a single dropdown. Each node keeps its full
-  // ancestor path so the real nested folder path can be rebuilt on upload.
-  const [subTeamChoices, setSubTeamChoices] = useState<SubTeamNode[]>([]);
-  const [subTeamValue, setSubTeamValue] = useState<string>("");
+
+  // Generic N-level cascade state: one option list + one selected term id per level.
+  const [levelChoices, setLevelChoices] = useState<TermOption[][]>([]);
+  const [levelValues, setLevelValues] = useState<string[]>([]);
+  const [userPaths, setUserPaths] = useState<UserPath[]>([]);
 
   const [modes, setModes] = useState<UploadMode[]>([]);
-  const [modeParents, setModeParents] = useState<Record<string, TermOption[]>>(
-    {},
-  );
   const [uploadMode, setUploadMode] = useState<string>("");
   const [settings, setSettings] = useState<DmsSettings>(DEFAULT_SETTINGS);
   const [file, setFile] = useState<File | undefined>(undefined);
@@ -168,6 +172,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setToast({ message, type });
     toastTimerRef.current = setTimeout(() => setToast(null), 5000);
   };
+
+  const activeMode = (): UploadMode | undefined =>
+    modes.find((m) => m.key === uploadMode);
 
   /* ---------- Term Store helpers ------------------------------------------ */
 
@@ -208,9 +215,32 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     );
   };
 
+  // Resolve the full ancestor chain [top ... leaf] for a unit term, as {label,id}.
+  const loadTermPath = async (
+    termSetId: string,
+    leafTermId: string,
+  ): Promise<TermOption[]> => {
+    const chain: TermOption[] = [];
+    let currentId: string | null = leafTermId;
+    while (currentId) {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}/terms/${currentId}?$select=id,labels&$expand=parent($select=id)`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) break;
+      const t = await res.json();
+      chain.unshift({ id: t.id, label: t.labels?.[0]?.name ?? "" });
+      currentId = t.parent?.id ?? null;
+    }
+    return chain;
+  };
+
+  /* ---------- Config + group-map readers ---------------------------------- */
+
   const loadModes = async (): Promise<UploadMode[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,TermSetGuid,StagingFolder,LookupStyle,SubTeamLabel,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,Side,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -220,19 +250,46 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       (item: {
         Title: string;
         ModeLabel: string;
+        Side: string;
         TermSetGuid: string;
         StagingFolder: string;
-        LookupStyle: string;
-        SubTeamLabel: string;
+        Levels: string;
         SortOrder: number;
       }) => ({
         key: item.Title,
         label: item.ModeLabel,
+        side: (item.Side === "Project" ? "Project" : "BusinessSegment") as
+          | "BusinessSegment"
+          | "Project",
         termSetGuid: item.TermSetGuid,
         stagingFolder: item.StagingFolder,
-        lookupStyle: (item.LookupStyle || "direct") as "direct" | "parentMatch",
-        subTeamLabel: item.SubTeamLabel || "Sub-team",
+        levels: parseLevels(item.Levels),
         sortOrder: item.SortOrder,
+      }),
+    );
+  };
+
+  const loadGroupMap = async (): Promise<GroupMapRow[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId,GroupName,Segment,UnitTermGuid,Role&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) throw new Error("DMS Group Map list not found");
+    const data = await res.json();
+    return (data.value ?? []).map(
+      (r: {
+        GroupId: string;
+        GroupName: string;
+        Segment: string;
+        UnitTermGuid: string;
+        Role: string;
+      }) => ({
+        groupId: r.GroupId ?? "",
+        groupName: r.GroupName ?? "",
+        segment: r.Segment ?? "",
+        unitTermGuid: r.UnitTermGuid ?? "",
+        role: r.Role ?? "",
       }),
     );
   };
@@ -256,8 +313,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       termSets: {
         documentType:
           get("termSet_documentType") ?? DEFAULT_SETTINGS.termSets.documentType,
-        department:
-          get("termSet_department") ?? DEFAULT_SETTINGS.termSets.department,
         yearPeriod:
           get("termSet_yearPeriod") ?? DEFAULT_SETTINGS.termSets.yearPeriod,
         confidentiality:
@@ -272,142 +327,118 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     };
   };
 
-  // Recursively walks every descendant of `rootId` (the whole nested chain,
-  // however deep it goes) and flattens it into one list. Each node keeps its
-  // full ancestor path so the real nested folder path can be rebuilt later.
-  const loadDescendants = async (
-    mode: UploadMode,
-    rootId: string,
-  ): Promise<SubTeamNode[]> => {
-    const result: SubTeamNode[] = [];
-    const walk = async (
-      parentId: string,
-      ancestorPath: TermOption[],
-    ): Promise<void> => {
-      const children = await loadTermChildren(mode.termSetGuid, parentId).catch(
-        () => [] as TermOption[],
-      );
-      for (const child of children) {
-        const path = [...ancestorPath, child];
-        result.push({ term: child, path });
-        await walk(child.id, path);
-      }
-    };
-    await walk(rootId, []);
-    return result;
-  };
+  /* ---------- Identity: group ids + admin --------------------------------- */
 
-  // "direct" modes (e.g. Department) scope the chain to the uploader's own
-  // department root. "parentMatch" modes (e.g. Project) have their own term
-  // set whose top-level terms mirror department labels — find the matching
-  // root by label, then flatten its chain.
-  const loadSubTeamTree = async (
-    mode: UploadMode,
-    dept: TermOption | null,
-    parents: TermOption[],
-  ): Promise<SubTeamNode[]> => {
-    if (!dept) return [];
-    if (mode.lookupStyle === "direct") {
-      return loadDescendants(mode, dept.id);
+  // Detect the user's M365 (Entra) group Object IDs via MS Graph /me/memberOf.
+  // These are matched against DMS Group Map GroupId (Object ID) — names are cosmetic.
+  const loadUserGroupIds = async (): Promise<string[]> => {
+    try {
+      const graph = await context.msGraphClientFactory.getClient("3");
+      const memberOf = await graph.api("/me/memberOf").select("id").get();
+      return (memberOf.value ?? [])
+        .map((g: { id?: string }) => g.id ?? "")
+        .filter(Boolean);
+    } catch {
+      return [];
     }
-    const parent = parents.find((p) =>
-      dept.label.toLowerCase().includes(p.label.toLowerCase()),
-    );
-    if (!parent) return [];
-    return loadDescendants(mode, parent.id);
   };
 
-  /* ---------- Group detection --------------------------------------------- */
-
-  // Uses MS Graph /me/memberOf to detect M365 (Domain) group membership.
-  // SP REST /currentuser/groups only returns SharePoint-native groups and misses
-  // M365 groups added from the admin center (e.g. SDG-IT-Uploaders).
-  // Falls back to SP REST groups if Graph is unavailable.
-  const detectDepartment = async (
-    depts: TermOption[],
-  ): Promise<{ dept: TermOption | null; admin: boolean }> => {
-    const [graphClient, userRes] = await Promise.all([
-      context.msGraphClientFactory.getClient("3"),
-      context.spHttpClient.get(
+  const loadIsAdmin = async (): Promise<boolean> => {
+    try {
+      const res = await context.spHttpClient.get(
         `${siteUrl}/_api/web/currentuser?$select=IsSiteAdmin`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json" } },
-      ),
-    ]);
-
-    let groupNames: string[] = [];
-    try {
-      const memberOf = await graphClient
-        .api("/me/memberOf")
-        .select("displayName")
-        .get();
-      groupNames = (memberOf.value ?? []).map((g: { displayName?: string }) =>
-        (g.displayName ?? "").toLowerCase(),
       );
+      if (!res.ok) return false;
+      const d = await res.json();
+      return d.IsSiteAdmin === true;
     } catch {
-      // Graph unavailable — fall back to SP REST groups (SharePoint-native only)
-      try {
-        const spRes = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/currentuser/groups?$select=Title`,
-          SPHttpClient.configurations.v1,
-          { headers: { Accept: "application/json" } },
-        );
-        if (spRes.ok) {
-          const data = await spRes.json();
-          groupNames = (data.value ?? []).map((g: { Title: string }) =>
-            g.Title.toLowerCase(),
-          );
-        }
-      } catch {
-        /* nothing — groupNames stays empty */
+      return false;
+    }
+  };
+
+  /* ---------- Cascade builders -------------------------------------------- */
+
+  // Load level-0 options (top terms of the mode's set); reset deeper levels.
+  const initCascade = async (mode: UploadMode): Promise<void> => {
+    const tops = await loadTermSet(mode.termSetGuid).catch(
+      () => [] as TermOption[],
+    );
+    setLevelChoices([tops]);
+    setLevelValues([]);
+  };
+
+  // When level `idx` changes to `termId`, load level idx+1 options and truncate below.
+  const onLevelChange = async (
+    mode: UploadMode,
+    idx: number,
+    termId: string,
+  ): Promise<void> => {
+    const values = levelValues.slice(0, idx);
+    values[idx] = termId;
+    setLevelValues(values);
+    const choices = levelChoices.slice(0, idx + 1);
+    if (idx + 1 < mode.levels.length && termId) {
+      const kids = await loadTermChildren(mode.termSetGuid, termId).catch(
+        () => [] as TermOption[],
+      );
+      choices[idx + 1] = kids;
+    }
+    setLevelChoices(choices);
+  };
+
+  // Pre-fill all levels from a detected UserPath (walk the term ancestry).
+  const prefillFromPath = async (
+    mode: UploadMode,
+    path: UserPath,
+  ): Promise<void> => {
+    const chain = await loadTermPath(mode.termSetGuid, path.unitTermGuid); // [top..leaf]
+    const choices: TermOption[][] = [];
+    const values: string[] = [];
+    choices[0] = await loadTermSet(mode.termSetGuid).catch(
+      () => [] as TermOption[],
+    );
+    for (let i = 0; i < chain.length && i < mode.levels.length; i++) {
+      values[i] = chain[i].id;
+      if (i + 1 < mode.levels.length) {
+        choices[i + 1] = await loadTermChildren(
+          mode.termSetGuid,
+          chain[i].id,
+        ).catch(() => [] as TermOption[]);
       }
     }
-
-    const uploaderGroups = groupNames.filter((g) => g.includes("uploader"));
-    // Strip all non-alphanumeric chars and lowercase — used on both sides so
-    // hyphens, spaces, and casing differences never cause a mismatch.
-    const bare = (s: string): string =>
-      s.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const dept =
-      depts.find((d) => {
-        const termBare = bare(d.label);
-        return uploaderGroups.some((g) => {
-          // Extract just the dept portion from the group name by stripping the
-          // "SDG" prefix and "Uploader" suffix — whatever remains is the dept key.
-          const core = bare(g.replace(/^sdg/i, "").replace(/uploaders?$/i, ""));
-          // Term bare must start with the extracted core so "accountd" matches
-          // core "account", and exact matches ("account" === "account") also work.
-          return core.length > 0 && termBare.startsWith(core);
-        });
-      }) ?? null;
-
-    let isSiteAdmin = false;
-    if (userRes.ok) {
-      const userData = await userRes.json();
-      isSiteAdmin = userData.IsSiteAdmin === true;
-    }
-    const admin = isSiteAdmin || groupNames.some((g) => g.includes("owner"));
-    return { dept, admin };
+    setLevelChoices(choices);
+    setLevelValues(values);
   };
 
   /* ---------- Init -------------------------------------------------------- */
 
   useEffect(() => {
     const init = async (): Promise<void> => {
-      // Load config lists in parallel first — term sets depend on settings GUIDs.
-      const [loadedSettings, loadedModes] = await Promise.all([
-        loadSettings().catch(() => DEFAULT_SETTINGS),
-        loadModes().catch(() => DEFAULT_MODES),
-      ]);
+      const [loadedSettings, rawModes, groupMap, userGroupIds, admin] =
+        await Promise.all([
+          loadSettings().catch(() => DEFAULT_SETTINGS),
+          loadModes().catch(() => DEFAULT_MODES),
+          loadGroupMap().catch(() => [] as GroupMapRow[]),
+          loadUserGroupIds(),
+          loadIsAdmin(),
+        ]);
       setSettings(loadedSettings);
+      // Ignore config rows that predate the Side/Levels schema (empty Levels) —
+      // fall back to the built-in modes so the form never renders a broken cascade.
+      const usable = rawModes.filter(
+        (m: UploadMode) => m.levels.length > 0 && !!m.termSetGuid,
+      );
+      const loadedModes = usable.length > 0 ? usable : DEFAULT_MODES;
       setModes(loadedModes);
-      setUploadMode(loadedModes[0]?.key ?? "");
+      setIsAdmin(admin);
 
-      const [docTypes, depts, years, confs, vendors] = await Promise.all([
+      const paths = matchUserPaths(groupMap, userGroupIds);
+      setUserPaths(paths);
+
+      const [docTypes, years, confs, vendors] = await Promise.all([
         loadTermSet(loadedSettings.termSets.documentType).catch(
-          () => [] as TermOption[],
-        ),
-        loadTermSet(loadedSettings.termSets.department).catch(
           () => [] as TermOption[],
         ),
         loadTermSet(loadedSettings.termSets.yearPeriod).catch(
@@ -420,7 +451,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           () => [] as TermOption[],
         ),
       ]);
-
       setOptions({
         documentType: docTypes,
         yearPeriod: years,
@@ -428,39 +458,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         vendor: vendors,
       });
 
-      // For parentMatch modes, load top-level terms now so switchMode can use them instantly.
-      const parentEntries = await Promise.all(
-        loadedModes
-          .filter((m) => m.lookupStyle === "parentMatch")
-          .map(async (m) => {
-            const parents = await loadTermSet(m.termSetGuid).catch(
-              () => [] as TermOption[],
-            );
-            return [m.key, parents] as [string, TermOption[]];
-          }),
+      // Default toggle = BusinessSegment; default mode = first matched segment
+      // path, else the first BusinessSegment mode.
+      const bsModes = loadedModes.filter(
+        (m: UploadMode) => m.side === "BusinessSegment",
       );
-      const parentMap: Record<string, TermOption[]> = {};
-      parentEntries.forEach(([key, parents]) => {
-        parentMap[key] = parents;
-      });
-      setModeParents(parentMap);
-
-      const { dept, admin } = await detectDepartment(depts);
-      setIsAdmin(admin);
-      setAllDepts(depts);
-      setDetectedDept(dept);
-      setDeptLoading(false);
-
-      if (loadedModes.length > 0) {
-        const defaultMode = loadedModes[0];
-        const tree = await loadSubTeamTree(
-          defaultMode,
-          dept,
-          parentMap[defaultMode.key] ?? [],
-        );
-        setSubTeamChoices(tree);
-        setSubTeamValue("");
+      const firstPath = paths.find((p) =>
+        bsModes.some((m: UploadMode) => m.termSetGuid === p.segment),
+      );
+      const defaultMode =
+        (firstPath &&
+          bsModes.find(
+            (m: UploadMode) => m.termSetGuid === firstPath.segment,
+          )) ??
+        bsModes[0] ??
+        loadedModes[0];
+      if (defaultMode) {
+        setUploadMode(defaultMode.key);
+        if (firstPath) await prefillFromPath(defaultMode, firstPath);
+        else await initCascade(defaultMode);
       }
+      setDeptLoading(false);
     };
 
     init().catch((err) => {
@@ -474,24 +492,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   const switchMode = (modeKey: string): void => {
     setUploadMode(modeKey);
-    setSubTeamValue("");
-    setSubTeamChoices([]);
     setStatus("");
-
-    if (isAdmin) {
-      setAdminSelectedDept("");
-      setDetectedDept(null);
-      return;
-    }
-
-    if (!detectedDept) return;
-
     const mode = modes.find((m) => m.key === modeKey);
     if (!mode) return;
-
-    loadSubTeamTree(mode, detectedDept, modeParents[modeKey] ?? [])
-      .then(setSubTeamChoices)
-      .catch(() => setSubTeamChoices([]));
+    const path = userPaths.find((p) => p.segment === mode.termSetGuid);
+    if (path) prefillFromPath(mode, path).catch(() => initCascade(mode));
+    else
+      initCascade(mode).catch(() => {
+        setLevelChoices([]);
+        setLevelValues([]);
+      });
   };
 
   const toTaxValue = (opts: TermOption[], id: string): string => {
@@ -503,7 +513,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setFile(undefined);
     setDocName("");
     setDocumentType("");
-    setSubTeamValue("");
+    setLevelValues([]);
     setYearPeriod("");
     setDocumentDate("");
     setConfidentiality("");
@@ -511,61 +521,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  const handleAdminDeptChange = (deptId: string): void => {
-    setAdminSelectedDept(deptId);
-    setSubTeamValue("");
-    setSubTeamChoices([]);
-
-    const mode = modes.find((m) => m.key === uploadMode);
-    if (!mode) return;
-
-    if (mode.lookupStyle === "parentMatch") {
-      // deptId here is a Project-term-set id (the dropdown lists modeParents,
-      // not allDepts, for this lookup style — see the render below).
-      const parents = modeParents[mode.key] ?? [];
-      const picked = parents.find((d) => d.id === deptId) ?? null;
-      const deptForWrite =
-        allDepts.find((d) =>
-          d.label.toLowerCase().includes(picked?.label.toLowerCase() ?? ""),
-        ) ?? null;
-      if (picked && !deptForWrite) {
-        // picked.id belongs to the Project term set, not the Department term
-        // set the "Department" column is bound to — writing it as-is would
-        // tag the item with a GUID that's real but in the wrong term set.
-        showToast(
-          `"${picked.label}" has no matching entry in the Department term set. Ask your administrator to align the Department and Project term sets before uploading here.`,
-          "error",
-        );
-      }
-      setDetectedDept(deptForWrite);
-      if (picked) {
-        loadDescendants(mode, picked.id)
-          .then(setSubTeamChoices)
-          .catch(() => setSubTeamChoices([]));
-      }
-      return;
-    }
-
-    const picked = allDepts.find((d) => d.id === deptId) ?? null;
-    setDetectedDept(picked);
-    if (picked) {
-      loadDescendants(mode, picked.id)
-        .then(setSubTeamChoices)
-        .catch(() => setSubTeamChoices([]));
-    }
-  };
-
   /* ---------- Upload ------------------------------------------------------ */
 
   const handleUpload = async (): Promise<void> => {
     const missing: string[] = [];
     if (!file) missing.push("File");
-    if (!detectedDept) missing.push("Department");
     if (!documentType) missing.push("Document Type");
-    if (!subTeamValue)
-      missing.push(
-        modes.find((m) => m.key === uploadMode)?.subTeamLabel ?? "Sub-team",
-      );
+    const m = activeMode();
+    (m?.levels ?? []).forEach((lvl, i) => {
+      if (!levelValues[i]) missing.push(lvl.label);
+    });
     if (!yearPeriod) missing.push("Year / Period");
     if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidentiality Level");
@@ -573,7 +538,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       showToast(`Please complete: ${missing.join(", ")}.`, "error");
       return;
     }
-    if (!file || !detectedDept) return;
+    if (!file) return;
 
     const finalName = buildUploadName(file.name, docName);
     if (
@@ -588,43 +553,100 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       return;
     }
 
-    // Upload to Staging/Department/ or Staging/Projects/ depending on toggle mode.
-    // These folders must be created once in the Staging library before first upload.
-    const selectedChoice = subTeamChoices.find((c) => c.term.id === subTeamValue);
-    if (!selectedChoice) {
-      showToast(
-        "Could not resolve the selected sub-team/project folder.",
-        "error",
-      );
+    const mode = activeMode();
+    if (!mode || mode.levels.length === 0) {
+      showToast("No upload mode configured.", "error");
       return;
     }
-    // The picked term itself is the metadata value; its `path` is the full
-    // nested chain from the department down to it (e.g. Sub-1/Sub-2/Sub-3).
-    const selectedSubTeam = selectedChoice.term;
+    // The leaf level's selected term is the permissioned Unit folder.
+    const leafIdx = mode.levels.length - 1;
+    const leafTerm = (levelChoices[leafIdx] ?? []).find(
+      (o) => o.id === levelValues[leafIdx],
+    );
+    if (!leafTerm) {
+      showToast("Please choose all folder levels before uploading.", "error");
+      return;
+    }
 
-    // Resolve the destination folder by its stable UniqueId (rename-proof),
-    // NOT by a name-built path. The selected leaf term is the lookup key.
     setBusy(true);
     setStatus("Locating destination folder…");
 
+    // Resolve the Unit folder by its stable UniqueId (rename-proof), NOT by a
+    // name-built path. The selected leaf term is the lookup key.
     const mapping = await lookupFolderMapping(
       context.spHttpClient,
       siteUrl,
-      selectedSubTeam.id,
+      leafTerm.id,
     ).catch((e: unknown) => {
       console.error("Folder map lookup error:", e);
       return null;
     });
     if (!mapping || !mapping.folderUniqueId) {
       showToast(
-        `This folder hasn't been mapped yet. Ask an administrator to register it in the reconciliation tool. (term ${selectedSubTeam.label})`,
+        `This folder hasn't been mapped yet. Ask an administrator to run the reconciliation tool. (term ${leafTerm.label})`,
         "error",
       );
       setStatus("");
       setBusy(false);
       return;
     }
-    const folderId = mapping.folderUniqueId;
+
+    // Rename-proof: resolve the Unit folder's CURRENT path from its UniqueId, then
+    // ensure-create the Year and Document Type subfolders under it (they inherit its ACL).
+    const unitSru = await resolveFolderServerUrl(
+      context.spHttpClient,
+      siteUrl,
+      mapping.folderUniqueId,
+    );
+    if (!unitSru) {
+      showToast(
+        "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation.",
+        "error",
+      );
+      setStatus("");
+      setBusy(false);
+      return;
+    }
+    const yearLabel = sanitizeFolderSegment(
+      options.yearPeriod.find((o) => o.id === yearPeriod)?.label ?? "",
+    );
+    const docTypeLabel = sanitizeFolderSegment(
+      options.documentType.find((o) => o.id === documentType)?.label ?? "",
+    );
+    if (!yearLabel || !docTypeLabel) {
+      showToast("Year and Document Type are required.", "error");
+      setStatus("");
+      setBusy(false);
+      return;
+    }
+
+    setStatus("Preparing destination folders…");
+    const yearFolder = await ensureFolder(
+      context.spHttpClient,
+      siteUrl,
+      unitSru,
+      yearLabel,
+    );
+    if (!yearFolder) {
+      showToast(`Could not create the "${yearLabel}" folder.`, "error");
+      setStatus("");
+      setBusy(false);
+      return;
+    }
+    const destFolder = await ensureFolder(
+      context.spHttpClient,
+      siteUrl,
+      yearFolder.serverRelativeUrl,
+      docTypeLabel,
+    );
+    if (!destFolder) {
+      showToast(`Could not create the "${docTypeLabel}" folder.`, "error");
+      setStatus("");
+      setBusy(false);
+      return;
+    }
+
+    const folderId = destFolder.uniqueId; // upload target — a fresh, unit-scoped folder
     let uploadedServerRelativeUrl = "";
 
     setStatus("Checking for duplicates…");
@@ -702,6 +724,24 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }
       const item = await itemRes.json();
 
+      // One label + one term-GUID pair per level, plus the Business Segment
+      // column (the mode's segment label / term-set GUID).
+      const selections = (mode.levels ?? []).map((lvl, i) => {
+        const opt = (levelChoices[i] ?? []).find(
+          (o) => o.id === levelValues[i],
+        );
+        return {
+          column: lvl.column,
+          label: opt?.label ?? "",
+          id: opt?.id ?? "",
+        };
+      });
+      selections.unshift({
+        column: "BusinessSegment",
+        label: mode.label,
+        id: mode.termSetGuid,
+      });
+
       const formValues: Array<{ FieldName: string; FieldValue: string }> = [
         {
           FieldName: FIELDS.documentType,
@@ -716,19 +756,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           FieldValue: toTaxValue(options.confidentiality, confidentiality),
         },
         { FieldName: FIELDS.documentDate, FieldValue: toSpDate(documentDate) },
-        // Department is auto-detected from SP group — never user-entered.
-        {
-          FieldName: FIELDS.department,
-          FieldValue: `${detectedDept.label}|${detectedDept.id}`,
-        },
+        ...buildLevelFormValues(LEVEL_COLUMNS, selections),
       ];
-
-      if (selectedSubTeam) {
-        formValues.push({
-          FieldName: uploadMode === "department" ? FIELDS.deptSubTeam : FIELDS.projectSubTeam,
-          FieldValue: `${selectedSubTeam.label}|${selectedSubTeam.id}`,
-        });
-      }
 
       if (vendor) {
         formValues.push({
@@ -736,12 +765,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           FieldValue: toTaxValue(options.vendor, vendor),
         });
       }
-
-      // TEMP DIAGNOSTIC — remove after debugging blank-metadata issue.
-      // Logs the item we're tagging and the EXACT payload we send. If any
-      // FieldValue below is "" the tag will silently blank that column.
-      console.log("[DMS DEBUG] item.Id =", item.Id);
-      console.table(formValues);
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
@@ -756,9 +779,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         return;
       }
       const metaJson = await metaRes.json();
-      // TEMP DIAGNOSTIC — SharePoint echoes each field's stored value or its
-      // exception here. This is the ground truth for whether tagging worked.
-      console.log("[DMS DEBUG] validateUpdateListItem response:", JSON.stringify(metaJson));
       const fieldError = (metaJson.value ?? []).find(
         (v: { HasException?: boolean }) => v.HasException,
       );
@@ -961,60 +981,56 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         <p className="dms-section-title">Document Information</p>
 
         {deptLoading ? (
-          <p className="dms-dept-loading">Detecting your department&hellip;</p>
-        ) : isAdmin ? (
-          // Admin — always show dept picker regardless of own group membership
-          <div className="dms-admin-row">
-            <span className="dms-admin-badge">Admin</span>
-            <select
-              value={adminSelectedDept}
-              onChange={(e) => handleAdminDeptChange(e.target.value)}
-            >
-              <option value="">
-                {modes.find((m) => m.key === uploadMode)?.lookupStyle ===
-                "parentMatch"
-                  ? "Select project…"
-                  : "Select department…"}
-              </option>
-              {(modes.find((m) => m.key === uploadMode)?.lookupStyle ===
-              "parentMatch"
-                ? (modeParents[uploadMode] ?? [])
-                : allDepts
-              ).map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : detectedDept ? (
-          <div className="dms-dept-badge">
-            <span className="dept-label">Your department:</span>
-            <span className="dept-name">{detectedDept.label}</span>
-          </div>
-        ) : (
+          <p className="dms-dept-loading">Loading your access&hellip;</p>
+        ) : userPaths.length === 0 && !isAdmin ? (
           <div className="dms-dept-error">
-            Your account is not assigned to a department group. Contact your
+            Your account isn&apos;t mapped to any unit. Contact your
             administrator before uploading.
           </div>
-        )}
+        ) : null}
 
-        {/* Upload mode toggle — options driven by DMS Config list */}
+        {/* Business Segment | Project toggle — sides driven by DMS Config */}
         <div className="dms-radio-group">
-        <p>Folder Location:</p>
-          {modes.map((m) => (
-            <label key={m.key}>
-              <input
-                type="radio"
-                name="uploadMode"
-                value={m.key}
-                checked={uploadMode === m.key}
-                onChange={() => switchMode(m.key)}
-              />
-              {m.label}
-            </label>
-          ))}
+          <p>Upload into:</p>
+          {(["BusinessSegment", "Project"] as const).map((side) => {
+            const first = modes.find((m) => m.side === side);
+            if (!first) return null;
+            const active = activeMode()?.side === side;
+            return (
+              <label key={side}>
+                <input
+                  type="radio"
+                  name="sideToggle"
+                  checked={active}
+                  onChange={() => switchMode(first.key)}
+                />
+                {side === "BusinessSegment" ? "Business Segment" : "Project"}
+              </label>
+            );
+          })}
         </div>
+
+        {/* Segment picker — shown only when the active side has more than one mode */}
+        {(() => {
+          const side = activeMode()?.side;
+          const sideModes = modes.filter((m) => m.side === side);
+          if (sideModes.length <= 1) return null;
+          return (
+            <label className="dms-field">
+              <span>Segment</span>
+              <select
+                value={uploadMode}
+                onChange={(e) => switchMode(e.target.value)}
+              >
+                {sideModes.map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })()}
 
         <div className="dms-grid">
           {renderSelect(
@@ -1034,9 +1050,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               value={documentDate}
               max={(() => {
                 const d = new Date();
-                const m = d.getMonth() + 1;
+                const mm = d.getMonth() + 1;
                 const day = d.getDate();
-                return `${d.getFullYear()}-${m < 10 ? "0" + m : m}-${day < 10 ? "0" + day : day}`;
+                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
               })()}
               onChange={(e) => setDocumentDate(e.target.value)}
             />
@@ -1050,16 +1066,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             options.vendor,
           )}
 
-          {renderSelect(
-            modes.find((m) => m.key === uploadMode)?.subTeamLabel ??
-              "Sub-team",
-            true,
-            subTeamValue,
-            setSubTeamValue,
-            subTeamChoices.map((c) => c.term),
-            deptLoading || !detectedDept,
-            "--",
-            true,
+          {(activeMode()?.levels ?? []).map((lvl, i) =>
+            renderSelect(
+              lvl.label,
+              true,
+              levelValues[i] ?? "",
+              (v) => {
+                const md = activeMode();
+                if (md) onLevelChange(md, i, v).catch(() => undefined);
+              },
+              levelChoices[i] ?? [],
+              deptLoading || (i > 0 && !levelValues[i - 1]),
+              "--",
+              true,
+            ),
           )}
 
           {renderSelect(
@@ -1094,7 +1114,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           type="button"
           className="dms-btn primary"
           onClick={handleUpload}
-          disabled={busy || deptLoading || !detectedDept}
+          disabled={busy || deptLoading}
         >
           {busy ? "Uploading…" : "Upload"}
         </button>
