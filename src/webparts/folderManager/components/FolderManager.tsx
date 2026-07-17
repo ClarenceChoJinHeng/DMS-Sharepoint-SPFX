@@ -3,9 +3,17 @@ import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse, MSGraphClientV3 } from "@microsoft/sp-http";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 
-const MODES = ["Departments", "Projects"] as const;
-type Mode      = (typeof MODES)[number];
+// A "mode" is a top-level container folder under the library root. These used to
+// be hardcoded (Departments / Projects); they are now discovered dynamically so
+// the tool works with the multi-segment model (Group Head Office, Group Upstream
+// Operations, …) or any future top-level folder naming.
+type Mode      = string;
 type LibTarget = "Staging" | "Documents";
+
+// SharePoint document libraries keep a system "Forms" folder (and other names
+// starting with "_") at the root — never show those as manageable sections.
+const isSystemFolder = (name: string): boolean =>
+  name === "Forms" || name.startsWith("_");
 
 const sanitize = (str: string): string => str.replace(/[\\/:*?"<>|#%]/g, "").trim();
 const uid      = (): string => Math.random().toString(36).slice(2, 9);
@@ -159,7 +167,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const siteUrl = context.pageContext.web.absoluteUrl;
 
   const [libTarget,    setLibTarget]    = useState<LibTarget>("Staging");
-  const [tree,         setTree]         = useState<Record<Mode, FolderNode[]>>({ Departments: [], Projects: [] });
+  // Top-level container folders discovered under the library root, in display order.
+  const [sections,     setSections]     = useState<Mode[]>([]);
+  const [tree,         setTree]         = useState<Record<Mode, FolderNode[]>>({});
   const [libRoot,      setLibRoot]      = useState<string | null>(null);
   const [loading,      setLoading]      = useState(true);
   const [busy,         setBusy]         = useState(false);
@@ -168,7 +178,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const [log,          setLog]          = useState<LogEntry[]>([]);
   const [toast,        setToast]        = useState<{ message: string; error: boolean } | null>(null);
   const [expandedIds,  setExpandedIds]  = useState<Record<string, boolean>>({});
-  const [modeOpen,     setModeOpen]     = useState<Record<Mode, boolean>>({ Departments: true, Projects: true });
+  // Section collapse state, keyed by section name; sections default to open.
+  const [modeOpen,     setModeOpen]     = useState<Record<Mode, boolean>>({});
 
   const showToast = (message: string, error: boolean): void => {
     setToast({ message, error });
@@ -368,16 +379,23 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const root = await getLibraryRoot(libTarget);
     setLibRoot(root);
     if (!root) {
-      setTree({ Departments: [], Projects: [] });
+      setSections([]);
+      setTree({});
       setLoading(false);
       showToast(`Could not find the "${libTarget}" library.`, true);
       return;
     }
-    const result: Record<Mode, FolderNode[]> = { Departments: [], Projects: [] };
-    for (const mode of MODES) {
-      const parents = await getFolders(`${root}/${mode}`);
-      result[mode] = parents.map(p => makeNode(p.Name, p.ServerRelativeUrl));
+    // Discover the top-level container folders under the library root (e.g. the
+    // segment folders) instead of assuming a fixed Departments/Projects layout.
+    const topFolders = (await getFolders(root))
+      .filter(f => !isSystemFolder(f.Name));
+    const sectionNames = topFolders.map(f => f.Name);
+    const result: Record<Mode, FolderNode[]> = {};
+    for (const f of topFolders) {
+      const parents = await getFolders(f.ServerRelativeUrl);
+      result[f.Name] = parents.map(p => makeNode(p.Name, p.ServerRelativeUrl));
     }
+    setSections(sectionNames);
     setTree(result);
     setLoading(false);
   };
@@ -392,13 +410,21 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     nodes.map(n => n.id === id ? updater(n) : (n.children.length > 0 ? { ...n, children: mapTree(n.children, id, updater) } : n));
 
   const updateNode = (id: string, updater: (n: FolderNode) => FolderNode): void =>
-    setTree(prev => ({ Departments: mapTree(prev.Departments, id, updater), Projects: mapTree(prev.Projects, id, updater) }));
+    setTree(prev => {
+      const next: Record<Mode, FolderNode[]> = {};
+      for (const k of Object.keys(prev)) next[k] = mapTree(prev[k], id, updater);
+      return next;
+    });
 
   const filterTree = (nodes: FolderNode[], id: string): FolderNode[] =>
     nodes.filter(n => n.id !== id).map(n => n.children.length > 0 ? { ...n, children: filterTree(n.children, id) } : n);
 
   const discardNode = (id: string): void =>
-    setTree(prev => ({ Departments: filterTree(prev.Departments, id), Projects: filterTree(prev.Projects, id) }));
+    setTree(prev => {
+      const next: Record<Mode, FolderNode[]> = {};
+      for (const k of Object.keys(prev)) next[k] = filterTree(prev[k], id);
+      return next;
+    });
 
   /* ── Expand / lazy-load children ────────────────────────────────────────────── */
 
@@ -482,7 +508,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     return renamed || permDirty || node.children.some(nodeHasChanges);
   };
 
-  const hasChanges = MODES.some(mode => tree[mode].some(nodeHasChanges));
+  const hasChanges = sections.some(mode => (tree[mode] ?? []).some(nodeHasChanges));
 
   /* ── Update (rename + create + permissions, all in one commit) ─────────────────── */
 
@@ -512,7 +538,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         if (n.children.length > 0) walk(n.children, mode, [...ancestorIds, n.id], n.newName.trim() || n.name || "(unnamed folder)");
       }
     };
-    MODES.forEach(mode => walk(tree[mode], mode, [], mode));
+    sections.forEach(mode => walk(tree[mode] ?? [], mode, [], mode));
     return errors;
   };
 
@@ -621,9 +647,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       return resolvedPath;
     };
 
-    for (const mode of MODES) {
+    for (const mode of sections) {
       const modeRootPath = `${libRoot}/${mode}`;
-      for (const node of tree[mode]) {
+      for (const node of (tree[mode] ?? [])) {
         await processNode(node, modeRootPath);
       }
     }
@@ -714,7 +740,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     <div style={{ paddingTop: 8 }}>
       <button style={s.addFolderBtn} disabled={busy}
         onClick={() => addNewChild(mode, parentNode ? parentNode.id : null)}>
-        {`+ ${parentNode ? "Add subfolder" : mode === "Departments" ? "Add department folder" : "Add project folder"}`}
+        {`+ ${parentNode ? "Add subfolder" : "Add folder"}`}
       </button>
     </div>
   );
@@ -835,30 +861,36 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
       {loading ? (
         <p style={{ fontSize: 13, color: "#666" }}>Loading folders…</p>
+      ) : sections.length === 0 ? (
+        <p style={{ fontSize: 13, color: "#999" }}>No top-level folders found under {libTarget}.</p>
       ) : (
-        MODES.map(mode => (
-          <div key={mode} style={{ marginBottom: 28 }}>
-            <div style={s.secHeader} onClick={() => setModeOpen(prev => ({ ...prev, [mode]: !prev[mode] }))}>
-              <span style={s.ico}>{modeOpen[mode] ? "▾" : "▸"}</span>
-              <p style={s.secTitle}>{mode}</p>
-              {tree[mode].length > 0 && <span style={s.badge}>{tree[mode].length}</span>}
+        sections.map(mode => {
+          const open = modeOpen[mode] !== false; // sections default to open
+          const nodes = tree[mode] ?? [];
+          return (
+            <div key={mode} style={{ marginBottom: 28 }}>
+              <div style={s.secHeader} onClick={() => setModeOpen(prev => ({ ...prev, [mode]: open ? false : true }))}>
+                <span style={s.ico}>{open ? "▾" : "▸"}</span>
+                <p style={s.secTitle}>{mode}</p>
+                {nodes.length > 0 && <span style={s.badge}>{nodes.length}</span>}
+              </div>
+
+              {open && (
+                <>
+                  {nodes.length === 0 ? (
+                    <p style={{ fontSize: 13, color: "#999" }}>No folders found under {libTarget}/{mode}.</p>
+                  ) : (
+                    <div style={s.scrollPane}>
+                      {nodes.map(node => renderNode(node, mode, 0))}
+                    </div>
+                  )}
+
+                  {libRoot && renderAddForm(mode, null)}
+                </>
+              )}
             </div>
-
-            {modeOpen[mode] && (
-              <>
-                {tree[mode].length === 0 ? (
-                  <p style={{ fontSize: 13, color: "#999" }}>No folders found under {libTarget}/{mode}.</p>
-                ) : (
-                  <div style={s.scrollPane}>
-                    {tree[mode].map(node => renderNode(node, mode, 0))}
-                  </div>
-                )}
-
-                {libRoot && renderAddForm(mode, null)}
-              </>
-            )}
-          </div>
-        ))
+          );
+        })
       )}
 
       <div style={s.actions}>
