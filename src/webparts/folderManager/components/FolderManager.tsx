@@ -18,6 +18,11 @@ const isSystemFolder = (name: string): boolean =>
 const sanitize = (str: string): string => str.replace(/[\\/:*?"<>|#%]/g, "").trim();
 const uid      = (): string => Math.random().toString(36).slice(2, 9);
 
+// Reserved tree key holding NEW top-level folders staged for creation directly
+// under the library root. "*" is illegal in SharePoint folder names, so this key
+// can never collide with a real discovered section (top-level folder) name.
+const NEW_TOP_LEVEL = "*pending-top-level*";
+
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
 type RoleDef        = { id: number; name: string };
@@ -180,6 +185,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const [expandedIds,  setExpandedIds]  = useState<Record<string, boolean>>({});
   // Section collapse state, keyed by section name; sections default to open.
   const [modeOpen,     setModeOpen]     = useState<Record<Mode, boolean>>({});
+  // Confirm gate for the "Copy structure → Documents" bulk action.
+  const [copyConfirm,  setCopyConfirm]  = useState(false);
 
   const showToast = (message: string, error: boolean): void => {
     setToast({ message, error });
@@ -442,12 +449,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const addNewChild = (mode: Mode, parentId: string | null): void => {
     const node = makeNewNode();
     if (parentId === null) {
-      setTree(prev => ({ ...prev, [mode]: [...prev[mode], node] }));
+      setTree(prev => ({ ...prev, [mode]: [...(prev[mode] ?? []), node] }));
       return;
     }
     setExpandedIds(prev => ({ ...prev, [parentId]: true }));
     updateNode(parentId, n => ({ ...n, children: [...n.children, node] }));
   };
+
+  // Stage a brand-new TOP-LEVEL folder, created directly under the library root
+  // on Update. Works even when the library currently has no folders at all.
+  const addTopLevel = (): void =>
+    setTree(prev => ({ ...prev, [NEW_TOP_LEVEL]: [...(prev[NEW_TOP_LEVEL] ?? []), makeNewNode()] }));
 
   /* ── Delete existing folders (staged in-memory, requires confirmation, applied on Update) ── */
 
@@ -508,7 +520,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     return renamed || permDirty || node.children.some(nodeHasChanges);
   };
 
-  const hasChanges = sections.some(mode => (tree[mode] ?? []).some(nodeHasChanges));
+  const hasChanges =
+    sections.some(mode => (tree[mode] ?? []).some(nodeHasChanges)) ||
+    (tree[NEW_TOP_LEVEL] ?? []).some(nodeHasChanges);
 
   /* ── Update (rename + create + permissions, all in one commit) ─────────────────── */
 
@@ -539,6 +553,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       }
     };
     sections.forEach(mode => walk(tree[mode] ?? [], mode, [], mode));
+    // New top-level folders live under the library root; label them by library.
+    walk(tree[NEW_TOP_LEVEL] ?? [], NEW_TOP_LEVEL, [], libTarget);
     return errors;
   };
 
@@ -653,6 +669,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         await processNode(node, modeRootPath);
       }
     }
+    // New top-level folders are created directly under the library root.
+    for (const node of (tree[NEW_TOP_LEVEL] ?? [])) {
+      await processNode(node, libRoot);
+    }
 
     setLog(entries);
     setBusy(false);
@@ -665,6 +685,82 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       failed > 0,
     );
     await loadTree();
+  };
+
+  /* ── Copy Staging folder STRUCTURE → Documents (folders only, locked) ──────────── */
+
+  // Depth-first, parent-before-child list of every non-system folder under `root`.
+  const walkAllFolders = async (root: string): Promise<string[]> => {
+    const out: string[] = [];
+    const recurse = async (path: string): Promise<void> => {
+      const kids = await getFolders(path);
+      for (const k of kids) {
+        if (isSystemFolder(k.Name)) continue;
+        out.push(k.ServerRelativeUrl); // parent pushed before we descend into it
+        await recurse(k.ServerRelativeUrl);
+      }
+    };
+    await recurse(root);
+    return out;
+  };
+
+  // Mirror the Staging folder tree into Documents: create each folder (never the
+  // files) and break inheritance so it's locked until the admin assigns groups.
+  // Idempotent — existing folders are skipped, and a folder that already has
+  // unique permissions is left untouched so a re-run never clobbers assigned groups.
+  const copyStructureToDocuments = async (): Promise<void> => {
+    setCopyConfirm(false);
+    setBusy(true);
+    const entries: LogEntry[] = [];
+    try {
+      const stagingRoot   = await getLibraryRoot("Staging");
+      const documentsRoot = await getLibraryRoot("Documents");
+      if (!stagingRoot || !documentsRoot) {
+        showToast("Could not resolve the Staging or Documents library root.", true);
+        setBusy(false);
+        return;
+      }
+      const folders = await walkAllFolders(stagingRoot);
+      if (folders.length === 0) {
+        showToast("No folders found in Staging to copy.", false);
+        setBusy(false);
+        return;
+      }
+      for (const src of folders) {
+        const rel  = src.substring(stagingRoot.length); // leading "/…"
+        const dest = `${documentsRoot}${rel}`;
+        try {
+          const existed = await folderExists(dest);
+          if (!existed) {
+            await createFolder(dest);
+            await breakInheritance(dest);
+            entries.push({ msg: `${rel} — created + locked ✓`, ok: true });
+          } else {
+            const isUnique = await getHasUniquePerms(dest);
+            if (isUnique === false) {
+              await breakInheritance(dest);
+              entries.push({ msg: `${rel} — existed, locked ✓`, ok: true });
+            } else {
+              entries.push({ msg: `${rel} — already exists & locked, skipped`, ok: true });
+            }
+          }
+        } catch (e) {
+          entries.push({ msg: `${rel} — FAILED: ${(e as Error).message}`, ok: false });
+        }
+      }
+      setLog(entries);
+      const failed = entries.filter(e => !e.ok).length;
+      showToast(
+        failed > 0
+          ? `Copied structure with ${failed} error(s) — see log.`
+          : `Copied ${entries.length} folder(s) to Documents (locked). Assign groups next.`,
+        failed > 0,
+      );
+    } catch (e) {
+      showToast(`Copy failed: ${(e as Error).message}`, true);
+    } finally {
+      setBusy(false);
+    }
   };
 
   /* ── Render helpers ──────────────────────────────────────────────────────────── */
@@ -861,39 +957,76 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
       {loading ? (
         <p style={{ fontSize: 13, color: "#666" }}>Loading folders…</p>
-      ) : sections.length === 0 ? (
-        <p style={{ fontSize: 13, color: "#999" }}>No top-level folders found under {libTarget}.</p>
       ) : (
-        sections.map(mode => {
-          const open = modeOpen[mode] !== false; // sections default to open
-          const nodes = tree[mode] ?? [];
-          return (
-            <div key={mode} style={{ marginBottom: 28 }}>
-              <div style={s.secHeader} onClick={() => setModeOpen(prev => ({ ...prev, [mode]: open ? false : true }))}>
-                <span style={s.ico}>{open ? "▾" : "▸"}</span>
-                <p style={s.secTitle}>{mode}</p>
-                {nodes.length > 0 && <span style={s.badge}>{nodes.length}</span>}
+        <>
+          {sections.length === 0 && (tree[NEW_TOP_LEVEL] ?? []).length === 0 && (
+            <p style={{ fontSize: 13, color: "#999" }}>
+              No top-level folders under {libTarget} yet — create the first one below.
+            </p>
+          )}
+
+          {sections.map(mode => {
+            const open = modeOpen[mode] !== false; // sections default to open
+            const nodes = tree[mode] ?? [];
+            return (
+              <div key={mode} style={{ marginBottom: 28 }}>
+                <div style={s.secHeader} onClick={() => setModeOpen(prev => ({ ...prev, [mode]: open ? false : true }))}>
+                  <span style={s.ico}>{open ? "▾" : "▸"}</span>
+                  <p style={s.secTitle}>{mode}</p>
+                  {nodes.length > 0 && <span style={s.badge}>{nodes.length}</span>}
+                </div>
+
+                {open && (
+                  <>
+                    {nodes.length === 0 ? (
+                      <p style={{ fontSize: 13, color: "#999" }}>No folders found under {libTarget}/{mode}.</p>
+                    ) : (
+                      <div style={s.scrollPane}>
+                        {nodes.map(node => renderNode(node, mode, 0))}
+                      </div>
+                    )}
+
+                    {libRoot && renderAddForm(mode, null)}
+                  </>
+                )}
               </div>
+            );
+          })}
 
-              {open && (
-                <>
-                  {nodes.length === 0 ? (
-                    <p style={{ fontSize: 13, color: "#999" }}>No folders found under {libTarget}/{mode}.</p>
-                  ) : (
-                    <div style={s.scrollPane}>
-                      {nodes.map(node => renderNode(node, mode, 0))}
-                    </div>
-                  )}
-
-                  {libRoot && renderAddForm(mode, null)}
-                </>
-              )}
+          {/* New top-level folders staged for creation directly under the library root */}
+          {(tree[NEW_TOP_LEVEL] ?? []).length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <p style={s.secTitle}>New top-level folder{(tree[NEW_TOP_LEVEL] ?? []).length !== 1 ? "s" : ""}</p>
+              <div style={s.scrollPane}>
+                {(tree[NEW_TOP_LEVEL] ?? []).map(node => renderNode(node, NEW_TOP_LEVEL, 0))}
+              </div>
             </div>
-          );
-        })
+          )}
+
+          {libRoot && (
+            <div style={{ paddingTop: 4 }}>
+              <button style={s.addFolderBtn} disabled={busy} onClick={addTopLevel}>
+                + Add top-level folder
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {copyConfirm && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>
+          <span>Copy the entire <strong>Staging</strong> folder structure into <strong>Documents</strong>? Folders only — no files — each locked (inheritance broken). Existing folders are skipped. You assign groups afterward.</span>
+          <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: "#0f6c3f", color: "#fff", border: "none", flexShrink: 0 }} disabled={busy} onClick={() => { copyStructureToDocuments().catch(() => undefined); }}>Yes, copy structure</button>
+          <button style={s.ghostBtn} disabled={busy} onClick={() => setCopyConfirm(false)}>Cancel</button>
+        </div>
       )}
 
       <div style={s.actions}>
+        <button onClick={() => setCopyConfirm(true)} disabled={busy || loading || copyConfirm}
+          title="Recreate the Staging folder tree in Documents (folders only, locked)"
+          style={{ ...s.btn, marginRight: "auto", background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>
+          Copy structure → Documents
+        </button>
         <button onClick={() => loadTree().catch(() => undefined)} disabled={busy || loading}
           style={{ ...s.btn, background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>
           Refresh
