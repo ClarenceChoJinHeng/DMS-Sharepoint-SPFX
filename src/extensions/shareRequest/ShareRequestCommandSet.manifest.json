@@ -1,0 +1,16 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/command-set-extension-manifest.schema.json",
+  "id": "d239b54b-47e5-430b-be20-7deecf0bd652",
+  "alias": "ShareRequestCommandSet",
+  "componentType": "Extension",
+  "extensionType": "ListViewCommandSet",
+  "version": "*",
+  "manifestVersion": 2,
+  "requiresCustomScript": false,
+  "items": {
+    "REQUEST_SHARE": {
+      "title": { "default": "Request to Share" },
+      "type": "command"
+    }
+  }
+}

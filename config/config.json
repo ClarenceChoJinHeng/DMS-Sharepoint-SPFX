@@ -65,6 +65,14 @@
           "manifest": "./src/webparts/requestShare/RequestShareWebPart.manifest.json"
         }
       ]
+    },
+    "share-request-extension": {
+      "components": [
+        {
+          "entrypoint": "./lib/extensions/shareRequest/ShareRequestCommandSet.js",
+          "manifest": "./src/extensions/shareRequest/ShareRequestCommandSet.manifest.json"
+        }
+      ]
     }
   },
   "externals": {},
