@@ -6,6 +6,7 @@ import {
   loadMappedTermGuids,
   resolveFolderByPath,
   writeFolderMapping,
+  ensureFolder,
 } from "../../../shared/dmsFolderMap";
 
 // A "mode" is a top-level container folder under the library root. These used to
@@ -28,10 +29,17 @@ const RECON_MODES: ReconMode[] = [
 ];
 type TermLite = { id: string; label: string };
 
+// Year/Period and Document Type term sets. Under each leaf (unit) folder the
+// provisioner pre-creates the full Year × Document Type grid (path order matches
+// the upload form: Unit / Year / Document Type). These inherit the unit's ACL.
+const YEAR_TERMSET    = "f7c578a1-e0e5-42ff-9e0c-d748cba42ede";
+const DOCTYPE_TERMSET = "0540e66e-7cb3-47ac-b0ef-4e3069387394";
+
 // One folder the provisioner will ensure exists + lock. termGuid is null for the
 // segment container folder (not a term); term folders (department, unit, …) carry
-// their GUID so Staging can be mapped for rename-proof routing.
-type ProvTarget = { termGuid: string | null; relPath: string; label: string; section: string };
+// their GUID so Staging can be mapped for rename-proof routing. isLeaf marks the
+// deepest terms (upload targets) that get the Year × Document Type grid beneath.
+type ProvTarget = { termGuid: string | null; relPath: string; label: string; section: string; isLeaf: boolean };
 
 // SharePoint document libraries keep a system "Forms" folder (and other names
 // starting with "_") at the root — never show those as manageable sections.
@@ -746,24 +754,30 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const buildProvisionTargets = async (): Promise<ProvTarget[]> => {
     const out: ProvTarget[] = [];
     for (const mode of RECON_MODES) {
-      out.push({ termGuid: null, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder });
+      out.push({ termGuid: null, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder, isLeaf: false });
       const tops = await loadReconTops(mode.termSetGuid).catch(() => [] as TermLite[]);
       for (const top of tops) {
-        out.push({ termGuid: top.id, relPath: `/${mode.stagingFolder}/${top.label}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder });
-        const walk = async (parentId: string, ancestors: string[]): Promise<void> => {
+        const topTarget: ProvTarget = { termGuid: top.id, relPath: `/${mode.stagingFolder}/${top.label}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder, isLeaf: false };
+        out.push(topTarget);
+        // Recurse; returns whether the term had children. A term with no children
+        // is a leaf (the upload target) and gets the Year × Document Type grid.
+        const walk = async (parentId: string, ancestors: string[]): Promise<boolean> => {
           const children = await loadReconChildren(mode.termSetGuid, parentId);
           for (const child of children) {
             const chain = [...ancestors, child.label];
-            out.push({
+            const childTarget: ProvTarget = {
               termGuid: child.id,
               relPath: `/${mode.stagingFolder}/${top.label}/${chain.join("/")}`,
               label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
               section: mode.stagingFolder,
-            });
-            await walk(child.id, chain);
+              isLeaf: false,
+            };
+            out.push(childTarget);
+            childTarget.isLeaf = !(await walk(child.id, chain));
           }
+          return children.length > 0;
         };
-        await walk(top.id, []);
+        topTarget.isLeaf = !(await walk(top.id, []));
       }
     }
     return out;
@@ -790,6 +804,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         setBusy(false);
         return;
       }
+      // Year × Document Type grid labels (from their term sets) — pre-created under
+      // each leaf/unit folder. Both are flat term sets, so top-level terms suffice.
+      const yearLabels    = (await loadReconTops(YEAR_TERMSET).catch(() => [] as TermLite[])).map(y => y.label);
+      const docTypeLabels = (await loadReconTops(DOCTYPE_TERMSET).catch(() => [] as TermLite[])).map(d => d.label);
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const root = await getLibraryRoot(lib);
         if (!root) {
@@ -829,6 +847,22 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 mapped.add(t.termGuid);
                 entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
               }
+            }
+            // Under leaf (unit) folders, pre-create the Year × Document Type grid.
+            // These inherit the unit's ACL (no lock, no map). Idempotent via
+            // ensureFolder. Logged as a per-unit count, not one line per folder.
+            if (t.isLeaf && yearLabels.length > 0) {
+              let grid = 0;
+              for (const yr of yearLabels) {
+                const yearFolder = await ensureFolder(context.spHttpClient, siteUrl, full, yr);
+                if (!yearFolder) continue;
+                grid++;
+                for (const dt of docTypeLabels) {
+                  const dtFolder = await ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt);
+                  if (dtFolder) grid++;
+                }
+              }
+              entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
             }
           } catch (e) {
             entries.push({ msg: `${lib}${t.relPath} — FAILED: ${(e as Error).message}`, ok: false });
@@ -1053,10 +1087,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             <strong>Staging</strong> and <strong>Documents</strong>. Every level
             (segment → department → unit) is created if missing and{" "}
             <strong>locked</strong> (inheritance broken) so nobody can see a folder
-            until you assign the proper group. Staging folders are also mapped for
-            rename-proof upload routing. Group assignment is not done here — assign
-            groups per folder afterward on the Staging / Documents tabs. Safe to
-            re-run: existing locked folders and already-mapped terms are skipped.
+            until you assign the proper group. Under each unit the full{" "}
+            <strong>Year × Document Type</strong> grid is pre-created (inheriting the
+            unit folder permissions). Staging folders are also mapped for rename-proof
+            upload routing. Group assignment is not done here — assign groups per
+            folder afterward on the Staging / Documents tabs. Safe to re-run:
+            existing folders and already-mapped terms are skipped. Note: building the
+            Year × Document Type grid across every unit can take a minute or two.
           </p>
           {reconConfirm ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>

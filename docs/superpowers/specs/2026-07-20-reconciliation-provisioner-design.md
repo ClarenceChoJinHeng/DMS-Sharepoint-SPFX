@@ -21,6 +21,25 @@ retired, and the Folder Manager "Copy structure → Documents" button is removed
 - **Lives in Folder Manager** as a tab; the standalone Reconciliation web part is
   removed from the bundle/componentId; the copy button is deleted.
 
+## Decision (2026-07-20b) — pre-create the Year × Document Type grid
+
+Under every **leaf (unit)** folder — the actual upload targets — reconciliation
+also pre-creates the full **Year × Document Type** grid: each Year folder, and
+inside it each Document Type folder. Both come from Term Store term sets
+(`yearPeriod` = `f7c578a1-…`, `documentType` = `0540e66e-…`), so they are finite
+and walkable just like the segment/dept/unit terms.
+
+- Path order matches the upload form: **Unit / Year / Document Type** (Form.tsx
+  creates the Year folder first, then the Document Type folder inside it).
+- These grid folders **inherit the unit's ACL** — no `breakroleinheritance`, no
+  folder-map row. They are organizational, not security boundaries.
+- Created in **both** libraries (Staging + Documents).
+- Idempotent via `ensureFolder` (create-or-resolve); a re-run after a new Year term
+  is added simply fills in the new folders. Logged as a per-unit summary count,
+  not one line per folder, to keep the log readable.
+- Cost: units × years × doc types × 2 libraries folder ensures — acceptable for a
+  one-time (occasionally re-run) admin action, but the slowest part of a run.
+
 ## Goal
 
 Eliminate manual folder creation + permissioning. The **term store is the structure
