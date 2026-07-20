@@ -352,7 +352,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         groupId: r.GroupId ?? "",
         groupName: r.GroupName ?? "",
         segment: r.Segment ?? "",
-        unitTermGuid: r.UnitTermGuid ?? "",
+        termGuid: r.UnitTermGuid ?? "",
         role: r.Role ?? "",
       }),
     );
