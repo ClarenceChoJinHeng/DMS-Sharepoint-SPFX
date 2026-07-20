@@ -1,5 +1,4 @@
 import {
-  AccessLevel,
   roleNameForAccess,
   parseShareTarget,
   buildRequestPayload,
