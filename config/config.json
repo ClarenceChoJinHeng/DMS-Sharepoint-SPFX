@@ -49,6 +49,14 @@
           "manifest": "./src/webparts/crossSiteBrowser/CrossSiteBrowserWebPart.manifest.json"
         }
       ]
+    },
+    "share-approval-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/shareApproval/ShareApprovalWebPart.js",
+          "manifest": "./src/webparts/shareApproval/ShareApprovalWebPart.manifest.json"
+        }
+      ]
     }
   },
   "externals": {},
@@ -57,6 +65,7 @@
     "FolderManagerWebPartStrings": "lib/webparts/folderManager/loc/{locale}.js",
     "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js",
     "CrossSiteBrowserWebPartStrings": "lib/webparts/crossSiteBrowser/loc/{locale}.js",
+    "ShareApprovalWebPartStrings": "lib/webparts/shareApproval/loc/{locale}.js",
     "ControlStrings": "node_modules/@pnp/spfx-controls-react/lib/loc/{locale}.js"
   }
 }

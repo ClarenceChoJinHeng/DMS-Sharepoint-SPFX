@@ -1,0 +1,21 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "f15ba20c-f89d-4eff-b081-83a3479de1ac",
+  "alias": "ShareApprovalWebPart",
+  "componentType": "WebPart",
+  "version": "*",
+  "manifestVersion": 2,
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart"],
+  "supportsThemeVariants": true,
+  "preconfiguredEntries": [
+    {
+      "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+      "group": { "default": "Other" },
+      "title": { "default": "Share Approval" },
+      "description": { "default": "Admin queue for approving DMS share requests" },
+      "officeFabricIconFontName": "PageCheckedIn",
+      "properties": {}
+    }
+  ]
+}
