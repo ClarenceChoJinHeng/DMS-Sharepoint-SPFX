@@ -2,6 +2,11 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse, MSGraphClientV3 } from "@microsoft/sp-http";
 import { IFolderManagerProps } from "./IFolderManagerProps";
+import {
+  loadMappedTermGuids,
+  resolveFolderByPath,
+  writeFolderMapping,
+} from "../../../shared/dmsFolderMap";
 
 // A "mode" is a top-level container folder under the library root. These used to
 // be hardcoded (Departments / Projects); they are now discovered dynamically so
@@ -9,6 +14,24 @@ import { IFolderManagerProps } from "./IFolderManagerProps";
 // Operations, …) or any future top-level folder naming.
 type Mode      = string;
 type LibTarget = "Staging" | "Documents";
+// The three top-level tabs. The two library tabs drive the folder tree; the
+// Reconciliation tab is the term-store-driven provisioner (create + lock + map).
+type Tab       = LibTarget | "Reconciliation";
+
+// Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
+// Each maps a term set to the segment container folder its terms live under.
+// Pilot slice: Group Head Office only; add the other four segments once their
+// term sets are onboarded (term-set GUID + its container folder name).
+type ReconMode = { key: string; termSetGuid: string; stagingFolder: string };
+const RECON_MODES: ReconMode[] = [
+  { key: "gho", termSetGuid: "efa87c6a-9536-4f7c-910f-011bf7413b80", stagingFolder: "Group Head Office" },
+];
+type TermLite = { id: string; label: string };
+
+// One folder the provisioner will ensure exists + lock. termGuid is null for the
+// segment container folder (not a term); term folders (department, unit, …) carry
+// their GUID so Staging can be mapped for rename-proof routing.
+type ProvTarget = { termGuid: string | null; relPath: string; label: string; section: string };
 
 // SharePoint document libraries keep a system "Forms" folder (and other names
 // starting with "_") at the root — never show those as manageable sections.
@@ -171,6 +194,9 @@ const GroupSearch: React.FC<{
 export default function FolderManager({ context }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
+  // Active tab. The two library tabs keep libTarget in sync (drives the folder
+  // tree); the Reconciliation tab shows the provisioner instead.
+  const [tab,          setTab]          = useState<Tab>("Staging");
   const [libTarget,    setLibTarget]    = useState<LibTarget>("Staging");
   // Top-level container folders discovered under the library root, in display order.
   const [sections,     setSections]     = useState<Mode[]>([]);
@@ -185,8 +211,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const [expandedIds,  setExpandedIds]  = useState<Record<string, boolean>>({});
   // Section collapse state, keyed by section name; sections default to open.
   const [modeOpen,     setModeOpen]     = useState<Record<Mode, boolean>>({});
-  // Confirm gate for the "Copy structure → Documents" bulk action.
-  const [copyConfirm,  setCopyConfirm]  = useState(false);
+  // Confirm gate for the Reconciliation tab's provisioning run.
+  const [reconConfirm, setReconConfirm] = useState(false);
 
   const showToast = (message: string, error: boolean): void => {
     setToast({ message, error });
@@ -687,77 +713,138 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     await loadTree();
   };
 
-  /* ── Copy Staging folder STRUCTURE → Documents (folders only, locked) ──────────── */
+  /* ── Folder Reconciliation (term-store provisioner) ────────────────────────────── */
 
-  // Depth-first, parent-before-child list of every non-system folder under `root`.
-  const walkAllFolders = async (root: string): Promise<string[]> => {
-    const out: string[] = [];
-    const recurse = async (path: string): Promise<void> => {
-      const kids = await getFolders(path);
-      for (const k of kids) {
-        if (isSystemFolder(k.Name)) continue;
-        out.push(k.ServerRelativeUrl); // parent pushed before we descend into it
-        await recurse(k.ServerRelativeUrl);
+  // Term-store readers (v2.1 taxonomy API) — same calls the retired Reconciliation
+  // web part used. Top-level terms = the first level under the set (departments for
+  // GHO); children recurse to the leaf (unit) terms.
+  const loadReconTops = async (termSetId: string): Promise<TermLite[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}/children`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) throw new Error(`Term set ${termSetId} returned ${res.status}`);
+    const data = await res.json();
+    return (data.value ?? []).map((t: { id: string; labels: Array<{ name: string }> }) => ({ id: t.id, label: t.labels[0].name }));
+  };
+
+  const loadReconChildren = async (termSetId: string, parentId: string): Promise<TermLite[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}/terms/${parentId}/children`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.value ?? []).map((t: { id: string; labels: Array<{ name: string }> }) => ({ id: t.id, label: t.labels[0].name }));
+  };
+
+  // Flatten the term store into the folders to provision, parent-before-child so a
+  // parent always exists before we create its child. The segment container folder
+  // (mode.stagingFolder) has no term; every term below it carries its GUID.
+  const buildProvisionTargets = async (): Promise<ProvTarget[]> => {
+    const out: ProvTarget[] = [];
+    for (const mode of RECON_MODES) {
+      out.push({ termGuid: null, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder });
+      const tops = await loadReconTops(mode.termSetGuid).catch(() => [] as TermLite[]);
+      for (const top of tops) {
+        out.push({ termGuid: top.id, relPath: `/${mode.stagingFolder}/${top.label}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder });
+        const walk = async (parentId: string, ancestors: string[]): Promise<void> => {
+          const children = await loadReconChildren(mode.termSetGuid, parentId);
+          for (const child of children) {
+            const chain = [...ancestors, child.label];
+            out.push({
+              termGuid: child.id,
+              relPath: `/${mode.stagingFolder}/${top.label}/${chain.join("/")}`,
+              label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
+              section: mode.stagingFolder,
+            });
+            await walk(child.id, chain);
+          }
+        };
+        await walk(top.id, []);
       }
-    };
-    await recurse(root);
+    }
     return out;
   };
 
-  // Mirror the Staging folder tree into Documents: create each folder (never the
-  // files) and break inheritance so it's locked until the admin assigns groups.
-  // Idempotent — existing folders are skipped, and a folder that already has
-  // unique permissions is left untouched so a re-run never clobbers assigned groups.
-  const copyStructureToDocuments = async (): Promise<void> => {
-    setCopyConfirm(false);
+  // Provision from the term store into BOTH libraries in one run: create each folder
+  // if missing and break inheritance at every level (segment → department → unit) so
+  // nothing is visible until an admin assigns groups. Owner group is re-added as Full
+  // Control so admins keep access. Staging folders are also mapped (term → UniqueId)
+  // for rename-proof upload routing; Documents is created + locked but not mapped.
+  // Group assignment is intentionally out of scope — admins assign groups afterward.
+  // Idempotent: existing, already-locked folders are skipped; already-mapped terms
+  // are not re-written.
+  const runReconciliation = async (): Promise<void> => {
+    setReconConfirm(false);
     setBusy(true);
     const entries: LogEntry[] = [];
     try {
-      const stagingRoot   = await getLibraryRoot("Staging");
-      const documentsRoot = await getLibraryRoot("Documents");
-      if (!stagingRoot || !documentsRoot) {
-        showToast("Could not resolve the Staging or Documents library root.", true);
+      const fullCtrlId = roleDefs.find(r => r.name === "Full Control")?.id;
+      const mapped = await loadMappedTermGuids(context.spHttpClient, siteUrl);
+      const targets = await buildProvisionTargets();
+      if (targets.length === 0) {
+        showToast("No terms found in the term store to provision.", false);
         setBusy(false);
         return;
       }
-      const folders = await walkAllFolders(stagingRoot);
-      if (folders.length === 0) {
-        showToast("No folders found in Staging to copy.", false);
-        setBusy(false);
-        return;
-      }
-      for (const src of folders) {
-        const rel  = src.substring(stagingRoot.length); // leading "/…"
-        const dest = `${documentsRoot}${rel}`;
-        try {
-          const existed = await folderExists(dest);
-          if (!existed) {
-            await createFolder(dest);
-            await breakInheritance(dest);
-            entries.push({ msg: `${rel} — created + locked ✓`, ok: true });
-          } else {
-            const isUnique = await getHasUniquePerms(dest);
-            if (isUnique === false) {
-              await breakInheritance(dest);
-              entries.push({ msg: `${rel} — existed, locked ✓`, ok: true });
+      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+        const root = await getLibraryRoot(lib);
+        if (!root) {
+          entries.push({ msg: `${lib}: library root not found — skipped`, ok: false });
+          continue;
+        }
+        for (const t of targets) {
+          const full = `${root}${t.relPath}`;
+          try {
+            const existed = await folderExists(full);
+            if (!existed) {
+              await createFolder(full);
+              await breakInheritance(full);
+              if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
+              entries.push({ msg: `${lib}${t.relPath} — created + locked ✓`, ok: true });
             } else {
-              entries.push({ msg: `${rel} — already exists & locked, skipped`, ok: true });
+              const isUnique = await getHasUniquePerms(full);
+              if (isUnique === false) {
+                await breakInheritance(full);
+                if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
+                entries.push({ msg: `${lib}${t.relPath} — existed, locked ✓`, ok: true });
+              } else {
+                entries.push({ msg: `${lib}${t.relPath} — already locked, skipped`, ok: true });
+              }
             }
+            // Map Staging term folders only (skip the segment container + already-mapped).
+            if (lib === "Staging" && t.termGuid && !mapped.has(t.termGuid)) {
+              const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);
+              if (resolved) {
+                await writeFolderMapping(context.spHttpClient, siteUrl, {
+                  termGuid: t.termGuid,
+                  folderUniqueId: resolved.uniqueId,
+                  title: t.label,
+                  folderUrl: resolved.serverRelativeUrl,
+                  section: t.section,
+                });
+                mapped.add(t.termGuid);
+                entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
+              }
+            }
+          } catch (e) {
+            entries.push({ msg: `${lib}${t.relPath} — FAILED: ${(e as Error).message}`, ok: false });
           }
-        } catch (e) {
-          entries.push({ msg: `${rel} — FAILED: ${(e as Error).message}`, ok: false });
         }
       }
       setLog(entries);
       const failed = entries.filter(e => !e.ok).length;
       showToast(
         failed > 0
-          ? `Copied structure with ${failed} error(s) — see log.`
-          : `Copied ${entries.length} folder(s) to Documents (locked). Assign groups next.`,
+          ? `Reconciled with ${failed} error(s) — see log.`
+          : `Reconciled ${targets.length} folder(s) across Staging + Documents (locked). Assign groups next.`,
         failed > 0,
       );
     } catch (e) {
-      showToast(`Copy failed: ${(e as Error).message}`, true);
+      showToast(`Reconciliation failed: ${(e as Error).message}`, true);
     } finally {
       setBusy(false);
     }
@@ -941,21 +1028,55 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       <h2 style={s.h2}>Manage Folders</h2>
       <p style={s.subtitle}>Rename, create, and assign permissions to folders at any depth — then apply it all at once.</p>
 
-      {/* Library toggle */}
+      {/* Tab bar: two library views + the term-store reconciliation provisioner */}
       <div style={s.toggleWrap}>
         <div style={s.seg}>
-          {(["Staging", "Documents"] as LibTarget[]).map((t, i) => (
+          {(["Staging", "Documents", "Reconciliation"] as Tab[]).map((t, i, arr) => (
             <button key={t}
-              onClick={() => { setLibTarget(t); setExpandedIds({}); }}
-              style={{ ...s.segBtn, ...(i === 1 ? { borderRight: "none" } : {}), ...(libTarget === t ? s.segActive : {}) }}
+              onClick={() => {
+                setTab(t);
+                setReconConfirm(false);
+                if (t !== "Reconciliation") { setLibTarget(t as LibTarget); setExpandedIds({}); }
+              }}
+              style={{ ...s.segBtn, ...(i === arr.length - 1 ? { borderRight: "none" } : {}), ...(tab === t ? s.segActive : {}) }}
             >
-              {t}
+              {t === "Reconciliation" ? "Folder Reconciliation" : t}
             </button>
           ))}
         </div>
       </div>
 
-      {loading ? (
+      {tab === "Reconciliation" ? (
+        <div>
+          <p style={{ fontSize: 13, color: "#444", lineHeight: 1.5, margin: "0 0 16px" }}>
+            Build the folder tree from the <strong>term store</strong> in both{" "}
+            <strong>Staging</strong> and <strong>Documents</strong>. Every level
+            (segment → department → unit) is created if missing and{" "}
+            <strong>locked</strong> (inheritance broken) so nobody can see a folder
+            until you assign the proper group. Staging folders are also mapped for
+            rename-proof upload routing. Group assignment is not done here — assign
+            groups per folder afterward on the Staging / Documents tabs. Safe to
+            re-run: existing locked folders and already-mapped terms are skipped.
+          </p>
+          {reconConfirm ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>
+              <span>Create + lock the term-store folder tree in <strong>Staging</strong> and <strong>Documents</strong>? Folders only — no groups assigned. You assign groups afterward.</span>
+              <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: "#0f6c3f", color: "#fff", border: "none", flexShrink: 0 }} disabled={busy} onClick={() => { runReconciliation().catch(() => undefined); }}>
+                {busy ? "Running…" : "Yes, run reconciliation"}
+              </button>
+              <button style={s.ghostBtn} disabled={busy} onClick={() => setReconConfirm(false)}>Cancel</button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setReconConfirm(true)}
+              disabled={busy}
+              style={{ ...s.btn, background: "#0f6c3f", color: "#fff", border: "none" }}
+            >
+              Run reconciliation
+            </button>
+          )}
+        </div>
+      ) : loading ? (
         <p style={{ fontSize: 13, color: "#666" }}>Loading folders…</p>
       ) : (
         <>
@@ -1013,30 +1134,19 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         </>
       )}
 
-      {copyConfirm && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>
-          <span>Copy the entire <strong>Staging</strong> folder structure into <strong>Documents</strong>? Folders only — no files — each locked (inheritance broken). Existing folders are skipped. You assign groups afterward.</span>
-          <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: "#0f6c3f", color: "#fff", border: "none", flexShrink: 0 }} disabled={busy} onClick={() => { copyStructureToDocuments().catch(() => undefined); }}>Yes, copy structure</button>
-          <button style={s.ghostBtn} disabled={busy} onClick={() => setCopyConfirm(false)}>Cancel</button>
+      {tab !== "Reconciliation" && (
+        <div style={s.actions}>
+          <button onClick={() => loadTree().catch(() => undefined)} disabled={busy || loading}
+            style={{ ...s.btn, marginRight: "auto", background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>
+            Refresh
+          </button>
+          <button onClick={() => { handleUpdate().catch(() => undefined); }}
+            disabled={busy || loading || !hasChanges}
+            style={{ ...s.btn, background: !busy && !loading && hasChanges ? "#0f6c3f" : "#9bbfaa", color: "#fff", border: "none", cursor: !busy && !loading && hasChanges ? "pointer" : "default" }}>
+            {busy ? "Updating…" : "Update"}
+          </button>
         </div>
       )}
-
-      <div style={s.actions}>
-        <button onClick={() => setCopyConfirm(true)} disabled={busy || loading || copyConfirm}
-          title="Recreate the Staging folder tree in Documents (folders only, locked)"
-          style={{ ...s.btn, marginRight: "auto", background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>
-          Copy structure → Documents
-        </button>
-        <button onClick={() => loadTree().catch(() => undefined)} disabled={busy || loading}
-          style={{ ...s.btn, background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>
-          Refresh
-        </button>
-        <button onClick={() => { handleUpdate().catch(() => undefined); }}
-          disabled={busy || loading || !hasChanges}
-          style={{ ...s.btn, background: !busy && !loading && hasChanges ? "#0f6c3f" : "#9bbfaa", color: "#fff", border: "none", cursor: !busy && !loading && hasChanges ? "pointer" : "default" }}>
-          {busy ? "Updating…" : "Update"}
-        </button>
-      </div>
 
       {log.length > 0 && (
         <div style={s.logBox}>

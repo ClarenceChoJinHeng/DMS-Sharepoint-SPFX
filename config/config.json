@@ -42,14 +42,6 @@
         }
       ]
     },
-    "reconciliation-web-part": {
-      "components": [
-        {
-          "entrypoint": "./lib/webparts/reconciliation/ReconciliationWebPart.js",
-          "manifest": "./src/webparts/reconciliation/ReconciliationWebPart.manifest.json"
-        }
-      ]
-    },
     "cross-site-browser-web-part": {
       "components": [
         {
@@ -64,7 +56,6 @@
     "FormWebPartStrings": "lib/webparts/form/loc/{locale}.js",
     "FolderManagerWebPartStrings": "lib/webparts/folderManager/loc/{locale}.js",
     "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js",
-    "ReconciliationWebPartStrings": "lib/webparts/reconciliation/loc/{locale}.js",
     "CrossSiteBrowserWebPartStrings": "lib/webparts/crossSiteBrowser/loc/{locale}.js",
     "ControlStrings": "node_modules/@pnp/spfx-controls-react/lib/loc/{locale}.js"
   }

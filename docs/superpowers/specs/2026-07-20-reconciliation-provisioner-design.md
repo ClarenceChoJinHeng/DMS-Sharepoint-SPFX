@@ -1,8 +1,25 @@
 # Reconciliation as Term-Store Provisioner — Design
 
-**Status:** proposed. Extends the Folder Reconciliation web part from a read-only
-term→folder mapper into a term-store-driven provisioner that creates, locks, and
-secures the folder tree in one pass. Implement after Phase 1 is verified.
+**Status:** in progress. Turns Folder Reconciliation from a read-only term→folder
+mapper into a term-store-driven provisioner that **creates folders and breaks
+inheritance** in one pass. It lives as a **third tab inside the Folder Manager
+("Manage Folders") web part** — Staging / Documents / Folder Reconciliation — so
+users have one tool, not two pages. The standalone Reconciliation web part is
+retired, and the Folder Manager "Copy structure → Documents" button is removed
+(this tab supersedes it).
+
+## Decisions (2026-07-20) — supersede the earlier draft below
+
+- **Group assignment is scratched for now.** The tab only **creates folders +
+  breaks inheritance** (+ writes the folder map for Staging). Admins assign groups
+  manually afterward, exactly like the old copy button's "lock only" model — this
+  keeps the client-facing behaviour simple and avoids confusing them with role
+  mapping. The role→permission table below is deferred, not deleted; revisit when
+  auto-grouping is wanted.
+- **Both libraries in one run.** A single Run provisions Staging (create + lock +
+  map) and Documents (create + lock, no map).
+- **Lives in Folder Manager** as a tab; the standalone Reconciliation web part is
+  removed from the bundle/componentId; the copy button is deleted.
 
 ## Goal
 
