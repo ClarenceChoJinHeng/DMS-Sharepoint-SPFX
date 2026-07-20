@@ -181,7 +181,6 @@ const CrossSiteBrowser: React.FC<ICrossSiteBrowserProps> = ({
         setConfigLoading(false);
       }
     })().catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetSiteUrl, libraryName]);
 
   // 2) When the selected target changes, reset to its Documents root and load.
@@ -190,7 +189,6 @@ const CrossSiteBrowser: React.FC<ICrossSiteBrowserProps> = ({
     const root = libraryRootPath(activeTarget.siteUrl, activeTarget.documentsLibrary);
     setCrumbs([{ name: activeTarget.documentsLibrary, path: root }]);
     load(activeTarget.siteUrl, root).catch(() => undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targets, selected]);
 
   const openFolder = (folder: FolderEntry): void => {
