@@ -10,12 +10,18 @@ retired, and the Folder Manager "Copy structure → Documents" button is removed
 
 ## Decisions (2026-07-20) — supersede the earlier draft below
 
-- **Group assignment is scratched for now.** The tab only **creates folders +
-  breaks inheritance** (+ writes the folder map for Staging). Admins assign groups
-  manually afterward, exactly like the old copy button's "lock only" model — this
-  keeps the client-facing behaviour simple and avoids confusing them with role
-  mapping. The role→permission table below is deferred, not deleted; revisit when
-  auto-grouping is wanted.
+- **Group assignment is now IMPLEMENTED (2026-07-20c).** Reconciliation auto-assigns
+  the DMS Group Map groups to each folder by role using the table below
+  (MEMBER→Read, UPL→Contribute, APR→Design; GLOBAL skipped). Documents gets
+  MEMBER/viewer groups only. The join key is **DMS Group Map `UnitTermGuid`** →
+  the folder's tier term: for the segment container that term is the **term-set
+  GUID** (`assignTerm`), for dept/unit folders it is the term GUID. A term can have
+  several rows (one per role); the folder gets every mapped group at its level.
+  Assignment is idempotent — `addroleassignment` merges, so re-adding an existing
+  binding is a no-op and manual extra grants survive. A folder whose tier term has
+  no group-map rows is logged as a warning (locked admin-only until rows are added).
+  (Superseded the earlier "scratched for now" decision after the 403-on-locked-folder
+  finding made per-folder manual assignment clearly untenable at scale.)
 - **Both libraries in one run.** A single Run provisions Staging (create + lock +
   map) and Documents (create + lock, no map).
 - **Lives in Folder Manager** as a tab; the standalone Reconciliation web part is

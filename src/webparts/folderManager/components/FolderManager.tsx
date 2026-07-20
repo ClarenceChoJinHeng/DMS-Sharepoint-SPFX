@@ -39,7 +39,19 @@ const DOCTYPE_TERMSET = "0540e66e-7cb3-47ac-b0ef-4e3069387394";
 // segment container folder (not a term); term folders (department, unit, …) carry
 // their GUID so Staging can be mapped for rename-proof routing. isLeaf marks the
 // deepest terms (upload targets) that get the Year × Document Type grid beneath.
-type ProvTarget = { termGuid: string | null; relPath: string; label: string; section: string; isLeaf: boolean };
+// assignTerm is the term used to look up DMS Group Map rows for THIS folder's tier:
+// the term-set GUID for the segment container, the term GUID for dept/unit folders.
+type ProvTarget = { termGuid: string | null; assignTerm: string; relPath: string; label: string; section: string; isLeaf: boolean };
+
+// DMS Group Map role → SharePoint permission level. GLOBAL is a privileged
+// uploader bypass (not folder-scoped) and is never assigned to a folder.
+const ROLE_TO_PERMISSION: Record<string, string> = {
+  MEMBER: "Read",
+  UPL: "Contribute",
+  APR: "Design",
+};
+
+type GroupMapRow = { groupId: string; groupName: string; role: string };
 
 // SharePoint document libraries keep a system "Forms" folder (and other names
 // starting with "_") at the root — never show those as manageable sections.
@@ -748,16 +760,39 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     return (data.value ?? []).map((t: { id: string; labels: Array<{ name: string }> }) => ({ id: t.id, label: t.labels[0].name }));
   };
 
+  // Load DMS Group Map keyed by term (lowercased UnitTermGuid) → its group rows.
+  // Same list/fields the upload form reads. A term can have several rows (one per
+  // role), so a folder gets every mapped group at its role's permission level.
+  const loadGroupMapForAssign = async (): Promise<Map<string, GroupMapRow[]>> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupName,GroupId,UnitTermGuid,Role&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    const map = new Map<string, GroupMapRow[]>();
+    if (!res.ok) return map;
+    const data = await res.json();
+    for (const r of (data.value ?? []) as Array<{ GroupName?: string; GroupId?: string; UnitTermGuid?: string; Role?: string }>) {
+      const term = (r.UnitTermGuid ?? "").toLowerCase();
+      if (!term || !r.GroupId) continue;
+      const arr = map.get(term) ?? [];
+      arr.push({ groupId: r.GroupId, groupName: r.GroupName ?? r.GroupId, role: (r.Role ?? "").toUpperCase() });
+      map.set(term, arr);
+    }
+    return map;
+  };
+
   // Flatten the term store into the folders to provision, parent-before-child so a
   // parent always exists before we create its child. The segment container folder
   // (mode.stagingFolder) has no term; every term below it carries its GUID.
   const buildProvisionTargets = async (): Promise<ProvTarget[]> => {
     const out: ProvTarget[] = [];
     for (const mode of RECON_MODES) {
-      out.push({ termGuid: null, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder, isLeaf: false });
+      // Segment container: not a mapped term, but groups target it via the term-set GUID.
+      out.push({ termGuid: null, assignTerm: mode.termSetGuid, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder, isLeaf: false });
       const tops = await loadReconTops(mode.termSetGuid).catch(() => [] as TermLite[]);
       for (const top of tops) {
-        const topTarget: ProvTarget = { termGuid: top.id, relPath: `/${mode.stagingFolder}/${top.label}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder, isLeaf: false };
+        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${top.label}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder, isLeaf: false };
         out.push(topTarget);
         // Recurse; returns whether the term had children. A term with no children
         // is a leaf (the upload target) and gets the Year × Document Type grid.
@@ -767,6 +802,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             const chain = [...ancestors, child.label];
             const childTarget: ProvTarget = {
               termGuid: child.id,
+              assignTerm: child.id,
               relPath: `/${mode.stagingFolder}/${top.label}/${chain.join("/")}`,
               label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
               section: mode.stagingFolder,
@@ -784,13 +820,15 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   };
 
   // Provision from the term store into BOTH libraries in one run: create each folder
-  // if missing and break inheritance at every level (segment → department → unit) so
-  // nothing is visible until an admin assigns groups. Owner group is re-added as Full
-  // Control so admins keep access. Staging folders are also mapped (term → UniqueId)
-  // for rename-proof upload routing; Documents is created + locked but not mapped.
-  // Group assignment is intentionally out of scope — admins assign groups afterward.
-  // Idempotent: existing, already-locked folders are skipped; already-mapped terms
-  // are not re-written.
+  // if missing and break inheritance at every level (segment → department → unit).
+  // Owner group is re-added as Full Control so admins keep access. Then AUTO-ASSIGN
+  // the DMS Group Map groups to each folder by role (MEMBER→Read, UPL→Contribute,
+  // APR→Design; GLOBAL skipped). Documents gets MEMBER→Read only; uploaders/approvers
+  // get no access there. Staging term folders are also mapped (term → UniqueId) for
+  // rename-proof upload routing; Documents is not mapped. Idempotent: folders/maps
+  // are not duplicated; role assignments merge (re-adding an existing one is a no-op),
+  // and manual extra grants survive. Folders whose term has no group-map rows are
+  // logged as a warning (locked admin-only until groups are added).
   const runReconciliation = async (): Promise<void> => {
     setReconConfirm(false);
     setBusy(true);
@@ -798,6 +836,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     try {
       const fullCtrlId = roleDefs.find(r => r.name === "Full Control")?.id;
       const mapped = await loadMappedTermGuids(context.spHttpClient, siteUrl);
+      const groupMap = await loadGroupMapForAssign();
       const targets = await buildProvisionTargets();
       if (targets.length === 0) {
         showToast("No terms found in the term store to provision.", false);
@@ -848,6 +887,30 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
               }
             }
+            // Auto-assign DMS Group Map groups to this folder by role. Documents
+            // gets MEMBER (viewer) groups only; Staging gets all roles. Idempotent
+            // (add-role merges). A folder whose term has no rows is flagged.
+            const groupRows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
+            const applicable = groupRows.filter(g =>
+              ROLE_TO_PERMISSION[g.role] !== undefined && (lib === "Staging" || g.role === "MEMBER"),
+            );
+            if (applicable.length === 0) {
+              entries.push({ msg: `  ⚠ ${lib}${t.relPath} — no group-map groups for this tier (locked admin-only)`, ok: true });
+            }
+            for (const g of applicable) {
+              const roleDefId = roleDefs.find(r => r.name === ROLE_TO_PERMISSION[g.role])?.id;
+              if (roleDefId === undefined) {
+                entries.push({ msg: `  ⚠ ${g.groupName} — no "${ROLE_TO_PERMISSION[g.role]}" role definition on site`, ok: false });
+                continue;
+              }
+              try {
+                const pid = await ensureGroupPrincipal({ id: g.groupId, displayName: g.groupName, isUnified: false });
+                await addRoleAssignment(full, pid, roleDefId);
+                entries.push({ msg: `  ↳ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}`, ok: true });
+              } catch (e) {
+                entries.push({ msg: `  ✗ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]} FAILED: ${(e as Error).message}`, ok: false });
+              }
+            }
             // Under leaf (unit) folders, pre-create the Year × Document Type grid.
             // These inherit the unit's ACL (no lock, no map). Idempotent via
             // ensureFolder. Logged as a per-unit count, not one line per folder.
@@ -874,7 +937,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       showToast(
         failed > 0
           ? `Reconciled with ${failed} error(s) — see log.`
-          : `Reconciled ${targets.length} folder(s) across Staging + Documents (locked). Assign groups next.`,
+          : `Reconciled ${targets.length} folder(s) across Staging + Documents — locked + groups assigned from DMS Group Map.`,
         failed > 0,
       );
     } catch (e) {
@@ -1087,17 +1150,19 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             <strong>Staging</strong> and <strong>Documents</strong>. Every level
             (segment → department → unit) is created if missing and{" "}
             <strong>locked</strong> (inheritance broken) so nobody can see a folder
-            until you assign the proper group. Under each unit the full{" "}
-            <strong>Year × Document Type</strong> grid is pre-created (inheriting the
-            unit folder permissions). Staging folders are also mapped for rename-proof
-            upload routing. Group assignment is not done here — assign groups per
-            folder afterward on the Staging / Documents tabs. Safe to re-run:
-            existing folders and already-mapped terms are skipped. Note: building the
-            Year × Document Type grid across every unit can take a minute or two.
+            until its group is assigned. Groups are then{" "}
+            <strong>auto-assigned from DMS Group Map</strong> by role (MEMBER → Read,
+            UPL → Contribute, APR → Design; Documents gets viewer/MEMBER groups only).
+            Under each unit the full <strong>Year × Document Type</strong> grid is
+            pre-created (inheriting the unit folder permissions). Staging folders are
+            also mapped for rename-proof upload routing. Safe to re-run: existing
+            folders and mappings are not duplicated, and role assignments merge. A
+            tier with no group-map rows is flagged in the log. Note: a full run can
+            take a minute or two.
           </p>
           {reconConfirm ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>
-              <span>Create + lock the term-store folder tree in <strong>Staging</strong> and <strong>Documents</strong>? Folders only — no groups assigned. You assign groups afterward.</span>
+              <span>Create + lock the term-store folder tree in <strong>Staging</strong> and <strong>Documents</strong>, then auto-assign groups from DMS Group Map by role. Safe to re-run.</span>
               <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: "#0f6c3f", color: "#fff", border: "none", flexShrink: 0 }} disabled={busy} onClick={() => { runReconciliation().catch(() => undefined); }}>
                 {busy ? "Running…" : "Yes, run reconciliation"}
               </button>
