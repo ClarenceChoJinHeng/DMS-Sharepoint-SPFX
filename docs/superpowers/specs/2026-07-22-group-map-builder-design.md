@@ -87,6 +87,13 @@ Label resolution is best-effort: resolve term GUIDs to labels via the term store
 - **Confirm before delete.**
 - **Disable Add** until a group, a role, and (for non-GLOBAL) a segment + tier are all chosen.
 
+> **The builder only writes the mapping row — it does not apply any permission.** The
+> `Role` is a label; the native SharePoint level (`MEMBER`→Read, `UPL`→Contribute,
+> `APR`→Design; `GLOBAL`→none) is applied by **Folder Reconciliation** via
+> `ROLE_TO_PERMISSION`, using SharePoint's built-in role definitions. So after adding
+> or deleting rows, the admin must **re-run reconciliation** for the change to take
+> effect on the folders. The tab shows a reminder to that effect after a successful add/delete.
+
 ---
 
 ## 7. Testable core — `src/shared/groupMapModel.ts` (pure, no `@microsoft/*`)
