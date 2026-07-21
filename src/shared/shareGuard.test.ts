@@ -3,6 +3,7 @@ import {
   parseShareTarget,
   buildRequestPayload,
   itemAbsoluteUrl,
+  itemBreadcrumb,
   ShareTarget,
 } from "./shareGuard";
 
@@ -77,5 +78,32 @@ describe("itemAbsoluteUrl", () => {
   it("joins origin and encoded server-relative url", () => {
     expect(itemAbsoluteUrl("https://t.sharepoint.com", "/sites/X/Docs/a b.pdf"))
       .toBe("https://t.sharepoint.com/sites/X/Docs/a%20b.pdf");
+  });
+});
+
+describe("itemBreadcrumb", () => {
+  it("returns the path segments below the web root", () => {
+    expect(itemBreadcrumb("/sites/X/Staging/Group Head Office/Treasury", "/sites/X"))
+      .toEqual(["Staging", "Group Head Office", "Treasury"]);
+  });
+
+  it("tolerates a trailing slash on the web url and the item url", () => {
+    expect(itemBreadcrumb("/sites/X/Documents/GHO/GCO/", "/sites/X/"))
+      .toEqual(["Documents", "GHO", "GCO"]);
+  });
+
+  it("decodes percent-encoded segments", () => {
+    expect(itemBreadcrumb("/sites/X/Staging/a%20b/c", "/sites/X"))
+      .toEqual(["Staging", "a b", "c"]);
+  });
+
+  it("matches the web root case-insensitively", () => {
+    expect(itemBreadcrumb("/Sites/X/Staging/A", "/sites/x"))
+      .toEqual(["Staging", "A"]);
+  });
+
+  it("returns all segments when the web root is not a prefix", () => {
+    expect(itemBreadcrumb("/other/Staging/A", "/sites/X"))
+      .toEqual(["other", "Staging", "A"]);
   });
 });

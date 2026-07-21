@@ -61,3 +61,21 @@ export function buildRequestPayload(
 export function itemAbsoluteUrl(origin: string, serverRelativeUrl: string): string {
   return `${origin}${encodeURI(serverRelativeUrl)}`;
 }
+
+/** Location breadcrumb: the decoded path segments of an item below the site's web
+ *  root. e.g. ("/sites/X/Staging/GHO/Treasury", "/sites/X") -> ["Staging","GHO","Treasury"].
+ *  Lets the approver see WHERE an item lives without opening it. Matches the web
+ *  root case-insensitively; if it isn't a prefix, returns every segment. */
+export function itemBreadcrumb(serverRelativeUrl: string, webServerRelativeUrl: string): string[] {
+  const web = webServerRelativeUrl.replace(/\/+$/, "");
+  let rest = serverRelativeUrl;
+  if (web && rest.toLowerCase().indexOf(web.toLowerCase()) === 0) {
+    rest = rest.slice(web.length);
+  }
+  return rest
+    .split("/")
+    .filter(Boolean)
+    .map((s) => {
+      try { return decodeURIComponent(s); } catch { return s; }
+    });
+}
