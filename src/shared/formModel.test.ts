@@ -7,6 +7,8 @@ import {
   sanitizeFolderSegment,
   buildLevelFormValues,
   ColumnPair,
+  parseReconModes,
+  RawModeRow,
 } from "./formModel";
 
 describe("parseLevels", () => {
@@ -191,5 +193,57 @@ describe("buildLevelFormValues", () => {
       { FieldName: "Region", FieldValue: "East" },
       { FieldName: "RegionTid", FieldValue: "t-east" },
     ]);
+  });
+});
+
+describe("parseReconModes", () => {
+  const levels = '[{"label":"Department","column":"Department"}]';
+
+  it("returns term set + staging folder for valid mode rows, sorted by SortOrder", () => {
+    const rows: RawModeRow[] = [
+      { TermSetGuid: "set-upstream", StagingFolder: "Group Upstream Operations", Levels: levels, SortOrder: 2 },
+      { TermSetGuid: "set-gho", StagingFolder: "Group Head Office", Levels: levels, SortOrder: 1 },
+    ];
+    expect(parseReconModes(rows)).toEqual([
+      { termSetGuid: "set-gho", stagingFolder: "Group Head Office", sortOrder: 1 },
+      { termSetGuid: "set-upstream", stagingFolder: "Group Upstream Operations", sortOrder: 2 },
+    ]);
+  });
+
+  it("trims whitespace so a trailing space in the GUID or folder can't break matching", () => {
+    const rows: RawModeRow[] = [
+      { TermSetGuid: "  set-gho  ", StagingFolder: " Group Head Office ", Levels: levels, SortOrder: 1 },
+    ];
+    expect(parseReconModes(rows)[0]).toEqual({
+      termSetGuid: "set-gho",
+      stagingFolder: "Group Head Office",
+      sortOrder: 1,
+    });
+  });
+
+  it("ignores rows with an empty/old-schema Levels (e.g. retired department/project rows)", () => {
+    const rows: RawModeRow[] = [
+      { TermSetGuid: "old-dept", StagingFolder: "Departments", Levels: "", SortOrder: 1 },
+      { TermSetGuid: "old-proj", StagingFolder: "Projects", SortOrder: 2 },
+      { TermSetGuid: "set-gho", StagingFolder: "Group Head Office", Levels: levels, SortOrder: 3 },
+    ];
+    expect(parseReconModes(rows)).toEqual([
+      { termSetGuid: "set-gho", stagingFolder: "Group Head Office", sortOrder: 3 },
+    ]);
+  });
+
+  it("drops rows missing a term set or staging folder", () => {
+    const rows: RawModeRow[] = [
+      { TermSetGuid: "", StagingFolder: "X", Levels: levels, SortOrder: 1 },
+      { TermSetGuid: "set-x", StagingFolder: "  ", Levels: levels, SortOrder: 2 },
+    ];
+    expect(parseReconModes(rows)).toEqual([]);
+  });
+
+  it("defaults a missing SortOrder to 0", () => {
+    const rows: RawModeRow[] = [
+      { TermSetGuid: "set-gho", StagingFolder: "Group Head Office", Levels: levels },
+    ];
+    expect(parseReconModes(rows)[0].sortOrder).toBe(0);
   });
 });

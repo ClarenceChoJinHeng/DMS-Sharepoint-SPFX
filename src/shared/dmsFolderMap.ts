@@ -1,4 +1,8 @@
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
+import { encodeServerRelativePath } from "./pathEncoding";
+
+// Re-exported so existing consumers (FolderManager) can keep importing it from here.
+export { encodeServerRelativePath };
 
 /** The rename-proof lookup list. Field internal names have no spaces. */
 export const FOLDER_MAP_LIST = "DMS Folder Map";
@@ -70,7 +74,7 @@ export async function resolveFolderByPath(
   serverRelativePath: string,
 ): Promise<{ uniqueId: string; serverRelativeUrl: string } | null> {
   const url =
-    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeURIComponent(serverRelativePath)}'` +
+    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeServerRelativePath(serverRelativePath)}'` +
     `&$select=UniqueId,ServerRelativeUrl`;
   const res: SPHttpClientResponse = await spHttpClient.get(
     url,
@@ -139,8 +143,13 @@ export async function ensureFolder(
   name: string,
 ): Promise<{ uniqueId: string; serverRelativeUrl: string } | null> {
   const childPath = `${parentServerRelativeUrl}/${name}`;
+  // Check first: on re-runs the folder usually already exists, so skip the create.
+  // This is one GET instead of a POST that 400s ("already exists") followed by a
+  // resolve GET — faster on re-runs and no noisy 400s in the console.
+  const found = await resolveFolderByPath(spHttpClient, siteUrl, childPath);
+  if (found) return found;
   const addRes: SPHttpClientResponse = await spHttpClient.post(
-    `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@u)?@u='${encodeURIComponent(childPath)}'&$select=UniqueId,ServerRelativeUrl`,
+    `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@u)?@u='${encodeServerRelativePath(childPath)}'&$select=UniqueId,ServerRelativeUrl`,
     SPHttpClient.configurations.v1,
     { headers: { Accept: "application/json;odata=nometadata" } },
   );
@@ -148,7 +157,7 @@ export async function ensureFolder(
     const d = await addRes.json();
     return { uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl };
   }
-  // Already exists (or transient) — try to resolve it by path.
+  // Lost a race, or a transient error — resolve it by path once more.
   const existing = await resolveFolderByPath(spHttpClient, siteUrl, childPath);
   return existing;
 }

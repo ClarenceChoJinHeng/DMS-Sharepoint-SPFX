@@ -78,6 +78,45 @@ export function parseLevels(json: string): Level[] {
     });
 }
 
+/** Raw DMS Config `mode` row (only the fields the reconciliation provisioner needs). */
+export interface RawModeRow {
+  TermSetGuid?: string;
+  StagingFolder?: string;
+  Levels?: string;
+  SortOrder?: number;
+}
+
+/** A reconciliation target segment: the term set + its top-level Staging folder. */
+export interface ReconMode {
+  termSetGuid: string;
+  stagingFolder: string;
+  sortOrder: number;
+}
+
+/**
+ * Slim the DMS Config `mode` rows down to what the reconciliation provisioner needs
+ * (term set + Staging folder), so seeding a segment is data-only — no code change.
+ * Trims stray whitespace (a trailing space silently breaks GUID matching), drops rows
+ * missing a term set or folder, and — like the upload form — ignores rows with an
+ * empty/old-schema `Levels` (so retired department/project rows never provision).
+ * Sorted by SortOrder.
+ */
+export function parseReconModes(rows: RawModeRow[]): ReconMode[] {
+  const out: ReconMode[] = [];
+  for (const r of rows ?? []) {
+    const termSetGuid = (r.TermSetGuid ?? "").trim();
+    const stagingFolder = (r.StagingFolder ?? "").trim();
+    if (!termSetGuid || !stagingFolder) continue;
+    if (parseLevels(r.Levels ?? "").length === 0) continue;
+    out.push({
+      termSetGuid,
+      stagingFolder,
+      sortOrder: typeof r.SortOrder === "number" ? r.SortOrder : 0,
+    });
+  }
+  return out.sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
 /**
  * Reduce the DMS Group Map to the current user's memberships:
  *  - `memberTerms`: every term/term-set GUID whose group the user is in (any role);

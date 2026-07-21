@@ -7,7 +7,9 @@ import {
   resolveFolderByPath,
   writeFolderMapping,
   ensureFolder,
+  encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
+import { sanitizeFolderSegment, parseReconModes, RawModeRow } from "../../../shared/formModel";
 
 // A "mode" is a top-level container folder under the library root. These used to
 // be hardcoded (Departments / Projects); they are now discovered dynamically so
@@ -32,6 +34,9 @@ type TermLite = { id: string; label: string };
 // Year/Period and Document Type term sets. Under each leaf (unit) folder the
 // provisioner pre-creates the full Year × Document Type grid (path order matches
 // the upload form: Unit / Year / Document Type). These inherit the unit's ACL.
+// Offline fallback only — the grid term sets are read at runtime from the DMS Config
+// `setting` rows (termSet_yearPeriod / termSet_documentType) via loadReconGridTermSets,
+// so a different tenant needs no code edit. These GUIDs are the sandbox values.
 const YEAR_TERMSET    = "f7c578a1-e0e5-42ff-9e0c-d748cba42ede";
 const DOCTYPE_TERMSET = "0540e66e-7cb3-47ac-b0ef-4e3069387394";
 
@@ -50,6 +55,26 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   UPL: "Contribute",
   APR: "Design",
 };
+
+// Max folder-creation requests in flight at once when building the Year × Document Type
+// grid. Kept moderate to speed up the (large) grid without tripping SharePoint throttling.
+const GRID_CONCURRENCY = 6;
+
+/** Run `fn` over `items` with at most `limit` promises in flight at once. Preserves
+ *  input order in the results. Used to create the large grid in parallel instead of
+ *  one folder at a time. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 type GroupMapRow = { groupId: string; groupName: string; role: string };
 
@@ -306,7 +331,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   const getHasUniquePerms = async (folderPath: string): Promise<boolean | null> => {
     const res = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields?$select=HasUniqueRoleAssignments&@f='${encodeURIComponent(folderPath)}'`,
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields?$select=HasUniqueRoleAssignments&@f='${encodeServerRelativePath(folderPath)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -317,7 +342,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   const folderExists = async (path: string): Promise<boolean> => {
     const res = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(path)}')`,
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeServerRelativePath(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -327,7 +352,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const createFolder = async (path: string): Promise<void> => {
     if (await folderExists(path)) return;
     const res = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@d,overwrite=false)?@d='${encodeURIComponent(path)}'`,
+      `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@d,overwrite=false)?@d='${encodeServerRelativePath(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" } },
     );
@@ -782,12 +807,58 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     return map;
   };
 
+  // Segments to provision come from the SAME DMS Config `mode` rows the upload form
+  // reads, so onboarding a segment is data-only (add a mode row → Run) — no redeploy.
+  // Falls back to the built-in RECON_MODES (GHO) if the config is empty/unreachable.
+  const loadReconModes = async (): Promise<Array<{ termSetGuid: string; stagingFolder: string }>> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return RECON_MODES;
+      const data = await res.json();
+      const modes = parseReconModes((data.value ?? []) as RawModeRow[]);
+      return modes.length > 0 ? modes : RECON_MODES;
+    } catch {
+      return RECON_MODES;
+    }
+  };
+
+  // The Year × Document Type grid term sets come from the SAME DMS Config `setting`
+  // rows the upload form reads (termSet_yearPeriod / termSet_documentType), so the
+  // grid matches the form on any tenant with no code edit. Falls back to the built-in
+  // YEAR_TERMSET / DOCTYPE_TERMSET constants per-key if the row or the list is missing.
+  const loadReconGridTermSets = async (): Promise<{ year: string; docType: string }> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET };
+      const data = await res.json();
+      const map: Record<string, string> = {};
+      ((data.value ?? []) as Array<{ Title: string; SettingValue: string }>).forEach(
+        (item) => { map[item.Title] = (item.SettingValue ?? "").trim(); },
+      );
+      return {
+        year: map.termSet_yearPeriod || YEAR_TERMSET,
+        docType: map.termSet_documentType || DOCTYPE_TERMSET,
+      };
+    } catch {
+      return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET };
+    }
+  };
+
   // Flatten the term store into the folders to provision, parent-before-child so a
   // parent always exists before we create its child. The segment container folder
   // (mode.stagingFolder) has no term; every term below it carries its GUID.
   const buildProvisionTargets = async (): Promise<ProvTarget[]> => {
     const out: ProvTarget[] = [];
-    for (const mode of RECON_MODES) {
+    const modes = await loadReconModes();
+    for (const mode of modes) {
       // Segment container: not a mapped term, but groups target it via the term-set GUID.
       out.push({ termGuid: null, assignTerm: mode.termSetGuid, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder, isLeaf: false });
       const tops = await loadReconTops(mode.termSetGuid).catch(() => [] as TermLite[]);
@@ -845,8 +916,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       }
       // Year × Document Type grid labels (from their term sets) — pre-created under
       // each leaf/unit folder. Both are flat term sets, so top-level terms suffice.
-      const yearLabels    = (await loadReconTops(YEAR_TERMSET).catch(() => [] as TermLite[])).map(y => y.label);
-      const docTypeLabels = (await loadReconTops(DOCTYPE_TERMSET).catch(() => [] as TermLite[])).map(d => d.label);
+      // Sanitize labels to safe folder names with the SAME helper the upload form uses
+      // (formModel.sanitizeFolderSegment), so reconciliation and Form.tsx always agree on
+      // the folder name — e.g. a Document Type term containing illegal chars like "/".
+      const gridSets = await loadReconGridTermSets();
+      const yearLabels    = (await loadReconTops(gridSets.year).catch(() => [] as TermLite[])).map(y => sanitizeFolderSegment(y.label)).filter(Boolean);
+      const docTypeLabels = (await loadReconTops(gridSets.docType).catch(() => [] as TermLite[])).map(d => sanitizeFolderSegment(d.label)).filter(Boolean);
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const root = await getLibraryRoot(lib);
         if (!root) {
@@ -920,10 +995,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 const yearFolder = await ensureFolder(context.spHttpClient, siteUrl, full, yr);
                 if (!yearFolder) continue;
                 grid++;
-                for (const dt of docTypeLabels) {
-                  const dtFolder = await ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt);
-                  if (dtFolder) grid++;
-                }
+                // Create this year's Document Type folders in parallel (bounded) — the grid
+                // is large, so one-at-a-time creation is what made the run take minutes.
+                const dtResults = await mapLimit(docTypeLabels, GRID_CONCURRENCY, dt =>
+                  ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt));
+                grid += dtResults.filter(Boolean).length;
               }
               entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
             }
