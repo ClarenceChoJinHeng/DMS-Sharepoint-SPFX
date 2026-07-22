@@ -50,6 +50,19 @@ export function isDuplicateRow(
   return existing.some((r) => key(r) === k);
 }
 
+/**
+ * Derive the intended role from a group name's suffix (CTO naming convention:
+ * DMS_<seg>_<dept>_<unit>[_UPL|_APR]). Case-insensitive, trims. GLOBAL is a
+ * privileged bypass the admin picks by hand — it is never auto-derived, so any
+ * non-suffixed name (including a base viewer group) defaults to MEMBER.
+ */
+export function roleFromGroupName(name: string): GroupMapRole {
+  const n = norm(name).toUpperCase();
+  if (n.endsWith("_APR")) return "APR";
+  if (n.endsWith("_UPL")) return "UPL";
+  return "MEMBER";
+}
+
 /** Field-level validation for enabling the Add button. Returns [] when valid. */
 export function validateDraft(draft: GroupMapDraft): string[] {
   const errors: string[] = [];

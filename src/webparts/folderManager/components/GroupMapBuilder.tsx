@@ -6,6 +6,7 @@ import {
   buildGroupMapRow,
   isDuplicateRow,
   validateDraft,
+  roleFromGroupName,
   GroupMapRole,
   GroupMapDraft,
   GroupMapWriteRow,
@@ -197,6 +198,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setGroup(g);
     setQuery(g.displayName);
     setResults([]);
+    // Pre-select the role implied by the name suffix (_UPL/_APR); admin can override.
+    setRole(roleFromGroupName(g.displayName));
   };
 
   const clearGroup = (): void => {

@@ -2,9 +2,35 @@ import {
   buildGroupMapRow,
   isDuplicateRow,
   validateDraft,
+  roleFromGroupName,
   GroupMapWriteRow,
   GroupMapDraft,
 } from "./groupMapModel";
+
+describe("roleFromGroupName", () => {
+  it("derives APR from an _APR suffix", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_APR")).toBe("APR");
+  });
+
+  it("derives UPL from an _UPL suffix", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_UPL")).toBe("UPL");
+  });
+
+  it("defaults a base (no-suffix) group to MEMBER", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_CORU")).toBe("MEMBER");
+  });
+
+  it("matches the suffix case-insensitively and trims", () => {
+    expect(roleFromGroupName("  dms_gho_gf_coru_apr  ")).toBe("APR");
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_Upl")).toBe("UPL");
+  });
+
+  it("never auto-derives GLOBAL and is safe on empty/undefined", () => {
+    expect(roleFromGroupName("DMS_GLOBAL_UPLOADERS")).toBe("MEMBER");
+    expect(roleFromGroupName("")).toBe("MEMBER");
+    expect(roleFromGroupName(undefined as unknown as string)).toBe("MEMBER");
+  });
+});
 
 describe("buildGroupMapRow", () => {
   it("builds a trimmed row for a unit-tier UPL mapping", () => {
