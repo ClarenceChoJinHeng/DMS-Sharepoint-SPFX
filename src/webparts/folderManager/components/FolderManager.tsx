@@ -2,6 +2,7 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse, MSGraphClientV3 } from "@microsoft/sp-http";
 import { IFolderManagerProps } from "./IFolderManagerProps";
+import GroupMapBuilder from "./GroupMapBuilder";
 import {
   loadMappedTermGuids,
   resolveFolderByPath,
@@ -19,7 +20,7 @@ type Mode      = string;
 type LibTarget = "Staging" | "Documents";
 // The three top-level tabs. The two library tabs drive the folder tree; the
 // Reconciliation tab is the term-store-driven provisioner (create + lock + map).
-type Tab       = LibTarget | "Reconciliation";
+type Tab       = LibTarget | "Reconciliation" | "GroupMap";
 
 // Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
 // Each maps a term set to the segment container folder its terms live under.
@@ -1204,22 +1205,24 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       {/* Tab bar: two library views + the term-store reconciliation provisioner */}
       <div style={s.toggleWrap}>
         <div style={s.seg}>
-          {(["Staging", "Documents", "Reconciliation"] as Tab[]).map((t, i, arr) => (
+          {(["Staging", "Documents", "Reconciliation", "GroupMap"] as Tab[]).map((t, i, arr) => (
             <button key={t}
               onClick={() => {
                 setTab(t);
                 setReconConfirm(false);
-                if (t !== "Reconciliation") { setLibTarget(t as LibTarget); setExpandedIds({}); }
+                if (t !== "Reconciliation" && t !== "GroupMap") { setLibTarget(t as LibTarget); setExpandedIds({}); }
               }}
               style={{ ...s.segBtn, ...(i === arr.length - 1 ? { borderRight: "none" } : {}), ...(tab === t ? s.segActive : {}) }}
             >
-              {t === "Reconciliation" ? "Folder Reconciliation" : t}
+              {t === "Reconciliation" ? "Folder Reconciliation" : t === "GroupMap" ? "Group Map" : t}
             </button>
           ))}
         </div>
       </div>
 
-      {tab === "Reconciliation" ? (
+      {tab === "GroupMap" ? (
+        <GroupMapBuilder context={context} siteUrl={siteUrl} />
+      ) : tab === "Reconciliation" ? (
         <div>
           <p style={{ fontSize: 13, color: "#444", lineHeight: 1.5, margin: "0 0 16px" }}>
             Build the folder tree from the <strong>term store</strong> in both{" "}
