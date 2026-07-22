@@ -306,13 +306,24 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     return "—";
   };
 
+  // Location = the org folder path (Segment › … › Unit), derived from the file's live
+  // Staging path so it is segment-agnostic (GHO, Upstream, Projects — any depth). Drops
+  // the deepest three path segments — Year, Document Type, and the filename — which are
+  // shown separately below and are not part of the org location.
+  const orgLocation = ((): string => {
+    const after = item.File.ServerRelativeUrl.split("/Staging/")[1];
+    if (!after) return "—";
+    const parts = after.split("/");
+    const org = parts.slice(0, Math.max(0, parts.length - 3));
+    return org.length ? org.join(" › ") : "—";
+  })();
+
   const metadata: [string, string][] = [
-    ["Location",           pick("Department")],
+    ["Location",           orgLocation],
     ["Document Type",      pick("Department_x005f_x0020_x005f_Type", "Department_x0020_Type")],
     ["Confidential Level", pick("Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
     ["Year/Period",        pick("Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
     ["Vendor",             pick("Vendor")],
-    ["Project Name",       pick("Project_x005f_x0020_x005f_Name", "Project_x0020_Name")],
   ];
 
   const radioOptions: { val: Decision; label: string; desc: string }[] = [
@@ -420,10 +431,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             <div style={s.publishLabel}>Publish to</div>
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" as const }}>
               {(() => {
-                const category = item.File.ServerRelativeUrl.includes('/Projects/') ? 'Projects' : 'Departments';
-                const dept = fieldText.Department;
-                const proj = fieldText.Project_x0020_Name;
-                const crumbs = [category, dept, proj].filter(Boolean) as string[];
+                // Segment › … › Unit, from the live Staging path (segment-agnostic).
+                const after = item.File.ServerRelativeUrl.split('/Staging/')[1];
+                const parts = after ? after.split('/') : [];
+                const crumbs = parts.slice(0, Math.max(0, parts.length - 3));
                 return crumbs.map((crumb, i) => (
                   <React.Fragment key={crumb}>
                     {i > 0 && <span style={{ color: "#c8c6c4", fontSize: 12 }}>›</span>}
