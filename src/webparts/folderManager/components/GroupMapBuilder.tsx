@@ -145,7 +145,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       SPHttpClient.configurations.v1,
       {
         headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json;odata=nometadata" },
-        body: JSON.stringify(row),
+        // Title is mandatory on a default SP list; set it so the create never 400s.
+        body: JSON.stringify({ Title: row.GroupName || row.GroupId, ...row }),
       },
     );
     if (!res.ok) {
