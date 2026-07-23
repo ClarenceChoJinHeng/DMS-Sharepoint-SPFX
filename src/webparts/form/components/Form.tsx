@@ -429,14 +429,21 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   /* ---------- Identity: group ids + admin --------------------------------- */
 
-  // Detect the user's M365 (Entra) group Object IDs via MS Graph /me/memberOf.
-  // These are matched against DMS Group Map GroupId (Object ID) — names are cosmetic.
+  // Detect the user's native SharePoint site-group Ids (direct membership only).
+  // Matched as strings against DMS Group Map GroupId (SP group integer Id, e.g. "27").
+  // No Graph, no admin consent. Nested Entra groups inside an SP group are NOT
+  // returned — the DMS model adds users to site groups directly by design.
   const loadUserGroupIds = async (): Promise<string[]> => {
     try {
-      const graph = await context.msGraphClientFactory.getClient("3");
-      const memberOf = await graph.api("/me/memberOf").select("id").get();
-      return (memberOf.value ?? [])
-        .map((g: { id?: string }) => g.id ?? "")
+      const res = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/currentuser/groups?$select=Id`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return [];
+      const d = await res.json();
+      return ((d.value ?? []) as Array<{ Id?: number }>)
+        .map((g) => (g.Id != null ? String(g.Id) : ""))
         .filter(Boolean);
     } catch {
       return [];
