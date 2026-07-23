@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
-import { SPHttpClient, SPHttpClientResponse, MSGraphClientV3 } from "@microsoft/sp-http";
+import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
+import { searchSiteGroups } from "../../../shared/spGroups";
 import { IOnboardingProps } from "./IOnboardingProps";
 
 const TARGETS = ["Staging", "Documents"] as const;
@@ -11,8 +12,6 @@ type Section = (typeof SECTIONS)[number];
 interface GroupPick {
   id: string;
   displayName: string;
-  mail?: string;
-  isUnified: boolean; // true = M365 group, false = security/other AAD group
 }
 interface RoleDef {
   id: number;
@@ -83,7 +82,7 @@ const styles: Record<string, React.CSSProperties> = {
   groupTag: { fontSize: 11, color: "#0f6c3f", background: "#eaf5ee", borderRadius: 3, padding: "2px 8px", display: "inline-block", marginBottom: 3 },
 };
 
-/* ── Group search field (live Microsoft Graph search) ────────────────────────── */
+/* ── Group search field (native SP site groups) ────────────────────────── */
 
 const GroupSearch: React.FC<{
   disabled: boolean;
@@ -134,7 +133,6 @@ const GroupSearch: React.FC<{
                 onMouseDown={() => { onPick(g); setOpen(false); setFocused(false); setResults([]); setQ(""); }}
               >
                 <div style={{ fontWeight: 600 }}>{g.displayName}</div>
-                {g.mail && <div style={{ fontSize: 11, color: "#888" }}>{g.mail}</div>}
               </div>
             ))
           ) : (
@@ -204,33 +202,17 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
   /* ── Graph helpers ──────────────────────────────────────────────────────── */
 
   const searchGroups = async (query: string): Promise<GroupPick[]> => {
-    const client: MSGraphClientV3 = await context.msGraphClientFactory.getClient("3");
-    const q = query.trim();
-    let req = client
-      .api("/groups")
-      .header("ConsistencyLevel", "eventual")
-      .count(true)
-      .select("id,displayName,mail,groupTypes")
-      .top(25);
-    if (q.length >= 1) req = req.search(`"displayName:${q}"`);
-    const res = await req.get();
-    const groups = (res as { value?: Array<{ id: string; displayName: string; mail?: string; groupTypes?: string[] }> }).value ?? [];
-    return groups.map((g) => ({
-      id: g.id,
-      displayName: g.displayName,
-      mail: g.mail,
-      isUnified: (g.groupTypes ?? []).indexOf("Unified") !== -1,
-    }));
+    const groups = await searchSiteGroups(context.spHttpClient, siteUrl, query);
+    return groups.map((g) => ({ id: String(g.id), displayName: g.title }));
   };
 
   const groupExists = async (id: string): Promise<boolean> => {
-    try {
-      const client: MSGraphClientV3 = await context.msGraphClientFactory.getClient("3");
-      await client.api(`/groups/${id}`).select("id").get();
-      return true;
-    } catch {
-      return false;
-    }
+    const res = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/sitegroups(${Number(id)})?$select=Id`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    return res.ok;
   };
 
   /* ── SharePoint REST helpers ────────────────────────────────────────────── */
@@ -274,21 +256,16 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
     if (!res.ok) throw new Error(`breakroleinheritance: HTTP ${res.status}`);
   };
 
-  const ensureGroupPrincipal = async (group: GroupPick): Promise<number> => {
-    const logonName = group.isUnified
-      ? `c:0o.c|federateddirectoryclaimprovider|${group.id}`
-      : `c:0t.c|tenant|${group.id}`;
-    const res = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/ensureuser`,
-      SPHttpClient.configurations.v1,
-      {
-        headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" },
-        body: JSON.stringify({ logonName }),
-      },
-    );
-    if (!res.ok) throw new Error(`ensureuser: HTTP ${res.status} ${(await res.text().catch(() => "")).slice(0, 200)}`);
-    const data = await res.json();
-    return data.Id as number;
+  // SP site group: the group's integer Id IS the role-assignment principal id.
+  // No ensureuser, no federateddirectoryclaimprovider claim.
+  const spGroupPrincipalId = (groupId: string): number => {
+    const n = Number((groupId ?? "").trim());
+    if (!(n > 0) || n % 1 !== 0) {
+      throw new Error(
+        `"${groupId}" is not a SharePoint site-group id — pick the group from the search box`,
+      );
+    }
+    return n;
   };
 
   const addRoleAssignment = async (path: string, principalId: number, roleDefId: number): Promise<void> => {
@@ -350,7 +327,7 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
       const getPrincipal = async (g: GroupPick): Promise<number> => {
         const cached = principalCache.get(g.id);
         if (cached !== undefined) return cached;
-        const pid = await ensureGroupPrincipal(g);
+        const pid = spGroupPrincipalId(g.id);
         principalCache.set(g.id, pid);
         return pid;
       };
@@ -459,7 +436,7 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
         <div key={a.id} style={styles.assignRow}>
           <div style={{ flex: 1 }}>
             <span style={styles.greenChip}>
-              <span style={styles.chipName} title={a.group.mail ?? a.group.displayName}>{a.group.displayName}</span>
+              <span style={styles.chipName} title={a.group.displayName}>{a.group.displayName}</span>
               <button style={styles.chipX} disabled={busy} title="Remove group" onClick={() => cb.onRemoveGroup(a.id)}>✕</button>
             </span>
           </div>
@@ -501,12 +478,13 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
       <h2 style={styles.h2}>Folder Onboarding</h2>
       <p style={styles.subtitle}>
         Create a parent folder and its subfolders, break permission inheritance, and assign one or
-        more M365 groups to each — in one submit.
+        more SharePoint site groups to each — in one submit.
       </p>
 
       <div style={styles.note}>
-        Group search needs the <strong>Group.Read.All</strong> Graph permission approved in
-        SharePoint Admin → API access. If searches return nothing, that approval is likely pending.
+        Groups here are <strong>native SharePoint site groups</strong> on this site (names
+        starting <strong>DMS_</strong>). Create and manage them in the DMS Admin Tool&rsquo;s
+        Group Map tab — no Microsoft Graph approval is involved.
       </div>
 
       {/* Library target */}
