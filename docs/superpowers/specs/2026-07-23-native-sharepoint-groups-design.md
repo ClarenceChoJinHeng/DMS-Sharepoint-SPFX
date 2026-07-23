@@ -32,8 +32,22 @@ to the DMS site. Hard cutover — no dual-source support.
 | Grant on folder | `ensureuser` with `c:0o.c\|federateddirectoryclaimprovider\|{id}` claim to obtain a principal id | group's integer `Id` **is** the principal id — assign directly |
 | Add a user | blocked on the security department | `POST /_api/web/sitegroups(N)/users` by the site admin |
 
-`Group.Read.All` becomes unused and is removed from `package-solution.json`.
-`User.Read.All` **stays** — `requestShare` still uses it.
+### Permission impact
+
+| Scope in `package-solution.json` | Used by | After |
+|---|---|---|
+| `Group.Read.All` | group search (GroupMapBuilder, Onboarding, FolderManager) | **remove** |
+| `GroupMember.Read.All` | `/me/memberOf` (Form, BulkUpload) | **remove** |
+| `User.Read.All` | PnP `PeoplePicker` in `RequestShare.tsx` — unrelated to groups | **keep** |
+| `Sites.Read.All` | no Graph call in the codebase uses it | **leave as-is** — appears to predate this architecture; verify and remove separately, not as part of this cutover |
+
+The new member-assignment picker uses SharePoint's `ClientPeoplePickerSearchUser` endpoint, so
+it adds no Graph dependency.
+
+**No Entra directory role is required.** Creating and populating SP site groups needs only
+**Full Control (Site Owner)** on the DMS site — a SharePoint grant. The Entra **Group
+Administrator** role and the tenant "approve API access" step in SharePoint Admin Center are
+both no longer needed for group work.
 
 ### Accepted constraints
 
