@@ -86,9 +86,16 @@ Do these in order for each new segment:
 
 ---
 
-## 5. Staging level columns to create
+## 5. Level columns to create — in BOTH Staging AND Documents
 
 Add these **label + Tid** text columns per segment (skip ones already present). Keep the internal names for the `Levels` JSON `labelCol`/`tidCol`.
+
+> **Create each column in the Documents library too, with the identical internal name and type.**
+> Staging and Documents must mirror (see `2026-07-24-documents-metadata-parity-design.md`). A
+> level column that exists only in Staging reproduces the blank-metadata bug on the new segment:
+> the Auto-route flow (and the bulk-upload tool) write it, but Documents has nowhere to put it.
+> The head-office pilot columns (`Business Segment`/`Department`/`Unit` + Tids) are handled by that
+> parity fix; every **new** segment's columns below must be added to both libraries at onboarding.
 
 | Segment | New columns (label / Tid) | Reuses |
 |---|---|---|

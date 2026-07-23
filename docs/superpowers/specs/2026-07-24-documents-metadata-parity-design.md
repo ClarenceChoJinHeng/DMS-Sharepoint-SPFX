@@ -123,6 +123,17 @@ Documents has no content approval (Staging-only), so status is surfaced as a pla
 4. Every Documents item shows `Approval Status = Approved` (new ones by default; existing ones
    after backfill).
 
+## Future segments — same rule applies
+
+This fix creates only the **head-office pilot** columns (`Business Segment`/`Department`/`Unit`
++ Tids, `Document Type`, `Document Date`). The plain-text label + `…Tid` design is deliberately
+segment-agnostic — segments that share level names (e.g. Projects reuse `Department`/`Unit`, SDGI
+reuses `Department`) reuse these columns. But a 2027 segment with **new** level names introduces
+new columns — `Region`, `EstateMill`, `Refinery`, `ITOperatingUnit`, `ProjectName` (+ their Tids)
+— and each must be created in **both Staging and Documents** at onboarding, or this exact blank-
+metadata bug returns on that segment. The onboarding plan's column step
+(`2026-07-21-segment-onboarding-plan.md` §5) now states this explicitly.
+
 ## Out of scope
 
 - Making the level columns taxonomy (deferred; text mirrors Staging and is enough now).
