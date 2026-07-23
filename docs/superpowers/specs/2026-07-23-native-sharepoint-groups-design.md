@@ -61,11 +61,25 @@ both no longer needed for group work.
 
 1. **Site-collection scoped.** An SP group on the DMS site cannot be assigned on another site.
    Two groups sharing a name on two sites are unrelated objects; adding a person to one does
-   nothing to the other. Phase 2 (`2026-07-20-multi-site-storage-phase2-design.md`) therefore
-   needs a parallel group set **and parallel membership** per segment site — an ongoing
-   duplication, not a one-time setup. Client has confirmed Phase 2 **will** happen.
+   nothing to the other. Client has confirmed Phase 2
+   (`2026-07-20-multi-site-storage-phase2-design.md`) **will** happen.
 
-   Scope of the impact, which is narrower than it first appears:
+   **Per-unit roles are unaffected.** The 3-groups-per-unit model already partitions by site:
+   `_UPL`/`_APR` are assigned on the central Staging folder (DMS site), the base group on the
+   Documents folder (segment site). Each group is only ever assigned on one site, so nothing is
+   duplicated — three groups under Entra, three under SP groups, and a user needing upload plus
+   readback is in two groups either way.
+
+   **The cost falls only on principals that must be assigned on more than one site**, which an
+   Entra group handles as a single object and an SP group cannot:
+   - `DMS_GLOBAL_READERS` — the prime example. Read on unit folders across every site. Entra:
+     one group, N assignments, one membership. SP: N groups, N memberships.
+   - Cross-segment roles — a shared-services approver, auditor, or compliance reviewer covering
+     several segments becomes N memberships instead of one.
+
+   This population is small, so the practical cost is much lower than "duplicate everything."
+
+   Scope of the impact:
    - **Upload routing is unaffected.** The form runs only on the DMS site and Phase 2 keeps
      Staging central, so `DMS Group Map`, the tiered hard-check, and the `GLOBAL` role
      (`isGlobalUploader`, an *upload* flag — `formModel.ts:139`) stay single-site.
