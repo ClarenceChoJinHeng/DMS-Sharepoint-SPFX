@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
-import { SPHttpClient, SPHttpClientResponse, MSGraphClientV3 } from "@microsoft/sp-http";
+import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
+import { searchSiteGroups } from "../../../shared/spGroups";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import GroupMapBuilder from "./GroupMapBuilder";
 import {
@@ -24,11 +25,14 @@ type Tab       = LibTarget | "Reconciliation" | "GroupMap";
 
 // Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
 // Each maps a term set to the segment container folder its terms live under.
-// Pilot slice: Group Head Office only; add the other four segments once their
-// term sets are onboarded (term-set GUID + its container folder name).
+// Pilot slice: the four Head Office segments (2026); add the 2027 segments once
+// their term sets are onboarded (term-set GUID + its container folder name).
 type ReconMode = { key: string; termSetGuid: string; stagingFolder: string };
 const RECON_MODES: ReconMode[] = [
   { key: "gho", termSetGuid: "efa87c6a-9536-4f7c-910f-011bf7413b80", stagingFolder: "Group Head Office" },
+  { key: "upstream_my_ho", termSetGuid: "5ab1c7c4-78d2-43b4-869f-3eab4b1c375c", stagingFolder: "Upstream Malaysia Head Office" },
+  { key: "minamas_ho", termSetGuid: "6ba9a64c-a363-48fd-afd1-324897df781c", stagingFolder: "Minamas Head Office" },
+  { key: "nbpol_ho", termSetGuid: "21d7e6fe-8f71-4a56-bd2e-e4a2176995a7", stagingFolder: "NBPOL Head Office" },
 ];
 type TermLite = { id: string; label: string };
 
@@ -95,7 +99,7 @@ const NEW_TOP_LEVEL = "*pending-top-level*";
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
 type RoleDef        = { id: number; name: string };
-type GroupPick      = { id: string; displayName: string; mail?: string; isUnified: boolean };
+type GroupPick      = { id: string; displayName: string };
 type ExistingAssign = { uid: string; principalId: number; title: string; roleDefId: number; kept: boolean };
 type PendingAssign  = { uid: string; group: GroupPick; roleDefId: number };
 type LogEntry       = { msg: string; ok: boolean };
@@ -222,7 +226,6 @@ const GroupSearch: React.FC<{
               onMouseDown={() => { onPick(g); setOpen(false); setFocused(false); setResults([]); setQ(""); }}
             >
               <div style={{ fontWeight: 600 }}>{g.displayName}</div>
-              {g.mail && <div style={{ fontSize: 11, color: "#888" }}>{g.mail}</div>}
             </div>
           )) : (
             <div style={{ ...s.dropItem, color: "#888", cursor: "default" }}>
@@ -380,18 +383,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     if (!res.ok) throw new Error(`delete folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
   };
 
-  const ensureGroupPrincipal = async (group: GroupPick): Promise<number> => {
-    const logonName = group.isUnified
-      ? `c:0o.c|federateddirectoryclaimprovider|${group.id}`
-      : `c:0t.c|tenant|${group.id}`;
-    const res = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/ensureuser`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" }, body: JSON.stringify({ logonName }) },
-    );
-    if (!res.ok) throw new Error(`ensureuser HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
-    const data = await res.json();
-    return data.Id as number;
+  // SP site group: the group's integer Id IS the role-assignment principal id.
+  // No ensureuser, no federateddirectoryclaimprovider claim. A GUID here means a
+  // legacy Entra row that must be recreated via the Group Map tab.
+  const spGroupPrincipalId = (groupId: string): number => {
+    const n = Number((groupId ?? "").trim());
+    if (!(n > 0) || n % 1 !== 0) {
+      throw new Error(
+        `"${groupId}" is not a SharePoint site-group id — recreate this Group Map row with the Group Map tab`,
+      );
+    }
+    return n;
   };
 
   const addRoleAssignment = async (path: string, principalId: number, roleDefId: number): Promise<void> => {
@@ -404,13 +406,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   };
 
   const searchGroups = async (query: string): Promise<GroupPick[]> => {
-    const client: MSGraphClientV3 = await context.msGraphClientFactory.getClient("3");
-    const q = query.trim();
-    let req = client.api("/groups").header("ConsistencyLevel", "eventual").count(true).select("id,displayName,mail,groupTypes").top(25);
-    if (q.length >= 1) req = req.search(`"displayName:${q}"`);
-    const res = await req.get();
-    const groups = (res as { value?: Array<{ id: string; displayName: string; mail?: string; groupTypes?: string[] }> }).value ?? [];
-    return groups.map(g => ({ id: g.id, displayName: g.displayName, mail: g.mail, isUnified: (g.groupTypes ?? []).indexOf("Unified") !== -1 }));
+    const groups = await searchSiteGroups(context.spHttpClient, siteUrl, query);
+    return groups.map((g) => ({ id: String(g.id), displayName: g.title }));
   };
 
   /* ── Init ────────────────────────────────────────────────────────────────────── */
@@ -650,14 +647,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     setBusy(true);
     const entries: LogEntry[] = [];
     const fullCtrlId = roleDefs.find(r => r.name === "Full Control")?.id;
-    const principalCache = new Map<string, number>();
-    const ensurePrincipal = async (group: GroupPick): Promise<number> => {
-      const cached = principalCache.get(group.id);
-      if (cached !== undefined) return cached;
-      const pid = await ensureGroupPrincipal(group);
-      principalCache.set(group.id, pid);
-      return pid;
-    };
+    const ensurePrincipal = async (group: GroupPick): Promise<number> =>
+      spGroupPrincipalId(group.id);
 
     // Pre-order walk: parents are created/renamed before their children are
     // processed, so each child always receives its parent's up-to-date path.
@@ -894,9 +885,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // Provision from the term store into BOTH libraries in one run: create each folder
   // if missing and break inheritance at every level (segment → department → unit).
   // Owner group is re-added as Full Control so admins keep access. Then AUTO-ASSIGN
-  // the DMS Group Map groups to each folder by role (MEMBER→Read, UPL→Contribute,
-  // APR→Design; GLOBAL skipped). Documents gets MEMBER→Read only; uploaders/approvers
-  // get no access there. Staging term folders are also mapped (term → UniqueId) for
+  // the DMS Group Map groups to each folder by role. Staging gets UPL→Contribute and
+  // APR→Design only (MEMBER is Documents-only for isolation); Documents gets MEMBER→Read
+  // only; GLOBAL is skipped everywhere. Staging term folders are also mapped (term → UniqueId) for
   // rename-proof upload routing; Documents is not mapped. Idempotent: folders/maps
   // are not duplicated; role assignments merge (re-adding an existing one is a no-op),
   // and manual extra grants survive. Folders whose term has no group-map rows are
@@ -907,6 +898,19 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const entries: LogEntry[] = [];
     try {
       const fullCtrlId = roleDefs.find(r => r.name === "Full Control")?.id;
+      const readId = roleDefs.find(r => r.name === "Read")?.id;
+      if (readId === undefined) entries.push({ msg: `⚠ "Read" role definition not found — ancestor browse access will be skipped`, ok: false });
+      // Ancestor rel-paths of a target, excluding the folder itself and the library root.
+      // e.g. "/A/B/C" -> ["/A", "/A/B"]. Used to grant each unit group Read up its own path
+      // so members can browse down to their folder; siblings without a grant stay
+      // security-trimmed (invisible) in the view.
+      const ancestorRelPaths = (relPath: string): string[] => {
+        const parts = relPath.split("/").filter(Boolean);
+        const out: string[] = [];
+        let cur = "";
+        for (let i = 0; i < parts.length - 1; i++) { cur += `/${parts[i]}`; out.push(cur); }
+        return out;
+      };
       const mapped = await loadMappedTermGuids(context.spHttpClient, siteUrl);
       const groupMap = await loadGroupMapForAssign();
       const targets = await buildProvisionTargets();
@@ -963,16 +967,21 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
               }
             }
-            // Auto-assign DMS Group Map groups to this folder by role. Documents
-            // gets MEMBER (viewer) groups only; Staging gets all roles. Idempotent
+            // Auto-assign DMS Group Map groups to this folder by role. Staging gets
+            // UPL/APR only; Documents gets MEMBER (viewer) groups only. Idempotent
             // (add-role merges). A folder whose term has no rows is flagged.
             const groupRows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
+            // Isolation rule: MEMBER (base/viewer) groups are Documents-only and must
+            // NEVER land on Staging (else a viewer could see pending docs). Staging gets
+            // UPL/APR only; Documents gets MEMBER only.
             const applicable = groupRows.filter(g =>
-              ROLE_TO_PERMISSION[g.role] !== undefined && (lib === "Staging" || g.role === "MEMBER"),
+              ROLE_TO_PERMISSION[g.role] !== undefined &&
+              (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
             );
             if (applicable.length === 0) {
               entries.push({ msg: `  ⚠ ${lib}${t.relPath} — no group-map groups for this tier (locked admin-only)`, ok: true });
             }
+            const grantedPids: Array<{ groupName: string; pid: number }> = [];
             for (const g of applicable) {
               const roleDefId = roleDefs.find(r => r.name === ROLE_TO_PERMISSION[g.role])?.id;
               if (roleDefId === undefined) {
@@ -980,11 +989,29 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 continue;
               }
               try {
-                const pid = await ensureGroupPrincipal({ id: g.groupId, displayName: g.groupName, isUnified: false });
+                const pid = spGroupPrincipalId(g.groupId);
                 await addRoleAssignment(full, pid, roleDefId);
+                grantedPids.push({ groupName: g.groupName, pid });
                 entries.push({ msg: `  ↳ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}`, ok: true });
               } catch (e) {
                 entries.push({ msg: `  ✗ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]} FAILED: ${(e as Error).message}`, ok: false });
+              }
+            }
+            // Browse access: grant each just-assigned group Read on every ANCESTOR folder on
+            // its own path (same library), so members can navigate down to their unit.
+            // Ancestors get Read only (never edit) — pass-through, not write targets. Siblings
+            // get no grant, so SharePoint security-trims them: a user sees only their corridor.
+            if (grantedPids.length > 0 && readId !== undefined) {
+              for (const anc of ancestorRelPaths(t.relPath)) {
+                const ancFull = `${root}${anc}`;
+                for (const gp of grantedPids) {
+                  try {
+                    await addRoleAssignment(ancFull, gp.pid, readId);
+                    entries.push({ msg: `  ↳ ${gp.groupName} → Read (browse) on ${anc}`, ok: true });
+                  } catch (e) {
+                    entries.push({ msg: `  ✗ ${gp.groupName} → Read (browse) on ${anc} FAILED: ${(e as Error).message}`, ok: false });
+                  }
+                }
               }
             }
             // Under leaf (unit) folders, pre-create the Year × Document Type grid.
