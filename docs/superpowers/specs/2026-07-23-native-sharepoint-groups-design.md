@@ -43,6 +43,17 @@ to the DMS site. Hard cutover — no dual-source support.
 2. **No nesting, no mailbox.** SP groups cannot contain other SP groups and have no group email.
 3. **Direct membership only.** `currentuser/groups` returns groups the user is a *direct* member
    of. Users must be added individually — which is the requested workflow.
+4. **No joiner/mover/leaver automation — the significant one.** Entra groups inherit the
+   directory's identity lifecycle: a leaver loses group membership, and therefore DMS access,
+   automatically. SP site groups do not. When someone leaves SDG or transfers department, a DMS
+   admin must remove them from the SP group **by hand**, or their access persists. Membership
+   also now lives in SharePoint rather than the directory where IT manages people, so the two
+   can drift.
+
+   **Mitigation:** none technical in this scope. This is a governance change the client must
+   accept explicitly, and it should be written into the DMS admin handover as a standing duty
+   (periodic membership review, plus offboarding checklist entry). Flag it to the client
+   before implementation.
 
 ## Data model
 
