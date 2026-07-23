@@ -1,16 +1,28 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
-import { SPHttpClient, SPHttpClientResponse, MSGraphClientV3 } from "@microsoft/sp-http";
+import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import {
   buildGroupMapRow,
   isDuplicateRow,
   validateDraft,
   roleFromGroupName,
+  suggestGroupName,
   GroupMapRole,
   GroupMapDraft,
   GroupMapWriteRow,
 } from "../../../shared/groupMapModel";
+import {
+  searchSiteGroups,
+  createSiteGroup,
+  getGroupMembers,
+  addGroupMember,
+  removeGroupMember,
+  searchTenantPeople,
+  DUPLICATE_GROUP,
+  SpGroupMember,
+  PersonPick,
+} from "../../../shared/spGroups";
 
 type Props = { context: WebPartContext; siteUrl: string };
 type GroupPick = { id: string; displayName: string };
@@ -55,6 +67,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const [existing, setExisting] = useState<ExistingRow[]>([]);
   const [busy, setBusy]         = useState(false);
   const [toast, setToast]       = useState<{ message: string; error: boolean } | undefined>(undefined);
+  const [canManage, setCanManage] = useState<boolean | undefined>(undefined); // undefined = still checking
 
   // Draft selections
   const [group, setGroup]         = useState<GroupPick | undefined>(undefined);
@@ -69,7 +82,22 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const [results, setResults]     = useState<GroupPick[]>([]);
   const [searching, setSearching] = useState(false);
 
-  const [confirmDel, setConfirmDel] = useState<number | undefined>(undefined);
+  // Inline group create
+  const [creating, setCreating]   = useState(false);
+  const [newName, setNewName]     = useState("");
+
+  // Member editor
+  const [membersOpen, setMembersOpen]         = useState(false);
+  const [members, setMembers]                 = useState<SpGroupMember[] | undefined>(undefined);
+  const [memberBusy, setMemberBusy]           = useState(false);
+  const [peopleQuery, setPeopleQuery]         = useState("");
+  const [peopleResults, setPeopleResults]     = useState<PersonPick[]>([]);
+  const [peopleSearching, setPeopleSearching] = useState(false);
+  const [confirmRemove, setConfirmRemove]     = useState<number | undefined>(undefined);
+
+  const [confirmDel, setConfirmDel]   = useState<number | undefined>(undefined);
+  const [selected, setSelected]       = useState<Set<number>>(new Set());
+  const [confirmBulk, setConfirmBulk] = useState(false);
 
   const showToast = (message: string, error: boolean): void => {
     setToast({ message, error });
@@ -79,17 +107,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   /* ── Data access ───────────────────────────────────────────────────────── */
 
   const searchGroups = async (q: string): Promise<GroupPick[]> => {
-    const client: MSGraphClientV3 = await context.msGraphClientFactory.getClient("3");
-    let req = client
-      .api("/groups")
-      .header("ConsistencyLevel", "eventual")
-      .count(true)
-      .select("id,displayName")
-      .top(25);
-    if (q.trim().length >= 1) req = req.search(`"displayName:${q.trim()}"`);
-    const res = await req.get();
-    const groups = (res as { value?: Array<{ id: string; displayName: string }> }).value ?? [];
-    return groups.map((g) => ({ id: g.id, displayName: g.displayName }));
+    const groups = await searchSiteGroups(context.spHttpClient, siteUrl, q);
+    return groups.map((g) => ({ id: String(g.id), displayName: g.title }));
   };
 
   const loadModes = async (): Promise<ModePick[]> => {
@@ -168,11 +187,33 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     }
   };
 
+  // Create/add/remove need Full Control. Detect up front so the controls are
+  // disabled with an explanation instead of failing with a 403 on click.
+  const loadCanManage = async (): Promise<boolean> => {
+    const meRes = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/currentuser?$select=Id,IsSiteAdmin`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!meRes.ok) return false;
+    const me = await meRes.json();
+    if (me.IsSiteAdmin === true) return true;
+    const ownRes = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/AssociatedOwnerGroup/Users?$filter=Id eq ${me.Id}&$select=Id`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!ownRes.ok) return false;
+    const own = await ownRes.json();
+    return ((own.value ?? []) as unknown[]).length > 0;
+  };
+
   /* ── Mount ─────────────────────────────────────────────────────────────── */
 
   useEffect(() => {
     loadModes().then(setModes).catch(() => setModes([]));
     loadExisting().then(setExisting).catch(() => setExisting([]));
+    loadCanManage().then(setCanManage).catch(() => setCanManage(false));
   }, []);
 
   /* ── Group search (debounced) ──────────────────────────────────────────── */
@@ -192,12 +233,39 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     return () => { cancelled = true; clearTimeout(t); };
   }, [query, group]);
 
+  /* ── People search for the member editor (debounced) ───────────────────── */
+
+  useEffect(() => {
+    const q = peopleQuery.trim();
+    if (!membersOpen || q.length < 2) { setPeopleResults([]); return; }
+    let cancelled = false;
+    setPeopleSearching(true);
+    const t = setTimeout(() => {
+      searchTenantPeople(context.spHttpClient, siteUrl, q)
+        .then((r) => { if (!cancelled) { setPeopleResults(r); setPeopleSearching(false); } })
+        .catch(() => { if (!cancelled) { setPeopleResults([]); setPeopleSearching(false); } });
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [peopleQuery, membersOpen]);
+
   /* ── Selection handlers ────────────────────────────────────────────────── */
+
+  // Wipe the member-editor state so a freshly picked/cleared group never shows
+  // the previous group's members.
+  const resetMemberState = (): void => {
+    setMembersOpen(false);
+    setMembers(undefined);
+    setPeopleQuery("");
+    setPeopleResults([]);
+    setConfirmRemove(undefined);
+  };
 
   const pickGroup = (g: GroupPick): void => {
     setGroup(g);
     setQuery(g.displayName);
     setResults([]);
+    setCreating(false);
+    resetMemberState();
     // Pre-select the role implied by the name suffix (_UPL/_APR); admin can override.
     setRole(roleFromGroupName(g.displayName));
   };
@@ -206,6 +274,94 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setGroup(undefined);
     setQuery("");
     setResults([]);
+    setCreating(false);
+    resetMemberState();
+  };
+
+  /* ── Inline group create ───────────────────────────────────────────────── */
+
+  const startCreate = (): void => {
+    setCreating(true);
+    setNewName(
+      query.trim() ||
+        suggestGroupName(mode?.label ?? "", chosen.map((t) => t.label), (role || "") as GroupMapRole | ""),
+    );
+  };
+
+  const cancelCreate = (): void => { setCreating(false); setNewName(""); };
+
+  // Warn (never block) when the typed name's suffix disagrees with the selected Role.
+  const nameRoleMismatch = (): boolean => {
+    if (!newName.trim() || !role || role === "GLOBAL") return false;
+    return roleFromGroupName(newName) !== role;
+  };
+
+  const onCreateGroup = async (): Promise<void> => {
+    const title = newName.trim();
+    if (!title) return;
+    setBusy(true);
+    try {
+      const created = await createSiteGroup(context.spHttpClient, siteUrl, title);
+      pickGroup({ id: String(created.id), displayName: created.title });
+      setCreating(false);
+      setNewName("");
+      showToast(`Group "${created.title}" created (no permissions yet — Reconciliation grants folder access).`, false);
+    } catch (e) {
+      if ((e as Error).message === DUPLICATE_GROUP) {
+        showToast("A group with that name already exists — search for it and select it instead.", true);
+        setCreating(false);
+        setQuery(title); // re-runs the debounced search so the existing group appears
+      } else {
+        showToast(`Create failed: ${(e as Error).message}`, true);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /* ── Member editor ─────────────────────────────────────────────────────── */
+
+  const groupIdNum = (): number => Number(group?.id ?? 0);
+
+  const reloadMembers = async (): Promise<void> => {
+    setMembers(await getGroupMembers(context.spHttpClient, siteUrl, groupIdNum()));
+  };
+
+  const toggleMembers = (): void => {
+    const opening = !membersOpen;
+    setMembersOpen(opening);
+    if (opening && members === undefined) {
+      reloadMembers().catch(() => { setMembers([]); showToast("Could not load members.", true); });
+    }
+  };
+
+  const onAddMember = async (p: PersonPick): Promise<void> => {
+    setMemberBusy(true);
+    try {
+      await addGroupMember(context.spHttpClient, siteUrl, groupIdNum(), p.loginName);
+      await reloadMembers();
+      setPeopleQuery("");
+      setPeopleResults([]);
+      showToast(`${p.displayName} added — access is immediate.`, false);
+    } catch (e) {
+      showToast(`Add member failed: ${(e as Error).message}`, true);
+    } finally {
+      setMemberBusy(false);
+    }
+  };
+
+  const onRemoveMember = async (userId: number): Promise<void> => {
+    setMemberBusy(true);
+    try {
+      await removeGroupMember(context.spHttpClient, siteUrl, groupIdNum(), userId);
+      await reloadMembers();
+      setConfirmRemove(undefined);
+      showToast("Member removed — access revoked immediately.", false);
+    } catch (e) {
+      showToast(`Remove failed: ${(e as Error).message}`, true);
+    } finally {
+      setMemberBusy(false);
+    }
   };
 
   const pickRole = (r: GroupMapRole): void => {
@@ -293,9 +449,44 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     try {
       await deleteRow(itemId);
       setExisting(await loadExisting());
+      setSelected((prev) => { const n = new Set(prev); n.delete(itemId); return n; });
       setConfirmDel(undefined);
       showToast("Row deleted — re-run Folder Reconciliation to apply the change.", false);
     } catch (e) {
+      showToast(`Delete failed: ${(e as Error).message}`, true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSel = (itemId: number): void => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId); else next.add(itemId);
+      return next;
+    });
+  };
+
+  const allSelected = existing.length > 0 && selected.size === existing.length;
+
+  const toggleAll = (): void => {
+    setSelected(allSelected ? new Set() : new Set(existing.map((r) => r.itemId)));
+  };
+
+  // Delete every checked row, then reload once. Reloads even on failure so the list
+  // reflects any rows that were removed before the error.
+  const onDeleteSelected = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      for (const id of Array.from(selected)) await deleteRow(id);
+      setExisting(await loadExisting());
+      setSelected(new Set());
+      setConfirmBulk(false);
+      showToast("Selected rows deleted — re-run Folder Reconciliation to apply the change.", false);
+    } catch (e) {
+      setExisting(await loadExisting());
+      setSelected(new Set());
+      setConfirmBulk(false);
       showToast(`Delete failed: ${(e as Error).message}`, true);
     } finally {
       setBusy(false);
@@ -307,36 +498,123 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   return (
     <div style={s.wrap}>
       <p style={s.intro}>
-        Map an <strong>existing</strong> security group to a segment, tier, and role. This writes a clean
-        row into the <strong>DMS Group Map</strong> list — no hand-typed GUIDs. It does <strong>not</strong>{" "}
-        create the group or apply permissions: after adding rows, <strong>re-run Folder Reconciliation</strong>{" "}
-        to grant access (MEMBER → Read, UPL → Contribute, APR → Design).
+        Map a <strong>native SharePoint site group</strong> to a segment, tier, and role — or create
+        the group right here and add its members. This writes a clean row into the{" "}
+        <strong>DMS Group Map</strong> list. Member changes take effect <strong>immediately</strong>;
+        new/deleted <em>rows</em> need a <strong>Folder Reconciliation</strong> run to apply folder
+        permissions (MEMBER → Read, UPL → Contribute, APR → Design).
       </p>
+
+      {canManage === false && (
+        <div style={{ ...s.card, borderColor: "#f0c000", background: "#fff8e1" }}>
+          Read-only: creating groups and editing members needs <strong>Full Control (site owner)</strong>{" "}
+          on this site. You can still view mappings.
+        </div>
+      )}
 
       <div style={s.card}>
         {/* Group */}
         <label style={s.label}>Group</label>
         {group ? (
-          <span style={s.pickedChip}>
-            {group.displayName}
-            <button style={s.chipX} disabled={busy} title="Change" onClick={clearGroup}>✕</button>
-          </span>
+          <>
+            <span style={s.pickedChip}>
+              {group.displayName}
+              <button style={s.chipX} disabled={busy} title="Change" onClick={clearGroup}>✕</button>
+            </span>
+            <button style={s.seglvl} disabled={busy} onClick={toggleMembers}>
+              {members === undefined ? "members" : `${members.length} member(s)`} {membersOpen ? "▴" : "▾"}
+            </button>
+            {membersOpen && (
+              <div style={{ ...s.preview, borderStyle: "solid", marginTop: 8 }}>
+                {members === undefined && <div>Loading members…</div>}
+                {members !== undefined && members.length === 0 && <div>No members yet.</div>}
+                {(members ?? []).map((m) => (
+                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
+                    <span style={{ flex: 1 }}>{m.title}</span>
+                    <span style={s.mono}>{m.email}</span>
+                    {canManage === true && (confirmRemove === m.id ? (
+                      <span style={{ display: "inline-flex", gap: 6 }}>
+                        <button style={s.delBtn} disabled={memberBusy} onClick={() => { onRemoveMember(m.id).catch(() => undefined); }}>Remove</button>
+                        <button style={s.ghost} disabled={memberBusy} onClick={() => setConfirmRemove(undefined)}>Cancel</button>
+                      </span>
+                    ) : (
+                      <button style={s.chipX} disabled={memberBusy} title="Remove from group" onClick={() => setConfirmRemove(m.id)}>✕</button>
+                    ))}
+                  </div>
+                ))}
+                {canManage === true && (
+                  <div style={{ ...s.ddwrap, marginTop: 8 }}>
+                    <input
+                      style={s.input}
+                      placeholder="Search people in the tenant to add…"
+                      value={peopleQuery}
+                      disabled={memberBusy}
+                      onChange={(e) => setPeopleQuery(e.target.value)}
+                    />
+                    {(peopleSearching || peopleResults.length > 0) && (
+                      <div style={s.dd}>
+                        {peopleSearching && <div style={s.ddItem}>Searching…</div>}
+                        {!peopleSearching && peopleResults.map((p) => (
+                          <div key={p.loginName} style={s.ddItem} onClick={() => { onAddMember(p).catch(() => undefined); }}>
+                            {p.displayName} <span style={s.mono}>{p.email}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
         ) : (
           <div style={s.ddwrap}>
             <input
               style={s.input}
-              placeholder="Type to search Entra groups…"
+              placeholder="Type to search this site's DMS_ groups…"
               value={query}
               disabled={busy}
               onChange={(e) => setQuery(e.target.value)}
             />
-            {(searching || results.length > 0) && (
+            {(searching || results.length > 0 || query.trim()) && (
               <div style={s.dd}>
                 {searching && <div style={s.ddItem}>Searching…</div>}
                 {!searching && results.map((g) => (
                   <div key={g.id} style={s.ddItem} onClick={() => pickGroup(g)}>{g.displayName}</div>
                 ))}
-                {!searching && results.length === 0 && query.trim() && <div style={s.ddItem}>No groups found.</div>}
+                {!searching && results.length === 0 && query.trim() && (
+                  <div style={{ ...s.ddItem, color: "#666" }}>No matching group.</div>
+                )}
+                {!searching && canManage === true && (
+                  <div style={{ ...s.ddItem, color: "#0f6c3f", fontWeight: 600 }} onClick={startCreate}>
+                    ➕ Create a new group…
+                  </div>
+                )}
+              </div>
+            )}
+            {creating && (
+              <div style={{ marginTop: 8 }}>
+                <input
+                  style={s.input}
+                  value={newName}
+                  disabled={busy}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="New group name"
+                />
+                {nameRoleMismatch() && (
+                  <div style={{ fontSize: 12, color: "#a4262c", marginTop: 4 }}>
+                    Warning: the name suffix doesn&rsquo;t match the selected role ({role}). You can still create it.
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                  <button
+                    style={newName.trim() && !busy ? s.addBtn : s.addBtnOff}
+                    disabled={!newName.trim() || busy}
+                    onClick={() => { onCreateGroup().catch(() => undefined); }}
+                  >
+                    Create group
+                  </button>
+                  <button style={s.ghost} disabled={busy} onClick={cancelCreate}>Cancel</button>
+                </div>
               </div>
             )}
           </div>
@@ -408,10 +686,28 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       </div>
 
       {/* Existing rows */}
-      <h3 style={{ fontSize: 14, margin: "0 0 6px" }}>Existing mappings ({existing.length})</h3>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 6px" }}>
+        <h3 style={{ fontSize: 14, margin: 0 }}>Existing mappings ({existing.length})</h3>
+        {selected.size > 0 && (
+          confirmBulk ? (
+            <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <span style={{ fontSize: 12, color: "#a4262c" }}>Delete {selected.size} selected row(s)?</span>
+              <button style={s.delBtn} disabled={busy} onClick={() => { onDeleteSelected().catch(() => undefined); }}>Yes, delete</button>
+              <button style={s.ghost} disabled={busy} onClick={() => setConfirmBulk(false)}>Cancel</button>
+            </span>
+          ) : (
+            <button style={s.delBtn} disabled={busy} onClick={() => setConfirmBulk(true)}>
+              Delete selected ({selected.size})
+            </button>
+          )
+        )}
+      </div>
       <table style={s.table}>
         <thead>
           <tr>
+            <th style={{ ...s.th, width: 28 }}>
+              <input type="checkbox" checked={allSelected} disabled={busy || existing.length === 0} onChange={toggleAll} title="Select all" />
+            </th>
             <th style={s.th}>Group</th>
             <th style={s.th}>Segment</th>
             <th style={s.th}>Tier</th>
@@ -421,10 +717,13 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </thead>
         <tbody>
           {existing.length === 0 && (
-            <tr><td style={s.td} colSpan={5}>No mappings yet.</td></tr>
+            <tr><td style={s.td} colSpan={6}>No mappings yet.</td></tr>
           )}
           {existing.map((r) => (
             <tr key={r.itemId}>
+              <td style={s.td}>
+                <input type="checkbox" checked={selected.has(r.itemId)} disabled={busy} onChange={() => toggleSel(r.itemId)} />
+              </td>
               <td style={s.td}>{r.GroupName || <span style={s.mono}>{r.GroupId}</span>}</td>
               <td style={s.td}>{r.Segment ? segmentLabelFor(r.Segment) : "—"}</td>
               <td style={s.td}>
