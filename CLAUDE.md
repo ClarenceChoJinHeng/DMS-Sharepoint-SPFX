@@ -32,10 +32,15 @@ Workbench: `https://dcidigitalcom.sharepoint.com/_layouts/workbench.aspx?debugMa
 The form is now **data-driven over "modes"** loaded from the `DMS Config` list. Each mode
 has a `Side` (`BusinessSegment` | `Project`), a term-set GUID, and a `Levels` JSON chain
 (variable depth, e.g. `[{"label":"Department","column":"Department"},{"label":"Unit","column":"Unit"}]`).
-The 5 intended modes: 4 Business Segments (Group Head Office, Upstream, SDGI, I&T) + Group-led Projects.
-- **Pilot scope (now):** only **Group Head Office (GHO)** is live. Its term set GUID is the
-  `DEFAULT_MODES` fallback in both `Form.tsx` and `Reconciliation.tsx`. The other 4 term-set
-  GUIDs are not yet captured — add them to `DEFAULT_MODES` + DMS Config when onboarded.
+**12 intended modes** (see `docs/superpowers/specs/2026-07-24-twelve-segment-expansion-design.md`
+for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** — not "NBBOL"),
+3 Upstream Ops, 2 SDGI, 2 I&T, 1 Group-led Project.
+- **Pilot scope (2026):** the **4 Head Office segments**, all `Levels = [Department, Unit]`
+  (shared columns — zero new columns). All 4 term sets exist flat in the `DMS Metadata` term
+  group (GUIDs below) and are in the code fallbacks: `DEFAULT_MODES` in `Form.tsx` +
+  `BulkUpload.tsx`, `RECON_MODES` in `FolderManager.tsx`. DMS Config `mode` rows are the
+  runtime source of truth — the 3 new rows still need creating. 2027 segments need new level
+  columns first (see the spec + `2026-07-21-segment-onboarding-plan.md`).
 - **User path auto-detection:** the form reads the user's Entra group Object IDs via Graph
   `/me/memberOf`, matched against the **`DMS Group Map`** list (`GroupId`, `Segment`, `UnitTermGuid`,
   `Role`). Names are cosmetic — matching is by Object ID (so existing `SDG-*` groups are reused
@@ -53,6 +58,11 @@ vendor:          cb3c0ab7-a959-4200-9b7b-d1e13397d240
 Group Head Office (business-segment set): efa87c6a-9536-4f7c-910f-011bf7413b80
   Structure: Set → Department terms (e.g. Group Legal, Risk & Compliance) → Unit terms
   (Group Compliance/GCO, Group Risk, Group Legal). Levels = [Department, Unit].
+Upstream Malaysia Head Office: 5ab1c7c4-78d2-43b4-869f-3eab4b1c375c  <- created as "Upstream
+  Head Office" — rename in term store to match client list
+Minamas Head Office:           6ba9a64c-a363-48fd-afd1-324897df781c
+NBPOL Head Office:             21d7e6fe-8f71-4a56-bd2e-e4a2176995a7
+  (all 3 same structure/Levels as GHO; Department/Unit terms pending client trees)
 ```
 > The old single `department` term set (`eaba82e5-…`) and the `project` term set
 > (`94ce322b-…`, lookupStyle "parentMatch") are **retired** by the multi-segment model.

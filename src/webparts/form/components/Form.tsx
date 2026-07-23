@@ -108,8 +108,8 @@ const EMPTY_OPTIONS: OptionMap = {
 
 // Fallback if DMS Config is missing/unreachable. DMS Config is the source of
 // truth at runtime — these built-in modes only serve an offline fallback.
-//   - Group Head Office has a real term-set GUID (verified in the sandbox).
-//   - The other four carry REPLACE-* placeholder GUIDs: swap them for the real
+//   - The four Head Office segments (2026 pilot) have real term-set GUIDs.
+//   - The 2027 segments carry REPLACE-* placeholder GUIDs: swap them for the real
 //     term-set GUIDs (or, preferably, drive everything from DMS Config so no
 //     code edit is needed). Each level's real Staging column internal names are
 //     supplied per-level via DMS Config Levels JSON (labelCol/tidCol); the
@@ -128,6 +128,42 @@ const DEFAULT_MODES: UploadMode[] = [
     sortOrder: 1,
   },
   {
+    key: "upstream_my_ho",
+    label: "Upstream Malaysia Head Office",
+    side: "BusinessSegment",
+    termSetGuid: "5ab1c7c4-78d2-43b4-869f-3eab4b1c375c",
+    stagingFolder: "Upstream Malaysia Head Office",
+    levels: [
+      { label: "Department", column: "Department" },
+      { label: "Unit", column: "Unit" },
+    ],
+    sortOrder: 2,
+  },
+  {
+    key: "minamas_ho",
+    label: "Minamas Head Office",
+    side: "BusinessSegment",
+    termSetGuid: "6ba9a64c-a363-48fd-afd1-324897df781c",
+    stagingFolder: "Minamas Head Office",
+    levels: [
+      { label: "Department", column: "Department" },
+      { label: "Unit", column: "Unit" },
+    ],
+    sortOrder: 3,
+  },
+  {
+    key: "nbpol_ho",
+    label: "NBPOL Head Office",
+    side: "BusinessSegment",
+    termSetGuid: "21d7e6fe-8f71-4a56-bd2e-e4a2176995a7",
+    stagingFolder: "NBPOL Head Office",
+    levels: [
+      { label: "Department", column: "Department" },
+      { label: "Unit", column: "Unit" },
+    ],
+    sortOrder: 4,
+  },
+  {
     key: "upstream",
     label: "Group Upstream Operations",
     side: "BusinessSegment",
@@ -137,7 +173,7 @@ const DEFAULT_MODES: UploadMode[] = [
       { label: "Region", column: "Region" },
       { label: "Estate/Mill", column: "EstateMill" },
     ],
-    sortOrder: 2,
+    sortOrder: 5,
   },
   {
     key: "sdgi",
@@ -149,7 +185,7 @@ const DEFAULT_MODES: UploadMode[] = [
       { label: "Refinery", column: "Refinery" },
       { label: "Department", column: "Department" },
     ],
-    sortOrder: 3,
+    sortOrder: 6,
   },
   {
     key: "it",
@@ -158,7 +194,7 @@ const DEFAULT_MODES: UploadMode[] = [
     termSetGuid: "REPLACE-IT-TERMSET-GUID",
     stagingFolder: "Group Innovation & Technology",
     levels: [{ label: "I&T Operating Unit", column: "ITOperatingUnit" }],
-    sortOrder: 4,
+    sortOrder: 7,
   },
   {
     key: "projects",
@@ -171,7 +207,7 @@ const DEFAULT_MODES: UploadMode[] = [
       { label: "Department", column: "Department" },
       { label: "Unit", column: "Unit" },
     ],
-    sortOrder: 5,
+    sortOrder: 8,
   },
 ];
 
