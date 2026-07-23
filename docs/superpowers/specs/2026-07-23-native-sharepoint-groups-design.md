@@ -36,13 +36,21 @@ to the DMS site. Hard cutover — no dual-source support.
 
 | Scope in `package-solution.json` | Used by | After |
 |---|---|---|
-| `Group.Read.All` | group search (GroupMapBuilder, Onboarding, FolderManager) | **remove** |
-| `GroupMember.Read.All` | `/me/memberOf` (Form, BulkUpload) | **remove** |
-| `User.Read.All` | PnP `PeoplePicker` in `RequestShare.tsx` — unrelated to groups | **keep** |
-| `Sites.Read.All` | no Graph call in the codebase uses it | **leave as-is** — appears to predate this architecture; verify and remove separately, not as part of this cutover |
+| `Group.Read.All` | group search (GroupMapBuilder, Onboarding, FolderManager) | **remove** — this spec |
+| `GroupMember.Read.All` | `/me/memberOf` (Form, BulkUpload) | **remove** — this spec |
+| `User.Read.All` | PnP `PeoplePicker` in `RequestShare.tsx` | **remove** — with Share Guard retirement (`2026-07-23-share-guard-retirement.md`) |
+| `Sites.Read.All` | nothing — no Graph call in the codebase uses it | **remove** — already dead |
+
+**`webApiPermissionRequests` ends up empty.** Once this spec and the Share Guard retirement are
+both implemented, no code calls `msGraphClientFactory`, so the solution requests **zero Graph
+permissions** and needs no tenant API-access approval at all.
 
 The new member-assignment picker uses SharePoint's `ClientPeoplePickerSearchUser` endpoint, so
 it adds no Graph dependency.
+
+**Sequencing:** this spec removes the first two scopes. Emptying the array entirely depends on
+the Share Guard retirement landing. If Share Guard is kept for any reason, `User.Read.All` stays
+and the "zero Graph" claim does not hold — do not tell the client otherwise until both ship.
 
 **No Entra directory role is required.** Creating and populating SP site groups needs only
 **Full Control (Site Owner)** on the DMS site — a SharePoint grant. The Entra **Group
