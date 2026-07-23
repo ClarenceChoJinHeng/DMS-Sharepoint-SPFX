@@ -60,8 +60,24 @@ both no longer needed for group work.
 ### Accepted constraints
 
 1. **Site-collection scoped.** An SP group on the DMS site cannot be assigned on another site.
-   The Phase 2 multi-site split (`2026-07-20-multi-site-storage-phase2-design.md`) would need a
-   parallel group set per segment site. Accepted knowingly; revisit if Phase 2 proceeds.
+   Two groups sharing a name on two sites are unrelated objects; adding a person to one does
+   nothing to the other. Phase 2 (`2026-07-20-multi-site-storage-phase2-design.md`) therefore
+   needs a parallel group set **and parallel membership** per segment site — an ongoing
+   duplication, not a one-time setup. Client has confirmed Phase 2 **will** happen.
+
+   Scope of the impact, which is narrower than it first appears:
+   - **Upload routing is unaffected.** The form runs only on the DMS site and Phase 2 keeps
+     Staging central, so `DMS Group Map`, the tiered hard-check, and the `GLOBAL` role
+     (`isGlobalUploader`, an *upload* flag — `formModel.ts:139`) stay single-site.
+   - **Cross-site *read* needs a per-site grant regardless of group technology.** Entra groups
+     would also have to be assigned on each segment site; the only saving would be maintaining
+     membership once instead of N times.
+   - **A global reader (e.g. an executive) cannot be served by a site-level grant**, because
+     inheritance is broken per unit folder. They need Read on each unit folder, which means
+     Reconciliation must learn to write a **global-reader principal** into the folder ACL
+     template alongside MEMBER/UPL/APR. **Not in this spec — required for Phase 2.**
+   - Site Collection Administrator would bypass all of this, but grants full destructive
+     control and cannot be scoped read-only. Not an acceptable substitute.
 2. **No nesting, no mailbox.** SP groups cannot contain other SP groups and have no group email.
 3. **Direct membership only.** `currentuser/groups` returns groups the user is a *direct* member
    of. Users must be added individually — which is the requested workflow.
@@ -226,8 +242,27 @@ separate Visitors membership (see `dms-two-layer-access-site-plus-folder`).
 - `roleFromGroupName`, `buildGroupMapRow`, `isDuplicateRow`, `validateDraft`, `collectMembership`
   — unchanged, existing tests must still pass.
 - `src/shared/spGroups.ts` REST calls — verified live against the sandbox site, not mocked.
-- End-to-end: create group → add self → map row → reconcile → upload via the form → confirm the
+- End-to-end: create group → add member → map row → reconcile → upload via the form → confirm the
   file lands in the unit folder and a non-member cannot see it.
+
+### Testing must not use a Site Collection Administrator account
+
+**SCA bypasses every ACL, including broken inheritance.** A unit folder with completely wrong
+permissions looks correct from an SCA account, so testing with one proves nothing about the
+permission model.
+
+The developer account is SCA on the sandbox site — verified 2026-07-23 via
+`/_api/web/currentuser?$select=IsSiteAdmin` → `true`. Check any account before trusting what it
+shows you.
+
+Every permission assertion must be verified with a **non-admin test account** holding only the
+group under test:
+
+- A user in only `DMS_..._UPL` sees exactly their unit folder in Staging — and no other unit's.
+- A user in no DMS group sees nothing and gets the existing "no access" path.
+- A user in only the global-reader group (when that exists) can read across units but not upload.
+
+"I can see it" from the developer account is not evidence. Only a non-admin account is.
 
 ## Out of scope
 
