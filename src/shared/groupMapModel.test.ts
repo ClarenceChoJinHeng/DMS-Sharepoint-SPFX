@@ -3,6 +3,7 @@ import {
   isDuplicateRow,
   validateDraft,
   roleFromGroupName,
+  suggestGroupName,
   GroupMapWriteRow,
   GroupMapDraft,
 } from "./groupMapModel";
@@ -128,5 +129,38 @@ describe("validateDraft", () => {
 
   it("does not require segment/tier for GLOBAL", () => {
     expect(validateDraft({ groupId: "g", groupName: "n", role: "GLOBAL" })).toEqual([]);
+  });
+});
+
+describe("suggestGroupName", () => {
+  it("joins DMS + segment + tier labels + role suffix", () => {
+    expect(
+      suggestGroupName("Group Head Office", ["Group Finance", "Corporate Reporting"], "UPL"),
+    ).toBe("DMS_Group Head Office_Group Finance_Corporate Reporting_UPL");
+  });
+
+  it("APR suffix works the same way", () => {
+    expect(suggestGroupName("Minamas Head Office", ["Finance"], "APR")).toBe(
+      "DMS_Minamas Head Office_Finance_APR",
+    );
+  });
+
+  it("MEMBER gets no suffix (base/viewer group)", () => {
+    expect(suggestGroupName("Group Head Office", ["Group Finance"], "MEMBER")).toBe(
+      "DMS_Group Head Office_Group Finance",
+    );
+  });
+
+  it("GLOBAL is a fixed name regardless of labels", () => {
+    expect(suggestGroupName("anything", ["x", "y"], "GLOBAL")).toBe("DMS_GLOBAL");
+  });
+
+  it("skips empty labels and trims the rest", () => {
+    expect(suggestGroupName(" GHO ", ["", "  Unit A "], "APR")).toBe("DMS_GHO_Unit A_APR");
+  });
+
+  it("empty role and empty labels degrade gracefully", () => {
+    expect(suggestGroupName("GHO", [], "")).toBe("DMS_GHO");
+    expect(suggestGroupName("", [], "")).toBe("DMS");
   });
 });

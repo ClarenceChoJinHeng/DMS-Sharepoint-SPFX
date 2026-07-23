@@ -74,3 +74,20 @@ export function validateDraft(draft: GroupMapDraft): string[] {
   }
   return errors;
 }
+
+/**
+ * Suggest a site-group title from the builder's current selections, e.g.
+ * "DMS_Group Head Office_Group Finance_UPL". Purely a SUGGESTION — the admin
+ * edits it freely before create (no abbreviation algorithm by design; see the
+ * native-sharepoint-groups spec). GLOBAL is a fixed name; MEMBER has no suffix.
+ */
+export function suggestGroupName(
+  segmentLabel: string,
+  tierLabels: string[],
+  role: GroupMapRole | "",
+): string {
+  if (role === "GLOBAL") return "DMS_GLOBAL";
+  const parts = ["DMS", norm(segmentLabel), ...tierLabels.map(norm)].filter(Boolean);
+  const suffix = role === "UPL" || role === "APR" ? `_${role}` : "";
+  return parts.join("_") + suffix;
+}
