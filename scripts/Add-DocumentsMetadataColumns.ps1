@@ -68,10 +68,12 @@ Add-IfMissing "UnitTid"                { Add-PnPField -List $List -DisplayName "
 Add-IfMissing "DocumentDate"           { Add-PnPField -List $List -DisplayName "Document Date"        -InternalName "DocumentDate"           -Type DateTime | Out-Null }
 
 # --- Document Type (Taxonomy, same term set as Staging) -----------------------
-# InternalName is Department_x0020_Type by design - DO NOT change to Document_x0020_Type.
-Add-IfMissing "Department_x0020_Type" {
+# Internal name Document_x0020_Type (migrated 2026-07-24 from the old Department_x0020_Type;
+# see 2026-07-24-document-type-internal-name-migration-design). The display name "Document Type"
+# yields this internal name naturally, so no create-then-rename workaround is needed.
+Add-IfMissing "Document_x0020_Type" {
   Add-PnPTaxonomyField -List $List -DisplayName "Document Type" `
-    -InternalName "Department_x0020_Type" -TermSetId $DocumentTypeTermSetId | Out-Null
+    -InternalName "Document_x0020_Type" -TermSetId $DocumentTypeTermSetId | Out-Null
 }
 
 # --- Approval Status (Choice, default "Approved") -----------------------------

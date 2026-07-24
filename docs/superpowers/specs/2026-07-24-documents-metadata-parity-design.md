@@ -6,6 +6,13 @@
 Segment, Department, Unit, Document Type, Document Date). Staging has the tags; Documents
 does not.
 
+> **Note (2026-07-24):** the Document Type column's internal name was subsequently migrated
+> from `Department_x0020_Type` to **`Document_x0020_Type`** — see
+> `2026-07-24-document-type-internal-name-migration-design.md`. Wherever this spec says
+> `Department_x0020_Type`, read `Document_x0020_Type`, and the frozen-internal-name / "create as
+> Department Type first" workaround no longer applies (the display name "Document Type" now yields
+> the correct internal name directly).
+
 ## Root cause (verified against live `/fields`, 2026-07-24)
 
 The Documents library is **missing 8 of the 11** metadata columns that Staging has. It is
