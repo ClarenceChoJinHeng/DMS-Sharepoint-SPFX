@@ -15,8 +15,8 @@ interface IFileItem {
 }
 
 // SharePoint's OData layer double-encodes underscores in property names, so a field
-// whose internal name already contains an encoded char (e.g. Department_x0020_Type,
-// where _x0020_ is a space) comes back as Department_x005f_x0020_x005f_Type.
+// whose internal name already contains an encoded char (e.g. Document_x0020_Type,
+// where _x0020_ is a space) comes back as Document_x005f_x0020_x005f_Type.
 // Index signature so we can read whichever key SharePoint returns.
 interface IFieldText {
   [internalName: string]: string;
@@ -320,7 +320,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
   const metadata: [string, string][] = [
     ["Location",           orgLocation],
-    ["Document Type",      pick("Department_x005f_x0020_x005f_Type", "Department_x0020_Type")],
+    ["Document Type",      pick("Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
     ["Confidential Level", pick("Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
     ["Year/Period",        pick("Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
     ["Vendor",             pick("Vendor")],

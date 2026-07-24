@@ -41,9 +41,9 @@ const DOCUMENTS_URL_SEGMENT = "Shared Documents";
 const DOCUMENTS_LIST_TITLE = "Documents";
 
 const FIELDS = {
-  // Internal name frozen as "Department_x0020_Type" (created as "Department Type",
-  // then display-renamed to "Document Type" — verified against the live fields API).
-  documentType: "Department_x0020_Type",
+  // Document Type column — internal name Document_x0020_Type (migrated from the old
+  // frozen "Department_x0020_Type"; see 2026-07-24-document-type-internal-name-migration-design).
+  documentType: "Document_x0020_Type",
   yearPeriod: "Year_x002f_Period",
   documentDate: "DocumentDate",
   confidentiality: "Confidentiality_x0020_Level",

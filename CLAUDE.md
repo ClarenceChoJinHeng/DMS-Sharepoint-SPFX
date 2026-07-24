@@ -71,7 +71,7 @@ NBPOL Head Office:             21d7e6fe-8f71-4a56-bd2e-e4a2176995a7
 ## Staging Library — Column Internal Names
 Verified against live `/fields` API. Do NOT guess from display names.
 ```
-Department_x0020_Type      <- "Document Type" (created as "Department Type", frozen internal name)
+Document_x0020_Type        <- "Document Type" (migrated 2026-07-24 from the old frozen Department_x0020_Type)
 Year_x002f_Period
 DocumentDate               <- DateTime, no space encoding
 Confidentiality_x0020_Level
