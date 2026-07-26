@@ -29,10 +29,10 @@ type Tab       = LibTarget | "Reconciliation" | "GroupMap";
 // their term sets are onboarded (term-set GUID + its container folder name).
 type ReconMode = { key: string; termSetGuid: string; stagingFolder: string };
 const RECON_MODES: ReconMode[] = [
-  { key: "gho", termSetGuid: "efa87c6a-9536-4f7c-910f-011bf7413b80", stagingFolder: "Group Head Office" },
-  { key: "upstream_my_ho", termSetGuid: "5ab1c7c4-78d2-43b4-869f-3eab4b1c375c", stagingFolder: "Upstream Malaysia Head Office" },
-  { key: "minamas_ho", termSetGuid: "6ba9a64c-a363-48fd-afd1-324897df781c", stagingFolder: "Minamas Head Office" },
-  { key: "nbpol_ho", termSetGuid: "21d7e6fe-8f71-4a56-bd2e-e4a2176995a7", stagingFolder: "NBPOL Head Office" },
+  { key: "gho", termSetGuid: "df4b9afa-d3b9-4c04-9097-50dcaf5d8036", stagingFolder: "Group Head Office" },
+  { key: "upstream_my_ho", termSetGuid: "16a52947-57a3-4217-9a49-b48cb8b0dd31", stagingFolder: "Upstream Malaysia Head Office" },
+  { key: "minamas_ho", termSetGuid: "c6b26d32-1c3e-441f-b4ea-78f053e12990", stagingFolder: "Minamas Head Office" },
+  { key: "nbpol_ho", termSetGuid: "303f2c38-086a-46ba-8ee0-85445f6bfa3a", stagingFolder: "NBPOL Head Office" },
 ];
 type TermLite = { id: string; label: string };
 
@@ -42,8 +42,8 @@ type TermLite = { id: string; label: string };
 // Offline fallback only — the grid term sets are read at runtime from the DMS Config
 // `setting` rows (termSet_yearPeriod / termSet_documentType) via loadReconGridTermSets,
 // so a different tenant needs no code edit. These GUIDs are the sandbox values.
-const YEAR_TERMSET    = "f7c578a1-e0e5-42ff-9e0c-d748cba42ede";
-const DOCTYPE_TERMSET = "0540e66e-7cb3-47ac-b0ef-4e3069387394";
+const YEAR_TERMSET    = "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf";
+const DOCTYPE_TERMSET = "866c5754-258e-401f-8685-03d20ae59b1d";
 
 // One folder the provisioner will ensure exists + lock. termGuid is null for the
 // segment container folder (not a term); term folders (department, unit, …) carry

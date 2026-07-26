@@ -179,7 +179,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "gho",
     label: "Group Head Office",
     side: "BusinessSegment",
-    termSetGuid: "efa87c6a-9536-4f7c-910f-011bf7413b80",
+    termSetGuid: "df4b9afa-d3b9-4c04-9097-50dcaf5d8036",
     stagingFolder: "Group Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -191,7 +191,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "upstream_my_ho",
     label: "Upstream Malaysia Head Office",
     side: "BusinessSegment",
-    termSetGuid: "5ab1c7c4-78d2-43b4-869f-3eab4b1c375c",
+    termSetGuid: "16a52947-57a3-4217-9a49-b48cb8b0dd31",
     stagingFolder: "Upstream Malaysia Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -203,7 +203,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "minamas_ho",
     label: "Minamas Head Office",
     side: "BusinessSegment",
-    termSetGuid: "6ba9a64c-a363-48fd-afd1-324897df781c",
+    termSetGuid: "c6b26d32-1c3e-441f-b4ea-78f053e12990",
     stagingFolder: "Minamas Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -215,7 +215,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "nbpol_ho",
     label: "NBPOL Head Office",
     side: "BusinessSegment",
-    termSetGuid: "21d7e6fe-8f71-4a56-bd2e-e4a2176995a7",
+    termSetGuid: "303f2c38-086a-46ba-8ee0-85445f6bfa3a",
     stagingFolder: "NBPOL Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -284,10 +284,10 @@ type DmsSettings = {
 
 const DEFAULT_SETTINGS: DmsSettings = {
   termSets: {
-    documentType: "0540e66e-7cb3-47ac-b0ef-4e3069387394",
-    yearPeriod: "f7c578a1-e0e5-42ff-9e0c-d748cba42ede",
-    confidentiality: "032534ab-9285-4b42-98c6-5c7b0df1f066",
-    vendor: "cb3c0ab7-a959-4200-9b7b-d1e13397d240",
+    documentType: "866c5754-258e-401f-8685-03d20ae59b1d",
+    yearPeriod: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
+    confidentiality: "0d6d1da8-27e5-477f-8684-e8cf169f8fb9",
+    vendor: "eaafd0e5-03fd-4d33-b1b1-e4252bec430a",
   },
   stagingLibrary: "Staging",
   allowedExtensions: [".pdf", ".xls", ".xlsx"],
