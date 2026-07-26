@@ -52,6 +52,10 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   UniqueId via DMS Folder Map. `Year` + `Document Type` subfolders are **ensure-created on demand**
   under the Unit folder and inherit its ACL.
 
+> ⚠ **PENDING PIVOT (2026-07-26):** the GUIDs below are **tenant** (admin-center) term sets. The
+> client wants to move to a **site-collection–local term store** (security — no admin-center access).
+> If adopted, ALL these GUIDs change and become per-site — do not trust them as fact. Not yet verified
+> or implemented. See memory `dms-term-store-site-collection-pivot`.
 ```
 documentType:    0540e66e-7cb3-47ac-b0ef-4e3069387394
 yearPeriod:      f7c578a1-e0e5-42ff-9e0c-d748cba42ede
