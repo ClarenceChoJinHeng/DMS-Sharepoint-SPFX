@@ -322,7 +322,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     ["Location",           orgLocation],
     ["Document Type",      pick("Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
     ["Confidential Level", pick("Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
-    ["Year/Period",        pick("Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
+    ["Year",               pick("Year", "Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
     ["Vendor",             pick("Vendor")],
   ];
 

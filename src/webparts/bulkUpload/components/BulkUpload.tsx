@@ -50,7 +50,7 @@ const FIELDS = {
   // Document Type column — internal name Document_x0020_Type (migrated from the old
   // frozen "Department_x0020_Type"; see 2026-07-24-document-type-internal-name-migration-design).
   documentType: "Document_x0020_Type",
-  yearPeriod: "Year_x002f_Period",
+  yearPeriod: "Year",            // site column internal name (client kept plain "Year")
   documentDate: "DocumentDate",
   confidentiality: "Confidentiality_x0020_Level",
   vendor: "Vendor",
@@ -278,6 +278,17 @@ type DmsSettings = {
     confidentiality: string;
     vendor: string;
   };
+  // Metadata column INTERNAL names — portable via DMS Config col_* setting rows
+  // (defaults match the current site so no config rows are required). Mirrors Form.tsx.
+  columns: {
+    documentType: string;
+    yearPeriod: string;
+    documentDate: string;
+    confidentiality: string;
+    vendor: string;
+    businessSegmentLabel: string;
+    businessSegmentTid: string;
+  };
   stagingLibrary: string;
   allowedExtensions: string[];
 };
@@ -288,6 +299,15 @@ const DEFAULT_SETTINGS: DmsSettings = {
     yearPeriod: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
     confidentiality: "0d6d1da8-27e5-477f-8684-e8cf169f8fb9",
     vendor: "eaafd0e5-03fd-4d33-b1b1-e4252bec430a",
+  },
+  columns: {
+    documentType: FIELDS.documentType,
+    yearPeriod: FIELDS.yearPeriod,
+    documentDate: FIELDS.documentDate,
+    confidentiality: FIELDS.confidentiality,
+    vendor: FIELDS.vendor,
+    businessSegmentLabel: LEVEL_COLUMNS.BusinessSegment.label,
+    businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
   },
   stagingLibrary: "Staging",
   allowedExtensions: [".pdf", ".xls", ".xlsx"],
@@ -494,6 +514,18 @@ export default function BulkUpload({
           get("termSet_confidentiality") ??
           DEFAULT_SETTINGS.termSets.confidentiality,
         vendor: get("termSet_vendor") ?? DEFAULT_SETTINGS.termSets.vendor,
+      },
+      columns: {
+        documentType: get("col_documentType") ?? DEFAULT_SETTINGS.columns.documentType,
+        yearPeriod: get("col_yearPeriod") ?? DEFAULT_SETTINGS.columns.yearPeriod,
+        documentDate: get("col_documentDate") ?? DEFAULT_SETTINGS.columns.documentDate,
+        confidentiality:
+          get("col_confidentiality") ?? DEFAULT_SETTINGS.columns.confidentiality,
+        vendor: get("col_vendor") ?? DEFAULT_SETTINGS.columns.vendor,
+        businessSegmentLabel:
+          get("col_businessSegment") ?? DEFAULT_SETTINGS.columns.businessSegmentLabel,
+        businessSegmentTid:
+          get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
       stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
       allowedExtensions: get("allowedExtensions")
@@ -1134,28 +1166,37 @@ export default function BulkUpload({
       tidCol: undefined,
     });
 
+    // BusinessSegment column names come from settings.columns (portable); Department/Unit
+    // fall back to LEVEL_COLUMNS but are normally overridden by DMS Config Levels JSON.
+    const levelCols: Record<string, ColumnPair> = {
+      ...LEVEL_COLUMNS,
+      BusinessSegment: {
+        label: settings.columns.businessSegmentLabel,
+        tid: settings.columns.businessSegmentTid,
+      },
+    };
     const formValues: Array<{ FieldName: string; FieldValue: string }> = [
       {
-        FieldName: FIELDS.documentType,
+        FieldName: settings.columns.documentType,
         FieldValue: taxVal(batch.docTypeLabel, batch.docTypeId),
       },
       {
-        FieldName: FIELDS.yearPeriod,
+        FieldName: settings.columns.yearPeriod,
         FieldValue: taxVal(batch.yearLabel, batch.yearId),
       },
       {
-        FieldName: FIELDS.confidentiality,
+        FieldName: settings.columns.confidentiality,
         FieldValue: taxVal(batch.confLabel, batch.confId),
       },
       {
-        FieldName: FIELDS.documentDate,
+        FieldName: settings.columns.documentDate,
         FieldValue: toSpDate(batch.documentDate),
       },
-      ...buildLevelFormValues(LEVEL_COLUMNS, selections),
+      ...buildLevelFormValues(levelCols, selections),
     ];
     if (batch.vendorId) {
       formValues.push({
-        FieldName: FIELDS.vendor,
+        FieldName: settings.columns.vendor,
         FieldValue: taxVal(batch.vendorLabel, batch.vendorId),
       });
     }
