@@ -3,16 +3,11 @@
   "solution": {
     "name": "sd-gatrie-client-side-solution",
     "id": "4c93b50e-03c1-4005-a280-add0da86c86f",
-    "version": "1.0.29.0",
+    "version": "1.0.31.0",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
-    "webApiPermissionRequests": [
-      {
-        "resource": "Microsoft Graph",
-        "scope": "User.Read.All"
-      }
-    ],
+    "webApiPermissionRequests": [],
     "developer": {
       "name": "",
       "websiteUrl": "",
@@ -43,10 +38,6 @@
           "3a8f2e6d-1b4c-4a7f-8e9d-2c5b7f3a1e6d",
           "02007994-7d63-4178-9a43-2b6ec96f9e44",
           "7b3e9c14-2a8d-4f61-9b0e-5d3c8a1f4e72",
-          "b2d5f8a1-3c7e-4d90-a1f2-6e8c9b04d7a3",
-          "f15ba20c-f89d-4eff-b081-83a3479de1ac",
-          "443fdf05-34bd-42e4-b469-244197c769ac",
-          "d239b54b-47e5-430b-be20-7deecf0bd652",
           "299700f0-9a8e-4367-8018-1f9d54b92705"
         ]
       }

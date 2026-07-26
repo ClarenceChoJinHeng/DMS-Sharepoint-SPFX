@@ -22,7 +22,6 @@
     "@microsoft/sp-property-pane": "1.23.0",
     "@microsoft/sp-webpart-base": "1.23.0",
     "@pnp/sp": "^4.20.0",
-    "@pnp/spfx-controls-react": "^3.24.0",
     "gulp": "^5.0.1",
     "react": "17.0.1",
     "react-dom": "17.0.1",

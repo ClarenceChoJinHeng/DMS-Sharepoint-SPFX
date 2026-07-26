@@ -49,38 +49,6 @@
           "manifest": "./src/webparts/onboarding/OnboardingWebPart.manifest.json"
         }
       ]
-    },
-    "cross-site-browser-web-part": {
-      "components": [
-        {
-          "entrypoint": "./lib/webparts/crossSiteBrowser/CrossSiteBrowserWebPart.js",
-          "manifest": "./src/webparts/crossSiteBrowser/CrossSiteBrowserWebPart.manifest.json"
-        }
-      ]
-    },
-    "share-approval-web-part": {
-      "components": [
-        {
-          "entrypoint": "./lib/webparts/shareApproval/ShareApprovalWebPart.js",
-          "manifest": "./src/webparts/shareApproval/ShareApprovalWebPart.manifest.json"
-        }
-      ]
-    },
-    "request-share-web-part": {
-      "components": [
-        {
-          "entrypoint": "./lib/webparts/requestShare/RequestShareWebPart.js",
-          "manifest": "./src/webparts/requestShare/RequestShareWebPart.manifest.json"
-        }
-      ]
-    },
-    "share-request-extension": {
-      "components": [
-        {
-          "entrypoint": "./lib/extensions/shareRequest/ShareRequestCommandSet.js",
-          "manifest": "./src/extensions/shareRequest/ShareRequestCommandSet.manifest.json"
-        }
-      ]
     }
   },
   "externals": {},
@@ -88,10 +56,6 @@
     "FormWebPartStrings": "lib/webparts/form/loc/{locale}.js",
     "BulkUploadWebPartStrings": "lib/webparts/bulkUpload/loc/{locale}.js",
     "FolderManagerWebPartStrings": "lib/webparts/folderManager/loc/{locale}.js",
-    "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js",
-    "CrossSiteBrowserWebPartStrings": "lib/webparts/crossSiteBrowser/loc/{locale}.js",
-    "ShareApprovalWebPartStrings": "lib/webparts/shareApproval/loc/{locale}.js",
-    "RequestShareWebPartStrings": "lib/webparts/requestShare/loc/{locale}.js",
-    "ControlStrings": "node_modules/@pnp/spfx-controls-react/lib/loc/{locale}.js"
+    "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js"
   }
 }

@@ -1,5 +1,5 @@
 // Pure, SPFx-free helpers for the Group Map Builder. No @microsoft/* imports —
-// keep this unit-testable in plain Jest (same pattern as formModel / shareGuard).
+// keep this unit-testable in plain Jest (same pattern as formModel).
 
 export type GroupMapRole = "MEMBER" | "UPL" | "APR" | "GLOBAL";
 

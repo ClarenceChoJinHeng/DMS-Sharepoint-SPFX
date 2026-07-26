@@ -1,7 +1,7 @@
 # Share Guard — Retirement
 
 **Date:** 2026-07-23
-**Status:** approved, not yet implemented
+**Status:** IMPLEMENTED 2026-07-26 (code removed; tenant cleanup + handover items still manual)
 **Retires:** `2026-07-20-share-guard-design.md`, `2026-07-20-share-guard-runbook.md`
 
 ## Why

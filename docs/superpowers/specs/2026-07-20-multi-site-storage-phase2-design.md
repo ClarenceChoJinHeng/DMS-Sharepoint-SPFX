@@ -1,7 +1,8 @@
 # Multi-Site Storage (Phase 2) — Design
 
-**Status:** proposed — Phase 2 (planned now, implemented later). Phase 1 (multi-segment
-form + tiered detection) must be verified live first.
+**Status:** SUPERSEDED / RETIRED 2026-07-26 — see `2026-07-26-cross-site-upload-retirement.md`.
+A new site collection draws from the same tenant storage quota, so multi-site saves no space;
+the DMS stays single-site. Kept for historical context only.
 
 ## Problem
 
@@ -94,13 +95,37 @@ new segment site with:
   `c:0o.c|federateddirectoryclaimprovider|{GroupId}` claim.
 Scripted chosen (over manual runbook) so every segment site is guaranteed consistent.
 
-### 4. View web part (productionize the POC)
-Turn the throwaway `CrossSiteBrowser` POC into a supported web part that, on a DMS-site page,
-reads a segment site's **Documents** library (folder tree + open-in-place). Productionization:
+### 4. View surface — how users reach split-out segments from the DMS site
+
+**Chosen (MVP): native SharePoint Link items.** No code. In the DMS **Documents** library,
+segments that stay local remain **real folders**; each split-out segment is added as a native
+`+ New -> Link` item pointing at that segment site's Documents library (or a folder within it).
+
+```
+DMS site — Documents library
+  📁 Group Head Office        <- real folder, files stored locally
+  🔗 Upstream Operations      <- Link -> https://.../sites/Upstream/Shared Documents
+  🔗 SDGI                     <- Link -> https://.../sites/SDGI/Shared Documents
+  🔗 I&T                      <- Link -> https://.../sites/IandT/Shared Documents
+```
+
+Clicking a link navigates the user to that segment site, where they browse the real folders/files.
+- **Zero code, fully native**, always in sync with SharePoint's own UI.
+- **Permissions carry over unchanged** — the link is just a URL; the user needs **Read** on the
+  segment site (the same DMS_* group reuse) or they hit access-denied after the jump.
+- **Opt-in per segment** — only split-out segments become links; local segments stay real folders.
+- **Trade-off:** a visible context switch — the user lands on the segment site (different URL/nav),
+  not an in-place browse. Acceptable for the Phase 2 goal ("find and view" from the DMS site).
+- **Prerequisite:** confirm `+ New -> Link` is enabled for the library (can be disabled at
+  tenant/library level).
+
+**Later (optional): productionize the `CrossSiteBrowser` POC** into a supported web part for a
+seamless in-place experience — only if the client wants to avoid the context switch. It would:
+- Read a segment site's **Documents** library (folder tree + open-in-place) on a DMS-site page.
 - Drive the target site(s) from the Segment->Site config rather than hand-typed properties.
 - Optionally aggregate multiple segment sites in one view (tabs or a segment picker).
 - Theme-aware styling, empty/error states, and paging for large folders.
-- Opening a file is authorised by the user's **Read** on the segment site (group reuse).
+- Opening a file is still authorised by the user's **Read** on the segment site (group reuse).
 
 ## Open decisions to finalise at build time
 
@@ -108,7 +133,7 @@ reads a segment site's **Documents** library (folder tree + open-in-place). Prod
   list — clean separation, easy for admins.)
 - **Cross-site move mechanism:** Power Automate SharePoint connector vs an Azure Function for
   very large files (tens of GB) or high volume.
-- **View surface:** single web part with a segment picker vs one instance per segment page.
+- **View surface:** DECIDED — native Link items for MVP (see #4); optional web part later.
 - **HC files:** if a Highly Confidential file is approved, where is it secured — does the segment
   site's Documents folder get the HC ACL applied by the flow (reuse the HC securing design)?
 - **Rename-proofing the destination:** the flow routes by live path on the segment site; confirm
