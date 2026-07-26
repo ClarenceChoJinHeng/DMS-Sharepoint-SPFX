@@ -61,25 +61,36 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   APR: "Design",
 };
 
-// Max folder-creation requests in flight at once when building the Year × Document Type
-// grid. Kept moderate to speed up the (large) grid without tripping SharePoint throttling.
-const GRID_CONCURRENCY = 6;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Run `fn` over `items` with at most `limit` promises in flight at once. Preserves
- *  input order in the results. Used to create the large grid in parallel instead of
- *  one folder at a time. */
-async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const idx = next++;
-      results[idx] = await fn(items[idx]);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+// Throttle-safety tuning for reconciliation (tunable; could move to DMS Config).
+// Grid is created sequentially now (not in parallel) — that parallel burst was what
+// tripped SharePoint's 429 throttle. A short delay between writes + an automatic
+// cooldown every N ops keeps a large run under the limit.
+const RECON_WRITE_DELAY_MS = 500;    // pause between folder/permission writes
+const RECON_BATCH_SIZE      = 150;   // writes before an automatic cooldown
+const RECON_COOLDOWN_MS     = 4000;  // cooldown length (masked in the UI as "work")
+// Rotating status text shown during the cooldown so the pause reads as progress.
+const COOLDOWN_MESSAGES = ["Discombobulating…", "Generating folders…"];
+
+// Retry a SharePoint write on HTTP 429/503, honoring Retry-After (seconds) with
+// exponential backoff. Returns the final response (ok or not) after up to 5 retries.
+async function withThrottleRetry(
+  doPost: () => Promise<SPHttpClientResponse>,
+  onWait?: (ms: number) => void,
+): Promise<SPHttpClientResponse> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await doPost();
+    if ((res.status !== 429 && res.status !== 503) || attempt >= 5) return res;
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+    if (onWait) onWait(waitMs);
+    await sleep(waitMs);
+  }
 }
+
+// Live reconciliation progress feed item (rendered in the two-panel progress view).
+type ProgItem = { text: string; status: "run" | "ok" | "skip" | "fail" | "warn" | "admin" };
 
 type GroupMapRow = { groupId: string; groupName: string; role: string };
 
@@ -262,6 +273,36 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const [modeOpen,     setModeOpen]     = useState<Record<Mode, boolean>>({});
   // Confirm gate for the Reconciliation tab's provisioning run.
   const [reconConfirm, setReconConfirm] = useState(false);
+  // Live reconciliation progress (two-panel view + rotating cooldown text).
+  const [reconRunning, setReconRunning] = useState(false);
+  const [reconPhase,   setReconPhase]   = useState("");
+  const [folderFeed,   setFolderFeed]   = useState<ProgItem[]>([]);
+  const [assignFeed,   setAssignFeed]   = useState<ProgItem[]>([]);
+  const [reconCounts,  setReconCounts]  = useState<{ folders: number; assigns: number }>({ folders: 0, assigns: 0 });
+
+  // Keep the live feeds short so hundreds of ops don't flood the DOM.
+  const FEED_CAP = 40;
+  const pushFolder = (text: string, status: ProgItem["status"]): void =>
+    setFolderFeed((f) => [...f.slice(-(FEED_CAP - 1)), { text, status }]);
+  const setLastFolder = (text: string, status: ProgItem["status"]): void =>
+    setFolderFeed((f) => (f.length ? [...f.slice(0, -1), { text, status }] : [{ text, status }]));
+  const pushAssign = (text: string, status: ProgItem["status"]): void =>
+    setAssignFeed((a) => [...a.slice(-(FEED_CAP - 1)), { text, status }]);
+  // Surfaces a 429 backoff wait in the rotating status line (safety-net path).
+  const reconWaitNote = (ms: number): void =>
+    setReconPhase(`Easing off — SharePoint is busy (${Math.round(ms / 1000)}s)…`);
+
+  // Status glyph for a progress-feed row (spinner while running, else a colored mark).
+  const progIcon = (status: ProgItem["status"]): React.ReactElement => {
+    if (status === "run") {
+      return <span style={{ display: "inline-block", width: 11, height: 11, border: "2px solid #cfe4d8", borderTopColor: "#0f6c3f", borderRadius: "50%", animation: "fmspin 0.8s linear infinite", flexShrink: 0 }} />;
+    }
+    const marks: Record<string, [string, string]> = {
+      ok: ["✓", "#0f6c3f"], skip: ["○", "#999"], fail: ["✗", "#c0392b"], admin: ["⚠", "#b45309"], warn: ["⚠", "#b45309"],
+    };
+    const [ch, color] = marks[status] ?? ["•", "#666"];
+    return <span style={{ color, fontSize: 12, width: 11, textAlign: "center", flexShrink: 0 }}>{ch}</span>;
+  };
 
   const showToast = (message: string, error: boolean): void => {
     setToast({ message, error });
@@ -355,20 +396,20 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   const createFolder = async (path: string): Promise<void> => {
     if (await folderExists(path)) return;
-    const res = await context.spHttpClient.post(
+    const res = await withThrottleRetry(() => context.spHttpClient.post(
       `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@d,overwrite=false)?@d='${encodeServerRelativePath(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" } },
-    );
+    ), reconWaitNote);
     if (!res.ok) throw new Error(`create folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
   };
 
   const breakInheritance = async (path: string): Promise<void> => {
-    const res = await context.spHttpClient.post(
+    const res = await withThrottleRetry(() => context.spHttpClient.post(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)?@f='${encodeURIComponent(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
-    );
+    ), reconWaitNote);
     if (!res.ok) throw new Error(`breakroleinheritance HTTP ${res.status}`);
   };
 
@@ -397,11 +438,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   };
 
   const addRoleAssignment = async (path: string, principalId: number, roleDefId: number): Promise<void> => {
-    const res = await context.spHttpClient.post(
+    const res = await withThrottleRetry(() => context.spHttpClient.post(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeURIComponent(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
-    );
+    ), reconWaitNote);
     if (!res.ok) throw new Error(`addroleassignment HTTP ${res.status}`);
   };
 
@@ -895,7 +936,29 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const runReconciliation = async (): Promise<void> => {
     setReconConfirm(false);
     setBusy(true);
+    setReconRunning(true);
+    setFolderFeed([]);
+    setAssignFeed([]);
+    setReconCounts({ folders: 0, assigns: 0 });
+    setReconPhase("Generating folders…");
     const entries: LogEntry[] = [];
+    // Throttle governor: pause between writes, and auto-cooldown every N writes. The
+    // cooldown is invisible — the spinner keeps running and the status text rotates so
+    // it reads as continuous work (no user click needed to resume).
+    let opCount = 0;
+    const tick = async (): Promise<void> => {
+      opCount++;
+      await sleep(RECON_WRITE_DELAY_MS);
+      if (opCount % RECON_BATCH_SIZE === 0) {
+        for (const msg of COOLDOWN_MESSAGES) {
+          setReconPhase(msg);
+          await sleep(RECON_COOLDOWN_MS / COOLDOWN_MESSAGES.length);
+        }
+        setReconPhase("Generating folders…");
+      }
+    };
+    const bumpFolders = (): void => setReconCounts((c) => ({ ...c, folders: c.folders + 1 }));
+    const bumpAssigns = (): void => setReconCounts((c) => ({ ...c, assigns: c.assigns + 1 }));
     try {
       const fullCtrlId = roleDefs.find(r => r.name === "Full Control")?.id;
       const readId = roleDefs.find(r => r.name === "Read")?.id;
@@ -935,21 +998,30 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         }
         for (const t of targets) {
           const full = `${root}${t.relPath}`;
+          const folderLabel = `${lib}${t.relPath}`;
           try {
+            pushFolder(`${folderLabel} — creating…`, "run");
             const existed = await folderExists(full);
             if (!existed) {
               await createFolder(full);
               await breakInheritance(full);
               if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
-              entries.push({ msg: `${lib}${t.relPath} — created + locked ✓`, ok: true });
+              entries.push({ msg: `${folderLabel} — created + locked ✓`, ok: true });
+              setLastFolder(`${folderLabel} — created + locked`, "ok");
+              bumpFolders();
+              await tick();
             } else {
               const isUnique = await getHasUniquePerms(full);
               if (isUnique === false) {
                 await breakInheritance(full);
                 if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
-                entries.push({ msg: `${lib}${t.relPath} — existed, locked ✓`, ok: true });
+                entries.push({ msg: `${folderLabel} — existed, locked ✓`, ok: true });
+                setLastFolder(`${folderLabel} — existed, locked`, "ok");
+                bumpFolders();
+                await tick();
               } else {
-                entries.push({ msg: `${lib}${t.relPath} — already locked, skipped`, ok: true });
+                entries.push({ msg: `${folderLabel} — already locked, skipped`, ok: true });
+                setLastFolder(`${folderLabel} — already there`, "skip");
               }
             }
             // Map Staging term folders only (skip the segment container + already-mapped).
@@ -979,13 +1051,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
             );
             if (applicable.length === 0) {
-              entries.push({ msg: `  ⚠ ${lib}${t.relPath} — no group-map groups for this tier (locked admin-only)`, ok: true });
+              entries.push({ msg: `  ⚠ ${folderLabel} — no group-map groups for this tier (locked admin-only)`, ok: true });
             }
             const grantedPids: Array<{ groupName: string; pid: number }> = [];
             for (const g of applicable) {
               const roleDefId = roleDefs.find(r => r.name === ROLE_TO_PERMISSION[g.role])?.id;
               if (roleDefId === undefined) {
                 entries.push({ msg: `  ⚠ ${g.groupName} — no "${ROLE_TO_PERMISSION[g.role]}" role definition on site`, ok: false });
+                pushAssign(`${t.label}: "${ROLE_TO_PERMISSION[g.role]}" role missing on site`, "warn");
                 continue;
               }
               try {
@@ -993,8 +1066,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 await addRoleAssignment(full, pid, roleDefId);
                 grantedPids.push({ groupName: g.groupName, pid });
                 entries.push({ msg: `  ↳ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}`, ok: true });
+                pushAssign(`${t.label} → ${g.groupName} (${ROLE_TO_PERMISSION[g.role]})`, "ok");
+                bumpAssigns();
+                await tick();
               } catch (e) {
                 entries.push({ msg: `  ✗ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]} FAILED: ${(e as Error).message}`, ok: false });
+                // Most common cause: the SP group doesn't exist yet (or is a legacy Entra
+                // row). Surface the admin-needs-to-create-it message in the right panel.
+                pushAssign(`Group "${g.groupName}" not found — ask an administrator to create it`, "admin");
               }
             }
             // Browse access: grant each just-assigned group Read on every ANCESTOR folder on
@@ -1018,18 +1097,26 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // These inherit the unit's ACL (no lock, no map). Idempotent via
             // ensureFolder. Logged as a per-unit count, not one line per folder.
             if (t.isLeaf && yearLabels.length > 0) {
+              const gridTotal = yearLabels.length * (1 + docTypeLabels.length);
               let grid = 0;
+              pushFolder(`${t.label} grid: 0 / ${gridTotal}`, "run");
               for (const yr of yearLabels) {
                 const yearFolder = await ensureFolder(context.spHttpClient, siteUrl, full, yr);
+                if (yearFolder) { grid++; bumpFolders(); }
+                setLastFolder(`${t.label} grid: ${grid} / ${gridTotal}`, "run");
+                await tick();
                 if (!yearFolder) continue;
-                grid++;
-                // Create this year's Document Type folders in parallel (bounded) — the grid
-                // is large, so one-at-a-time creation is what made the run take minutes.
-                const dtResults = await mapLimit(docTypeLabels, GRID_CONCURRENCY, dt =>
-                  ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt));
-                grid += dtResults.filter(Boolean).length;
+                // Sequential (NOT parallel) — the old parallel burst was what tripped the
+                // 429 throttle. One folder at a time + the inter-write delay keeps it safe.
+                for (const dt of docTypeLabels) {
+                  const made = await ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt);
+                  if (made) { grid++; bumpFolders(); }
+                  setLastFolder(`${t.label} grid: ${grid} / ${gridTotal}`, "run");
+                  await tick();
+                }
               }
               entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
+              setLastFolder(`${t.label} grid: ${grid} / ${gridTotal} ✓`, "ok");
             }
           } catch (e) {
             entries.push({ msg: `${lib}${t.relPath} — FAILED: ${(e as Error).message}`, ok: false });
@@ -1048,6 +1135,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       showToast(`Reconciliation failed: ${(e as Error).message}`, true);
     } finally {
       setBusy(false);
+      setReconRunning(false);
+      setReconPhase("");
     }
   };
 
@@ -1282,6 +1371,45 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             >
               Run reconciliation
             </button>
+          )}
+
+          {(reconRunning || folderFeed.length > 0 || assignFeed.length > 0) && (
+            <div style={{ marginTop: 18 }}>
+              <style>{"@keyframes fmspin{to{transform:rotate(360deg)}}"}</style>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                {reconRunning && (
+                  <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #cfe4d8", borderTopColor: "#0f6c3f", borderRadius: "50%", animation: "fmspin 0.8s linear infinite" }} />
+                )}
+                <strong style={{ fontSize: 13, color: "#0f6c3f" }}>
+                  {reconRunning ? (reconPhase || "Working…") : "Reconciliation complete"}
+                </strong>
+                <span style={{ fontSize: 12, color: "#666" }}>
+                  {reconCounts.folders} folders · {reconCounts.assigns} group assignments
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 12 }}>
+                {([
+                  { title: "Folders", feed: folderFeed },
+                  { title: "Group assignments", feed: assignFeed },
+                ] as const).map((panel) => (
+                  <div key={panel.title} style={{ flex: 1, minWidth: 0, border: "1px solid #e5e5e5", borderRadius: 4, overflow: "hidden" }}>
+                    <div style={{ padding: "6px 10px", background: "#f7f7f7", fontSize: 12, fontWeight: 600, color: "#444", borderBottom: "1px solid #eee" }}>{panel.title}</div>
+                    <div style={{ maxHeight: 260, overflowY: "auto", padding: "4px 0" }}>
+                      {panel.feed.length === 0 ? (
+                        <div style={{ padding: "6px 10px", fontSize: 12, color: "#aaa" }}>—</div>
+                      ) : (
+                        panel.feed.map((it, i) => (
+                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 10px", fontSize: 12, color: it.status === "admin" ? "#b45309" : "#333" }}>
+                            {progIcon(it.status)}
+                            <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.text}</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       ) : loading ? (

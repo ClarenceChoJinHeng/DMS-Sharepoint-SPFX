@@ -148,11 +148,23 @@ export async function ensureFolder(
   // resolve GET — faster on re-runs and no noisy 400s in the console.
   const found = await resolveFolderByPath(spHttpClient, siteUrl, childPath);
   if (found) return found;
-  const addRes: SPHttpClientResponse = await spHttpClient.post(
+  // Retry on SharePoint throttling (429/503), honoring Retry-After — the reconciliation
+  // grid can be large, so a transient throttle here must not silently drop a folder.
+  let addRes: SPHttpClientResponse = await spHttpClient.post(
     `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@u)?@u='${encodeServerRelativePath(childPath)}'&$select=UniqueId,ServerRelativeUrl`,
     SPHttpClient.configurations.v1,
     { headers: { Accept: "application/json;odata=nometadata" } },
   );
+  for (let attempt = 0; (addRes.status === 429 || addRes.status === 503) && attempt < 5; attempt++) {
+    const ra = Number(addRes.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+    await new Promise<void>((r) => setTimeout(r, waitMs));
+    addRes = await spHttpClient.post(
+      `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@u)?@u='${encodeServerRelativePath(childPath)}'&$select=UniqueId,ServerRelativeUrl`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+  }
   if (addRes.ok) {
     const d = await addRes.json();
     return { uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl };
