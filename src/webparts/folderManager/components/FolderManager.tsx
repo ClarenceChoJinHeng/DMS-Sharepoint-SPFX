@@ -61,7 +61,7 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   APR: "Design",
 };
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Throttle-safety tuning for reconciliation (tunable; could move to DMS Config).
 // Grid is created sequentially now (not in parallel) — that parallel burst was what

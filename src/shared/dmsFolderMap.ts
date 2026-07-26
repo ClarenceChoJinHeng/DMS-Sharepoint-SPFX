@@ -158,7 +158,7 @@ export async function ensureFolder(
   for (let attempt = 0; (addRes.status === 429 || addRes.status === 503) && attempt < 5; attempt++) {
     const ra = Number(addRes.headers.get("Retry-After"));
     const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
-    await new Promise<void>((r) => setTimeout(r, waitMs));
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
     addRes = await spHttpClient.post(
       `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@u)?@u='${encodeServerRelativePath(childPath)}'&$select=UniqueId,ServerRelativeUrl`,
       SPHttpClient.configurations.v1,
