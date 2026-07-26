@@ -30,7 +30,9 @@ Workbench: `https://dcidigitalcom.sharepoint.com/_layouts/workbench.aspx?debugMa
 
 ## Multi-Segment Model (current — replaces the old 2-mode Department/Project cascade)
 The form is now **data-driven over "modes"** loaded from the `DMS Config` list. Each mode
-has a `Side` (`BusinessSegment` | `Project`), a term-set GUID, and a `Levels` JSON chain
+has a `Category` (`BusinessSegment` | `Project` — the top-level family, NOT a tier; drives the
+form's two top-level tabs and whether a Business Segment is required; internally still the
+`side` property), a term-set GUID, and a `Levels` JSON chain
 (variable depth, e.g. `[{"label":"Department","column":"Department"},{"label":"Unit","column":"Unit"}]`).
 **12 intended modes** (see `docs/superpowers/specs/2026-07-24-twelve-segment-expansion-design.md`
 for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** — not "NBBOL"),

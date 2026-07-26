@@ -340,7 +340,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   const loadModes = async (): Promise<UploadMode[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,Side,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,Category,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -350,7 +350,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       (item: {
         Title: string;
         ModeLabel: string;
-        Side: string;
+        Category: string;
         TermSetGuid: string;
         StagingFolder: string;
         Levels: string;
@@ -358,7 +358,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }) => ({
         key: item.Title,
         label: item.ModeLabel,
-        side: (item.Side === "Project" ? "Project" : "BusinessSegment") as
+        side: (item.Category === "Project" ? "Project" : "BusinessSegment") as
           | "BusinessSegment"
           | "Project",
         termSetGuid: item.TermSetGuid,

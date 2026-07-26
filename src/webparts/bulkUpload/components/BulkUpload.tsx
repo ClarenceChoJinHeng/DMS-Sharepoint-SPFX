@@ -21,17 +21,23 @@ import {
 } from "../../../shared/formModel";
 
 /* ----------------------------------------------------------------------------
- * BULK UPLOAD — a duplicate of the `form` web part with two behaviour changes:
- *   1. Accepts up to MAX_FILES files per submission instead of one.
- *   2. Writes straight into the Documents library, bypassing Staging (and so
+ * BULK UPLOAD — a duplicate of the `form` web part, with two behaviour changes:
+ *   1. Writes straight into the Documents library, bypassing Staging (and so
  *      bypassing content approval and the Auto-route flow).
- * TEMPORARY TOOL. See docs/superpowers/specs/2026-07-23-bulk-upload-direct-to-documents-design.md
+ *   2. Files are queued in up to MAX_BATCHES independent "batches" — each batch
+ *      has its own destination folder + metadata and up to MAX_FILES files.
+ *      "Upload all" processes the batches sequentially.
+ * TEMPORARY TOOL. See:
+ *   docs/superpowers/specs/2026-07-24-bulk-upload-two-batch-design.md
+ *   docs/superpowers/specs/2026-07-23-bulk-upload-direct-to-documents-design.md
  *
- * Everything else — metadata tagging, group-based mode detection, the term
- * cascade, per-Unit folder routing — is cloned from Form.tsx unchanged.
+ * Metadata tagging, group-based mode detection, the term cascade and per-Unit
+ * folder routing are cloned from Form.tsx unchanged.
  * -------------------------------------------------------------------------- */
 
-const MAX_FILES = 50;
+const MAX_FILES = 50; // per batch
+const MAX_BATCHES = 2;
+const FILE_PAGE = 8; // file rows shown before the "Show more" button
 
 // The Documents library's real URL segment differs from its display title:
 //   URL segment   = "Shared Documents"  (used to build server-relative paths)
@@ -64,30 +70,16 @@ const LEVEL_COLUMNS: Record<string, ColumnPair> = {
   Unit: { label: "Unit", tid: "UnitTid" },
 };
 
-const ILLEGAL_NAME_CHARS = /[\\/:*?"<>|#%&{}~]/g;
-
-const getExtension = (name: string): string => {
-  const dot = name.lastIndexOf(".");
-  return dot >= 0 ? name.slice(dot) : "";
-};
-
-const buildUploadName = (originalName: string, typed: string): string => {
-  const cleaned = typed.trim();
-  if (!cleaned) return originalName;
-  const ext = getExtension(originalName);
-  let base = cleaned;
-  const typedExt = getExtension(base);
-  if (typedExt) base = base.slice(0, base.length - typedExt.length);
-  base = base.replace(ILLEGAL_NAME_CHARS, "").replace(/\s+/g, " ").trim();
-  return base ? `${base}${ext}` : originalName;
-};
-
 // validateUpdateListItem validates dates against the SITE's regional settings.
 // This tenant is US locale (M/D/YYYY) — ISO YYYY-MM-DD is rejected.
 const toSpDate = (iso: string): string => {
   const [y, m, d] = iso.split("-");
   return `${Number(m)}/${Number(d)}/${y}`;
 };
+
+// Managed-metadata single value: "Label|GUID". Empty when unset.
+const taxVal = (label: string, id: string): string =>
+  label && id ? `${label}|${id}` : "";
 
 type TermOption = { id: string; label: string };
 type ToastType = "error" | "success";
@@ -105,11 +97,66 @@ type UploadMode = {
 // A fully authorised upload path for a restricted (non-privileged) user.
 type ValidPath = { modeKey: string; chain: TermOption[] };
 
-// One user-selected file plus its optional per-file rename.
-type PickedFile = { key: string; file: File; rename: string };
+// One picked file in the draft config panel (no per-file rename any more).
+type PickedFile = { key: string; file: File };
 
 type Outcome = "uploaded" | "skipped" | "failed" | "tagFailed";
 type FileResult = { name: string; outcome: Outcome; detail?: string };
+
+// A resolved level term (label + id) plus the pair of column internal names it
+// writes to — everything needed to rebuild formValues without the live cascade.
+type BatchSelection = {
+  column: string;
+  label: string;
+  id: string;
+  labelCol?: string;
+  tidCol?: string;
+};
+
+// A fully-configured, self-contained batch. Snapshots the draft at Save time so
+// it no longer depends on any live cascade/option state.
+type Batch = {
+  id: string;
+  files: File[];
+  modeKey: string;
+  modeLabel: string;
+  termSetGuid: string;
+  levelSelections: BatchSelection[];
+  docTypeId: string;
+  docTypeLabel: string;
+  yearId: string;
+  yearLabel: string;
+  confId: string;
+  confLabel: string;
+  vendorId: string;
+  vendorLabel: string;
+  documentDate: string; // ISO yyyy-mm-dd as entered; converted at upload
+  destinationLabel: string;
+};
+
+// Per-batch upload outcome for the results panel.
+type BatchOutcome = {
+  batchId: string;
+  label: string;
+  destinationLabel: string;
+  batchError?: string; // set when the whole batch could not be routed
+  results: FileResult[];
+};
+
+// Live per-file state for the upload progress bars (state-driven, not byte-driven —
+// spHttpClient exposes no upload progress events).
+type FileState =
+  | "pending"
+  | "uploading"
+  | "done"
+  | "skipped"
+  | "failed"
+  | "tagFailed";
+type LiveBatch = {
+  label: string;
+  destinationLabel: string;
+  files: { name: string; state: FileState }[];
+};
 
 type OptionMap = {
   documentType: TermOption[];
@@ -252,6 +299,7 @@ export default function BulkUpload({
   const siteUrl = context.pageContext.web.absoluteUrl;
   const webSru = context.pageContext.web.serverRelativeUrl.replace(/\/+$/, "");
   const fileRef = useRef<HTMLInputElement>(null);
+  const batchSeqRef = useRef<number>(1);
 
   const [options, setOptions] = useState<OptionMap>(EMPTY_OPTIONS);
   const [deptLoading, setDeptLoading] = useState<boolean>(true);
@@ -259,23 +307,36 @@ export default function BulkUpload({
   // and gets the full manual cascade (may upload anywhere).
   const [privileged, setPrivileged] = useState<boolean>(false);
 
-  // Generic N-level cascade state: one option list + one selected term id per level.
+  // Generic N-level cascade state for the DRAFT config panel: one option list +
+  // one selected term id per level.
   const [levelChoices, setLevelChoices] = useState<TermOption[][]>([]);
   const [levelValues, setLevelValues] = useState<string[]>([]);
   const [validPaths, setValidPaths] = useState<ValidPath[]>([]);
 
   const [modes, setModes] = useState<UploadMode[]>([]);
-  const [uploadMode, setUploadMode] = useState<string>("");
   const [settings, setSettings] = useState<DmsSettings>(DEFAULT_SETTINGS);
+
+  // ── Queued batches ──
+  const [batches, setBatches] = useState<Batch[]>([]);
+  // The inline config panel: open while adding/editing a batch. editingId is the
+  // id of the batch being edited (null when adding a new one).
+  const [panelOpen, setPanelOpen] = useState<boolean>(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+
+  // ── Draft state (bound to the config panel) ──
+  const [uploadMode, setUploadMode] = useState<string>("");
   const [picked, setPicked] = useState<PickedFile[]>([]);
+  const [fileShowCount, setFileShowCount] = useState<number>(FILE_PAGE);
   const [documentType, setDocumentType] = useState<string>("");
   const [yearPeriod, setYearPeriod] = useState<string>("");
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
+
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
-  const [results, setResults] = useState<FileResult[] | null>(null);
+  const [batchResults, setBatchResults] = useState<BatchOutcome[] | null>(null);
+  const [live, setLive] = useState<LiveBatch[] | null>(null);
   const [toast, setToast] = useState<{
     message: string;
     type: ToastType;
@@ -354,7 +415,7 @@ export default function BulkUpload({
 
   const loadModes = async (): Promise<UploadMode[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,Side,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,Category,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -364,7 +425,7 @@ export default function BulkUpload({
       (item: {
         Title: string;
         ModeLabel: string;
-        Side: string;
+        Category: string;
         TermSetGuid: string;
         StagingFolder: string;
         Levels: string;
@@ -372,7 +433,7 @@ export default function BulkUpload({
       }) => ({
         key: item.Title,
         label: item.ModeLabel,
-        side: (item.Side === "Project" ? "Project" : "BusinessSegment") as
+        side: (item.Category === "Project" ? "Project" : "BusinessSegment") as
           | "BusinessSegment"
           | "Project",
         termSetGuid: item.TermSetGuid,
@@ -476,7 +537,7 @@ export default function BulkUpload({
     }
   };
 
-  /* ---------- Cascade builders -------------------------------------------- */
+  /* ---------- Cascade builders (draft panel) ------------------------------ */
 
   const initCascade = async (mode: UploadMode): Promise<void> => {
     const tops = await loadTermSet(mode.termSetGuid).catch(
@@ -484,6 +545,27 @@ export default function BulkUpload({
     );
     setLevelChoices([tops]);
     setLevelValues([]);
+  };
+
+  // Rebuild the cascade option lists for a set of already-chosen level values
+  // (used when editing a saved batch — privileged users).
+  const restoreCascade = async (
+    mode: UploadMode,
+    values: string[],
+  ): Promise<void> => {
+    const tops = await loadTermSet(mode.termSetGuid).catch(
+      () => [] as TermOption[],
+    );
+    const choices: TermOption[][] = [tops];
+    for (let i = 0; i < values.length - 1; i++) {
+      if (!values[i]) break;
+      const kids = await loadTermChildren(mode.termSetGuid, values[i]).catch(
+        () => [] as TermOption[],
+      );
+      choices[i + 1] = kids;
+    }
+    setLevelChoices(choices);
+    setLevelValues(values);
   };
 
   const onLevelChange = async (
@@ -622,28 +704,9 @@ export default function BulkUpload({
         vendor: vendors,
       });
 
-      if (isPrivileged) {
-        const bsModes = loadedModes.filter(
-          (m: UploadMode) => m.side === "BusinessSegment",
-        );
-        const defaultMode = bsModes[0] ?? loadedModes[0];
-        if (defaultMode) {
-          setUploadMode(defaultMode.key);
-          await initCascade(defaultMode);
-        }
-      } else {
+      if (!isPrivileged) {
         const paths = await resolveValidPaths(loadedModes, membership);
         setValidPaths(paths);
-        const offerable = new Set(paths.map((p) => p.modeKey));
-        const defaultMode =
-          loadedModes.find(
-            (m: UploadMode) =>
-              m.side === "BusinessSegment" && offerable.has(m.key),
-          ) ?? loadedModes.find((m: UploadMode) => offerable.has(m.key));
-        if (defaultMode) {
-          setUploadMode(defaultMode.key);
-          applyRestrictedMode(paths, defaultMode, []);
-        }
       }
       setDeptLoading(false);
     };
@@ -655,13 +718,35 @@ export default function BulkUpload({
     });
   }, []);
 
-  /* ---------- Helpers ----------------------------------------------------- */
+  /* ---------- Draft-panel helpers ----------------------------------------- */
 
-  const switchMode = (modeKey: string): void => {
-    setUploadMode(modeKey);
-    setStatus("");
-    const mode = modes.find((m) => m.key === modeKey);
-    if (!mode) return;
+  // Default mode to open the config panel on, honouring the user's access.
+  const pickDefaultMode = (): UploadMode | undefined => {
+    if (privileged) {
+      const bs = modes.filter((m) => m.side === "BusinessSegment");
+      return bs[0] ?? modes[0];
+    }
+    const offerable = new Set(validPaths.map((p) => p.modeKey));
+    return (
+      modes.find((m) => m.side === "BusinessSegment" && offerable.has(m.key)) ??
+      modes.find((m) => offerable.has(m.key))
+    );
+  };
+
+  const resetDraft = (): void => {
+    setPicked([]);
+    setFileShowCount(FILE_PAGE);
+    setDocumentType("");
+    setLevelValues([]);
+    setLevelChoices([]);
+    setYearPeriod("");
+    setDocumentDate("");
+    setConfidentiality("");
+    setVendor("");
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const initDraftCascade = (mode: UploadMode): void => {
     if (privileged) {
       initCascade(mode).catch(() => {
         setLevelChoices([]);
@@ -670,6 +755,73 @@ export default function BulkUpload({
     } else {
       applyRestrictedMode(validPaths, mode, []);
     }
+  };
+
+  const openAddPanel = (): void => {
+    if (batches.length >= MAX_BATCHES) {
+      showToast(`You can queue at most ${MAX_BATCHES} batches.`, "error");
+      return;
+    }
+    resetDraft();
+    setEditingId(null);
+    setPanelOpen(true);
+    setLive(null);
+    setBatchResults(null);
+    const dm = pickDefaultMode();
+    if (dm) {
+      setUploadMode(dm.key);
+      initDraftCascade(dm);
+    }
+  };
+
+  const editBatch = (batch: Batch): void => {
+    // The tile is hidden while editingId === batch.id (see render); Save replaces
+    // it in place, Cancel brings it back.
+    setEditingId(batch.id);
+    setPanelOpen(true);
+    setUploadMode(batch.modeKey);
+    const values = batch.levelSelections.map((s) => s.id);
+    const mode = modes.find((m) => m.key === batch.modeKey);
+    if (mode) {
+      if (privileged) {
+        restoreCascade(mode, values).catch(() => initDraftCascade(mode));
+      } else {
+        applyRestrictedMode(validPaths, mode, values);
+      }
+    }
+    setPicked(
+      batch.files.map((file, i) => ({
+        key: `${batch.id}-${i}-${file.name}`,
+        file,
+      })),
+    );
+    setFileShowCount(FILE_PAGE);
+    setDocumentType(batch.docTypeId);
+    setYearPeriod(batch.yearId);
+    setDocumentDate(batch.documentDate);
+    setConfidentiality(batch.confId);
+    setVendor(batch.vendorId);
+    setBatchResults(null);
+    setLive(null);
+  };
+
+  const removeBatch = (id: string): void => {
+    setBatches((prev) => prev.filter((b) => b.id !== id));
+    setLive(null);
+    setBatchResults(null);
+  };
+
+  const cancelPanel = (): void => {
+    setPanelOpen(false);
+    setEditingId(null);
+    resetDraft();
+  };
+
+  const switchMode = (modeKey: string): void => {
+    setUploadMode(modeKey);
+    const mode = modes.find((m) => m.key === modeKey);
+    if (!mode) return;
+    initDraftCascade(mode);
   };
 
   const handleLevelChange = (
@@ -686,24 +838,108 @@ export default function BulkUpload({
     applyRestrictedMode(validPaths, mode, values);
   };
 
-  const toTaxValue = (opts: TermOption[], id: string): string => {
-    const match = opts.find((o) => o.id === id);
-    return match ? `${match.label}|${match.id}` : "";
+  const validateDraft = (): string[] => {
+    const missing: string[] = [];
+    if (picked.length === 0) missing.push("File");
+    const m = activeMode();
+    (m?.levels ?? []).forEach((lvl, i) => {
+      if (!levelValues[i]) missing.push(lvl.label);
+    });
+    if (!documentType) missing.push("Document Type");
+    if (!yearPeriod) missing.push("Year / Period");
+    if (!documentDate) missing.push("Document Date");
+    if (!confidentiality) missing.push("Confidentiality Level");
+    return missing;
   };
 
-  const resetForm = (): void => {
-    setPicked([]);
-    setDocumentType("");
-    setLevelValues([]);
-    setYearPeriod("");
-    setDocumentDate("");
-    setConfidentiality("");
-    setVendor("");
-    setResults(null);
-    if (fileRef.current) fileRef.current.value = "";
+  const saveBatch = (): void => {
+    const missing = validateDraft();
+    if (missing.length > 0) {
+      showToast(`Please complete: ${missing.join(", ")}.`, "error");
+      return;
+    }
+
+    // Files upload under their original names — duplicate names within the batch
+    // would silently collide (first wins), so reject them here.
+    const names = picked.map((p) => p.file.name);
+    const collision = names.find(
+      (n, i) =>
+        names.findIndex((o) => o.toLowerCase() === n.toLowerCase()) !== i,
+    );
+    if (collision) {
+      showToast(
+        `Two or more files in this batch are named "${collision}". Remove the duplicate first.`,
+        "error",
+      );
+      return;
+    }
+
+    const mode = activeMode();
+    if (!mode || mode.levels.length === 0) {
+      showToast("No upload mode configured.", "error");
+      return;
+    }
+
+    const levelSelections: BatchSelection[] = mode.levels.map((lvl, i) => {
+      const opt = (levelChoices[i] ?? []).find((o) => o.id === levelValues[i]);
+      return {
+        column: lvl.column,
+        label: opt?.label ?? "",
+        id: opt?.id ?? "",
+        labelCol: lvl.labelCol,
+        tidCol: lvl.tidCol,
+      };
+    });
+
+    const dt = options.documentType.find((o) => o.id === documentType);
+    const yr = options.yearPeriod.find((o) => o.id === yearPeriod);
+    const cf = options.confidentiality.find((o) => o.id === confidentiality);
+    const vd = options.vendor.find((o) => o.id === vendor);
+
+    const destinationLabel = [
+      mode.label,
+      ...levelSelections.map((s) => s.label),
+    ]
+      .filter(Boolean)
+      .join(" › ");
+
+    const batch: Batch = {
+      id: editingId ?? `b${batchSeqRef.current++}`,
+      files: picked.map((p) => p.file),
+      modeKey: mode.key,
+      modeLabel: mode.label,
+      termSetGuid: mode.termSetGuid,
+      levelSelections,
+      docTypeId: documentType,
+      docTypeLabel: dt?.label ?? "",
+      yearId: yearPeriod,
+      yearLabel: yr?.label ?? "",
+      confId: confidentiality,
+      confLabel: cf?.label ?? "",
+      vendorId: vendor,
+      vendorLabel: vd?.label ?? "",
+      documentDate,
+      destinationLabel,
+    };
+
+    setBatches((prev) =>
+      editingId
+        ? prev.map((b) => (b.id === editingId ? batch : b))
+        : [...prev, batch],
+    );
+    setPanelOpen(false);
+    setEditingId(null);
+    resetDraft();
   };
 
-  /* ---------- File selection ---------------------------------------------- */
+  const clearAll = (): void => {
+    setBatches([]);
+    setBatchResults(null);
+    setLive(null);
+    cancelPanel();
+  };
+
+  /* ---------- File selection (draft panel) -------------------------------- */
 
   const addFiles = (list: FileList | null): void => {
     if (!list || list.length === 0) return;
@@ -728,37 +964,25 @@ export default function BulkUpload({
     setPicked((prev) => {
       const room = MAX_FILES - prev.length;
       if (room <= 0) {
-        showToast(
-          `You can upload at most ${MAX_FILES} files at a time.`,
-          "error",
-        );
+        showToast(`A batch can hold at most ${MAX_FILES} files.`, "error");
         return prev;
       }
       if (allowed.length > room) {
         showToast(
-          `Only the first ${room} file(s) were added — the limit is ${MAX_FILES}.`,
+          `Only the first ${room} file(s) were added — the per-batch limit is ${MAX_FILES}.`,
           "error",
         );
       }
-      const stamp = Date.now();
+      const seq = batchSeqRef.current;
       const added = allowed.slice(0, room).map((file, i) => ({
-        key: `${stamp}-${i}-${file.name}`,
+        key: `${seq}-${prev.length + i}-${file.name}`,
         file,
-        rename: "",
       }));
       return [...prev, ...added];
     });
 
-    setStatus("");
-    setResults(null);
     // Clear the input so the same file can be re-picked after a removal.
     if (fileRef.current) fileRef.current.value = "";
-  };
-
-  const setRename = (key: string, value: string): void => {
-    setPicked((prev) =>
-      prev.map((p) => (p.key === key ? { ...p, rename: value } : p)),
-    );
   };
 
   const removeFile = (key: string): void => {
@@ -782,340 +1006,382 @@ export default function BulkUpload({
     return `${webSru}/${DOCUMENTS_URL_SEGMENT}/${rest}`;
   };
 
-  /* ---------- Upload ------------------------------------------------------ */
+  /* ---------- Upload one batch -------------------------------------------- */
+
+  // Resolves the batch's destination folder, ensures Year/DocType subfolders, and
+  // uploads + tags each file. Never throws for routing problems — returns a
+  // batchError instead, so the caller can continue to the next batch.
+  const uploadBatch = async (
+    batch: Batch,
+    index: number,
+    total: number,
+    onState: (fileIndex: number, state: FileState) => void,
+  ): Promise<{ batchError?: string; results: FileResult[] }> => {
+    const tag = `Batch ${index + 1} of ${total}`;
+    const leaf = batch.levelSelections[batch.levelSelections.length - 1];
+    if (!leaf || !leaf.id) {
+      return { batchError: "No destination folder selected.", results: [] };
+    }
+
+    setStatus(`${tag}: locating destination folder…`);
+    const mapping = await lookupFolderMapping(
+      context.spHttpClient,
+      siteUrl,
+      leaf.id,
+    ).catch((e: unknown) => {
+      console.error("Folder map lookup error:", e);
+      return null;
+    });
+    if (!mapping || !mapping.folderUniqueId) {
+      return {
+        batchError: `This folder hasn't been mapped yet. Ask an administrator to run the reconciliation tool. (term ${leaf.label})`,
+        results: [],
+      };
+    }
+
+    // Resolve the Staging unit folder's CURRENT path (rename-proof), then swap
+    // the library segment to reach the mirrored Documents unit folder.
+    const stagingSru = await resolveFolderServerUrl(
+      context.spHttpClient,
+      siteUrl,
+      mapping.folderUniqueId,
+    );
+    if (!stagingSru) {
+      return {
+        batchError:
+          "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation.",
+        results: [],
+      };
+    }
+
+    const docsUnitPath = toDocumentsPath(stagingSru);
+    if (!docsUnitPath) {
+      console.error(
+        "Could not swap library segment. stagingSru:",
+        stagingSru,
+        "expected prefix:",
+        `${webSru}/${settings.stagingLibrary}/`,
+      );
+      return {
+        batchError:
+          "Could not work out the Documents path for this unit folder. Check the stagingLibrary setting in DMS Config.",
+        results: [],
+      };
+    }
+
+    // The unit folder must ALREADY exist in Documents. It is deliberately not
+    // auto-created: a folder created here would inherit the Documents root ACL
+    // and silently widen access. A missing one is an administrator task.
+    const docsUnitFolder = await resolveFolderByPath(
+      context.spHttpClient,
+      siteUrl,
+      docsUnitPath,
+    );
+    if (!docsUnitFolder) {
+      return {
+        batchError: `The matching folder does not exist in Documents yet (${docsUnitPath}). Ask an administrator to create it — it is not created automatically, so its permissions stay correct.`,
+        results: [],
+      };
+    }
+
+    const yearLabel = sanitizeFolderSegment(batch.yearLabel);
+    const docTypeLabel = sanitizeFolderSegment(batch.docTypeLabel);
+    if (!yearLabel || !docTypeLabel) {
+      return {
+        batchError: "Year and Document Type are required.",
+        results: [],
+      };
+    }
+
+    setStatus(`${tag}: preparing destination folders…`);
+    // Year / Document Type subfolders are safe to create — they inherit the unit
+    // folder's ACL, exactly as they do in Staging.
+    const yearFolder = await ensureFolder(
+      context.spHttpClient,
+      siteUrl,
+      docsUnitFolder.serverRelativeUrl,
+      yearLabel,
+    );
+    if (!yearFolder) {
+      return {
+        batchError: `Could not create the "${yearLabel}" folder.`,
+        results: [],
+      };
+    }
+    const destFolder = await ensureFolder(
+      context.spHttpClient,
+      siteUrl,
+      yearFolder.serverRelativeUrl,
+      docTypeLabel,
+    );
+    if (!destFolder) {
+      return {
+        batchError: `Could not create the "${docTypeLabel}" folder.`,
+        results: [],
+      };
+    }
+    const folderId = destFolder.uniqueId;
+
+    // Batch metadata — identical for every file in this batch.
+    const selections: BatchSelection[] = batch.levelSelections.map((s) => ({
+      ...s,
+    }));
+    selections.unshift({
+      column: "BusinessSegment",
+      label: batch.modeLabel,
+      id: batch.termSetGuid,
+      labelCol: undefined,
+      tidCol: undefined,
+    });
+
+    const formValues: Array<{ FieldName: string; FieldValue: string }> = [
+      {
+        FieldName: FIELDS.documentType,
+        FieldValue: taxVal(batch.docTypeLabel, batch.docTypeId),
+      },
+      {
+        FieldName: FIELDS.yearPeriod,
+        FieldValue: taxVal(batch.yearLabel, batch.yearId),
+      },
+      {
+        FieldName: FIELDS.confidentiality,
+        FieldValue: taxVal(batch.confLabel, batch.confId),
+      },
+      {
+        FieldName: FIELDS.documentDate,
+        FieldValue: toSpDate(batch.documentDate),
+      },
+      ...buildLevelFormValues(LEVEL_COLUMNS, selections),
+    ];
+    if (batch.vendorId) {
+      formValues.push({
+        FieldName: FIELDS.vendor,
+        FieldValue: taxVal(batch.vendorLabel, batch.vendorId),
+      });
+    }
+
+    /* ----- Sequential per-file upload; one failure never stops the batch -- */
+    const results: FileResult[] = [];
+
+    for (let i = 0; i < batch.files.length; i++) {
+      const file = batch.files[i];
+      const finalName = file.name;
+      onState(i, "uploading");
+      setStatus(
+        `${tag}: uploading ${i + 1} of ${batch.files.length} — ${finalName}`,
+      );
+
+      // Duplicate probe. overwrite=false is kept, so an existing file is never
+      // clobbered; it is reported as skipped instead.
+      try {
+        const existsRes: SPHttpClientResponse = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')?$select=Exists`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (existsRes.ok) {
+          results.push({
+            name: finalName,
+            outcome: "skipped",
+            detail: "A file with this name already exists here.",
+          });
+          onState(i, "skipped");
+          continue;
+        }
+      } catch {
+        // Network error on the existence check — proceed; the upload will
+        // surface the real error.
+      }
+
+      try {
+        const uploadRes: SPHttpClientResponse = await context.spHttpClient.post(
+          `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
+          SPHttpClient.configurations.v1,
+          { body: file },
+        );
+        if (!uploadRes.ok) {
+          let detail = `HTTP ${uploadRes.status}`;
+          try {
+            const bodyText = await uploadRes.text();
+            try {
+              const errJson = JSON.parse(bodyText);
+              const spMsg =
+                errJson?.error?.message?.value ?? errJson?.error?.message;
+              detail += spMsg
+                ? ` — ${spMsg}`
+                : bodyText
+                  ? ` — ${bodyText.slice(0, 200)}`
+                  : "";
+            } catch {
+              if (bodyText) detail += ` — ${bodyText.slice(0, 200)}`;
+            }
+          } catch {
+            /* body already consumed or unreadable */
+          }
+          console.error("Upload failed:", finalName, folderId, detail);
+          results.push({ name: finalName, outcome: "failed", detail });
+          onState(i, "failed");
+          continue;
+        }
+        const uploadJson = await uploadRes.json();
+        const uploadedSru = uploadJson.ServerRelativeUrl;
+
+        const itemRes: SPHttpClientResponse = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeURIComponent(uploadedSru)}'`,
+          SPHttpClient.configurations.v1,
+        );
+        if (!itemRes.ok) {
+          results.push({
+            name: finalName,
+            outcome: "tagFailed",
+            detail: "Uploaded, but the item could not be retrieved to tag.",
+          });
+          onState(i, "tagFailed");
+          continue;
+        }
+        const item = await itemRes.json();
+
+        const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
+          `${siteUrl}/_api/web/lists/getbytitle('${DOCUMENTS_LIST_TITLE}')/items(${item.Id})/validateUpdateListItem`,
+          SPHttpClient.configurations.v1,
+          {
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ formValues }),
+          },
+        );
+        if (!metaRes.ok) {
+          results.push({
+            name: finalName,
+            outcome: "tagFailed",
+            detail: `Uploaded, but tagging failed (HTTP ${metaRes.status}).`,
+          });
+          onState(i, "tagFailed");
+          continue;
+        }
+        // validateUpdateListItem returns HTTP 200 even on field errors —
+        // HasException on each result is the real check.
+        const metaJson = await metaRes.json();
+        const fieldError = (metaJson.value ?? []).find(
+          (v: { HasException?: boolean }) => v.HasException,
+        );
+        if (fieldError) {
+          console.error("Field update error:", finalName, fieldError);
+          results.push({
+            name: finalName,
+            outcome: "tagFailed",
+            detail: `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
+          });
+          onState(i, "tagFailed");
+          continue;
+        }
+
+        results.push({ name: finalName, outcome: "uploaded" });
+        onState(i, "done");
+      } catch (err) {
+        console.error("Upload threw:", finalName, err);
+        results.push({
+          name: finalName,
+          outcome: "failed",
+          detail: err instanceof Error ? err.message : "Unexpected error.",
+        });
+        onState(i, "failed");
+      }
+    }
+
+    return { results };
+  };
+
+  /* ---------- Upload all -------------------------------------------------- */
 
   const handleUpload = async (): Promise<void> => {
-    const missing: string[] = [];
-    if (picked.length === 0) missing.push("File");
-    if (!documentType) missing.push("Document Type");
-    const m = activeMode();
-    (m?.levels ?? []).forEach((lvl, i) => {
-      if (!levelValues[i]) missing.push(lvl.label);
-    });
-    if (!yearPeriod) missing.push("Year / Period");
-    if (!documentDate) missing.push("Document Date");
-    if (!confidentiality) missing.push("Confidentiality Level");
-    if (missing.length > 0) {
-      showToast(`Please complete: ${missing.join(", ")}.`, "error");
+    if (panelOpen) {
+      showToast("Save or cancel the batch you're editing first.", "error");
       return;
     }
-
-    // Final names must be unique within the batch, or files silently collide:
-    // the first wins and the rest are reported as duplicates.
-    const finalNames = picked.map((p) => buildUploadName(p.file.name, p.rename));
-    const collision = finalNames.find(
-      (n, i) =>
-        finalNames.findIndex((o) => o.toLowerCase() === n.toLowerCase()) !== i,
-    );
-    if (collision) {
-      showToast(
-        `Two or more files would be saved as "${collision}". Rename them first.`,
-        "error",
-      );
-      return;
-    }
-
-    const mode = activeMode();
-    if (!mode || mode.levels.length === 0) {
-      showToast("No upload mode configured.", "error");
-      return;
-    }
-    const leafIdx = mode.levels.length - 1;
-    const leafTerm = (levelChoices[leafIdx] ?? []).find(
-      (o) => o.id === levelValues[leafIdx],
-    );
-    if (!leafTerm) {
-      showToast("Please choose all folder levels before uploading.", "error");
+    if (batches.length === 0) {
+      showToast("Add at least one batch first.", "error");
       return;
     }
 
     setBusy(true);
-    setResults(null);
-    setStatus("Locating destination folder…");
+    setBatchResults(null);
+    // Seed the live progress list — every file starts "pending".
+    setLive(
+      batches.map((b, i) => ({
+        label: `Batch ${i + 1}`,
+        destinationLabel: b.destinationLabel,
+        files: b.files.map((f) => ({
+          name: f.name,
+          state: "pending" as FileState,
+        })),
+      })),
+    );
+    const outcomes: BatchOutcome[] = [];
 
     try {
-      const mapping = await lookupFolderMapping(
-        context.spHttpClient,
-        siteUrl,
-        leafTerm.id,
-      ).catch((e: unknown) => {
-        console.error("Folder map lookup error:", e);
-        return null;
-      });
-      if (!mapping || !mapping.folderUniqueId) {
-        showToast(
-          `This folder hasn't been mapped yet. Ask an administrator to run the reconciliation tool. (term ${leafTerm.label})`,
-          "error",
-        );
-        setStatus("");
-        return;
-      }
-
-      // Resolve the Staging unit folder's CURRENT path (rename-proof), then swap
-      // the library segment to reach the mirrored Documents unit folder.
-      const stagingSru = await resolveFolderServerUrl(
-        context.spHttpClient,
-        siteUrl,
-        mapping.folderUniqueId,
-      );
-      if (!stagingSru) {
-        showToast(
-          "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation.",
-          "error",
-        );
-        setStatus("");
-        return;
-      }
-
-      const docsUnitPath = toDocumentsPath(stagingSru);
-      if (!docsUnitPath) {
-        console.error(
-          "Could not swap library segment. stagingSru:",
-          stagingSru,
-          "expected prefix:",
-          `${webSru}/${settings.stagingLibrary}/`,
-        );
-        showToast(
-          "Could not work out the Documents path for this unit folder. Check the stagingLibrary setting in DMS Config.",
-          "error",
-        );
-        setStatus("");
-        return;
-      }
-
-      // The unit folder must ALREADY exist in Documents. It is deliberately not
-      // auto-created: a folder created here would inherit the Documents root
-      // ACL and silently widen access. A missing one is an administrator task.
-      const docsUnitFolder = await resolveFolderByPath(
-        context.spHttpClient,
-        siteUrl,
-        docsUnitPath,
-      );
-      if (!docsUnitFolder) {
-        showToast(
-          `The matching folder does not exist in Documents yet (${docsUnitPath}). Ask an administrator to create it — it is not created automatically, so its permissions stay correct.`,
-          "error",
-        );
-        setStatus("");
-        return;
-      }
-
-      const yearLabel = sanitizeFolderSegment(
-        options.yearPeriod.find((o) => o.id === yearPeriod)?.label ?? "",
-      );
-      const docTypeLabel = sanitizeFolderSegment(
-        options.documentType.find((o) => o.id === documentType)?.label ?? "",
-      );
-      if (!yearLabel || !docTypeLabel) {
-        showToast("Year and Document Type are required.", "error");
-        setStatus("");
-        return;
-      }
-
-      setStatus("Preparing destination folders…");
-      // Year / Document Type subfolders are safe to create — they inherit the
-      // unit folder's ACL, exactly as they do in Staging.
-      const yearFolder = await ensureFolder(
-        context.spHttpClient,
-        siteUrl,
-        docsUnitFolder.serverRelativeUrl,
-        yearLabel,
-      );
-      if (!yearFolder) {
-        showToast(`Could not create the "${yearLabel}" folder.`, "error");
-        setStatus("");
-        return;
-      }
-      const destFolder = await ensureFolder(
-        context.spHttpClient,
-        siteUrl,
-        yearFolder.serverRelativeUrl,
-        docTypeLabel,
-      );
-      if (!destFolder) {
-        showToast(`Could not create the "${docTypeLabel}" folder.`, "error");
-        setStatus("");
-        return;
-      }
-      const folderId = destFolder.uniqueId;
-
-      // Batch metadata — identical for every file in this submission.
-      const selections = (mode.levels ?? []).map((lvl, i) => {
-        const opt = (levelChoices[i] ?? []).find((o) => o.id === levelValues[i]);
-        return {
-          column: lvl.column,
-          label: opt?.label ?? "",
-          id: opt?.id ?? "",
-          labelCol: lvl.labelCol,
-          tidCol: lvl.tidCol,
+      for (let b = 0; b < batches.length; b++) {
+        const batch = batches[b];
+        const onState = (fileIndex: number, state: FileState): void => {
+          setLive((prev) =>
+            prev
+              ? prev.map((lb, idx) =>
+                  idx === b
+                    ? {
+                        ...lb,
+                        files: lb.files.map((f, fi) =>
+                          fi === fileIndex ? { ...f, state } : f,
+                        ),
+                      }
+                    : lb,
+                )
+              : prev,
+          );
         };
-      });
-      selections.unshift({
-        column: "BusinessSegment",
-        label: mode.label,
-        id: mode.termSetGuid,
-        labelCol: undefined,
-        tidCol: undefined,
-      });
-
-      const formValues: Array<{ FieldName: string; FieldValue: string }> = [
-        {
-          FieldName: FIELDS.documentType,
-          FieldValue: toTaxValue(options.documentType, documentType),
-        },
-        {
-          FieldName: FIELDS.yearPeriod,
-          FieldValue: toTaxValue(options.yearPeriod, yearPeriod),
-        },
-        {
-          FieldName: FIELDS.confidentiality,
-          FieldValue: toTaxValue(options.confidentiality, confidentiality),
-        },
-        { FieldName: FIELDS.documentDate, FieldValue: toSpDate(documentDate) },
-        ...buildLevelFormValues(LEVEL_COLUMNS, selections),
-      ];
-      if (vendor) {
-        formValues.push({
-          FieldName: FIELDS.vendor,
-          FieldValue: toTaxValue(options.vendor, vendor),
+        const { batchError, results } = await uploadBatch(
+          batch,
+          b,
+          batches.length,
+          onState,
+        );
+        if (batchError) {
+          // Routing failed before any file uploaded — show every row as failed.
+          setLive((prev) =>
+            prev
+              ? prev.map((lb, idx) =>
+                  idx === b
+                    ? {
+                        ...lb,
+                        files: lb.files.map((f) => ({
+                          ...f,
+                          state: "failed" as FileState,
+                        })),
+                      }
+                    : lb,
+                )
+              : prev,
+          );
+        }
+        outcomes.push({
+          batchId: batch.id,
+          label: `Batch ${b + 1}`,
+          destinationLabel: batch.destinationLabel,
+          batchError,
+          results,
         });
       }
 
-      /* ----- Sequential per-file upload; one failure never stops the batch -- */
-      const batch = [...picked];
-      const collected: FileResult[] = [];
-      const succeededKeys = new Set<string>();
-
-      for (let i = 0; i < batch.length; i++) {
-        const entry = batch[i];
-        const finalName = buildUploadName(entry.file.name, entry.rename);
-        setStatus(`Uploading ${i + 1} of ${batch.length} — ${finalName}`);
-
-        // Duplicate probe. overwrite=false is kept, so an existing file is
-        // never clobbered; it is reported as skipped instead.
-        try {
-          const existsRes: SPHttpClientResponse =
-            await context.spHttpClient.get(
-              `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')?$select=Exists`,
-              SPHttpClient.configurations.v1,
-              { headers: { Accept: "application/json;odata=nometadata" } },
-            );
-          if (existsRes.ok) {
-            collected.push({
-              name: finalName,
-              outcome: "skipped",
-              detail: "A file with this name already exists here.",
-            });
-            continue;
-          }
-        } catch {
-          // Network error on the existence check — proceed; the upload will
-          // surface the real error.
-        }
-
-        try {
-          const uploadRes: SPHttpClientResponse =
-            await context.spHttpClient.post(
-              `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
-              SPHttpClient.configurations.v1,
-              { body: entry.file },
-            );
-          if (!uploadRes.ok) {
-            let detail = `HTTP ${uploadRes.status}`;
-            try {
-              const bodyText = await uploadRes.text();
-              try {
-                const errJson = JSON.parse(bodyText);
-                const spMsg =
-                  errJson?.error?.message?.value ?? errJson?.error?.message;
-                detail += spMsg
-                  ? ` — ${spMsg}`
-                  : bodyText
-                    ? ` — ${bodyText.slice(0, 200)}`
-                    : "";
-              } catch {
-                if (bodyText) detail += ` — ${bodyText.slice(0, 200)}`;
-              }
-            } catch {
-              /* body already consumed or unreadable */
-            }
-            console.error("Upload failed:", finalName, folderId, detail);
-            collected.push({ name: finalName, outcome: "failed", detail });
-            continue;
-          }
-          const uploadJson = await uploadRes.json();
-          const uploadedSru = uploadJson.ServerRelativeUrl;
-
-          const itemRes: SPHttpClientResponse = await context.spHttpClient.get(
-            `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeURIComponent(uploadedSru)}'`,
-            SPHttpClient.configurations.v1,
-          );
-          if (!itemRes.ok) {
-            collected.push({
-              name: finalName,
-              outcome: "tagFailed",
-              detail: "Uploaded, but the item could not be retrieved to tag.",
-            });
-            succeededKeys.add(entry.key);
-            continue;
-          }
-          const item = await itemRes.json();
-
-          const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
-            `${siteUrl}/_api/web/lists/getbytitle('${DOCUMENTS_LIST_TITLE}')/items(${item.Id})/validateUpdateListItem`,
-            SPHttpClient.configurations.v1,
-            {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ formValues }),
-            },
-          );
-          if (!metaRes.ok) {
-            collected.push({
-              name: finalName,
-              outcome: "tagFailed",
-              detail: `Uploaded, but tagging failed (HTTP ${metaRes.status}).`,
-            });
-            succeededKeys.add(entry.key);
-            continue;
-          }
-          // validateUpdateListItem returns HTTP 200 even on field errors —
-          // HasException on each result is the real check.
-          const metaJson = await metaRes.json();
-          const fieldError = (metaJson.value ?? []).find(
-            (v: { HasException?: boolean }) => v.HasException,
-          );
-          if (fieldError) {
-            console.error("Field update error:", finalName, fieldError);
-            collected.push({
-              name: finalName,
-              outcome: "tagFailed",
-              detail: `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
-            });
-            succeededKeys.add(entry.key);
-            continue;
-          }
-
-          collected.push({ name: finalName, outcome: "uploaded" });
-          succeededKeys.add(entry.key);
-        } catch (err) {
-          console.error("Upload threw:", finalName, err);
-          collected.push({
-            name: finalName,
-            outcome: "failed",
-            detail: err instanceof Error ? err.message : "Unexpected error.",
-          });
-        }
-      }
-
-      setResults(collected);
+      setBatchResults(outcomes);
       setStatus("");
-      // Keep only the rows that did not fully succeed, so the user can fix and
-      // retry without re-picking everything.
-      setPicked((prev) => prev.filter((p) => !succeededKeys.has(p.key)));
 
-      const okCount = collected.filter((r) => r.outcome === "uploaded").length;
-      if (okCount === collected.length && okCount > 0) {
-        showToast(`All ${okCount} file(s) uploaded to Documents.`, "success");
+      const totalOk = outcomes.reduce(
+        (n, o) => n + o.results.filter((r) => r.outcome === "uploaded").length,
+        0,
+      );
+      const anyProblem = outcomes.some(
+        (o) => !!o.batchError || o.results.some((r) => r.outcome !== "uploaded"),
+      );
+      if (!anyProblem && totalOk > 0) {
+        showToast(`All ${totalOk} file(s) uploaded to Documents.`, "success");
       }
     } catch (err) {
       console.error("Bulk upload failed:", err);
@@ -1171,14 +1437,18 @@ export default function BulkUpload({
     tagFailed: "Uploaded, not tagged",
   };
 
-  const summary = results
-    ? {
-        uploaded: results.filter((r) => r.outcome === "uploaded").length,
-        skipped: results.filter((r) => r.outcome === "skipped").length,
-        failed: results.filter((r) => r.outcome === "failed").length,
-        tagFailed: results.filter((r) => r.outcome === "tagFailed").length,
-      }
-    : null;
+  const fpLabel: Record<FileState, string> = {
+    pending: "Waiting",
+    uploading: "Uploading…",
+    done: "Done",
+    skipped: "Skipped",
+    failed: "Failed",
+    tagFailed: "No tags",
+  };
+
+  const totalQueued = batches.reduce((n, b) => n + b.files.length, 0);
+  const canAdd = !panelOpen && batches.length < MAX_BATCHES;
+  const visibleBatches = batches.filter((b) => b.id !== editingId);
 
   /* ---------- Render ------------------------------------------------------ */
 
@@ -1196,13 +1466,33 @@ export default function BulkUpload({
         .dms-link { background: none; border: none; color: #0f6c3f; cursor: pointer; font-weight: 600; padding: 0; font-size: 13px; }
         .dms-link:disabled { color: #9bbfaa; cursor: default; }
         .dms-filelist { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
-        .dms-filerow { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; gap: 12px; align-items: start; border: 1px solid #ececec; border-radius: 6px; padding: 10px 12px; background: #fafafa; }
+        .dms-filerow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; border: 1px solid #ececec; border-radius: 6px; padding: 10px 12px; background: #fafafa; }
         .dms-filerow .orig { font-size: 13px; font-weight: 600; word-break: break-all; }
         .dms-filerow .size { font-size: 12px; color: #666; }
-        .dms-filerow input[type="text"] { padding: 6px 8px; border: 1px solid #c8c8c8; border-radius: 4px; font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
-        .dms-filerow .preview { font-size: 11px; color: #666; margin-top: 4px; word-break: break-all; }
         .dms-remove { background: none; border: none; cursor: pointer; color: #d13438; font-size: 15px; line-height: 1; padding: 4px; }
-        .dms-count { font-size: 12px; color: #666; margin-top: 10px; }
+        .dms-count { font-size: 12px; color: #666; }
+        .dms-filelist-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+        .dms-filelist-more { display: flex; gap: 16px; }
+        .dms-fileblock { margin-top: 20px; border-top: 1px solid #ececec; padding-top: 16px; }
+        .dms-fileblock-title { font-size: 13px; font-weight: 700; color: #1b1b1b; margin: 0 0 12px; }
+        /* Live per-file progress */
+        .dms-progress { margin-top: 16px; }
+        .dms-progress-batch { border: 1px solid #e1e1e1; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; background: #fff; }
+        .dms-progress-head { font-size: 13px; font-weight: 700; color: #0f6c3f; margin-bottom: 12px; }
+        .dms-progress-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+        .dms-fp-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+        .dms-fp-name { flex: 0 0 42%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #333; }
+        .dms-fp-bar { position: relative; flex: 1; height: 8px; border-radius: 5px; background: #ececec; overflow: hidden; }
+        .dms-fp-fill { position: absolute; top: 0; left: 0; height: 100%; width: 100%; border-radius: 5px; }
+        .dms-fp-fill.done { background: #0f6c3f; }
+        .dms-fp-fill.skipped, .dms-fp-fill.tagFailed { background: #f0a020; }
+        .dms-fp-fill.failed { background: #d13438; }
+        .dms-fp-bar.uploading::after { content: ""; position: absolute; top: 0; height: 100%; width: 40%; border-radius: 5px; background: #0f6c3f; animation: dms-slide 1.1s ease-in-out infinite; }
+        @keyframes dms-slide { 0% { left: -45%; } 100% { left: 100%; } }
+        .dms-fp-tag { flex: 0 0 78px; text-align: right; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #999; }
+        .dms-fp-tag.done, .dms-fp-tag.uploading { color: #0f6c3f; }
+        .dms-fp-tag.skipped, .dms-fp-tag.tagFailed { color: #7a4f00; }
+        .dms-fp-tag.failed { color: #d13438; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
         .dms-field > span { font-weight: 600; }
         .dms-field .req { color: #d13438; font-style: normal; }
@@ -1223,9 +1513,32 @@ export default function BulkUpload({
         .dms-btn.primary { background: #0f6c3f; color: #fff; }
         .dms-btn.primary:disabled { background: #9bbfaa; cursor: default; }
         .dms-btn.secondary { background: #fff; border-color: #0f6c3f; color: #0f6c3f; }
+        .dms-btn.secondary:disabled { border-color: #c8c8c8; color: #9b9b9b; cursor: default; }
         .dms-status { margin-top: 16px; font-size: 13px; }
+        /* Batch tiles */
+        .dms-batchlist { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+        .dms-batch-tile { display: flex; gap: 14px; align-items: center; border: 1px solid #b3d9c4; border-radius: 8px; background: #fff; padding: 14px 16px; }
+        .dms-batch-tile .ico { font-size: 30px; line-height: 1; }
+        .dms-batch-tile .body { flex: 1; min-width: 0; }
+        .dms-batch-tile .bt-title { font-weight: 700; color: #0f6c3f; font-size: 14px; }
+        .dms-batch-tile .bt-path { font-size: 12px; color: #333; margin-top: 2px; word-break: break-word; }
+        .dms-batch-tile .bt-meta { font-size: 11px; color: #666; margin-top: 4px; }
+        .dms-batch-tile .bt-actions { display: flex; flex-direction: column; gap: 6px; }
+        .dms-batch-tile .bt-actions button { background: none; border: none; cursor: pointer; font: inherit; font-size: 12px; padding: 0; }
+        .dms-batch-tile .bt-edit { color: #0f6c3f; }
+        .dms-batch-tile .bt-remove { color: #d13438; }
+        .dms-batch-tile .bt-actions button:disabled { color: #9b9b9b; cursor: default; }
+        .dms-add-batch { display: inline-flex; align-items: center; gap: 6px; background: #f4f8f5; border: 1px dashed #b3d9c4; color: #0f6c3f; border-radius: 6px; padding: 10px 16px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .dms-add-batch:disabled { border-color: #ddd; color: #9b9b9b; cursor: default; }
+        .dms-panel { border: 1px solid #d6e6dc; border-radius: 8px; padding: 20px; margin-top: 8px; background: #fbfdfc; }
+        .dms-panel-title { font-size: 13px; font-weight: 700; color: #0f6c3f; margin: 0 0 16px; }
+        /* Results */
         .dms-results { margin-top: 20px; }
+        .dms-batch-result { border: 1px solid #e1e1e1; border-radius: 8px; padding: 16px; margin-bottom: 14px; }
+        .dms-batch-result h4 { margin: 0 0 4px; font-size: 14px; color: #1b1b1b; }
+        .dms-batch-result .bt-dest { font-size: 12px; color: #666; margin: 0 0 10px; }
         .dms-results-summary { font-size: 13px; font-weight: 600; margin: 0 0 10px; }
+        .dms-batch-error { background: #fdf3f3; color: #d13438; border: 1px solid #f1c0c0; border-radius: 4px; padding: 10px 14px; font-size: 13px; }
         .dms-result { display: flex; gap: 10px; align-items: baseline; font-size: 13px; padding: 7px 10px; border-radius: 4px; margin-bottom: 6px; }
         .dms-result .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
         .dms-result .fname { word-break: break-all; }
@@ -1242,15 +1555,15 @@ export default function BulkUpload({
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         @media (max-width: 640px) {
           .dms-grid { grid-template-columns: 1fr; }
-          .dms-filerow { grid-template-columns: 1fr auto; }
           .dms-toast { left: 12px; right: 12px; min-width: unset; top: 12px; }
         }
       `}</style>
 
       <h2>Bulk upload</h2>
       <p className="dms-subtitle">
-        All fields marked <strong>*</strong> are required. Up to {MAX_FILES}{" "}
-        files per upload.
+        Queue up to {MAX_BATCHES} batches of {MAX_FILES} files each — every batch
+        goes to its own folder with its own metadata. All fields marked{" "}
+        <strong>*</strong> are required.
       </p>
       <div className="dms-warn">
         <span aria-hidden="true">⚠</span>
@@ -1262,83 +1575,9 @@ export default function BulkUpload({
         </span>
       </div>
 
-      {/* ── Files ───────────────────────────────────────────────────────── */}
+      {/* ── Batches ─────────────────────────────────────────────────────── */}
       <div className="dms-section">
-        <p className="dms-section-title">Files</p>
-        <div className="dms-drop">
-          <span className="size">
-            {picked.length === 0
-              ? "No files selected"
-              : `${picked.length} file(s) selected`}
-          </span>
-          <button
-            type="button"
-            className="dms-link"
-            onClick={() => fileRef.current?.click()}
-            disabled={busy}
-          >
-            {picked.length === 0 ? "Select files" : "Add more files"}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            multiple
-            accept={settings.allowedExtensions.join(",")}
-            style={{ display: "none" }}
-            onChange={(e) => addFiles(e.target.files)}
-          />
-        </div>
-
-        {picked.length > 0 && (
-          <>
-            <div className="dms-filelist">
-              {picked.map((p) => (
-                <div className="dms-filerow" key={p.key}>
-                  <div>
-                    <div className="orig">{p.file.name}</div>
-                    <div className="size">
-                      {(p.file.size / 1024).toFixed(1)} KB
-                    </div>
-                  </div>
-                  <div>
-                    <input
-                      type="text"
-                      value={p.rename}
-                      disabled={busy}
-                      placeholder="Leave blank to keep this name"
-                      aria-label={`Rename ${p.file.name}`}
-                      onChange={(e) => setRename(p.key, e.target.value)}
-                    />
-                    {p.rename.trim() !== "" && (
-                      <div className="preview">
-                        Saved as: {buildUploadName(p.file.name, p.rename)}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="dms-remove"
-                    aria-label={`Remove ${p.file.name}`}
-                    disabled={busy}
-                    onClick={() => removeFile(p.key)}
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-            <p className="dms-count">
-              {picked.length} of {MAX_FILES} files.
-            </p>
-          </>
-        )}
-      </div>
-
-      {/* ── Document Information ─────────────────────────────────────────── */}
-      <div className="dms-section">
-        <p className="dms-section-title">
-          Document Information — applies to every file above
-        </p>
+        <p className="dms-section-title">Batches</p>
 
         {deptLoading ? (
           <p className="dms-dept-loading">Loading your access&hellip;</p>
@@ -1350,141 +1589,326 @@ export default function BulkUpload({
           </div>
         ) : null}
 
-        <div className="dms-radio-group">
-          <p>Upload into:</p>
-          {(["BusinessSegment", "Project"] as const).map((side) => {
-            const sideModes = modes.filter((m) => m.side === side);
-            const offerable = privileged
-              ? sideModes
-              : sideModes.filter((m) =>
-                  validPaths.some((p) => p.modeKey === m.key),
-                );
-            if (offerable.length === 0) return null;
-            const active = activeMode()?.side === side;
-            return (
-              <label key={side}>
-                <input
-                  type="radio"
-                  name="bulkSideToggle"
-                  checked={active}
-                  onChange={() => switchMode(offerable[0].key)}
-                />
-                {side === "BusinessSegment" ? "Business Segment" : "Project"}
-              </label>
-            );
-          })}
-        </div>
-
-        {(() => {
-          const side = activeMode()?.side;
-          const sideModes = modes.filter((m) => m.side === side);
-          const offerable = privileged
-            ? sideModes
-            : sideModes.filter((m) =>
-                validPaths.some((p) => p.modeKey === m.key),
+        {visibleBatches.length > 0 && (
+          <div className="dms-batchlist">
+            {visibleBatches.map((b) => {
+              const n = batches.findIndex((x) => x.id === b.id) + 1;
+              return (
+                <div className="dms-batch-tile" key={b.id}>
+                  <div className="ico" aria-hidden="true">
+                    📁
+                  </div>
+                  <div className="body">
+                    <div className="bt-title">Batch {n}</div>
+                    <div className="bt-path">{b.destinationLabel}</div>
+                    <div className="bt-meta">
+                      {[b.yearLabel, b.docTypeLabel, `${b.files.length} files`]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </div>
+                  </div>
+                  <div className="bt-actions">
+                    <button
+                      type="button"
+                      className="bt-edit"
+                      disabled={busy || panelOpen}
+                      onClick={() => editBatch(b)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className="bt-remove"
+                      disabled={busy || panelOpen}
+                      onClick={() => removeBatch(b.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
               );
-          if (offerable.length <= 1) return null;
-          return (
-            <label className="dms-field">
-              <span>Segment</span>
-              <select
-                value={uploadMode}
-                onChange={(e) => switchMode(e.target.value)}
-              >
-                {offerable.map((m) => (
-                  <option key={m.key} value={m.key}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          );
-        })()}
-
-        {!privileged && activeMode() && (
-          <div className="dms-dept-badge">
-            <span className="dept-label">Uploading to:</span>
-            <span className="dept-name">
-              {[
-                activeMode()?.label,
-                ...(activeMode()?.levels ?? []).map(
-                  (_lvl, i) =>
-                    (levelChoices[i] ?? []).find((o) => o.id === levelValues[i])
-                      ?.label,
-                ),
-              ]
-                .filter(Boolean)
-                .join(" › ")}
-            </span>
+            })}
           </div>
         )}
 
-        <div className="dms-grid">
-          {(activeMode()?.levels ?? []).map((lvl, i) =>
-            renderSelect(
-              lvl.label,
-              true,
-              levelValues[i] ?? "",
-              (v) => {
-                const md = activeMode();
-                if (md) handleLevelChange(md, i, v);
-              },
-              levelChoices[i] ?? [],
-              deptLoading || isLevelLocked(i) || (i > 0 && !levelValues[i - 1]),
-              "--",
-              true,
-            ),
-          )}
+        {!panelOpen && !deptLoading && (
+          <button
+            type="button"
+            className="dms-add-batch"
+            disabled={!canAdd || busy}
+            onClick={openAddPanel}
+            title={
+              batches.length >= MAX_BATCHES
+                ? `Maximum ${MAX_BATCHES} batches`
+                : undefined
+            }
+          >
+            + Add batch
+          </button>
+        )}
 
-          {renderSelect(
-            "Year / Period",
-            true,
-            yearPeriod,
-            setYearPeriod,
-            options.yearPeriod,
-          )}
+        {/* ── Inline config panel ──────────────────────────────────────── */}
+        {panelOpen && (
+          <div className="dms-panel">
+            <p className="dms-panel-title">
+              {editingId
+                ? "Edit batch"
+                : `Configure batch ${batches.length + 1}`}
+            </p>
 
-          {renderSelect(
-            "Document Type",
-            true,
-            documentType,
-            setDocumentType,
-            options.documentType,
-          )}
+            {/* Files */}
+            <div className="dms-drop">
+              <span className="size">
+                {picked.length === 0
+                  ? "No files selected"
+                  : `${picked.length} file(s) selected`}
+              </span>
+              <button
+                type="button"
+                className="dms-link"
+                onClick={() => fileRef.current?.click()}
+                disabled={busy}
+              >
+                {picked.length === 0 ? "Select files" : "Add more files"}
+              </button>
+              <input
+                ref={fileRef}
+                type="file"
+                multiple
+                accept={settings.allowedExtensions.join(",")}
+                style={{ display: "none" }}
+                onChange={(e) => addFiles(e.target.files)}
+              />
+            </div>
 
-          <label className="dms-field">
-            <span>
-              Document Date <em className="req">*</em>
-            </span>
-            <input
-              type="date"
-              value={documentDate}
-              max={(() => {
-                const d = new Date();
-                const mm = d.getMonth() + 1;
-                const day = d.getDate();
-                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+            {/* (Selected-file list is rendered below the metadata form.) */}
+
+            {/* Destination + metadata */}
+            <div style={{ marginTop: 20 }}>
+              <div className="dms-radio-group">
+                <p>Upload into:</p>
+                {(["BusinessSegment", "Project"] as const).map((side) => {
+                  const sideModes = modes.filter((m) => m.side === side);
+                  const offerable = privileged
+                    ? sideModes
+                    : sideModes.filter((m) =>
+                        validPaths.some((p) => p.modeKey === m.key),
+                      );
+                  if (offerable.length === 0) return null;
+                  const active = activeMode()?.side === side;
+                  return (
+                    <label key={side}>
+                      <input
+                        type="radio"
+                        name="bulkSideToggle"
+                        checked={active}
+                        onChange={() => switchMode(offerable[0].key)}
+                      />
+                      {side === "BusinessSegment"
+                        ? "Business Segment"
+                        : "Project"}
+                    </label>
+                  );
+                })}
+              </div>
+
+              {(() => {
+                const side = activeMode()?.side;
+                const sideModes = modes.filter((m) => m.side === side);
+                const offerable = privileged
+                  ? sideModes
+                  : sideModes.filter((m) =>
+                      validPaths.some((p) => p.modeKey === m.key),
+                    );
+                if (offerable.length <= 1) return null;
+                return (
+                  <label className="dms-field">
+                    <span>Segment</span>
+                    <select
+                      value={uploadMode}
+                      onChange={(e) => switchMode(e.target.value)}
+                    >
+                      {offerable.map((m) => (
+                        <option key={m.key} value={m.key}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
               })()}
-              onChange={(e) => setDocumentDate(e.target.value)}
-            />
-          </label>
 
-          {renderSelect(
-            "Confidentiality Level",
-            true,
-            confidentiality,
-            setConfidentiality,
-            options.confidentiality,
-          )}
+              {!privileged && activeMode() && (
+                <div className="dms-dept-badge">
+                  <span className="dept-label">Uploading to:</span>
+                  <span className="dept-name">
+                    {[
+                      activeMode()?.label,
+                      ...(activeMode()?.levels ?? []).map(
+                        (_lvl, i) =>
+                          (levelChoices[i] ?? []).find(
+                            (o) => o.id === levelValues[i],
+                          )?.label,
+                      ),
+                    ]
+                      .filter(Boolean)
+                      .join(" › ")}
+                  </span>
+                </div>
+              )}
 
-          {renderSelect(
-            "Vendor (if applicable)",
-            false,
-            vendor,
-            setVendor,
-            options.vendor,
-          )}
-        </div>
+              <div className="dms-grid">
+                {(activeMode()?.levels ?? []).map((lvl, i) =>
+                  renderSelect(
+                    lvl.label,
+                    true,
+                    levelValues[i] ?? "",
+                    (v) => {
+                      const md = activeMode();
+                      if (md) handleLevelChange(md, i, v);
+                    },
+                    levelChoices[i] ?? [],
+                    deptLoading ||
+                      isLevelLocked(i) ||
+                      (i > 0 && !levelValues[i - 1]),
+                    "--",
+                    true,
+                  ),
+                )}
+
+                {renderSelect(
+                  "Year / Period",
+                  true,
+                  yearPeriod,
+                  setYearPeriod,
+                  options.yearPeriod,
+                )}
+
+                {renderSelect(
+                  "Document Type",
+                  true,
+                  documentType,
+                  setDocumentType,
+                  options.documentType,
+                )}
+
+                <label className="dms-field">
+                  <span>
+                    Document Date <em className="req">*</em>
+                  </span>
+                  <input
+                    type="date"
+                    value={documentDate}
+                    max={(() => {
+                      const d = new Date();
+                      const mm = d.getMonth() + 1;
+                      const day = d.getDate();
+                      return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+                    })()}
+                    onChange={(e) => setDocumentDate(e.target.value)}
+                  />
+                </label>
+
+                {renderSelect(
+                  "Confidentiality Level",
+                  true,
+                  confidentiality,
+                  setConfidentiality,
+                  options.confidentiality,
+                )}
+
+                {renderSelect(
+                  "Vendor (if applicable)",
+                  false,
+                  vendor,
+                  setVendor,
+                  options.vendor,
+                )}
+              </div>
+
+              {/* Selected files — listed below the form */}
+              {picked.length > 0 && (
+                <div className="dms-fileblock">
+                  <p className="dms-fileblock-title">Selected files</p>
+                  <div className="dms-filelist">
+                    {picked.slice(0, fileShowCount).map((p) => (
+                      <div className="dms-filerow" key={p.key}>
+                        <div>
+                          <div className="orig">{p.file.name}</div>
+                          <div className="size">
+                            {(p.file.size / 1024).toFixed(1)} KB
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="dms-remove"
+                          aria-label={`Remove ${p.file.name}`}
+                          disabled={busy}
+                          onClick={() => removeFile(p.key)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="dms-filelist-foot">
+                    <span className="dms-count">
+                      Showing {Math.min(fileShowCount, picked.length)} of{" "}
+                      {picked.length} ({MAX_FILES} max).
+                    </span>
+                    <span className="dms-filelist-more">
+                      {picked.length > fileShowCount && (
+                        <button
+                          type="button"
+                          className="dms-link"
+                          disabled={busy}
+                          onClick={() =>
+                            setFileShowCount((c) =>
+                              Math.min(c + FILE_PAGE, picked.length),
+                            )
+                          }
+                        >
+                          Show more (
+                          {Math.min(FILE_PAGE, picked.length - fileShowCount)}{" "}
+                          more)
+                        </button>
+                      )}
+                      {fileShowCount > FILE_PAGE && (
+                        <button
+                          type="button"
+                          className="dms-link"
+                          disabled={busy}
+                          onClick={() => setFileShowCount(FILE_PAGE)}
+                        >
+                          Show less
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              <div className="dms-actions">
+                <button
+                  type="button"
+                  className="dms-btn secondary"
+                  onClick={cancelPanel}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="dms-btn primary"
+                  onClick={saveBatch}
+                  disabled={busy}
+                >
+                  Save batch
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Actions ─────────────────────────────────────────────────────── */}
@@ -1492,8 +1916,8 @@ export default function BulkUpload({
         <button
           type="button"
           className="dms-btn secondary"
-          onClick={resetForm}
-          disabled={busy}
+          onClick={clearAll}
+          disabled={busy || (batches.length === 0 && !panelOpen)}
         >
           Clear
         </button>
@@ -1501,38 +1925,105 @@ export default function BulkUpload({
           type="button"
           className="dms-btn primary"
           onClick={handleUpload}
-          disabled={busy || deptLoading || picked.length === 0}
+          disabled={busy || deptLoading || panelOpen || batches.length === 0}
+          title={
+            panelOpen
+              ? "Save or cancel the batch you're editing first"
+              : undefined
+          }
         >
           {busy
             ? "Uploading…"
-            : `Upload ${picked.length > 0 ? picked.length : ""} file(s)`}
+            : `Upload all${totalQueued > 0 ? ` (${totalQueued} files)` : ""}`}
         </button>
       </div>
 
       {status && <p className="dms-status">{status}</p>}
 
-      {/* ── Per-file results ────────────────────────────────────────────── */}
-      {results && summary && (
-        <div className="dms-results">
-          <p className="dms-results-summary">
-            {summary.uploaded} uploaded
-            {summary.skipped > 0 && `, ${summary.skipped} skipped`}
-            {summary.failed > 0 && `, ${summary.failed} failed`}
-            {summary.tagFailed > 0 &&
-              `, ${summary.tagFailed} uploaded without tags`}
-            .
-            {(summary.failed > 0 || summary.skipped > 0) &&
-              " Failed and skipped files are still listed above so you can rename and retry."}
-            {summary.tagFailed > 0 &&
-              " Files listed as “uploaded, not tagged” are already in Documents — re-uploading would duplicate them; fix their metadata in the library instead."}
-          </p>
-          {results.map((r, i) => (
-            <div className={`dms-result ${r.outcome}`} key={`${r.name}-${i}`}>
-              <span className="tag">{outcomeLabel[r.outcome]}</span>
-              <span className="fname">{r.name}</span>
-              {r.detail && <span className="why">{r.detail}</span>}
+      {/* ── Live upload progress (per file) ─────────────────────────────── */}
+      {live && (
+        <div className="dms-progress">
+          {live.map((lb, bi) => (
+            <div className="dms-progress-batch" key={bi}>
+              <div className="dms-progress-head">
+                {lb.label} — {lb.destinationLabel}
+              </div>
+              <div className="dms-progress-list">
+                {lb.files.map((f, fi) => (
+                  <div className="dms-fp-row" key={fi}>
+                    <span className="dms-fp-name" title={f.name}>
+                      {f.name}
+                    </span>
+                    <span
+                      className={`dms-fp-bar${f.state === "uploading" ? " uploading" : ""}`}
+                    >
+                      {f.state !== "uploading" && f.state !== "pending" && (
+                        <span className={`dms-fp-fill ${f.state}`} />
+                      )}
+                    </span>
+                    <span className={`dms-fp-tag ${f.state}`}>
+                      {fpLabel[f.state]}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── Per-batch results ───────────────────────────────────────────── */}
+      {batchResults && (
+        <div className="dms-results">
+          {batchResults.map((bo, bi) => {
+            const s = {
+              uploaded: bo.results.filter((r) => r.outcome === "uploaded")
+                .length,
+              skipped: bo.results.filter((r) => r.outcome === "skipped").length,
+              failed: bo.results.filter((r) => r.outcome === "failed").length,
+              tagFailed: bo.results.filter((r) => r.outcome === "tagFailed")
+                .length,
+            };
+            const allOk =
+              !bo.batchError &&
+              s.uploaded === bo.results.length &&
+              bo.results.length > 0;
+            const shownRows = allOk
+              ? []
+              : bo.results.filter((r) => r.outcome !== "uploaded");
+            return (
+              <div className="dms-batch-result" key={`${bo.batchId}-${bi}`}>
+                <h4>{bo.label}</h4>
+                <p className="bt-dest">{bo.destinationLabel}</p>
+                {bo.batchError ? (
+                  <div className="dms-batch-error">{bo.batchError}</div>
+                ) : (
+                  <>
+                    <p className="dms-results-summary">
+                      {s.uploaded} uploaded
+                      {s.skipped > 0 && `, ${s.skipped} skipped`}
+                      {s.failed > 0 && `, ${s.failed} failed`}
+                      {s.tagFailed > 0 &&
+                        `, ${s.tagFailed} uploaded without tags`}
+                      .
+                      {s.tagFailed > 0 &&
+                        " Files listed as “uploaded, not tagged” are already in Documents — fix their metadata in the library rather than re-uploading."}
+                    </p>
+                    {shownRows.map((r, i) => (
+                      <div
+                        className={`dms-result ${r.outcome}`}
+                        key={`${r.name}-${i}`}
+                      >
+                        <span className="tag">{outcomeLabel[r.outcome]}</span>
+                        <span className="fname">{r.name}</span>
+                        {r.detail && <span className="why">{r.detail}</span>}
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
