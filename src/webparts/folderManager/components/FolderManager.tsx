@@ -70,6 +70,16 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 const RECON_WRITE_DELAY_MS = 500;    // pause between folder/permission writes
 const RECON_BATCH_SIZE      = 150;   // writes before an automatic cooldown
 const RECON_COOLDOWN_MS     = 4000;  // cooldown length (masked in the UI as "work")
+const RECON_EST_HTTP_MS     = 250;   // rough per-write network+server time, on top of the delay
+                                     // (used only for the up-front estimate before a live rate exists)
+
+// Human-friendly duration: "45s" or "3m 07s".
+const fmtDur = (ms: number): string => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const sec = s % 60;
+  return `${Math.floor(s / 60)}m ${sec < 10 ? "0" : ""}${sec}s`;
+};
 // Rotating status text shown during the cooldown so the pause reads as progress.
 const COOLDOWN_MESSAGES = ["Discombobulating…", "Generating folders…"];
 
@@ -279,6 +289,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const [folderFeed,   setFolderFeed]   = useState<ProgItem[]>([]);
   const [assignFeed,   setAssignFeed]   = useState<ProgItem[]>([]);
   const [reconCounts,  setReconCounts]  = useState<{ folders: number; assigns: number }>({ folders: 0, assigns: 0 });
+  // ETA: planned total throttled ops, run start time, and a ticking "now" so the
+  // elapsed/remaining estimate repaints every second even between ops.
+  const [reconPlanned, setReconPlanned] = useState(0);
+  const [reconStartMs, setReconStartMs] = useState<number | undefined>(undefined);
+  const [reconNow,     setReconNow]     = useState(0);
+
+  useEffect(() => {
+    if (!reconRunning) return;
+    const id = setInterval(() => setReconNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [reconRunning]);
 
   // Keep the live feeds short so hundreds of ops don't flood the DOM.
   const FEED_CAP = 40;
@@ -940,6 +961,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     setFolderFeed([]);
     setAssignFeed([]);
     setReconCounts({ folders: 0, assigns: 0 });
+    setReconPlanned(0);
+    setReconStartMs(undefined);
     setReconPhase("Generating folders…");
     const entries: LogEntry[] = [];
     // Throttle governor: pause between writes, and auto-cooldown every N writes. The
@@ -990,6 +1013,28 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       const gridSets = await loadReconGridTermSets();
       const yearLabels    = (await loadReconTops(gridSets.year).catch(() => [] as TermLite[])).map(y => sanitizeFolderSegment(y.label)).filter(Boolean);
       const docTypeLabels = (await loadReconTops(gridSets.docType).catch(() => [] as TermLite[])).map(d => sanitizeFolderSegment(d.label)).filter(Boolean);
+      // Estimate the workload up front: count every throttled op (each incurs the
+      // inter-write delay). Structural folder (1) + Year×DocType grid per leaf +
+      // applicable group grants per lib. Ancestor browse grants aren't throttled, so
+      // they're excluded — the live rate absorbs their real time. Worst case (assumes
+      // nothing exists yet); re-runs finish faster as existing folders skip.
+      const gridPerLeaf = yearLabels.length > 0 ? yearLabels.length * (1 + docTypeLabels.length) : 0;
+      let plannedOps = 0;
+      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+        for (const t of targets) {
+          plannedOps += 1;
+          if (t.isLeaf) plannedOps += gridPerLeaf;
+          const rows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
+          plannedOps += rows.filter(g =>
+            ROLE_TO_PERMISSION[g.role] !== undefined &&
+            (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
+          ).length;
+        }
+      }
+      const reconStart = Date.now();
+      setReconPlanned(plannedOps);
+      setReconStartMs(reconStart);
+      setReconNow(reconStart);
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const root = await getLibraryRoot(lib);
         if (!root) {
@@ -1315,7 +1360,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     <section style={s.wrap}>
       <style>{`.fm-in:focus { outline: none; box-shadow: 0 0 0 2px rgba(15,108,63,.18); }`}</style>
 
-      <h2 style={s.h2}>Manage Folders</h2>
+      <h2 style={s.h2}>Folder &amp; Group Manager</h2>
       <p style={s.subtitle}>Rename, create, and assign permissions to folders at any depth — then apply it all at once.</p>
 
       {/* Tab bar: two library views + the term-store reconciliation provisioner */}
@@ -1386,22 +1431,49 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 <span style={{ fontSize: 12, color: "#666" }}>
                   {reconCounts.folders} folders · {reconCounts.assigns} group assignments
                 </span>
+                {(() => {
+                  const completed = reconCounts.folders + reconCounts.assigns;
+                  const elapsedMs = reconStartMs ? Math.max(0, reconNow - reconStartMs) : 0;
+                  if (!reconRunning) {
+                    // Final line after a run completes.
+                    return reconStartMs ? (
+                      <span style={{ fontSize: 12, color: "#666" }}>· took {fmtDur(elapsedMs)}</span>
+                    ) : null;
+                  }
+                  const remainingOps = Math.max(0, reconPlanned - completed);
+                  // Use the live rate once we have a few samples; before that, a static
+                  // model from the delay + cooldown so a number shows immediately.
+                  const remainMs = completed >= 5
+                    ? remainingOps * (elapsedMs / completed)
+                    : remainingOps * (RECON_WRITE_DELAY_MS + RECON_EST_HTTP_MS)
+                      + Math.floor(reconPlanned / RECON_BATCH_SIZE) * RECON_COOLDOWN_MS;
+                  return (
+                    <span style={{ fontSize: 12, color: "#0f6c3f", fontWeight: 600 }}>
+                      · ~{fmtDur(remainMs)} left
+                      <span style={{ color: "#999", fontWeight: 400 }}> ({fmtDur(elapsedMs)} elapsed{reconPlanned > 0 ? `, ${completed}/${reconPlanned}` : ""})</span>
+                    </span>
+                  );
+                })()}
               </div>
-              <div style={{ display: "flex", gap: 12 }}>
+              {/* flexWrap + flex-basis makes the two panels sit side-by-side on wide
+                  screens and stack on narrow (mobile) — no media query needed. */}
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                 {([
                   { title: "Folders", feed: folderFeed },
                   { title: "Group assignments", feed: assignFeed },
                 ] as const).map((panel) => (
-                  <div key={panel.title} style={{ flex: 1, minWidth: 0, border: "1px solid #e5e5e5", borderRadius: 4, overflow: "hidden" }}>
+                  <div key={panel.title} style={{ flex: "1 1 280px", minWidth: 0, border: "1px solid #e5e5e5", borderRadius: 4, overflow: "hidden" }}>
                     <div style={{ padding: "6px 10px", background: "#f7f7f7", fontSize: 12, fontWeight: 600, color: "#444", borderBottom: "1px solid #eee" }}>{panel.title}</div>
-                    <div style={{ maxHeight: 260, overflowY: "auto", padding: "4px 0" }}>
+                    {/* overflowX:auto lets the client slide left/right to read full paths;
+                        rows keep nowrap (no ellipsis clip) so the whole message is reachable. */}
+                    <div style={{ maxHeight: 260, overflowY: "auto", overflowX: "auto", padding: "4px 0" }}>
                       {panel.feed.length === 0 ? (
                         <div style={{ padding: "6px 10px", fontSize: 12, color: "#aaa" }}>—</div>
                       ) : (
                         panel.feed.map((it, i) => (
                           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 10px", fontSize: 12, color: it.status === "admin" ? "#b45309" : "#333" }}>
                             {progIcon(it.status)}
-                            <span style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{it.text}</span>
+                            <span style={{ whiteSpace: "nowrap" }}>{it.text}</span>
                           </div>
                         ))
                       )}
@@ -1484,16 +1556,43 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         </div>
       )}
 
-      {log.length > 0 && (
-        <div style={s.logBox}>
-          <p style={s.logTitle}>Log</p>
-          {log.map((entry, i) => (
-            <div key={i} style={{ fontSize: 12, color: entry.ok ? "#0f6c3f" : "#d13438", marginBottom: 4, wordBreak: "break-word" }}>
-              {entry.ok ? "✓" : "✗"} {entry.msg}
-            </div>
-          ))}
-        </div>
-      )}
+      {log.length > 0 && (() => {
+        // Split the log so the client sees clearly what succeeded vs what still needs
+        // action. "Needs attention" = failures and folders created without a group
+        // (the "no group-map groups (locked admin-only)" warnings + missing/failed grants).
+        const isAttention = (e: LogEntry): boolean =>
+          !e.ok || /no group-map groups|not found|FAILED|✗|⚠/.test(e.msg);
+        const attention = log.filter(isAttention);
+        const done = log.filter((e) => !isAttention(e));
+        return (
+          <div style={s.logBox}>
+            <p style={{ ...s.logTitle, color: "#0f6c3f" }}>
+              ✓ Completed — created &amp; assigned ({done.length})
+            </p>
+            {done.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#999", marginBottom: 6 }}>None yet.</div>
+            ) : (
+              done.map((entry, i) => (
+                <div key={i} style={{ fontSize: 12, color: "#0f6c3f", marginBottom: 4, wordBreak: "break-word" }}>
+                  ✓ {entry.msg}
+                </div>
+              ))
+            )}
+            <p style={{ ...s.logTitle, marginTop: 14, color: attention.length > 0 ? "#b45309" : "#0f6c3f" }}>
+              ⚠ Needs attention — created without a group / errors ({attention.length})
+            </p>
+            {attention.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#0f6c3f" }}>None — every folder got a group. 🎉</div>
+            ) : (
+              attention.map((entry, i) => (
+                <div key={i} style={{ fontSize: 12, color: entry.ok ? "#b45309" : "#d13438", marginBottom: 4, wordBreak: "break-word" }}>
+                  {entry.ok ? "⚠" : "✗"} {entry.msg}
+                </div>
+              ))
+            )}
+          </div>
+        );
+      })()}
 
       {toast && (
         <div style={{ ...s.toast, background: toast.error ? "#d13438" : "#0f6c3f" }}>

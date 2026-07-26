@@ -2,10 +2,10 @@
   "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/spfx-serve.schema.json",
   "port": 4321,
   "https": true,
-  "initialPage": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/_layouts/15/workbench.aspx",
+  "initialPage": "https://dcidigitalcom.sharepoint.com/sites/ClarenceDMSTesting/_layouts/15/workbench.aspx",
   "serveConfigurations": {
     "default": {
-      "pageUrl": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/_layouts/15/workbench.aspx"
+      "pageUrl": "https://dcidigitalcom.sharepoint.com/sites/ClarenceDMSTesting/_layouts/15/workbench.aspx"
     },
     "approvalDocument": {
       "pageUrl": "https://dcidigitalcom.sharepoint.com/sites/SPFX-Sandbox-Testing-Ground/SitePages/ApprovalDocument.aspx?itemId=1"

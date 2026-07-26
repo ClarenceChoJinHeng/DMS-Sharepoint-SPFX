@@ -117,6 +117,24 @@ export async function removeGroupMember(
   if (!res.ok) return fail("remove member", res);
 }
 
+/**
+ * Delete a site group entirely. DESTRUCTIVE: removes the group and every role
+ * assignment it holds across the site. The member users themselves are not
+ * deleted — only the group and its grants. Caller must confirm with the user first.
+ */
+export async function deleteSiteGroup(
+  sp: SPHttpClient,
+  siteUrl: string,
+  groupId: number,
+): Promise<void> {
+  const res = await sp.post(
+    `${siteUrl}/_api/web/sitegroups/removebyid(${groupId})`,
+    SPHttpClient.configurations.v1,
+    { headers: POST_HEADERS },
+  );
+  if (!res.ok) return fail("delete group", res);
+}
+
 /** Tenant-wide people search via SharePoint's own picker service — no Graph. */
 export async function searchTenantPeople(
   sp: SPHttpClient,

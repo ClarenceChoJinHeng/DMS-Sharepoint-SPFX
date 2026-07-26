@@ -15,6 +15,7 @@ import {
 import {
   searchSiteGroups,
   createSiteGroup,
+  deleteSiteGroup,
   getGroupMembers,
   addGroupMember,
   removeGroupMember,
@@ -44,6 +45,10 @@ const s: Record<string, React.CSSProperties> = {
   ddwrap:     { position: "relative" },
   dd:         { position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #c7c7c7", borderRadius: 4, maxHeight: 220, overflowY: "auto", boxShadow: "0 4px 12px rgba(0,0,0,.12)" },
   ddItem:     { padding: "7px 10px", cursor: "pointer", borderBottom: "1px solid #f0f0f0" },
+  ddCreate:   { color: "#0f6c3f", fontWeight: 600, borderBottom: "none", borderTop: "1px solid #e1e1e1", background: "#f6fbf8" },
+  createPanel:{ border: "1px solid #b7dcc4", borderRadius: 6, padding: 14, background: "#f3faf5" },
+  createHead: { fontWeight: 600, fontSize: 13, marginBottom: 2, color: "#0f6c3f" },
+  hint:       { fontSize: 11, color: "#666", marginTop: 8, lineHeight: 1.45 },
   roleRow:    { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 },
   roleBtn:    { padding: "5px 12px", fontSize: 12, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
   roleActive: { background: "#0f6c3f", color: "#fff", borderColor: "#0f6c3f" },
@@ -53,6 +58,11 @@ const s: Record<string, React.CSSProperties> = {
   preview:    { marginTop: 14, padding: "10px 12px", background: "#fff", border: "1px dashed #b7dcc4", borderRadius: 4, fontSize: 12 },
   addBtn:     { marginTop: 12, padding: "7px 18px", fontSize: 13, background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer" },
   addBtnOff:  { marginTop: 12, padding: "7px 18px", fontSize: 13, background: "#c7c7c7", color: "#fff", border: "none", borderRadius: 4, cursor: "not-allowed" },
+  // Same footprint as addBtn (padding + fontSize) so the two buttons match; ghost colours.
+  secondaryBtn:{ marginTop: 12, padding: "7px 18px", fontSize: 13, background: "#fff", color: "#242424", border: "1px solid #c7c7c7", borderRadius: 4, cursor: "pointer" },
+  req:        { color: "#a4262c", marginLeft: 2 },
+  missing:    { marginTop: 8, fontSize: 12, color: "#a4262c" },
+  dangerBox:  { marginTop: 8, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 4, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
   table:      { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 },
   th:         { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:         { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "top" },
@@ -85,6 +95,13 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // Inline group create
   const [creating, setCreating]   = useState(false);
   const [newName, setNewName]     = useState("");
+
+  // Delete-group confirmation (destructive — two-step).
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState(false);
+
+  // People staged to be added as members during a one-shot create (added after the
+  // group is created). Kept separate from the existing-group member editor.
+  const [stagedMembers, setStagedMembers] = useState<PersonPick[]>([]);
 
   // Member editor
   const [membersOpen, setMembersOpen]         = useState(false);
@@ -237,7 +254,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   useEffect(() => {
     const q = peopleQuery.trim();
-    if (!membersOpen || q.length < 2) { setPeopleResults([]); return; }
+    // Runs for BOTH the existing-group member editor (membersOpen) and the create
+    // panel's "add members" box (creating) — the two are never open at once.
+    if ((!membersOpen && !creating) || q.length < 2) { setPeopleResults([]); setPeopleSearching(false); return; }
     let cancelled = false;
     setPeopleSearching(true);
     const t = setTimeout(() => {
@@ -246,7 +265,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         .catch(() => { if (!cancelled) { setPeopleResults([]); setPeopleSearching(false); } });
     }, 350);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [peopleQuery, membersOpen]);
+  }, [peopleQuery, membersOpen, creating]);
 
   /* ── Selection handlers ────────────────────────────────────────────────── */
 
@@ -265,6 +284,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setQuery(g.displayName);
     setResults([]);
     setCreating(false);
+    setConfirmDeleteGroup(false);
     resetMemberState();
     // Pre-select the role implied by the name suffix (_UPL/_APR); admin can override.
     setRole(roleFromGroupName(g.displayName));
@@ -275,20 +295,65 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setQuery("");
     setResults([]);
     setCreating(false);
+    setConfirmDeleteGroup(false);
     resetMemberState();
+  };
+
+  // Delete the whole SharePoint group. Also removes any DMS Group Map rows that
+  // reference it, so no orphan mappings are left behind. Destructive — gated behind
+  // a two-step confirm in the UI.
+  const onDeleteGroup = async (): Promise<void> => {
+    if (!group) return;
+    setBusy(true);
+    try {
+      const gid = Number(group.id);
+      const name = group.displayName;
+      const rows = existing.filter((r) => Number(r.GroupId) === gid);
+      for (const r of rows) await deleteRow(r.itemId);
+      await deleteSiteGroup(context.spHttpClient, siteUrl, gid);
+      clearGroup();
+      setExisting(await loadExisting());
+      showToast(
+        `Group "${name}" deleted${rows.length ? ` (+${rows.length} mapping row(s))` : ""} — re-run Folder Reconciliation to refresh folder permissions.`,
+        false,
+      );
+    } catch (e) {
+      showToast(`Delete group failed: ${(e as Error).message}`, true);
+    } finally {
+      setBusy(false);
+    }
   };
 
   /* ── Inline group create ───────────────────────────────────────────────── */
 
   const startCreate = (): void => {
     setCreating(true);
+    setStagedMembers([]);
+    setPeopleQuery("");
+    setPeopleResults([]);
     setNewName(
       query.trim() ||
         suggestGroupName(mode?.label ?? "", chosen.map((t) => t.label), (role || "") as GroupMapRole | ""),
     );
   };
 
-  const cancelCreate = (): void => { setCreating(false); setNewName(""); };
+  const cancelCreate = (): void => {
+    setCreating(false);
+    setNewName("");
+    setStagedMembers([]);
+    setPeopleQuery("");
+    setPeopleResults([]);
+  };
+
+  // Stage / unstage a person to be added as a member when the group is created.
+  const stageMember = (p: PersonPick): void => {
+    setStagedMembers((prev) => prev.some((m) => m.loginName === p.loginName) ? prev : [...prev, p]);
+    setPeopleQuery("");
+    setPeopleResults([]);
+  };
+  const unstageMember = (loginName: string): void => {
+    setStagedMembers((prev) => prev.filter((m) => m.loginName !== loginName));
+  };
 
   // Warn (never block) when the typed name's suffix disagrees with the selected Role.
   const nameRoleMismatch = (): boolean => {
@@ -296,23 +361,72 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     return roleFromGroupName(newName) !== role;
   };
 
-  const onCreateGroup = async (): Promise<void> => {
+  // What the create panel still needs before its bottom button lights up. Mirrors
+  // validateDraft, but keyed on the typed name (the group doesn't exist yet).
+  const createErrors: string[] = [];
+  if (!newName.trim()) createErrors.push("Enter a group name.");
+  if (!role) createErrors.push("Select a role.");
+  if (role && role !== "GLOBAL") {
+    if (!mode) createErrors.push("Select a segment.");
+    if (!tierGuid) createErrors.push("Select a tier.");
+  }
+
+  // One-shot create: make the site group AND write its mapping row in a single
+  // action. Called from the create panel's bottom button, which is only enabled
+  // once the name + role + segment + tier are all chosen. On success we land on
+  // the freshly created group so the admin can add its members next.
+  const onCreateAndMap = async (): Promise<void> => {
     const title = newName.trim();
-    if (!title) return;
+    if (!title || createErrors.length > 0) return;
     setBusy(true);
     try {
       const created = await createSiteGroup(context.spHttpClient, siteUrl, title);
-      pickGroup({ id: String(created.id), displayName: created.title });
+      const newGroup = { id: String(created.id), displayName: created.title };
+      // The group now exists. If writing the mapping fails, roll it back so a failed
+      // "one shot" never leaves an orphan group behind (which would then collide with
+      // a retry as "already exists"). Keeps the action atomic.
+      try {
+        const row = buildGroupMapRow({
+          groupId: newGroup.id,
+          groupName: newGroup.displayName,
+          role: role as GroupMapRole,
+          segmentGuid: mode?.termSetGuid,
+          tierGuid,
+        });
+        await postRow(row);
+      } catch (mapErr) {
+        await deleteSiteGroup(context.spHttpClient, siteUrl, Number(newGroup.id)).catch(() => undefined);
+        throw mapErr;
+      }
+      setExisting(await loadExisting());
+      // Add any staged members now that the group exists. Failures are counted, not fatal.
+      let addedMembers = 0;
+      let failedMembers = 0;
+      for (const p of stagedMembers) {
+        try { await addGroupMember(context.spHttpClient, siteUrl, Number(newGroup.id), p.loginName); addedMembers++; }
+        catch { failedMembers++; }
+      }
+      const staged = stagedMembers.length;
+      // Land on the created + mapped group; clear the draft selections.
+      pickGroup(newGroup);
       setCreating(false);
       setNewName("");
-      showToast(`Group "${created.title}" created (no permissions yet — Reconciliation grants folder access).`, false);
+      setStagedMembers([]);
+      setRole(""); setMode(undefined); setCascade([]); setChosen([]); setTierGuid("");
+      const memberNote = staged === 0
+        ? " — add members below, then run Folder Reconciliation."
+        : failedMembers === 0
+          ? ` with ${addedMembers} member(s) — run Folder Reconciliation.`
+          : ` — ${addedMembers} member(s) added, ${failedMembers} failed. Run Folder Reconciliation.`;
+      showToast(`Group "${newGroup.displayName}" created & mapped${memberNote}`, failedMembers > 0);
     } catch (e) {
-      if ((e as Error).message === DUPLICATE_GROUP) {
-        showToast("A group with that name already exists — search for it and select it instead.", true);
-        setCreating(false);
-        setQuery(title); // re-runs the debounced search so the existing group appears
+      const msg = (e as Error).message;
+      if (msg === DUPLICATE_GROUP) {
+        showToast("A group with that name already exists — use Back to search and select it instead.", true);
+      } else if (msg.indexOf("does not exist") !== -1) {
+        showToast("Couldn't write the mapping: the 'DMS Group Map' list is missing. No group was created — create/rename that list, then try again.", true);
       } else {
-        showToast(`Create failed: ${(e as Error).message}`, true);
+        showToast(`Create failed: ${msg} — no group was left behind.`, true);
       }
     } finally {
       setBusy(false);
@@ -495,6 +609,62 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   /* ── Render ────────────────────────────────────────────────────────────── */
 
+  // Role + Segment + Tier selectors. Shared by both flows: rendered INSIDE the
+  // create panel (one-shot create) and below an already-picked group (add mapping).
+  const selectionFields = (
+    <>
+      <label style={s.label}>Role</label>
+      <div style={s.roleRow}>
+        {ROLES.map((r) => (
+          <button
+            key={r}
+            disabled={busy}
+            style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}) }}
+            onClick={() => pickRole(r)}
+          >
+            {r}
+          </button>
+        ))}
+      </div>
+
+      {role && role !== "GLOBAL" && (
+        <>
+          <label style={s.label}>Segment <span style={s.req}>*</span></label>
+          <select
+            style={s.select}
+            disabled={busy}
+            value={mode?.termSetGuid ?? ""}
+            onChange={(e) => { pickMode(e.target.value).catch(() => undefined); }}
+          >
+            <option value="">— select a segment —</option>
+            {modes.map((m) => <option key={m.termSetGuid} value={m.termSetGuid}>{m.label}</option>)}
+          </select>
+
+          {mode && (
+            <>
+              <label style={s.label}>Tier (where this group applies) <span style={s.req}>*</span></label>
+              {cascade.map((opts, i) => (
+                <select
+                  key={i}
+                  style={{ ...s.select, marginBottom: 6 }}
+                  disabled={busy}
+                  value={chosen[i]?.id ?? ""}
+                  onChange={(e) => { pickTerm(i, e.target.value).catch(() => undefined); }}
+                >
+                  <option value="">— select —</option>
+                  {opts.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+                </select>
+              ))}
+              <button style={s.seglvl} disabled={busy} onClick={assignAtSegment}>
+                Assign at segment level (whole {mode.label})
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+
   return (
     <div style={s.wrap}>
       <p style={s.intro}>
@@ -521,9 +691,28 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               {group.displayName}
               <button style={s.chipX} disabled={busy} title="Change" onClick={clearGroup}>✕</button>
             </span>
-            <button style={s.seglvl} disabled={busy} onClick={toggleMembers}>
+            <button style={{ ...s.seglvl, marginLeft: 14 }} disabled={busy} onClick={toggleMembers}>
               {members === undefined ? "members" : `${members.length} member(s)`} {membersOpen ? "▴" : "▾"}
             </button>
+            {canManage === true && (
+              confirmDeleteGroup ? (
+                <div style={s.dangerBox}>
+                  <span>
+                    ⚠ Permanently delete the SharePoint group <strong>{group.displayName}</strong>? This
+                    removes the group and any of its DMS Group Map rows and folder permissions across the
+                    site. Its <em>members</em> (the users) are not deleted. This cannot be undone.
+                  </span>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                    <button style={s.delBtn} disabled={busy} onClick={() => { onDeleteGroup().catch(() => undefined); }}>Yes, delete group</button>
+                    <button style={s.ghost} disabled={busy} onClick={() => setConfirmDeleteGroup(false)}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button style={{ ...s.seglvl, marginLeft: 14, color: "#a4262c", textDecoration: "underline" }} disabled={busy} onClick={() => setConfirmDeleteGroup(true)}>
+                  delete group
+                </button>
+              )
+            )}
             {membersOpen && (
               <div style={{ ...s.preview, borderStyle: "solid", marginTop: 8 }}>
                 {members === undefined && <div>Loading members…</div>}
@@ -551,7 +740,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                       disabled={memberBusy}
                       onChange={(e) => setPeopleQuery(e.target.value)}
                     />
-                    {(peopleSearching || peopleResults.length > 0) && (
+                    {peopleQuery.trim().length >= 2 && (
                       <div style={s.dd}>
                         {peopleSearching && <div style={s.ddItem}>Searching…</div>}
                         {!peopleSearching && peopleResults.map((p) => (
@@ -559,6 +748,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                             {p.displayName} <span style={s.mono}>{p.email}</span>
                           </div>
                         ))}
+                        {!peopleSearching && peopleResults.length === 0 && (
+                          <div style={{ ...s.ddItem, color: "#666" }}>No matching people.</div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -566,7 +758,87 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               </div>
             )}
           </>
+        ) : creating ? (
+          /* Create mode — one shot. Name + role + segment + tier all live in this
+             panel, with a single button at the bottom that creates the group AND
+             writes its mapping. Search box/dropdown are not rendered, so there is
+             never a duplicate name field. */
+          <div style={s.createPanel}>
+            <div style={s.createHead}>Create a new group</div>
+            <label style={s.label}>New group name</label>
+            <input
+              style={s.input}
+              value={newName}
+              disabled={busy}
+              autoFocus
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="e.g. DMS_GHO_Finance_UPL"
+            />
+            {nameRoleMismatch() && (
+              <div style={{ fontSize: 12, color: "#a4262c", marginTop: 4 }}>
+                Warning: the name suffix doesn&rsquo;t match the selected role ({role}). You can still create it.
+              </div>
+            )}
+
+            {/* Role + Segment + Tier — chosen here, above the button. */}
+            {selectionFields}
+
+            {/* Members (optional) — staged now, added when the group is created. */}
+            <label style={s.label}>Members (optional)</label>
+            {stagedMembers.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                {stagedMembers.map((p) => (
+                  <span key={p.loginName} style={s.pickedChip}>
+                    {p.displayName}
+                    <button style={s.chipX} disabled={busy} title="Remove" onClick={() => unstageMember(p.loginName)}>✕</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={s.ddwrap}>
+              <input
+                style={s.input}
+                placeholder="Search people in the tenant to add…"
+                value={peopleQuery}
+                disabled={busy}
+                onChange={(e) => setPeopleQuery(e.target.value)}
+              />
+              {peopleQuery.trim().length >= 2 && (
+                <div style={s.dd}>
+                  {peopleSearching && <div style={s.ddItem}>Searching…</div>}
+                  {!peopleSearching && peopleResults.map((p) => (
+                    <div key={p.loginName} style={s.ddItem} onClick={() => stageMember(p)}>
+                      {p.displayName} <span style={s.mono}>{p.email}</span>
+                    </div>
+                  ))}
+                  {!peopleSearching && peopleResults.length === 0 && (
+                    <div style={{ ...s.ddItem, color: "#666" }}>No matching people.</div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {createErrors.length > 0 && (
+              <div style={s.missing}>Before creating: {createErrors.join(" ")}</div>
+            )}
+            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+              <button
+                style={createErrors.length === 0 && !busy ? s.addBtn : s.addBtnOff}
+                disabled={createErrors.length > 0 || busy}
+                onClick={() => { onCreateAndMap().catch(() => undefined); }}
+              >
+                Create group &amp; add mapping
+              </button>
+              <button style={s.secondaryBtn} disabled={busy} onClick={cancelCreate}>Back to search</button>
+            </div>
+            <div style={s.hint}>
+              Creates the native SharePoint group, its mapping, and any members above — all in
+              one step. It gets no permissions until you run Folder Reconciliation.
+            </div>
+          </div>
         ) : (
+          /* Search mode — search box + results dropdown. "Create a new group" is
+             an action inside the dropdown that switches to create mode. */
           <div style={s.ddwrap}>
             <input
               style={s.input}
@@ -585,104 +857,38 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                   <div style={{ ...s.ddItem, color: "#666" }}>No matching group.</div>
                 )}
                 {!searching && canManage === true && (
-                  <div style={{ ...s.ddItem, color: "#0f6c3f", fontWeight: 600 }} onClick={startCreate}>
-                    ➕ Create a new group…
+                  <div style={{ ...s.ddItem, ...s.ddCreate }} onClick={startCreate}>
+                    ➕ Create a new group{query.trim() ? ` “${query.trim()}”` : ""}…
                   </div>
                 )}
-              </div>
-            )}
-            {creating && (
-              <div style={{ marginTop: 8 }}>
-                <input
-                  style={s.input}
-                  value={newName}
-                  disabled={busy}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="New group name"
-                />
-                {nameRoleMismatch() && (
-                  <div style={{ fontSize: 12, color: "#a4262c", marginTop: 4 }}>
-                    Warning: the name suffix doesn&rsquo;t match the selected role ({role}). You can still create it.
-                  </div>
-                )}
-                <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                  <button
-                    style={newName.trim() && !busy ? s.addBtn : s.addBtnOff}
-                    disabled={!newName.trim() || busy}
-                    onClick={() => { onCreateGroup().catch(() => undefined); }}
-                  >
-                    Create group
-                  </button>
-                  <button style={s.ghost} disabled={busy} onClick={cancelCreate}>Cancel</button>
-                </div>
               </div>
             )}
           </div>
         )}
 
-        {/* Role */}
-        <label style={s.label}>Role</label>
-        <div style={s.roleRow}>
-          {ROLES.map((r) => (
-            <button
-              key={r}
-              disabled={busy}
-              style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}) }}
-              onClick={() => pickRole(r)}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
-
-        {/* Segment + cascade (hidden for GLOBAL) */}
-        {role && role !== "GLOBAL" && (
+        {/* Existing-group flow: for a group picked via search, choose role/segment/
+            tier and Add mapping. Hidden during create — the panel above owns that. */}
+        {!creating && (
           <>
-            <label style={s.label}>Segment</label>
-            <select
-              style={s.select}
-              disabled={busy}
-              value={mode?.termSetGuid ?? ""}
-              onChange={(e) => { pickMode(e.target.value).catch(() => undefined); }}
-            >
-              <option value="">— select a segment —</option>
-              {modes.map((m) => <option key={m.termSetGuid} value={m.termSetGuid}>{m.label}</option>)}
-            </select>
+            {selectionFields}
 
-            {mode && (
-              <>
-                <label style={s.label}>Tier (where this group applies)</label>
-                {cascade.map((opts, i) => (
-                  <select
-                    key={i}
-                    style={{ ...s.select, marginBottom: 6 }}
-                    disabled={busy}
-                    value={chosen[i]?.id ?? ""}
-                    onChange={(e) => { pickTerm(i, e.target.value).catch(() => undefined); }}
-                  >
-                    <option value="">— select —</option>
-                    {opts.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
-                  </select>
-                ))}
-                <button style={s.seglvl} disabled={busy} onClick={assignAtSegment}>
-                  Assign at segment level (whole {mode.label})
-                </button>
-              </>
+            {/* Preview */}
+            {group && role && (
+              <div style={s.preview}>
+                <strong>Will write:</strong> {group.displayName} · <em>{role}</em>
+                {role !== "GLOBAL" && <> · segment <strong>{mode?.label ?? "(none)"}</strong> · tier <strong>{tierLabel()}</strong></>}
+              </div>
             )}
+
+            {group && role && draftErrors.length > 0 && (
+              <div style={s.missing}>Before adding: {draftErrors.join(" ")}</div>
+            )}
+
+            <button style={canAdd ? s.addBtn : s.addBtnOff} disabled={!canAdd} onClick={() => { onAdd().catch(() => undefined); }}>
+              Add mapping
+            </button>
           </>
         )}
-
-        {/* Preview */}
-        {group && role && (
-          <div style={s.preview}>
-            <strong>Will write:</strong> {group.displayName} · <em>{role}</em>
-            {role !== "GLOBAL" && <> · segment <strong>{mode?.label ?? "(none)"}</strong> · tier <strong>{tierLabel()}</strong></>}
-          </div>
-        )}
-
-        <button style={canAdd ? s.addBtn : s.addBtnOff} disabled={!canAdd} onClick={() => { onAdd().catch(() => undefined); }}>
-          Add mapping
-        </button>
       </div>
 
       {/* Existing rows */}

@@ -1817,6 +1817,28 @@ export default function BulkUpload({
                   ),
                 )}
 
+                {/* Graceful empty-state: a segment whose term set has no child terms
+                    yet (non-GHO Head Offices before their trees are added) would show a
+                    dead "--" dropdown. Name the missing level instead. */}
+                {(() => {
+                  const md = activeMode();
+                  if (!md || md.levels.length === 0 || deptLoading || levelChoices.length === 0) return null;
+                  for (let i = 0; i < md.levels.length; i++) {
+                    const parentChosen = i === 0 || !!levelValues[i - 1];
+                    if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
+                      return (
+                        <div
+                          key="dms-empty-level"
+                          style={{ gridColumn: "1 / -1", padding: "8px 12px", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, fontSize: 13, color: "#7a5b00" }}
+                        >
+                          No {md.levels[i].label.toLowerCase()} options are configured for this segment yet — ask your administrator to add them in the term store before uploading here.
+                        </div>
+                      );
+                    }
+                  }
+                  return null;
+                })()}
+
                 {renderSelect(
                   "Year / Period",
                   true,
