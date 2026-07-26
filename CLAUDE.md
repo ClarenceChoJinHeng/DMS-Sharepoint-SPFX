@@ -9,8 +9,14 @@ Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 - **Client:** SD Guthrie (SDG) | **Agency:** Trinergy Digital | **Dev:** Clarence (Junior Digital Developer)
 - **Type:** SPFx 1.23.0 React web part — Document Management System upload form
 - **Project folder:** `C:\laragon\www\Work\Projects\sd-gatrie`
-- **Tenant:** `dcidigitalcom.sharepoint.com` | **Site:** `/sites/SPFX-Sandbox-Testing-Ground`
+- **Tenant:** `dcidigitalcom.sharepoint.com` | **Site:** `/sites/ClarenceDMSTesting` (rebuilding here
+  after being locked out of the old `/sites/SPFX-Sandbox-Testing-Ground`; serve.json still points at
+  the old sandbox)
 - **Staging library:** `Staging`
+- **Single-site DMS** — the cross-site/multi-site model was retired 2026-07-26 (a new site draws from
+  the same tenant storage quota → no space saved). Package is **Graph-free** (Share Guard retired).
+  See memories `dms-single-site-decision`, specs `2026-07-26-cross-site-upload-retirement.md` +
+  `2026-07-23-share-guard-retirement.md`.
 
 ## Dev Commands
 ```
@@ -43,32 +49,39 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   `BulkUpload.tsx`, `RECON_MODES` in `FolderManager.tsx`. DMS Config `mode` rows are the
   runtime source of truth — the 3 new rows still need creating. 2027 segments need new level
   columns first (see the spec + `2026-07-21-segment-onboarding-plan.md`).
-- **User path auto-detection:** the form reads the user's Entra group Object IDs via Graph
-  `/me/memberOf`, matched against the **`DMS Group Map`** list (`GroupId`, `Segment`, `UnitTermGuid`,
-  `Role`). Names are cosmetic — matching is by Object ID (so existing `SDG-*` groups are reused
-  without renaming). Only unit-level rows are needed; the form walks the term ancestry
-  (`loadTermPath`) to reconstruct Segment→Dept→Unit from just the unit term GUID.
+- **User path auto-detection:** the form reads the user's **SharePoint group** memberships via SP
+  REST (`spGroups.ts`, `/_api/web/...` — **no Graph, no admin consent**; Graph was fully retired in
+  the native-SP-groups refactor), matched against the **`DMS Group Map`** list (`GroupId` = SP group
+  **integer** id, `Segment`, `UnitTermGuid`, `Role`). Only unit-level rows are needed; the form walks
+  the term ancestry (`loadTermPath`) to reconstruct Segment→Dept→Unit from just the unit term GUID.
+  See memory `dms-group-model-per-role-per-library`.
 - **Folder routing:** the deepest (leaf) level = the permissioned **Unit** folder, resolved by
   UniqueId via DMS Folder Map. `Year` + `Document Type` subfolders are **ensure-created on demand**
   under the Unit folder and inherit its ACL.
 
-> ⚠ **PENDING PIVOT (2026-07-26):** the GUIDs below are **tenant** (admin-center) term sets. The
-> client wants to move to a **site-collection–local term store** (security — no admin-center access).
-> If adopted, ALL these GUIDs change and become per-site — do not trust them as fact. Not yet verified
-> or implemented. See memory `dms-term-store-site-collection-pivot`.
+> ✅ **TERM STORE — RESOLVED (2026-07-27):** managed **in-site**, no admin center. Client refuses
+> tenant term-store access, so the sets were rebuilt in a **site-collection-local `DMS` group** on
+> the test site **`/sites/ClarenceDMSTesting`** (managed as Site Collection Admin; Contributor on a
+> group is the alternative). **GUIDs are per-site** — those below are ClarenceDMSTesting's, verified
+> via the `/_api/v2.1/termStore/sets/{guid}/terms` read path. Code fallbacks
+> (`DEFAULT_MODES`/`DEFAULT_SETTINGS`, `RECON_MODES`) already rewired; **DMS Config must carry these
+> too** (setting rows `termSet_*` + mode rows' `TermSetGuid`). See spec
+> `2026-07-26-in-site-term-store-management-design.md` + memory `dms-term-store-site-collection-pivot`.
 ```
-documentType:    0540e66e-7cb3-47ac-b0ef-4e3069387394
-yearPeriod:      f7c578a1-e0e5-42ff-9e0c-d748cba42ede
-confidentiality: 032534ab-9285-4b42-98c6-5c7b0df1f066
-vendor:          cb3c0ab7-a959-4200-9b7b-d1e13397d240
-Group Head Office (business-segment set): efa87c6a-9536-4f7c-910f-011bf7413b80
-  Structure: Set → Department terms (e.g. Group Legal, Risk & Compliance) → Unit terms
-  (Group Compliance/GCO, Group Risk, Group Legal). Levels = [Department, Unit].
-Upstream Malaysia Head Office: 5ab1c7c4-78d2-43b4-869f-3eab4b1c375c  <- created as "Upstream
-  Head Office" — rename in term store to match client list
-Minamas Head Office:           6ba9a64c-a363-48fd-afd1-324897df781c
-NBPOL Head Office:             21d7e6fe-8f71-4a56-bd2e-e4a2176995a7
-  (all 3 same structure/Levels as GHO; Department/Unit terms pending client trees)
+documentType:    866c5754-258e-401f-8685-03d20ae59b1d
+yearPeriod:      023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf
+confidentiality: 0d6d1da8-27e5-477f-8684-e8cf169f8fb9
+vendor:          eaafd0e5-03fd-4d33-b1b1-e4252bec430a
+Group Head Office (business-segment set): df4b9afa-d3b9-4c04-9097-50dcaf5d8036
+  Structure: Set → Department → Unit. Verified 14 terms: Group Finance [9 units],
+  "Group Legal, Risk ＆ Compliance" [3 units]. Ampersands are FULLWIDTH ＆ (SharePoint requirement).
+  Levels = [Department, Unit]. Rebuilt via CSV import — see docs/term-store-import/.
+Upstream Malaysia Head Office: 16a52947-57a3-4217-9a49-b48cb8b0dd31
+Minamas Head Office:           c6b26d32-1c3e-441f-b4ea-78f053e12990
+NBPOL Head Office:             303f2c38-086a-46ba-8ee0-85445f6bfa3a
+  (same structure/Levels as GHO; own Department/Unit trees pending client — currently share GHO's
+  terms via isAvailableForTagging). Old tenant GUIDs (0540e66e/f7c578a1/032534ab/cb3c0ab7/efa87c6a/
+  5ab1c7c4/6ba9a64c/21d7e6fe) are RETIRED for this site.
 ```
 > The old single `department` term set (`eaba82e5-…`) and the `project` term set
 > (`94ce322b-…`, lookupStyle "parentMatch") are **retired** by the multi-segment model.
