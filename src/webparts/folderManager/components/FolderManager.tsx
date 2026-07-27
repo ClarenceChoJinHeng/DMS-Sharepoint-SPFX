@@ -63,13 +63,17 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Throttle-safety tuning for reconciliation (tunable; could move to DMS Config).
-// Grid is created sequentially now (not in parallel) — that parallel burst was what
-// tripped SharePoint's 429 throttle. A short delay between writes + an automatic
-// cooldown every N ops keeps a large run under the limit.
-const RECON_WRITE_DELAY_MS = 500;    // pause between folder/permission writes
-const RECON_BATCH_SIZE      = 150;   // writes before an automatic cooldown
-const RECON_COOLDOWN_MS     = 4000;  // cooldown length (masked in the UI as "work")
+// Throttle-safety tuning for reconciliation. These are the DEFAULTS/fallbacks —
+// they can be overridden live via DMS Config `setting` rows (recon_writeDelayMs /
+// recon_batchSize / recon_cooldownMs) so the client can tune speed without a redeploy.
+// withThrottleRetry() is the safety net: any write that still hits a 429/503 backs
+// off and retries, so a shorter delay is safe — an occasional throttle self-heals.
+// Lower delay = faster; too low risks 429s whose Retry-After penalty can be large,
+// so ~150ms is a sensible aggressive floor. Grid is sequential (the old parallel
+// burst was what tripped the throttle originally).
+const RECON_WRITE_DELAY_MS = 200;    // pause between folder/permission writes (was 500)
+const RECON_BATCH_SIZE      = 300;   // writes before an automatic cooldown (was 150)
+const RECON_COOLDOWN_MS     = 2500;  // cooldown length, masked in the UI as "work" (was 4000)
 const RECON_EST_HTTP_MS     = 250;   // rough per-write network+server time, on top of the delay
                                      // (used only for the up-front estimate before a live rate exists)
 
@@ -906,6 +910,38 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     }
   };
 
+  // Reconciliation speed knobs, tunable live from DMS Config `setting` rows without a
+  // redeploy: recon_writeDelayMs / recon_batchSize / recon_cooldownMs. Falls back to
+  // the module defaults. Lets the client dial the delay down to find their tenant's
+  // throttle floor (withThrottleRetry catches any 429 that slips through).
+  const loadReconThrottle = async (): Promise<{ delayMs: number; batchSize: number; cooldownMs: number }> => {
+    const fallback = { delayMs: RECON_WRITE_DELAY_MS, batchSize: RECON_BATCH_SIZE, cooldownMs: RECON_COOLDOWN_MS };
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return fallback;
+      const data = await res.json();
+      const map: Record<string, string> = {};
+      ((data.value ?? []) as Array<{ Title: string; SettingValue: string }>).forEach(
+        (item) => { map[item.Title] = (item.SettingValue ?? "").trim(); },
+      );
+      const num = (v: string | undefined, d: number): number => {
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? n : d;
+      };
+      return {
+        delayMs: num(map.recon_writeDelayMs, fallback.delayMs),
+        batchSize: num(map.recon_batchSize, fallback.batchSize),
+        cooldownMs: num(map.recon_cooldownMs, fallback.cooldownMs),
+      };
+    } catch {
+      return fallback;
+    }
+  };
+
   // Flatten the term store into the folders to provision, parent-before-child so a
   // parent always exists before we create its child. The segment container folder
   // (mode.stagingFolder) has no term; every term below it carries its GUID.
@@ -967,15 +1003,18 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const entries: LogEntry[] = [];
     // Throttle governor: pause between writes, and auto-cooldown every N writes. The
     // cooldown is invisible — the spinner keeps running and the status text rotates so
-    // it reads as continuous work (no user click needed to resume).
+    // it reads as continuous work (no user click needed to resume). Speed knobs come
+    // from DMS Config (recon_writeDelayMs / recon_batchSize / recon_cooldownMs) so the
+    // client can tune without a redeploy; withThrottleRetry catches any 429 that slips.
+    const throttle = await loadReconThrottle();
     let opCount = 0;
     const tick = async (): Promise<void> => {
       opCount++;
-      await sleep(RECON_WRITE_DELAY_MS);
-      if (opCount % RECON_BATCH_SIZE === 0) {
+      await sleep(throttle.delayMs);
+      if (opCount % throttle.batchSize === 0) {
         for (const msg of COOLDOWN_MESSAGES) {
           setReconPhase(msg);
-          await sleep(RECON_COOLDOWN_MS / COOLDOWN_MESSAGES.length);
+          await sleep(throttle.cooldownMs / COOLDOWN_MESSAGES.length);
         }
         setReconPhase("Generating folders…");
       }
@@ -1542,7 +1581,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         </>
       )}
 
-      {tab !== "Reconciliation" && (
+      {tab !== "Reconciliation" && tab !== "GroupMap" && (
         <div style={s.actions}>
           <button onClick={() => loadTree().catch(() => undefined)} disabled={busy || loading}
             style={{ ...s.btn, marginRight: "auto", background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>

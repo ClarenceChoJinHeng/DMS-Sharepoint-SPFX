@@ -63,6 +63,11 @@ const s: Record<string, React.CSSProperties> = {
   req:        { color: "#a4262c", marginLeft: 2 },
   missing:    { marginTop: 8, fontSize: 12, color: "#a4262c" },
   dangerBox:  { marginTop: 8, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 4, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
+  modalOverlay:{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 16 },
+  modalBox:   { background: "#fff", borderRadius: 8, width: "100%", maxWidth: 480, maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 8px 30px rgba(0,0,0,.25)" },
+  modalHead:  { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid #eee", fontWeight: 600, fontSize: 14 },
+  modalBody:  { padding: "12px 16px", overflowY: "auto" },
+  modalFoot:  { padding: "10px 16px", borderTop: "1px solid #eee", display: "flex", justifyContent: "flex-end" },
   table:      { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 },
   th:         { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:         { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "top" },
@@ -70,6 +75,7 @@ const s: Record<string, React.CSSProperties> = {
   ghost:      { padding: "3px 10px", fontSize: 12, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
   toast:      { position: "fixed", bottom: 20, right: 20, padding: "10px 16px", borderRadius: 6, color: "#fff", fontSize: 13, zIndex: 50, boxShadow: "0 4px 14px rgba(0,0,0,.18)" },
   mono:       { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666" },
+  staleBadge: { display: "inline-block", marginLeft: 8, padding: "1px 7px", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3", borderRadius: 10, verticalAlign: "middle" },
 };
 
 export default function GroupMapBuilder({ context, siteUrl }: Props): React.ReactElement {
@@ -102,6 +108,20 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // People staged to be added as members during a one-shot create (added after the
   // group is created). Kept separate from the existing-group member editor.
   const [stagedMembers, setStagedMembers] = useState<PersonPick[]>([]);
+
+  // Cache of tier term GUID -> label, so the Existing mappings table shows the unit
+  // name instead of a raw GUID. Populated lazily as rows load.
+  const [tierLabels, setTierLabels] = useState<Record<string, string>>({});
+
+  // Member-management modal (opened from an existing-mapping row). Self-contained so
+  // it never touches the add-mapping form's segment/tier/role state.
+  const [memberModal, setMemberModal]       = useState<GroupPick | null>(null);
+  const [mmMembers, setMmMembers]           = useState<SpGroupMember[] | undefined>(undefined);
+  const [mmBusy, setMmBusy]                 = useState(false);
+  const [mmQuery, setMmQuery]               = useState("");
+  const [mmResults, setMmResults]           = useState<PersonPick[]>([]);
+  const [mmSearching, setMmSearching]       = useState(false);
+  const [mmConfirmRemove, setMmConfirmRemove] = useState<number | undefined>(undefined);
 
   // Member editor
   const [membersOpen, setMembersOpen]         = useState(false);
@@ -225,6 +245,36 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     return ((own.value ?? []) as unknown[]).length > 0;
   };
 
+  // Resolve tier term GUIDs to labels for the Existing mappings table (raw GUIDs are
+  // meaningless to the client). One read per distinct unit term; cached.
+  const loadTierLabels = async (rows: ExistingRow[]): Promise<void> => {
+    // Dedupe to distinct, not-yet-resolved unit terms up front so the async loop never
+    // re-reads its own accumulator across an await (avoids a race-condition lint error).
+    const seen = new Set<string>();
+    const need = rows.filter((r) => {
+      if (!r.UnitTermGuid || !r.Segment || r.UnitTermGuid === r.Segment) return false;
+      if (tierLabels[r.UnitTermGuid] || seen.has(r.UnitTermGuid)) return false;
+      seen.add(r.UnitTermGuid);
+      return true;
+    });
+    const map: Record<string, string> = {};
+    for (const r of need) {
+      try {
+        const res: SPHttpClientResponse = await context.spHttpClient.get(
+          `${siteUrl}/_api/v2.1/termStore/sets/${r.Segment}/terms/${r.UnitTermGuid}?$select=labels`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json" } },
+        );
+        if (res.ok) {
+          const d = await res.json();
+          const nm = (d.labels ?? [])[0]?.name as string | undefined;
+          if (nm) map[r.UnitTermGuid] = nm;
+        }
+      } catch { /* leave as GUID */ }
+    }
+    if (Object.keys(map).length) setTierLabels((prev) => ({ ...prev, ...map }));
+  };
+
   /* ── Mount ─────────────────────────────────────────────────────────────── */
 
   useEffect(() => {
@@ -232,6 +282,11 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     loadExisting().then(setExisting).catch(() => setExisting([]));
     loadCanManage().then(setCanManage).catch(() => setCanManage(false));
   }, []);
+
+  // Whenever the mappings change, resolve any new tier labels.
+  useEffect(() => {
+    if (existing.length) loadTierLabels(existing).catch(() => undefined);
+  }, [existing]);
 
   /* ── Group search (debounced) ──────────────────────────────────────────── */
 
@@ -266,6 +321,20 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     }, 350);
     return () => { cancelled = true; clearTimeout(t); };
   }, [peopleQuery, membersOpen, creating]);
+
+  // People search for the member modal (debounced).
+  useEffect(() => {
+    const q = mmQuery.trim();
+    if (!memberModal || q.length < 2) { setMmResults([]); setMmSearching(false); return; }
+    let cancelled = false;
+    setMmSearching(true);
+    const t = setTimeout(() => {
+      searchTenantPeople(context.spHttpClient, siteUrl, q)
+        .then((r) => { if (!cancelled) { setMmResults(r); setMmSearching(false); } })
+        .catch(() => { if (!cancelled) { setMmResults([]); setMmSearching(false); } });
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [mmQuery, memberModal]);
 
   /* ── Selection handlers ────────────────────────────────────────────────── */
 
@@ -321,6 +390,59 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       showToast(`Delete group failed: ${(e as Error).message}`, true);
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Member management modal — fully separate from the add-mapping form, so editing a
+  // group's members never disturbs the segment/tier/role selections below.
+  const openMemberModal = (r: ExistingRow): void => {
+    const g = { id: r.GroupId, displayName: r.GroupName || r.GroupId };
+    setMemberModal(g);
+    setMmMembers(undefined);
+    setMmQuery("");
+    setMmResults([]);
+    setMmConfirmRemove(undefined);
+    getGroupMembers(context.spHttpClient, siteUrl, Number(g.id))
+      .then(setMmMembers)
+      .catch(() => { setMmMembers([]); showToast("Could not load members.", true); });
+  };
+  const closeMemberModal = (): void => {
+    setMemberModal(null);
+    setMmMembers(undefined);
+    setMmQuery("");
+    setMmResults([]);
+    setMmConfirmRemove(undefined);
+  };
+  const reloadMm = async (): Promise<void> => {
+    if (memberModal) setMmMembers(await getGroupMembers(context.spHttpClient, siteUrl, Number(memberModal.id)));
+  };
+  const mmAdd = async (p: PersonPick): Promise<void> => {
+    if (!memberModal) return;
+    setMmBusy(true);
+    try {
+      await addGroupMember(context.spHttpClient, siteUrl, Number(memberModal.id), p.loginName);
+      await reloadMm();
+      setMmQuery("");
+      setMmResults([]);
+      showToast(`${p.displayName} added — access is immediate.`, false);
+    } catch (e) {
+      showToast(`Add member failed: ${(e as Error).message}`, true);
+    } finally {
+      setMmBusy(false);
+    }
+  };
+  const mmRemove = async (userId: number): Promise<void> => {
+    if (!memberModal) return;
+    setMmBusy(true);
+    try {
+      await removeGroupMember(context.spHttpClient, siteUrl, Number(memberModal.id), userId);
+      await reloadMm();
+      setMmConfirmRemove(undefined);
+      showToast("Member removed — access revoked immediately.", false);
+    } catch (e) {
+      showToast(`Remove failed: ${(e as Error).message}`, true);
+    } finally {
+      setMmBusy(false);
     }
   };
 
@@ -407,18 +529,19 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         catch { failedMembers++; }
       }
       const staged = stagedMembers.length;
-      // Land on the created + mapped group; clear the draft selections.
-      pickGroup(newGroup);
-      setCreating(false);
+      const createdName = newGroup.displayName;
+      // Reset the whole form back to the default (empty search) state so the admin can
+      // immediately create another group — no leftover group/role/segment selections.
+      clearGroup();
       setNewName("");
       setStagedMembers([]);
       setRole(""); setMode(undefined); setCascade([]); setChosen([]); setTierGuid("");
       const memberNote = staged === 0
-        ? " — add members below, then run Folder Reconciliation."
+        ? " — edit members from its row, then run Folder Reconciliation."
         : failedMembers === 0
           ? ` with ${addedMembers} member(s) — run Folder Reconciliation.`
           : ` — ${addedMembers} member(s) added, ${failedMembers} failed. Run Folder Reconciliation.`;
-      showToast(`Group "${newGroup.displayName}" created & mapped${memberNote}`, failedMembers > 0);
+      showToast(`Group "${createdName}" created & mapped${memberNote}`, failedMembers > 0);
     } catch (e) {
       const msg = (e as Error).message;
       if (msg === DUPLICATE_GROUP) {
@@ -509,13 +632,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setCascade(newCascade);
   };
 
-  const assignAtSegment = (): void => {
-    if (!mode) return;
-    setChosen([]);
-    setTierGuid(mode.termSetGuid);
-    setCascade((c) => c.slice(0, 1)); // keep top-level options for re-pick
-  };
-
   /* ── Derived ───────────────────────────────────────────────────────────── */
 
   const draft: GroupMapDraft = {
@@ -540,6 +656,13 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     const m = modes.find((x) => x.termSetGuid === guid);
     return m ? m.label : guid;
   };
+
+  // A mapping is stale when its Segment GUID no longer matches any current mode — e.g.
+  // the term set was recreated (new GUID) or deleted. Such a row won't reconcile and
+  // should be deleted + recreated. (Only meaningful once modes have loaded; GLOBAL rows
+  // carry no segment and are never stale.)
+  const isStaleRow = (r: ExistingRow): boolean =>
+    modes.length > 0 && !!r.Segment && !modes.some((m) => m.termSetGuid === r.Segment);
 
   const onAdd = async (): Promise<void> => {
     const row = buildGroupMapRow(draft);
@@ -655,9 +778,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                   {opts.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                 </select>
               ))}
-              <button style={s.seglvl} disabled={busy} onClick={assignAtSegment}>
-                Assign at segment level (whole {mode.label})
-              </button>
             </>
           )}
         </>
@@ -930,10 +1050,19 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               <td style={s.td}>
                 <input type="checkbox" checked={selected.has(r.itemId)} disabled={busy} onChange={() => toggleSel(r.itemId)} />
               </td>
-              <td style={s.td}>{r.GroupName || <span style={s.mono}>{r.GroupId}</span>}</td>
+              <td style={s.td}>
+                {r.GroupName || <span style={s.mono}>{r.GroupId}</span>}
+                {isStaleRow(r) && (
+                  <span style={s.staleBadge} title="This mapping points at a term set/term that no longer exists (likely recreated with a new GUID). Delete it and recreate the mapping, then re-run Folder Reconciliation.">stale</span>
+                )}
+              </td>
               <td style={s.td}>{r.Segment ? segmentLabelFor(r.Segment) : "—"}</td>
               <td style={s.td}>
-                {!r.UnitTermGuid ? "—" : r.UnitTermGuid === r.Segment ? "(segment level)" : <span style={s.mono}>{r.UnitTermGuid}</span>}
+                {!r.UnitTermGuid
+                  ? "—"
+                  : r.UnitTermGuid === r.Segment
+                    ? "(segment level)"
+                    : tierLabels[r.UnitTermGuid] ?? <span style={s.mono}>{r.UnitTermGuid}</span>}
               </td>
               <td style={s.td}>{r.Role}</td>
               <td style={s.td}>
@@ -943,13 +1072,77 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                     <button style={s.ghost} disabled={busy} onClick={() => setConfirmDel(undefined)}>Cancel</button>
                   </span>
                 ) : (
-                  <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
+                  <span style={{ display: "inline-flex", gap: 6 }}>
+                    {canManage === true && (
+                      <button style={s.ghost} disabled={busy} onClick={() => openMemberModal(r)} title="Add or remove members of this group">Members</button>
+                    )}
+                    <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
+                  </span>
                 )}
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+
+      {/* Member-management modal — separate from the add-mapping form. */}
+      {memberModal && (
+        <div style={s.modalOverlay} onClick={closeMemberModal}>
+          <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
+            <div style={s.modalHead}>
+              <span>Members — {memberModal.displayName}</span>
+              <button style={s.chipX} onClick={closeMemberModal} title="Close">✕</button>
+            </div>
+            <div style={s.modalBody}>
+              {mmMembers === undefined && <div style={{ fontSize: 12, color: "#666" }}>Loading members…</div>}
+              {mmMembers !== undefined && mmMembers.length === 0 && (
+                <div style={{ fontSize: 12, color: "#888", fontStyle: "italic" }}>No members yet.</div>
+              )}
+              {(mmMembers ?? []).map((m) => (
+                <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid #f4f4f4" }}>
+                  <span style={{ flex: 1 }}>{m.title}</span>
+                  <span style={s.mono}>{m.email}</span>
+                  {canManage === true && (mmConfirmRemove === m.id ? (
+                    <span style={{ display: "inline-flex", gap: 6 }}>
+                      <button style={s.delBtn} disabled={mmBusy} onClick={() => { mmRemove(m.id).catch(() => undefined); }}>Remove</button>
+                      <button style={s.ghost} disabled={mmBusy} onClick={() => setMmConfirmRemove(undefined)}>Cancel</button>
+                    </span>
+                  ) : (
+                    <button style={s.chipX} disabled={mmBusy} title="Remove from group" onClick={() => setMmConfirmRemove(m.id)}>✕</button>
+                  ))}
+                </div>
+              ))}
+              {canManage === true && (
+                <div style={{ ...s.ddwrap, marginTop: 12 }}>
+                  <input
+                    style={s.input}
+                    placeholder="Search people in the tenant to add…"
+                    value={mmQuery}
+                    disabled={mmBusy}
+                    onChange={(e) => setMmQuery(e.target.value)}
+                  />
+                  {mmQuery.trim().length >= 2 && (
+                    <div style={s.dd}>
+                      {mmSearching && <div style={s.ddItem}>Searching…</div>}
+                      {!mmSearching && mmResults.map((p) => (
+                        <div key={p.loginName} style={s.ddItem} onClick={() => { mmAdd(p).catch(() => undefined); }}>
+                          {p.displayName} <span style={s.mono}>{p.email}</span>
+                        </div>
+                      ))}
+                      {!mmSearching && mmResults.length === 0 && (
+                        <div style={{ ...s.ddItem, color: "#666" }}>No matching people.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div style={s.modalFoot}>
+              <button style={s.secondaryBtn} onClick={closeMemberModal}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div style={{ ...s.toast, background: toast.error ? "#a4262c" : "#0f6c3f" }}>{toast.message}</div>
