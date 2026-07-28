@@ -35,13 +35,13 @@ describe("parseLevels", () => {
 
   it("carries optional labelCol/tidCol internal-name overrides", () => {
     const json =
-      '[{"label":"Project Name","column":"ProjectName","labelCol":"Project_x0020_Name","tidCol":"ProjectNameTid"}]';
+      '[{"label":"Group Project Name","column":"GroupProjectName","labelCol":"GroupProjectName","tidCol":"GroupProjectNameTid"}]';
     expect(parseLevels(json)).toEqual([
       {
-        label: "Project Name",
-        column: "ProjectName",
-        labelCol: "Project_x0020_Name",
-        tidCol: "ProjectNameTid",
+        label: "Group Project Name",
+        column: "GroupProjectName",
+        labelCol: "GroupProjectName",
+        tidCol: "GroupProjectNameTid",
       },
     ]);
   });
@@ -196,6 +196,29 @@ describe("buildLevelFormValues", () => {
     expect(result).toEqual([
       { FieldName: "Region", FieldValue: "East" },
       { FieldName: "RegionTid", FieldValue: "t-east" },
+    ]);
+  });
+
+  it("resolves a Group Project Name level to its label and Tid columns", () => {
+    const columnMap: Record<string, ColumnPair> = {
+      GroupProjectName: {
+        label: "GroupProjectName",
+        tid: "GroupProjectNameTid",
+      },
+    };
+    const result = buildLevelFormValues(columnMap, [
+      {
+        column: "GroupProjectName",
+        label: "Blue Sky",
+        id: "3f2a1c8e-0000-0000-0000-000000000001",
+      },
+    ]);
+    expect(result).toEqual([
+      { FieldName: "GroupProjectName", FieldValue: "Blue Sky" },
+      {
+        FieldName: "GroupProjectNameTid",
+        FieldValue: "3f2a1c8e-0000-0000-0000-000000000001",
+      },
     ]);
   });
 });

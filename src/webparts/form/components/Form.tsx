@@ -218,7 +218,11 @@ const DEFAULT_MODES: UploadMode[] = [
     termSetGuid: "REPLACE-PROJECTS-TERMSET-GUID",
     stagingFolder: "Group-led Projects",
     levels: [
-      { label: "Project Name", column: "ProjectName" },
+      // Renamed from "Project Name"/"ProjectName" 2026-07-28: the bare
+      // ProjectName column is now the free-text field on every upload.
+      // GroupProjectName/GroupProjectNameTid are not created yet — not needed
+      // for the 2026 Head Office pilot.
+      { label: "Group Project Name", column: "GroupProjectName" },
       { label: "Department", column: "Department" },
       { label: "Unit", column: "Unit" },
     ],
