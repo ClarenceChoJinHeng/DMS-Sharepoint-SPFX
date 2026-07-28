@@ -1191,11 +1191,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-field .req { color: #d13438; font-style: normal; }
         .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
         .dms-field small { color: #666; font-size: 12px; font-weight: 400; }
-        /* Confidentiality info tooltip. flex-end + 10px lifts the 18px icon to
-           the vertical middle of the 38px select beside it. */
-        .dms-conf { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 16px; }
-        .dms-conf .dms-field { flex: 1; margin-bottom: 0; min-width: 0; }
-        .dms-info { position: relative; flex-shrink: 0; margin-bottom: 10px; width: 18px; height: 18px; border-radius: 50%; background: #0f6c3f; color: #fff; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; }
+        /* Confidentiality info tooltip. The icon is taken out of flow and placed
+           in the grid gutter, so the select keeps the FULL column width and lines
+           up with Vendor above it. bottom:10px centres the 18px icon on the 38px
+           select; left keeps it inside the 24px gutter (6 + 18 = 24). */
+        .dms-conf { position: relative; margin-bottom: 16px; }
+        .dms-conf .dms-field { margin-bottom: 0; }
+        .dms-info { position: absolute; left: calc(100% + 6px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; background: #0f6c3f; color: #fff; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; }
         /* Opens to the right of the icon, into the empty third grid column.
            280px keeps it inside the card rather than spilling past its edge. */
         .dms-info-panel { display: none; position: absolute; top: -8px; left: calc(100% + 8px); z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
