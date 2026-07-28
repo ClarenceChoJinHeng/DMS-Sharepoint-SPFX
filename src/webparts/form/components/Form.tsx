@@ -820,6 +820,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     // These strings are shown to the user, so they must match the on-screen
     // field labels — renamed to "Year" / "Confidential Level" in the relayout.
     if (!yearPeriod) missing.push("Year");
+    if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidential Level");
     if (missing.length > 0) {
       showToast(`Please complete: ${missing.join(", ")}.`, "error");
@@ -1065,8 +1066,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         ...buildLevelFormValues(levelCols, selections),
       ];
 
-      // Document Date is optional. Omit rather than send an empty value —
-      // toSpDate("") yields the malformed "NaN/NaN/" and SharePoint rejects it.
+      // Document Date is required, so validation above already guarantees a
+      // value. The guard is a safety net: toSpDate("") yields the malformed
+      // "NaN/NaN/", which SharePoint rejects with a HasException that surfaces
+      // as a confusing "Uploaded, but a field failed" long after the cause.
       if (documentDate) {
         formValues.push({
           FieldName: settings.columns.documentDate,
@@ -1337,7 +1340,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           </label>
 
           <label className="dms-field">
-            <span>Document Date</span>
+            <span>
+              Document Date <em className="req">*</em>
+            </span>
             <input
               type="date"
               value={documentDate}
