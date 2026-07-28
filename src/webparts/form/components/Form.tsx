@@ -33,6 +33,9 @@ const FIELDS = {
   // "Vendor/CustomerName" — the "/" encodes to _x002f_ in the internal name.
   // Verified against /fields 2026-07-28. The old "Vendor" column was deleted.
   vendor: "Vendor_x002f_CustomerName",
+  // Free-text project name, written on every upload regardless of segment.
+  // Distinct from the Group-led Projects "Group Project Name" folder level.
+  projectName: "ProjectName",
   details: "_ExtendedDescription",
 };
 
@@ -247,6 +250,7 @@ type DmsSettings = {
     documentDate: string;
     confidentiality: string;
     vendor: string;
+    projectName: string;
     businessSegmentLabel: string;
     businessSegmentTid: string;
   };
@@ -267,6 +271,7 @@ const DEFAULT_SETTINGS: DmsSettings = {
     documentDate: FIELDS.documentDate,
     confidentiality: FIELDS.confidentiality,
     vendor: FIELDS.vendor,
+    projectName: FIELDS.projectName,
     businessSegmentLabel: LEVEL_COLUMNS.BusinessSegment.label,
     businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
   },
@@ -303,6 +308,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
+  const [projectName, setProjectName] = useState<string>("");
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
   const [toast, setToast] = useState<{
@@ -489,6 +495,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         confidentiality:
           get("col_confidentiality") ?? DEFAULT_SETTINGS.columns.confidentiality,
         vendor: get("col_vendor") ?? DEFAULT_SETTINGS.columns.vendor,
+        projectName: get("col_projectName") ?? DEFAULT_SETTINGS.columns.projectName,
         businessSegmentLabel:
           get("col_businessSegment") ?? DEFAULT_SETTINGS.columns.businessSegmentLabel,
         businessSegmentTid:
@@ -796,6 +803,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setDocumentDate("");
     setConfidentiality("");
     setVendor("");
+    setProjectName("");
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -1057,9 +1065,21 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         ...buildLevelFormValues(levelCols, selections),
       ];
 
-      // Vendor is captured as free text only to build the document name — it is NOT
-      // written as a metadata column on the file (client request), so no Vendor
-      // FieldValue is pushed here.
+      // Project Name and Vendor are free text. Both are optional, so only push a
+      // FieldValue when there is something to write — an empty string would
+      // overwrite a stored value rather than leave the column untouched.
+      if (projectName.trim()) {
+        formValues.push({
+          FieldName: settings.columns.projectName,
+          FieldValue: projectName.trim(),
+        });
+      }
+      if (vendor.trim()) {
+        formValues.push({
+          FieldName: settings.columns.vendor,
+          FieldValue: vendor.trim(),
+        });
+      }
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
