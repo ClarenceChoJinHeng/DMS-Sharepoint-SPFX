@@ -67,23 +67,101 @@ export async function loadMappedTermGuids(
   return guids;
 }
 
-/** Resolve a server-relative folder path to its stable UniqueId. Returns null if the folder does not exist. */
+/** Outcome of a folder existence probe — see `probeFolderByPath`. */
+export interface FolderProbe {
+  folder: { uniqueId: string; serverRelativeUrl: string } | null;
+  /**
+   * True ONLY when SharePoint positively reported the folder is not there (404).
+   * A throttle, a permission error or a malformed request all leave this false —
+   * callers must not tell the user "this folder does not exist" unless it is true.
+   */
+  confirmedMissing: boolean;
+  /** Last HTTP status seen, for diagnostics. */
+  status: number;
+  /** Response body snippet on a non-404 failure, for diagnostics. */
+  detail?: string;
+}
+
+/**
+ * Probe a server-relative folder path, distinguishing "definitely not there" from
+ * "could not tell". The old collapse-everything-to-null behaviour caused a real
+ * misdiagnosis: a bulk upload run DURING reconciliation reported "the folder does
+ * not exist in Documents — ask an administrator to create it" for a folder that
+ * existed. Reconciliation is exactly the process that provokes this — it creates
+ * folders, breaks inheritance and rewrites role assignments on the very folder
+ * being probed, and it generates enough traffic to get throttled. So:
+ *   - 404          → confirmedMissing (a real, actionable "not there")
+ *   - 429/503      → retried with Retry-After, same as ensureFolder's POST
+ *   - 403/400/5xx  → NOT missing; reported with status + body per CLAUDE.md gotcha #9
+ */
+export async function probeFolderByPath(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  serverRelativePath: string,
+): Promise<FolderProbe> {
+  const url =
+    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeServerRelativePath(serverRelativePath)}'` +
+    `&$select=UniqueId,ServerRelativeUrl`;
+  let res: SPHttpClientResponse = await spHttpClient.get(
+    url,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  // A throttle is not an answer about existence — wait it out before deciding.
+  for (
+    let attempt = 0;
+    (res.status === 429 || res.status === 503) && attempt < 5;
+    attempt++
+  ) {
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    res = await spHttpClient.get(url, SPHttpClient.configurations.v1, {
+      headers: { Accept: "application/json;odata=nometadata" },
+    });
+  }
+  if (res.ok) {
+    const d = await res.json();
+    return {
+      folder: { uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl },
+      confirmedMissing: false,
+      status: res.status,
+    };
+  }
+  if (res.status === 404) {
+    return { folder: null, confirmedMissing: true, status: 404 };
+  }
+  // Anything else: log loudly. A 400 means a malformed request, not missing data.
+  const detail = await res.text().catch(() => "");
+  console.error(
+    `Folder probe could not determine existence. HTTP ${res.status} for path:`,
+    serverRelativePath,
+    detail.slice(0, 300),
+  );
+  return {
+    folder: null,
+    confirmedMissing: false,
+    status: res.status,
+    detail: detail.slice(0, 300),
+  };
+}
+
+/**
+ * Resolve a server-relative folder path to its stable UniqueId. Returns null if the
+ * folder does not exist — or if existence could not be determined. Prefer
+ * `probeFolderByPath` when the difference matters to the user.
+ */
 export async function resolveFolderByPath(
   spHttpClient: SPHttpClient,
   siteUrl: string,
   serverRelativePath: string,
 ): Promise<{ uniqueId: string; serverRelativeUrl: string } | null> {
-  const url =
-    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeServerRelativePath(serverRelativePath)}'` +
-    `&$select=UniqueId,ServerRelativeUrl`;
-  const res: SPHttpClientResponse = await spHttpClient.get(
-    url,
-    SPHttpClient.configurations.v1,
-    { headers: { Accept: "application/json;odata=nometadata" } },
+  const probe = await probeFolderByPath(
+    spHttpClient,
+    siteUrl,
+    serverRelativePath,
   );
-  if (!res.ok) return null;
-  const d = await res.json();
-  return { uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl };
+  return probe.folder;
 }
 
 /** Create one mapping row. */
@@ -141,13 +219,22 @@ export async function ensureFolder(
   siteUrl: string,
   parentServerRelativeUrl: string,
   name: string,
-): Promise<{ uniqueId: string; serverRelativeUrl: string } | null> {
+): Promise<{
+  uniqueId: string;
+  serverRelativeUrl: string;
+  /**
+   * True only when THIS call created the folder. Callers that pace their writes
+   * (reconciliation's throttle) must not charge a delay for a folder that already
+   * existed — that is what made a no-op re-run take as long as a real one.
+   */
+  created: boolean;
+} | null> {
   const childPath = `${parentServerRelativeUrl}/${name}`;
   // Check first: on re-runs the folder usually already exists, so skip the create.
   // This is one GET instead of a POST that 400s ("already exists") followed by a
   // resolve GET — faster on re-runs and no noisy 400s in the console.
   const found = await resolveFolderByPath(spHttpClient, siteUrl, childPath);
-  if (found) return found;
+  if (found) return { ...found, created: false };
   // Retry on SharePoint throttling (429/503), honoring Retry-After — the reconciliation
   // grid can be large, so a transient throttle here must not silently drop a folder.
   let addRes: SPHttpClientResponse = await spHttpClient.post(
@@ -167,9 +254,14 @@ export async function ensureFolder(
   }
   if (addRes.ok) {
     const d = await addRes.json();
-    return { uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl };
+    return {
+      uniqueId: d.UniqueId,
+      serverRelativeUrl: d.ServerRelativeUrl,
+      created: true,
+    };
   }
-  // Lost a race, or a transient error — resolve it by path once more.
+  // Lost a race, or a transient error — resolve it by path once more. Someone else
+  // created it, so this call did not: created stays false.
   const existing = await resolveFolderByPath(spHttpClient, siteUrl, childPath);
-  return existing;
+  return existing ? { ...existing, created: false } : null;
 }

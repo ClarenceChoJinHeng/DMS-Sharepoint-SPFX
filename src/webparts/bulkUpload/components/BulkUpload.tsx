@@ -5,7 +5,7 @@ import { IBulkUploadProps } from "./IBulkUploadProps";
 import {
   lookupFolderMapping,
   resolveFolderServerUrl,
-  resolveFolderByPath,
+  probeFolderByPath,
   ensureFolder,
 } from "../../../shared/dmsFolderMap";
 import {
@@ -37,7 +37,6 @@ import {
 
 const MAX_FILES = 50; // per batch
 const MAX_BATCHES = 2;
-const FILE_PAGE = 8; // file rows shown before the "Show more" button
 
 // The Documents library's real URL segment differs from its display title:
 //   URL segment   = "Shared Documents"  (used to build server-relative paths)
@@ -143,19 +142,26 @@ type BatchOutcome = {
   results: FileResult[];
 };
 
-// Live per-file state for the upload progress bars (state-driven, not byte-driven —
-// spHttpClient exposes no upload progress events).
+// Live per-file state for the upload progress bars. Byte-accurate: the upload
+// itself goes over XMLHttpRequest so `upload.onprogress` can drive a real
+// percentage (spHttpClient exposes no progress events, which is why this used to
+// be a looping indeterminate bar).
 type FileState =
   | "pending"
   | "uploading"
   | "done"
   | "skipped"
   | "failed"
-  | "tagFailed";
+  | "tagFailed"
+  | "deleted";
 type LiveBatch = {
   label: string;
   destinationLabel: string;
-  files: { name: string; state: FileState }[];
+  // `sru` is the uploaded file's ServerRelativeUrl, captured once a file lands in
+  // the Documents library (done / tagFailed) so the per-row X can delete it after
+  // the fact. `pct` is real bytes-sent progress, 0-100, only meaningful while
+  // state === "uploading".
+  files: { name: string; size: number; state: FileState; sru?: string; pct: number }[];
 };
 
 type OptionMap = {
@@ -313,6 +319,127 @@ const DEFAULT_SETTINGS: DmsSettings = {
   allowedExtensions: [".pdf", ".xls", ".xlsx"],
 };
 
+type XhrResult = { ok: boolean; status: number; body: string };
+
+/**
+ * POST a file to SharePoint with real byte-level progress.
+ *
+ * spHttpClient is fetch-based and exposes no upload progress events, so a
+ * genuine percentage was impossible through it — hence the old looping
+ * indeterminate bar. XMLHttpRequest still gives us `upload.onprogress`, so the
+ * raw REST call is made here instead: same URL and same raw-File body as
+ * before, plus the X-RequestDigest header spHttpClient used to attach for us.
+ */
+const postFileWithProgress = (
+  url: string,
+  file: File,
+  digest: string,
+  onPct: (pct: number) => void,
+): Promise<XhrResult> =>
+  new Promise<XhrResult>((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url, true);
+    xhr.setRequestHeader("Accept", "application/json;odata=nometadata");
+    xhr.setRequestHeader("X-RequestDigest", digest);
+    xhr.upload.onprogress = (e: ProgressEvent): void => {
+      if (e.lengthComputable && e.total > 0) {
+        // Capped at 99 — the last percent stands for "bytes sent, server still
+        // committing the file", which only `onload` can confirm.
+        onPct(Math.min(99, Math.round((e.loaded / e.total) * 100)));
+      }
+    };
+    xhr.onload = (): void =>
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        body: xhr.responseText || "",
+      });
+    xhr.onerror = (): void =>
+      resolve({ ok: false, status: 0, body: "Network error during upload." });
+    xhr.onabort = (): void =>
+      resolve({ ok: false, status: 0, body: "Upload was aborted." });
+    xhr.send(file);
+  });
+
+// Human-friendly file size for the progress rows.
+const fmtSize = (bytes: number): string =>
+  bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+/**
+ * The animated fill for the file currently uploading.
+ *
+ * `target` is the real bytes-sent percentage, but the browser only fires
+ * `upload.onprogress` a handful of times per file — a 2 MB PDF typically reports
+ * once or twice, so the raw value parks on something like 50% and then jumps to
+ * done. This drives the width from a rAF loop instead:
+ *
+ *   - when real progress arrives, ease toward it quickly (measured data wins);
+ *   - when nothing new has been reported, creep slowly toward the midpoint of
+ *     whatever is left, decelerating as it goes.
+ *
+ * So the bar always looks like it is loading, never overtakes what we actually
+ * know, and never reaches 100% until the upload genuinely resolves.
+ *
+ * The loop writes to the DOM through refs rather than through state — one file
+ * uploads at a time, but 60 setState calls a second to re-render a batch list of
+ * 50 rows is a waste.
+ */
+const UploadingBar = ({
+  target,
+  label,
+}: {
+  target: number;
+  label: string;
+}): React.ReactElement => {
+  const fillRef = useRef<HTMLSpanElement>(null);
+  const pctRef = useRef<HTMLSpanElement>(null);
+  const targetRef = useRef<number>(target);
+
+  useEffect(() => {
+    targetRef.current = target;
+  }, [target]);
+
+  useEffect(() => {
+    let frame = 0;
+    let shown = 0;
+    const tick = (): void => {
+      const t = targetRef.current;
+      if (t > shown) {
+        shown += (t - shown) * 0.15; // catch up to real progress
+      } else {
+        const ceiling = t + (99 - t) * 0.5; // halfway into the unknown, no further
+        if (shown < ceiling) shown += (ceiling - shown) * 0.006;
+      }
+      if (shown > 99) shown = 99;
+      if (fillRef.current) fillRef.current.style.width = `${shown}%`;
+      if (pctRef.current) pctRef.current.textContent = `${Math.round(shown)}%`;
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  return (
+    <>
+      <span
+        className="dms-fp-bar"
+        role="progressbar"
+        aria-valuenow={target}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={label}
+      >
+        <span className="dms-fp-fill" ref={fillRef} style={{ width: "0%" }} />
+      </span>
+      <span className="dms-fp-pct" ref={pctRef}>
+        0%
+      </span>
+    </>
+  );
+};
+
 export default function BulkUpload({
   context,
 }: IBulkUploadProps): React.ReactElement {
@@ -320,6 +447,9 @@ export default function BulkUpload({
   const webSru = context.pageContext.web.serverRelativeUrl.replace(/\/+$/, "");
   const fileRef = useRef<HTMLInputElement>(null);
   const batchSeqRef = useRef<number>(1);
+  // Cached form digest for the XHR upload path (spHttpClient handles its own).
+  // Digests expire — SharePoint tells us when, and we refresh a minute early.
+  const digestRef = useRef<{ value: string; expiresAt: number } | null>(null);
 
   const [options, setOptions] = useState<OptionMap>(EMPTY_OPTIONS);
   const [deptLoading, setDeptLoading] = useState<boolean>(true);
@@ -346,7 +476,6 @@ export default function BulkUpload({
   // ── Draft state (bound to the config panel) ──
   const [uploadMode, setUploadMode] = useState<string>("");
   const [picked, setPicked] = useState<PickedFile[]>([]);
-  const [fileShowCount, setFileShowCount] = useState<number>(FILE_PAGE);
   const [documentType, setDocumentType] = useState<string>("");
   const [yearPeriod, setYearPeriod] = useState<string>("");
   const [documentDate, setDocumentDate] = useState<string>("");
@@ -367,6 +496,22 @@ export default function BulkUpload({
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ message, type });
     toastTimerRef.current = setTimeout(() => setToast(null), 5000);
+  };
+
+  // Replace-file guard. Uploads run one file at a time, so a single shared prompt
+  // (resolved via a promise) is enough — the loop awaits the user's answer.
+  const [replaceAsk, setReplaceAsk] = useState<{ name: string } | null>(null);
+  const replaceResolveRef = useRef<((ok: boolean) => void) | null>(null);
+  const askReplace = (name: string): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      replaceResolveRef.current = resolve;
+      setReplaceAsk({ name });
+    });
+  const answerReplace = (ok: boolean): void => {
+    setReplaceAsk(null);
+    const resolve = replaceResolveRef.current;
+    replaceResolveRef.current = null;
+    if (resolve) resolve(ok);
   };
 
   const activeMode = (): UploadMode | undefined =>
@@ -712,7 +857,9 @@ export default function BulkUpload({
       setModes(loadedModes);
 
       const membership = collectMembership(groupMap, userGroupIds);
-      const isPrivileged = admin || membership.isGlobalUploader;
+      // Upload-anywhere is a site-admin privilege only. GLOBAL is a read-only role
+      // (site-entry-access-layer spec) and no longer grants upload.
+      const isPrivileged = admin;
       setPrivileged(isPrivileged);
 
       const [docTypes, years, confs, vendors] = await Promise.all([
@@ -767,7 +914,6 @@ export default function BulkUpload({
 
   const resetDraft = (): void => {
     setPicked([]);
-    setFileShowCount(FILE_PAGE);
     setDocumentType("");
     setLevelValues([]);
     setLevelChoices([]);
@@ -827,7 +973,6 @@ export default function BulkUpload({
         file,
       })),
     );
-    setFileShowCount(FILE_PAGE);
     setDocumentType(batch.docTypeId);
     setYearPeriod(batch.yearId);
     setDocumentDate(batch.documentDate);
@@ -1021,6 +1166,58 @@ export default function BulkUpload({
     setPicked((prev) => prev.filter((p) => p.key !== key));
   };
 
+  // Delete an already-uploaded file from the Documents library via the per-row X
+  // in the live progress panel (bulk upload writes straight to Documents). The
+  // row keeps its `sru` (ServerRelativeUrl) captured at upload time, so the
+  // delete targets the exact file regardless of any folder rename. Marks the row
+  // "deleted" on success.
+  const [deletingKey, setDeletingKey] = useState<string | null>(null);
+  const deleteUploaded = async (
+    batchIdx: number,
+    fileIdx: number,
+    sru: string,
+    name: string,
+  ): Promise<void> => {
+    const key = `${batchIdx}:${fileIdx}`;
+    if (!window.confirm(`Delete "${name}" from Documents? This cannot be undone.`)) {
+      return;
+    }
+    setDeletingKey(key);
+    try {
+      const safeUrl = sru.replace(/'/g, "''");
+      const delRes: SPHttpClientResponse = await context.spHttpClient.fetch(
+        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)?@f='${encodeURIComponent(safeUrl)}'`,
+        SPHttpClient.configurations.v1,
+        { method: "POST", headers: { "X-HTTP-Method": "DELETE", "IF-MATCH": "*" } },
+      );
+      if (!delRes.ok && delRes.status !== 404) {
+        throw new Error(`HTTP ${delRes.status}`);
+      }
+      setLive((prev) =>
+        prev
+          ? prev.map((lb, bi) =>
+              bi === batchIdx
+                ? {
+                    ...lb,
+                    files: lb.files.map((f, fi) =>
+                      fi === fileIdx
+                        ? { ...f, state: "deleted" as FileState, sru: undefined }
+                        : f,
+                    ),
+                  }
+                : lb,
+            )
+          : prev,
+      );
+      showToast(`"${name}" deleted from Documents.`, "success");
+    } catch (err) {
+      console.error("Delete from Staging failed:", name, err);
+      showToast(`Could not delete "${name}". Please try again.`, "error");
+    } finally {
+      setDeletingKey(null);
+    }
+  };
+
   /* ---------- Documents-library path swap --------------------------------- */
 
   // The DMS Folder Map stores the STAGING unit folder's UniqueId. The Documents
@@ -1038,6 +1235,39 @@ export default function BulkUpload({
     return `${webSru}/${DOCUMENTS_URL_SEGMENT}/${rest}`;
   };
 
+  /* ---------- Form digest (XHR upload path) -------------------------------- */
+
+  // A long batch can outlive one digest, so cache it with its real expiry and
+  // re-request when close. `force` refetches unconditionally — used to retry once
+  // after a 403, which is what an expired/rejected digest looks like.
+  const fetchDigest = async (): Promise<string> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/contextinfo`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) {
+      throw new Error(`Could not get a form digest (HTTP ${res.status}).`);
+    }
+    const json = await res.json();
+    // nometadata puts it at the root; verbose nests it under GetContextWebInformation.
+    const info =
+      json.GetContextWebInformation ?? json.d?.GetContextWebInformation ?? json;
+    const value: string = info.FormDigestValue;
+    if (!value) throw new Error("Form digest response had no FormDigestValue.");
+    const ttlSeconds: number = info.FormDigestTimeoutSeconds ?? 1800;
+    digestRef.current = { value, expiresAt: Date.now() + ttlSeconds * 1000 };
+    return value;
+  };
+
+  const getDigest = async (force?: boolean): Promise<string> => {
+    const cached = digestRef.current;
+    if (!force && cached && cached.expiresAt > Date.now() + 60_000) {
+      return cached.value;
+    }
+    return fetchDigest();
+  };
+
   /* ---------- Upload one batch -------------------------------------------- */
 
   // Resolves the batch's destination folder, ensures Year/DocType subfolders, and
@@ -1047,7 +1277,8 @@ export default function BulkUpload({
     batch: Batch,
     index: number,
     total: number,
-    onState: (fileIndex: number, state: FileState) => void,
+    onState: (fileIndex: number, state: FileState, sru?: string) => void,
+    onPct: (fileIndex: number, pct: number) => void,
   ): Promise<{ batchError?: string; results: FileResult[] }> => {
     const tag = `Batch ${index + 1} of ${total}`;
     const leaf = batch.levelSelections[batch.levelSelections.length - 1];
@@ -1102,19 +1333,30 @@ export default function BulkUpload({
     }
 
     // The unit folder must ALREADY exist in Documents. It is deliberately not
-    // auto-created: a folder created here would inherit the Documents root ACL
-    // and silently widen access. A missing one is an administrator task.
-    const docsUnitFolder = await resolveFolderByPath(
+    // auto-created HERE: a folder created on the upload path would inherit the
+    // Documents root ACL and silently widen access. The correct remedy is the
+    // Reconciliation tool, which creates the mirrored tree in BOTH libraries and
+    // locks each folder to its DMS Group Map groups (FolderManager.tsx — it loops
+    // over ["Staging", "Documents"]). Hand-creating the folder is NOT equivalent:
+    // it would inherit the root ACL, which is exactly what this guard prevents.
+    const docsProbe = await probeFolderByPath(
       context.spHttpClient,
       siteUrl,
       docsUnitPath,
     );
-    if (!docsUnitFolder) {
+    if (!docsProbe.folder) {
+      // Only claim the folder is missing when SharePoint actually said 404.
+      // Anything else (throttle, permission, malformed request) is "couldn't
+      // tell" — and sending the user off to create a folder that already exists
+      // is how the first report of this bug went wrong.
       return {
-        batchError: `The matching folder does not exist in Documents yet (${docsUnitPath}). Ask an administrator to create it — it is not created automatically, so its permissions stay correct.`,
+        batchError: docsProbe.confirmedMissing
+          ? `The matching folder does not exist in Documents yet (${docsUnitPath}). Ask an administrator to run the reconciliation tool — it creates this folder with the correct permissions. Do not create it by hand: a hand-made folder inherits the library's root permissions and would widen access.`
+          : `Could not verify the destination folder in Documents (HTTP ${docsProbe.status}). This usually means SharePoint was busy — most often because folder reconciliation is running at the same time. Wait for reconciliation to finish, then try again. The folder itself is probably fine.`,
         results: [],
       };
     }
+    const docsUnitFolder = docsProbe.folder;
 
     const yearLabel = sanitizeFolderSegment(batch.yearLabel);
     const docTypeLabel = sanitizeFolderSegment(batch.docTypeLabel);
@@ -1194,6 +1436,9 @@ export default function BulkUpload({
       },
       ...buildLevelFormValues(levelCols, selections),
     ];
+    // Vendor is intentionally NOT written. The field is hidden in the UI (client
+    // request, 2026-07-28) so batch.vendorId is always empty; the plumbing stays
+    // in place so un-hiding the select is the only change needed to restore it.
     if (batch.vendorId) {
       formValues.push({
         FieldName: settings.columns.vendor,
@@ -1207,13 +1452,15 @@ export default function BulkUpload({
     for (let i = 0; i < batch.files.length; i++) {
       const file = batch.files[i];
       const finalName = file.name;
+      onPct(i, 0);
       onState(i, "uploading");
       setStatus(
         `${tag}: uploading ${i + 1} of ${batch.files.length} — ${finalName}`,
       );
 
-      // Duplicate probe. overwrite=false is kept, so an existing file is never
-      // clobbered; it is reported as skipped instead.
+      // Duplicate probe. On a clash we ask the user whether to overwrite; No
+      // keeps the existing skip behaviour, Yes re-uploads with overwrite=true.
+      let overwrite = false;
       try {
         const existsRes: SPHttpClientResponse = await context.spHttpClient.get(
           `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')?$select=Exists`,
@@ -1221,13 +1468,19 @@ export default function BulkUpload({
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
         if (existsRes.ok) {
-          results.push({
-            name: finalName,
-            outcome: "skipped",
-            detail: "A file with this name already exists here.",
-          });
-          onState(i, "skipped");
-          continue;
+          const confirmed = await askReplace(finalName);
+          if (!confirmed) {
+            results.push({
+              name: finalName,
+              outcome: "skipped",
+              detail: "A file with this name already exists here.",
+            });
+            onState(i, "skipped");
+            continue;
+          }
+          overwrite = true;
+          onPct(i, 0);
+          onState(i, "uploading");
         }
       } catch {
         // Network error on the existence check — proceed; the upload will
@@ -1235,37 +1488,44 @@ export default function BulkUpload({
       }
 
       try {
-        const uploadRes: SPHttpClientResponse = await context.spHttpClient.post(
-          `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
-          SPHttpClient.configurations.v1,
-          { body: file },
+        const addUrl = `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=${overwrite})?$select=ServerRelativeUrl`;
+
+        let uploadRes = await postFileWithProgress(
+          addUrl,
+          file,
+          await getDigest(),
+          (pct) => onPct(i, pct),
         );
+        // A 403 here is almost always a stale digest — refresh once and retry.
+        if (!uploadRes.ok && uploadRes.status === 403) {
+          onPct(i, 0);
+          uploadRes = await postFileWithProgress(
+            addUrl,
+            file,
+            await getDigest(true),
+            (pct) => onPct(i, pct),
+          );
+        }
+
         if (!uploadRes.ok) {
           let detail = `HTTP ${uploadRes.status}`;
+          const bodyText = uploadRes.body;
           try {
-            const bodyText = await uploadRes.text();
-            try {
-              const errJson = JSON.parse(bodyText);
-              const spMsg =
-                errJson?.error?.message?.value ?? errJson?.error?.message;
-              detail += spMsg
-                ? ` — ${spMsg}`
-                : bodyText
-                  ? ` — ${bodyText.slice(0, 200)}`
-                  : "";
-            } catch {
-              if (bodyText) detail += ` — ${bodyText.slice(0, 200)}`;
-            }
+            const errJson = JSON.parse(bodyText);
+            const spMsg =
+              errJson?.error?.message?.value ?? errJson?.error?.message;
+            detail += spMsg ? ` — ${spMsg}` : ` — ${bodyText.slice(0, 200)}`;
           } catch {
-            /* body already consumed or unreadable */
+            if (bodyText) detail += ` — ${bodyText.slice(0, 200)}`;
           }
           console.error("Upload failed:", finalName, folderId, detail);
           results.push({ name: finalName, outcome: "failed", detail });
           onState(i, "failed");
           continue;
         }
-        const uploadJson = await uploadRes.json();
+        const uploadJson = JSON.parse(uploadRes.body);
         const uploadedSru = uploadJson.ServerRelativeUrl;
+        onPct(i, 100);
 
         const itemRes: SPHttpClientResponse = await context.spHttpClient.get(
           `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeURIComponent(uploadedSru)}'`,
@@ -1277,7 +1537,7 @@ export default function BulkUpload({
             outcome: "tagFailed",
             detail: "Uploaded, but the item could not be retrieved to tag.",
           });
-          onState(i, "tagFailed");
+          onState(i, "tagFailed", uploadedSru);
           continue;
         }
         const item = await itemRes.json();
@@ -1296,7 +1556,7 @@ export default function BulkUpload({
             outcome: "tagFailed",
             detail: `Uploaded, but tagging failed (HTTP ${metaRes.status}).`,
           });
-          onState(i, "tagFailed");
+          onState(i, "tagFailed", uploadedSru);
           continue;
         }
         // validateUpdateListItem returns HTTP 200 even on field errors —
@@ -1312,12 +1572,12 @@ export default function BulkUpload({
             outcome: "tagFailed",
             detail: `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
           });
-          onState(i, "tagFailed");
+          onState(i, "tagFailed", uploadedSru);
           continue;
         }
 
         results.push({ name: finalName, outcome: "uploaded" });
-        onState(i, "done");
+        onState(i, "done", uploadedSru);
       } catch (err) {
         console.error("Upload threw:", finalName, err);
         results.push({
@@ -1353,7 +1613,9 @@ export default function BulkUpload({
         destinationLabel: b.destinationLabel,
         files: b.files.map((f) => ({
           name: f.name,
+          size: f.size,
           state: "pending" as FileState,
+          pct: 0,
         })),
       })),
     );
@@ -1362,7 +1624,11 @@ export default function BulkUpload({
     try {
       for (let b = 0; b < batches.length; b++) {
         const batch = batches[b];
-        const onState = (fileIndex: number, state: FileState): void => {
+        const onState = (
+          fileIndex: number,
+          state: FileState,
+          sru?: string,
+        ): void => {
           setLive((prev) =>
             prev
               ? prev.map((lb, idx) =>
@@ -1370,7 +1636,25 @@ export default function BulkUpload({
                     ? {
                         ...lb,
                         files: lb.files.map((f, fi) =>
-                          fi === fileIndex ? { ...f, state } : f,
+                          fi === fileIndex
+                            ? { ...f, state, ...(sru ? { sru } : {}) }
+                            : f,
+                        ),
+                      }
+                    : lb,
+                )
+              : prev,
+          );
+        };
+        const onPct = (fileIndex: number, pct: number): void => {
+          setLive((prev) =>
+            prev
+              ? prev.map((lb, idx) =>
+                  idx === b
+                    ? {
+                        ...lb,
+                        files: lb.files.map((f, fi) =>
+                          fi === fileIndex ? { ...f, pct } : f,
                         ),
                       }
                     : lb,
@@ -1383,6 +1667,7 @@ export default function BulkUpload({
           b,
           batches.length,
           onState,
+          onPct,
         );
         if (batchError) {
           // Routing failed before any file uploaded — show every row as failed.
@@ -1423,6 +1708,12 @@ export default function BulkUpload({
       );
       if (!anyProblem && totalOk > 0) {
         showToast(`All ${totalOk} file(s) uploaded to Documents.`, "success");
+        // The queue has been fully processed — empty it so "Upload all" can't be
+        // clicked a second time and re-send the same files (which would raise a
+        // replace prompt per file). The results summary and the progress list are
+        // deliberately left on screen, so nothing is lost by dropping the queue.
+        // On a PARTIAL failure the batches are kept, so the user can edit and retry.
+        setBatches([]);
       }
     } catch (err) {
       console.error("Bulk upload failed:", err);
@@ -1480,12 +1771,37 @@ export default function BulkUpload({
 
   const fpLabel: Record<FileState, string> = {
     pending: "Waiting",
-    uploading: "Uploading…",
-    done: "Done",
+    uploading: "Uploading",
+    done: "Uploaded",
     skipped: "Skipped",
     failed: "Failed",
     tagFailed: "No tags",
+    deleted: "Deleted",
   };
+
+  // Overall progress across all live batches. A file counts as "settled" once it
+  // reaches any terminal state; the one file in flight contributes its own byte
+  // fraction so the bar creeps forward instead of jumping a whole file at a time.
+  const liveTotals = (live ?? []).reduce(
+    (acc, lb) => {
+      lb.files.forEach((f) => {
+        acc.total += 1;
+        if (f.state !== "pending" && f.state !== "uploading") acc.done += 1;
+        else if (f.state === "uploading") acc.partial += f.pct / 100;
+      });
+      return acc;
+    },
+    { total: 0, done: 0, partial: 0 },
+  );
+  const livePct =
+    liveTotals.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            ((liveTotals.done + liveTotals.partial) / liveTotals.total) * 100,
+          ),
+        )
+      : 0;
 
   const totalQueued = batches.reduce((n, b) => n + b.files.length, 0);
   const canAdd = !panelOpen && batches.length < MAX_BATCHES;
@@ -1506,34 +1822,64 @@ export default function BulkUpload({
         .dms-drop .size { color: #666; font-size: 12px; }
         .dms-link { background: none; border: none; color: #0f6c3f; cursor: pointer; font-weight: 600; padding: 0; font-size: 13px; }
         .dms-link:disabled { color: #9bbfaa; cursor: default; }
-        .dms-filelist { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+        /* Scrolls instead of paginating — the whole selection is always reachable. */
+        .dms-filelist { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; }
         .dms-filerow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; border: 1px solid #ececec; border-radius: 6px; padding: 10px 12px; background: #fafafa; }
         .dms-filerow .orig { font-size: 13px; font-weight: 600; word-break: break-all; }
         .dms-filerow .size { font-size: 12px; color: #666; }
         .dms-remove { background: none; border: none; cursor: pointer; color: #d13438; font-size: 15px; line-height: 1; padding: 4px; }
         .dms-count { font-size: 12px; color: #666; }
         .dms-filelist-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
-        .dms-filelist-more { display: flex; gap: 16px; }
         .dms-fileblock { margin-top: 20px; border-top: 1px solid #ececec; padding-top: 16px; }
         .dms-fileblock-title { font-size: 13px; font-weight: 700; color: #1b1b1b; margin: 0 0 12px; }
         /* Live per-file progress */
         .dms-progress { margin-top: 16px; }
         .dms-progress-batch { border: 1px solid #e1e1e1; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; background: #fff; }
         .dms-progress-head { font-size: 13px; font-weight: 700; color: #0f6c3f; margin-bottom: 12px; }
-        .dms-progress-list { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
-        .dms-fp-row { display: flex; align-items: center; gap: 10px; font-size: 12px; }
-        .dms-fp-name { flex: 0 0 42%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #333; }
-        .dms-fp-bar { position: relative; flex: 1; height: 8px; border-radius: 5px; background: #ececec; overflow: hidden; }
-        .dms-fp-fill { position: absolute; top: 0; left: 0; height: 100%; width: 100%; border-radius: 5px; }
-        .dms-fp-fill.done { background: #0f6c3f; }
-        .dms-fp-fill.skipped, .dms-fp-fill.tagFailed { background: #f0a020; }
-        .dms-fp-fill.failed { background: #d13438; }
-        .dms-fp-bar.uploading::after { content: ""; position: absolute; top: 0; height: 100%; width: 40%; border-radius: 5px; background: #0f6c3f; animation: dms-slide 1.1s ease-in-out infinite; }
-        @keyframes dms-slide { 0% { left: -45%; } 100% { left: 100%; } }
-        .dms-fp-tag { flex: 0 0 78px; text-align: right; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: #999; }
+        .dms-progress-list { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding-right: 6px; }
+        /* One row per file: status tag · name · size · live bar · % · remove */
+        .dms-fp-row { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 10px 12px; border-radius: 6px; background: #fafafa; }
+        .dms-fp-row.done { background: #eaf7f0; }
+        .dms-fp-row.skipped, .dms-fp-row.tagFailed { background: #fff4e5; }
+        .dms-fp-row.failed { background: #fdf3f3; }
+        .dms-fp-row.deleted { background: #f2f2f2; }
+        .dms-fp-tag { flex: 0 0 84px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #999; }
         .dms-fp-tag.done, .dms-fp-tag.uploading { color: #0f6c3f; }
         .dms-fp-tag.skipped, .dms-fp-tag.tagFailed { color: #7a4f00; }
         .dms-fp-tag.failed { color: #d13438; }
+        .dms-fp-tag.deleted { color: #999; }
+        .dms-fp-name { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: #1b1b1b; }
+        .dms-fp-size { flex: 0 0 auto; font-size: 12px; color: #888; }
+        /* Real byte-driven fill. Width is animated frame-by-frame from the rAF
+           loop in UploadingBar, so no CSS transition here — the two would fight. */
+        .dms-fp-bar { flex: 1 1 auto; min-width: 40px; height: 8px; border-radius: 5px; background: #dde5e0; overflow: hidden; }
+        /* display:block is REQUIRED — the fill is a <span>, and width/height are
+           ignored on an inline box, so the rAF loop's style.width would silently
+           do nothing. (.dms-fp-bar escapes this only because it is a flex item of
+           .dms-fp-row and gets blockified.) */
+        .dms-fp-fill { display: block; height: 100%; border-radius: 5px; background: #0f6c3f; }
+        .dms-fp-pct { flex: 0 0 34px; text-align: right; font-size: 12px; color: #666; }
+        .dms-fp-gap { flex: 1 1 auto; }
+        .dms-fp-x { flex: 0 0 auto; background: none; border: none; cursor: pointer; color: #d13438; font-size: 14px; line-height: 1; padding: 2px 4px; }
+        .dms-fp-x:disabled { color: #c9a3a4; cursor: default; }
+        .dms-fp-xspacer { flex: 0 0 22px; }
+        /* Overall progress bar (above the form) */
+        .dms-overall { margin: 0 0 16px; }
+        .dms-overall-head { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: #333; margin-bottom: 6px; }
+        .dms-overall-track { height: 10px; border-radius: 6px; background: #ececec; overflow: hidden; }
+        .dms-overall-fill { height: 100%; background: #0f6c3f; border-radius: 6px; transition: width .3s ease; }
+        /* Replace-file confirmation popup */
+        .dms-popup-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.25); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 9998; display: flex; align-items: center; justify-content: center; padding: 16px; }
+        .dms-popup { background: #fff; border-radius: 16px; padding: 40px 40px 32px; text-align: center; max-width: 420px; width: 100%; box-shadow: 0 8px 40px rgba(0,0,0,.15); }
+        .dms-popup-svg { width: 110px; height: 110px; display: block; margin: 0 auto 20px; }
+        .dms-popup-title { font-size: 22px; font-weight: 700; color: #0f6c3f; margin: 0 0 12px; }
+        .dms-popup-msg { font-size: 14px; color: #555; margin: 0 0 28px; line-height: 1.6; }
+        .dms-popup-actions { display:flex; align-items:center; justify-content:center; gap: 12px; }
+        .dms-popup-btn { min-width: 96px; border-radius: 6px; padding: 11px 22px; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
+        .dms-popup-btn.confirm { background: #0f6c3f; color: #fff; border: none; }
+        .dms-popup-btn.confirm:hover { background: #0a5230; }
+        .dms-popup-btn.cancel { background: #fff; color: #0f6c3f; border: 1px solid #0f6c3f; }
+        .dms-popup-btn.cancel:hover { background: #f0f6f2; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
         .dms-field > span { font-weight: 600; }
         .dms-field .req { color: #d13438; font-style: normal; }
@@ -1615,6 +1961,83 @@ export default function BulkUpload({
           destination folder as soon as they upload.
         </span>
       </div>
+
+      {/* ── Live upload progress (above the form) ───────────────────────── */}
+      {live && (
+        <div className="dms-section">
+          <p className="dms-section-title">Upload progress</p>
+          {liveTotals.total > 0 && (
+            <div className="dms-overall">
+              <div className="dms-overall-head">
+                <span>
+                  {liveTotals.done} of {liveTotals.total} file
+                  {liveTotals.total === 1 ? "" : "s"} processed
+                </span>
+                <span>{livePct}%</span>
+              </div>
+              <div className="dms-overall-track">
+                <div
+                  className="dms-overall-fill"
+                  style={{ width: `${livePct}%` }}
+                />
+              </div>
+            </div>
+          )}
+          <div className="dms-progress">
+            {live.map((lb, bi) => (
+              <div className="dms-progress-batch" key={bi}>
+                <div className="dms-progress-head">
+                  {lb.label} — {lb.destinationLabel}
+                </div>
+                <div className="dms-progress-list">
+                  {lb.files.map((f, fi) => {
+                    const canDelete =
+                      (f.state === "done" || f.state === "tagFailed") && !!f.sru;
+                    const rowKey = `${bi}:${fi}`;
+                    return (
+                      <div className={`dms-fp-row ${f.state}`} key={fi}>
+                        <span className={`dms-fp-tag ${f.state}`}>
+                          {fpLabel[f.state]}
+                        </span>
+                        <span className="dms-fp-name" title={f.name}>
+                          {f.name}
+                        </span>
+                        <span className="dms-fp-size">{fmtSize(f.size)}</span>
+                        {f.state === "uploading" ? (
+                          <UploadingBar
+                            target={f.pct}
+                            label={`Uploading ${f.name}`}
+                          />
+                        ) : (
+                          <span className="dms-fp-gap" aria-hidden="true" />
+                        )}
+                        {canDelete ? (
+                          <button
+                            type="button"
+                            className="dms-fp-x"
+                            aria-label={`Delete ${f.name} from Documents`}
+                            title="Delete this file from Documents"
+                            disabled={deletingKey === rowKey}
+                            onClick={() => {
+                              deleteUploaded(bi, fi, f.sru as string, f.name).catch(
+                                () => undefined,
+                              );
+                            }}
+                          >
+                            ✕
+                          </button>
+                        ) : (
+                          <span className="dms-fp-xspacer" aria-hidden="true" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Batches ─────────────────────────────────────────────────────── */}
       <div className="dms-section">
@@ -1698,20 +2121,35 @@ export default function BulkUpload({
             </p>
 
             {/* Files */}
-            <div className="dms-drop">
+            {/* The whole card is clickable to open the file picker — same as the
+                single-file form. The label is a plain span, not a button, so the
+                container is the only interactive element (no nested buttons). */}
+            <div
+              className="dms-drop"
+              role="button"
+              tabIndex={busy ? -1 : 0}
+              aria-disabled={busy}
+              style={{ cursor: busy ? "default" : "pointer" }}
+              onClick={() => { if (!busy) fileRef.current?.click(); }}
+              onKeyDown={(e) => {
+                if (busy) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  fileRef.current?.click();
+                }
+              }}
+            >
               <span className="size">
                 {picked.length === 0
-                  ? "No files selected"
+                  ? "Click here to select files"
                   : `${picked.length} file(s) selected`}
               </span>
-              <button
-                type="button"
+              <span
                 className="dms-link"
-                onClick={() => fileRef.current?.click()}
-                disabled={busy}
+                style={busy ? { color: "#9bbfaa" } : undefined}
               >
                 {picked.length === 0 ? "Select files" : "Add more files"}
-              </button>
+              </span>
               <input
                 ref={fileRef}
                 type="file"
@@ -1880,13 +2318,16 @@ export default function BulkUpload({
                   options.confidentiality,
                 )}
 
-                {renderSelect(
-                  "Vendor (if applicable)",
-                  false,
-                  vendor,
-                  setVendor,
-                  options.vendor,
-                )}
+                {/* Vendor is hidden for now (client request, 2026-07-28). The
+                    state, term-set load and formValues push all stay wired up —
+                    restoring the field is just un-commenting this select.
+                    {renderSelect(
+                      "Vendor (if applicable)",
+                      false,
+                      vendor,
+                      setVendor,
+                      options.vendor,
+                    )} */}
               </div>
 
               {/* Selected files — listed below the form */}
@@ -1894,7 +2335,7 @@ export default function BulkUpload({
                 <div className="dms-fileblock">
                   <p className="dms-fileblock-title">Selected files</p>
                   <div className="dms-filelist">
-                    {picked.slice(0, fileShowCount).map((p) => (
+                    {picked.map((p) => (
                       <div className="dms-filerow" key={p.key}>
                         <div>
                           <div className="orig">{p.file.name}</div>
@@ -1916,36 +2357,8 @@ export default function BulkUpload({
                   </div>
                   <div className="dms-filelist-foot">
                     <span className="dms-count">
-                      Showing {Math.min(fileShowCount, picked.length)} of{" "}
-                      {picked.length} ({MAX_FILES} max).
-                    </span>
-                    <span className="dms-filelist-more">
-                      {picked.length > fileShowCount && (
-                        <button
-                          type="button"
-                          className="dms-link"
-                          disabled={busy}
-                          onClick={() =>
-                            setFileShowCount((c) =>
-                              Math.min(c + FILE_PAGE, picked.length),
-                            )
-                          }
-                        >
-                          Show more (
-                          {Math.min(FILE_PAGE, picked.length - fileShowCount)}{" "}
-                          more)
-                        </button>
-                      )}
-                      {fileShowCount > FILE_PAGE && (
-                        <button
-                          type="button"
-                          className="dms-link"
-                          disabled={busy}
-                          onClick={() => setFileShowCount(FILE_PAGE)}
-                        >
-                          Show less
-                        </button>
-                      )}
+                      {picked.length} file{picked.length === 1 ? "" : "s"}{" "}
+                      selected ({MAX_FILES} max).
                     </span>
                   </div>
                 </div>
@@ -2003,38 +2416,6 @@ export default function BulkUpload({
 
       {status && <p className="dms-status">{status}</p>}
 
-      {/* ── Live upload progress (per file) ─────────────────────────────── */}
-      {live && (
-        <div className="dms-progress">
-          {live.map((lb, bi) => (
-            <div className="dms-progress-batch" key={bi}>
-              <div className="dms-progress-head">
-                {lb.label} — {lb.destinationLabel}
-              </div>
-              <div className="dms-progress-list">
-                {lb.files.map((f, fi) => (
-                  <div className="dms-fp-row" key={fi}>
-                    <span className="dms-fp-name" title={f.name}>
-                      {f.name}
-                    </span>
-                    <span
-                      className={`dms-fp-bar${f.state === "uploading" ? " uploading" : ""}`}
-                    >
-                      {f.state !== "uploading" && f.state !== "pending" && (
-                        <span className={`dms-fp-fill ${f.state}`} />
-                      )}
-                    </span>
-                    <span className={`dms-fp-tag ${f.state}`}>
-                      {fpLabel[f.state]}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* ── Per-batch results ───────────────────────────────────────────── */}
       {batchResults && (
         <div className="dms-results">
@@ -2087,6 +2468,46 @@ export default function BulkUpload({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {replaceAsk && (
+        <div className="dms-popup-overlay" role="dialog" aria-modal="true">
+          <div className="dms-popup">
+            <svg
+              className="dms-popup-svg"
+              viewBox="0 0 184 184"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <circle opacity="0.3" cx="92.0001" cy="92" r="75.4872" fill="#FF952A" />
+              <circle cx="92" cy="92" r="92" fill="#FF952A" fillOpacity="0.2" />
+              <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#FF952A" strokeWidth="3" />
+              <path d="M93 66L93 100" stroke="#FF952A" strokeWidth="10" strokeLinecap="round" />
+              <path d="M93 116.804L93 118" stroke="#FF952A" strokeWidth="10" strokeLinecap="round" />
+            </svg>
+            <p className="dms-popup-title">Replace Existing File</p>
+            <p className="dms-popup-msg">
+              We noticed there&rsquo;s a same name file
+              {replaceAsk.name ? `: "${replaceAsk.name}"` : ""}.
+              <br />
+              Are you sure you want to override this file?
+            </p>
+            <div className="dms-popup-actions">
+              <button
+                className="dms-popup-btn confirm"
+                onClick={() => answerReplace(true)}
+              >
+                Yes
+              </button>
+              <button
+                className="dms-popup-btn cancel"
+                onClick={() => answerReplace(false)}
+              >
+                No
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

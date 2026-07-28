@@ -74,6 +74,19 @@ const toSpDate = (iso: string): string => {
   return `${Number(m)}/${Number(d)}/${y}`;
 };
 
+// Document Date (ISO YYYY-MM-DD) -> DD-MM-YY for the auto-composed document name.
+const dateDDMMYY = (iso: string): string => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (!y || !m || !d) return "";
+  return `${d}-${m}-${y.slice(2)}`;
+};
+
+// Auto-compose the document name from Vendor + Document Date: "<Vendor>-<DD-MM-YY>".
+// Either part omitted if empty. Used until the user manually edits the name.
+const composeDocName = (vendor: string, iso: string): string =>
+  [vendor.trim(), dateDDMMYY(iso)].filter(Boolean).join("-");
+
 type TermOption = { id: string; label: string };
 type ToastType = "error" | "success";
 
@@ -276,6 +289,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [settings, setSettings] = useState<DmsSettings>(DEFAULT_SETTINGS);
   const [file, setFile] = useState<File | undefined>(undefined);
   const [docName, setDocName] = useState<string>("");
+  // True once the user manually edits the document name — stops the Vendor+Date
+  // auto-composition from overwriting their custom text (reset when they clear it).
+  const [docNameEdited, setDocNameEdited] = useState<boolean>(false);
   const [documentType, setDocumentType] = useState<string>("");
   const [yearPeriod, setYearPeriod] = useState<string>("");
   const [documentDate, setDocumentDate] = useState<string>("");
@@ -288,6 +304,24 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     type: ToastType;
   } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Replace-file guard. When a name clash is found we pause the upload and ask
+  // the user whether to overwrite. The modal resolves a promise so handleUpload
+  // can stay a single linear flow. Uploads are sequential, so one shared prompt
+  // is safe.
+  const [replaceAsk, setReplaceAsk] = useState<{ name: string } | null>(null);
+  const replaceResolveRef = useRef<((ok: boolean) => void) | null>(null);
+  const askReplace = (name: string): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      replaceResolveRef.current = resolve;
+      setReplaceAsk({ name });
+    });
+  const answerReplace = (ok: boolean): void => {
+    setReplaceAsk(null);
+    const resolve = replaceResolveRef.current;
+    replaceResolveRef.current = null;
+    if (resolve) resolve(ok);
+  };
 
   const showToast = (message: string, type: ToastType): void => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -632,7 +666,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       setModes(loadedModes);
 
       const membership = collectMembership(groupMap, userGroupIds);
-      const isPrivileged = admin || membership.isGlobalUploader;
+      // Upload-anywhere is a site-admin privilege only. GLOBAL is a read-only role
+      // (site-entry-access-layer spec) and no longer grants upload.
+      const isPrivileged = admin;
       setPrivileged(isPrivileged);
 
       const [docTypes, years, confs, vendors] = await Promise.all([
@@ -729,9 +765,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     return match ? `${match.label}|${match.id}` : "";
   };
 
+  // Vendor + Document Date feed the document name until the user types their own.
+  const onVendorChange = (v: string): void => {
+    setVendor(v);
+    if (!docNameEdited) setDocName(composeDocName(v, documentDate));
+  };
+  const onDocumentDateChange = (iso: string): void => {
+    setDocumentDate(iso);
+    if (!docNameEdited) setDocName(composeDocName(vendor, iso));
+  };
+  const onDocNameChange = (v: string): void => {
+    setDocName(v);
+    // Blank name re-enables auto-composition; any real text is treated as a manual override.
+    setDocNameEdited(v.trim() !== "");
+  };
+
   const resetForm = (): void => {
     setFile(undefined);
     setDocName("");
+    setDocNameEdited(false);
     setDocumentType("");
     setLevelValues([]);
     setYearPeriod("");
@@ -871,6 +923,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
     setStatus("Checking for duplicates…");
 
+    // Flipped to true only when the user confirms overwriting an existing file.
+    let overwrite = false;
     try {
       // Duplicate check — GetFolderById targets the folder by UniqueId, so a
       // rename of that folder does not affect this lookup.
@@ -880,13 +934,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (existsRes.ok) {
-        showToast(
-          `A file named "${finalName}" already exists in this location. Rename your document or choose a different file.`,
-          "error",
-        );
+        // A file with this name already exists — ask the user whether to replace
+        // it rather than silently blocking the upload.
         setStatus("");
-        setBusy(false);
-        return;
+        const confirmed = await askReplace(finalName);
+        if (!confirmed) {
+          setBusy(false);
+          return;
+        }
+        overwrite = true;
       }
     } catch {
       // Network error on existence check — proceed; upload will surface the real error.
@@ -899,7 +955,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // existence probe is needed — GetFolderById either resolves (folder
       // still exists under its current name/location) or 404s (deleted).
       const uploadRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
+        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=${overwrite})?$select=ServerRelativeUrl`,
         SPHttpClient.configurations.v1,
         { body: file },
       );
@@ -995,12 +1051,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         ...buildLevelFormValues(levelCols, selections),
       ];
 
-      if (vendor) {
-        formValues.push({
-          FieldName: settings.columns.vendor,
-          FieldValue: toTaxValue(options.vendor, vendor),
-        });
-      }
+      // Vendor is captured as free text only to build the document name — it is NOT
+      // written as a metadata column on the file (client request), so no Vendor
+      // FieldValue is pushed here.
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
@@ -1130,6 +1183,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-popup-ok-container { display:flex; align-items:center; justify-content:center; }
         .dms-popup-ok { background: #0f6c3f; max-width: 183px; color: #fff; border: none; border-radius: 6px; padding: 12px 0; width: 100%; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
         .dms-popup-ok:hover { background: #0a5230; }
+        .dms-popup-actions { display:flex; align-items:center; justify-content:center; gap: 12px; }
+        .dms-popup-btn { min-width: 96px; border-radius: 6px; padding: 11px 22px; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
+        .dms-popup-btn.confirm { background: #0f6c3f; color: #fff; border: none; }
+        .dms-popup-btn.confirm:hover { background: #0a5230; }
+        .dms-popup-btn.cancel { background: #fff; color: #0f6c3f; border: 1px solid #0f6c3f; }
+        .dms-popup-btn.cancel:hover { background: #f0f6f2; }
         @media (max-width: 480px) {
           .dms-popup { padding: 28px 20px 24px; border-radius: 12px; }
           .dms-popup-svg { width: 88px; height: 88px; }
@@ -1149,22 +1208,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       {/* ── File ────────────────────────────────────────────────────────── */}
       <div className="dms-section">
         <p className="dms-section-title">File</p>
-        <div className="dms-filecard">
+        {/* The whole card is clickable to open the file picker. */}
+        <div
+          className="dms-filecard"
+          role="button"
+          tabIndex={0}
+          style={{ cursor: "pointer" }}
+          onClick={() => fileRef.current?.click()}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
+        >
           {file ? (
             <div>
               <div className="name">{file.name}</div>
               <div className="size">{(file.size / 1024).toFixed(1)} KB</div>
             </div>
           ) : (
-            <span className="size">No file selected</span>
+            <span className="size">Click here to select a file</span>
           )}
-          <button
-            type="button"
-            className="dms-link"
-            onClick={() => fileRef.current?.click()}
-          >
+          <span className="dms-link">
             {file ? "Change file" : "Select file"}
-          </button>
+          </span>
           <input
             ref={fileRef}
             type="file"
@@ -1203,11 +1266,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   ? `Leave blank to keep "${file.name}"`
                   : "Select a file first"
               }
-              onChange={(e) => setDocName(e.target.value)}
+              onChange={(e) => onDocNameChange(e.target.value)}
             />
-            {file && (
-              <small>Saved as: {buildUploadName(file.name, docName)}</small>
-            )}
           </label>
         </div>
       </div>
@@ -1373,7 +1433,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 const day = d.getDate();
                 return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
               })()}
-              onChange={(e) => setDocumentDate(e.target.value)}
+              onChange={(e) => onDocumentDateChange(e.target.value)}
             />
           </label>
 
@@ -1385,13 +1445,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             options.confidentiality,
           )}
 
-          {renderSelect(
-            "Vendor (if applicable)",
-            false,
-            vendor,
-            setVendor,
-            options.vendor,
-          )}
+          {/* Vendor is free text (client request). It also feeds the document name. */}
+          <label className="dms-field">
+            <span>Vendor (if applicable)</span>
+            <input
+              type="text"
+              value={vendor}
+              placeholder="Type the vendor name"
+              onChange={(e) => onVendorChange(e.target.value)}
+            />
+          </label>
         </div>
       </div>
 
@@ -1427,6 +1490,47 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {replaceAsk && (
+        <div className="dms-popup-overlay" role="dialog" aria-modal="true">
+          <div className="dms-popup">
+            <div className="dms-popup-icon">
+              <svg
+                className="dms-popup-svg"
+                viewBox="0 0 184 184"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle opacity="0.3" cx="92.0001" cy="92" r="75.4872" fill="#FF952A" />
+                <circle cx="92" cy="92" r="92" fill="#FF952A" fillOpacity="0.2" />
+                <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#FF952A" strokeWidth="3" />
+                <path d="M93 66L93 100" stroke="#FF952A" strokeWidth="10" strokeLinecap="round" />
+                <path d="M93 116.804L93 118" stroke="#FF952A" strokeWidth="10" strokeLinecap="round" />
+              </svg>
+            </div>
+            <p className="dms-popup-title">Replace Existing File</p>
+            <p className="dms-popup-msg">
+              We noticed there&rsquo;s a same name file.
+              <br />
+              Are you sure you want to override this file?
+            </p>
+            <div className="dms-popup-actions">
+              <button
+                className="dms-popup-btn confirm"
+                onClick={() => answerReplace(true)}
+              >
+                Yes
+              </button>
+              <button
+                className="dms-popup-btn cancel"
+                onClick={() => answerReplace(false)}
+              >
+                No
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1484,7 +1588,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   window.location.href = siteUrl;
                 }}
               >
-                Track Status on Home
+                Track File Status
               </button>
             </div>
           </div>

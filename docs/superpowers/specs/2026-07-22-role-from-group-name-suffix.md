@@ -16,10 +16,32 @@ and whose role is encoded as a name suffix:
 | `DMS_GHO_GF_CORU_UPL` | uploader |
 | `DMS_GHO_GF_CORU_APR` | approver |
 
-**Access model (a), confirmed:** a base viewer group per unit, with `_UPL` / `_APR`
-role groups added on top. Uploaders/approvers are members of the base group **and**
-their role group. (Pending boss confirmation on whether pure-viewer members exist —
-non-blocking; model (a) supports both outcomes with no code change.)
+**Access model — FINAL, confirmed 2026-07-23. Separate group PER ROLE, isolated PER
+LIBRARY. 3 groups per unit:**
+
+| Group | Library assigned to | Permission | Persona |
+|---|---|---|---|
+| `DMS_<seg>_<dept>_<unit>` (base) | Documents **only** | Read | viewer |
+| `..._UPL` | Staging **only** | Contribute | uploader |
+| `..._APR` | Staging **only** | Design (= approve) | approver |
+
+**Isolation rule:** the base group is **never** assigned to the Staging library. A
+viewer is only in the base group → zero Staging grant → a direct Staging link returns
+Access Denied. Staging only ever lists `_UPL`/`_APR`, satisfying "only uploaders and
+approvers in Staging."
+
+**Cross-library visibility:** an uploader/approver who also needs to read approved docs
+is added to the base group **in addition to** their role group (deliberate double
+membership — the price of clean per-library separation). Base membership is optional per
+user; the app itself never requires Documents access to upload or approve.
+
+GHO scope = 12 units × 3 = **36 groups** (9 Group Finance + 3 GLRC).
+
+> Decision history: model (a) base-viewer → briefly "model (b) 24 groups, no base"
+> (misread of the boss answer, which meant only uploaders/approvers in *Staging*) →
+> FINAL: base viewer exists but is Documents-only, so both constraints hold.
+> `roleFromGroupName` maps `_UPL`→UPL, `_APR`→APR, base (no suffix)→MEMBER. No code
+> change across any of these decisions — group→role→library is configuration only.
 
 ## Scope
 

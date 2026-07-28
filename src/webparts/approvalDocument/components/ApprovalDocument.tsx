@@ -64,7 +64,6 @@ const s = {
   panel:       { border: "1px solid #edebe9", borderRadius: 4, padding: 20, position: "sticky" as const, top: 16, background: "#fff", boxShadow: "0 2px 6px rgba(0,0,0,0.08)" } as React.CSSProperties,
   panelTitle:  { fontWeight: 700, fontSize: 16, color: "#201f1e" } as React.CSSProperties,
   panelHint:   { fontSize: 13, color: "#605e5c", marginBottom: 16, lineHeight: 1.4 } as React.CSSProperties,
-  radioDesc:   { fontSize: 12, color: "#605e5c", lineHeight: 1.4, marginTop: 2 } as React.CSSProperties,
   textarea:    { width: "100%", height: 122, maxHeight: 122, padding: "6px 8px", fontSize: 13, border: "1px solid #8a8886", borderRadius: 2, resize: "vertical" as const, fontFamily: "inherit", boxSizing: "border-box" as const, color: "#201f1e" } as React.CSSProperties,
   charCount:   { fontSize: 12, color: "#605e5c", textAlign: "right" as const, marginTop: 2, marginBottom: 12 } as React.CSSProperties,
   publishLabel:{ fontSize: 13, fontWeight: 600, marginBottom: 6 } as React.CSSProperties,
@@ -74,6 +73,11 @@ const s = {
   btnSendBack: { width: "100%", padding: "10px 0", marginBottom: 8, background: "#fff", color: "#201f1e", border: "1px solid #8a8886", borderRadius: 4, fontSize: 14, fontWeight: 600, cursor: "pointer" } as React.CSSProperties,
   btnReject:   { width: "100%", padding: "10px 0", background: "#fff", color: "#a4262c", border: "1px solid #a4262c", borderRadius: 4, fontSize: 14, fontWeight: 600, cursor: "pointer" } as React.CSSProperties,
   errText:     { color: "#a4262c", fontSize: 13, marginBottom: 10 } as React.CSSProperties,
+  popupOverlay:{ position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.25)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 } as React.CSSProperties,
+  popupCard:   { background: "#fff", borderRadius: 16, padding: "40px 40px 32px", textAlign: "center" as const, maxWidth: 420, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.15)" } as React.CSSProperties,
+  popupTitle:  { fontSize: 22, fontWeight: 700, color: "#0f6c3f", margin: "0 0 12px" } as React.CSSProperties,
+  popupMsg:    { fontSize: 14, color: "#555", margin: "0 0 28px", lineHeight: 1.6 } as React.CSSProperties,
+  popupBtn:    { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 6, padding: "12px 28px", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", minWidth: 183 } as React.CSSProperties,
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -268,18 +272,69 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   // ── Success ────────────────────────────────────────────────────────────────
 
   if (submitted) {
-    const msgs: Record<Decision, { icon: string; title: string; color: string }> = {
-      Approved: { icon: "✓", title: "Document Approved",      color: "#107c10" },
-      Rejected: { icon: "×", title: "Document Rejected",      color: "#a4262c" },
-      Pending:  { icon: "↩", title: "Set Back to Pending",    color: "#797775" },
+    const popups: Record<
+      Decision,
+      { title: string; message: string; icon: React.ReactNode }
+    > = {
+      Approved: {
+        title: "Approval Successful",
+        message: "Your document has been approved successfully.",
+        icon: (
+          <svg width="120" height="120" viewBox="0 0 184 184" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle opacity="0.3" cx="92.0001" cy="91.9999" r="75.4872" fill="#14C7A5" />
+            <circle cx="92" cy="92" r="92" fill="#14C7A5" fillOpacity="0.2" />
+            <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#14C7A5" strokeWidth="3" />
+            <path d="M102 106.841L111 114.841L122 99.8413" stroke="#14C7A5" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M98 121H65L65 77.5L82 58H113V91" stroke="#14C7A5" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M80 81H99" stroke="#14C7A5" strokeWidth="6" strokeLinecap="round" />
+            <path d="M80 92H87" stroke="#14C7A5" strokeWidth="6" strokeLinecap="round" />
+          </svg>
+        ),
+      },
+      Rejected: {
+        title: "Document Rejected",
+        message: "The document has been returned for revision.",
+        icon: (
+          <svg width="120" height="120" viewBox="0 0 184 184" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle opacity="0.3" cx="92.0001" cy="91.9999" r="75.4872" fill="#FF4646" />
+            <circle cx="92" cy="92" r="92" fill="#FF4646" fillOpacity="0.2" />
+            <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#FF4646" strokeWidth="3" />
+            <path d="M119.801 98.5981L104.598 113.801" stroke="#FF4646" strokeWidth="7" strokeLinecap="round" />
+            <path d="M104.598 98.605L119.801 113.808" stroke="#FF4646" strokeWidth="7" strokeLinecap="round" />
+            <path d="M98 121H65L65 77.5L82 58H113V91" stroke="#FF4646" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M80 81H99" stroke="#FF4646" strokeWidth="6" strokeLinecap="round" />
+            <path d="M80 92H87" stroke="#FF4646" strokeWidth="6" strokeLinecap="round" />
+          </svg>
+        ),
+      },
+      Pending: {
+        title: "Still pending Approval",
+        message: "You can monitor its status anytime.",
+        icon: (
+          <svg width="120" height="120" viewBox="0 0 184 184" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle opacity="0.3" cx="92.0001" cy="91.9999" r="75.4872" fill="#FF8800" />
+            <circle cx="92" cy="92" r="92" fill="#FF8800" fillOpacity="0.2" />
+            <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#FF8800" strokeWidth="3" />
+            <path d="M98 121H65L65 77.5L82 58H113V91" stroke="#FF8800" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx="113" cy="110" r="11" stroke="#FF8800" strokeWidth="5" />
+            <path d="M113 105V112L118 109.5" stroke="#FF8800" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M80 81H99" stroke="#FF8800" strokeWidth="6" strokeLinecap="round" />
+            <path d="M80 92H87" stroke="#FF8800" strokeWidth="6" strokeLinecap="round" />
+          </svg>
+        ),
+      },
     };
-    const { icon, title, color } = msgs[submitted];
+    const { title, message, icon } = popups[submitted];
     return (
-      <div style={{ padding: 48, textAlign: "center" }}>
-        <div style={{ fontSize: 52, color, marginBottom: 12 }}>{icon}</div>
-        <div style={{ fontSize: 18, fontWeight: 700, color, marginBottom: 6 }}>{title}</div>
-        <div style={{ fontSize: 14, color: "#605e5c", marginBottom: 28 }}>{item.FileLeafRef}</div>
-        <a href={backUrl()} style={s.backLink}>← Back to document list</a>
+      <div style={s.popupOverlay} role="dialog" aria-modal="true">
+        <div style={s.popupCard}>
+          <div style={{ marginBottom: 20 }}>{icon}</div>
+          <div style={s.popupTitle}>{title}</div>
+          <div style={s.popupMsg}>{message}</div>
+          <button style={s.popupBtn} onClick={() => { window.location.href = backUrl(); }}>
+            Back to Document
+          </button>
+        </div>
       </div>
     );
   }
@@ -326,10 +381,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     ["Vendor",             pick("Vendor")],
   ];
 
-  const radioOptions: { val: Decision; label: string; desc: string }[] = [
-    { val: "Approved", label: "Approved", desc: "This item will become visible to all users." },
-    { val: "Rejected", label: "Rejected", desc: "This item will be returned to its creator and only be visible to its creator and all users who can see draft items." },
-    { val: "Pending",  label: "Pending",  desc: "This item will remain visible to its creator and all users who can see draft items." },
+  // Pending is a system state only — approvers pick Approved or Rejected.
+  const radioOptions: { val: Decision; label: string }[] = [
+    { val: "Approved", label: "Approved" },
+    { val: "Rejected", label: "Rejected" },
   ];
 
   return (
@@ -396,21 +451,18 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Approval status</div>
-            {radioOptions.map(({ val, label, desc }) => (
+            {radioOptions.map(({ val, label }) => (
               <label key={val} style={{ display: "block", marginBottom: 10, cursor: "pointer" }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <input
                     type="radio"
                     name="decision"
                     value={val}
                     checked={decision === val}
                     onChange={() => setDecision(val)}
-                    style={{ marginTop: 3, flexShrink: 0 }}
+                    style={{ flexShrink: 0 }}
                   />
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: decision === val ? 600 : 400 }}>{label}</div>
-                    {desc && <div style={s.radioDesc}>{desc}</div>}
-                  </div>
+                  <div style={{ fontSize: 13, fontWeight: decision === val ? 600 : 400 }}>{label}</div>
                 </div>
               </label>
             ))}
@@ -447,7 +499,12 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
           {submitError && <div style={s.errText}>{submitError}</div>}
 
-          <button onClick={() => { submitDecision(decision).catch(() => undefined); }} disabled={submitting} style={{ ...s.btnApprove, opacity: submitting ? 0.7 : 1 }}>
+          {/* Pending is no longer selectable — require an explicit Approved/Rejected choice. */}
+          <button
+            onClick={() => { submitDecision(decision).catch(() => undefined); }}
+            disabled={submitting || decision === "Pending"}
+            style={{ ...s.btnApprove, opacity: submitting || decision === "Pending" ? 0.7 : 1, cursor: decision === "Pending" ? "not-allowed" : "pointer" }}
+          >
             {submitting ? "Saving…" : "Ok"}
           </button>
           <button onClick={() => { window.location.href = backUrl(); }} disabled={submitting} style={{ ...s.btnSendBack, opacity: submitting ? 0.7 : 1 }}>

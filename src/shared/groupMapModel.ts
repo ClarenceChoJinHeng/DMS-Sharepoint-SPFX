@@ -3,6 +3,15 @@
 
 export type GroupMapRole = "MEMBER" | "UPL" | "APR" | "GLOBAL";
 
+/**
+ * The site-entry SP group. Grants Read on the web + Home + Documents library so any DMS user
+ * can actually open the site (folder-group Limited Access alone cannot — see the
+ * site-entry-access-layer spec). NOT a Group Map row: it is a pure SharePoint permission, not
+ * an upload-routing role. Adding a user to any DMS group via the Members modal also adds them
+ * here so nobody is left locked out of the site.
+ */
+export const SITE_ENTRY_GROUP_NAME = "DMS_SITE_MEMBERS";
+
 /** The exact field set POSTed to the DMS Group Map list. */
 export interface GroupMapWriteRow {
   GroupId: string;

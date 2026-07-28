@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import {
@@ -11,9 +11,11 @@ import {
   GroupMapRole,
   GroupMapDraft,
   GroupMapWriteRow,
+  SITE_ENTRY_GROUP_NAME,
 } from "../../../shared/groupMapModel";
 import {
   searchSiteGroups,
+  fetchAllSiteGroups,
   createSiteGroup,
   deleteSiteGroup,
   getGroupMembers,
@@ -416,15 +418,52 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const reloadMm = async (): Promise<void> => {
     if (memberModal) setMmMembers(await getGroupMembers(context.spHttpClient, siteUrl, Number(memberModal.id)));
   };
+  // Session cache for the site-entry group lookup. Cache the PROMISE (assigned
+  // synchronously) so there is no read-modify-write of a ref across an await.
+  // Resolves to the group's id, or null if DMS_SITE_MEMBERS doesn't exist yet.
+  const entryGroupPromiseRef = useRef<Promise<number | null> | undefined>(undefined);
+  const resolveEntryGroupId = (): Promise<number | null> => {
+    if (!entryGroupPromiseRef.current) {
+      entryGroupPromiseRef.current = fetchAllSiteGroups(context.spHttpClient, siteUrl)
+        .catch(() => [])
+        .then((all) => {
+          const hit = all.find(
+            (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+          );
+          return hit ? hit.id : null;
+        });
+    }
+    return entryGroupPromiseRef.current;
+  };
+
   const mmAdd = async (p: PersonPick): Promise<void> => {
     if (!memberModal) return;
     setMmBusy(true);
     try {
-      await addGroupMember(context.spHttpClient, siteUrl, Number(memberModal.id), p.loginName);
+      const targetId = Number(memberModal.id);
+      await addGroupMember(context.spHttpClient, siteUrl, targetId, p.loginName);
+      // Also grant site entry: every DMS group member needs to be able to open the
+      // site (folder-group Limited Access alone can't — site-entry-access-layer spec).
+      // Skip when the group being edited IS the entry group; re-adding is idempotent.
+      let entryNote = "";
+      const isEntryGroup =
+        memberModal.displayName.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase();
+      if (!isEntryGroup) {
+        const entryId = await resolveEntryGroupId();
+        if (entryId === null) {
+          entryNote = ` (note: ${SITE_ENTRY_GROUP_NAME} not found — create it so they can open the site)`;
+        } else {
+          await addGroupMember(context.spHttpClient, siteUrl, entryId, p.loginName).catch(
+            () => {
+              entryNote = ` (warning: could not add to ${SITE_ENTRY_GROUP_NAME})`;
+            },
+          );
+        }
+      }
       await reloadMm();
       setMmQuery("");
       setMmResults([]);
-      showToast(`${p.displayName} added — access is immediate.`, false);
+      showToast(`${p.displayName} added — access is immediate.${entryNote}`, !!entryNote);
     } catch (e) {
       showToast(`Add member failed: ${(e as Error).message}`, true);
     } finally {
@@ -522,11 +561,17 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       }
       setExisting(await loadExisting());
       // Add any staged members now that the group exists. Failures are counted, not fatal.
+      // Each member is also added to the site-entry group so they can open the site
+      // (site-entry-access-layer spec). A new DMS group is never the entry group itself.
+      const entryId: number | null = stagedMembers.length > 0 ? await resolveEntryGroupId() : null;
       let addedMembers = 0;
       let failedMembers = 0;
       for (const p of stagedMembers) {
         try { await addGroupMember(context.spHttpClient, siteUrl, Number(newGroup.id), p.loginName); addedMembers++; }
         catch { failedMembers++; }
+        if (entryId !== null) {
+          await addGroupMember(context.spHttpClient, siteUrl, entryId, p.loginName).catch(() => undefined);
+        }
       }
       const staged = stagedMembers.length;
       const createdName = newGroup.displayName;
@@ -643,14 +688,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   };
   const draftErrors = validateDraft(draft);
   const canAdd = draftErrors.length === 0 && !busy;
-
-  const tierLabel = (): string => {
-    if (role === "GLOBAL") return "—";
-    if (!tierGuid) return "(not chosen)";
-    if (mode && tierGuid === mode.termSetGuid) return "(segment level)";
-    const hit = chosen.find((t) => t.id === tierGuid);
-    return hit ? hit.label : tierGuid;
-  };
 
   const segmentLabelFor = (guid: string): string => {
     const m = modes.find((x) => x.termSetGuid === guid);
@@ -991,14 +1028,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         {!creating && (
           <>
             {selectionFields}
-
-            {/* Preview */}
-            {group && role && (
-              <div style={s.preview}>
-                <strong>Will write:</strong> {group.displayName} · <em>{role}</em>
-                {role !== "GLOBAL" && <> · segment <strong>{mode?.label ?? "(none)"}</strong> · tier <strong>{tierLabel()}</strong></>}
-              </div>
-            )}
 
             {group && role && draftErrors.length > 0 && (
               <div style={s.missing}>Before adding: {draftErrors.join(" ")}</div>

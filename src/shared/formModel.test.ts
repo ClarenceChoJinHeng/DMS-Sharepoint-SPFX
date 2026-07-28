@@ -54,21 +54,26 @@ describe("collectMembership", () => {
     { groupId: "g-lrc", groupName: "LRC Dept", segment: "set-gho", termGuid: "t-lrc", role: "MEMBER" },
     { groupId: "g-gco-upl", groupName: "GCO Uploaders", segment: "set-gho", termGuid: "t-gco", role: "UPL" },
     { groupId: "g-risk-upl", groupName: "Risk Uploaders", segment: "set-gho", termGuid: "t-risk", role: "UPL" },
-    { groupId: "g-global", groupName: "Global Uploaders", segment: "", termGuid: "", role: "GLOBAL" },
+    { groupId: "g-global", groupName: "Global Reader", segment: "", termGuid: "", role: "GLOBAL" },
   ];
 
   it("collects member terms and uploader leaves for the user's groups", () => {
     const m = collectMembership(rows, ["g-seg", "g-lrc", "g-gco-upl"]);
     expect(m.memberTerms).toEqual(new Set(["set-gho", "t-lrc", "t-gco"]));
     expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
-    expect(m.isGlobalUploader).toBe(false);
   });
 
-  it("flags a global uploader and ignores its (empty) term", () => {
+  it("ignores GLOBAL rows entirely — a read-only role, never an uploader", () => {
     const m = collectMembership(rows, ["g-global"]);
-    expect(m.isGlobalUploader).toBe(true);
     expect(m.uploaderLeaves).toEqual([]);
     expect(m.memberTerms.size).toBe(0);
+  });
+
+  it("gives a GLOBAL member no upload paths even alongside a real upl group", () => {
+    // GLOBAL adds nothing; the UPL leaf is the only thing that grants upload.
+    const m = collectMembership(rows, ["g-global", "g-gco-upl"]);
+    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
+    expect(m.memberTerms).toEqual(new Set(["t-gco"]));
   });
 
   it("is case-insensitive and trims group ids on both sides", () => {
@@ -80,7 +85,6 @@ describe("collectMembership", () => {
     const m = collectMembership(rows, ["none"]);
     expect(m.memberTerms.size).toBe(0);
     expect(m.uploaderLeaves).toEqual([]);
-    expect(m.isGlobalUploader).toBe(false);
   });
 });
 

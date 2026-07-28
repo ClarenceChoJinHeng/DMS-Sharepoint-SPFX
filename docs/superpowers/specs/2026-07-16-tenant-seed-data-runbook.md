@@ -1,5 +1,13 @@
 # Tenant Seed-Data Runbook — Multi-Segment DMS
 
+> ⛔ **SUPERSEDED 2026-07-28 by `2026-07-28-client-site-migration-runbook.md`. Do not follow this
+> document.** It is stale in ways that will actively break a deployment:
+> §0 asks for Graph API permissions (Graph fully retired; `webApiPermissionRequests` is `[]`);
+> §4 says `GroupId` = Entra Object ID (it is now the SP group **integer** id) and names the column
+> `TermGuid` (actual: `UnitTermGuid`); §3a names the column `Side` (the code selects `Category`);
+> §1 lists the 5 retired term sets (upstream/sdgi/it/projects) instead of the 4 Head Offices, and
+> the GHO GUID `efa87c6a-…` is retired. Kept for history only.
+
 **Purpose:** everything a tenant needs so the deployed `sd-gatrie.sppkg` "just works" with
 **data insertion only — no code changes.** The web part is fully data-driven: modes, level
 chains, and the real Staging column internal names all come from SharePoint lists / config.

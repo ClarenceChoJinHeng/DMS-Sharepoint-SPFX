@@ -39,3 +39,6 @@ obj
 
 # Brainstorming visual companion
 .superpowers
+
+# Dev harness generated bundle
+dev/**/*.bundle.js

@@ -27,6 +27,27 @@ retired, and the Folder Manager "Copy structure → Documents" button is removed
 - **Lives in Folder Manager** as a tab; the standalone Reconciliation web part is
   removed from the bundle/componentId; the copy button is deleted.
 
+## Decision (2026-07-23) — ancestor Read for browsable, security-trimmed paths
+
+Uploaders/approvers/viewers must be able to **browse the tree in the UI** (segment →
+department → unit), not just reach their folder by a direct link. Limited Access alone
+does not render intermediate folder views, so reconciliation now **also grants each
+assigned group `Read` on every ANCESTOR folder on its own path** (same library):
+
+- A group assigned at a unit folder (`_UPL`/`_APR` in Staging, base `MEMBER` in Documents)
+  gets **Read** on each parent up to — but not including — the library root.
+- Ancestors get **Read only** (never Contribute/Design), so pass-through folders can't be
+  written to; edit/upload rights stay only at the unit folder (+ its inherited Year/DocType).
+- **Siblings get no grant**, so SharePoint **security-trims** them from the user's view —
+  a member sees only their own corridor (e.g. Group Head Office → Group Finance → CORU),
+  with sibling departments/units invisible, not merely locked.
+- Shared ancestors accumulate one Read ACE per unit group; each unit group still sees only
+  its own child (the others are trimmed). Idempotent (`addRoleAssignment` merges).
+
+Verified manually on CORU (2026-07-23): a `DMS_GHO_GF_CORU_UPL` member (kaisya) with Read on
+Group Head Office + Group Finance and Contribute on CORU saw **only** GHO → Group Finance →
+CORU. This behaviour is now produced automatically by a run.
+
 ## Decision (2026-07-20b) — pre-create the Year × Document Type grid
 
 Under every **leaf (unit)** folder — the actual upload targets — reconciliation

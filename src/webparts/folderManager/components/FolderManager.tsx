@@ -1,12 +1,14 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
-import { searchSiteGroups } from "../../../shared/spGroups";
+import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember } from "../../../shared/spGroups";
+import { SITE_ENTRY_GROUP_NAME } from "../../../shared/groupMapModel";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import GroupMapBuilder from "./GroupMapBuilder";
 import {
   loadMappedTermGuids,
   resolveFolderByPath,
+  probeFolderByPath,
   writeFolderMapping,
   ensureFolder,
   encodeServerRelativePath,
@@ -87,15 +89,28 @@ const fmtDur = (ms: number): string => {
 // Rotating status text shown during the cooldown so the pause reads as progress.
 const COOLDOWN_MESSAGES = ["Discombobulating…", "Generating folders…"];
 
-// Retry a SharePoint write on HTTP 429/503, honoring Retry-After (seconds) with
-// exponential backoff. Returns the final response (ok or not) after up to 5 retries.
+// Retry a SharePoint request on transient throttling, honoring Retry-After (seconds)
+// with exponential backoff. Returns the final response (ok or not) after up to 5 retries.
+// Beyond the obvious 429/503, SharePoint Online's anti-abuse system can surface a
+// sustained WRITE burst as `403 E_ACCESSDENIED` / UnauthorizedAccessException even when
+// the caller has full permissions — indistinguishable at the status line from a real
+// denial except by the burst context. We treat that signature as retryable but only for
+// the first few attempts, so a GENUINE 403 still fails fast (after ~3 backoffs) instead
+// of masquerading as success forever.
 async function withThrottleRetry(
   doPost: () => Promise<SPHttpClientResponse>,
   onWait?: (ms: number) => void,
 ): Promise<SPHttpClientResponse> {
   for (let attempt = 0; ; attempt++) {
     const res = await doPost();
-    if ((res.status !== 429 && res.status !== 503) || attempt >= 5) return res;
+    const throttled = res.status === 429 || res.status === 503;
+    let burst403 = false;
+    if (res.status === 403 && attempt < 3) {
+      // Peek at a CLONE so the original body stays readable for the caller.
+      const body = await res.clone().text().catch(() => "");
+      burst403 = /E_ACCESSDENIED|UnauthorizedAccessException/i.test(body);
+    }
+    if ((!throttled && !burst403) || attempt >= 5) return res;
     const ra = Number(res.headers.get("Retry-After"));
     const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
     if (onWait) onWait(waitMs);
@@ -339,12 +354,20 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   /* ── REST ────────────────────────────────────────────────────────────────────── */
 
   const getLibraryRoot = async (lib: string): Promise<string | null> => {
-    const res: SPHttpClientResponse = await context.spHttpClient.get(
+    // Retry-wrapped: a single throttled GET here used to null out the WHOLE library
+    // pass in reconciliation (e.g. Documents skipped → no MEMBER grants land). Log the
+    // real HTTP status on genuine failure rather than reporting a false "not found"
+    // (CLAUDE.md gotcha #9 — a transient status is not missing data).
+    const res: SPHttpClientResponse = await withThrottleRetry(() => context.spHttpClient.get(
       `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/RootFolder?$select=ServerRelativeUrl`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
-    );
-    if (!res.ok) return null;
+    ), reconWaitNote);
+    if (!res.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(`getLibraryRoot('${lib}') failed: HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      return null;
+    }
     const data = await res.json();
     return data.ServerRelativeUrl ?? null;
   };
@@ -1183,12 +1206,34 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             if (t.isLeaf && yearLabels.length > 0) {
               const gridTotal = yearLabels.length * (1 + docTypeLabels.length);
               let grid = 0;
+              // FAST PATH. The grid is built in order, so if the LAST year's LAST
+              // document-type folder is there, the whole grid is there. One probe
+              // replaces 63 round-trips per leaf per library. Without this a no-op
+              // re-run cost the same as a first run (measured: 6,090 folders in
+              // 111m for 48 units, of which only 6 were real group assignments).
+              // Trade-off: a folder hand-deleted from the middle of a COMPLETE grid
+              // is not restored here — the upload form ensure-creates it on demand.
+              // probeFolderByPath retries 429s, so a throttle cannot fake "incomplete"
+              // and trigger a needless full rebuild.
+              const lastYear = yearLabels[yearLabels.length - 1];
+              const lastDt = docTypeLabels.length > 0 ? docTypeLabels[docTypeLabels.length - 1] : undefined;
+              const gridProbe = await probeFolderByPath(
+                context.spHttpClient,
+                siteUrl,
+                lastDt ? `${full}/${lastYear}/${lastDt}` : `${full}/${lastYear}`,
+              );
+              if (gridProbe.folder) {
+                entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`, ok: true });
+                setLastFolder(`${t.label} grid: already complete, skipped`, "skip");
+              } else {
               pushFolder(`${t.label} grid: 0 / ${gridTotal}`, "run");
               for (const yr of yearLabels) {
                 const yearFolder = await ensureFolder(context.spHttpClient, siteUrl, full, yr);
                 if (yearFolder) { grid++; bumpFolders(); }
                 setLastFolder(`${t.label} grid: ${grid} / ${gridTotal}`, "run");
-                await tick();
+                // Only pace REAL writes. Charging the throttle delay to a folder that
+                // already existed is what made a no-op re-run as slow as a first run.
+                if (yearFolder?.created) await tick();
                 if (!yearFolder) continue;
                 // Sequential (NOT parallel) — the old parallel burst was what tripped the
                 // 429 throttle. One folder at a time + the inter-write delay keeps it safe.
@@ -1196,8 +1241,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                   const made = await ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt);
                   if (made) { grid++; bumpFolders(); }
                   setLastFolder(`${t.label} grid: ${grid} / ${gridTotal}`, "run");
-                  await tick();
+                  if (made?.created) await tick();
                 }
+              }
               }
               entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
               setLastFolder(`${t.label} grid: ${grid} / ${gridTotal} ✓`, "ok");
@@ -1207,6 +1253,46 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           }
         }
       }
+      // Site-entry self-heal: ensure every member of any DMS_* group is also in
+      // DMS_SITE_MEMBERS, so users added the native way (bypassing the web part's
+      // auto-add) can still open the site. See site-entry-access-layer spec §7a.
+      try {
+        setReconPhase("Syncing site-entry group…");
+        const allGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+        const entryGroup = allGroups.find(
+          (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+        );
+        if (!entryGroup) {
+          entries.push({ msg: `⚠ ${SITE_ENTRY_GROUP_NAME} not found — run "Set up site entry" first (site-entry sync skipped)`, ok: false });
+        } else {
+          const entryMembers = await getGroupMembers(context.spHttpClient, siteUrl, entryGroup.id);
+          const already = new Set(entryMembers.map((m) => m.loginName.toLowerCase()));
+          const dmsGroups = allGroups.filter(
+            (g) => g.title.toUpperCase().indexOf("DMS_") === 0 && g.id !== entryGroup.id,
+          );
+          let healed = 0;
+          for (const g of dmsGroups) {
+            const members = await getGroupMembers(context.spHttpClient, siteUrl, g.id).catch(() => []);
+            for (const m of members) {
+              if (already.has(m.loginName.toLowerCase())) continue;
+              try {
+                await addGroupMember(context.spHttpClient, siteUrl, entryGroup.id, m.loginName);
+                already.add(m.loginName.toLowerCase());
+                healed++;
+              } catch { /* skip a member that can't be added; not fatal */ }
+            }
+          }
+          entries.push({
+            msg: healed > 0
+              ? `${SITE_ENTRY_GROUP_NAME}: added ${healed} member(s) missing site entry ✓`
+              : `${SITE_ENTRY_GROUP_NAME}: all DMS group members already have site entry ✓`,
+            ok: true,
+          });
+        }
+      } catch (e) {
+        entries.push({ msg: `Site-entry sync skipped — ${(e as Error).message}`, ok: false });
+      }
+
       setLog(entries);
       const failed = entries.filter(e => !e.ok).length;
       showToast(

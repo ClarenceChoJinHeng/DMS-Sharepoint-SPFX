@@ -48,7 +48,6 @@ export interface UploaderLeaf {
 export interface Membership {
   memberTerms: Set<string>; // every term (or term-set) GUID the user is a member of, normalised
   uploaderLeaves: UploaderLeaf[]; // the user's UPL-role leaves
-  isGlobalUploader: boolean; // user holds a GLOBAL-role group -> upload anywhere
 }
 
 const normGuid = (g: string): string => (g ?? "").trim().toLowerCase();
@@ -120,8 +119,11 @@ export function parseReconModes(rows: RawModeRow[]): ReconMode[] {
 /**
  * Reduce the DMS Group Map to the current user's memberships:
  *  - `memberTerms`: every term/term-set GUID whose group the user is in (any role);
- *  - `uploaderLeaves`: the leaves the user holds the UPL role for;
- *  - `isGlobalUploader`: true if the user is in any GLOBAL-role group.
+ *  - `uploaderLeaves`: the leaves the user holds the UPL role for.
+ * `GLOBAL` is a read-only super-viewer role (reads all of Documents + Staging, enforced
+ * by SharePoint library-level Read grants — see the site-entry-access-layer spec). It grants
+ * NO upload capability, so GLOBAL rows are ignored here entirely (they carry no term).
+ * Upload-anywhere is a separate site-admin concern, checked outside this function.
  * Matching is case-insensitive and trimmed on both sides.
  */
 export function collectMembership(
@@ -131,20 +133,16 @@ export function collectMembership(
   const wanted = new Set(userGroupIds.map(normGuid));
   const memberTerms = new Set<string>();
   const uploaderLeaves: UploaderLeaf[] = [];
-  let isGlobalUploader = false;
   for (const r of rows) {
     if (!wanted.has(normGuid(r.groupId))) continue;
     const role = (r.role ?? "").trim().toUpperCase();
-    if (role === "GLOBAL") {
-      isGlobalUploader = true;
-      continue; // GLOBAL rows carry no term
-    }
+    if (role === "GLOBAL") continue; // read-only role, no term, no upload
     if (r.termGuid) memberTerms.add(normGuid(r.termGuid));
     if (role === "UPL") {
       uploaderLeaves.push({ termGuid: r.termGuid, segment: r.segment });
     }
   }
-  return { memberTerms, uploaderLeaves, isGlobalUploader };
+  return { memberTerms, uploaderLeaves };
 }
 
 /**
