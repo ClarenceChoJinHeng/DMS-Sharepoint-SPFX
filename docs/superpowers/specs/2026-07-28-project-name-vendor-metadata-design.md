@@ -54,7 +54,7 @@ state is discarded the moment the upload completes.
 | Project Name column | New `ProjectName` column in Staging |
 | Group-led Projects level | Renamed "Project Name" → **"Group Project Name"** |
 | Both project fields on one screen | Show both, always |
-| Document Date | Becomes **optional** (mockup shows no asterisk) |
+| Document Date | **Required.** Briefly made optional to match the mockup, then reverted 2026-07-28 on an updated client requirement |
 | Date input format | Keep native `<input type="date">`; format follows browser locale |
 
 ---
@@ -263,17 +263,18 @@ Remove the carve-out at `Form.tsx:1054-1056` and push
 Vendor keeps feeding the auto-composed document name via `onVendorChange` /
 `composeDocName`. That behaviour is unchanged — it now additionally persists.
 
-### 3.3 Document Date becomes optional
+### 3.3 Document Date stays required
 
-Remove `Document Date` from the `missing` validation array (`Form.tsx:807`), and drop the
-asterisk from its label.
+The mockup shows no asterisk on Document Date, so it was briefly made optional. **An
+updated client requirement on 2026-07-28 reverted this** — the field keeps its validation
+check and its required asterisk. The mockup's missing asterisk is treated as an oversight.
 
-The `FieldValue` must be **skipped entirely when blank**, not sent as an empty string:
-`toSpDate("")` splits an empty string and produces the malformed `NaN/NaN/`, which
-SharePoint rejects with a `HasException` on that field.
-
-`composeDocName` already tolerates an empty date — it filters falsy parts — so the
-auto-composed name degrades to vendor-only with no change needed.
+One artefact of the round trip remains deliberately: the `FieldValue` is pushed behind an
+`if (documentDate)` guard rather than sitting unconditionally in the `formValues` array
+literal. Validation now guarantees a value, so the guard is redundant — it is kept as a
+safety net because `toSpDate("")` produces the malformed `NaN/NaN/`, which SharePoint
+rejects with a `HasException` surfacing as a confusing "Uploaded, but a field failed"
+far from its cause.
 
 ---
 
@@ -312,10 +313,12 @@ level-column rename resolving `GroupProjectName` to its label/Tid pair.
    Approval Document page.
 2. Business Segment upload with both blank → Approval page shows "—" for both; no field
    error toast.
-3. Upload with Document Date blank → succeeds; document name falls back to vendor-only;
-   no `NaN/NaN/` error.
+3. Upload with Document Date blank → **blocked** by validation, with "Document Date"
+   named in the missing-fields toast.
 4. Upload with Document Date filled → date stored correctly, name composes as
    `<Vendor>-<DD-MM-YY>`.
+5. **Replace an existing file**, leaving Project Name and Vendor blank → see the open
+   question below; as built, the previous upload's values persist.
 5. 31st character rejected in all three limited fields.
 6. Group-led Projects upload → both "Project Name" (text) and "Group Project Name"
    (dropdown) visible; folder path uses the term, free text stored separately.
@@ -344,6 +347,33 @@ warning all still render in the folder card.
 Step 3 must precede step 6. The code fallbacks carry the correct names, so a missed
 config row degrades to the fallback rather than failing — but a `col_vendor` row left
 pointing at the deleted `Vendor` column overrides the fallback and breaks every upload.
+
+## Open question — replace-file leaves stale metadata
+
+Found in review after implementation; neither this spec nor the plan considered it.
+
+`Form.tsx` uploads with `Files/Add(..., overwrite=true)` when the user confirms replacing
+a same-named file. That swaps the file's *content* but reuses the **same list item**, so
+its metadata columns survive. Because Project Name and Vendor are written only when
+non-blank, clearing one of those fields on a replace no longer clears the column.
+
+Concretely: upload `Invoice.pdf` with Vendor `Acme Trading`; later replace it with a
+corrected `Invoice.pdf`, leaving Vendor blank. The upload succeeds and the Approval
+Document page still shows `Acme Trading` — metadata describing the superseded file.
+
+Document Date is not affected: it is required, so it is always written and always
+refreshed.
+
+Three options, undecided:
+
+1. **Blank clears** — push both text fields unconditionally, sending `""` when blank.
+   Safe for Text columns. Guarantees the stored metadata always describes the file that
+   is actually there.
+2. **Leave as built** — blank means "don't touch". Fewest changes; accepts that the
+   approval page can show values belonging to a replaced document.
+3. **Prefill on replace** — when the name clash is detected, load the existing item's
+   metadata into the form so the user edits current values rather than starting blank.
+   Best experience, most work.
 
 ## Correction to an existing fixture
 
