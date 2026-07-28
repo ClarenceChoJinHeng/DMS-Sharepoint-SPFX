@@ -817,8 +817,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     (m?.levels ?? []).forEach((lvl, i) => {
       if (!levelValues[i]) missing.push(lvl.label);
     });
-    if (!yearPeriod) missing.push("Year / Period");
-    if (!confidentiality) missing.push("Confidentiality Level");
+    // These strings are shown to the user, so they must match the on-screen
+    // field labels — renamed to "Year" / "Confidential Level" in the relayout.
+    if (!yearPeriod) missing.push("Year");
+    if (!confidentiality) missing.push("Confidential Level");
     if (missing.length > 0) {
       showToast(`Please complete: ${missing.join(", ")}.`, "error");
       return;
