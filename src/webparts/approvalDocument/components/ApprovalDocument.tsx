@@ -378,7 +378,11 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     ["Document Type",      pick("Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
     ["Confidential Level", pick("Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
     ["Year",               pick("Year", "Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
-    ["Vendor",             pick("Vendor")],
+    // ProjectName has no encoded characters, so its response key is unencoded.
+    ["Project Name",       pick("ProjectName")],
+    // Vendor_x002f_CustomerName does, and FieldValuesAsText double-encodes the
+    // underscores in response keys — hence the _x005f_ form first.
+    ["Vendor/Customer Name", pick("Vendor_x005f_x002f_x005f_CustomerName", "Vendor_x002f_CustomerName")],
   ];
 
   // Pending is a system state only — approvers pick Approved or Rejected.
