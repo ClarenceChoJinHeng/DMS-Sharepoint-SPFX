@@ -1196,9 +1196,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-conf { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 16px; }
         .dms-conf .dms-field { flex: 1; margin-bottom: 0; min-width: 0; }
         .dms-info { position: relative; flex-shrink: 0; margin-bottom: 10px; width: 18px; height: 18px; border-radius: 50%; background: #0f6c3f; color: #fff; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; }
-        /* Anchored to the icon's right edge so the panel grows leftward and
-           cannot overflow the viewport — Confidential Level is the last column. */
-        .dms-info-panel { display: none; position: absolute; top: 26px; right: 0; z-index: 30; width: 300px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
+        /* Opens to the right of the icon, into the empty third grid column.
+           280px keeps it inside the card rather than spilling past its edge. */
+        .dms-info-panel { display: none; position: absolute; top: -8px; left: calc(100% + 8px); z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
         .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; }
         .dms-info-panel dl { margin: 0; }
         .dms-info-panel dt { margin-top: 12px; color: #0f6c3f; font-size: 13px; font-weight: 700; }
