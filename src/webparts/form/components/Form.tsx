@@ -1191,6 +1191,19 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-field .req { color: #d13438; font-style: normal; }
         .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
         .dms-field small { color: #666; font-size: 12px; font-weight: 400; }
+        /* Confidentiality info tooltip. flex-end + 10px lifts the 18px icon to
+           the vertical middle of the 38px select beside it. */
+        .dms-conf { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 16px; }
+        .dms-conf .dms-field { flex: 1; margin-bottom: 0; min-width: 0; }
+        .dms-info { position: relative; flex-shrink: 0; margin-bottom: 10px; width: 18px; height: 18px; border-radius: 50%; background: #0f6c3f; color: #fff; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; }
+        /* Anchored to the icon's right edge so the panel grows leftward and
+           cannot overflow the viewport — Confidential Level is the last column. */
+        .dms-info-panel { display: none; position: absolute; top: 26px; right: 0; z-index: 30; width: 300px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
+        .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; }
+        .dms-info-panel dl { margin: 0; }
+        .dms-info-panel dt { margin-top: 12px; color: #0f6c3f; font-size: 13px; font-weight: 700; }
+        .dms-info-panel dt:first-of-type { margin-top: 0; }
+        .dms-info-panel dd { margin: 4px 0 0; color: #444; font-size: 12px; font-weight: 400; line-height: 1.45; }
         .dms-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 24px; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; }
         .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; color: #1b1b1b; }
@@ -1363,13 +1376,55 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             options.documentType,
           )}
 
-          {renderSelect(
-            "Confidential Level",
-            true,
-            confidentiality,
-            setConfidentiality,
-            options.confidentiality,
-          )}
+          {/* Confidential Level carries an info tooltip defining each term.
+              tabIndex makes it keyboard-reachable; :focus-within keeps the
+              panel open while it holds focus. */}
+          <div className="dms-conf">
+            {renderSelect(
+              "Confidential Level",
+              true,
+              confidentiality,
+              setConfidentiality,
+              options.confidentiality,
+            )}
+            <em
+              className="dms-info"
+              tabIndex={0}
+              role="button"
+              aria-label="What the confidentiality levels mean"
+            >
+              i
+              <span className="dms-info-panel" role="tooltip">
+                <dl>
+                  <dt>Highly Confidential</dt>
+                  <dd>
+                    This applies to the most sensitive business information that
+                    is intended strictly for use within the Group, the disclosure
+                    of which will impact share price and competitive advantage.
+                  </dd>
+                  <dt>Legally Privileged</dt>
+                  <dd>
+                    This applies to confidential communications (email, advice,
+                    documents, conversations) between client and lawyer that are
+                    protected by law from being disclosed in a court of law or
+                    during legal proceedings.
+                  </dd>
+                  <dt>Confidential</dt>
+                  <dd>
+                    This applies to sensitive business information that is
+                    intended strictly for use within the Group, on a need-to-know
+                    basis.
+                  </dd>
+                  <dt>Restricted</dt>
+                  <dd>
+                    This applies to business information that may be disclosed to
+                    external parties only if a non-disclosure agreement has been
+                    signed.
+                  </dd>
+                </dl>
+              </span>
+            </em>
+          </div>
         </div>
       </div>
 
