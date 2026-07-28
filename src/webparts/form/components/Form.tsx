@@ -1238,7 +1238,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         All fields marked <strong>*</strong> are required.
       </p>
 
-      {/* ── File ────────────────────────────────────────────────────────── */}
+      {/* ── Upload a Document ───────────────────────────────────────────── */}
       <div className="dms-section">
         <p className="dms-section-title">Upload a Document</p>
         <div style={{ marginBottom: 16 }}>
@@ -1458,8 +1458,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         )}
 
         <div className="dms-grid">
-          {/* --- File-path fields, in folder order:
-                 Segment (above) -> level(s) -> Year -> Document Type --- */}
+          {/* --- File-path fields, in folder order: Segment (above) -> level(s).
+                 Year and Document Type also form part of the path but are
+                 ensure-created on demand, so they live in the card above. --- */}
           {(activeMode()?.levels ?? []).map((lvl, i) =>
             renderSelect(
               lvl.label,
@@ -1480,7 +1481,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
           {/* Graceful empty-state: a segment whose term set has no child terms yet
               (e.g. the non-GHO Head Offices before their Department/Unit trees are
-              added) would otherwise show a dead "--" dropdown. Name the missing level. */}
+              added) would otherwise show a dropdown with nothing but its
+              "Select …" placeholder. Name the missing level instead. */}
           {(() => {
             const md = activeMode();
             if (!md || md.levels.length === 0 || deptLoading || levelChoices.length === 0) return null;
