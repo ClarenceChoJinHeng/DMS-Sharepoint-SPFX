@@ -1205,6 +1205,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-info-panel dt:first-of-type { margin-top: 0; }
         .dms-info-panel dd { margin: 4px 0 0; color: #444; font-size: 12px; font-weight: 400; line-height: 1.45; }
         .dms-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 24px; }
+        /* Folder card runs 2-up so the deepest level and Year pair evenly. */
+        .dms-grid-2 { grid-template-columns: 1fr 1fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; }
         .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; color: #1b1b1b; }
         .dms-radio-group input[type="radio"] { accent-color: #0f6c3f; width: 16px; height: 16px; cursor: pointer; }
@@ -1366,8 +1368,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             />
           </label>
 
-          {renderSelect("Year", true, yearPeriod, setYearPeriod, options.yearPeriod)}
-
           {renderSelect(
             "Document Type",
             true,
@@ -1516,11 +1516,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           </div>
         )}
 
-        <div className="dms-grid">
-          {/* --- File-path fields, in folder order: Segment (above) -> level(s).
-                 Year and Document Type also form part of the path but are
-                 ensure-created on demand, so they live in the card above. --- */}
-          {(activeMode()?.levels ?? []).map((lvl, i) =>
+        <div className="dms-grid dms-grid-2">
+          {/* --- File-path fields, in folder order: Segment (above) -> level(s)
+                 -> Year. Every level spans the full row EXCEPT the deepest one,
+                 which shares its row with Year. Document Type also forms part of
+                 the path but is ensure-created on demand, so it lives above. --- */}
+          {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
             renderSelect(
               lvl.label,
               true,
@@ -1534,9 +1535,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 isLevelLocked(i) ||
                 (i > 0 && !levelValues[i - 1]),
               `Select ${lvl.label}`,
-              true,
+              i < arr.length - 1,
             ),
           )}
+
+          {renderSelect("Year", true, yearPeriod, setYearPeriod, options.yearPeriod)}
 
           {/* Graceful empty-state: a segment whose term set has no child terms yet
               (e.g. the non-GHO Head Offices before their Department/Unit trees are
