@@ -63,25 +63,46 @@ state is discarded the moment the upload completes.
 
 ### Staging library columns
 
-| Display name | Internal name | Type | Status |
-|---|---|---|---|
-| Project Name | `ProjectName` | Single line of text | **Must be created before ship** |
-| Vendor | `Vendor` | Single line of text | Exists; starts being written |
+Both columns exist. Verified against the live `/fields` API on 2026-07-28 — these are
+facts, not inferences:
 
-`Vendor` is confirmed as a **Text** column by the UAT contract fixture in
-`2026-07-28-dms-uat-test-plan.md`, so writing a plain string to it is safe. The older
-`2026-07-24-documents-metadata-parity-design.md` lists it as Taxonomy; that entry is
-stale and the newer UAT contract governs.
+| Display name | Internal name | Type |
+|---|---|---|
+| `ProjectName` | `ProjectName` | Text |
+| `Vendor/CustomerName` | `Vendor_x002f_CustomerName` | Text |
 
-`ProjectName` has no spaces in its display name, so SharePoint will not encode the
-internal name. Both columns are read back from `FieldValuesAsText` under their plain
-internal name — the `_x005f_x0020_x005f_` double-encoding problem documented in the
-`sp-fieldvaluesastext-underscore-encoding` memory only affects columns whose display
-name contains a space (`Document Type`, `Confidentiality Level`).
+**The old `Vendor` column was deleted** on 2026-07-28 and replaced by
+`Vendor/CustomerName`. The slash in the display name encodes to `_x002f_` in the internal
+name — the same pattern as the existing `Year_x002f_Period` elsewhere in the tenant. It
+held no data, since nothing ever wrote to it.
 
-> **Blocking prerequisite:** if `ProjectName` does not exist when this ships, the
-> `validateUpdateListItem` call returns `HasException` for that field and the user sees
-> "Uploaded, but a field failed". Create the column first.
+### Read keys on the Approval page
+
+`FieldValuesAsText` double-encodes the underscores in its response keys (see the
+`sp-fieldvaluesastext-underscore-encoding` memory), so the two columns read differently:
+
+| Column | Read key |
+|---|---|
+| `ProjectName` | `ProjectName` — no encoded characters, so no double-encoding |
+| `Vendor_x002f_CustomerName` | `Vendor_x005f_x002f_x005f_CustomerName`, falling back to the plain name |
+
+The plain-name fallback follows the existing `pick(...)` convention already used for
+Document Type and Confidentiality Level.
+
+### Stale references to the deleted `Vendor`
+
+Four places still name the deleted column and must be updated together. None is failing
+today only because both write paths are currently disabled — the Form skips Vendor
+deliberately, and Bulk Upload's field is hidden so its guard never fires. **This work
+re-enables the Form write path, which is exactly when a stale name starts throwing
+`HasException`.**
+
+| Location | Current | Change to |
+|---|---|---|
+| `Form.tsx` `FIELDS.vendor` | `Vendor` | `Vendor_x002f_CustomerName` |
+| `BulkUpload.tsx` `FIELDS.vendor` | `Vendor` | `Vendor_x002f_CustomerName` |
+| `ApprovalDocument.tsx` `pick("Vendor")` | `Vendor` | double-encoded key + fallback |
+| `DMS Config` `col_vendor` row | `Vendor` | `Vendor_x002f_CustomerName` |
 
 ### Column visibility
 
@@ -138,10 +159,10 @@ the latter rendered as a dropdown — are what disambiguate them for the user.
 
 ### DMS Config
 
-| Setting row | Fallback | Status |
+| Setting row | Value | Status |
 |---|---|---|
-| `col_projectName` | `ProjectName` | **New** |
-| `col_vendor` | `Vendor` | Already exists (see the migration runbook) |
+| `col_projectName` | `ProjectName` | **New row** |
+| `col_vendor` | `Vendor_x002f_CustomerName` | Row exists; **value must be corrected** |
 
 Add `projectName` to the `columns` block of the `DmsSettings` type and to
 `DEFAULT_SETTINGS.columns` in `Form.tsx`, following the existing pattern, plus a
@@ -262,13 +283,16 @@ Add one row to the `metadata` array (`ApprovalDocument.tsx:376-382`) and let the
 Vendor row start resolving:
 
 ```ts
-["Project Name", pick("ProjectName")],
-["Vendor",       pick("Vendor")],
+["Project Name",         pick("ProjectName")],
+["Vendor/Customer Name", pick("Vendor_x005f_x002f_x005f_CustomerName",
+                              "Vendor_x002f_CustomerName")],
 ```
 
-Both are plain-text columns with space-free display names, so a single plain-internal-name
-lookup suffices — no double-encoded variant needed. The existing `pick` helper already
-falls back to "—" when a value is absent.
+`ProjectName` has no encoded characters, so a single plain lookup suffices.
+`Vendor_x002f_CustomerName` does, so it needs the double-encoded key first with the plain
+name as a fallback. The existing `pick` helper already returns "—" when a value is absent.
+
+The row label also changes from "Vendor" to "Vendor/Customer Name" to match the form.
 
 ### Existing documents
 
@@ -307,13 +331,30 @@ warning all still render in the folder card.
 
 ## Rollout
 
-1. Create the `ProjectName` column in the Staging library.
-2. Remove `ProjectName` and `Vendor` from the Staging library views (view-level hiding
-   only — see Column visibility above).
-3. Add the `col_projectName` setting row to `DMS Config`.
+1. ~~Create `ProjectName` and `Vendor/CustomerName` in Staging.~~ **Done 2026-07-28.**
+2. Remove both from the Staging library views (view-level hiding only — see Column
+   visibility above).
+3. Add the `col_projectName` row to `DMS Config`, and correct `col_vendor` to
+   `Vendor_x002f_CustomerName`.
 4. Rename the Group-led Projects level in the mode row's `Levels` JSON.
 5. Amend `2026-07-21-segment-onboarding-plan.md` and
    `2026-07-16-tenant-seed-data-runbook.md` for the `GroupProjectName` rename.
 6. Ship the web part.
 
-Step 1 must precede step 6, or every upload reports a field failure.
+Step 3 must precede step 6. The code fallbacks carry the correct names, so a missed
+config row degrades to the fallback rather than failing — but a `col_vendor` row left
+pointing at the deleted `Vendor` column overrides the fallback and breaks every upload.
+
+## Correction to an existing fixture
+
+The contract fixture in `2026-07-28-dms-uat-test-plan.md` (§2.1) is wrong on three rows,
+confirmed against the live `/fields` API:
+
+| Column | Fixture claims | Actual |
+|---|---|---|
+| `Document_x0020_Type` | Text | `TaxonomyFieldType` |
+| `Confidentiality_x0020_Level` | Text | `TaxonomyFieldType` |
+| Year | `Year_x002f_Period`, Text | internal name `Year`, `TaxonomyFieldType` |
+
+`Form.tsx` already uses the correct `Year`. The fixture should be corrected so it does not
+fail its own test; out of scope for this change but worth doing alongside.
