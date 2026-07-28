@@ -30,7 +30,9 @@ const FIELDS = {
   yearPeriod: "Year",            // site column internal name (client kept plain "Year")
   documentDate: "DocumentDate",
   confidentiality: "Confidentiality_x0020_Level",
-  vendor: "Vendor",
+  // "Vendor/CustomerName" — the "/" encodes to _x002f_ in the internal name.
+  // Verified against /fields 2026-07-28. The old "Vendor" column was deleted.
+  vendor: "Vendor_x002f_CustomerName",
   details: "_ExtendedDescription",
 };
 
