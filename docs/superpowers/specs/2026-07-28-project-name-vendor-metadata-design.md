@@ -83,6 +83,29 @@ name contains a space (`Document Type`, `Confidentiality Level`).
 > `validateUpdateListItem` call returns `HasException` for that field and the user sees
 > "Uploaded, but a field failed". Create the column first.
 
+### Column visibility
+
+Both columns are **hidden from the Staging library views** and surface only on the
+Approval Document page. Hide them by removing them from the view (Library settings → the
+view → untick the column). The column still exists, is still written, and is still
+returned by the API — this is purely presentational and carries no risk.
+
+`ApprovalDocument.tsx:136` calls `FieldValuesAsText` with no `$select`, so it retrieves
+the entire field bag regardless of which columns any view displays. View membership and
+the Approval page are completely decoupled.
+
+Two variants to avoid:
+
+- **Column-level `Hidden=true`** ("Hidden (Will not appear in forms)"). Reads and writes
+  still work, but the column disappears from the forms UI too, which makes a missing
+  value much harder to diagnose. Prefer view-level hiding.
+- **Read-only.** `validateUpdateListItem` refuses read-only fields, so every upload would
+  fail with `HasException` on that field. Never mark these read-only.
+
+Because the columns are invisible in Staging, the Approval Document page is the **only**
+place a wrong value is observable. The UAT steps below are the sole verification path —
+do not skip them.
+
 ### Two distinct "project name" concepts
 
 These must not be conflated. They are different fields with different sources, storage,
@@ -285,10 +308,12 @@ warning all still render in the folder card.
 ## Rollout
 
 1. Create the `ProjectName` column in the Staging library.
-2. Add the `col_projectName` setting row to `DMS Config`.
-3. Rename the Group-led Projects level in the mode row's `Levels` JSON.
-4. Amend `2026-07-21-segment-onboarding-plan.md` and
+2. Remove `ProjectName` and `Vendor` from the Staging library views (view-level hiding
+   only — see Column visibility above).
+3. Add the `col_projectName` setting row to `DMS Config`.
+4. Rename the Group-led Projects level in the mode row's `Levels` JSON.
+5. Amend `2026-07-21-segment-onboarding-plan.md` and
    `2026-07-16-tenant-seed-data-runbook.md` for the `GroupProjectName` rename.
-5. Ship the web part.
+6. Ship the web part.
 
-Step 1 must precede step 5, or every upload reports a field failure.
+Step 1 must precede step 6, or every upload reports a field failure.
