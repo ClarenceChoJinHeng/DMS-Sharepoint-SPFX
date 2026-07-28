@@ -1077,21 +1077,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         });
       }
 
-      // Project Name and Vendor are free text. Both are optional, so only push a
-      // FieldValue when there is something to write — an empty string would
-      // overwrite a stored value rather than leave the column untouched.
-      if (projectName.trim()) {
-        formValues.push({
-          FieldName: settings.columns.projectName,
-          FieldValue: projectName.trim(),
-        });
-      }
-      if (vendor.trim()) {
-        formValues.push({
-          FieldName: settings.columns.vendor,
-          FieldValue: vendor.trim(),
-        });
-      }
+      // Project Name and Vendor are optional free text, but they are written
+      // UNCONDITIONALLY — a blank field sends "" and clears the column.
+      //
+      // This matters on the replace path: Files/Add(overwrite=true) swaps the
+      // file's content but reuses the same list item, so anything not written
+      // here survives from the previous upload. Skipping blanks would leave an
+      // approver looking at a vendor or project belonging to the document that
+      // was just replaced. Sending "" is safe for a Text column (unlike the
+      // date above, where an empty value would reach toSpDate).
+      formValues.push({
+        FieldName: settings.columns.projectName,
+        FieldValue: projectName.trim(),
+      });
+      formValues.push({
+        FieldName: settings.columns.vendor,
+        FieldValue: vendor.trim(),
+      });
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
