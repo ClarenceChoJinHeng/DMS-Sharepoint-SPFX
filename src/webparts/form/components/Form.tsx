@@ -818,7 +818,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       if (!levelValues[i]) missing.push(lvl.label);
     });
     if (!yearPeriod) missing.push("Year / Period");
-    if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidentiality Level");
     if (missing.length > 0) {
       showToast(`Please complete: ${missing.join(", ")}.`, "error");
@@ -1061,9 +1060,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           FieldName: settings.columns.confidentiality,
           FieldValue: toTaxValue(options.confidentiality, confidentiality),
         },
-        { FieldName: settings.columns.documentDate, FieldValue: toSpDate(documentDate) },
         ...buildLevelFormValues(levelCols, selections),
       ];
+
+      // Document Date is optional. Omit rather than send an empty value —
+      // toSpDate("") yields the malformed "NaN/NaN/" and SharePoint rejects it.
+      if (documentDate) {
+        formValues.push({
+          FieldName: settings.columns.documentDate,
+          FieldValue: toSpDate(documentDate),
+        });
+      }
 
       // Project Name and Vendor are free text. Both are optional, so only push a
       // FieldValue when there is something to write — an empty string would
@@ -1447,9 +1454,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
           {/* --- Other metadata (not part of the folder path) --- */}
           <label className="dms-field">
-            <span>
-              Document Date <em className="req">*</em>
-            </span>
+            <span>Document Date</span>
             <input
               type="date"
               value={documentDate}
