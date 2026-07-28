@@ -249,8 +249,9 @@ resolution, the replace-file guard — is untouched.
 
 ### 3.1 Project Name state
 
-New `projectName` state, cleared by `resetForm()` alongside the other fields. Pushed as a
-`FieldValue` only when non-blank, so an untouched field does not write an empty string.
+New `projectName` state, cleared by `resetForm()` alongside the other fields. Written
+unconditionally as a `FieldValue` — see the replace-file section below for why a blank
+value must be sent rather than skipped.
 
 Value is trimmed. The `ILLEGAL_NAME_CHARS` filter is **not** applied — that rule exists
 for filenames, and this is a metadata value.
@@ -258,7 +259,8 @@ for filenames, and this is a metadata value.
 ### 3.2 Vendor is written
 
 Remove the carve-out at `Form.tsx:1054-1056` and push
-`{ FieldName: settings.columns.vendor, FieldValue: vendor.trim() }` when non-blank.
+`{ FieldName: settings.columns.vendor, FieldValue: vendor.trim() }`, again
+unconditionally.
 
 Vendor keeps feeding the auto-composed document name via `onVendorChange` /
 `composeDocName`. That behaviour is unchanged — it now additionally persists.
@@ -317,8 +319,8 @@ level-column rename resolving `GroupProjectName` to its label/Tid pair.
    named in the missing-fields toast.
 4. Upload with Document Date filled → date stored correctly, name composes as
    `<Vendor>-<DD-MM-YY>`.
-5. **Replace an existing file**, leaving Project Name and Vendor blank → see the open
-   question below; as built, the previous upload's values persist.
+5. **Replace an existing file**, leaving Project Name and Vendor blank → both columns are
+   cleared; the Approval page shows "—" for each, not the replaced file's values.
 5. 31st character rejected in all three limited fields.
 6. Group-led Projects upload → both "Project Name" (text) and "Group Project Name"
    (dropdown) visible; folder path uses the term, free text stored separately.
@@ -348,32 +350,26 @@ Step 3 must precede step 6. The code fallbacks carry the correct names, so a mis
 config row degrades to the fallback rather than failing — but a `col_vendor` row left
 pointing at the deleted `Vendor` column overrides the fallback and breaks every upload.
 
-## Open question — replace-file leaves stale metadata
+## Replace-file behaviour — blank clears
 
-Found in review after implementation; neither this spec nor the plan considered it.
+Found in review after implementation; neither this spec nor the plan originally
+considered it. **Resolved 2026-07-28: a blank field clears the column.**
 
 `Form.tsx` uploads with `Files/Add(..., overwrite=true)` when the user confirms replacing
 a same-named file. That swaps the file's *content* but reuses the **same list item**, so
-its metadata columns survive. Because Project Name and Vendor are written only when
-non-blank, clearing one of those fields on a replace no longer clears the column.
+any column not written survives from the previous upload.
 
-Concretely: upload `Invoice.pdf` with Vendor `Acme Trading`; later replace it with a
-corrected `Invoice.pdf`, leaving Vendor blank. The upload succeeds and the Approval
-Document page still shows `Acme Trading` — metadata describing the superseded file.
+The original conditional writes therefore left stale values: upload `Invoice.pdf` with
+Vendor `Acme Trading`, later replace it leaving Vendor blank, and the Approval Document
+page still showed `Acme Trading` — metadata describing the superseded file.
 
-Document Date is not affected: it is required, so it is always written and always
-refreshed.
+Project Name and Vendor are now written **unconditionally**; a blank field sends `""`,
+which clears the Text column. The rationale is that a replaced file is a new document, so
+its metadata should describe that document and nothing else.
 
-Three options, undecided:
-
-1. **Blank clears** — push both text fields unconditionally, sending `""` when blank.
-   Safe for Text columns. Guarantees the stored metadata always describes the file that
-   is actually there.
-2. **Leave as built** — blank means "don't touch". Fewest changes; accepts that the
-   approval page can show values belonging to a replaced document.
-3. **Prefill on replace** — when the name clash is detected, load the existing item's
-   metadata into the form so the user edits current values rather than starting blank.
-   Best experience, most work.
+Document Date needs no equivalent handling: it is required, so it is always written and
+always refreshed. It also could not use the same fix — an empty value would reach
+`toSpDate` and produce `NaN/NaN/`.
 
 ## Correction to an existing fixture
 
