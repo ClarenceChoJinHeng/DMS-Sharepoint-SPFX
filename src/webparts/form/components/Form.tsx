@@ -87,10 +87,12 @@ const dateDDMMYY = (iso: string): string => {
   return `${d}-${m}-${y.slice(2)}`;
 };
 
-// Auto-compose the document name from Vendor + Document Date: "<Vendor>-<DD-MM-YY>".
-// Either part omitted if empty. Used until the user manually edits the name.
-const composeDocName = (vendor: string, iso: string): string =>
-  [vendor.trim(), dateDDMMYY(iso)].filter(Boolean).join("-");
+// Auto-compose the document name from Project Name + Vendor + Document Date:
+// "<Project>-<Vendor>-<DD-MM-YY>", following the order the fields appear on the
+// form. Any empty part is omitted, so a blank project still yields
+// "<Vendor>-<DD-MM-YY>". Used until the user manually edits the name.
+const composeDocName = (project: string, vendor: string, iso: string): string =>
+  [project.trim(), vendor.trim(), dateDDMMYY(iso)].filter(Boolean).join("-");
 
 type TermOption = { id: string; label: string };
 type ToastType = "error" | "success";
@@ -778,14 +780,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     return match ? `${match.label}|${match.id}` : "";
   };
 
-  // Vendor + Document Date feed the document name until the user types their own.
+  // Project Name + Vendor + Document Date feed the document name until the user
+  // types their own. Each handler passes its own new value plus the current
+  // state of the other two, since its setState has not applied yet.
+  const onProjectNameChange = (v: string): void => {
+    setProjectName(v);
+    if (!docNameEdited) setDocName(composeDocName(v, vendor, documentDate));
+  };
   const onVendorChange = (v: string): void => {
     setVendor(v);
-    if (!docNameEdited) setDocName(composeDocName(v, documentDate));
+    if (!docNameEdited) setDocName(composeDocName(projectName, v, documentDate));
   };
   const onDocumentDateChange = (iso: string): void => {
     setDocumentDate(iso);
-    if (!docNameEdited) setDocName(composeDocName(vendor, iso));
+    if (!docNameEdited) setDocName(composeDocName(projectName, vendor, iso));
   };
   const onDocNameChange = (v: string): void => {
     setDocName(v);
@@ -1335,7 +1343,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               value={projectName}
               maxLength={30}
               placeholder="Type the project name"
-              onChange={(e) => setProjectName(e.target.value)}
+              onChange={(e) => onProjectNameChange(e.target.value)}
             />
             <small>Max. 30 character</small>
           </label>
