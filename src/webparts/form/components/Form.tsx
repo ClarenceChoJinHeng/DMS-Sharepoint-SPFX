@@ -1240,7 +1240,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
       {/* ── File ────────────────────────────────────────────────────────── */}
       <div className="dms-section">
-        <p className="dms-section-title">File</p>
+        <p className="dms-section-title">Upload a Document</p>
+        <div style={{ marginBottom: 16 }}>
+          <label className="dms-field">
+            <span>Document Name</span>
+            <input
+              type="text"
+              value={docName}
+              maxLength={30}
+              disabled={!file}
+              placeholder={
+                file
+                  ? `Leave blank to keep "${file.name}"`
+                  : "Select a file first"
+              }
+              onChange={(e) => onDocNameChange(e.target.value)}
+            />
+            <small>Max. 30 character</small>
+          </label>
+        </div>
         {/* The whole card is clickable to open the file picker. */}
         <div
           className="dms-filecard"
@@ -1287,27 +1305,73 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             }}
           />
         </div>
-        <div style={{ marginTop: 16 }}>
+
+        <div className="dms-grid" style={{ marginTop: 16 }}>
+          {/* Free-text Project Name — distinct from the Group-led Projects
+              "Group Project Name" folder level in the card below. */}
           <label className="dms-field">
-            <span>Document name</span>
+            <span>Project Name</span>
             <input
               type="text"
-              value={docName}
-              disabled={!file}
-              placeholder={
-                file
-                  ? `Leave blank to keep "${file.name}"`
-                  : "Select a file first"
-              }
-              onChange={(e) => onDocNameChange(e.target.value)}
+              value={projectName}
+              maxLength={30}
+              placeholder="Type the project name"
+              onChange={(e) => setProjectName(e.target.value)}
+            />
+            <small>Max. 30 character</small>
+          </label>
+
+          {/* Vendor is free text. It also feeds the auto-composed document name. */}
+          <label className="dms-field">
+            <span>Vendor/Customer Name</span>
+            <input
+              type="text"
+              value={vendor}
+              maxLength={30}
+              placeholder="Type the vendor or customer name"
+              onChange={(e) => onVendorChange(e.target.value)}
+            />
+            <small>Max. 30 character</small>
+          </label>
+
+          <label className="dms-field">
+            <span>Document Date</span>
+            <input
+              type="date"
+              value={documentDate}
+              max={(() => {
+                const d = new Date();
+                const mm = d.getMonth() + 1;
+                const day = d.getDate();
+                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+              })()}
+              onChange={(e) => onDocumentDateChange(e.target.value)}
             />
           </label>
+
+          {renderSelect("Year", true, yearPeriod, setYearPeriod, options.yearPeriod)}
+
+          {renderSelect(
+            "Document Type",
+            true,
+            documentType,
+            setDocumentType,
+            options.documentType,
+          )}
+
+          {renderSelect(
+            "Confidential Level",
+            true,
+            confidentiality,
+            setConfidentiality,
+            options.confidentiality,
+          )}
         </div>
       </div>
 
-      {/* ── Document Information ─────────────────────────────────────────── */}
+      {/* ── Document Folder Information ──────────────────────────────────── */}
       <div className="dms-section">
-        <p className="dms-section-title">Document Information</p>
+        <p className="dms-section-title">Document Folder Information</p>
 
         {deptLoading ? (
           <p className="dms-dept-loading">Loading your access&hellip;</p>
@@ -1322,7 +1386,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         {/* Business Segment | Project toggle — a side shows only if the user can
             actually upload there (privileged users see every configured side). */}
         <div className="dms-radio-group">
-          <p>Upload into:</p>
+          <p>Upload to</p>
           {(["BusinessSegment", "Project"] as const).map((side) => {
             const sideModes = modes.filter((m) => m.side === side);
             const offerable = privileged
@@ -1409,7 +1473,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               deptLoading ||
                 isLevelLocked(i) ||
                 (i > 0 && !levelValues[i - 1]),
-              "--",
+              `Select ${lvl.label}`,
               true,
             ),
           )}
@@ -1435,57 +1499,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             }
             return null;
           })()}
-
-          {renderSelect(
-            "Year / Period",
-            true,
-            yearPeriod,
-            setYearPeriod,
-            options.yearPeriod,
-          )}
-
-          {renderSelect(
-            "Document Type",
-            true,
-            documentType,
-            setDocumentType,
-            options.documentType,
-          )}
-
-          {/* --- Other metadata (not part of the folder path) --- */}
-          <label className="dms-field">
-            <span>Document Date</span>
-            <input
-              type="date"
-              value={documentDate}
-              max={(() => {
-                const d = new Date();
-                const mm = d.getMonth() + 1;
-                const day = d.getDate();
-                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
-              })()}
-              onChange={(e) => onDocumentDateChange(e.target.value)}
-            />
-          </label>
-
-          {renderSelect(
-            "Confidentiality Level",
-            true,
-            confidentiality,
-            setConfidentiality,
-            options.confidentiality,
-          )}
-
-          {/* Vendor is free text (client request). It also feeds the document name. */}
-          <label className="dms-field">
-            <span>Vendor (if applicable)</span>
-            <input
-              type="text"
-              value={vendor}
-              placeholder="Type the vendor name"
-              onChange={(e) => onVendorChange(e.target.value)}
-            />
-          </label>
         </div>
       </div>
 
