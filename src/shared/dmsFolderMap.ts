@@ -42,15 +42,28 @@ export async function lookupFolderMapping(
   };
 }
 
-/** Read every mapping row's TermGuid — used to skip already-mapped terms. */
-export async function loadMappedTermGuids(
+/** A mapping row including its list item Id, so it can be updated or deleted. */
+export interface FolderMapRow extends FolderMapping {
+  itemId: number;
+}
+
+/**
+ * Read every mapping row, with its list item Id.
+ *
+ * Replaces the old `loadMappedTermGuids`, which returned only the term GUIDs. That
+ * was enough to answer "is this term mapped?" but not "is the mapping still CORRECT?"
+ * — and reconciliation treated the presence of a row as proof it was correct, so a
+ * folder deleted and recreated (new UniqueId) left a permanently broken row that no
+ * re-run could repair. Callers now get the stored UniqueId and can verify it.
+ */
+export async function loadFolderMapRows(
   spHttpClient: SPHttpClient,
   siteUrl: string,
-): Promise<Set<string>> {
-  const guids = new Set<string>();
+): Promise<FolderMapRow[]> {
+  const rows: FolderMapRow[] = [];
   let url: string | null =
     `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items` +
-    `?$select=TermGuid&$top=5000`;
+    `?$select=Id,Title,TermGuid,FolderUniqueId,FolderUrl,Section&$top=5000`;
   while (url) {
     const res: SPHttpClientResponse = await spHttpClient.get(
       url,
@@ -59,12 +72,28 @@ export async function loadMappedTermGuids(
     );
     if (!res.ok) throw new Error(`Folder map read failed: HTTP ${res.status}`);
     const data = await res.json();
-    (data.value ?? []).forEach((r: { TermGuid?: string }) => {
-      if (r.TermGuid) guids.add(r.TermGuid);
-    });
+    (data.value ?? []).forEach(
+      (r: {
+        Id: number;
+        Title?: string;
+        TermGuid?: string;
+        FolderUniqueId?: string;
+        FolderUrl?: string;
+        Section?: string;
+      }) => {
+        rows.push({
+          itemId: r.Id,
+          title: r.Title ?? "",
+          termGuid: r.TermGuid ?? "",
+          folderUniqueId: r.FolderUniqueId ?? "",
+          folderUrl: r.FolderUrl ?? "",
+          section: r.Section ?? "",
+        });
+      },
+    );
     url = data["@odata.nextLink"] ?? null;
   }
-  return guids;
+  return rows;
 }
 
 /** Outcome of a folder existence probe — see `probeFolderByPath`. */
@@ -190,6 +219,132 @@ export async function writeFolderMapping(
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`Write mapping failed: HTTP ${res.status} ${body.slice(0, 200)}`);
+  }
+}
+
+/**
+ * Probe a folder by its stable UniqueId, distinguishing "definitely gone" from
+ * "could not tell" — the by-id twin of `probeFolderByPath`, with the same rules.
+ *
+ * This is the check that decides whether a mapping row is still trustworthy, so it
+ * MUST NOT collapse a throttle or a permission error into "missing": treating an
+ * uncertain answer as a dead folder would rewrite a perfectly good row.
+ *
+ * Note this asks by ID, never by path. A folder that was renamed or moved keeps its
+ * UniqueId and still resolves here — which is exactly the point, and why the caller
+ * must not "verify" a row by comparing it against whatever sits at the term-label
+ * path instead. (Doing that would repoint the row at a freshly created empty folder
+ * and abandon the real one, documents and all.)
+ */
+export async function probeFolderById(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  uniqueId: string,
+): Promise<FolderProbe> {
+  const url =
+    `${siteUrl}/_api/web/GetFolderById(guid'${encodeURIComponent(uniqueId)}')` +
+    `?$select=UniqueId,ServerRelativeUrl`;
+  let res: SPHttpClientResponse = await spHttpClient.get(
+    url,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  for (
+    let attempt = 0;
+    (res.status === 429 || res.status === 503) && attempt < 5;
+    attempt++
+  ) {
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    res = await spHttpClient.get(url, SPHttpClient.configurations.v1, {
+      headers: { Accept: "application/json;odata=nometadata" },
+    });
+  }
+  if (res.ok) {
+    const d = await res.json();
+    return {
+      folder: { uniqueId: d.UniqueId, serverRelativeUrl: d.ServerRelativeUrl },
+      confirmedMissing: false,
+      status: res.status,
+    };
+  }
+  // A deleted folder answers 404 here. SharePoint also answers 404 for a folder sitting
+  // in the Recycle Bin — restoring it brings the SAME UniqueId back, which is why a
+  // caller must never delete a row on this signal alone without the guards in the
+  // folder-map-integrity spec.
+  if (res.status === 404) {
+    return { folder: null, confirmedMissing: true, status: 404 };
+  }
+  const detail = await res.text().catch(() => "");
+  console.error(
+    `Folder probe by id could not determine existence. HTTP ${res.status} for UniqueId:`,
+    uniqueId,
+    detail.slice(0, 300),
+  );
+  return {
+    folder: null,
+    confirmedMissing: false,
+    status: res.status,
+    detail: detail.slice(0, 300),
+  };
+}
+
+/** Repoint an existing mapping row at a different folder. */
+export async function updateFolderMapping(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  itemId: number,
+  patch: { folderUniqueId: string; folderUrl: string; title?: string },
+): Promise<void> {
+  const body: Record<string, string> = {
+    FolderUniqueId: patch.folderUniqueId,
+    FolderUrl: patch.folderUrl,
+  };
+  if (patch.title !== undefined) body.Title = patch.title;
+  const res: SPHttpClientResponse = await spHttpClient.post(
+    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items(${itemId})`,
+    SPHttpClient.configurations.v1,
+    {
+      headers: {
+        Accept: "application/json;odata=nometadata",
+        "Content-Type": "application/json;odata=nometadata",
+        "X-HTTP-Method": "MERGE",
+        "IF-MATCH": "*",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!res.ok) {
+    const b = await res.text().catch(() => "");
+    throw new Error(`Update mapping failed: HTTP ${res.status} ${b.slice(0, 200)}`);
+  }
+}
+
+/**
+ * Delete one mapping row. Removes the LIST ROW ONLY — never the folder it points at.
+ * A map row is derived data that reconciliation can rebuild from the term store plus
+ * the folder tree; the folder holds documents that exist nowhere else.
+ */
+export async function deleteFolderMapRow(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  itemId: number,
+): Promise<void> {
+  const res: SPHttpClientResponse = await spHttpClient.post(
+    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items(${itemId})`,
+    SPHttpClient.configurations.v1,
+    {
+      headers: {
+        Accept: "application/json;odata=nometadata",
+        "X-HTTP-Method": "DELETE",
+        "IF-MATCH": "*",
+      },
+    },
+  );
+  if (!res.ok) {
+    const b = await res.text().catch(() => "");
+    throw new Error(`Delete mapping row failed: HTTP ${res.status} ${b.slice(0, 200)}`);
   }
 }
 

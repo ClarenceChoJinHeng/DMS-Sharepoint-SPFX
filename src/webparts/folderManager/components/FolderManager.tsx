@@ -6,10 +6,14 @@ import { SITE_ENTRY_GROUP_NAME } from "../../../shared/groupMapModel";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import GroupMapBuilder from "./GroupMapBuilder";
 import {
-  loadMappedTermGuids,
+  loadFolderMapRows,
+  FolderMapRow,
   resolveFolderByPath,
   probeFolderByPath,
+  probeFolderById,
   writeFolderMapping,
+  updateFolderMapping,
+  deleteFolderMapRow,
   ensureFolder,
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
@@ -31,10 +35,14 @@ type Tab       = LibTarget | "Reconciliation" | "GroupMap";
 // their term sets are onboarded (term-set GUID + its container folder name).
 type ReconMode = { key: string; termSetGuid: string; stagingFolder: string };
 const RECON_MODES: ReconMode[] = [
-  { key: "gho", termSetGuid: "df4b9afa-d3b9-4c04-9097-50dcaf5d8036", stagingFolder: "Group Head Office" },
+  { key: "gho", termSetGuid: "08dd94cb-f76c-431c-9b37-e9c98f739ffc", stagingFolder: "Group Head Office" },
+  // PLACEHOLDER — Upstream Malaysia is NOT onboarded (client scope 2026-07-29 is the other
+  // three head offices). This GUID pre-dates the 2026-07-29 term-set rebuild and is stale.
+  // Inert: with no `mode` row in DMS Config the segment is never offered. Replace the GUID
+  // when the client creates the term set — nothing else needs to change.
   { key: "upstream_my_ho", termSetGuid: "16a52947-57a3-4217-9a49-b48cb8b0dd31", stagingFolder: "Upstream Malaysia Head Office" },
-  { key: "minamas_ho", termSetGuid: "c6b26d32-1c3e-441f-b4ea-78f053e12990", stagingFolder: "Minamas Head Office" },
-  { key: "nbpol_ho", termSetGuid: "303f2c38-086a-46ba-8ee0-85445f6bfa3a", stagingFolder: "NBPOL Head Office" },
+  { key: "minamas_ho", termSetGuid: "9ad00b00-a43c-4a8b-a39a-d0efa89ba706", stagingFolder: "Minamas Head Office" },
+  { key: "nbpol_ho", termSetGuid: "77c3993b-0c3c-4a18-89d9-d69209886322", stagingFolder: "NBPOL Head Office" },
 ];
 type TermLite = { id: string; label: string };
 
@@ -46,6 +54,25 @@ type TermLite = { id: string; label: string };
 // so a different tenant needs no code edit. These GUIDs are the sandbox values.
 const YEAR_TERMSET    = "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf";
 const DOCTYPE_TERMSET = "866c5754-258e-401f-8685-03d20ae59b1d";
+
+/**
+ * How much of the Year × Document Type grid to pre-create under each unit folder.
+ * Set live from DMS Config (`recon_gridMode` setting row) — no redeploy to change.
+ *
+ *   off         — create nothing. The upload form ensure-creates Year/Document Type on
+ *                 first upload, and the Auto-route flow creates them in Documents as
+ *                 approved files land. Viewers then see only folders that hold documents.
+ *   currentYear — pre-create the current year's row only.
+ *   full        — every year × every document type (the original behaviour).
+ *
+ * Why `off` is the default: the grid is ~98% of a full run. With 3 years and 20 document
+ * types it is 63 folders per unit per library — 16,758 operations for 133 units, turning a
+ * ~6 minute run into ~4h20m, to produce folders that are overwhelmingly empty and that
+ * make browsing NOISIER for viewers. The structural folders that actually carry
+ * permissions are only ~360 operations.
+ */
+type GridMode = "off" | "currentYear" | "full";
+const DEFAULT_GRID_MODE: GridMode = "off";
 
 // One folder the provisioner will ensure exists + lock. termGuid is null for the
 // segment container folder (not a term); term folders (department, unit, …) carry
@@ -320,6 +347,24 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     return () => clearInterval(id);
   }, [reconRunning]);
 
+  // Guard against losing a run to a stray refresh or tab close. Reconciliation executes
+  // entirely in this page — there is no server-side job — so navigating away stops it
+  // mid-operation. Work already committed survives and a re-run resumes safely, but a
+  // folder interrupted between "created" and "inheritance broken" is briefly left
+  // INHERITING its parent's permissions until the next run repairs it. Worth a prompt.
+  useEffect(() => {
+    if (!reconRunning) return;
+    const warn = (e: BeforeUnloadEvent): string => {
+      e.preventDefault();
+      // Browsers show their own wording and ignore ours, but a non-empty returnValue is
+      // still what triggers the prompt at all.
+      e.returnValue = "Reconciliation is still running. Leaving now will stop it.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [reconRunning]);
+
   // Keep the live feeds short so hundreds of ops don't flood the DOM.
   const FEED_CAP = 40;
   const pushFolder = (text: string, status: ProgItem["status"]): void =>
@@ -404,7 +449,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   const getRoleAssignments = async (folderPath: string): Promise<ExistingAssign[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments?$expand=Member,RoleDefinitionBindings&@f='${encodeURIComponent(folderPath)}'`,
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments?$expand=Member,RoleDefinitionBindings&@f='${encodeServerRelativePath(folderPath)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -454,7 +499,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   const breakInheritance = async (path: string): Promise<void> => {
     const res = await withThrottleRetry(() => context.spHttpClient.post(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)?@f='${encodeURIComponent(path)}'`,
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)?@f='${encodeServerRelativePath(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     ), reconWaitNote);
@@ -465,7 +510,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // recoverable, not a permanent delete.
   const deleteFolder = async (path: string): Promise<void> => {
     const res = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/recycle()?@f='${encodeURIComponent(path)}'`,
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/recycle()?@f='${encodeServerRelativePath(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
@@ -487,7 +532,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   const addRoleAssignment = async (path: string, principalId: number, roleDefId: number): Promise<void> => {
     const res = await withThrottleRetry(() => context.spHttpClient.post(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeURIComponent(path)}'`,
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeServerRelativePath(path)}'`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     ), reconWaitNote);
@@ -861,7 +906,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
-    if (!res.ok) return [];
+    // THROWS on failure — do NOT soften this to `return []`. A silently empty child
+    // list truncates the term tree, and prune reads "term not enumerated" as "term
+    // deleted". Swallowing this error would let a throttle wipe a segment's map rows.
+    if (!res.ok) throw new Error(`Term children ${parentId} returned ${res.status}`);
     const data = await res.json();
     return (data.value ?? []).map((t: { id: string; labels: Array<{ name: string }> }) => ({ id: t.id, label: t.labels[0].name }));
   };
@@ -911,25 +959,32 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // rows the upload form reads (termSet_yearPeriod / termSet_documentType), so the
   // grid matches the form on any tenant with no code edit. Falls back to the built-in
   // YEAR_TERMSET / DOCTYPE_TERMSET constants per-key if the row or the list is missing.
-  const loadReconGridTermSets = async (): Promise<{ year: string; docType: string }> => {
+  const loadReconGridTermSets = async (): Promise<{ year: string; docType: string; gridMode: GridMode }> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
-      if (!res.ok) return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET };
+      if (!res.ok) return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET, gridMode: DEFAULT_GRID_MODE };
       const data = await res.json();
       const map: Record<string, string> = {};
       ((data.value ?? []) as Array<{ Title: string; SettingValue: string }>).forEach(
         (item) => { map[item.Title] = (item.SettingValue ?? "").trim(); },
       );
+      const raw = (map.recon_gridMode || "").toLowerCase();
+      const gridMode: GridMode =
+        raw === "full" ? "full"
+        : raw === "currentyear" ? "currentYear"
+        : raw === "off" ? "off"
+        : DEFAULT_GRID_MODE;
       return {
         year: map.termSet_yearPeriod || YEAR_TERMSET,
         docType: map.termSet_documentType || DOCTYPE_TERMSET,
+        gridMode,
       };
     } catch {
-      return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET };
+      return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET, gridMode: DEFAULT_GRID_MODE };
     }
   };
 
@@ -968,39 +1023,67 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // Flatten the term store into the folders to provision, parent-before-child so a
   // parent always exists before we create its child. The segment container folder
   // (mode.stagingFolder) has no term; every term below it carries its GUID.
-  const buildProvisionTargets = async (): Promise<ProvTarget[]> => {
+  /**
+   * Enumerate every folder target from the term store.
+   *
+   * Also reports which segments could NOT be fully enumerated. This matters far more
+   * than it looks: prune decides a row is orphaned by asking "is its term in the
+   * enumerated set?", so a segment that silently came back empty would make every one
+   * of its rows look deleted. Callers MUST treat a non-empty `incomplete` as a reason
+   * to skip pruning.
+   */
+  const buildProvisionTargets = async (): Promise<{ targets: ProvTarget[]; incomplete: string[] }> => {
     const out: ProvTarget[] = [];
+    const incomplete: string[] = [];
     const modes = await loadReconModes();
     for (const mode of modes) {
       // Segment container: not a mapped term, but groups target it via the term-set GUID.
       out.push({ termGuid: null, assignTerm: mode.termSetGuid, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder, isLeaf: false });
-      const tops = await loadReconTops(mode.termSetGuid).catch(() => [] as TermLite[]);
+      // A failure anywhere in this segment's tree marks the WHOLE segment incomplete.
+      // Targets gathered before the failure are kept (creating a subset of folders is
+      // harmless and idempotent) — but prune must not run against a partial picture.
+      try {
+      const tops = await loadReconTops(mode.termSetGuid);
       for (const top of tops) {
-        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${top.label}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder, isLeaf: false };
+        // Term labels are NOT safe as folder names. A "/" is the worst case — it is both
+        // rejected by SharePoint (HTTP 400, SPException -2130575245) and read as a path
+        // separator, so it silently implies an extra folder level. Real example: the
+        // Minamas unit "Value Creation / Value Transformation".
+        // Path segments are sanitised; the DISPLAY label and the map row Title keep the
+        // raw term text, so the log and the index still read like the term store.
+        const seg = (label: string): string => sanitizeFolderSegment(label) || label;
+        const topSeg = seg(top.label);
+        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder, isLeaf: false };
         out.push(topTarget);
         // Recurse; returns whether the term had children. A term with no children
         // is a leaf (the upload target) and gets the Year × Document Type grid.
-        const walk = async (parentId: string, ancestors: string[]): Promise<boolean> => {
+        // `ancestors` carries raw labels for display, `pathAncestors` the sanitised
+        // segments for the folder path — they can differ and must not be conflated.
+        const walk = async (parentId: string, ancestors: string[], pathAncestors: string[]): Promise<boolean> => {
           const children = await loadReconChildren(mode.termSetGuid, parentId);
           for (const child of children) {
             const chain = [...ancestors, child.label];
+            const pathChain = [...pathAncestors, seg(child.label)];
             const childTarget: ProvTarget = {
               termGuid: child.id,
               assignTerm: child.id,
-              relPath: `/${mode.stagingFolder}/${top.label}/${chain.join("/")}`,
+              relPath: `/${mode.stagingFolder}/${topSeg}/${pathChain.join("/")}`,
               label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
               section: mode.stagingFolder,
               isLeaf: false,
             };
             out.push(childTarget);
-            childTarget.isLeaf = !(await walk(child.id, chain));
+            childTarget.isLeaf = !(await walk(child.id, chain, pathChain));
           }
           return children.length > 0;
         };
-        topTarget.isLeaf = !(await walk(top.id, []));
+        topTarget.isLeaf = !(await walk(top.id, [], []));
+      }
+      } catch (e) {
+        incomplete.push(`${mode.stagingFolder} — ${(e as Error).message}`);
       }
     }
-    return out;
+    return { targets: out, incomplete };
   };
 
   // Provision from the term store into BOTH libraries in one run: create each folder
@@ -1059,9 +1142,21 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         for (let i = 0; i < parts.length - 1; i++) { cur += `/${parts[i]}`; out.push(cur); }
         return out;
       };
-      const mapped = await loadMappedTermGuids(context.spHttpClient, siteUrl);
+      // Full rows, not just term GUIDs: the presence of a row is NOT proof the row is
+      // still correct, so each one gets verified below. See the folder-map-integrity spec.
+      const mapRows = await loadFolderMapRows(context.spHttpClient, siteUrl);
+      const mapByTerm = new Map<string, FolderMapRow>();
+      for (const r of mapRows) {
+        if (r.termGuid) mapByTerm.set(r.termGuid.toLowerCase(), r);
+      }
       const groupMap = await loadGroupMapForAssign();
-      const targets = await buildProvisionTargets();
+      const { targets, incomplete: incompleteSegments } = await buildProvisionTargets();
+      // Surface enumeration failures as real errors. Without this they were invisible:
+      // the segment just produced no targets, the run looked clean, and prune would
+      // then delete every map row for it. See the prune guard below.
+      for (const seg of incompleteSegments) {
+        entries.push({ msg: `⚠ could not fully read the term store for ${seg} — folders may be missing and pruning is disabled for this run`, ok: false });
+      }
       if (targets.length === 0) {
         showToast("No terms found in the term store to provision.", false);
         setBusy(false);
@@ -1073,8 +1168,27 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // (formModel.sanitizeFolderSegment), so reconciliation and Form.tsx always agree on
       // the folder name — e.g. a Document Type term containing illegal chars like "/".
       const gridSets = await loadReconGridTermSets();
-      const yearLabels    = (await loadReconTops(gridSets.year).catch(() => [] as TermLite[])).map(y => sanitizeFolderSegment(y.label)).filter(Boolean);
-      const docTypeLabels = (await loadReconTops(gridSets.docType).catch(() => [] as TermLite[])).map(d => sanitizeFolderSegment(d.label)).filter(Boolean);
+      let yearLabels: string[] = [];
+      let docTypeLabels: string[] = [];
+      if (gridSets.gridMode === "off") {
+        // Nothing to pre-create. Year/Document Type folders are made on demand by the
+        // upload form, and in Documents by the Auto-route flow as approved files land.
+        entries.push({ msg: `Year × Document Type grid: skipped (recon_gridMode = off) — folders are created on first use`, ok: true });
+      } else {
+        yearLabels    = (await loadReconTops(gridSets.year).catch(() => [] as TermLite[])).map(y => sanitizeFolderSegment(y.label)).filter(Boolean);
+        docTypeLabels = (await loadReconTops(gridSets.docType).catch(() => [] as TermLite[])).map(d => sanitizeFolderSegment(d.label)).filter(Boolean);
+        if (gridSets.gridMode === "currentYear" && yearLabels.length > 0) {
+          const thisYear = String(new Date().getFullYear());
+          const match = yearLabels.filter((y) => y === thisYear);
+          // No term for the current year (e.g. the client has not added 2027 yet) — fall
+          // back to the LAST year in the set rather than silently building all of them.
+          yearLabels = match.length > 0 ? match : yearLabels.slice(-1);
+        }
+        entries.push({
+          msg: `Year × Document Type grid: ${gridSets.gridMode} — ${yearLabels.length} year(s) × ${docTypeLabels.length} document type(s) per unit`,
+          ok: true,
+        });
+      }
       // Estimate the workload up front: count every throttled op (each incurs the
       // inter-write delay). Structural folder (1) + Year×DocType grid per leaf +
       // applicable group grants per lib. Ancestor browse grants aren't throttled, so
@@ -1131,19 +1245,68 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 setLastFolder(`${folderLabel} — already there`, "skip");
               }
             }
-            // Map Staging term folders only (skip the segment container + already-mapped).
-            if (lib === "Staging" && t.termGuid && !mapped.has(t.termGuid)) {
-              const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);
-              if (resolved) {
-                await writeFolderMapping(context.spHttpClient, siteUrl, {
-                  termGuid: t.termGuid,
-                  folderUniqueId: resolved.uniqueId,
-                  title: t.label,
-                  folderUrl: resolved.serverRelativeUrl,
-                  section: t.section,
-                });
-                mapped.add(t.termGuid);
-                entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
+            // Map Staging term folders only (the segment container has no term).
+            if (lib === "Staging" && t.termGuid) {
+              const existingRow = mapByTerm.get(t.termGuid.toLowerCase());
+              if (!existingRow) {
+                // Unmapped term → create the row.
+                const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);
+                if (resolved) {
+                  await writeFolderMapping(context.spHttpClient, siteUrl, {
+                    termGuid: t.termGuid,
+                    folderUniqueId: resolved.uniqueId,
+                    title: t.label,
+                    folderUrl: resolved.serverRelativeUrl,
+                    section: t.section,
+                  });
+                  entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
+                }
+              } else {
+                // Mapped already — VERIFY the stored UniqueId instead of assuming it is
+                // right. Ask whether THAT folder still exists; do NOT compare against
+                // whatever sits at the term-label path. A renamed or moved folder keeps
+                // its UniqueId, so it still resolves and the row is left alone — that is
+                // the rename-proofing working. Comparing by path would see a difference
+                // and repoint the row at a freshly created empty folder, abandoning the
+                // real one and its documents.
+                const probe = await probeFolderById(
+                  context.spHttpClient,
+                  siteUrl,
+                  existingRow.folderUniqueId,
+                );
+                if (probe.folder) {
+                  // Row still valid. Nothing to do.
+                } else if (probe.confirmedMissing) {
+                  // The mapped folder is gone (deleted, then recreated by this run or by
+                  // hand). Repoint the row at the folder that is actually there now —
+                  // this is the self-heal that the old skip-if-mapped logic prevented.
+                  const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);
+                  if (resolved) {
+                    await updateFolderMapping(context.spHttpClient, siteUrl, existingRow.itemId, {
+                      folderUniqueId: resolved.uniqueId,
+                      folderUrl: resolved.serverRelativeUrl,
+                      title: t.label,
+                    });
+                    existingRow.folderUniqueId = resolved.uniqueId;
+                    existingRow.folderUrl = resolved.serverRelativeUrl;
+                    entries.push({
+                      msg: `  ↻ remapped ${t.label} — stale folder id replaced with ${resolved.uniqueId}`,
+                      ok: true,
+                    });
+                  } else {
+                    entries.push({
+                      msg: `  ⚠ ${t.label} — mapped folder is gone and no folder found at ${full}; row left as-is`,
+                      ok: false,
+                    });
+                  }
+                } else {
+                  // Throttle, permission error, malformed request — NOT evidence of
+                  // deletion. Changing the row on this would be acting on a guess.
+                  entries.push({
+                    msg: `  ⚠ ${t.label} — could not verify mapped folder (HTTP ${probe.status}); row left unchanged`,
+                    ok: false,
+                  });
+                }
               }
             }
             // Auto-assign DMS Group Map groups to this folder by role. Staging gets
@@ -1291,6 +1454,83 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         }
       } catch (e) {
         entries.push({ msg: `Site-entry sync skipped — ${(e as Error).message}`, ok: false });
+      }
+
+      // ── Prune orphaned Folder Map rows ────────────────────────────────────────
+      // A row whose TERM no longer exists is never visited by the loop above, so it
+      // would linger forever. This is the only place that can see them: the run has
+      // just enumerated every valid term.
+      //
+      // Deletes LIST ROWS ONLY, never folders. A row is derived data that a later run
+      // can rebuild from the term store + the folder tree; the folder holds documents
+      // that exist nowhere else. A folder left behind is reported so a human can decide.
+      const errorsBeforePrune = entries.filter((e) => !e.ok).length;
+      if (incompleteSegments.length > 0) {
+        // Checked separately from the error count even though an entry was already
+        // pushed above — this is THE condition prune must never run under, and it
+        // should not depend on that entry still being there.
+        entries.push({
+          msg: `Prune skipped — the term store could not be fully read (${incompleteSegments.length} segment(s)); rows are never pruned against a partial term list`,
+          ok: true,
+        });
+      } else if (errorsBeforePrune > 0) {
+        // Hard guard. A half-failed term-store read returns a SHORT target list, and a
+        // short list makes perfectly healthy rows look orphaned — pruning on that would
+        // wipe the map wholesale. No clean run, no prune.
+        entries.push({
+          msg: `Prune skipped — run had ${errorsBeforePrune} error(s); orphaned map rows are only removed after a clean run`,
+          ok: true,
+        });
+      } else {
+        try {
+          setReconPhase("Pruning orphaned folder map rows…");
+          const enumerated = new Set(
+            targets
+              .filter((t) => t.termGuid)
+              .map((t) => (t.termGuid as string).toLowerCase()),
+          );
+          let pruned = 0;
+          for (const row of mapRows) {
+            if (!row.termGuid) continue;
+            if (enumerated.has(row.termGuid.toLowerCase())) continue; // term alive — handled above
+            const probe = await probeFolderById(
+              context.spHttpClient,
+              siteUrl,
+              row.folderUniqueId,
+            );
+            if (!probe.folder && !probe.confirmedMissing) {
+              // Could not tell. Keep the row; never delete on a guess.
+              entries.push({
+                msg: `  ⚠ orphaned row "${row.title}" — could not verify its folder (HTTP ${probe.status}); row kept`,
+                ok: false,
+              });
+              continue;
+            }
+            try {
+              await deleteFolderMapRow(context.spHttpClient, siteUrl, row.itemId);
+              pruned++;
+              entries.push({
+                msg: probe.folder
+                  ? `  ✂ pruned "${row.title}" — term deleted from the term store. Its FOLDER still exists at ${probe.folder.serverRelativeUrl} and was NOT touched — delete it manually if that is intended.`
+                  : `  ✂ pruned "${row.title}" — term and folder both gone`,
+                ok: true,
+              });
+            } catch (e) {
+              entries.push({
+                msg: `  ✗ could not prune "${row.title}": ${(e as Error).message}`,
+                ok: false,
+              });
+            }
+          }
+          entries.push({
+            msg: pruned > 0
+              ? `Folder Map: pruned ${pruned} orphaned row(s) ✓`
+              : `Folder Map: no orphaned rows ✓`,
+            ok: true,
+          });
+        } catch (e) {
+          entries.push({ msg: `Prune skipped — ${(e as Error).message}`, ok: false });
+        }
       }
 
       setLog(entries);
@@ -1527,7 +1767,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           </p>
           {reconConfirm ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>
-              <span>Create + lock the term-store folder tree in <strong>Staging</strong> and <strong>Documents</strong>, then auto-assign groups from DMS Group Map by role. Safe to re-run.</span>
+              <span>
+                Create + lock the term-store folder tree in <strong>Staging</strong> and <strong>Documents</strong>, then auto-assign groups from DMS Group Map by role. Safe to re-run.
+                <br />
+                <strong>Keep this tab open until it finishes.</strong> The run happens in your browser — refreshing, closing the tab or navigating away stops it partway. Nothing is lost and you can simply run it again, but do re-run before letting users in: a folder interrupted at the wrong moment stays unlocked until the next run.
+              </span>
               <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: "#0f6c3f", color: "#fff", border: "none", flexShrink: 0 }} disabled={busy} onClick={() => { runReconciliation().catch(() => undefined); }}>
                 {busy ? "Running…" : "Yes, run reconciliation"}
               </button>
@@ -1552,6 +1796,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 )}
                 <strong style={{ fontSize: 13, color: "#0f6c3f" }}>
                   {reconRunning ? (reconPhase || "Working…") : "Reconciliation complete"}
+                  {reconRunning && (
+                    <span style={{ marginLeft: 8, fontWeight: 400, color: "#8a5a00" }}>
+                      — keep this tab open; leaving stops the run
+                    </span>
+                  )}
                 </strong>
                 <span style={{ fontSize: 12, color: "#666" }}>
                   {reconCounts.folders} folders · {reconCounts.assigns} group assignments

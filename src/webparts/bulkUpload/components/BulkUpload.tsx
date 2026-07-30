@@ -7,11 +7,12 @@ import {
   resolveFolderServerUrl,
   probeFolderByPath,
   ensureFolder,
+  encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
 import {
   parseLevels,
   collectMembership,
-  isChainAuthorized,
+  isLeafChainValid,
   sanitizeFolderSegment,
   buildLevelFormValues,
   Level,
@@ -187,7 +188,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "gho",
     label: "Group Head Office",
     side: "BusinessSegment",
-    termSetGuid: "df4b9afa-d3b9-4c04-9097-50dcaf5d8036",
+    termSetGuid: "08dd94cb-f76c-431c-9b37-e9c98f739ffc",
     stagingFolder: "Group Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -211,7 +212,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "minamas_ho",
     label: "Minamas Head Office",
     side: "BusinessSegment",
-    termSetGuid: "c6b26d32-1c3e-441f-b4ea-78f053e12990",
+    termSetGuid: "9ad00b00-a43c-4a8b-a39a-d0efa89ba706",
     stagingFolder: "Minamas Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -223,7 +224,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "nbpol_ho",
     label: "NBPOL Head Office",
     side: "BusinessSegment",
-    termSetGuid: "303f2c38-086a-46ba-8ee0-85445f6bfa3a",
+    termSetGuid: "77c3993b-0c3c-4a18-89d9-d69209886322",
     stagingFolder: "NBPOL Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -780,15 +781,7 @@ export default function BulkUpload({
       const chain = await loadTermPath(mode.termSetGuid, leaf.termGuid).catch(
         () => [] as TermOption[],
       );
-      const requireSegment = mode.side === "BusinessSegment";
-      if (
-        isChainAuthorized(
-          chain.map((c) => c.id),
-          mode.termSetGuid,
-          membership.memberTerms,
-          requireSegment,
-        )
-      ) {
+      if (isLeafChainValid(chain.map((c) => c.id), leaf.termGuid)) {
         out.push({ modeKey: mode.key, chain });
       }
     }
@@ -866,7 +859,7 @@ export default function BulkUpload({
       const isPrivileged = admin;
       setPrivileged(isPrivileged);
 
-      const [docTypes, years, confs, vendors] = await Promise.all([
+      const [docTypes, years, confs] = await Promise.all([
         loadTermSet(loadedSettings.termSets.documentType).catch(
           () => [] as TermOption[],
         ),
@@ -876,15 +869,16 @@ export default function BulkUpload({
         loadTermSet(loadedSettings.termSets.confidentiality).catch(
           () => [] as TermOption[],
         ),
-        loadTermSet(loadedSettings.termSets.vendor).catch(
-          () => [] as TermOption[],
-        ),
       ]);
       setOptions({
         documentType: docTypes,
         yearPeriod: years,
         confidentiality: confs,
-        vendor: vendors,
+        // The vendor term set was deleted from the site 2026-07-29 — Vendor/Customer
+        // Name is free text in the upload form now. Fetching it here was a guaranteed
+        // 404 on every load. The hidden-field plumbing below is left intact (client
+        // request 2026-07-28), so this stays an empty list rather than being removed.
+        vendor: [],
       });
 
       if (!isPrivileged) {
@@ -1190,7 +1184,7 @@ export default function BulkUpload({
     try {
       const safeUrl = sru.replace(/'/g, "''");
       const delRes: SPHttpClientResponse = await context.spHttpClient.fetch(
-        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)?@f='${encodeURIComponent(safeUrl)}'`,
+        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)?@f='${encodeServerRelativePath(safeUrl)}'`,
         SPHttpClient.configurations.v1,
         { method: "POST", headers: { "X-HTTP-Method": "DELETE", "IF-MATCH": "*" } },
       );
@@ -1532,7 +1526,7 @@ export default function BulkUpload({
         onPct(i, 100);
 
         const itemRes: SPHttpClientResponse = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeURIComponent(uploadedSru)}'`,
+          `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeServerRelativePath(uploadedSru)}'`,
           SPHttpClient.configurations.v1,
         );
         if (!itemRes.ok) {

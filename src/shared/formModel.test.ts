@@ -2,7 +2,7 @@ import {
   parseLevels,
   Level,
   collectMembership,
-  isChainAuthorized,
+  isLeafChainValid,
   GroupMapRow,
   sanitizeFolderSegment,
   buildLevelFormValues,
@@ -88,33 +88,34 @@ describe("collectMembership", () => {
   });
 });
 
-describe("isChainAuthorized", () => {
-  const memberTerms = new Set(["set-gho", "t-lrc", "t-gco"]);
-
-  it("authorises when every chain term + the segment are members (BS mode)", () => {
-    expect(isChainAuthorized(["t-lrc", "t-gco"], "set-gho", memberTerms, true)).toBe(true);
+describe("isLeafChainValid", () => {
+  // Regression: an uploader holds ONE Group Map row — the unit row. Its
+  // ancestors (segment, department) have no rows and must not need any.
+  // The predecessor check demanded membership at every tier and refused a
+  // correctly provisioned uploader. See the leaf-only-upload-authorization
+  // spec (2026-07-29).
+  it("accepts a chain ending at the leaf with no rows for the ancestors", () => {
+    expect(isLeafChainValid(["t-lrc", "t-gco"], "t-gco")).toBe(true);
   });
 
-  it("rejects when an intermediate tier is missing", () => {
-    // user is not a member of the department term
-    const partial = new Set(["set-gho", "t-gco"]);
-    expect(isChainAuthorized(["t-lrc", "t-gco"], "set-gho", partial, true)).toBe(false);
+  it("accepts a deeper chain (Project mode: project → dept → unit)", () => {
+    expect(isLeafChainValid(["p-1", "d-1", "u-1"], "u-1")).toBe(true);
   });
 
-  it("rejects when segment membership is required but absent", () => {
-    const noSeg = new Set(["t-lrc", "t-gco"]);
-    expect(isChainAuthorized(["t-lrc", "t-gco"], "set-gho", noSeg, true)).toBe(false);
+  it("rejects an empty chain (loadTermPath failed)", () => {
+    expect(isLeafChainValid([], "t-gco")).toBe(false);
   });
 
-  it("skips the segment check for Project mode (no segment tier)", () => {
-    // chain = [project, dept, unit]; no term-set membership needed
-    const proj = new Set(["p-1", "d-1", "u-1"]);
-    expect(isChainAuthorized(["p-1", "d-1", "u-1"], "set-proj", proj, false)).toBe(true);
+  it("rejects a chain that does not terminate at the leaf", () => {
+    // a truncated ancestry would otherwise point the upload at the department
+    expect(isLeafChainValid(["t-lrc"], "t-gco")).toBe(false);
+    expect(isLeafChainValid(["t-lrc", "t-other"], "t-gco")).toBe(false);
   });
 
-  it("rejects an empty chain and is case-insensitive", () => {
-    expect(isChainAuthorized([], "set-gho", memberTerms, true)).toBe(false);
-    expect(isChainAuthorized(["T-LRC", "T-GCO"], "SET-GHO", memberTerms, true)).toBe(true);
+  // normGuid trims + lowercases only — it does not strip braces.
+  it("normalises case and surrounding whitespace on both sides", () => {
+    expect(isLeafChainValid(["T-LRC", "T-GCO"], "t-gco")).toBe(true);
+    expect(isLeafChainValid(["t-lrc", " t-gco "], "T-GCO")).toBe(true);
   });
 });
 

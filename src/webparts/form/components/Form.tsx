@@ -6,11 +6,12 @@ import {
   lookupFolderMapping,
   resolveFolderServerUrl,
   ensureFolder,
+  encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
 import {
   parseLevels,
   collectMembership,
-  isChainAuthorized,
+  isLeafChainValid,
   sanitizeFolderSegment,
   buildLevelFormValues,
   Level,
@@ -112,18 +113,18 @@ type UploadMode = {
 // user is a member of, with the leaf held under the UPL role.
 type ValidPath = { modeKey: string; chain: TermOption[] };
 
+// Vendor is NOT here — it is free text (see the Vendor/Customer Name input), so it
+// has no term set and no options list.
 type OptionMap = {
   documentType: TermOption[];
   yearPeriod: TermOption[];
   confidentiality: TermOption[];
-  vendor: TermOption[];
 };
 
 const EMPTY_OPTIONS: OptionMap = {
   documentType: [],
   yearPeriod: [],
   confidentiality: [],
-  vendor: [],
 };
 
 // Fallback if DMS Config is missing/unreachable. DMS Config is the source of
@@ -139,7 +140,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "gho",
     label: "Group Head Office",
     side: "BusinessSegment",
-    termSetGuid: "df4b9afa-d3b9-4c04-9097-50dcaf5d8036",
+    termSetGuid: "08dd94cb-f76c-431c-9b37-e9c98f739ffc",
     stagingFolder: "Group Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -163,7 +164,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "minamas_ho",
     label: "Minamas Head Office",
     side: "BusinessSegment",
-    termSetGuid: "c6b26d32-1c3e-441f-b4ea-78f053e12990",
+    termSetGuid: "9ad00b00-a43c-4a8b-a39a-d0efa89ba706",
     stagingFolder: "Minamas Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -175,7 +176,7 @@ const DEFAULT_MODES: UploadMode[] = [
     key: "nbpol_ho",
     label: "NBPOL Head Office",
     side: "BusinessSegment",
-    termSetGuid: "303f2c38-086a-46ba-8ee0-85445f6bfa3a",
+    termSetGuid: "77c3993b-0c3c-4a18-89d9-d69209886322",
     stagingFolder: "NBPOL Head Office",
     levels: [
       { label: "Department", column: "Department" },
@@ -236,11 +237,11 @@ const DEFAULT_MODES: UploadMode[] = [
 ];
 
 type DmsSettings = {
+  // No `vendor` term set — Vendor/Customer Name is free text.
   termSets: {
     documentType: string;
     yearPeriod: string;
     confidentiality: string;
-    vendor: string;
   };
   // Metadata column INTERNAL names. Portable: a new site sets these in DMS Config
   // (col_* setting rows) instead of editing code. Defaults below match the current
@@ -265,7 +266,6 @@ const DEFAULT_SETTINGS: DmsSettings = {
     documentType: "866c5754-258e-401f-8685-03d20ae59b1d",
     yearPeriod: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
     confidentiality: "0d6d1da8-27e5-477f-8684-e8cf169f8fb9",
-    vendor: "eaafd0e5-03fd-4d33-b1b1-e4252bec430a",
   },
   columns: {
     documentType: FIELDS.documentType,
@@ -488,7 +488,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         confidentiality:
           get("termSet_confidentiality") ??
           DEFAULT_SETTINGS.termSets.confidentiality,
-        vendor: get("termSet_vendor") ?? DEFAULT_SETTINGS.termSets.vendor,
       },
       columns: {
         documentType: get("col_documentType") ?? DEFAULT_SETTINGS.columns.documentType,
@@ -594,15 +593,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       const chain = await loadTermPath(mode.termSetGuid, leaf.termGuid).catch(
         () => [] as TermOption[],
       );
-      const requireSegment = mode.side === "BusinessSegment";
-      if (
-        isChainAuthorized(
-          chain.map((c) => c.id),
-          mode.termSetGuid,
-          membership.memberTerms,
-          requireSegment,
-        )
-      ) {
+      if (isLeafChainValid(chain.map((c) => c.id), leaf.termGuid)) {
         out.push({ modeKey: mode.key, chain });
       }
     }
@@ -686,7 +677,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       const isPrivileged = admin;
       setPrivileged(isPrivileged);
 
-      const [docTypes, years, confs, vendors] = await Promise.all([
+      const [docTypes, years, confs] = await Promise.all([
         loadTermSet(loadedSettings.termSets.documentType).catch(
           () => [] as TermOption[],
         ),
@@ -696,15 +687,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         loadTermSet(loadedSettings.termSets.confidentiality).catch(
           () => [] as TermOption[],
         ),
-        loadTermSet(loadedSettings.termSets.vendor).catch(
-          () => [] as TermOption[],
-        ),
       ]);
       setOptions({
         documentType: docTypes,
         yearPeriod: years,
         confidentiality: confs,
-        vendor: vendors,
       });
 
       if (isPrivileged) {
@@ -1015,7 +1002,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       uploadedServerRelativeUrl = uploadJson.ServerRelativeUrl;
 
       const itemRes: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeURIComponent(uploadedServerRelativeUrl)}'`,
+        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeServerRelativePath(uploadedServerRelativeUrl)}'`,
         SPHttpClient.configurations.v1,
       );
       if (!itemRes.ok) {

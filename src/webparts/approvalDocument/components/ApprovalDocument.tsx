@@ -5,6 +5,11 @@ import { IApprovalDocumentProps } from "./IApprovalDocumentProps";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+// Library URL segments used to map a Staging path to its Documents twin. "Shared Documents"
+// is the Documents library's URL segment even though its display name is "Documents".
+const STAGING_URL_SEGMENT = "Staging";
+const DOCUMENTS_URL_SEGMENT = "Shared Documents";
+
 interface IFileItem {
   ID: number;
   FileLeafRef: string;
@@ -159,12 +164,77 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     return data.FormDigestValue as string;
   };
 
+  /**
+   * Is this document's destination in the Documents library ready to receive it?
+   *
+   * The Auto-route flow creates whatever path it is handed. If the unit folder is missing,
+   * it silently creates the WHOLE chain from the library root, and those folders inherit
+   * the Documents library ACL — where DMS_SITE_MEMBERS holds Read. Every DMS user would
+   * then be able to read that unit's approved documents, with nothing logged as an error.
+   *
+   * So refuse to approve unless the unit folder exists AND has unique permissions.
+   * An inconclusive answer also blocks: a retry costs the approver seconds, whereas a wrong
+   * "proceed" publishes documents to everyone and nobody finds out.
+   *
+   * See docs/superpowers/specs/2026-07-29-approval-destination-guard-design.md
+   */
+  const documentsUnitFolderReady = async (
+    stagingFileUrl: string,
+  ): Promise<{ ok: boolean; reason?: string }> => {
+    const webSru = context.pageContext.web.serverRelativeUrl;
+    // …/Unit/Year/Document Type/file.ext → walk up three levels to the unit folder.
+    // Position-based, so it holds for segments with a deeper Levels chain too.
+    const parts = stagingFileUrl.split("/");
+    if (parts.length < 4) return { ok: false, reason: "unexpected file path" };
+    const unitStaging = parts.slice(0, parts.length - 3).join("/");
+
+    // Swap the library segment, anchored on the web-relative prefix so a folder that
+    // happens to be named "Staging" deeper in the tree is not mangled.
+    const prefix = `${webSru}/${STAGING_URL_SEGMENT}/`;
+    if (unitStaging.toLowerCase().indexOf(prefix.toLowerCase()) !== 0) {
+      return { ok: false, reason: "could not work out the Documents path" };
+    }
+    const unitDocs = `${webSru}/${DOCUMENTS_URL_SEGMENT}/${unitStaging.slice(prefix.length)}`;
+    // Per-segment encoding (no %2F flood) with OData quote doubling — see pathEncoding.ts.
+    const encoded = unitDocs.split("/").map(encodeURIComponent).join("/").replace(/'/g, "''");
+
+    const res = await context.spHttpClient.get(
+      `${webUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields?$select=HasUniqueRoleAssignments&@f='${encoded}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (res.status === 404) return { ok: false, reason: "the folder does not exist yet" };
+    if (!res.ok) {
+      console.error("Approval destination check failed:", res.status, unitDocs);
+      return { ok: false, reason: `it could not be verified (HTTP ${res.status})` };
+    }
+    const d = await res.json();
+    if (d.HasUniqueRoleAssignments !== true) {
+      return { ok: false, reason: "it is not locked down — it would be readable by every DMS user" };
+    }
+    return { ok: true };
+  };
+
   const submitDecision = async (action: Decision): Promise<void> => {
     if (!item || submitting) return;
     setDecision(action);
     setSubmitting(true);
     setSubmitError("");
     try {
+      // Only approving publishes to Documents. Rejecting copies nothing, so it is not gated.
+      if (action === "Approved") {
+        const ready = await documentsUnitFolderReady(item.File.ServerRelativeUrl);
+        if (!ready.ok) {
+          setSubmitError(
+            `This unit's folder is not ready in the Documents library, so the document was NOT approved (${ready.reason}). ` +
+            `Ask an administrator to run Folder Reconciliation, then approve again.`,
+          );
+          // Leave `decision` as the approver chose it — the selection is still valid, it is
+          // the destination that is not ready.
+          setSubmitting(false);
+          return;
+        }
+      }
       const digest      = await getDigest();
       const safeComment = comments.replace(/'/g, "''");
       // Path passed as an OData parameter alias (@f) appended to the query

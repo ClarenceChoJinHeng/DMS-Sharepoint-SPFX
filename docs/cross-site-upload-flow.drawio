@@ -1,0 +1,149 @@
+<mxfile host="Electron" agent="Claude">
+  <diagram id="cross-site-upload" name="Cross-Site Upload Flow">
+    <mxGraphModel dx="1216256.94" dy="739707.66" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="0.02" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="e8" edge="1" parent="1" source="autoroute" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="viewDocs" />
+        <mxCell id="e11" edge="1" parent="1" source="goFolder" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="viewDocs" />
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-28" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;container=0;" value="" vertex="1">
+          <mxGeometry height="940" width="270" x="-5100" y="-2320" as="geometry" />
+        </mxCell>
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontStyle=1;fontSize=14;strokeColor=#000000;fillColor=none;container=0;" value="SharePoint DMS — Cross-Site Upload" vertex="1">
+          <mxGeometry height="30" width="1080" x="-5660" y="-2380" as="geometry" />
+        </mxCell>
+        <mxCell id="hUp" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontStyle=1;fontSize=13;strokeColor=#000000;fillColor=#f5f5f5;container=0;" value="Uploader (DMS Site)" vertex="1">
+          <mxGeometry height="30" width="290" x="-5660" y="-2350" as="geometry" />
+        </mxCell>
+        <mxCell id="hAp" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontStyle=1;fontSize=13;strokeColor=#000000;fillColor=#f5f5f5;container=0;" value="Approver (DMS Site)" vertex="1">
+          <mxGeometry height="30" width="270" x="-5370" y="-2350" as="geometry" />
+        </mxCell>
+        <mxCell id="hVw" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontStyle=1;fontSize=13;strokeColor=#000000;fillColor=#f5f5f5;container=0;" value="Viewer (DMS Site)" vertex="1">
+          <mxGeometry height="30" width="270" x="-5100" y="-2350" as="geometry" />
+        </mxCell>
+        <mxCell id="colUp" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;container=0;" value="" vertex="1">
+          <mxGeometry height="940" width="290" x="-5660" y="-2320" as="geometry" />
+        </mxCell>
+        <mxCell id="colVw" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;container=0;" value="" vertex="1">
+          <mxGeometry height="940" width="520" x="-5100" y="-2320" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-1" edge="1" parent="1" source="start" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="form">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="start" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=50;fillColor=#dae8fc;strokeColor=#6c8ebf;container=0;" value="Start" vertex="1">
+          <mxGeometry height="45" width="120" x="-5575" y="-2300" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-3" edge="1" parent="1" source="form" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="tag">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="form" parent="1" style="whiteSpace=wrap;html=1;align=left;spacingLeft=6;fillColor=#f5f5f5;strokeColor=#666666;container=0;" value="Custom Upload Form (SPFx):&#xa;• select multiple files&#xa;• select metadata (segment, dept, unit, doc type, year)&#xa;• realtime file-format check" vertex="1">
+          <mxGeometry height="120" width="200" x="-5615" y="-2220" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-5" edge="1" parent="1" source="tag" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="upload" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="tag" parent="1" style="whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;container=0;" value="Update metadata, rename file, validate file format (SPFx)" vertex="1">
+          <mxGeometry height="70" width="200" x="-5615" y="-2060" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-6" edge="1" parent="1" source="upload" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="review">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="-5359.95" y="-1915" />
+              <mxPoint x="-5359.95" y="-2185" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="upload" parent="1" style="whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;container=0;" value="Files uploaded to Staging library (Site A) for approval" vertex="1">
+          <mxGeometry height="70" width="200" x="-5615" y="-1950" as="geometry" />
+        </mxCell>
+        <mxCell id="notifyApproved" parent="1" style="whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;container=0;" value="Received notification&#xa;(approved — with folder / file link on destination site)" vertex="1">
+          <mxGeometry height="70" width="200" x="-5615" y="-1840" as="geometry" />
+        </mxCell>
+        <mxCell id="notifyRejected" parent="1" style="whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;container=0;" value="Received notification&#xa;(rejected)" vertex="1">
+          <mxGeometry height="60" width="200" x="-5615" y="-1520" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-7" edge="1" parent="1" source="review" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="approve" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="review" parent="1" style="whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;container=0;" value="Access Staging library to review uploaded files (custom SPFx page)" vertex="1">
+          <mxGeometry height="70" width="200" x="-5335" y="-2220" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-11" edge="1" parent="1" source="approve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="autoroute" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="approve" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;container=0;" value="Approve?" vertex="1">
+          <mxGeometry height="90" width="120" x="-5295" y="-2080" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-44" edge="1" parent="1" source="autoroute" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="YiWXUoFFgMeye_Nx0yRk-32">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="-5080" y="-1805" />
+              <mxPoint x="-5080" y="-2185" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-45" edge="1" parent="1" source="autoroute" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="notifyApproved">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-54" connectable="0" parent="YiWXUoFFgMeye_Nx0yRk-45" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];container=0;" value="Yes" vertex="1">
+          <mxGeometry relative="1" x="-0.5868" y="-3" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-47" edge="1" parent="1" source="autoroute" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="sendReject">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-48" connectable="0" parent="YiWXUoFFgMeye_Nx0yRk-47" style="edgeLabel;html=1;align=center;verticalAlign=middle;resizable=0;points=[];container=0;" value="No" vertex="1">
+          <mxGeometry relative="1" x="-0.1423" y="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="autoroute" parent="1" style="whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;container=0;" value="Power Automate — Auto-route&#xa;Copies approved file by live folder path to the destination site&#39;s final library (rename-proof, metadata-driven)" vertex="1">
+          <mxGeometry height="110" width="195" x="-5332.5" y="-1860" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-42" edge="1" parent="1" source="sendReject" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="notifyRejected">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="sendReject" parent="1" style="whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;container=0;" value="Send rejection notification via Power Automate" vertex="1">
+          <mxGeometry height="60" width="202.5" x="-5336.25" y="-1520" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-27" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontStyle=1;fontSize=13;strokeColor=#000000;fillColor=#f5f5f5;container=0;" value="Site B&amp;nbsp;" vertex="1">
+          <mxGeometry height="30" width="250" x="-4830" y="-2350" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-30" parent="1" style="whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;container=0;" value="Lands on Site B Documents Library" vertex="1">
+          <mxGeometry height="60" width="180" x="-4795" y="-2215" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-36" edge="1" parent="1" source="YiWXUoFFgMeye_Nx0yRk-32" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="YiWXUoFFgMeye_Nx0yRk-34" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-32" parent="1" style="whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;container=0;" value="Go to Documents Library (Final Folder)" vertex="1">
+          <mxGeometry height="70" width="180" x="-5055" y="-2220" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-37" edge="1" parent="1" source="YiWXUoFFgMeye_Nx0yRk-34" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="YiWXUoFFgMeye_Nx0yRk-35" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-34" parent="1" style="whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;container=0;" value="View the approved documents&amp;nbsp;" vertex="1">
+          <mxGeometry height="70" width="180" x="-5055" y="-2080" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-38" edge="1" parent="1" source="YiWXUoFFgMeye_Nx0yRk-35" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="YiWXUoFFgMeye_Nx0yRk-30">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-35" parent="1" style="whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;container=0;" value="Redirect to Site B&amp;nbsp;" vertex="1">
+          <mxGeometry height="70" width="180" x="-5055" y="-1940" as="geometry" />
+        </mxCell>
+        <mxCell id="YiWXUoFFgMeye_Nx0yRk-55" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;container=0;" value="" vertex="1">
+          <mxGeometry height="940" width="270" x="-5370" y="-2320" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="start" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="form" />
+        <mxCell id="e2" edge="1" parent="1" source="form" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="tag" />
+        <mxCell id="e3" edge="1" parent="1" source="tag" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="upload" />
+        <mxCell id="e4" edge="1" parent="1" source="upload" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="review" />
+        <mxCell id="e5" edge="1" parent="1" source="review" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="approve" />
+        <mxCell id="e6" edge="1" parent="1" source="approve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontStyle=1;" target="autoroute" value="Yes" />
+        <mxCell id="e9" edge="1" parent="1" source="autoroute" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="notifyApproved" value="Send notification (approved)" />
+        <mxCell id="e7" edge="1" parent="1" source="approve" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontStyle=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="sendReject" value="No" />
+        <mxCell id="e10" edge="1" parent="1" source="sendReject" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" target="notifyRejected" value="Send notification (rejected)" />
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

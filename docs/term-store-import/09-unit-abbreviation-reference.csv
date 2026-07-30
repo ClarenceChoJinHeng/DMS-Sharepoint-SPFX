@@ -1,0 +1,134 @@
+Business Segment,Department,Unit,Abbreviated Name,Source,Notes
+Group Head Office,Group Human Resources,Rewards & HRIS - Rewards,GHO_GHR_REWARDS,Guthrie 22072026,
+Group Head Office,Group Human Resources,Rewards & HRIS - Nadi HRIS,GHO_GHR_NHRIS,Guthrie 22072026,
+Group Head Office,Group Human Resources,Rewards & HRIS - GHR Payroll,GHO_GHR_PAYROLL,Guthrie 22072026,
+Group Head Office,Group Human Resources,Talent & Learning - Talent Strategy (TS),GHO_GHR_TALENTSTRAT,Guthrie 22072026,
+Group Head Office,Group Human Resources,Talent & Learning - Talent Management (TM),GHO_GHR_TM,Guthrie 22072026,
+Group Head Office,Group Human Resources,Talent & Learning - Talent Acquisition (TA),GHO_GHR_TA,Guthrie 22072026,
+Group Head Office,Group Human Resources,Talent & Learning - Learning & Development (L&D),GHO_GHR_LND,Guthrie 22072026,
+Group Head Office,Group Human Resources,Talent & Learning - GH Campus,GHO_GHR_GHC,Guthrie 22072026,
+Group Head Office,Group Human Resources,Talent & Learning - The Crest,GHO_GHR_THECREST,Guthrie 22072026,
+Group Head Office,Group Human Resources,Performance & Analytics - Performance,GHO_GHR_PERFORMANCE,Guthrie 22072026,
+Group Head Office,Group Human Resources,Performance & Analytics - Analytics,GHO_GHR_ANALYTICS,Guthrie 22072026,
+Group Head Office,Group Human Resources,Industrial Relations & Compliance,GHO_GHR_IRC,Guthrie 22072026,
+Group Head Office,Group Human Resources,HR Head Office & Org Design - HR Head Office (HR HO),GHO_GHR_HRHO,Guthrie 22072026,
+Group Head Office,Group Human Resources,HR Head Office & Org Design - Org Design,GHO_GHR_HROD,Guthrie 22072026,
+Group Head Office,Group Human Resources,Org Culture & Workplace Services - Org Culture & Transformation (OCT),GHO_GHR_OCWS_OCT,Guthrie 22072026,
+Group Head Office,Group Human Resources,Org Culture & Workplace Services - Integrated Facilities Management (IFM),GHO_GHR_OCWS_IFM,Guthrie 22072026,
+Group Head Office,Group Human Resources,Org Culture & Workplace Services - Admin & Sports,GHO_GHR_OCWS_ANS,Guthrie 22072026,
+Group Head Office,Group Finance,Finance Operations,GHO_GF_FINOPS,Guthrie 22072026,
+Group Head Office,Group Finance,Finance Upstream Malaysia,GHO_GF_FINUPMY,Guthrie 22072026,
+Group Head Office,Group Finance,Tax,GHO_GF_TAX,Guthrie 22072026,
+Group Head Office,Group Finance,Treasury,GHO_GF_TREASURY,Guthrie 22072026,
+Group Head Office,Group Finance,Finance Land & SDGRE,GHO_GF_LAND_SDGRE,Guthrie 22072026,
+Group Head Office,Group Finance,Global Strategic Procurement,GHO_GF_GSTRATPROC,Guthrie 22072026,
+Group Head Office,Group Finance,Group IT & Projects,GHO_GF_GIT,Guthrie 22072026,
+Group Head Office,Group Finance,Compliance & Operational Risk (CORU),GHO_GF_CORU,Guthrie 22072026,
+Group Head Office,Group Finance,Strategy & Price Risk Management,GHO_GF_STRAT_PRM,Guthrie 22072026,
+Group Head Office,"Group Legal, Risk & Compliance",Group Legal,GHO_GLRC_LEGAL,Guthrie 22072026,
+Group Head Office,"Group Legal, Risk & Compliance",Group Risk,GHO_GLRC_RISK,Guthrie 22072026,
+Group Head Office,"Group Legal, Risk & Compliance",Group Compliance (GCO),GHO_GLRC_GCO,Guthrie 22072026,
+Group Head Office,President's Office,Strategic Governance & Communications,GHO_PO_STRATGOV_COMMS,Guthrie 22072026,
+Group Head Office,President's Office,Strategy Partner Malaysia & Indonesia,GHO_PO_SP_MY_ID,Guthrie 22072026,
+Group Head Office,President's Office,Strategy Partner PNG & SI,GHO_PO_SP_PNGSI,Guthrie 22072026,
+Group Head Office,President's Office,Strategy Partner Midstream & Investments,GHO_PO_SPMID_INVT,Guthrie 22072026,
+Group Head Office,President's Office,Strategy Partner Downstream,GHO_PO_SPDNSTRM,Guthrie 22072026,
+Group Head Office,President's Office,Strategic Planning,GHO_PO_SP,Guthrie 22072026,Code GHO_PO_SP overlaps the Strategy Partner prefix - confirm with client
+Group Head Office,Group Corporate Affairs,Global Marketing & Branding - Strategic & Customer Marketing,GHO_GCA_GMB_SCM,Guthrie 22072026,
+Group Head Office,Group Corporate Affairs,Global Marketing & Branding - Product Marketing B2C,GHO_CGA_GMB_PMB2C,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Global Marketing & Branding - Strategic Communications,GHO_CGA_GMB_STRATCOMMS,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Group Operation Services - Workforce Management Unit,GHO_CGA_GOS_WMU,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Group Operation Services - Agri Sumber Prestari,GHO_CGA_GOS_ASP,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Group Operation Services - Government Relations,GHO_CGA_GOS_GOVTREL,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Group Operation Services - Chairman Office,GHO_CGA_GOS_CO,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Group Communications - Strategic Communications,GHO_CGA_GC_STRATCOMMS,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Group Communications - Brand Communications,GHO_CGA_GC_BRANDCOMMS,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Group Communications - Events & Protocol,GHO_CGA_GC_EP,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Investor Relations,GHO_CGA_IR,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Elaeis Garden (Hospitality),GHO_CGA_EG,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Corporate Affairs,Yayasan Guthrie,GHO_CGA_YG,Guthrie 22072026,GCA/CGA inconsistency in client source
+Group Head Office,Group Sustainability,Sustainability Head Office,GHO_GS_SUS_HO,Guthrie 22072026,
+Group Head Office,Group Sustainability,Climate Change & Reporting,GHO_GS_CLIMATE_CR,Guthrie 22072026,
+Group Head Office,Group Sustainability,Global HSE,GHO_GS_GLOBALHSE,Guthrie 22072026,
+Group Head Office,Group Sustainability,Traceability,GHO_GS_TRACEABILITY,Guthrie 22072026,
+Group Head Office,Group Sustainability,Sustainability Compliance,GHO_GS_SC,Guthrie 22072026,
+Group Head Office,Group Sustainability,Conservation & Biodiversity,GHO_GS_CNB,Guthrie 22072026,
+Group Head Office,"Group Integrity, Governance & Assurance",GCA IT & Analytics,GHO_GIGA_GCAIT_ANALYTICS,Guthrie 22072026,
+Group Head Office,"Group Integrity, Governance & Assurance",Group Integrity & Governance Unit (GIG),GHO_GIGA_GIG,Guthrie 22072026,
+Group Head Office,"Group Integrity, Governance & Assurance",Group Fraud & Corruption Risk Mgmt (GFCRM),GHO_GIGA_GRCRM,Guthrie 22072026,Client code reads GRCRM but the unit acronym is GFCRM - confirm
+Group Head Office,"Group Integrity, Governance & Assurance",Practice Management (PM),GHO_GIGA_PM,Guthrie 22072026,
+Group Head Office,"Group Integrity, Governance & Assurance","GCA UPMY, R&D & HO",GHO_GIGA_GCA_UPMY_RDHO,Guthrie 22072026,
+Group Head Office,"Group Integrity, Governance & Assurance",GCA SDGI,GHO_GIGA_GCA_SDGI,Guthrie 22072026,
+Group Head Office,Group Corporate Secretarial,Guthrie,GHO_COSEC_GUTHRIE,Guthrie 22072026,
+Group Head Office,Group Corporate Secretarial,SDGI,GHO_COSEC_SDGI,Guthrie 22072026,
+Minamas Head Office,CEO Office Administration,Expatriate Formalities,MHO_CEOOA_EXPATF,Client,
+Minamas Head Office,CEO Office Administration,General Administration & Building Management,MHO_CEOOA_GABM,Client,
+Minamas Head Office,Corporate Communication,Corporate Social Responsibility & Operations Comms,MHO_CEOOA_CSR_OPSCOMMS,Client,Prefix says CEOOA but department is Corporate Communication - confirm
+Minamas Head Office,Corporate Communication,Internal & External Comms,MHO_INEXCOMMS,Client,Missing department segment in code - confirm
+Minamas Head Office,Corporate Services,Government Relations,MHO_CS_GOVTREL,Client,
+Minamas Head Office,Corporate Services,Land Regulation,MHO_CS_LANDREL,Client,
+Minamas Head Office,Corporate Services,Licensing & Operation Security,MHO_CS_LOS,Client,
+Minamas Head Office,Corporate Services,Minority Shareholder Relation,MHO_CS_MSR,Client,
+Minamas Head Office,Corporate Services,Partnership Development,MHO_CS_PARTDEV,Client,
+Minamas Head Office,General Accounting,Asset Management,MHO_GA_AM,Client,
+Minamas Head Office,General Accounting,General Ledger,MHO_GA_GL,Client,
+Minamas Head Office,General Accounting,Holding & Consolidation,MHO_GA_HCONSOL,Client,
+Minamas Head Office,General Accounting,Tax Compliance,MHO_GA_TAX,Client,
+Minamas Head Office,Group Compliance,Group Compliance,MHO_GCO,Client,Client left Unit blank - unit mirrors department so a leaf folder exists
+Minamas Head Office,Group Corporate Assurance,Data Intelligence & Investigations,MHO_GCA_DIINVESTN,Client,
+Minamas Head Office,Group Corporate Assurance,Estate & Other Operations,MHO_GCA_EOOPS,Client,
+Minamas Head Office,Group Corporate Assurance,Practice Management,MHO_GCA_PM,Client,
+Minamas Head Office,Group Corporate Assurance,Project & Mill Operations,MHO_PMOPS,Client,Missing GCA segment in code - confirm
+Minamas Head Office,Group Integrity & Governance,Group Integrity & Governance,MHO_GIG,Client,
+Minamas Head Office,Human Resource Management,HR Business Partner and Industrial Relations,MHO_HRM_HRBP_IR,Client,
+Minamas Head Office,Human Resource Management,"HR Rewards, Services, and Performance",MHO_HRM_HRRSP,Client,
+Minamas Head Office,Human Resource Management,Organisation Development and Talent Management,MHO_HRM_ODTM,Client,
+Minamas Head Office,Information Technology Services,Business Application & Development,MHO_ITS_BADEV,Client,
+Minamas Head Office,Information Technology Services,Infrastructure & IT Security,MHO_ITS_INFRA_ITS,Client,
+Minamas Head Office,Information Technology Services,SAP Strategic Project & Data,MHO_ITS_SAPSTRATPD,Client,
+Minamas Head Office,Legal & Corporate Secretary,Corporate Secretary,MHO_LCS_COSEC,Client,
+Minamas Head Office,Legal & Corporate Secretary,Legal,MHO_LCS_LEGAL,Client,
+Minamas Head Office,Performance Monitoring Unit & Mechanisation,Mechanisation,MHO_PMUM_MEC,Client,
+Minamas Head Office,Performance Monitoring Unit & Mechanisation,Performance Monitoring Unit,MHO_PMUM_PMU,Client,
+Minamas Head Office,Plantation Operation,Estate Report,MHO_POP_ER,Client,
+Minamas Head Office,Plantation Operation,Management Report,MHO_POP_MR,Client,
+Minamas Head Office,Plantation Operation,Mill Report,MHO_POP_MILLR,Client,
+Minamas Head Office,Plantation Operation,Task Force Operation,MHO_POP_TFO,Client,
+Minamas Head Office,Production & Engineering,Engineering,MHO_PNE_ENGINEERING,Client,
+Minamas Head Office,Production & Engineering,Production & Operation,MHO_PROD_OPS,Client,Missing PNE segment in code - confirm
+Minamas Head Office,Risk Management,Risk Management,MHO_GRM,Client,Client left Unit blank - unit mirrors department so a leaf folder exists
+Minamas Head Office,Supply Chain,Procurement,MHO_SC_PROC,Client,
+Minamas Head Office,Supply Chain,Logistics,MHO_SC_LOGS,Client,
+Minamas Head Office,Sustainability,"Health, Safety, and Environment",MHO_SUS_HSE,Client,
+Minamas Head Office,Sustainability,Sustainability Compliance & Quality Management,MHO_SC_QM,Client,SC prefix collides with Supply Chain - confirm
+Minamas Head Office,Sustainability,"Environment, Social & Governance",MHO_SC_ESG,Client,SC prefix collides with Supply Chain - confirm
+Minamas Head Office,Sustainability,Health & Medical Services,MHO_SC_HMS,Client,SC prefix collides with Supply Chain - confirm
+Minamas Head Office,Taxation,Taxation,MHO_TAX,Client,
+Minamas Head Office,Treasury,Funding Operations,MHO_TREAS_FO,Client,
+Minamas Head Office,Treasury,Insurance Management,MHO_TREAS_INSURM,Client,
+Minamas Head Office,Treasury,Payment,MHO_TREAS_PAYMENT,Client,
+Minamas Head Office,Treasury,Account Payable,MHO_TREAS_AC,Client,
+Minamas Head Office,Upstream Productivity,Upstream Productivity,MHO_UPPROD,Client,
+Minamas Head Office,Value Creation / Value Transformation,Value Creation / Value Transformation,MHO_VCVT,Client,
+NBPOL Head Office,Sustainability,Certification,NBPOLHO_SUS_CERT,Client,
+NBPOL Head Office,Sustainability,"Environment, Safety & Health",NBPOLHO_SUS_ESH,Client,Client sheet spelled Heath - corrected to Health
+NBPOL Head Office,Land Department,Land Management,NBPOLHO_LAND_LM,Client,Case normalised from NBPOLHO_Land_LM
+NBPOL Head Office,Land Department,Surveying,NBPOLHO_LAND_SURVEYING,Client,Case normalised from NBPOLHO_Land_SURVEYING
+NBPOL Head Office,Legal,Legal,NBPOLHO_LEGAL,PROPOSED,Client left code blank; unit mirrors department
+NBPOL Head Office,Transformation,Transformation,NBPOLHO_TRANSFORM,PROPOSED,Client left code blank; unit mirrors department
+NBPOL Head Office,Group Corporate Assurance,Group Corporate Assurance,NBPOLHO_GCA,Client,Client left Unit blank - unit mirrors department
+NBPOL Head Office,Engineering & Mill Services,Engineering Services,NBPOLHO_EMS_ES,Client,
+NBPOL Head Office,Performance Management Unit,Standard Crop Recovery Assessment,NBPOLHO_SCRA,Client,
+NBPOL Head Office,Corporate Development & Services,Upstream Support,NBPOLHO_UPSUPPORT,Client,
+NBPOL Head Office,Chief Operating Officer's Office,Chief Operating Officer's Office,NBPOLHO_COO,PROPOSED,Client left code blank; unit mirrors department
+NBPOL Head Office,Finance,Tax,NBPOLHO_FIN_TAX,PROPOSED,Client left code blank
+NBPOL Head Office,Finance,Finance Reporting,NBPOLHO_FIN_REPORTING,PROPOSED,Client left code blank
+NBPOL Head Office,NBPOL Procurement,Corporate Office,NBPOLHO_PROC_CO,Client,
+NBPOL Head Office,Information Technology,NBPOL IT Application Development,NBPOLHO_IT_APPDEV,PROPOSED,Client left code blank
+NBPOL Head Office,Information Technology,NBPOL IT SAP Support,NBPOLHO_IT_SAP,PROPOSED,Client left code blank
+NBPOL Head Office,Human Resources,HR Strategy & Talent,NBPOLHO_HR_STRATTALENT,PROPOSED,Client left code blank
+NBPOL Head Office,Human Resources,HR Operations,NBPOLHO_HR_OPS,PROPOSED,Client left code blank
+NBPOL Head Office,Human Resources,Management Academy,NBPOLHO_HR_MGMTACAD,PROPOSED,Client left code blank
+NBPOL Head Office,Human Resources,Travel,NBPOLHO_HR_TRAVEL,PROPOSED,Client left code blank
+NBPOL Head Office,Human Resources,HRMIS,NBPOLHO_HR_HRMIS,PROPOSED,Client left code blank
+NBPOL Head Office,Commercial,Commercial,NBPOLHO_COMMERCIAL,PROPOSED,Client left code blank; unit mirrors department

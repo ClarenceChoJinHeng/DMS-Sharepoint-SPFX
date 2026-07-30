@@ -52,8 +52,13 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
 - **User path auto-detection:** the form reads the user's **SharePoint group** memberships via SP
   REST (`spGroups.ts`, `/_api/web/...` — **no Graph, no admin consent**; Graph was fully retired in
   the native-SP-groups refactor), matched against the **`DMS Group Map`** list (`GroupId` = SP group
-  **integer** id, `Segment`, `UnitTermGuid`, `Role`). Only unit-level rows are needed; the form walks
-  the term ancestry (`loadTermPath`) to reconstruct Segment→Dept→Unit from just the unit term GUID.
+  **integer** id, `Segment`, `UnitTermGuid`, `Role`). **Only unit-level rows are needed** — one row
+  per group, at the leaf. The form walks the term ancestry (`loadTermPath`) to reconstruct
+  Segment→Dept→Unit from just the unit term GUID, then `isLeafChainValid` checks only that the
+  chain resolved and terminates at that leaf. Do NOT add `MEMBER` rows for the segment/department
+  tiers: they are derivable, and the old `isChainAuthorized` that demanded them was removed
+  2026-07-29 (spec `2026-07-29-leaf-only-upload-authorization-design.md`) after it refused a
+  correctly provisioned uploader with "your account isn't fully provisioned to upload".
   See memory `dms-group-model-per-role-per-library`.
 - **Folder routing:** the deepest (leaf) level = the permissioned **Unit** folder, resolved by
   UniqueId via DMS Folder Map. `Year` + `Document Type` subfolders are **ensure-created on demand**
@@ -71,14 +76,21 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
 documentType:    866c5754-258e-401f-8685-03d20ae59b1d
 yearPeriod:      023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf
 confidentiality: 0d6d1da8-27e5-477f-8684-e8cf169f8fb9
-vendor:          eaafd0e5-03fd-4d33-b1b1-e4252bec430a
-Group Head Office (business-segment set): df4b9afa-d3b9-4c04-9097-50dcaf5d8036
+vendor:          RETIRED — Vendor/Customer Name is FREE TEXT; there is no vendor term set.
+                 The set was deleted from the site 2026-07-29 and the code no longer reads one.
+Group Head Office (business-segment set): 08dd94cb-f76c-431c-9b37-e9c98f739ffc
   Structure: Set → Department → Unit. Verified 14 terms: Group Finance [9 units],
   "Group Legal, Risk ＆ Compliance" [3 units]. Ampersands are FULLWIDTH ＆ (SharePoint requirement).
   Levels = [Department, Unit]. Rebuilt via CSV import — see docs/term-store-import/.
-Upstream Malaysia Head Office: 16a52947-57a3-4217-9a49-b48cb8b0dd31
-Minamas Head Office:           c6b26d32-1c3e-441f-b4ea-78f053e12990
-NBPOL Head Office:             303f2c38-086a-46ba-8ee0-85445f6bfa3a
+Upstream Malaysia Head Office: 16a52947-57a3-4217-9a49-b48cb8b0dd31  ⚠ PLACEHOLDER — NOT onboarded.
+  Client scope as of 2026-07-29 is the other THREE head offices only. This GUID is stale (pre-dates
+  the 2026-07-29 term-set rebuild) and is deliberately left in the code fallbacks as a slot-holder.
+  It is inert: with no `mode` row in DMS Config the segment is never offered, and the fallback
+  constants only surface if the DMS Config read fails. When the client adds the term set, read its
+  GUID off the site and update DEFAULT_MODES (Form.tsx, BulkUpload.tsx) + RECON_MODES
+  (FolderManager.tsx) — no other change needed.
+Minamas Head Office:           9ad00b00-a43c-4a8b-a39a-d0efa89ba706
+NBPOL Head Office:             77c3993b-0c3c-4a18-89d9-d69209886322
   (same structure/Levels as GHO; own Department/Unit trees pending client — currently share GHO's
   terms via isAvailableForTagging). Old tenant GUIDs (0540e66e/f7c578a1/032534ab/cb3c0ab7/efa87c6a/
   5ab1c7c4/6ba9a64c/21d7e6fe) are RETIRED for this site.

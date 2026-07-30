@@ -20,6 +20,23 @@ describe("encodeServerRelativePath", () => {
       .toBe("/x/Compliance%20%EF%BC%86%20Operational%20Risk%20(CORU)");
   });
 
+  // Regression: a bare apostrophe closes the OData string literal early, and SharePoint
+  // answers HTTP 400 "The query string DecodedUrl is missing or invalid". This took out
+  // every President's Office folder on a live reconciliation run.
+  it("doubles a single quote so it cannot close the OData literal", () => {
+    expect(encodeServerRelativePath("/x/President's Office"))
+      .toBe("/x/President''s%20Office");
+  });
+
+  it("doubles every quote when a path has more than one", () => {
+    expect(encodeServerRelativePath("/x/President's Office/Chief Operating Officer's Office"))
+      .toBe("/x/President''s%20Office/Chief%20Operating%20Officer''s%20Office");
+  });
+
+  it("never emits %27 for a quote (the server decodes it back and breaks again)", () => {
+    expect(encodeServerRelativePath("/x/a'b").indexOf("%27")).toBe(-1);
+  });
+
   it("does NOT flood the path with %2F (deep path stays readable)", () => {
     const deep = "/sites/X/Staging/GHO/Group Finance/Unit A/2026/Agreement";
     const out = encodeServerRelativePath(deep);

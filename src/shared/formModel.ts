@@ -146,21 +146,33 @@ export function collectMembership(
 }
 
 /**
- * Hard-check a candidate path: the user must be a member of every term in the
- * chain [top … leaf], and — for Business Segment modes — of the segment
- * (term set) itself. Returns true only when the whole chain is authorised.
+ * Validate a candidate path STRUCTURALLY: the chain must have resolved, and it
+ * must terminate at the uploader leaf it was derived from.
+ *
+ * Authorisation lives in the leaf alone. The chain is not user input — callers
+ * build it with `loadTermPath(termSetGuid, leaf.termGuid)`, i.e. it is the term
+ * store's own ancestry for a term the user already holds the UPL role on. There
+ * is no way to supply a chain you are not entitled to, so re-checking every
+ * ancestor against the Group Map only asks that list to restate what the unit
+ * row plus the term store already say. See the leaf-only-upload-authorization
+ * spec (2026-07-29).
+ *
+ * The predecessor (`isChainAuthorized`) demanded membership at EVERY tier plus
+ * the segment. That belonged to the retired per-tier group model; under
+ * one-group-per-unit it rejects correctly provisioned uploaders unless hundreds
+ * of derivable MEMBER rows are maintained by hand.
+ *
+ * The leaf anchor is worth keeping: `loadTermPath` is a network read wrapped in
+ * `.catch(() => [])`, and a partial or unrelated chain would otherwise point an
+ * upload at a folder the user has no claim on.
  */
-export function isChainAuthorized(
+export function isLeafChainValid(
   chainTermGuids: string[],
-  termSetGuid: string,
-  memberTerms: Set<string>,
-  requireSegmentMembership: boolean,
+  leafTermGuid: string,
 ): boolean {
   if (chainTermGuids.length === 0) return false;
-  if (requireSegmentMembership && !memberTerms.has(normGuid(termSetGuid))) {
-    return false;
-  }
-  return chainTermGuids.every((g) => memberTerms.has(normGuid(g)));
+  const last = chainTermGuids[chainTermGuids.length - 1];
+  return normGuid(last) === normGuid(leafTermGuid);
 }
 
 const ILLEGAL_FOLDER_CHARS = /[\\/:*?"<>|#%]/g;
