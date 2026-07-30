@@ -1,4 +1,11 @@
-import { normalizeFileTypes, readChoiceArray } from "./allowedFileTypes";
+import {
+  normalizeFileTypes,
+  readChoiceArray,
+  resolveAllowedFileTypes,
+  FALLBACK_FILE_TYPES,
+  NO_TYPES_MESSAGE,
+  CONFIG_UNREADABLE_MESSAGE,
+} from "./allowedFileTypes";
 
 describe("normalizeFileTypes", () => {
   // Regression: a bare "png" typed into DMS Config produced an invalid `accept`
@@ -51,8 +58,69 @@ describe("readChoiceArray", () => {
     expect(readChoiceArray(null)).toBeUndefined();
   });
 
+  // A verbose-mode response can carry a null `results`; it must read as absent,
+  // not throw and not look like an empty selection.
+  it("returns undefined when the wrapped results field is null or undefined", () => {
+    expect(readChoiceArray({ results: null })).toBeUndefined();
+    expect(readChoiceArray({ results: undefined })).toBeUndefined();
+  });
+
   it("returns undefined for shapes that are not a choice array", () => {
     expect(readChoiceArray(".pdf,.doc")).toBeUndefined();
     expect(readChoiceArray({ notResults: [".pdf"] })).toBeUndefined();
+  });
+});
+
+describe("resolveAllowedFileTypes", () => {
+  it("resolves a populated selection to configured, normalized", () => {
+    expect(resolveAllowedFileTypes(["png", ".PDF"])).toEqual({
+      kind: "configured",
+      types: [".png", ".pdf"],
+    });
+  });
+
+  // Spec §3: empty is a hard block, never a silent fallback and never an empty
+  // allowlist that some caller might read as permissive.
+  it("resolves an empty selection to none", () => {
+    expect(resolveAllowedFileTypes([])).toEqual({ kind: "none" });
+  });
+
+  it("resolves a selection of only blanks to none", () => {
+    expect(resolveAllowedFileTypes(["", "  "])).toEqual({ kind: "none" });
+  });
+
+  it("resolves an absent field to unknown, carrying the fallback types", () => {
+    expect(resolveAllowedFileTypes(undefined)).toEqual({
+      kind: "unknown",
+      types: FALLBACK_FILE_TYPES,
+    });
+  });
+
+  // The two failure states must never be confusable — different people fix them.
+  it("distinguishes none from unknown", () => {
+    expect(resolveAllowedFileTypes([]).kind).not.toBe(
+      resolveAllowedFileTypes(undefined).kind,
+    );
+  });
+
+  it("never reports configured with an empty type list", () => {
+    const resolved = resolveAllowedFileTypes([""]);
+    expect(resolved.kind).toBe("none");
+    expect(resolved).not.toHaveProperty("types");
+  });
+
+  it("ships fallback types that are already normalized", () => {
+    expect(normalizeFileTypes(FALLBACK_FILE_TYPES)).toEqual(FALLBACK_FILE_TYPES);
+  });
+});
+
+describe("messages", () => {
+  it("tells the client which column and list to fix", () => {
+    expect(NO_TYPES_MESSAGE).toContain("Allowed File Types");
+    expect(NO_TYPES_MESSAGE).toContain("DMS Config");
+  });
+
+  it("uses a different message for an unreadable config", () => {
+    expect(CONFIG_UNREADABLE_MESSAGE).not.toBe(NO_TYPES_MESSAGE);
   });
 });

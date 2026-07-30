@@ -69,3 +69,36 @@ export function readChoiceArray(value: unknown): string[] | undefined {
   }
   return undefined;
 }
+
+/**
+ * Shown when `AllowedFileTypes` is present but nothing is ticked. Names the
+ * column and the list because the client is the person who fixes it, in one
+ * click, and a vague message would send them to us instead.
+ */
+export const NO_TYPES_MESSAGE =
+  "No file types are configured for upload. Ask your DMS administrator to set Allowed File Types in DMS Config.";
+
+/**
+ * Shown when `DMS Config` could not be read at all. Deliberately different from
+ * NO_TYPES_MESSAGE: this one is an admin or permissions problem, and uploads
+ * continue on built-in defaults rather than stopping.
+ */
+export const CONFIG_UNREADABLE_MESSAGE =
+  "Could not load the upload configuration — using built-in file types. Ask your DMS administrator to check DMS Config.";
+
+/**
+ * Turns the raw `AllowedFileTypes` value into one of the three states.
+ *
+ * `undefined` (field absent — unprovisioned site, or a read that fell back)
+ * becomes `unknown`. An empty or all-blank selection becomes `none`.
+ */
+export function resolveAllowedFileTypes(
+  raw: readonly string[] | undefined,
+): AllowedFileTypes {
+  if (raw === undefined) {
+    return { kind: "unknown", types: normalizeFileTypes(FALLBACK_FILE_TYPES) };
+  }
+  const types = normalizeFileTypes(raw);
+  if (types.length === 0) return { kind: "none" };
+  return { kind: "configured", types };
+}
