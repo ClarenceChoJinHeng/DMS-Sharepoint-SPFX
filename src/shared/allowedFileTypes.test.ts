@@ -1,5 +1,6 @@
 import {
   normalizeFileTypes,
+  readAllowedFileTypesField,
   readChoiceArray,
   resolveAllowedFileTypes,
   FALLBACK_FILE_TYPES,
@@ -126,5 +127,52 @@ describe("messages", () => {
     expect(CONFIG_UNREADABLE_MESSAGE).not.toBe(NO_TYPES_MESSAGE);
     expect(CONFIG_UNREADABLE_MESSAGE).toContain("DMS Config");
     expect(CONFIG_UNREADABLE_MESSAGE).toContain("built-in");
+  });
+});
+
+describe("readAllowedFileTypesField", () => {
+  // Regression, verified against the live list 2026-07-30: unticking every choice
+  // makes SharePoint send null, NOT []. Reading the value alone made "emptied"
+  // indistinguishable from "absent", so the hard block was unreachable and an
+  // emptied column silently fell back to the built-in types.
+  it("treats a present-but-null field as an empty selection, not as absent", () => {
+    expect(readAllowedFileTypesField({ AllowedFileTypes: null })).toEqual([]);
+  });
+
+  it("treats a missing key as absent", () => {
+    expect(readAllowedFileTypesField({})).toBeUndefined();
+  });
+
+  // The two must resolve to different states — none blocks, unknown falls back.
+  it("distinguishes an emptied column from an absent one", () => {
+    expect(
+      resolveAllowedFileTypes(readAllowedFileTypesField({ AllowedFileTypes: null })).kind,
+    ).toBe("none");
+    expect(resolveAllowedFileTypes(readAllowedFileTypesField({})).kind).toBe(
+      "unknown",
+    );
+  });
+
+  it("reads a populated selection", () => {
+    expect(
+      readAllowedFileTypesField({ AllowedFileTypes: [".pdf", ".doc"] }),
+    ).toEqual([".pdf", ".doc"]);
+  });
+
+  it("reads the verbose wrapped shape", () => {
+    expect(
+      readAllowedFileTypesField({ AllowedFileTypes: { results: [".pdf"] } }),
+    ).toEqual([".pdf"]);
+  });
+
+  it("still reads a literal empty array as an empty selection", () => {
+    expect(readAllowedFileTypesField({ AllowedFileTypes: [] })).toEqual([]);
+  });
+
+  // An unparseable shape must not take every upload down site-wide.
+  it("treats an unrecognised shape as absent, not as empty", () => {
+    expect(
+      readAllowedFileTypesField({ AllowedFileTypes: ".pdf,.doc" }),
+    ).toBeUndefined();
   });
 });

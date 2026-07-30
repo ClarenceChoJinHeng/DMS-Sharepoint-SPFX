@@ -57,9 +57,9 @@ export function normalizeFileTypes(raw: readonly string[]): string[] {
  * a plain array (odata=nometadata / minimalmetadata) and `{ results: [...] }`
  * (odata=verbose).
  *
- * Returns `undefined` only when the field is genuinely absent. An empty
- * selection returns `[]`, which callers must treat as "nothing ticked" rather
- * than "not configured".
+ * Returns `undefined` for any value that is not a recognised choice array,
+ * including `null`. Callers that need to tell "emptied" from "absent" must NOT
+ * use this directly — see `readAllowedFileTypesField`.
  */
 export function readChoiceArray(value: unknown): string[] | undefined {
   if (Array.isArray(value)) return value as string[];
@@ -68,6 +68,34 @@ export function readChoiceArray(value: unknown): string[] | undefined {
     if (Array.isArray(wrapped)) return wrapped as string[];
   }
   return undefined;
+}
+
+/**
+ * Reads `AllowedFileTypes` off a `DMS Config` row, distinguishing an emptied
+ * selection from an absent column.
+ *
+ * **SharePoint returns `null` for a multi-choice field with nothing ticked — not
+ * `[]`.** Verified 2026-07-30 against the live list: untick every choice and the
+ * row comes back as `{"Title":"allowedExtensions","AllowedFileTypes":null}`. The
+ * original design assumed `[]`, which made the "none" hard block unreachable —
+ * unticking everything silently degraded to the built-in fallback types instead
+ * of blocking uploads.
+ *
+ * So the reliable signal is the *key*, not the value:
+ *   - key missing      -> `undefined` -> "unknown". The column does not exist on
+ *                         this site, or the read fell back to the legacy $select.
+ *   - key present, null -> `[]` -> "none". The client unticked everything.
+ *   - key present, array -> those values.
+ *   - key present, unrecognised shape -> `undefined` -> "unknown". Degrade to the
+ *     fallback rather than blocking every upload on a shape we failed to parse.
+ */
+export function readAllowedFileTypesField(
+  item: { AllowedFileTypes?: unknown },
+): string[] | undefined {
+  if (!("AllowedFileTypes" in item)) return undefined;
+  const value = item.AllowedFileTypes;
+  if (value === null || value === undefined) return [];
+  return readChoiceArray(value);
 }
 
 /**

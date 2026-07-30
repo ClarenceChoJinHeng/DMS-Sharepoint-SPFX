@@ -24,7 +24,7 @@ import {
   CONFIG_UNREADABLE_MESSAGE,
   FALLBACK_FILE_TYPES,
   NO_TYPES_MESSAGE,
-  readChoiceArray,
+  readAllowedFileTypesField,
   resolveAllowedFileTypes,
 } from "../../../shared/allowedFileTypes";
 
@@ -511,8 +511,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     }
     const data = await res.json();
     const map: Record<string, string> = {};
-    // Left undefined when the column is absent, which resolves to "unknown". An
-    // empty tick list arrives as [] and resolves to "none" — a different state.
+    // Keyed on the property's PRESENCE, not its value: SharePoint sends null for
+    // an emptied multi-choice field, so reading the value alone cannot tell
+    // "unticked" (-> none, hard block) from "no such column" (-> unknown,
+    // fallback). Verified against the live list 2026-07-30.
     let rawFileTypes: string[] | undefined;
     (data.value ?? []).forEach(
       (item: {
@@ -522,7 +524,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }) => {
         map[item.Title] = item.SettingValue;
         if (item.Title === "allowedExtensions") {
-          rawFileTypes = readChoiceArray(item.AllowedFileTypes);
+          rawFileTypes = readAllowedFileTypesField(item);
         }
       },
     );

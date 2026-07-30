@@ -144,6 +144,17 @@ Unit                  / UnitTid
     stale page: settings are read once in a mount-time `useEffect`, so **every config
     change needs a hard refresh** before it can be tested.
 
+11. **An emptied multi-value Choice field returns `null`, not `[]`.** Untick every choice on a
+    multi-select Choice column and SharePoint returns
+    `{"Title":"allowedExtensions","AllowedFileTypes":null}` — verified live 2026-07-30. So the
+    *value* cannot distinguish "user cleared it" from "column doesn't exist"; only the **presence of
+    the key** can (a nonexistent column makes the whole `$select` return HTTP 400, so the key is
+    absent). Reading the value alone made a deliberate hard-block state unreachable and let it
+    silently degrade to fallback defaults. See `readAllowedFileTypesField` in
+    `src/shared/allowedFileTypes.ts`. Also note the two JSON shapes: `odata=verbose` wraps arrays as
+    `{ "results": [...] }` while `nometadata`/`minimalmetadata` return a plain array — pin the
+    `Accept` header rather than relying on the default.
+
 ## Architecture: Direct REST (not Power Automate)
 The 3 instant flows (GetTermSetValues, DepartmentProjectList, UploadToStaging) use "When Power Apps calls a flow (V2)" trigger — not callable from SPFx. Form.tsx uses `context.spHttpClient` directly.
 

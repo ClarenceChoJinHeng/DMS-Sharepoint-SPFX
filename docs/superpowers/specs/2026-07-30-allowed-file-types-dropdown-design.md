@@ -100,6 +100,24 @@ with the dropdown.
 configuration" require different people to fix them. Each gets its own distinct message; neither is
 allowed to render as ordinary operation.
 
+**Corrected 2026-07-30 after live testing — read the KEY, not the value.** This design originally
+assumed an emptied Choice column arrives as `[]`. It does not: **SharePoint sends `null`.** Verified
+against the live list — untick every choice and the row returns
+`{"Title":"allowedExtensions","AllowedFileTypes":null}`. Because `null` was treated as "not a choice
+array" and therefore "absent", the `none` hard block was **unreachable in the first deployed build**:
+unticking everything silently fell back to the built-in types, and both an admin and an uploader
+could still upload. The reliable signal is whether the property is *present*:
+
+| Wire form | Meaning | State |
+|---|---|---|
+| key missing | column does not exist here, or the read fell back to the legacy `$select` | `unknown` |
+| key present, `null` | client unticked everything | `none` |
+| key present, array (either shape) | those types | `configured` |
+| key present, unrecognised shape | cannot parse — degrade, do not block every upload | `unknown` |
+
+Implemented as `readAllowedFileTypesField` in `src/shared/allowedFileTypes.ts`. `readChoiceArray`
+alone is insufficient for this decision and must not be used directly by consumers.
+
 ### 3a. Consequence: every site needs the column
 
 With no `SettingValue` bridge, a site whose `DMS Config` lacks `AllowedFileTypes` falls straight to

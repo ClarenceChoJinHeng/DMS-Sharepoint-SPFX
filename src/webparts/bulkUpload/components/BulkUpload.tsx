@@ -24,7 +24,7 @@ import {
   AllowedFileTypes,
   FALLBACK_FILE_TYPES,
   NO_TYPES_MESSAGE,
-  readChoiceArray,
+  readAllowedFileTypesField,
   resolveAllowedFileTypes,
 } from "../../../shared/allowedFileTypes";
 
@@ -682,8 +682,9 @@ export default function BulkUpload({
     }
     const data = await res.json();
     const map: Record<string, string> = {};
-    // undefined = column absent (resolves to "unknown"); [] = present but nothing
-    // ticked (resolves to "none"). Two different states, deliberately.
+    // Keyed on the property's PRESENCE, not its value: SharePoint sends null for
+    // an emptied multi-choice field. Key missing = column absent (-> unknown);
+    // key present = read it, null included (-> none). Verified 2026-07-30.
     let rawFileTypes: string[] | undefined;
     (data.value ?? []).forEach(
       (item: {
@@ -693,7 +694,7 @@ export default function BulkUpload({
       }) => {
         map[item.Title] = item.SettingValue;
         if (item.Title === "allowedExtensions") {
-          rawFileTypes = readChoiceArray(item.AllowedFileTypes);
+          rawFileTypes = readAllowedFileTypesField(item);
         }
       },
     );
