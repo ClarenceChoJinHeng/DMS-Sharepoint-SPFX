@@ -19,6 +19,14 @@ import {
   Membership,
   ColumnPair,
 } from "../../../shared/formModel";
+import {
+  AllowedFileTypes,
+  CONFIG_UNREADABLE_MESSAGE,
+  FALLBACK_FILE_TYPES,
+  NO_TYPES_MESSAGE,
+  readChoiceArray,
+  resolveAllowedFileTypes,
+} from "../../../shared/allowedFileTypes";
 
 /* ----------------------------------------------------------------------------
  * CONFIG — hardcoded values are fallbacks only; live values load from DMS Config SP list
@@ -258,7 +266,7 @@ type DmsSettings = {
     businessSegmentTid: string;
   };
   stagingLibrary: string;
-  allowedExtensions: string[];
+  allowedFileTypes: AllowedFileTypes;
 };
 
 const DEFAULT_SETTINGS: DmsSettings = {
@@ -278,7 +286,11 @@ const DEFAULT_SETTINGS: DmsSettings = {
     businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
   },
   stagingLibrary: "Staging",
-  allowedExtensions: [".pdf", ".xls", ".xlsx"],
+  // "unknown", not "configured": reaching this constant means DMS Config could not
+  // be read, and the UI must say so rather than present these as configured values.
+  // The old list here was [".pdf", ".xls", ".xlsx"] — missing .doc/.docx, which is
+  // part of why the silent fallback was so confusing to diagnose on 2026-07-30.
+  allowedFileTypes: { kind: "unknown", types: FALLBACK_FILE_TYPES },
 };
 
 export default function Form({ context }: IFormProps): React.ReactElement {
@@ -464,18 +476,54 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     );
   };
 
-  const loadSettings = async (): Promise<DmsSettings> => {
-    const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+  // Two field lists: a site whose DMS Config predates the AllowedFileTypes column
+  // answers HTTP 400 to the ENTIRE request, which would drop every setting on it —
+  // term-set GUIDs, stagingLibrary, column names — not just the file types. So we
+  // retry without the new field. Spec 2026-07-30 §5.
+  const SETTINGS_FIELDS = "Title,SettingValue,AllowedFileTypes";
+  const SETTINGS_FIELDS_LEGACY = "Title,SettingValue";
+
+  const fetchSettingRows = async (
+    select: string,
+  ): Promise<SPHttpClientResponse> =>
+    context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=${select}&$filter=ConfigType eq 'setting'`,
       SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json" } },
+      // Pinned to nometadata so multi-choice fields arrive as a plain array.
+      { headers: { Accept: "application/json;odata=nometadata" } },
     );
-    if (!res.ok) throw new Error("DMS Config list not found");
+
+  const loadSettings = async (): Promise<DmsSettings> => {
+    let res = await fetchSettingRows(SETTINGS_FIELDS);
+    if (!res.ok) {
+      const body = await res.text();
+      console.warn(
+        `DMS Config read including AllowedFileTypes failed (HTTP ${res.status}). ` +
+          `Retrying without that field. Response: ${body}`,
+      );
+      res = await fetchSettingRows(SETTINGS_FIELDS_LEGACY);
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(
+        `DMS Config read failed: HTTP ${res.status}. Response: ${body}`,
+      );
+    }
     const data = await res.json();
     const map: Record<string, string> = {};
+    // Left undefined when the column is absent, which resolves to "unknown". An
+    // empty tick list arrives as [] and resolves to "none" — a different state.
+    let rawFileTypes: string[] | undefined;
     (data.value ?? []).forEach(
-      (item: { Title: string; SettingValue: string }) => {
+      (item: {
+        Title: string;
+        SettingValue: string;
+        AllowedFileTypes?: unknown;
+      }) => {
         map[item.Title] = item.SettingValue;
+        if (item.Title === "allowedExtensions") {
+          rawFileTypes = readChoiceArray(item.AllowedFileTypes);
+        }
       },
     );
     const get = (key: string): string | undefined => map[key];
@@ -503,9 +551,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
       stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
-      allowedExtensions: get("allowedExtensions")
-        ? (get("allowedExtensions") as string).split(",").map((e) => e.trim())
-        : DEFAULT_SETTINGS.allowedExtensions,
+      // SettingValue is deliberately NOT consulted for file types any more —
+      // AllowedFileTypes is the single source of truth. Spec 2026-07-30 §3.
+      allowedFileTypes: resolveAllowedFileTypes(rawFileTypes),
     };
   };
 
@@ -656,9 +704,29 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const init = async (): Promise<void> => {
       const [loadedSettings, rawModes, groupMap, userGroupIds, admin] =
         await Promise.all([
-          loadSettings().catch(() => DEFAULT_SETTINGS),
-          loadModes().catch(() => DEFAULT_MODES),
-          loadGroupMap().catch(() => [] as GroupMapRow[]),
+          // Log the real failure. A silent fallback here is indistinguishable from
+          // success and cost four rounds of diagnosis on 2026-07-30. Gotcha #9.
+          loadSettings().catch((err) => {
+            console.error(
+              "DMS Config settings read failed — using built-in defaults.",
+              err,
+            );
+            return DEFAULT_SETTINGS;
+          }),
+          loadModes().catch((err) => {
+            console.error(
+              "DMS Config mode rows read failed — using built-in modes.",
+              err,
+            );
+            return DEFAULT_MODES;
+          }),
+          loadGroupMap().catch((err) => {
+            console.error(
+              "DMS Group Map read failed — no authorised upload paths.",
+              err,
+            );
+            return [] as GroupMapRow[];
+          }),
           loadUserGroupIds(),
           loadIsAdmin(),
         ]);
@@ -676,6 +744,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // (site-entry-access-layer spec) and no longer grants upload.
       const isPrivileged = admin;
       setPrivileged(isPrivileged);
+
+      // "unknown" means the config could not be read, or this site has no
+      // AllowedFileTypes column — an admin problem, not something an uploader can
+      // fix, so the toast is admin-only while the console line is always written.
+      // Distinct from "none", which the file card handles. Spec 2026-07-30 §6.
+      if (loadedSettings.allowedFileTypes.kind === "unknown") {
+        console.warn(
+          "AllowedFileTypes not supplied by DMS Config — running on built-in types:",
+          loadedSettings.allowedFileTypes.types.join(", "),
+        );
+        if (isPrivileged) showToast(CONFIG_UNREADABLE_MESSAGE, "error");
+      }
 
       const [docTypes, years, confs] = await Promise.all([
         loadTermSet(loadedSettings.termSets.documentType).catch(
@@ -824,13 +904,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (!file) return;
 
     const finalName = buildUploadName(file.name, docName);
-    if (
-      !settings.allowedExtensions.some((ext) =>
-        finalName.toLowerCase().endsWith(ext),
-      )
-    ) {
+    const allowed = settings.allowedFileTypes;
+    if (allowed.kind === "none") {
+      showToast(NO_TYPES_MESSAGE, "error");
+      return;
+    }
+    if (!allowed.types.some((ext) => finalName.toLowerCase().endsWith(ext))) {
       showToast(
-        `File type not allowed. Allowed: ${settings.allowedExtensions.join(", ")}`,
+        `File type not allowed. Allowed: ${allowed.types.join(", ")}`,
         "error",
       );
       return;
@@ -1274,51 +1355,64 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             <small>Max. 30 character</small>
           </label>
         </div>
-        {/* The whole card is clickable to open the file picker. */}
-        <div
-          className="dms-filecard"
-          role="button"
-          tabIndex={0}
-          style={{ cursor: "pointer" }}
-          onClick={() => fileRef.current?.click()}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
-        >
-          {/* Action label sits first so it reads left-aligned in the card. */}
-          <span className="dms-link">
-            {file ? "Change file" : "Upload Document"}
-          </span>
-          {file && (
-            <div>
-              <div className="name">{file.name}</div>
-              <div className="size">{(file.size / 1024).toFixed(1)} KB</div>
-            </div>
-          )}
-          <input
-            ref={fileRef}
-            type="file"
-            accept={settings.allowedExtensions.join(",")}
-            style={{ display: "none" }}
-            onChange={(e) => {
-              const picked = e.target.files?.[0];
-              if (
-                picked &&
-                !settings.allowedExtensions.some((ext) =>
-                  picked.name.toLowerCase().endsWith(ext),
-                )
-              ) {
-                showToast(
-                  `File type not allowed. Allowed: ${settings.allowedExtensions.join(", ")}`,
-                  "error",
-                );
-                setFile(undefined);
-                if (fileRef.current) fileRef.current.value = "";
-                return;
-              }
-              setStatus("");
-              setFile(picked);
-            }}
-          />
-        </div>
+        {/* An empty AllowedFileTypes selection is a hard block, not a silent
+            fallback — spec 2026-07-30 §3. The message names the column and the
+            list because the client is the one who fixes it, in one click. */}
+        {settings.allowedFileTypes.kind === "none" ? (
+          <div className="dms-filecard" style={{ opacity: 0.6 }}>
+            <span>{NO_TYPES_MESSAGE}</span>
+          </div>
+        ) : (
+          /* The whole card is clickable to open the file picker. */
+          <div
+            className="dms-filecard"
+            role="button"
+            tabIndex={0}
+            style={{ cursor: "pointer" }}
+            onClick={() => fileRef.current?.click()}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
+          >
+            {/* Action label sits first so it reads left-aligned in the card. */}
+            <span className="dms-link">
+              {file ? "Change file" : "Upload Document"}
+            </span>
+            {file && (
+              <div>
+                <div className="name">{file.name}</div>
+                <div className="size">{(file.size / 1024).toFixed(1)} KB</div>
+              </div>
+            )}
+            <input
+              ref={fileRef}
+              type="file"
+              accept={settings.allowedFileTypes.types.join(",")}
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const picked = e.target.files?.[0];
+                // Re-checked here because the narrowing above does not reach
+                // inside the callback.
+                const types =
+                  settings.allowedFileTypes.kind === "none"
+                    ? []
+                    : settings.allowedFileTypes.types;
+                if (
+                  picked &&
+                  !types.some((ext) => picked.name.toLowerCase().endsWith(ext))
+                ) {
+                  showToast(
+                    `File type not allowed. Allowed: ${types.join(", ")}`,
+                    "error",
+                  );
+                  setFile(undefined);
+                  if (fileRef.current) fileRef.current.value = "";
+                  return;
+                }
+                setStatus("");
+                setFile(picked);
+              }}
+            />
+          </div>
+        )}
 
         <div className="dms-grid" style={{ marginTop: 16 }}>
           {/* Free-text Project Name — distinct from the Group-led Projects
