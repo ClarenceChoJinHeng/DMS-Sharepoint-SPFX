@@ -20,6 +20,13 @@ import {
   Membership,
   ColumnPair,
 } from "../../../shared/formModel";
+import {
+  AllowedFileTypes,
+  FALLBACK_FILE_TYPES,
+  NO_TYPES_MESSAGE,
+  readChoiceArray,
+  resolveAllowedFileTypes,
+} from "../../../shared/allowedFileTypes";
 
 /* ----------------------------------------------------------------------------
  * BULK UPLOAD — a duplicate of the `form` web part, with two behaviour changes:
@@ -301,7 +308,7 @@ type DmsSettings = {
     businessSegmentTid: string;
   };
   stagingLibrary: string;
-  allowedExtensions: string[];
+  allowedFileTypes: AllowedFileTypes;
 };
 
 const DEFAULT_SETTINGS: DmsSettings = {
@@ -321,7 +328,9 @@ const DEFAULT_SETTINGS: DmsSettings = {
     businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
   },
   stagingLibrary: "Staging",
-  allowedExtensions: [".pdf", ".xls", ".xlsx"],
+  // "unknown", not "configured": reaching this constant means DMS Config could not
+  // be read, so the UI must not present these as configured values. Mirrors Form.tsx.
+  allowedFileTypes: { kind: "unknown", types: FALLBACK_FILE_TYPES },
 };
 
 type XhrResult = { ok: boolean; status: number; body: string };
@@ -639,18 +648,53 @@ export default function BulkUpload({
     );
   };
 
-  const loadSettings = async (): Promise<DmsSettings> => {
-    const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+  // See Form.tsx: a site whose DMS Config predates the AllowedFileTypes column
+  // answers HTTP 400 to the ENTIRE request, which would drop every other setting
+  // too. Retry without the new field. Spec 2026-07-30 §5.
+  const SETTINGS_FIELDS = "Title,SettingValue,AllowedFileTypes";
+  const SETTINGS_FIELDS_LEGACY = "Title,SettingValue";
+
+  const fetchSettingRows = async (
+    select: string,
+  ): Promise<SPHttpClientResponse> =>
+    context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=${select}&$filter=ConfigType eq 'setting'`,
       SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json" } },
+      // Pinned to nometadata so multi-choice fields arrive as a plain array.
+      { headers: { Accept: "application/json;odata=nometadata" } },
     );
-    if (!res.ok) throw new Error("DMS Config list not found");
+
+  const loadSettings = async (): Promise<DmsSettings> => {
+    let res = await fetchSettingRows(SETTINGS_FIELDS);
+    if (!res.ok) {
+      const body = await res.text();
+      console.warn(
+        `DMS Config read including AllowedFileTypes failed (HTTP ${res.status}). ` +
+          `Retrying without that field. Response: ${body}`,
+      );
+      res = await fetchSettingRows(SETTINGS_FIELDS_LEGACY);
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(
+        `DMS Config read failed: HTTP ${res.status}. Response: ${body}`,
+      );
+    }
     const data = await res.json();
     const map: Record<string, string> = {};
+    // undefined = column absent (resolves to "unknown"); [] = present but nothing
+    // ticked (resolves to "none"). Two different states, deliberately.
+    let rawFileTypes: string[] | undefined;
     (data.value ?? []).forEach(
-      (item: { Title: string; SettingValue: string }) => {
+      (item: {
+        Title: string;
+        SettingValue: string;
+        AllowedFileTypes?: unknown;
+      }) => {
         map[item.Title] = item.SettingValue;
+        if (item.Title === "allowedExtensions") {
+          rawFileTypes = readChoiceArray(item.AllowedFileTypes);
+        }
       },
     );
     const get = (key: string): string | undefined => map[key];
@@ -678,9 +722,9 @@ export default function BulkUpload({
           get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
       stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
-      allowedExtensions: get("allowedExtensions")
-        ? (get("allowedExtensions") as string).split(",").map((e) => e.trim())
-        : DEFAULT_SETTINGS.allowedExtensions,
+      // SettingValue is deliberately NOT consulted for file types any more —
+      // AllowedFileTypes is the single source of truth. Spec 2026-07-30 §3.
+      allowedFileTypes: resolveAllowedFileTypes(rawFileTypes),
     };
   };
 
@@ -1118,11 +1162,19 @@ export default function BulkUpload({
 
   const addFiles = (list: FileList | null): void => {
     if (!list || list.length === 0) return;
+    // Every file in this web part arrives through addFiles — there is no drop
+    // handler — so the hard block for an empty AllowedFileTypes selection lives
+    // here rather than in the picker markup. Spec 2026-07-30 §3.
+    const allowedTypes = settings.allowedFileTypes;
+    if (allowedTypes.kind === "none") {
+      showToast(NO_TYPES_MESSAGE, "error");
+      return;
+    }
     const incoming = Array.from(list);
     const allowed: File[] = [];
     let rejectedCount = 0;
     incoming.forEach((f) => {
-      const ok = settings.allowedExtensions.some((ext) =>
+      const ok = allowedTypes.types.some((ext) =>
         f.name.toLowerCase().endsWith(ext),
       );
       if (ok) allowed.push(f);
@@ -1131,7 +1183,7 @@ export default function BulkUpload({
 
     if (rejectedCount > 0) {
       showToast(
-        `Skipped ${rejectedCount} file(s) with a disallowed type. Allowed: ${settings.allowedExtensions.join(", ")}`,
+        `Skipped ${rejectedCount} file(s) with a disallowed type. Allowed: ${allowedTypes.types.join(", ")}`,
         "error",
       );
     }
@@ -2152,7 +2204,14 @@ export default function BulkUpload({
                 ref={fileRef}
                 type="file"
                 multiple
-                accept={settings.allowedExtensions.join(",")}
+                accept={
+                  // undefined rather than "": an empty accept attribute means "no
+                  // filter" and would offer every file in the dialog. addFiles
+                  // blocks them anyway, but not offering them is clearer.
+                  settings.allowedFileTypes.kind === "none"
+                    ? undefined
+                    : settings.allowedFileTypes.types.join(",")
+                }
                 style={{ display: "none" }}
                 onChange={(e) => addFiles(e.target.files)}
               />
