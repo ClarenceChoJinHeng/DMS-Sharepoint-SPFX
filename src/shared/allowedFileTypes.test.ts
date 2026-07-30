@@ -108,7 +108,9 @@ describe("resolveAllowedFileTypes", () => {
     expect(resolved.kind).toBe("none");
     expect(resolved).not.toHaveProperty("types");
   });
+});
 
+describe("FALLBACK_FILE_TYPES", () => {
   it("ships fallback types that are already normalized", () => {
     expect(normalizeFileTypes(FALLBACK_FILE_TYPES)).toEqual(FALLBACK_FILE_TYPES);
   });
@@ -122,5 +124,7 @@ describe("messages", () => {
 
   it("uses a different message for an unreadable config", () => {
     expect(CONFIG_UNREADABLE_MESSAGE).not.toBe(NO_TYPES_MESSAGE);
+    expect(CONFIG_UNREADABLE_MESSAGE).toContain("DMS Config");
+    expect(CONFIG_UNREADABLE_MESSAGE).toContain("built-in");
   });
 });

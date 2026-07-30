@@ -15,22 +15,22 @@
  * docs/superpowers/specs/2026-07-30-allowed-file-types-dropdown-design.md §3, §6.
  */
 export type AllowedFileTypes =
-  | { kind: "configured"; types: string[] }
+  | { kind: "configured"; types: readonly string[] }
   | { kind: "none" }
-  | { kind: "unknown"; types: string[] };
+  | { kind: "unknown"; types: readonly string[] };
 
 /**
  * Last-resort list used only when `DMS Config` cannot be read at all. Kept equal
  * to the column's configured choices so that even the fallback agrees with the
  * dropdown (spec §7).
  */
-export const FALLBACK_FILE_TYPES: string[] = [
+export const FALLBACK_FILE_TYPES: readonly string[] = Object.freeze([
   ".pdf",
   ".doc",
   ".docx",
   ".xls",
   ".xlsx",
-];
+]);
 
 /**
  * trim -> lowercase -> prepend "." if missing -> drop empties -> de-duplicate.
