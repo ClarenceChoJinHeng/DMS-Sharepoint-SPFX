@@ -51,3 +51,21 @@ export function normalizeFileTypes(raw: readonly string[]): string[] {
   });
   return out;
 }
+
+/**
+ * Reads a SharePoint multi-value Choice field, tolerating both JSON shapes:
+ * a plain array (odata=nometadata / minimalmetadata) and `{ results: [...] }`
+ * (odata=verbose).
+ *
+ * Returns `undefined` only when the field is genuinely absent. An empty
+ * selection returns `[]`, which callers must treat as "nothing ticked" rather
+ * than "not configured".
+ */
+export function readChoiceArray(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) return value as string[];
+  if (value !== null && typeof value === "object") {
+    const wrapped = (value as { results?: unknown }).results;
+    if (Array.isArray(wrapped)) return wrapped as string[];
+  }
+  return undefined;
+}

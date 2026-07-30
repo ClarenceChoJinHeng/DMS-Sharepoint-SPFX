@@ -1,4 +1,4 @@
-import { normalizeFileTypes } from "./allowedFileTypes";
+import { normalizeFileTypes, readChoiceArray } from "./allowedFileTypes";
 
 describe("normalizeFileTypes", () => {
   // Regression: a bare "png" typed into DMS Config produced an invalid `accept`
@@ -29,5 +29,30 @@ describe("normalizeFileTypes", () => {
 
   it("returns an empty array for an empty input", () => {
     expect(normalizeFileTypes([])).toEqual([]);
+  });
+});
+
+describe("readChoiceArray", () => {
+  it("reads the plain array shape (odata=nometadata / minimalmetadata)", () => {
+    expect(readChoiceArray([".pdf", ".doc"])).toEqual([".pdf", ".doc"]);
+  });
+
+  it("reads the wrapped shape (odata=verbose)", () => {
+    expect(readChoiceArray({ results: [".pdf", ".doc"] })).toEqual([".pdf", ".doc"]);
+  });
+
+  it("reads an empty selection in both shapes as an empty array, NOT as absent", () => {
+    expect(readChoiceArray([])).toEqual([]);
+    expect(readChoiceArray({ results: [] })).toEqual([]);
+  });
+
+  it("returns undefined when the field is absent", () => {
+    expect(readChoiceArray(undefined)).toBeUndefined();
+    expect(readChoiceArray(null)).toBeUndefined();
+  });
+
+  it("returns undefined for shapes that are not a choice array", () => {
+    expect(readChoiceArray(".pdf,.doc")).toBeUndefined();
+    expect(readChoiceArray({ notResults: [".pdf"] })).toBeUndefined();
   });
 });
