@@ -143,11 +143,33 @@ col_vendor                Vendor
 col_businessSegment       Business_x0020_Segment
 col_businessSegmentTid    BusinessSegmentTid
 stagingLibrary            Staging
-allowedExtensions         .pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.jpg,.jpeg,.png
+allowedExtensions         (leave SettingValue EMPTY — see AllowedFileTypes below)
 ```
 
 (the `col_*` values above are ClarenceDMSTesting's frozen names — replace with whatever step 3.4
 actually returned on the client site)
+
+> ⚠ **REQUIRED: the `AllowedFileTypes` column.** Since 2026-07-30 file types are read from a
+> multi-select Choice column on `DMS Config`, **not** from `SettingValue`. Create it before the
+> first upload test:
+>
+> | Property | Value |
+> |---|---|
+> | Internal name | `AllowedFileTypes` |
+> | Type | Choice, **allow multiple selections** |
+> | Fill-in choices | **Disabled** (enabling it restores the typo risk it exists to remove) |
+> | Choices | `.pdf` `.doc` `.docx` `.xls` `.xlsx` |
+>
+> Then tick all five on the `allowedExtensions` row. There is **no fallback to
+> `SettingValue`** — a site without this column runs on the hardcoded `FALLBACK_FILE_TYPES`
+> in `src/shared/allowedFileTypes.ts` and shows admins a warning. Verify with:
+>
+> ```
+> /_api/web/lists/getbytitle('DMS%20Config')/fields?$select=InternalName,FillInChoice,Choices&$filter=InternalName%20eq%20'AllowedFileTypes'
+> ```
+>
+> Expect `"FillInChoice": false` and exactly those five choices, each with a leading dot.
+> Config is read once on mount, so **hard-refresh** before testing any change.
 
 **4 `mode` rows** (`ConfigType = mode`), one per Head Office. All pilot segments share
 `[Department, Unit]`, so all four take the same `Levels`:

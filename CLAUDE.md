@@ -133,6 +133,17 @@ Unit                  / UnitTid
 8. **Term Store required** for ALL metadata dropdowns — do NOT use SharePoint Choice columns.
 9. **`GetFolderByServerRelativeUrl`/`GetFileByServerRelativeUrl` — always pass the path as an OData parameter alias, never as an inline quoted literal.** `getfolderbyserverrelativeurl('<long encoded path>')` returns **HTTP 400** (not 404) once the path is long/deep enough (many `%2F` from encoded slashes in one literal — hit this at ~330 chars / 6 nested levels, well under SharePoint's general 400-char item-path limit, so don't assume length limits rule this out). Correct form: `GetFolderByServerRelativeUrl(@f)?@f='<encoded path>'`. `FolderManager.tsx` already used the alias form everywhere and never hit this; `Form.tsx` used the inline-literal form and silently failed on deep nested subcategory paths — a real folder, correct name, wrongly reported as "not found." If a folder/file check fails unexpectedly, log the actual HTTP status + response body (a 400 means malformed request, not missing data) before assuming a naming/data problem.
 
+10. **`accept` tokens need a leading dot.** `<input type="file" accept="png">` is **not**
+    a filter for `.png` — a token without a leading `.` is parsed as a MIME type, is
+    invalid without a `/`, and is silently dropped, greying that type out of the file
+    dialog. Neither upload web part has a drag-and-drop handler, so the picker is the only
+    way in and this is a hard block with no workaround. Worse, the JS validator used
+    `endsWith(ext)`, which *accepts* a dotless `png` — one typo, two opposite behaviours.
+    Now normalized in `src/shared/allowedFileTypes.ts` (trim → lowercase → prepend the
+    dot → drop empties → de-duplicate). Cost half a day on 2026-07-30, made worse by a
+    stale page: settings are read once in a mount-time `useEffect`, so **every config
+    change needs a hard refresh** before it can be tested.
+
 ## Architecture: Direct REST (not Power Automate)
 The 3 instant flows (GetTermSetValues, DepartmentProjectList, UploadToStaging) use "When Power Apps calls a flow (V2)" trigger — not callable from SPFx. Form.tsx uses `context.spHttpClient` directly.
 
@@ -152,8 +163,27 @@ The **Auto-route** automated flow fires server-side after content approval to mo
 > Inheritance is broken per department folder in BOTH libraries — not at library level.
 
 ## Allowed File Types
-`.pdf .doc .docx .xls .xlsx .ppt .pptx .txt .csv .jpg .jpeg .png`
+Driven by the **`AllowedFileTypes`** multi-select Choice column on `DMS Config`
+(row `allowedExtensions`) — the **single source of truth** since 2026-07-30.
+`SettingValue` is no longer read for this setting; clear that cell once a site is verified.
+
+Current choices: `.pdf .doc .docx .xls .xlsx` (client policy as of 2026-07-30 — the
+12-type list previously documented here was never the client's actual policy).
 Everything else (`.exe`, `.bat`, etc.) rejected before upload.
+
+- **Nothing ticked = hard block**, with a message naming the column and the list. The
+  client fixes it themselves in one click. Never a silent fallback.
+- **Column absent / config unreadable** = code fallback `FALLBACK_FILE_TYPES` in
+  `src/shared/allowedFileTypes.ts`, plus an admin-only warning toast and a console line.
+  Adding the column is a **required** step when provisioning any new site — there is no
+  `SettingValue` bridge any more.
+- Adding a type the client cannot already tick means editing the column's **Choices**,
+  which needs Manage Lists (site Owner/admin). Ticking needs only item edit rights.
+- Keep `FillInChoice` **disabled** — enabling it restores the free-text typo risk the
+  column exists to remove.
+
+See spec `docs/superpowers/specs/2026-07-30-allowed-file-types-dropdown-design.md`
+and plan `docs/superpowers/plans/2026-07-30-allowed-file-types-dropdown.md`.
 
 ## Document Rename Feature
 User types a custom name — extension auto-preserved from original file. Illegal chars stripped. Blank = keep original filename. See `buildUploadName()` in Form.tsx.
