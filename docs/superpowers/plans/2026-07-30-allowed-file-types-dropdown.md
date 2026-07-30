@@ -21,6 +21,10 @@
 1. **Do not use `Array.prototype.includes`, `Promise.allSettled`, or other ES2017+ library methods.** The SPFx tsconfig does not target them (CLAUDE.md gotcha #3). Use `indexOf` and per-item `try/catch`.
 2. **Multi-value Choice fields have two possible JSON shapes.** With `odata=nometadata` or `minimalmetadata` SharePoint returns a plain array `[".pdf", ".doc"]`. With `odata=verbose` it returns `{ "results": [".pdf", ".doc"] }`. The current `Accept` header is a bare `application/json`, which leaves this ambiguous. Task 2 handles both shapes and Task 4 pins the header explicitly — belt and braces, because getting this wrong produces `undefined`, which resolves to `unknown`, which silently falls back to defaults. Exactly the failure mode this whole change exists to remove.
 
+3. **`types` is `readonly string[]`, and `FALLBACK_FILE_TYPES` is frozen.** Added during Task 3 review, because the fallback array is handed out by reference on every `unknown` resolution and two web parts are about to consume it — an in-place mutation would silently corrupt the shared fallback for every later call.
+
+   Every consumer pattern in Tasks 4-6 was type-checked against this and compiles: `.join(",")`, `.some(...)`, template interpolation, `cond ? [] : types` ternaries, and assigning `FALLBACK_FILE_TYPES` into a `DEFAULT_SETTINGS` literal. **The one thing that will NOT compile** is typing the receiving side as mutable — `const types: string[] = allowed.types`, or passing `.types` into a `(types: string[]) => void` signature. If you need that, type the receiver `readonly string[]` too, or take a fresh copy with `.slice()`. Do not "fix" it by removing the `readonly`.
+
 **Running tests:** there is no `npm test` script. Use `npx heft test`. Filter with `--test-path-pattern`. Heft type-checks the whole project during `test`, so a test referencing a not-yet-written module fails as a **compile error** — that is a legitimate red for TDD purposes.
 
 ---
@@ -112,22 +116,22 @@ Create `src/shared/allowedFileTypes.ts`:
  * docs/superpowers/specs/2026-07-30-allowed-file-types-dropdown-design.md §3, §6.
  */
 export type AllowedFileTypes =
-  | { kind: "configured"; types: string[] }
+  | { kind: "configured"; types: readonly string[] }
   | { kind: "none" }
-  | { kind: "unknown"; types: string[] };
+  | { kind: "unknown"; types: readonly string[] };
 
 /**
  * Last-resort list used only when `DMS Config` cannot be read at all. Kept equal
  * to the column's configured choices so that even the fallback agrees with the
  * dropdown (spec §7).
  */
-export const FALLBACK_FILE_TYPES: string[] = [
+export const FALLBACK_FILE_TYPES: readonly string[] = Object.freeze([
   ".pdf",
   ".doc",
   ".docx",
   ".xls",
   ".xlsx",
-];
+]);
 
 /**
  * trim -> lowercase -> prepend "." if missing -> drop empties -> de-duplicate.
