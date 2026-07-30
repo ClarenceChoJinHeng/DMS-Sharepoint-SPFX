@@ -161,17 +161,48 @@ folder); they must be unique within their parent; a unit abbreviation must inclu
 a missing abbreviation blocks that unit's uploads entirely; and the full name remains visible in the
 details panel.
 
-## Data still needed from the client
+## Abbreviation data — RESOLVED 2026-07-31
 
-**178 abbreviations, per level.** The existing `09-unit-abbreviation-reference.csv` has 133 rows but
-as *combined* tokens (`GHO_GHR_REWARDS`), which cannot be split mechanically —
-`GHO_GHR_OCWS_IFM` has four tokens for three levels, and casing is inconsistent (`REWARDS` vs
-`Rewards`). Segment and department abbreviations are absent entirely. The client must supply one
-abbreviation per term.
+An earlier draft of this spec claimed the client's combined tokens could not be split mechanically
+and that only 133 of the 178 abbreviations existed. **Both were wrong.** Splitting as
+*segment / department / everything remaining* succeeds on every row — the extra underscore in
+`GHO_GHR_OCWS_IFM` sits inside the unit token (`OCWS_IFM`), it is not a fourth level. So the client
+had already supplied all three levels, encoded in one column.
 
-Also note `CGA` in the current file appears to be a typo for `GCA` (Group Corporate Affairs).
+All 178 are generated and validated in **`docs/term-store-import/10-per-level-abbreviations.csv`**
+(`Level`, `BusinessSegment`, `Department`, `Unit`, `FullName`, `Abbreviation`, `Source`, `Notes`).
+This is a starting set to be corrected by the client, not a final answer; the `Source` and `Notes`
+columns record every deviation from their file.
 
-This is the long pole, and it is a data task, not an engineering one.
+### Conflicts corrected in the client's data
+
+Two department tokens were used for **two different departments** — precisely the failure in §4,
+which would have merged distinct departments into one folder and therefore one ACL:
+
+| Token | Was used for | Resolution |
+|---|---|---|
+| `CEOOA` | CEO Office Administration **and** Corporate Communication | Corporate Communication → `CORPCOMM` |
+| `SC` | Supply Chain **and** Sustainability | Sustainability → `SUS` |
+
+Three departments were internally inconsistent (`GCA`/`CGA`, `PNE`/`PROD`, `GCA`/`PMOPS`), and 15
+rows carried no department token — mostly single-unit departments whose department and unit share a
+name, plus four that simply omitted it (`INEXCOMMS`, `PMOPS`, `SCRA`, `UPSUPPORT`).
+
+### Measured result
+
+| | Before | After |
+|---|---|---|
+| Worst-case encoded path | 257 | **129** |
+| Median | 185 | **115** |
+| Headroom to the ~330 limit | 73 | **201** |
+
+Validated: no duplicate abbreviation among siblings at any level, no blanks.
+
+### Still outstanding
+
+The abbreviation list is keyed by **term GUID**, and the CSV has none — it is keyed by label path.
+GUID resolution happens at import time by walking the term store and matching labels, which the
+admin UI in §7 must do.
 
 ## Out of scope
 
