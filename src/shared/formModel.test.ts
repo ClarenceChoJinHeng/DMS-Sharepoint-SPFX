@@ -9,7 +9,56 @@ import {
   ColumnPair,
   parseReconModes,
   RawModeRow,
+  filterConfidentiality,
 } from "./formModel";
+
+// Real GUIDs from the test site's Confidentiality Level set, so a copy-paste
+// slip in the fixture cannot pass by matching itself.
+const CONF = [
+  { id: "87f8481b-dbe1-4d60-bbc8-3d111e6e0e5b", label: "Confidential" },
+  { id: "420d75d5-f3b7-4525-9eb7-ec06590e7f22", label: "Highly Confidential" },
+  { id: "3eccca8e-1617-4713-b923-988dd285c47d", label: "Restricted" },
+];
+const HC_GUID = "420d75d5-f3b7-4525-9eb7-ec06590e7f22";
+
+describe("filterConfidentiality", () => {
+  it("offers everything except Highly Confidential to a UPL-only user", () => {
+    expect(filterConfidentiality(CONF, ["UPL"], HC_GUID).map((o) => o.label)).toEqual([
+      "Confidential",
+      "Restricted",
+    ]);
+  });
+
+  it("offers ONLY Highly Confidential to an HC-only user", () => {
+    // PIC #2 reaches the HC library and nothing else, so Confidential and
+    // Restricted would point at a library they cannot open.
+    expect(filterConfidentiality(CONF, ["HC"], HC_GUID).map((o) => o.label)).toEqual([
+      "Highly Confidential",
+    ]);
+  });
+
+  it("offers all three when both roles are held", () => {
+    expect(filterConfidentiality(CONF, ["UPL", "HC"], HC_GUID)).toHaveLength(3);
+  });
+
+  it("offers nothing when neither upload role is held", () => {
+    expect(filterConfidentiality(CONF, [], HC_GUID)).toEqual([]);
+  });
+
+  it("matches the HC term case-insensitively and ignores surrounding space", () => {
+    // The GUID arrives from a DMS Config cell, so stray whitespace and casing are
+    // both realistic, and a miss would route HC documents into Staging.
+    expect(filterConfidentiality(CONF, ["HC"], `  ${HC_GUID.toUpperCase()}  `)).toHaveLength(1);
+  });
+
+  it("does not leak Highly Confidential to a UPL user when hcTermGuid is unset", () => {
+    // With nothing to match, no option is the HC one: UPL keeps all three rather
+    // than losing one, and HC gets none. The form blocks on the missing config
+    // separately instead of this function guessing.
+    expect(filterConfidentiality(CONF, ["UPL"], "")).toHaveLength(3);
+    expect(filterConfidentiality(CONF, ["HC"], "")).toEqual([]);
+  });
+});
 
 describe("parseLevels", () => {
   it("parses a valid Levels JSON array", () => {
@@ -55,12 +104,26 @@ describe("collectMembership", () => {
     { groupId: "g-gco-upl", groupName: "GCO Uploaders", segment: "set-gho", termGuid: "t-gco", role: "UPL" },
     { groupId: "g-risk-upl", groupName: "Risk Uploaders", segment: "set-gho", termGuid: "t-risk", role: "UPL" },
     { groupId: "g-global", groupName: "Global Reader", segment: "", termGuid: "", role: "GLOBAL" },
+    { groupId: "g-gco-hc", groupName: "GCO HC", segment: "set-gho", termGuid: "t-gco", role: "HC" },
   ];
 
   it("collects member terms and uploader leaves for the user's groups", () => {
     const m = collectMembership(rows, ["g-seg", "g-lrc", "g-gco-upl"]);
     expect(m.memberTerms).toEqual(new Set(["set-gho", "t-lrc", "t-gco"]));
-    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
+    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho", role: "UPL" }]);
+  });
+
+  it("treats HC as an upload role, so an HC-only member gets a path", () => {
+    // PIC #2 holds nothing but the HC group. Before HC counted here they were
+    // told their account "isn't fully provisioned to upload" — correctly
+    // provisioned, and refused.
+    const m = collectMembership(rows, ["g-gco-hc"]);
+    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho", role: "HC" }]);
+  });
+
+  it("reports both roles when a user holds UPL and HC on the same unit", () => {
+    const m = collectMembership(rows, ["g-gco-upl", "g-gco-hc"]);
+    expect(m.uploaderLeaves.map((l) => l.role).sort()).toEqual(["HC", "UPL"]);
   });
 
   it("ignores GLOBAL rows entirely — a read-only role, never an uploader", () => {
@@ -72,13 +135,13 @@ describe("collectMembership", () => {
   it("gives a GLOBAL member no upload paths even alongside a real upl group", () => {
     // GLOBAL adds nothing; the UPL leaf is the only thing that grants upload.
     const m = collectMembership(rows, ["g-global", "g-gco-upl"]);
-    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
+    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho", role: "UPL" }]);
     expect(m.memberTerms).toEqual(new Set(["t-gco"]));
   });
 
   it("is case-insensitive and trims group ids on both sides", () => {
     const m = collectMembership(rows, [" G-GCO-UPL "]);
-    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
+    expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho", role: "UPL" }]);
   });
 
   it("returns empty membership when nothing matches", () => {

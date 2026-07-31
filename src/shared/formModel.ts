@@ -38,16 +38,27 @@ export interface GroupMapRow {
   role: string; // "MEMBER" | "UPL" | "APR" | "GLOBAL" | ""
 }
 
-/** A candidate leaf the user holds the UPL (uploader) role for. */
+/**
+ * The two roles that permit uploading. They are not ranked.
+ *
+ * UPL uploads ordinary documents to Staging; HC uploads Highly Confidential ones
+ * to HC Approval. Holding HC does not imply UPL — that is the whole point of the
+ * compartment, and it is what lets a PIC upload and read Highly Confidential
+ * documents while Confidential ones stay invisible to them.
+ */
+export type UploadRole = "UPL" | "HC";
+
+/** A candidate leaf the user may upload to, and in which capacity. */
 export interface UploaderLeaf {
   termGuid: string;
   segment: string; // term-set GUID of the leaf's mode
+  role: UploadRole;
 }
 
 /** What the user's group memberships resolve to, before term-tree validation. */
 export interface Membership {
   memberTerms: Set<string>; // every term (or term-set) GUID the user is a member of, normalised
-  uploaderLeaves: UploaderLeaf[]; // the user's UPL-role leaves
+  uploaderLeaves: UploaderLeaf[]; // the user's UPL- and HC-role leaves
 }
 
 const normGuid = (g: string): string => (g ?? "").trim().toLowerCase();
@@ -138,11 +149,46 @@ export function collectMembership(
     const role = (r.role ?? "").trim().toUpperCase();
     if (role === "GLOBAL") continue; // read-only role, no term, no upload
     if (r.termGuid) memberTerms.add(normGuid(r.termGuid));
-    if (role === "UPL") {
-      uploaderLeaves.push({ termGuid: r.termGuid, segment: r.segment });
+    // HC counts as an upload role in its own right, not as an extra on top of
+    // UPL. A user holding only HC must still be offered their unit — omitting
+    // them here is what would tell a correctly provisioned PIC that their
+    // account "isn't fully provisioned to upload".
+    if (role === "UPL" || role === "HC") {
+      uploaderLeaves.push({ termGuid: r.termGuid, segment: r.segment, role });
     }
   }
   return { memberTerms, uploaderLeaves };
+}
+
+/**
+ * The confidentiality levels a user may choose, given the upload roles they hold
+ * at the leaf they are uploading to.
+ *
+ * Hiding the option is the enforcement, not a courtesy: an HC upload has to land
+ * in a pre-secured folder, so offering the level to someone without the HC role
+ * would produce a failure at submit time instead of a choice they never see.
+ *
+ * The inverse matters just as much — a UPL-only user must not be offered Highly
+ * Confidential, and an HC-only user must not be offered Confidential or
+ * Restricted, because those live in a library they cannot reach.
+ */
+export function filterConfidentiality<T extends { id: string }>(
+  options: readonly T[],
+  rolesHeld: readonly UploadRole[],
+  hcTermGuid: string,
+): T[] {
+  const hc = normGuid(hcTermGuid);
+  const isHcOption = (o: T): boolean => normGuid(o.id) === hc;
+  const hasHc = rolesHeld.indexOf("HC") !== -1;
+  const hasUpl = rolesHeld.indexOf("UPL") !== -1;
+  // An unconfigured hcTermGuid must not silently strip the option for HC holders
+  // or leak it to everyone: with nothing to match, no option is the HC one, so
+  // UPL sees every level and HC sees none. The form blocks on the missing config
+  // separately rather than guessing here.
+  if (hasHc && hasUpl) return options.slice();
+  if (hasHc) return options.filter(isHcOption);
+  if (hasUpl) return options.filter((o) => !isHcOption(o));
+  return [];
 }
 
 /**
