@@ -93,11 +93,72 @@ type ProvTarget = { termGuid: string | null; assignTerm: string; relPath: string
 
 // DMS Group Map role → SharePoint permission level. GLOBAL is a privileged
 // uploader bypass (not folder-scoped) and is never assigned to a folder.
+//
+// APR is still Design, which also grants Add and Delete — so approvers can
+// currently upload. Switching it to the custom "DMS Approve" level is a one-line
+// change, but it must land only once that level exists on the site:
+// reconciliation skips an unknown level, which would strip every approver's
+// access on the next run. Same dependency applies to DEL.
 const ROLE_TO_PERMISSION: Record<string, string> = {
   MEMBER: "Read",
   UPL: "Contribute",
   APR: "Design",
+  DEL: "DMS Delete",
+  HC: "Contribute",
 };
+
+// Highly Confidential lives in its own libraries rather than as a subfolder of
+// the ordinary tree. A subfolder would need the HC-only user to hold Read on the
+// Document Type folder in order to browse to it, and that folder holds the very
+// Confidential files they must not see. See the HC securing design.
+type ReconLibrary = "Staging" | "Documents" | "HCApproval" | "HCLibrary";
+
+/**
+ * Per-library reconciliation behaviour.
+ *
+ * Replaces a `lib === "Staging" ? … : …` test that was correct only while there
+ * were exactly two libraries: anything that was not Staging fell into the
+ * Documents branch, so an HC library would have received MEMBER groups and none
+ * of its own. A table forces every new library to state its own answer.
+ *
+ * `roles`      — which Group Map roles are granted here. The isolation rule is
+ *                that MEMBER (base viewer) never touches a pending-documents
+ *                library, and UPL/APR never touch an approved one.
+ * `buildGrid`  — pre-create the Year × Document Type folders. HC libraries do
+ *                not: both are metadata columns there, which is what keeps the
+ *                scope count at one per unit rather than one per unit × year ×
+ *                document type.
+ * `mapFolders` — write DMS Folder Map rows. Only libraries an upload form
+ *                resolves a target in need them; the approved libraries receive
+ *                files from the auto-route flow by path.
+ */
+const RECON_LIBRARIES: ReadonlyArray<{
+  lib: ReconLibrary;
+  title: string;
+  roles: readonly string[];
+  buildGrid: boolean;
+  mapFolders: boolean;
+}> = [
+  { lib: "Staging",    title: "Staging",     roles: ["UPL", "APR"],    buildGrid: true,  mapFolders: true  },
+  { lib: "Documents",  title: "Documents",   roles: ["MEMBER", "DEL"], buildGrid: true,  mapFolders: false },
+  { lib: "HCApproval", title: "HC Approval", roles: ["HC", "APR"],     buildGrid: false, mapFolders: true  },
+  { lib: "HCLibrary",  title: "HC Library",  roles: ["HC"],            buildGrid: false, mapFolders: false },
+];
+
+/**
+ * The permission a role earns in a given library.
+ *
+ * HC is the only role whose level varies: Contribute where its members upload,
+ * Read where they only consume approved documents. Encoding it here lets one SP
+ * group serve both HC libraries, exactly as MEMBER and UPL already split across
+ * Documents and Staging.
+ */
+const PERMISSION_OVERRIDE: Partial<Record<ReconLibrary, Record<string, string>>> = {
+  HCLibrary: { HC: "Read" },
+};
+
+const permissionFor = (role: string, lib: ReconLibrary): string | undefined =>
+  PERMISSION_OVERRIDE[lib]?.[role] ?? ROLE_TO_PERMISSION[role];
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1217,9 +1278,18 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // Full rows, not just term GUIDs: the presence of a row is NOT proof the row is
       // still correct, so each one gets verified below. See the folder-map-integrity spec.
       const mapRows = await loadFolderMapRows(context.spHttpClient, siteUrl);
+      // Keyed on term AND library: a term maps to a folder in every library that
+      // an upload form resolves targets in. Keying on the term alone was safe
+      // only while Staging was the sole mapped library — with HC Approval added,
+      // the Staging row would answer the HC lookup, reconciliation would report
+      // "already mapped", and the HC row would never be written. The folders
+      // would exist and be correctly secured, the log would say success, and
+      // every HC upload would fail with "folder hasn't been set up yet".
+      const mapKey = (termGuid: string, lib: ReconLibrary): string =>
+        `${termGuid.toLowerCase()}|${lib}`;
       const mapByTerm = new Map<string, FolderMapRow>();
       for (const r of mapRows) {
-        if (r.termGuid) mapByTerm.set(r.termGuid.toLowerCase(), r);
+        if (r.termGuid) mapByTerm.set(mapKey(r.termGuid, r.library), r);
       }
       const groupMap = await loadGroupMapForAssign();
       const { targets, incomplete: incompleteSegments, missingAbbrev, collisions } = await buildProvisionTargets();
@@ -1287,14 +1357,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // nothing exists yet); re-runs finish faster as existing folders skip.
       const gridPerLeaf = yearLabels.length > 0 ? yearLabels.length * (1 + docTypeLabels.length) : 0;
       let plannedOps = 0;
-      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+      for (const { lib, roles, buildGrid } of RECON_LIBRARIES) {
         for (const t of targets) {
           plannedOps += 1;
-          if (t.isLeaf) plannedOps += gridPerLeaf;
+          if (t.isLeaf && buildGrid) plannedOps += gridPerLeaf;
           const rows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
           plannedOps += rows.filter(g =>
-            ROLE_TO_PERMISSION[g.role] !== undefined &&
-            (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
+            permissionFor(g.role, lib) !== undefined && roles.indexOf(g.role) !== -1,
           ).length;
         }
       }
@@ -1302,10 +1371,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       setReconPlanned(plannedOps);
       setReconStartMs(reconStart);
       setReconNow(reconStart);
-      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
-        const root = await getLibraryRoot(lib);
+      for (const { lib, title, roles, buildGrid, mapFolders } of RECON_LIBRARIES) {
+        // getbytitle resolves the DISPLAY name, which differs from the stable key
+        // stored in DMS Folder Map: libraries are created with no-space URL names
+        // and then renamed, so "HCApproval" is the url and "HC Approval" the title.
+        const root = await getLibraryRoot(title);
         if (!root) {
-          entries.push({ msg: `${lib}: library root not found — skipped`, ok: false });
+          entries.push({ msg: `${title}: library root not found — skipped`, ok: false });
           continue;
         }
         for (const t of targets) {
@@ -1336,9 +1408,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 setLastFolder(`${folderLabel} — already there`, "skip");
               }
             }
-            // Map Staging term folders only (the segment container has no term).
-            if (lib === "Staging" && t.termGuid) {
-              const existingRow = mapByTerm.get(t.termGuid.toLowerCase());
+            // Map term folders in the libraries an upload form resolves targets
+            // in (the segment container has no term, so it is never mapped).
+            if (mapFolders && t.termGuid) {
+              const existingRow = mapByTerm.get(mapKey(t.termGuid, lib));
               if (!existingRow) {
                 // Unmapped term → create the row.
                 const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);
@@ -1349,12 +1422,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                     title: t.label,
                     folderUrl: resolved.serverRelativeUrl,
                     section: t.section,
-                    // Guarded by `lib === "Staging"` above. When HC Approval joins
-                    // the mapped libraries this becomes `lib`, and `mapByTerm` must
-                    // be re-keyed on term+library in the same change — it keys on
-                    // term alone today, so the second library's row would look like
-                    // a duplicate of the first and be silently skipped.
-                    library: "Staging",
+                    library: lib as "Staging" | "HCApproval",
                   });
                   entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
                 }
@@ -1410,30 +1478,32 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // UPL/APR only; Documents gets MEMBER (viewer) groups only. Idempotent
             // (add-role merges). A folder whose term has no rows is flagged.
             const groupRows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
-            // Isolation rule: MEMBER (base/viewer) groups are Documents-only and must
-            // NEVER land on Staging (else a viewer could see pending docs). Staging gets
-            // UPL/APR only; Documents gets MEMBER only.
+            // Isolation rule, now expressed per library in RECON_LIBRARIES: MEMBER
+            // (base/viewer) groups belong to approved libraries only and must NEVER
+            // land on a pending one, else a viewer could see unapproved documents.
+            // HC groups appear in the HC pair alone — never in Staging or Documents,
+            // which is what makes HC a compartment rather than a clearance tier.
             const applicable = groupRows.filter(g =>
-              ROLE_TO_PERMISSION[g.role] !== undefined &&
-              (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
+              permissionFor(g.role, lib) !== undefined && roles.indexOf(g.role) !== -1,
             );
             if (applicable.length === 0) {
               entries.push({ msg: `  ⚠ ${folderLabel} — no group-map groups for this tier (locked admin-only)`, ok: true });
             }
             const grantedPids: Array<{ groupName: string; pid: number }> = [];
             for (const g of applicable) {
-              const roleDefId = roleDefs.find(r => r.name === ROLE_TO_PERMISSION[g.role])?.id;
+              const wantLevel = permissionFor(g.role, lib);
+              const roleDefId = roleDefs.find(r => r.name === wantLevel)?.id;
               if (roleDefId === undefined) {
-                entries.push({ msg: `  ⚠ ${g.groupName} — no "${ROLE_TO_PERMISSION[g.role]}" role definition on site`, ok: false });
-                pushAssign(`${t.label}: "${ROLE_TO_PERMISSION[g.role]}" role missing on site`, "warn");
+                entries.push({ msg: `  ⚠ ${g.groupName} — no "${wantLevel}" role definition on site`, ok: false });
+                pushAssign(`${t.label}: "${wantLevel}" role missing on site`, "warn");
                 continue;
               }
               try {
                 const pid = spGroupPrincipalId(g.groupId);
                 await addRoleAssignment(full, pid, roleDefId);
                 grantedPids.push({ groupName: g.groupName, pid });
-                entries.push({ msg: `  ↳ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}`, ok: true });
-                pushAssign(`${t.label} → ${g.groupName} (${ROLE_TO_PERMISSION[g.role]})`, "ok");
+                entries.push({ msg: `  ↳ ${g.groupName} → ${wantLevel}`, ok: true });
+                pushAssign(`${t.label} → ${g.groupName} (${wantLevel})`, "ok");
                 bumpAssigns();
                 await tick();
               } catch (e) {
@@ -1463,7 +1533,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // Under leaf (unit) folders, pre-create the Year × Document Type grid.
             // These inherit the unit's ACL (no lock, no map). Idempotent via
             // ensureFolder. Logged as a per-unit count, not one line per folder.
-            if (t.isLeaf && yearLabels.length > 0) {
+            if (t.isLeaf && buildGrid && yearLabels.length > 0) {
               const gridTotal = yearLabels.length * (1 + docTypeLabels.length);
               let grid = 0;
               // FAST PATH. The grid is built in order, so if the LAST year's LAST
