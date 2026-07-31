@@ -197,9 +197,19 @@ The department name between `SDG-` and `-Uploader` in the group name **must matc
 
 Status: DONE (bare alphanumeric matching in `detectDepartment()`, Form.tsx).
 
-### 12. Audit Logging
-Track: uploads, approvals, edits, deletions, access events.
-Status: NOT STARTED. SharePoint audit log / M365 Compliance.
+### 12. Audit Logging + Access Matrix
+Client ask (2026-07-30) is two things: (1) activity log — download, upload, approve, delete,
+share; (2) access matrix — what a given user can reach at folder and file level.
+These are different problems: (1) is events over time, (2) is current state. Purview answers
+(1) and cannot answer (2).
+
+Uploads/approvals/edits/deletions are deliverable in-app with no new access. Sharing is
+**prevented** (owner-only sharing) rather than logged. **Downloads are Purview-only** — and
+that needs **Audit Reader**, NOT SharePoint Admin (SP Admin and Site Collection Admin grant
+zero audit access).
+
+Status: DESIGNED, not started.
+Design: `docs/superpowers/specs/2026-07-30-audit-log-and-access-matrix-design.md`
 
 ### 13. Retention Policy
 Define retention durations, apply retention labels, prevent unauthorized deletion.

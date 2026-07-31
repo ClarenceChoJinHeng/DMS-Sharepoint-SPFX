@@ -110,9 +110,15 @@ Folder hierarchy is a **nested chain** (Sub-1 contains Sub-2 contains Sub-3, etc
 - [ ] Pre-upload REST check: does a file with this name already exist in Staging?
 - [ ] Prevent overwrite; allow versioning only
 
-### Audit Logging
-- [ ] Configure SharePoint / M365 Compliance audit logging
-- [ ] Track: uploads, approvals, edits, deletions, access events
+### Audit Logging + Access Matrix
+Design: `docs/superpowers/specs/2026-07-30-audit-log-and-access-matrix-design.md`
+- [ ] `DMS Activity Log` list + Add/View-only permission level + indexed columns
+- [ ] Log rows on upload / approve / reject / edit / rename / delete (denormalized metadata)
+- [ ] Deletion view from `/_api/web/RecycleBin` (93-day window)
+- [ ] Disable non-owner sharing (site owner setting) — prevent rather than log
+- [ ] Access matrix: Direction A (user → folders) + B (folder → users)
+- [ ] VERIFY: site-collection audit reports page (zero-grant option)
+- [ ] DECIDE w/ client: downloads need Purview **Audit Reader** — not SharePoint Admin
 
 ### Retention Policy
 - [ ] Define retention durations per document type

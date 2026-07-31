@@ -26,6 +26,13 @@ import {
   SpGroupMember,
   PersonPick,
 } from "../../../shared/spGroups";
+import {
+  toCsv,
+  downloadCsv,
+  exportFileName,
+  GroupExportRow,
+  NO_MEMBERS,
+} from "../../../shared/groupExportCsv";
 
 type Props = { context: WebPartContext; siteUrl: string };
 type GroupPick = { id: string; displayName: string };
@@ -137,6 +144,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const [confirmDel, setConfirmDel]   = useState<number | undefined>(undefined);
   const [selected, setSelected]       = useState<Set<number>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
+
+  // CSV export progress — "n/total" while member lists are being fetched.
+  const [exporting, setExporting] = useState<{ done: number; total: number } | undefined>(undefined);
 
   const showToast = (message: string, error: boolean): void => {
     setToast({ message, error });
@@ -701,6 +711,74 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const isStaleRow = (r: ExistingRow): boolean =>
     modes.length > 0 && !!r.Segment && !modes.some((m) => m.termSetGuid === r.Segment);
 
+  /** Same text the Tier column shows, reused so the CSV and the screen never disagree. */
+  const tierLabelFor = (r: ExistingRow): string => {
+    if (!r.UnitTermGuid) return "";
+    if (r.UnitTermGuid === r.Segment) return "(segment level)";
+    return tierLabels[r.UnitTermGuid] ?? r.UnitTermGuid;
+  };
+
+  /**
+   * Export every mapping with its group's members as a CSV the client can open in
+   * Excel — one line per member, so a group with 4 people takes 4 lines and a group
+   * with none still gets one line marked "(no members)".
+   *
+   * Members are fetched live rather than from any cache: the point of the export is
+   * to be an accurate snapshot at the moment it is taken. Distinct group ids are
+   * fetched once even when a group appears in several mappings.
+   */
+  const onExportCsv = async (): Promise<void> => {
+    if (existing.length === 0) { showToast("There are no mappings to export.", true); return; }
+
+    const groupIds: string[] = [];
+    for (const r of existing) {
+      if (r.GroupId && groupIds.indexOf(r.GroupId) === -1) groupIds.push(r.GroupId);
+    }
+
+    setExporting({ done: 0, total: groupIds.length });
+    const byGroup: Record<string, SpGroupMember[]> = {};
+    let failed = 0;
+    for (let i = 0; i < groupIds.length; i++) {
+      const id = groupIds[i];
+      try {
+        byGroup[id] = await getGroupMembers(context.spHttpClient, siteUrl, Number(id));
+      } catch {
+        // A deleted group (or one we can't read) must not abort the whole export —
+        // it is flagged in its own row instead.
+        byGroup[id] = [];
+        failed++;
+      }
+      setExporting({ done: i + 1, total: groupIds.length });
+    }
+
+    const rows: GroupExportRow[] = [];
+    for (const r of existing) {
+      const base = {
+        group: r.GroupName || r.GroupId,
+        segment: r.Segment ? segmentLabelFor(r.Segment) : "",
+        tier: tierLabelFor(r),
+        role: r.Role,
+      };
+      const members = byGroup[r.GroupId] ?? [];
+      if (members.length === 0) {
+        rows.push({ ...base, memberName: NO_MEMBERS, memberEmail: "" });
+      } else {
+        for (const m of members) {
+          rows.push({ ...base, memberName: m.title, memberEmail: m.email });
+        }
+      }
+    }
+
+    downloadCsv(toCsv(rows), exportFileName(new Date()));
+    setExporting(undefined);
+    showToast(
+      failed === 0
+        ? `Exported ${existing.length} mapping(s) across ${groupIds.length} group(s).`
+        : `Exported, but ${failed} group(s) could not be read — their members are blank.`,
+      failed > 0,
+    );
+  };
+
   const onAdd = async (): Promise<void> => {
     const row = buildGroupMapRow(draft);
     if (isDuplicateRow(existing, row)) { showToast("This exact mapping already exists.", true); return; }
@@ -1043,6 +1121,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       {/* Existing rows */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 6px" }}>
         <h3 style={{ fontSize: 14, margin: 0 }}>Existing mappings ({existing.length})</h3>
+        <button
+          style={s.ghost}
+          disabled={busy || exporting !== undefined || existing.length === 0}
+          title="Download every mapping and its group members as a CSV (opens in Excel)"
+          onClick={() => { onExportCsv().catch(() => { setExporting(undefined); showToast("Export failed.", true); }); }}
+        >
+          {exporting ? `Exporting… ${exporting.done}/${exporting.total}` : "Export to Excel (CSV)"}
+        </button>
         {selected.size > 0 && (
           confirmBulk ? (
             <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
