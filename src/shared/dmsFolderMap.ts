@@ -7,23 +7,51 @@ export { encodeServerRelativePath };
 /** The rename-proof lookup list. Field internal names have no spaces. */
 export const FOLDER_MAP_LIST = "DMS Folder Map";
 
+/**
+ * The library a mapped folder lives in. Only libraries an upload form resolves a
+ * target in are mapped: `Documents` and `HC Library` receive files from the
+ * auto-route flow by path, never by UniqueId, so they need no rows.
+ */
+export type MappedLibrary = "Staging" | "HCApproval";
+
+/**
+ * Rows written before the HC split carry no `Library` value, and every one of
+ * them described a Staging folder. Reading empty as Staging is what lets the
+ * column be added without rewriting existing rows — otherwise every upload would
+ * fail between the schema change and the next full reconciliation.
+ */
+export const DEFAULT_MAPPED_LIBRARY: MappedLibrary = "Staging";
+
 export interface FolderMapping {
   termGuid: string;
   folderUniqueId: string;
   title: string;
   folderUrl: string;
   section: string;
+  library: MappedLibrary;
 }
 
-/** Read the mapping row for a single term. Returns null if the term is not mapped. */
+const readLibrary = (raw: unknown): MappedLibrary =>
+  String(raw ?? "").trim() === "HCApproval" ? "HCApproval" : DEFAULT_MAPPED_LIBRARY;
+
+/**
+ * Read the mapping row for a term in one library. Returns null if unmapped.
+ *
+ * A term now has one row per mapped library, and the rows are filtered in JS
+ * rather than by OData: "Library is HCApproval" is expressible in a `$filter`,
+ * but "Library is Staging OR absent" is not — `eq null` on a text column behaves
+ * inconsistently, and getting it wrong returns the wrong library's folder with
+ * no error. At most a handful of rows share a term, so the cost is nil.
+ */
 export async function lookupFolderMapping(
   spHttpClient: SPHttpClient,
   siteUrl: string,
   termGuid: string,
+  library: MappedLibrary = DEFAULT_MAPPED_LIBRARY,
 ): Promise<FolderMapping | null> {
   const url =
     `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items` +
-    `?$select=Title,TermGuid,FolderUniqueId,FolderUrl,Section&$filter=TermGuid eq '${termGuid}'&$top=1`;
+    `?$select=Title,TermGuid,FolderUniqueId,FolderUrl,Section,Library&$filter=TermGuid eq '${termGuid}'&$top=10`;
   const res: SPHttpClientResponse = await spHttpClient.get(
     url,
     SPHttpClient.configurations.v1,
@@ -31,14 +59,16 @@ export async function lookupFolderMapping(
   );
   if (!res.ok) throw new Error(`Folder map lookup failed: HTTP ${res.status}`);
   const data = await res.json();
-  const row = (data.value ?? [])[0];
+  const rows = (data.value ?? []) as Array<Record<string, unknown>>;
+  const row = rows.filter((r) => readLibrary(r.Library) === library)[0];
   if (!row) return null;
   return {
-    termGuid: row.TermGuid,
-    folderUniqueId: row.FolderUniqueId,
-    title: row.Title,
-    folderUrl: row.FolderUrl,
-    section: row.Section,
+    termGuid: row.TermGuid as string,
+    folderUniqueId: row.FolderUniqueId as string,
+    title: row.Title as string,
+    folderUrl: row.FolderUrl as string,
+    section: row.Section as string,
+    library: readLibrary(row.Library),
   };
 }
 
@@ -80,6 +110,7 @@ export async function loadFolderMapRows(
         FolderUniqueId?: string;
         FolderUrl?: string;
         Section?: string;
+        Library?: string;
       }) => {
         rows.push({
           itemId: r.Id,
@@ -88,6 +119,7 @@ export async function loadFolderMapRows(
           folderUniqueId: r.FolderUniqueId ?? "",
           folderUrl: r.FolderUrl ?? "",
           section: r.Section ?? "",
+          library: readLibrary(r.Library),
         });
       },
     );
@@ -213,6 +245,7 @@ export async function writeFolderMapping(
         FolderUniqueId: m.folderUniqueId,
         FolderUrl: m.folderUrl,
         Section: m.section,
+        Library: m.library,
       }),
     },
   );

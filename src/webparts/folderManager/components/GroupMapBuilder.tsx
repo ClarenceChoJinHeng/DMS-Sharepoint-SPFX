@@ -40,7 +40,10 @@ type ModePick = { label: string; termSetGuid: string };
 type TermLite = { id: string; label: string };
 type ExistingRow = GroupMapWriteRow & { itemId: number };
 
-const ROLES: GroupMapRole[] = ["MEMBER", "UPL", "APR", "GLOBAL"];
+// Ordered by escalating reach, not alphabetically: view → upload → approve →
+// delete, then HC (a separate compartment, not a higher tier) and finally the
+// GLOBAL bypass. GLOBAL stays last so it is never a mis-click away from DEL.
+const ROLES: GroupMapRole[] = ["MEMBER", "UPL", "APR", "DEL", "HC", "GLOBAL"];
 const GROUP_MAP_LIST = "DMS Group Map";
 const CONFIG_LIST = "DMS Config";
 

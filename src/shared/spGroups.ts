@@ -26,18 +26,36 @@ const fail = async (label: string, res: SPHttpClientResponse): Promise<never> =>
   throw new Error(`${label} HTTP ${res.status} ${body.slice(0, 200)}`);
 };
 
+/**
+ * Every site group, following OData paging.
+ *
+ * This used to be a single `$top=500`. Five groups per unit across 133 units is
+ * ~665, so the response silently truncated: no error, no flag, just a short
+ * array. Both callers treat "absent from this list" as "does not exist", so the
+ * symptom would have been the Group Map builder and reconciliation reporting
+ * several hundred perfectly healthy groups as missing — a data problem that
+ * isn't one. Paging is the fix; the page size is SharePoint's to decide, and
+ * `odata.nextLink` is present exactly when there is more to fetch.
+ */
 export async function fetchAllSiteGroups(sp: SPHttpClient, siteUrl: string): Promise<SpGroup[]> {
-  const res = await sp.get(
-    `${siteUrl}/_api/web/sitegroups?$select=Id,Title&$top=500`,
-    SPHttpClient.configurations.v1,
-    { headers: GET_HEADERS },
-  );
-  if (!res.ok) return fail("sitegroups", res);
-  const data = await res.json();
-  return ((data.value ?? []) as Array<{ Id: number; Title: string }>).map((g) => ({
-    id: g.Id,
-    title: g.Title,
-  }));
+  const out: SpGroup[] = [];
+  let url = `${siteUrl}/_api/web/sitegroups?$select=Id,Title&$top=500`;
+  // Bounded so a malformed nextLink cannot spin forever: 20 pages is ~10,000
+  // groups, far beyond any plausible site, and stopping beats hanging.
+  for (let page = 0; page < 20; page++) {
+    const res = await sp.get(url, SPHttpClient.configurations.v1, { headers: GET_HEADERS });
+    if (!res.ok) return fail("sitegroups", res);
+    const data = await res.json();
+    ((data.value ?? []) as Array<{ Id: number; Title: string }>).forEach((g) => {
+      out.push({ id: g.Id, title: g.Title });
+    });
+    // nometadata emits the annotation as "odata.nextLink" (verbose uses
+    // "__next"), and it is an ABSOLUTE url — do not prefix it with siteUrl.
+    const next = (data as { "odata.nextLink"?: string })["odata.nextLink"];
+    if (!next) return out;
+    url = next;
+  }
+  return out;
 }
 
 export async function searchSiteGroups(

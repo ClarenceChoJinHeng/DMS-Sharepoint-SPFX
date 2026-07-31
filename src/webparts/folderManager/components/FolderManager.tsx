@@ -1349,6 +1349,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                     title: t.label,
                     folderUrl: resolved.serverRelativeUrl,
                     section: t.section,
+                    // Guarded by `lib === "Staging"` above. When HC Approval joins
+                    // the mapped libraries this becomes `lib`, and `mapByTerm` must
+                    // be re-keyed on term+library in the same change — it keys on
+                    // term alone today, so the second library's row would look like
+                    // a duplicate of the first and be silently skipped.
+                    library: "Staging",
                   });
                   entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
                 }

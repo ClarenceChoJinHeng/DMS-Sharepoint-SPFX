@@ -17,8 +17,24 @@ describe("roleFromGroupName", () => {
     expect(roleFromGroupName("DMS_GHO_GF_CORU_UPL")).toBe("UPL");
   });
 
+  it("derives DEL from a _DEL suffix", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_DEL")).toBe("DEL");
+  });
+
+  it("derives HC from an _HC suffix", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_HC")).toBe("HC");
+  });
+
   it("defaults a base (no-suffix) group to MEMBER", () => {
     expect(roleFromGroupName("DMS_GHO_GF_CORU")).toBe("MEMBER");
+  });
+
+  // The suffix match requires the underscore for a reason: unit abbreviations are
+  // client-authored, so one ending in HC or DEL is a matter of time. Matching a
+  // bare "HC" would hand that unit's base viewer group the HC compartment.
+  it("does not mistake a unit abbreviation ending in HC/DEL for a suffix", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_ARCHC")).toBe("MEMBER");
+    expect(roleFromGroupName("DMS_GHO_GF_MODEL")).toBe("MEMBER");
   });
 
   it("matches the suffix case-insensitively and trims", () => {

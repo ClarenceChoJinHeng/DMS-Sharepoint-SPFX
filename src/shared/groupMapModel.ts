@@ -1,7 +1,20 @@
 // Pure, SPFx-free helpers for the Group Map Builder. No @microsoft/* imports —
 // keep this unit-testable in plain Jest (same pattern as formModel).
 
-export type GroupMapRole = "MEMBER" | "UPL" | "APR" | "GLOBAL";
+/**
+ * DEL and HC are library-scoped like the rest: DEL grants delete on Documents,
+ * HC grants Contribute on HC Approval and Read on HC Library. HC is a
+ * compartment, not a clearance tier — holding it does not imply MEMBER or UPL,
+ * which is what lets a PIC see Highly Confidential documents and nothing else.
+ * See docs/superpowers/specs/2026-07-16-highly-confidential-securing-design.md.
+ */
+export type GroupMapRole =
+  | "MEMBER"
+  | "UPL"
+  | "APR"
+  | "DEL"
+  | "HC"
+  | "GLOBAL";
 
 /**
  * The site-entry SP group. Grants Read on the web + Home + Documents library so any DMS user
@@ -69,6 +82,8 @@ export function roleFromGroupName(name: string): GroupMapRole {
   const n = norm(name).toUpperCase();
   if (n.endsWith("_APR")) return "APR";
   if (n.endsWith("_UPL")) return "UPL";
+  if (n.endsWith("_DEL")) return "DEL";
+  if (n.endsWith("_HC")) return "HC";
   return "MEMBER";
 }
 
