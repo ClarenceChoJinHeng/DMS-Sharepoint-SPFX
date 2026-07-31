@@ -29,6 +29,17 @@ export interface AbbrevCollision {
   labels: string[];
 }
 
+/**
+ * Name of the SharePoint list holding the mappings.
+ *
+ * The list READ lives in FolderManager.tsx, not here: importing `@microsoft/sp-http`
+ * into a shared module makes its Jest suite fail to run ("Cannot find module
+ * '@msinternal/ecs-flight'"), which is why dmsFolderMap.ts is untested while this
+ * module, formModel and pathEncoding are. Keeping this file free of SPFx imports is
+ * what keeps the collision logic covered by tests.
+ */
+export const ABBREV_LIST = "DMS Term Abbreviation";
+
 /** Term GUIDs are compared lowercased, matching DMS Group Map and DMS Folder Map. */
 export function buildAbbrevIndex(rows: readonly AbbrevRow[]): Map<string, string> {
   const ix = new Map<string, string>();

@@ -18,6 +18,15 @@ import {
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
 import { sanitizeFolderSegment, parseReconModes, RawModeRow } from "../../../shared/formModel";
+import {
+  ABBREV_LIST,
+  AbbrevCollision,
+  AbbrevRow,
+  AbbrevTarget,
+  buildAbbrevIndex,
+  findCollisions,
+  lookupAbbrev,
+} from "../../../shared/folderAbbreviation";
 
 // A "mode" is a top-level container folder under the library root. These used to
 // be hardcoded (Departments / Projects); they are now discovered dynamically so
@@ -936,6 +945,33 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     return map;
   };
 
+  /**
+   * Term GUID → folder-name abbreviation.
+   *
+   * Lives here rather than in the shared module because a shared file that imports
+   * `@microsoft/sp-http` cannot be unit tested — see the note on ABBREV_LIST.
+   *
+   * Deliberately NOT wrapped in a catch returning an empty map: an unreadable list
+   * must abort the run. An empty index makes every term look unmapped, which would
+   * skip every folder and report 175 false "needs attention" rows.
+   */
+  const loadAbbreviations = async (): Promise<Map<string, string>> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(ABBREV_LIST)}')/items?$select=TermGuid,Abbreviation&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`${ABBREV_LIST} read failed: HTTP ${res.status}. ${body}`);
+    }
+    const data = await res.json();
+    const rows: AbbrevRow[] = ((data.value ?? []) as Array<{ TermGuid?: string; Abbreviation?: string }>).map(
+      (r) => ({ termGuid: r.TermGuid ?? "", abbreviation: r.Abbreviation ?? "" }),
+    );
+    return buildAbbrevIndex(rows);
+  };
+
   // Segments to provision come from the SAME DMS Config `mode` rows the upload form
   // reads, so onboarding a segment is data-only (add a mode row → Run) — no redeploy.
   // Falls back to the built-in RECON_MODES (GHO) if the config is empty/unreachable.
@@ -1032,9 +1068,20 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
    * of its rows look deleted. Callers MUST treat a non-empty `incomplete` as a reason
    * to skip pruning.
    */
-  const buildProvisionTargets = async (): Promise<{ targets: ProvTarget[]; incomplete: string[] }> => {
+  const buildProvisionTargets = async (): Promise<{
+    targets: ProvTarget[];
+    incomplete: string[];
+    missingAbbrev: Array<{ termGuid: string; label: string }>;
+    collisions: AbbrevCollision[];
+  }> => {
     const out: ProvTarget[] = [];
     const incomplete: string[] = [];
+    // Terms with no abbreviation are skipped, not guessed at, and reported here.
+    const missingAbbrev: Array<{ termGuid: string; label: string }> = [];
+    // Every named target, so siblings sharing an abbreviation can be caught before
+    // a single folder is created.
+    const abbrevTargets: AbbrevTarget[] = [];
+    const abbrevIndex = await loadAbbreviations();
     const modes = await loadReconModes();
     for (const mode of modes) {
       // Segment container: not a mapped term, but groups target it via the term-set GUID.
@@ -1051,8 +1098,29 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // Minamas unit "Value Creation / Value Transformation".
         // Path segments are sanitised; the DISPLAY label and the map row Title keep the
         // raw term text, so the log and the index still read like the term store.
-        const seg = (label: string): string => sanitizeFolderSegment(label) || label;
-        const topSeg = seg(top.label);
+        // Folder names come from the abbreviation list, NOT the term label. The
+        // labels are long and their fullwidth ampersands cost 9 encoded characters
+        // each, which put the worst-case path within 73 characters of the ~330
+        // limit where GetFolderByServerRelativeUrl starts returning 400.
+        // See the 2026-07-30 folder-abbreviation-naming spec.
+        //
+        // sanitizeFolderSegment still applies: a "/" in a name is both rejected by
+        // SharePoint and read as a path separator.
+        //
+        // A term with no abbreviation is SKIPPED and reported, never guessed at.
+        // Falling back to the label would create a folder at a path the next run
+        // does not expect, and uploads resolve by UniqueId so nobody would notice.
+        const seg = (termGuid: string, label: string): string | undefined => {
+          const abbrev = lookupAbbrev(abbrevIndex, termGuid);
+          if (abbrev === undefined) {
+            missingAbbrev.push({ termGuid, label });
+            return undefined;
+          }
+          return sanitizeFolderSegment(abbrev) || abbrev;
+        };
+        const topSeg = seg(top.id, top.label);
+        if (topSeg === undefined) continue; // reported; its children are unreachable
+        abbrevTargets.push({ parentPath: `/${mode.stagingFolder}`, termGuid: top.id, abbreviation: topSeg, label: top.label });
         const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder, isLeaf: false };
         out.push(topTarget);
         // Recurse; returns whether the term had children. A term with no children
@@ -1062,8 +1130,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         const walk = async (parentId: string, ancestors: string[], pathAncestors: string[]): Promise<boolean> => {
           const children = await loadReconChildren(mode.termSetGuid, parentId);
           for (const child of children) {
+            const childSeg = seg(child.id, child.label);
+            if (childSeg === undefined) continue; // reported; skip this subtree
             const chain = [...ancestors, child.label];
-            const pathChain = [...pathAncestors, seg(child.label)];
+            const pathChain = [...pathAncestors, childSeg];
+            const parentPath = `/${mode.stagingFolder}/${topSeg}${pathAncestors.length > 0 ? "/" + pathAncestors.join("/") : ""}`;
+            abbrevTargets.push({ parentPath, termGuid: child.id, abbreviation: childSeg, label: child.label });
             const childTarget: ProvTarget = {
               termGuid: child.id,
               assignTerm: child.id,
@@ -1083,7 +1155,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         incomplete.push(`${mode.stagingFolder} — ${(e as Error).message}`);
       }
     }
-    return { targets: out, incomplete };
+    return { targets: out, incomplete, missingAbbrev, collisions: findCollisions(abbrevTargets) };
   };
 
   // Provision from the term store into BOTH libraries in one run: create each folder
@@ -1150,7 +1222,26 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         if (r.termGuid) mapByTerm.set(r.termGuid.toLowerCase(), r);
       }
       const groupMap = await loadGroupMapForAssign();
-      const { targets, incomplete: incompleteSegments } = await buildProvisionTargets();
+      const { targets, incomplete: incompleteSegments, missingAbbrev, collisions } = await buildProvisionTargets();
+      // A collision aborts BEFORE anything is created. Two siblings resolving to
+      // one path means one folder, one ACL, and two units' documents inside it —
+      // the isolation the whole permission model rests on. A partial run would
+      // create that merged folder before anyone read the log.
+      if (collisions.length > 0) {
+        for (const c of collisions) {
+          entries.push({ msg: `✖ COLLISION in ${c.parentPath}: "${c.abbreviation}" is used by ${c.labels.join(" | ")}`, ok: false });
+        }
+        entries.push({ msg: `Nothing was created. Give each of these a distinct abbreviation in ${ABBREV_LIST}, then run again.`, ok: false });
+        setLog((prev) => [...prev, ...entries]);
+        showToast(`${collisions.length} abbreviation collision(s) — nothing was created.`, false);
+        setBusy(false);
+        return;
+      }
+      // Not fatal: every other term still provisions. But it must be loud, because
+      // a unit with no folder has no map row and its uploaders are blocked.
+      for (const m of missingAbbrev) {
+        entries.push({ msg: `⚠ SKIPPED (no abbreviation): ${m.label} — add a row to ${ABBREV_LIST} for term ${m.termGuid}`, ok: false });
+      }
       // Surface enumeration failures as real errors. Without this they were invisible:
       // the segment just produced no targets, the run looked clean, and prune would
       // then delete every map row for it. See the prune guard below.
