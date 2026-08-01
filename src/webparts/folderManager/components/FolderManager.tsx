@@ -13,6 +13,7 @@ import {
   probeFolderById,
   writeFolderMapping,
   updateFolderMapping,
+  renameFolder,
   deleteFolderMapRow,
   ensureFolder,
   encodeServerRelativePath,
@@ -1312,6 +1313,74 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           const full = `${root}${t.relPath}`;
           const folderLabel = `${lib}${t.relPath}`;
           try {
+            // RENAME BEFORE CREATE. When an abbreviation is edited, `full` points
+            // at a name that does not exist yet, so the create below would make an
+            // empty folder there and the real one would keep its old name — and the
+            // subsequent rename would then collide with the folder we had just
+            // created. Renaming first makes the create a no-op.
+            //
+            // The old name comes from the Folder Map row's stored path. That row
+            // exists only for Staging, but every library mirrors the same relative
+            // tree, so it names the old folder in Documents too — which is how
+            // Documents gets renamed despite having no rows of its own.
+            //
+            // This also reverts a folder someone renamed by hand. Deliberate: the
+            // abbreviation list is the single source of truth for names and all
+            // libraries must agree. Nothing breaks either way, since uploads
+            // resolve by UniqueId, not by path.
+            const mappedRow = t.termGuid ? mapByTerm.get(t.termGuid.toLowerCase()) : undefined;
+            const wantName = t.relPath.split("/").pop() ?? "";
+            const oldName = (mappedRow?.folderUrl ?? "").split("/").pop() ?? "";
+            // Case-insensitive: SharePoint treats sibling names as case-insensitive
+            // for uniqueness, so renaming CORU → Coru would collide with itself and
+            // report a conflict that is not one.
+            if (
+              oldName.length > 0 &&
+              wantName.length > 0 &&
+              oldName.toLowerCase() !== wantName.toLowerCase()
+            ) {
+              const parentRel = t.relPath.slice(0, t.relPath.lastIndexOf("/"));
+              const oldFull = `${root}${parentRel}/${oldName}`;
+              const oldProbe = await probeFolderByPath(context.spHttpClient, siteUrl, oldFull);
+              if (oldProbe.folder) {
+                const renamed = await renameFolder(
+                  context.spHttpClient,
+                  siteUrl,
+                  oldProbe.folder.serverRelativeUrl,
+                  wantName,
+                );
+                if (renamed.ok) {
+                  entries.push({ msg: `  ✎ ${lib}${parentRel}: renamed ${oldName} → ${wantName}`, ok: true });
+                  // Refresh the stored path. The UniqueId is unchanged by a rename,
+                  // so the verification step below will report the row as valid and
+                  // would otherwise leave FolderUrl pointing at a path that no
+                  // longer exists — and stale forever, since it self-heals only on
+                  // a missing folder.
+                  if (lib === "Staging" && mappedRow && renamed.serverRelativeUrl) {
+                    await updateFolderMapping(context.spHttpClient, siteUrl, mappedRow.itemId, {
+                      folderUniqueId: mappedRow.folderUniqueId,
+                      folderUrl: renamed.serverRelativeUrl,
+                      title: t.label,
+                    });
+                    mappedRow.folderUrl = renamed.serverRelativeUrl;
+                  }
+                  await tick();
+                } else if (renamed.conflict) {
+                  // Two terms want one folder name. Forcing it would merge two
+                  // units' documents behind a single ACL — the isolation failure
+                  // findCollisions exists to prevent — so this needs a person.
+                  entries.push({
+                    msg: `  ⚠ ${t.label} — cannot rename "${oldName}" to "${wantName}" in ${lib}: a folder of that name is already there. Fix the abbreviation, then re-run.`,
+                    ok: false,
+                  });
+                } else {
+                  entries.push({
+                    msg: `  ✗ ${t.label} — rename "${oldName}" → "${wantName}" in ${lib} FAILED (HTTP ${renamed.status}) ${renamed.detail ?? ""}`,
+                    ok: false,
+                  });
+                }
+              }
+            }
             pushFolder(`${folderLabel} — creating…`, "run");
             const existed = await folderExists(full);
             if (!existed) {
@@ -1366,7 +1435,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                   existingRow.folderUniqueId,
                 );
                 if (probe.folder) {
-                  // Row still valid. Nothing to do.
+                  // Row still valid. Nothing to do — any rename already happened
+                  // before the folder was created, further up this iteration.
                 } else if (probe.confirmedMissing) {
                   // The mapped folder is gone (deleted, then recreated by this run or by
                   // hand). Repoint the row at the folder that is actually there now —

@@ -369,6 +369,70 @@ export async function resolveFolderServerUrl(
  * Idempotent: creates it, or resolves the existing one on 409/exists.
  * Returns the child's UniqueId + ServerRelativeUrl, or null on failure.
  */
+/** Outcome of a folder rename — see `renameFolder`. */
+export interface RenameResult {
+  ok: boolean;
+  /** New server-relative url, on success. */
+  serverRelativeUrl?: string;
+  /**
+   * True when the rename failed because a sibling already holds the target name.
+   * Distinct from a generic failure because it needs a human decision rather
+   * than a retry: two terms are competing for one folder name.
+   */
+  conflict: boolean;
+  status: number;
+  detail?: string;
+}
+
+/**
+ * Rename a folder in place, keeping its UniqueId, contents and ACL.
+ *
+ * `MoveTo` within the same parent is SharePoint's rename. The UniqueId survives,
+ * which is what lets the Folder Map row stay valid — only its `FolderUrl` needs
+ * refreshing afterwards.
+ *
+ * A name collision is reported, never forced. Overwriting would merge two units'
+ * documents behind one ACL — the exact isolation failure `findCollisions` exists
+ * to prevent — while silently skipping would leave a folder whose name disagrees
+ * with the abbreviation list and nothing saying why. The caller surfaces it so an
+ * administrator fixes the abbreviation.
+ *
+ * Paths go in as OData parameter aliases, never inline literals: CLAUDE.md
+ * gotcha #9 — a long encoded path in a quoted literal returns HTTP 400, not 404,
+ * and reads like a missing folder.
+ */
+export async function renameFolder(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  currentServerRelativeUrl: string,
+  newName: string,
+): Promise<RenameResult> {
+  const parent = currentServerRelativeUrl.slice(
+    0,
+    currentServerRelativeUrl.lastIndexOf("/"),
+  );
+  const target = `${parent}/${newName}`;
+  const res: SPHttpClientResponse = await spHttpClient.post(
+    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/MoveTo(newUrl=@d)` +
+      `?@f='${encodeServerRelativePath(currentServerRelativeUrl)}'` +
+      `&@d='${encodeServerRelativePath(target)}'`,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  if (res.ok) {
+    return { ok: true, serverRelativeUrl: target, conflict: false, status: res.status };
+  }
+  const detail = await res.text().catch(() => "");
+  return {
+    ok: false,
+    // SharePoint reports a collision as a 400 with the reason only in the body,
+    // so the status alone cannot tell it from a malformed request.
+    conflict: /already exists/i.test(detail),
+    status: res.status,
+    detail: detail.slice(0, 300),
+  };
+}
+
 export async function ensureFolder(
   spHttpClient: SPHttpClient,
   siteUrl: string,
