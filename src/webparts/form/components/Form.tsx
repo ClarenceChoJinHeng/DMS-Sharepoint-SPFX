@@ -1488,13 +1488,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             >
               i
               <span className="dms-info-panel" role="tooltip">
+                {/* Highly Confidential is deliberately absent. Its term is removed
+                    from the term store for Phase 1, so the dropdown cannot offer it,
+                    and describing a level nobody can pick reads as a bug in UAT. The
+                    definition returns with the HC libraries in Phase 2 — see the
+                    highly-confidential-securing design on feat/hc-libraries. */}
                 <dl>
-                  <dt>Highly Confidential</dt>
-                  <dd>
-                    This applies to the most sensitive business information that
-                    is intended strictly for use within the Group, the disclosure
-                    of which will impact share price and competitive advantage.
-                  </dd>
                   <dt>Legally Privileged</dt>
                   <dd>
                     This applies to confidential communications (email, advice,
