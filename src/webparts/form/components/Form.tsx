@@ -8,6 +8,7 @@ import {
   ensureFolder,
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
+import { formatFileSize } from "../../../shared/fileSize";
 import {
   parseLevels,
   collectMembership,
@@ -1374,15 +1375,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             onClick={() => fileRef.current?.click()}
             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
           >
-            {/* Action label sits first so it reads left-aligned in the card. */}
-            <span className="dms-link">
-              {file ? "Change file" : "Upload Document"}
-            </span>
-            {file && (
-              <div>
-                <div className="name">{file.name}</div>
-                <div className="size">{(file.size / 1024).toFixed(1)} KB</div>
-              </div>
+            {file ? (
+              <>
+                <span className="dms-filecard-ready">READY</span>
+                <span className="name">{file.name}</span>
+                <span className="size">{formatFileSize(file.size)}</span>
+                <span className="dms-link dms-filecard-action">Change Document</span>
+              </>
+            ) : (
+              <span className="dms-link">Choose a document</span>
             )}
             <input
               ref={fileRef}
