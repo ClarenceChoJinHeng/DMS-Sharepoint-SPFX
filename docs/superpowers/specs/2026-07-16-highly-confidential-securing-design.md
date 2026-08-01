@@ -505,7 +505,39 @@ unit's `APR` group for HC approval.
 
 ---
 
-## 14. Open items
+## 14. Restoring what Phase 1 removed
+
+Highly Confidential went **out of scope for Phase 1** on 2026-08-01: the term is
+deleted from the term store so the dropdown cannot offer the level, and this
+branch is parked until Phase 2. Four things must be undone before any of the code
+above works, and three of them fail silently if missed.
+
+| # | Step | If missed |
+| - | ---- | --------- |
+| 1 | **Recreate the Highly Confidential term** in the Confidentiality Level set | The level cannot be selected; nothing else matters |
+| 2 | **Update the `term_highlyConfidential` row** in DMS Config to the term's NEW guid | Silent — nothing matches, so every HC document routes to Staging with no error |
+| 3 | **Update `DEFAULT_SETTINGS.hcTermGuid`** in `Form.tsx` | Silent, and only when DMS Config is unreadable: the worst kind of stale fallback |
+| 4 | **Restore the `Highly Confidential` definition** in the Confidential Level tooltip (`Form.tsx`), removed on `feat/folder-abbreviations` in commit `7745d2b` | Cosmetic — the level is selectable but unexplained |
+
+**A recreated term gets a new GUID.** Term GUIDs are per term and per site, so
+`420d75d5-f3b7-4525-9eb7-ec06590e7f22` — the value in the Phase 1 config row and
+in this branch's code fallback — will be dead. Read the new one off the site:
+
+```
+GET <site>/_api/v2.1/termStore/sets/0d6d1da8-27e5-477f-8684-e8cf169f8fb9/terms
+```
+
+Steps 2 and 3 are the dangerous pair. This design matches on GUID rather than
+label precisely so a term *rename* cannot reroute confidential documents
+unnoticed — but a stale GUID produces that same failure by another route. If HC
+uploads land in Staging once Phase 2 starts, check these two before anything else.
+
+Rebasing this branch onto Phase 1 also reapplies the tooltip deletion, so step 4
+is a real edit rather than a merge artefact to discard.
+
+---
+
+## 15. Open items
 
 | Item | Owner | Blocking? |
 | ---- | ----- | --------- |
