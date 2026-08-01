@@ -7,6 +7,7 @@ import {
   resolveFolderServerUrl,
   ensureFolder,
   encodeServerRelativePath,
+  MappedLibrary,
 } from "../../../shared/dmsFolderMap";
 import {
   parseLevels,
@@ -18,6 +19,8 @@ import {
   GroupMapRow,
   Membership,
   ColumnPair,
+  UploadRole,
+  filterConfidentiality,
 } from "../../../shared/formModel";
 import {
   AllowedFileTypes,
@@ -119,7 +122,11 @@ type UploadMode = {
 // A fully authorised upload path for a restricted (non-privileged) user:
 // the mode plus the resolved term chain [top … leaf], every tier of which the
 // user is a member of, with the leaf held under the UPL role.
-type ValidPath = { modeKey: string; chain: TermOption[] };
+// `role` decides which confidentiality levels this path may carry: UPL uploads
+// ordinary documents to Staging, HC uploads Highly Confidential ones to HC
+// Approval. A user can hold both on the same unit, so the same leaf may appear
+// twice with different roles.
+type ValidPath = { modeKey: string; chain: TermOption[]; role: UploadRole };
 
 // Vendor is NOT here — it is free text (see the Vendor/Customer Name input), so it
 // has no term set and no options list.
@@ -266,6 +273,17 @@ type DmsSettings = {
     businessSegmentTid: string;
   };
   stagingLibrary: string;
+  /**
+   * The Highly Confidential TERM guid, not its label.
+   *
+   * The term store is client-editable in-site, so matching the text "Highly
+   * Confidential" would mean a rename silently routes every subsequent HC
+   * document into the ordinary library — no error, no warning, and nobody
+   * looking for one. The guid survives renaming.
+   */
+  hcTermGuid: string;
+  /** Display title of the pending-HC library, resolved via getbytitle. */
+  hcLibrary: string;
   allowedFileTypes: AllowedFileTypes;
 };
 
@@ -286,6 +304,11 @@ const DEFAULT_SETTINGS: DmsSettings = {
     businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
   },
   stagingLibrary: "Staging",
+  // ClarenceDMSTesting's Confidentiality Level > Highly Confidential. Per-site,
+  // like every other term guid here — the DMS Config row `term_highlyConfidential`
+  // is the runtime source of truth and this is only the read-failure fallback.
+  hcTermGuid: "420d75d5-f3b7-4525-9eb7-ec06590e7f22",
+  hcLibrary: "HC Approval",
   // "unknown", not "configured": reaching this constant means DMS Config could not
   // be read, and the UI must say so rather than present these as configured values.
   // The old list here was [".pdf", ".xls", ".xlsx"] — missing .doc/.docx, which is
@@ -553,6 +576,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
       stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
+      hcTermGuid: get("term_highlyConfidential") ?? DEFAULT_SETTINGS.hcTermGuid,
+      hcLibrary: get("hcLibrary") ?? DEFAULT_SETTINGS.hcLibrary,
       // SettingValue is deliberately NOT consulted for file types any more —
       // AllowedFileTypes is the single source of truth. Spec 2026-07-30 §3.
       allowedFileTypes: resolveAllowedFileTypes(rawFileTypes),
@@ -644,7 +669,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         () => [] as TermOption[],
       );
       if (isLeafChainValid(chain.map((c) => c.id), leaf.termGuid)) {
-        out.push({ modeKey: mode.key, chain });
+        out.push({ modeKey: mode.key, chain, role: leaf.role });
       }
     }
     return out;
@@ -699,6 +724,32 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   // A tier is locked when the user's paths leave exactly one option for it.
   const isLevelLocked = (i: number): boolean =>
     !privileged && (levelChoices[i]?.length ?? 0) <= 1;
+
+  /**
+   * The upload roles the user holds at the unit they have currently selected.
+   *
+   * Roles are per unit, not per person: someone can be an ordinary uploader in
+   * one unit and HC-cleared in another, so this is recomputed from the selection
+   * rather than read once. Until a leaf is chosen the answer is the union of
+   * everything their paths offer, which keeps the dropdown populated while the
+   * cascade is still being filled in.
+   */
+  const rolesAtSelection = (): UploadRole[] => {
+    // Site admins are not in the Group Map at all; withholding every option from
+    // them would make the form unusable for the people who configure it.
+    if (privileged) return ["UPL", "HC"];
+    const mode = activeMode();
+    if (!mode) return [];
+    const leafValue = levelValues[mode.levels.length - 1] ?? "";
+    const roles = new Set<UploadRole>();
+    validPaths.forEach((p) => {
+      if (p.modeKey !== mode.key) return;
+      const leafId = p.chain[p.chain.length - 1]?.id ?? "";
+      if (leafValue && leafId !== leafValue) return;
+      roles.add(p.role);
+    });
+    return Array.from(roles);
+  };
 
   /* ---------- Init -------------------------------------------------------- */
 
@@ -937,19 +988,36 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setBusy(true);
     setStatus("Locating destination folder…");
 
+    // Highly Confidential documents go to their own library, not to a subfolder
+    // of the ordinary tree. Compared by term GUID rather than label because the
+    // term store is client-editable in-site: matching on text would mean a rename
+    // silently reroutes confidential documents into Staging, with no error.
+    const isHighlyConfidential =
+      confidentiality.trim().toLowerCase() ===
+      settings.hcTermGuid.trim().toLowerCase();
+    const targetMappedLibrary: MappedLibrary = isHighlyConfidential
+      ? "HCApproval"
+      : "Staging";
+    const targetLibraryTitle = isHighlyConfidential
+      ? settings.hcLibrary
+      : settings.stagingLibrary;
+
     // Resolve the Unit folder by its stable UniqueId (rename-proof), NOT by a
-    // name-built path. The selected leaf term is the lookup key.
+    // name-built path. The selected leaf term plus the target library are the key.
     const mapping = await lookupFolderMapping(
       context.spHttpClient,
       siteUrl,
       leafTerm.id,
+      targetMappedLibrary,
     ).catch((e: unknown) => {
       console.error("Folder map lookup error:", e);
       return null;
     });
     if (!mapping || !mapping.folderUniqueId) {
       showToast(
-        `This folder hasn't been mapped yet. Ask an administrator to run the reconciliation tool. (term ${leafTerm.label})`,
+        isHighlyConfidential
+          ? `Your unit's Highly Confidential folder hasn't been set up yet. Ask an administrator to run reconciliation. (unit ${leafTerm.label})`
+          : `This folder hasn't been mapped yet. Ask an administrator to run the reconciliation tool. (term ${leafTerm.label})`,
         "error",
       );
       setStatus("");
@@ -957,8 +1025,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       return;
     }
 
-    // Rename-proof: resolve the Unit folder's CURRENT path from its UniqueId, then
-    // ensure-create the Year and Document Type subfolders under it (they inherit its ACL).
+    // Rename-proof: resolve the Unit folder's CURRENT path from its UniqueId.
     const unitSru = await resolveFolderServerUrl(
       context.spHttpClient,
       siteUrl,
@@ -973,43 +1040,54 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       setBusy(false);
       return;
     }
-    const yearLabel = sanitizeFolderSegment(
-      options.yearPeriod.find((o) => o.id === yearPeriod)?.label ?? "",
-    );
-    const docTypeLabel = sanitizeFolderSegment(
-      options.documentType.find((o) => o.id === documentType)?.label ?? "",
-    );
-    if (!yearLabel || !docTypeLabel) {
-      showToast("Year and Document Type are required.", "error");
-      setStatus("");
-      setBusy(false);
-      return;
-    }
 
-    setStatus("Preparing destination folders…");
-    const yearFolder = await ensureFolder(
-      context.spHttpClient,
-      siteUrl,
-      unitSru,
-      yearLabel,
-    );
-    if (!yearFolder) {
-      showToast(`Could not create the "${yearLabel}" folder.`, "error");
-      setStatus("");
-      setBusy(false);
-      return;
-    }
-    const destFolder = await ensureFolder(
-      context.spHttpClient,
-      siteUrl,
-      yearFolder.serverRelativeUrl,
-      docTypeLabel,
-    );
-    if (!destFolder) {
-      showToast(`Could not create the "${docTypeLabel}" folder.`, "error");
-      setStatus("");
-      setBusy(false);
-      return;
+    let destFolder: { uniqueId: string; serverRelativeUrl: string } | null;
+    if (isHighlyConfidential) {
+      // No Year or Document Type folders here — both are metadata columns in the
+      // HC libraries. That is what holds the permission-scope count to one per
+      // unit instead of one per unit × year × document type, and it means the
+      // form never has to create a folder that needs its own ACL (it holds
+      // Contribute, and breaking inheritance needs Manage Permissions).
+      destFolder = { uniqueId: mapping.folderUniqueId, serverRelativeUrl: unitSru };
+    } else {
+      const yearLabel = sanitizeFolderSegment(
+        options.yearPeriod.find((o) => o.id === yearPeriod)?.label ?? "",
+      );
+      const docTypeLabel = sanitizeFolderSegment(
+        options.documentType.find((o) => o.id === documentType)?.label ?? "",
+      );
+      if (!yearLabel || !docTypeLabel) {
+        showToast("Year and Document Type are required.", "error");
+        setStatus("");
+        setBusy(false);
+        return;
+      }
+
+      setStatus("Preparing destination folders…");
+      const yearFolder = await ensureFolder(
+        context.spHttpClient,
+        siteUrl,
+        unitSru,
+        yearLabel,
+      );
+      if (!yearFolder) {
+        showToast(`Could not create the "${yearLabel}" folder.`, "error");
+        setStatus("");
+        setBusy(false);
+        return;
+      }
+      destFolder = await ensureFolder(
+        context.spHttpClient,
+        siteUrl,
+        yearFolder.serverRelativeUrl,
+        docTypeLabel,
+      );
+      if (!destFolder) {
+        showToast(`Could not create the "${docTypeLabel}" folder.`, "error");
+        setStatus("");
+        setBusy(false);
+        return;
+      }
     }
 
     const folderId = destFolder.uniqueId; // upload target — a fresh, unit-scoped folder
@@ -1174,7 +1252,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       });
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
+        // The library the file actually landed in — an HC upload is in HC
+        // Approval, and writing its metadata against Staging would 404 on an
+        // item id that belongs to a different list.
+        `${siteUrl}/_api/web/lists/getbytitle('${targetLibraryTitle}')/items(${item.Id})/validateUpdateListItem`,
         SPHttpClient.configurations.v1,
         {
           headers: { "Content-Type": "application/json" },
@@ -1478,7 +1559,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               true,
               confidentiality,
               setConfidentiality,
-              options.confidentiality,
+              // Filtered by the roles held at the selected unit. Hiding the
+              // option IS the enforcement: an HC upload must land in a folder
+              // reconciliation pre-secured, so offering the level to someone
+              // without the HC role would fail at submit instead of never being
+              // offered. The reverse matters too — an HC-only user must not see
+              // Confidential or Restricted, which live in a library they cannot
+              // open.
+              filterConfidentiality(
+                options.confidentiality,
+                rolesAtSelection(),
+                settings.hcTermGuid,
+              ),
             )}
             <em
               className="dms-info"
