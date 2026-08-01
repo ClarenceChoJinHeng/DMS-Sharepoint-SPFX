@@ -1335,7 +1335,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         @keyframes dms-popin { from { transform: scale(.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       `}</style>
 
-      <h2>Upload a document</h2>
+      <h2>Upload Document Form</h2>
       <p className="dms-subtitle">
         All fields marked <strong>*</strong> are required.
       </p>
@@ -1350,11 +1350,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             <input
               type="text"
               value={docName}
-              maxLength={30}
+              maxLength={50}
               placeholder={file ? `Leave blank to keep "${file.name}"` : ""}
               onChange={(e) => onDocNameChange(e.target.value)}
             />
-            <small>Max. 30 character</small>
+            <small>Max. 50 characters</small>
           </label>
         </div>
         {/* An empty AllowedFileTypes selection is a hard block, not a silent
@@ -1424,11 +1424,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             <input
               type="text"
               value={projectName}
-              maxLength={30}
+              maxLength={50}
               placeholder="Type the project name"
               onChange={(e) => onProjectNameChange(e.target.value)}
             />
-            <small>Max. 30 character</small>
+            <small>Max. 50 characters</small>
           </label>
 
           {/* Vendor is free text. It also feeds the auto-composed document name. */}
@@ -1437,11 +1437,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             <input
               type="text"
               value={vendor}
-              maxLength={30}
+              maxLength={50}
               placeholder="Type the vendor or customer name"
               onChange={(e) => onVendorChange(e.target.value)}
             />
-            <small>Max. 30 character</small>
+            <small>Max. 50 characters</small>
           </label>
 
           <label className="dms-field">
