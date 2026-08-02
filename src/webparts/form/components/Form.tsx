@@ -104,12 +104,28 @@ const dateDDMMYY = (iso: string): string => {
   return `${d}-${m}-${y.slice(2)}`;
 };
 
-// Auto-compose the document name from Project Name + Vendor + Document Date:
-// "<Project>-<Vendor>-<DD-MM-YY>", following the order the fields appear on the
-// form. Any empty part is omitted, so a blank project still yields
-// "<Vendor>-<DD-MM-YY>". Used until the user manually edits the name.
-const composeDocName = (project: string, vendor: string, iso: string): string =>
-  [project.trim(), vendor.trim(), dateDDMMYY(iso)].filter(Boolean).join("-");
+/**
+ * The uploaded file's name, always assembled in one order:
+ *
+ *   [Project Name] - [Vendor/Customer Name] - [Document Name] - [Date]
+ *
+ * Document Name is ONE SEGMENT of this, not the whole name. It used to be the
+ * entire name, auto-filled from the other fields until the user typed over it —
+ * which meant two people filing the same kind of document could end up with
+ * unrelated names, and the ordering guarantee the client wants was impossible.
+ *
+ * Empty parts are dropped rather than leaving " -  - " gaps, so a document with
+ * no project still reads "Acme - Invoice - 03-08-26".
+ */
+const composeUploadBase = (
+  project: string,
+  vendor: string,
+  docName: string,
+  iso: string,
+): string =>
+  [project.trim(), vendor.trim(), docName.trim(), dateDDMMYY(iso)]
+    .filter(Boolean)
+    .join(" - ");
 
 type TermOption = { id: string; label: string };
 type ToastType = "error" | "success";
@@ -336,10 +352,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [uploadMode, setUploadMode] = useState<string>("");
   const [settings, setSettings] = useState<DmsSettings>(DEFAULT_SETTINGS);
   const [file, setFile] = useState<File | undefined>(undefined);
+  // One SEGMENT of the final file name, not the whole name — see composeUploadBase.
   const [docName, setDocName] = useState<string>("");
-  // True once the user manually edits the document name — stops the Vendor+Date
-  // auto-composition from overwriting their custom text (reset when they clear it).
-  const [docNameEdited, setDocNameEdited] = useState<boolean>(false);
   const [documentType, setDocumentType] = useState<string>("");
   const [yearPeriod, setYearPeriod] = useState<string>("");
   const [documentDate, setDocumentDate] = useState<string>("");
@@ -880,26 +894,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     return match ? `${match.label}|${match.id}` : "";
   };
 
-  // Project Name + Vendor + Document Date feed the document name until the user
-  // types their own. Each handler passes its own new value plus the current
-  // state of the other two, since its setState has not applied yet.
-  const onProjectNameChange = (v: string): void => {
-    setProjectName(v);
-    if (!docNameEdited) setDocName(composeDocName(v, vendor, documentDate));
-  };
-  const onVendorChange = (v: string): void => {
-    setVendor(v);
-    if (!docNameEdited) setDocName(composeDocName(projectName, v, documentDate));
-  };
-  const onDocumentDateChange = (iso: string): void => {
-    setDocumentDate(iso);
-    if (!docNameEdited) setDocName(composeDocName(projectName, vendor, iso));
-  };
-  const onDocNameChange = (v: string): void => {
-    setDocName(v);
-    // Blank name re-enables auto-composition; any real text is treated as a manual override.
-    setDocNameEdited(v.trim() !== "");
-  };
+  // Plain setters. These used to copy a composed name into the Document Name box
+  // and stop as soon as the user typed; the name is now assembled at upload from
+  // all four parts, so there is nothing to keep in sync and no "has the user
+  // edited this yet" state to get wrong.
+  const onProjectNameChange = (v: string): void => setProjectName(v);
+  const onVendorChange = (v: string): void => setVendor(v);
+  const onDocumentDateChange = (iso: string): void => setDocumentDate(iso);
+  const onDocNameChange = (v: string): void => setDocName(v);
 
   /**
    * Single gate for a chosen file, whether it arrived from the picker or a drop.
@@ -928,7 +930,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const resetForm = (): void => {
     setFile(undefined);
     setDocName("");
-    setDocNameEdited(false);
     setDocumentType("");
     setLevelValues([]);
     setYearPeriod("");
@@ -962,7 +963,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     }
     if (!file) return;
 
-    const finalName = buildUploadName(file.name, docName);
+    const finalName = buildUploadName(
+      file.name,
+      composeUploadBase(projectName, vendor, docName, documentDate),
+    );
     const allowed = settings.allowedFileTypes;
     if (allowed.kind === "none") {
       showToast(NO_TYPES_MESSAGE, "error");
@@ -1375,6 +1379,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            select; left keeps it inside the 24px gutter (6 + 18 = 24). */
         .dms-conf { position: relative; margin-bottom: 16px; }
         .dms-conf .dms-field { margin-bottom: 0; }
+        /* Stop short of the column edge so the info icon, which is positioned just
+           past 100%, sits inside the card instead of overhanging it. */
+        .dms-conf .dms-field select { max-width: calc(100% - 28px); }
         .dms-info { position: absolute; left: calc(100% + 6px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
         /* Opens to the right of the icon, into the empty third grid column.
            280px keeps it inside the card rather than spilling past its edge. */
@@ -1390,8 +1397,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         /* Folder card runs 2-up so the deepest level and Year pair evenly. */
         .dms-grid-2 { grid-template-columns: 1fr 1fr; }
         /* Unit | Year | Document Type on one row. Together they name exactly one
-           destination folder, so they read better as a set than stacked. */
-        .dms-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
+           destination folder, so they read better as a set than stacked. Unit gets
+           the most room because its labels are long unit names, while Year holds
+           four characters and needs almost none. */
+        .dms-grid-3 { grid-template-columns: 1.8fr 0.9fr 1.3fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; }
         .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; color: #1b1b1b; }
         .dms-radio-group input[type="radio"] { accent-color: #0f6c3f; width: 16px; height: 16px; cursor: pointer; }
@@ -1690,10 +1699,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               type="text"
               value={docName}
               maxLength={50}
-              placeholder={file ? `Leave blank to keep "${file.name}"` : ""}
               onChange={(e) => onDocNameChange(e.target.value)}
             />
-            <small>Max. 50 characters</small>
+            {/* The saved name is assembled from four fields, so showing the result
+                is the only way the uploader can tell what it will be called. Falls
+                back to the original filename when every part is blank, which is
+                exactly what buildUploadName does. */}
+            {file ? (
+              <small>
+                Saves as:{" "}
+                {buildUploadName(
+                  file.name,
+                  composeUploadBase(projectName, vendor, docName, documentDate),
+                )}
+              </small>
+            ) : (
+              <small>Max. 50 characters</small>
+            )}
           </label>
 
           {/* Free-text Project Name — distinct from the Group-led Projects
@@ -1704,7 +1726,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               type="text"
               value={projectName}
               maxLength={50}
-              placeholder="Type the project name"
               onChange={(e) => onProjectNameChange(e.target.value)}
             />
             <small>Max. 50 characters</small>
@@ -1717,7 +1738,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               type="text"
               value={vendor}
               maxLength={50}
-              placeholder="Type the vendor or customer name"
               onChange={(e) => onVendorChange(e.target.value)}
             />
             <small>Max. 50 characters</small>
