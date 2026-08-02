@@ -348,6 +348,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [projectName, setProjectName] = useState<string>("");
   const [remark, setRemark] = useState<string>("");
   const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
+  const [dragOver, setDragOver] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
   const [toast, setToast] = useState<{
@@ -900,6 +901,30 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setDocNameEdited(v.trim() !== "");
   };
 
+  /**
+   * Single gate for a chosen file, whether it arrived from the picker or a drop.
+   *
+   * The extension check has to live here rather than only on the <input accept>:
+   * `accept` filters the file dialog but is advisory, and a DROP bypasses it
+   * entirely — so without this a drag-and-drop would happily hand an .exe to the
+   * upload. See CLAUDE.md gotcha #10 for how the two checks disagreed before.
+   */
+  const acceptFile = (picked: File | undefined): void => {
+    if (!picked) return;
+    const types =
+      settings.allowedFileTypes.kind === "none"
+        ? []
+        : settings.allowedFileTypes.types;
+    if (!types.some((ext) => picked.name.toLowerCase().endsWith(ext))) {
+      showToast(`File type not allowed. Allowed: ${types.join(", ")}`, "error");
+      setFile(undefined);
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
+    setStatus("");
+    setFile(picked);
+  };
+
   const resetForm = (): void => {
     setFile(undefined);
     setDocName("");
@@ -1309,9 +1334,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-subtitle { margin: 0 0 28px; font-size: 14px; color: #666; }
         .dms-section { background: #fff; border: 1px solid #e1e1e1; border-radius: 8px; padding: 24px; margin-bottom: 20px; }
         .dms-section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #0f6c3f; margin: 0 0 16px; }
-        .dms-filecard { display: flex; align-items: center; justify-content: flex-start; gap: 16px; border: 1px dashed #8a8a8a; border-radius: 10px; padding: 16px; }
-        .dms-filecard .name { font-weight: 600; }
-        .dms-filecard .size { color: #666; font-size: 12px; }
+        /* Drop zone. Stacked and centred while empty so the icon and prompt read as
+           one target; switches to a single centred row once a file is chosen, where
+           READY / name / size / action belong on one line. */
+        .dms-dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 8px; text-align: center; border: 1px dashed #9bbfaa; border-radius: 10px;
+          background: #f2f8f4; padding: 24px 16px; cursor: pointer; font-size: 13px;
+          transition: background .12s, border-color .12s; }
+        .dms-dropzone:hover, .dms-dropzone:focus-visible { border-color: #0f6c3f; background: #eaf4ee; }
+        /* .over fires on dragover — without a visible change there is no confirmation
+           the browser will accept the drop, and users let go over the wrong element. */
+        .dms-dropzone.over { border-color: #0f6c3f; border-style: solid; background: #e2efe7; }
+        .dms-dropzone.has-file { flex-direction: row; gap: 16px; padding: 16px; }
+        .dms-dropzone-icon { width: 32px; height: 32px; color: #0f6c3f; }
+        .dms-dropzone .name { font-weight: 600; }
+        .dms-dropzone .size { color: #666; font-size: 12px; }
+        /* READY badge and the trailing action. margin-left:auto pushes "Change
+           Document" to the far edge so the row reads name-first, action-last. */
+        .dms-filecard-ready { background: #0f6c3f; color: #fff; font-size: 11px; font-weight: 700;
+          letter-spacing: .06em; border-radius: 4px; padding: 3px 8px; }
+        .dms-filecard-action { margin-left: auto; }
         /* Textarea inherits the input styling so Remark matches the fields around it —
            without this it renders in the browser's default monospace at a random width. */
         .dms-field textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 8px 10px;
@@ -1333,7 +1375,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            select; left keeps it inside the 24px gutter (6 + 18 = 24). */
         .dms-conf { position: relative; margin-bottom: 16px; }
         .dms-conf .dms-field { margin-bottom: 0; }
-        .dms-info { position: absolute; left: calc(100% + 6px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; background: #0f6c3f; color: #fff; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; }
+        .dms-info { position: absolute; left: calc(100% + 6px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
         /* Opens to the right of the icon, into the empty third grid column.
            280px keeps it inside the card rather than spilling past its edge. */
         .dms-info-panel { display: none; position: absolute; top: -8px; left: calc(100% + 8px); z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
@@ -1342,7 +1384,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-info-panel dt { margin-top: 12px; color: #0f6c3f; font-size: 13px; font-weight: 700; }
         .dms-info-panel dt:first-of-type { margin-top: 0; }
         .dms-info-panel dd { margin: 4px 0 0; color: #444; font-size: 12px; font-weight: 400; line-height: 1.45; }
-        .dms-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 24px; }
+        /* Two columns, matching the mockup. Three made Document Date and
+           Confidential Level share a row with Vendor and pushed the labels tight. */
+        .dms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
         /* Folder card runs 2-up so the deepest level and Year pair evenly. */
         .dms-grid-2 { grid-template-columns: 1fr 1fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; }
@@ -1555,8 +1599,67 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       {/* ── Document Details ────────────────────────────────────────────── */}
       <div className="dms-section">
         <p className="dms-section-title">Document Details</p>
-        <div style={{ marginBottom: 16 }}>
-          <label className="dms-field">
+        {/* An empty AllowedFileTypes selection is a hard block, not a silent
+            fallback — spec 2026-07-30 §3. The message names the column and the
+            list because the client is the one who fixes it, in one click. */}
+        {settings.allowedFileTypes.kind === "none" ? (
+          <div className="dms-dropzone" style={{ opacity: 0.6 }}>
+            <span>{NO_TYPES_MESSAGE}</span>
+          </div>
+        ) : (
+          /* Click anywhere to open the picker, or drop a file on it. The card
+             leads the section because choosing the document is the first thing
+             anyone does, and the fields below describe what was chosen. */
+          <div
+            className={`dms-dropzone${dragOver ? " over" : ""}${file ? " has-file" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => fileRef.current?.click()}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
+            // preventDefault on dragOver is what makes the element a valid drop
+            // target; without it the browser navigates to the file instead.
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              acceptFile(e.dataTransfer?.files?.[0]);
+            }}
+          >
+            {file ? (
+              <>
+                <span className="dms-filecard-ready">READY</span>
+                <span className="name">{file.name}</span>
+                <span className="size">{formatFileSize(file.size)}</span>
+                <span className="dms-link dms-filecard-action">Change Document</span>
+              </>
+            ) : (
+              <>
+                {/* Inlined rather than imported: an <img> would need an asset
+                    loader and a second network request for a 20-line glyph. */}
+                <svg className="dms-dropzone-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3v10m0 0 4-4m-4 4-4-4" fill="none" stroke="currentColor"
+                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none"
+                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span>
+                  <span className="dms-link">Choose a document</span> or drop it here
+                </span>
+              </>
+            )}
+            <input
+              ref={fileRef}
+              type="file"
+              accept={settings.allowedFileTypes.types.join(",")}
+              style={{ display: "none" }}
+              onChange={(e) => acceptFile(e.target.files?.[0])}
+            />
+          </div>
+        )}
+
+        <div className="dms-grid" style={{ marginTop: 16 }}>
+          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
             <span>Document Name</span>
             {/* Typeable before a file is picked: the name is only read at upload
                 time, and leaving it enabled avoids a greyed-out first field. */}
@@ -1569,67 +1672,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             />
             <small>Max. 50 characters</small>
           </label>
-        </div>
-        {/* An empty AllowedFileTypes selection is a hard block, not a silent
-            fallback — spec 2026-07-30 §3. The message names the column and the
-            list because the client is the one who fixes it, in one click. */}
-        {settings.allowedFileTypes.kind === "none" ? (
-          <div className="dms-filecard" style={{ opacity: 0.6 }}>
-            <span>{NO_TYPES_MESSAGE}</span>
-          </div>
-        ) : (
-          /* The whole card is clickable to open the file picker. */
-          <div
-            className="dms-filecard"
-            role="button"
-            tabIndex={0}
-            style={{ cursor: "pointer" }}
-            onClick={() => fileRef.current?.click()}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
-          >
-            {file ? (
-              <>
-                <span className="dms-filecard-ready">READY</span>
-                <span className="name">{file.name}</span>
-                <span className="size">{formatFileSize(file.size)}</span>
-                <span className="dms-link dms-filecard-action">Change Document</span>
-              </>
-            ) : (
-              <span className="dms-link">Choose a document</span>
-            )}
-            <input
-              ref={fileRef}
-              type="file"
-              accept={settings.allowedFileTypes.types.join(",")}
-              style={{ display: "none" }}
-              onChange={(e) => {
-                const picked = e.target.files?.[0];
-                // Re-checked here because the narrowing above does not reach
-                // inside the callback.
-                const types =
-                  settings.allowedFileTypes.kind === "none"
-                    ? []
-                    : settings.allowedFileTypes.types;
-                if (
-                  picked &&
-                  !types.some((ext) => picked.name.toLowerCase().endsWith(ext))
-                ) {
-                  showToast(
-                    `File type not allowed. Allowed: ${types.join(", ")}`,
-                    "error",
-                  );
-                  setFile(undefined);
-                  if (fileRef.current) fileRef.current.value = "";
-                  return;
-                }
-                setStatus("");
-                setFile(picked);
-              }}
-            />
-          </div>
-        )}
 
-        <div className="dms-grid" style={{ marginTop: 16 }}>
           {/* Free-text Project Name — distinct from the Group-led Projects
               "Group Project Name" folder level in the card below. */}
           <label className="dms-field">
