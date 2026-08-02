@@ -515,6 +515,9 @@ export default function BulkUpload({
   // Replace-file guard. Uploads run one file at a time, so a single shared prompt
   // (resolved via a promise) is enough — the loop awaits the user's answer.
   const [replaceAsk, setReplaceAsk] = useState<{ name: string } | null>(null);
+  // Success dialog, matching the Form's. Separate from `toast` because this one is
+  // modal and has to survive until the user chooses where to go next.
+  const [doneOpen, setDoneOpen] = useState<boolean>(false);
   const replaceResolveRef = useRef<((ok: boolean) => void) | null>(null);
   const askReplace = (name: string): Promise<boolean> =>
     new Promise<boolean>((resolve) => {
@@ -1758,7 +1761,10 @@ export default function BulkUpload({
         (o) => !!o.batchError || o.results.some((r) => r.outcome !== "uploaded"),
       );
       if (!anyProblem && totalOk > 0) {
-        showToast(`All ${totalOk} file(s) uploaded to Documents.`, "success");
+        // Same dialog as the single-file Form. A toast was easy to miss at the end of
+        // a long run, and after 50 files the uploader needs an explicit "that worked"
+        // plus a way to go again without reloading the page.
+        setDoneOpen(true);
         // The queue has been fully processed — empty it so "Upload all" can't be
         // clicked a second time and re-send the same files (which would raise a
         // replace prompt per file). The results summary and the progress list are
@@ -1925,6 +1931,9 @@ export default function BulkUpload({
         .dms-popup-svg { width: 110px; height: 110px; display: block; margin: 0 auto 20px; }
         .dms-popup-title { font-size: 22px; font-weight: 700; color: #0f6c3f; margin: 0 0 12px; }
         .dms-popup-msg { font-size: 14px; color: #555; margin: 0 0 28px; line-height: 1.6; }
+        /* Stacked buttons for the success dialog — matches the Form. */
+        .dms-popup-stack { display:flex; flex-direction: column; align-items:center; gap: 10px; }
+        .dms-popup-stack .dms-popup-btn { width: 100%; max-width: 200px; }
         .dms-popup-actions { display:flex; align-items:center; justify-content:center; gap: 12px; }
         .dms-popup-btn { min-width: 96px; border-radius: 6px; padding: 11px 22px; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
         .dms-popup-btn.confirm { background: #0f6c3f; color: #fff; border: none; }
@@ -2563,6 +2572,49 @@ export default function BulkUpload({
                 onClick={() => answerReplace(false)}
               >
                 No
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {doneOpen && (
+        <div className="dms-popup-overlay" role="dialog" aria-modal="true">
+          <div className="dms-popup">
+            <svg
+              className="dms-popup-svg"
+              viewBox="0 0 184 184"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <circle opacity="0.3" cx="92.0001" cy="92" r="75.4872" fill="#14C7A5" />
+              <circle cx="92" cy="92" r="92" fill="#14C7A5" fillOpacity="0.2" />
+              <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#14C7A5" strokeWidth="3" />
+              <path d="M67 90.7143L88.4286 110L117 74" stroke="#14C7A5" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <p className="dms-popup-title">Upload Successful</p>
+            <p className="dms-popup-msg">
+              Your document is awaiting approval.
+              <br />
+              Please visit Home page to track progress.
+            </p>
+            <div className="dms-popup-stack">
+              <button
+                className="dms-popup-btn confirm"
+                onClick={() => {
+                  window.location.href = siteUrl;
+                }}
+              >
+                Back to Document
+              </button>
+              <button
+                className="dms-popup-btn cancel"
+                onClick={() => {
+                  setDoneOpen(false);
+                  clearAll();
+                }}
+              >
+                Upload More
               </button>
             </div>
           </div>
