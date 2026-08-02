@@ -18,15 +18,18 @@ import {
   ensureFolder,
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
-import { sanitizeFolderSegment, parseReconModes, RawModeRow } from "../../../shared/formModel";
+import { sanitizeFolderSegment, parseLevels, parseReconModes, RawModeRow } from "../../../shared/formModel";
 import {
   ABBREV_LIST,
   AbbrevCollision,
   AbbrevRow,
   AbbrevTarget,
+  OrphanAbbrevRow,
+  UnclaimedTerm,
   buildAbbrevIndex,
   findCollisions,
   lookupAbbrev,
+  planOrphanRepairs,
 } from "../../../shared/folderAbbreviation";
 import { FULL_NAME_COLUMN_TITLE, pickFullNameField, SpFieldLite } from "../../../shared/folderFullName";
 
@@ -1114,6 +1117,88 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   };
 
   /**
+   * Group Map rows with their item Ids, for the orphan-repair pass.
+   *
+   * Separate from loadGroupMapForAssign because that one keys by term and drops the
+   * Id — repair needs to WRITE specific rows, and re-pointing the wrong one is a
+   * permissions change.
+   */
+  /**
+   * Immediate subfolder names of a folder, by server-relative path.
+   *
+   * Uses the OData parameter alias, not an inline quoted literal: an inline path
+   * returns HTTP 400 once it is long enough (CLAUDE.md gotcha #9), which reads as a
+   * malformed request but looks like "no subfolders" to a caller that ignores it.
+   * Returns undefined — not [] — when the listing FAILED, so "could not read" is
+   * distinguishable from "genuinely empty". Reporting a folder as unclaimed on the
+   * strength of a throttled read would be the same class of bug the prune guard exists for.
+   */
+  const listSubfolders = async (
+    serverRelativeUrl: string,
+  ): Promise<string[] | undefined> => {
+    const res: SPHttpClientResponse = await withThrottleRetry(() =>
+      context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Folders?$select=Name&@f='${encodeServerRelativePath(serverRelativeUrl)}'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return ((data.value ?? []) as Array<{ Name?: string }>)
+      .map((f) => f.Name ?? "")
+      .filter((n) => n.length > 0);
+  };
+
+  const loadGroupMapRowsForRepair = async (): Promise<
+    Array<{ itemId: number; termGuid: string; groupName: string }>
+  > => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=Id,GroupName,UnitTermGuid&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`DMS Group Map read failed: HTTP ${res.status}. ${body}`);
+    }
+    const data = await res.json();
+    return ((data.value ?? []) as Array<{ Id?: number; GroupName?: string; UnitTermGuid?: string }>)
+      .map((r) => ({
+        itemId: r.Id ?? 0,
+        termGuid: (r.UnitTermGuid ?? "").trim(),
+        groupName: r.GroupName ?? "",
+      }))
+      .filter((r) => r.itemId > 0 && r.termGuid.length > 0);
+  };
+
+  /** MERGE one field on one list item. Throws with the body — a bare status hides
+   *  "field does not exist" behind the same 400 as "read-only". */
+  const patchListItem = async (
+    listTitle: string,
+    itemId: number,
+    fields: Record<string, string>,
+  ): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+          "X-HTTP-Method": "MERGE",
+          "IF-MATCH": "*",
+        },
+        body: JSON.stringify(fields),
+      },
+    );
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(`HTTP ${res.status} ${detail}`);
+    }
+  };
+
+  /**
    * Term GUID → folder-name abbreviation.
    *
    * Lives here rather than in the shared module because a shared file that imports
@@ -1123,9 +1208,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
    * must abort the run. An empty index makes every term look unmapped, which would
    * skip every folder and report 175 false "needs attention" rows.
    */
-  const loadAbbreviations = async (): Promise<Map<string, string>> => {
+  const loadAbbrevRows = async (): Promise<OrphanAbbrevRow[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(ABBREV_LIST)}')/items?$select=TermGuid,Abbreviation&$top=5000`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(ABBREV_LIST)}')/items?$select=Id,TermGuid,Title,Level,Abbreviation&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
@@ -1134,10 +1219,61 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       throw new Error(`${ABBREV_LIST} read failed: HTTP ${res.status}. ${body}`);
     }
     const data = await res.json();
-    const rows: AbbrevRow[] = ((data.value ?? []) as Array<{ TermGuid?: string; Abbreviation?: string }>).map(
-      (r) => ({ termGuid: r.TermGuid ?? "", abbreviation: r.Abbreviation ?? "" }),
+    // Id/Title/Level are read for the orphan-repair pass, which matches a dead row
+    // to a re-created term by LABEL — the one thing that survives a delete-and-re-add.
+    return ((data.value ?? []) as Array<{
+      Id?: number;
+      TermGuid?: string;
+      Title?: string;
+      Level?: string;
+      Abbreviation?: string;
+    }>).map((r) => ({
+      itemId: r.Id ?? 0,
+      termGuid: r.TermGuid ?? "",
+      title: r.Title ?? "",
+      level: r.Level ?? "",
+      abbreviation: r.Abbreviation ?? "",
+    }));
+  };
+
+  const abbrevIndexOf = (rows: readonly OrphanAbbrevRow[]): Map<string, string> =>
+    buildAbbrevIndex(
+      rows.map(
+        (r): AbbrevRow => ({ termGuid: r.termGuid, abbreviation: r.abbreviation }),
+      ),
     );
-    return buildAbbrevIndex(rows);
+
+  /**
+   * Term set GUID → the segment's level names, in depth order, from the same DMS
+   * Config `Levels` JSON the upload form reads.
+   *
+   * Needed because the abbreviation list stores a level NAME ("Unit"), and an
+   * orphan is only ever matched to a live term at the SAME level. Falls back to
+   * the pilot's shared chain, which is what all four Head Office segments use.
+   */
+  const FALLBACK_LEVEL_NAMES = ["Department", "Unit"];
+
+  const loadReconLevelNames = async (): Promise<Map<string, string[]>> => {
+    const out = new Map<string, string[]>();
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=TermSetGuid,Levels&$filter=ConfigType eq 'mode'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out;
+      const data = await res.json();
+      ((data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>).forEach((r) => {
+        const guid = (r.TermSetGuid ?? "").trim().toLowerCase();
+        if (!guid) return;
+        const names = parseLevels(r.Levels ?? "").map((l) => l.label);
+        if (names.length > 0) out.set(guid, names);
+      });
+    } catch {
+      // A config hiccup costs the level NAMES, not the run — the fallback below
+      // is correct for every segment onboarded so far.
+    }
+    return out;
   };
 
   // Segments to provision come from the SAME DMS Config `mode` rows the upload form
@@ -1239,17 +1375,22 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const buildProvisionTargets = async (): Promise<{
     targets: ProvTarget[];
     incomplete: string[];
-    missingAbbrev: Array<{ termGuid: string; label: string }>;
+    missingAbbrev: UnclaimedTerm[];
     collisions: AbbrevCollision[];
+    abbrevRows: OrphanAbbrevRow[];
   }> => {
     const out: ProvTarget[] = [];
     const incomplete: string[] = [];
     // Terms with no abbreviation are skipped, not guessed at, and reported here.
-    const missingAbbrev: Array<{ termGuid: string; label: string }> = [];
+    // These are also the "unclaimed" half of an orphan repair: a re-created term
+    // has a new GUID, so it arrives here looking like a brand-new term.
+    const missingAbbrev: UnclaimedTerm[] = [];
     // Every named target, so siblings sharing an abbreviation can be caught before
     // a single folder is created.
     const abbrevTargets: AbbrevTarget[] = [];
-    const abbrevIndex = await loadAbbreviations();
+    const abbrevRows = await loadAbbrevRows();
+    const abbrevIndex = abbrevIndexOf(abbrevRows);
+    const levelNamesBySet = await loadReconLevelNames();
     const modes = await loadReconModes();
     for (const mode of modes) {
       // Segment container: not a mapped term, but groups target it via the term-set GUID.
@@ -1283,15 +1424,26 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // A term with no abbreviation is SKIPPED and reported, never guessed at.
         // Falling back to the label would create a folder at a path the next run
         // does not expect, and uploads resolve by UniqueId so nobody would notice.
-        const seg = (termGuid: string, label: string): string | undefined => {
+        //
+        // `depth` is 1-based (top = the first level in the segment's Levels chain).
+        // It resolves the level NAME the orphan-repair pass matches on, so a dead
+        // "Legal" department can never be repaired from a live "Legal" unit.
+        const levelNames =
+          levelNamesBySet.get((mode.termSetGuid ?? "").trim().toLowerCase()) ??
+          FALLBACK_LEVEL_NAMES;
+        const seg = (termGuid: string, label: string, depth: number): string | undefined => {
           const abbrev = lookupAbbrev(abbrevIndex, termGuid);
           if (abbrev === undefined) {
-            missingAbbrev.push({ termGuid, label });
+            missingAbbrev.push({
+              termGuid,
+              label,
+              level: levelNames[depth - 1] ?? `Level ${depth}`,
+            });
             return undefined;
           }
           return sanitizeFolderSegment(abbrev) || abbrev;
         };
-        const topSeg = seg(top.id, top.label);
+        const topSeg = seg(top.id, top.label, 1);
         if (topSeg === undefined) continue; // reported; its children are unreachable
         abbrevTargets.push({ parentPath: `/${mode.stagingFolder}`, termGuid: top.id, abbreviation: topSeg, label: top.label });
         const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false };
@@ -1303,7 +1455,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         const walk = async (parentId: string, ancestors: string[], pathAncestors: string[]): Promise<boolean> => {
           const children = await loadReconChildren(mode.termSetGuid, parentId);
           for (const child of children) {
-            const childSeg = seg(child.id, child.label);
+            // ancestors excludes `top`, so a direct child of top has depth 2.
+            const childSeg = seg(child.id, child.label, ancestors.length + 2);
             if (childSeg === undefined) continue; // reported; skip this subtree
             const chain = [...ancestors, child.label];
             const pathChain = [...pathAncestors, childSeg];
@@ -1329,7 +1482,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         incomplete.push(`${mode.stagingFolder} — ${(e as Error).message}`);
       }
     }
-    return { targets: out, incomplete, missingAbbrev, collisions: findCollisions(abbrevTargets) };
+    return {
+      targets: out,
+      incomplete,
+      missingAbbrev,
+      collisions: findCollisions(abbrevTargets),
+      abbrevRows,
+    };
   };
 
   // Provision from the term store into BOTH libraries in one run: create each folder
@@ -1409,7 +1568,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         if (r.termGuid && name) oldNameByTerm.set(r.termGuid.toLowerCase(), name);
       }
       const groupMap = await loadGroupMapForAssign();
-      const { targets, incomplete: incompleteSegments, missingAbbrev, collisions } = await buildProvisionTargets();
+      const { targets, incomplete: incompleteSegments, missingAbbrev, collisions, abbrevRows } = await buildProvisionTargets();
       // A collision aborts BEFORE anything is created. Two siblings resolving to
       // one path means one folder, one ACL, and two units' documents inside it —
       // the isolation the whole permission model rests on. A partial run would
@@ -1962,6 +2121,164 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           });
         } catch (e) {
           entries.push({ msg: `Prune skipped — ${(e as Error).message}`, ok: false });
+        }
+
+        // ── Repair term-GUID orphans ───────────────────────────────────────────
+        // Deleting a term and re-adding it under the same name orphans a row in
+        // DMS Term Abbreviation and DMS Group Map at once; the re-created term
+        // carries a NEW guid, so nothing joins them. Only the LABEL survives, and
+        // the abbreviation row keeps it in Title — that is the whole repair.
+        //
+        // The abbreviation row is NEVER auto-deleted, unlike a Folder Map row. A
+        // map row is derivable (term + folder on disk rebuilds it); an abbreviation
+        // exists nowhere else, and deleting one lets a later re-created term take a
+        // DIFFERENT abbreviation, which Task 4's rename pass would then apply to a
+        // live folder full of documents. Repair, or report. See spec 2026-08-02 §7.
+        //
+        // Inside the same else-branch as the prune, so it inherits both guards: a
+        // partial term-store read must never look like a mass deletion.
+        try {
+          setReconPhase("Repairing term-GUID orphans…");
+          const enumeratedTerms = new Set(
+            targets
+              .filter((t) => t.termGuid)
+              .map((t) => (t.termGuid as string).toLowerCase()),
+          );
+          const orphanRows = abbrevRows.filter(
+            (r) =>
+              r.termGuid.trim().length > 0 &&
+              !enumeratedTerms.has(r.termGuid.trim().toLowerCase()),
+          );
+          if (orphanRows.length === 0) {
+            entries.push({ msg: `${ABBREV_LIST}: no orphaned rows ✓`, ok: true });
+          } else {
+            const plan = planOrphanRepairs(orphanRows, missingAbbrev);
+            const groupRows =
+              plan.repairs.length > 0 ? await loadGroupMapRowsForRepair() : [];
+
+            for (const rep of plan.repairs) {
+              const oldGuid = rep.orphan.termGuid.trim().toLowerCase();
+              // Every row holding the dead GUID is the same unit by definition —
+              // the join cannot DISCOVER the new GUID, but it is how the answer is
+              // applied once the label has established it.
+              const affected = groupRows.filter(
+                (g) => g.termGuid.toLowerCase() === oldGuid,
+              );
+              try {
+                await patchListItem(ABBREV_LIST, rep.orphan.itemId, {
+                  TermGuid: rep.term.termGuid,
+                });
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ could not re-point "${rep.orphan.abbreviation}" (${rep.orphan.title}): ${(e as Error).message}`,
+                  ok: false,
+                });
+                continue;
+              }
+              let groupsFixed = 0;
+              for (const g of affected) {
+                try {
+                  await patchListItem("DMS Group Map", g.itemId, {
+                    UnitTermGuid: rep.term.termGuid,
+                  });
+                  groupsFixed++;
+                } catch (e) {
+                  entries.push({
+                    msg: `  ✗ re-pointed the abbreviation but NOT the group "${g.groupName}": ${(e as Error).message}. That folder will be locked admin-only until this row is fixed by hand.`,
+                    ok: false,
+                  });
+                }
+              }
+              entries.push({
+                msg: `  ✎ ${rep.orphan.abbreviation} — "${rep.orphan.title}" was re-created; re-pointed to ${rep.term.termGuid}${affected.length > 0 ? ` (+${groupsFixed} of ${affected.length} group-map row(s))` : ""}. Run again to create its folder.`,
+                ok: true,
+              });
+            }
+
+            for (const amb of plan.ambiguous) {
+              entries.push({
+                msg:
+                  `  ? AMBIGUOUS: "${amb.orphan.title}" (${amb.orphan.level}, ${amb.orphan.abbreviation}) — ` +
+                  `${amb.orphanCandidates.length} orphaned row(s) and ${amb.termCandidates.length} re-created term(s) share that name ` +
+                  `[${amb.termCandidates.map((t) => t.termGuid).join(", ")}]. ` +
+                  `Not repaired: the same name exists under more than one parent, and re-pointing the wrong one would grant another department's groups access to this folder. Set TermGuid by hand.`,
+                ok: false,
+              });
+            }
+
+            for (const u of plan.unmatched) {
+              entries.push({
+                msg:
+                  `  ⚠ ORPHANED: "${u.title}" (${u.level}, ${u.abbreviation}) — its term ${u.termGuid} no longer exists and no re-created term matches the name. ` +
+                  `The row was KEPT: it holds the only copy of the abbreviation. Delete it by hand once you are sure the term is gone for good.`,
+                ok: false,
+              });
+            }
+
+            entries.push({
+              msg: `${ABBREV_LIST}: ${plan.repairs.length} repaired, ${plan.ambiguous.length} ambiguous, ${plan.unmatched.length} orphaned`,
+              ok: plan.ambiguous.length === 0 && plan.unmatched.length === 0,
+            });
+          }
+        } catch (e) {
+          entries.push({
+            msg: `Orphan repair skipped — ${(e as Error).message}`,
+            ok: false,
+          });
+        }
+
+        // ── Report folders no live term claims ─────────────────────────────────
+        // Reconciliation only ever walks term store → libraries, never the reverse,
+        // so a permanently deleted term leaves its folder behind with broken
+        // inheritance INTACT — still granting Contribute and Design to that unit's
+        // groups. Deleting a term revokes nobody's access; the folder stays
+        // reachable by direct link or by browsing the library. Spec 2026-08-02 §8.
+        //
+        // Report only. NEVER deleted: there are documents behind it.
+        try {
+          setReconPhase("Checking for folders with no term…");
+          const expected = new Set(
+            targets.map((t) => t.relPath.toLowerCase()),
+          );
+          // Descend only into non-leaf targets. Below a leaf sit the Year ×
+          // Document Type grid folders, which have no term by design and would
+          // otherwise be reported as unclaimed — hundreds of false positives.
+          const descendFrom = targets.filter((t) => !t.isLeaf);
+          let unclaimed = 0;
+          let unreadable = 0;
+          for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+            const root = await getLibraryRoot(lib);
+            if (!root) continue;
+            for (const t of descendFrom) {
+              const names = await listSubfolders(`${root}${t.relPath}`);
+              if (names === undefined) {
+                unreadable++;
+                continue;
+              }
+              for (const name of names) {
+                if (expected.has(`${t.relPath}/${name}`.toLowerCase())) continue;
+                unclaimed++;
+                entries.push({
+                  msg: `  ⚠ NO TERM: ${lib}${t.relPath}/${name} — no live term maps to this folder, but its permissions are unchanged and its documents are still reachable. Review it; nothing was deleted.`,
+                  ok: false,
+                });
+              }
+            }
+          }
+          if (unreadable > 0) {
+            entries.push({
+              msg: `  ⚠ could not list ${unreadable} folder(s) while checking for unclaimed folders — that part of the tree was not checked`,
+              ok: false,
+            });
+          }
+          if (unclaimed === 0 && unreadable === 0) {
+            entries.push({ msg: `Folders: every folder maps to a live term ✓`, ok: true });
+          }
+        } catch (e) {
+          entries.push({
+            msg: `Unclaimed-folder check skipped — ${(e as Error).message}`,
+            ok: false,
+          });
         }
       }
 
