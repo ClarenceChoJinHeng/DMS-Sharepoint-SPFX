@@ -1429,9 +1429,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-popup-svg { width: 120px; height: 120px; display: block; margin: 0 auto; }
         .dms-popup-title { font-size: 22px; font-weight: 700; color: #0f6c3f; margin: 0 0 12px; }
         .dms-popup-msg { font-size: 14px; color: #555; margin: 0 0 28px; line-height: 1.6; }
-        .dms-popup-ok-container { display:flex; align-items:center; justify-content:center; }
-        .dms-popup-ok { background: #0f6c3f; max-width: 183px; color: #fff; border: none; border-radius: 6px; padding: 12px 0; width: 100%; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
-        .dms-popup-ok:hover { background: #0a5230; }
+        /* Stacked, equal-width buttons for the success dialog. Side by side, the
+           primary and secondary read as a yes/no pair; stacked they read as two
+           destinations, which is what they are. */
+        .dms-popup-stack { display:flex; flex-direction: column; align-items:center; gap: 10px; }
+        .dms-popup-stack .dms-popup-btn { width: 100%; max-width: 200px; }
         .dms-popup-actions { display:flex; align-items:center; justify-content:center; gap: 12px; }
         .dms-popup-btn { min-width: 96px; border-radius: 6px; padding: 11px 22px; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
         .dms-popup-btn.confirm { background: #0f6c3f; color: #fff; border: none; }
@@ -1956,18 +1958,31 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             </div>
             <p className="dms-popup-title">Upload Successful</p>
             <p className="dms-popup-msg">
-              Your file is awaiting approval.
+              Your document is awaiting approval.
               <br />
-              Please revisit the Home page to track progress.
+              Please visit Home page to track progress.
             </p>
-            <div className="dms-popup-ok-container">
+            {/* Two ways out, because the two things people do after uploading are
+                "that was my last one" and "I have a stack of these". Previously the
+                only button navigated away, so a second upload meant loading the form
+                again from scratch. */}
+            <div className="dms-popup-stack">
               <button
-                className="dms-popup-ok"
+                className="dms-popup-btn confirm"
                 onClick={() => {
                   window.location.href = siteUrl;
                 }}
               >
-                Track File Status
+                Back to Document
+              </button>
+              <button
+                className="dms-popup-btn cancel"
+                onClick={() => {
+                  setToast(null);
+                  resetForm();
+                }}
+              >
+                Upload More
               </button>
             </div>
           </div>
