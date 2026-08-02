@@ -1,7 +1,9 @@
 # Term-GUID Orphan Repair — Design
 
 **Date:** 2026-08-02
-**Status:** Agreed, not yet implemented
+**Status:** Implemented in 1.0.72.0 (`feat/folder-abbreviations`) — the matching logic is
+unit-tested (`planOrphanRepairs`, 10 cases); the repair and unclaimed-folder passes need the
+tenant to verify
 **Supersedes:** Task 6 of `docs/superpowers/plans/2026-07-31-folder-abbreviation-naming.md`
 **Related:** `2026-07-30-folder-abbreviation-naming-design.md`, `2026-07-29-folder-map-integrity-design.md`
 

@@ -113,9 +113,23 @@ arrival at the client site.
 5. Record every internal name; they become the `col_*` rows and `labelCol`/`tidCol` values in step 5.
 6. Staging settings: content approval **ON**, **Draft Item Security = "Any user who can edit items"**.
    Any other value gives Contribute uploaders a misleading 403 (test F-17).
+7. **`Full Name` column — on BOTH libraries.** Single line of text, display name exactly
+   `Full Name`. Folder names are abbreviations (`GMB_STRATCOMMS`); this column carries the term's
+   real label so the details pane can explain the code. **Read the internal name back** like every
+   other column — it is usually `Full_x0020_Name`, but the resolver matches however the space was
+   typed, so do not hand-write it anywhere.
+   Then **remove it from the default view, not from the form**: the details pane renders form
+   fields, so hiding it on the form deletes it from the pane, while merely dropping it from the
+   view still shows it.
+8. **`DMS Folder` content type — on BOTH libraries.** Create a content type named exactly
+   `DMS Folder`, parent **Folder**, add the `Full Name` column to it, and add it to `Staging` and
+   `Documents`. Reconciliation stamps it on every folder it creates. Without it the folders keep
+   the built-in `Folder` type, `Full Name` never reaches the details pane, and the run logs a
+   warning rather than failing — so this is easy to miss until a user asks what `GMB_STRATCOMMS`
+   means.
 
 ### 4. DMS lists
-Create `DMS Config`, `DMS Group Map`, `DMS Folder Map` (exact titles).
+Create `DMS Config`, `DMS Group Map`, `DMS Folder Map`, `DMS Term Abbreviation` (exact titles).
 
 - **`DMS Config`** columns: `Title`, `ConfigType` (`mode`|`setting`), `ModeLabel`, `Category`
   (`BusinessSegment`|`Project`), `TermSetGuid`, `StagingFolder`, `SortOrder` (Number),
@@ -123,10 +137,17 @@ Create `DMS Config`, `DMS Group Map`, `DMS Folder Map` (exact titles).
 - **`DMS Group Map`** columns: `GroupId` (SP group **integer** id, as text), `GroupName`,
   `Segment` (term-set GUID), `UnitTermGuid`, `Role` (`MEMBER`|`UPL`|`APR`|`GLOBAL`).
 - **`DMS Folder Map`**: TermGuid → FolderUniqueId, written by reconciliation. Leave empty.
+- **`DMS Term Abbreviation`** columns: `Title` (Text — the term's full label), `TermGuid` (Text),
+  `Abbreviation` (Text — the folder-name segment), `Level` (Choice: `Segment`|`Department`|`Unit`).
+  **Required, not optional**: folder names come from this list, and a term with no row here is
+  skipped by every reconciliation run, so that unit can never upload. Seed it in step 7 — the
+  GUIDs are per-site, so it cannot be populated before the term store exists.
+  > `Title` is not decoration. It is the only copy of the term's label outside the term store, and
+  > it is what lets reconciliation repair a term that was deleted and re-added. Do not blank it.
 
 ### 5. Populate DMS Config — **the gate**
 
-**14 `setting` rows** (`ConfigType = setting`, `Title` / `SettingValue`). Write **all of them**
+**16 `setting` rows** (`ConfigType = setting`, `Title` / `SettingValue`). Write **all of them**
 explicitly, even where the value matches a code default — the point is to never depend on a
 fallback:
 
@@ -136,15 +157,27 @@ termSet_yearPeriod        ‹new yearPeriod guid›
 termSet_confidentiality   ‹new confidentiality guid›
 termSet_vendor            ‹new vendor guid›
 col_documentType          Document_x0020_Type
-col_yearPeriod            Year_x002f_Period
+col_yearPeriod            Year
 col_documentDate          DocumentDate
 col_confidentiality       Confidentiality_x0020_Level
-col_vendor                Vendor
+col_vendor                Vendor_x002f_CustomerName
+col_remark                Remark
+col_legallyPrivileged     LegallyPrivileged
 col_businessSegment       Business_x0020_Segment
 col_businessSegmentTid    BusinessSegmentTid
+legallyPrivilegedFor      ‹term guid of the ONE confidentiality level that offers the tick›
 stagingLibrary            Staging
 allowedExtensions         (leave SettingValue EMPTY — see AllowedFileTypes below)
 ```
+
+> **`legallyPrivilegedFor`** names the single confidentiality term below which the *Legally
+> Privileged* checkbox appears on the upload form. **Leave it blank and the tick is never
+> offered** — that is the default, and it is silent, so a site that forgets this row simply never
+> collects the flag and nobody notices. The value is re-derived at upload time, so a user who
+> ticks the box and then changes the level cannot stamp `true` on a level that does not offer it.
+>
+> `col_remark` and `col_legallyPrivileged` back the two fields added in 1.0.6x. Both the Form and
+> Bulk Upload write them on every upload.
 
 (the `col_*` values above are ClarenceDMSTesting's frozen names — replace with whatever step 3.4
 actually returned on the client site)
@@ -203,12 +236,40 @@ actually returned on the client site)
 5. Optional: one `GLOBAL` row for read-only super-viewers (no upload — `collectMembership` skips it).
 
 ### 7. Folders + reconciliation
-1. Use **Folder Manager** to create `Staging/‹Segment›/‹Dept›/‹Unit›/`. Year + Document Type
-   subfolders are ensure-created on first upload and inherit the Unit ACL.
-2. Run reconciliation **dry-run first**, review, then live.
-3. Re-run immediately to confirm idempotency (test FM-04).
-4. Confirm `DMS Folder Map` is populated. **Uploads cannot succeed before this** — the form
+
+**Seed `DMS Term Abbreviation` FIRST — before the first reconciliation run.** Folder names come
+from it, and a term with no row is skipped, so running before seeding creates nothing and produces
+one `SKIPPED (no abbreviation)` line per term.
+
+1. Set the **segment** codes: `StagingFolder` on each `mode` row → `GHO`, `MHO`, `NBPOLHO`
+   (these are NOT in the abbreviation list). Note this makes `StagingFolder` differ from
+   `ModeLabel` — deliberately; the label is what the form shows.
+2. Seed the department and unit rows with `scripts/seed-term-abbreviations.js` (paste
+   `docs/term-store-import/10-per-level-abbreviations.csv` into `CSV_TEXT`, run in DevTools).
+   The CSV is keyed by label **path**, not GUID, so the script walks the live term store to
+   resolve GUIDs — which is why it must run after step 2. Expect `wrote 175 rows` and **no
+   unresolved label paths**. Any unresolved path means the CSV label does not match the live term
+   exactly; fix the term or the term store, **not** the CSV.
+3. Use **Folder Manager** to create `Staging/‹SEG›/‹DEPT›/‹UNIT›/` — abbreviated at every level.
+   Year + Document Type subfolders are ensure-created on first upload and inherit the Unit ACL.
+4. Run reconciliation **dry-run first**, review, then live.
+5. Re-run immediately to confirm idempotency (test FM-04).
+6. Confirm `DMS Folder Map` is populated. **Uploads cannot succeed before this** — the form
    resolves the target by `FolderUniqueId`.
+7. Read the log for these, in the order they hurt:
+   - `COLLISION` — two siblings share a code. **Nothing was created.** Fix and re-run; do not
+     work around it, this is one ACL over two units' documents.
+   - `SKIPPED (no abbreviation)` — that unit cannot upload at all until a row exists.
+   - `NO TERM` — a folder no live term claims. Never deleted; review by hand.
+8. Confirm `Full Name` is populated on a folder and visible in the details pane (step 3.7-3.8).
+   If the grid shows the column, remove it from the **view**, not the form.
+
+> Tell the client, in writing, before handover: **rename terms, never delete and re-add.** A
+> rename keeps the term's GUID; a delete-and-re-add issues a new one and orphans the abbreviation,
+> the folder mapping and the group permissions at the same moment. Reconciliation repairs that
+> only when exactly one dead row and one new term share a name at the same level — and `Tax`,
+> `Legal` and `PM` each exist under several parents, so it often cannot. See
+> `docs/client/folder-abbreviations-guide.md`.
 
 ### 8. Auto-route flow
 Rebuild in the client tenant — connections do not migrate.

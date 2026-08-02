@@ -660,10 +660,19 @@ git commit -m "feat: write the full term label to Full Name on each folder"
 
 ## Task 6: Prune orphaned abbreviation rows
 
+> ⛔ **SUPERSEDED — do not implement as written.** Replaced by
+> `docs/superpowers/specs/2026-08-02-term-guid-orphan-repair-design.md`, **done** in 1.0.72.0
+> (commit `3fde847`). Auto-pruning was judged wrong: an abbreviation row is the only copy of
+> authored data, and deleting one lets a re-created term take a *different* abbreviation that
+> Task 4's rename pass then applies to a live folder full of documents. The shipped behaviour
+> **repairs** the orphan (1:1 match on level + label, propagated across the Group Map) and
+> otherwise reports it, and adds the unclaimed-folder report from that spec's §8. Steps below
+> are kept for the record only.
+
 **Files:**
 - Modify: `src/webparts/folderManager/components/FolderManager.tsx` — the existing prune step
 
-- [ ] **Step 1: Extend prune to the abbreviation list**
+- [x] ~~**Step 1: Extend prune to the abbreviation list**~~ — superseded; see the banner above.
 
 An abbreviation row whose term no longer exists is an orphan. Report it in the same place `DMS Folder Map` orphans are reported, and delete only under the same conditions.
 
@@ -685,24 +694,34 @@ git commit -m "feat: prune orphaned abbreviation rows under the incomplete guard
 
 ---
 
-## Task 7: Messages and client guidance
+## Task 7: Messages and client guidance ✅ done in 1.0.72.0 (commit `6caa07f`)
+
+> Also went beyond the steps below, in the client-site migration runbook
+> (`2026-07-28-client-site-migration-runbook.md`), which was missing three things that would
+> each have cost a day on the client site: the **`Full Name`** column plus the **`DMS Folder`**
+> content type it needs to reach the details pane; the **`DMS Term Abbreviation`** list and the
+> fact it must be seeded *before* the first reconciliation run; and the **`legallyPrivilegedFor`**
+> setting row, which defaults to blank and then silently never offers the tick (with `col_remark`
+> and `col_legallyPrivileged` alongside it). Two stale internal names were corrected there and in
+> CLAUDE.md against `FIELDS` in Form.tsx: `Year_x002f_Period` → `Year`, `Vendor` →
+> `Vendor_x002f_CustomerName`.
 
 **Files:**
 - Modify: `src/webparts/form/components/Form.tsx`, `src/webparts/bulkUpload/components/BulkUpload.tsx` — upload failure text
 - Modify: `CLAUDE.md`
 - Create: `docs/client/folder-abbreviations-guide.md`
 
-- [ ] **Step 1: Correct the upload failure message**
+- [x] **Step 1: Correct the upload failure message**
 
 Both web parts currently tell the user to re-run reconciliation when no `DMS Folder Map` row resolves. Re-running does not help when the cause is a missing abbreviation. The message must name both possibilities and say who fixes it — for example: *"This unit has no folder yet. Your DMS administrator needs to add an abbreviation for it in DMS Term Abbreviation and re-run folder reconciliation."*
 
 Same class of defect as the "not fully provisioned" banner: the code changed, the message did not.
 
-- [ ] **Step 2: Update CLAUDE.md**
+- [x] **Step 2: Update CLAUDE.md**
 
 Under folder routing, record that folder names come from `DMS Term Abbreviation` keyed by term GUID (segments from `StagingFolder` in `DMS Config`), that term labels stay full and drive the dropdown, that a missing abbreviation skips the term, and that abbreviations must be unique among siblings or two units merge into one ACL.
 
-- [ ] **Step 3: Write the client guide**
+- [x] **Step 3: Write the client guide**
 
 Create `docs/client/folder-abbreviations-guide.md` covering: what an abbreviation controls; that it must be unique among its siblings; that a unit abbreviation must include its sub-group prefix (with the two Strategic Communications units as the worked example); that changing one renames a live folder; that a missing one blocks that unit's uploads entirely; and that the full name stays visible in the details panel.
 

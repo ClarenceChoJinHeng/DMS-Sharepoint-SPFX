@@ -63,6 +63,26 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
 - **Folder routing:** the deepest (leaf) level = the permissioned **Unit** folder, resolved by
   UniqueId via DMS Folder Map. `Year` + `Document Type` subfolders are **ensure-created on demand**
   under the Unit folder and inherit its ACL.
+- **Folder NAMES come from `DMS Term Abbreviation`** (keyed by term GUID), NOT from term labels —
+  `GHO/GCA/GMB_STRATCOMMS`. Segment codes come from `StagingFolder` on the DMS Config `mode` row.
+  Term labels stay full and drive the upload dropdowns; the full label is written to the
+  **`Full Name`** column on every folder, and folders carry the **`DMS Folder`** content type so
+  the details pane renders it. Three rules: a term with **no abbreviation is SKIPPED**, never
+  guessed (no folder → that unit cannot upload); abbreviations must be **unique among siblings**
+  or two units merge into one folder with one ACL (reconciliation aborts before creating
+  anything); changing one **renames a live folder** on the next run. Spec
+  `2026-07-30-folder-abbreviation-naming-design.md`, client guide
+  `docs/client/folder-abbreviations-guide.md`.
+- **Deleting a term orphans three lists at once** (Abbreviation, Folder Map, Group Map) — a
+  re-created term gets a NEW GUID and nothing joins them. Tell the client to **rename terms, never
+  delete and re-add**. Reconciliation repairs an orphan only on a **1:1 match of level + label**
+  (the label is the one thing that survives, kept in the abbreviation row's `Title`), then rewrites
+  the dead GUID across the Group Map. Ambiguous matches are reported, never guessed: `Tax`, `Legal`
+  and `PM` each exist under several parents, and a wrong re-point is a permissions grant to another
+  department's folder. Abbreviation rows are **never auto-deleted** (authored data, no other copy);
+  Folder Map rows still are (derivable). Folders whose term is gone are reported (`NO TERM`) and
+  **never** deleted — deleting a term revokes nobody's access. Both passes sit behind the existing
+  `incomplete` + clean-run guards. Spec `2026-08-02-term-guid-orphan-repair-design.md`.
 
 > ✅ **TERM STORE — RESOLVED (2026-07-27):** managed **in-site**, no admin center. Client refuses
 > tenant term-store access, so the sets were rebuilt in a **site-collection-local `DMS` group** on
@@ -103,10 +123,17 @@ NBPOL Head Office:             77c3993b-0c3c-4a18-89d9-d69209886322
 Verified against live `/fields` API. Do NOT guess from display names.
 ```
 Document_x0020_Type        <- "Document Type" (migrated 2026-07-24 from the old frozen Department_x0020_Type)
-Year_x002f_Period
+Year                       <- plain "Year", NOT Year_x002f_Period (client renamed it; matches FIELDS in Form.tsx)
 DocumentDate               <- DateTime, no space encoding
 Confidentiality_x0020_Level
-Vendor
+LegallyPrivileged          <- Yes/No, written as the STRING "true"/"false"; shown only for the level
+                              named by the `legallyPrivilegedFor` DMS Config row (blank = never offered)
+Remark                     <- a DEDICATED column, not the built-in _ExtendedDescription
+Full_x0020_Name            <- on FOLDERS, not files: the term's real label behind the abbreviated
+                              folder name. Read the internal name back — the resolver matches
+                              however the space was typed. Needs the `DMS Folder` content type to
+                              reach the details pane.
+Vendor_x002f_CustomerName  <- "Vendor/CustomerName"; the old plain `Vendor` column was DELETED 2026-07-28
 _ExtendedDescription       <- built-in doc Description (Note) — used for "Details" field
 
 # Multi-segment level columns (plain text, label + term-GUID pairs). Written via
