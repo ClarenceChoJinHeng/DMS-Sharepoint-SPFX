@@ -978,8 +978,27 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setPeopleOpen(new Set(distinctGroups.map((g) => g.groupId)));
   };
 
+  /** Case-insensitive substring match, with the hit wrapped so the eye can find it. */
+  const highlight = (text: string, q: string): React.ReactNode => {
+    if (q.length === 0) return text;
+    const at = text.toLowerCase().indexOf(q);
+    if (at === -1) return text;
+    return (
+      <>
+        {text.slice(0, at)}
+        <mark style={{ background: "#fff3bf", color: "inherit", padding: "0 1px" }}>
+          {text.slice(at, at + q.length)}
+        </mark>
+        {text.slice(at + q.length)}
+      </>
+    );
+  };
+
   const renderPeopleView = (): React.ReactElement => {
     const q = peopleFilter.trim().toLowerCase();
+    const personMatches = (p: SpGroupMember): boolean =>
+      (p.title ?? "").toLowerCase().indexOf(q) !== -1 ||
+      (p.email ?? "").toLowerCase().indexOf(q) !== -1;
     // A person filter can only see groups already read, so it says so rather than
     // silently reporting "no match" for groups it never looked inside.
     const unloaded = distinctGroups.filter((g) => !peopleByGroup[g.groupId]).length;
@@ -988,10 +1007,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       : distinctGroups.filter((g) => {
           if (g.groupName.toLowerCase().indexOf(q) !== -1) return true;
           const m = peopleByGroup[g.groupId];
-          return !!m && m.some((p) =>
-            (p.title ?? "").toLowerCase().indexOf(q) !== -1 ||
-            (p.email ?? "").toLowerCase().indexOf(q) !== -1);
+          return !!m && m.some(personMatches);
         });
+    // How many people the query found overall — searching a name and being told
+    // "3 groups" answers a question nobody asked. The count is what confirms the
+    // search ran at all.
+    const matchedPeople = q.length === 0
+      ? 0
+      : shown.reduce((n, g) => n + (peopleByGroup[g.groupId] ?? []).filter(personMatches).length, 0);
     return (
       <div>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
@@ -1017,15 +1040,33 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
             </span>
           )}
         </div>
+        {q.length > 0 && shown.length > 0 && (
+          <p style={{ fontSize: 12, color: "#0f6c3f", margin: "0 0 10px", fontWeight: 600 }}>
+            {matchedPeople > 0
+              ? `${matchedPeople} person match${matchedPeople === 1 ? "" : "es"} across ${shown.length} group${shown.length === 1 ? "" : "s"}`
+              : `${shown.length} group${shown.length === 1 ? "" : "s"} match by name`}
+          </p>
+        )}
         {distinctGroups.length === 0 ? (
           <p style={{ fontSize: 13, color: "#999" }}>No groups are mapped yet.</p>
         ) : shown.length === 0 ? (
           <p style={{ fontSize: 13, color: "#999" }}>No group or person matches &ldquo;{peopleFilter}&rdquo;.</p>
         ) : (
           shown.map((g) => {
-            const open = peopleOpen.has(g.groupId);
             const loading = peopleLoading.has(g.groupId);
             const members = peopleByGroup[g.groupId];
+            const nameHit = q.length > 0 && g.groupName.toLowerCase().indexOf(q) !== -1;
+            // A collapsed group that matched on a PERSON showed a header and nothing
+            // else — the search looked broken because the thing it found was hidden.
+            const open = q.length > 0 || peopleOpen.has(g.groupId);
+            // Searching a person and being handed the whole roster to scan is the
+            // other half of that. When the query matched people rather than the group
+            // NAME, show the people it matched and count the rest.
+            const hits = members && q.length > 0 && !nameHit
+              ? members.filter(personMatches)
+              : undefined;
+            const listed = hits ?? members ?? [];
+            const hidden = hits && members ? members.length - hits.length : 0;
             return (
               <div key={g.groupId} style={{ border: "1px solid #e5e5e5", borderRadius: 6, marginBottom: 8, overflow: "hidden" }}>
                 <div
@@ -1036,9 +1077,13 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                   style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer", background: open ? "#f4f8f5" : "#fff" }}
                 >
                   <span style={{ color: "#0f6c3f", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
-                  <span style={{ fontWeight: 600, fontSize: 13 }}>{g.groupName}</span>
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{highlight(g.groupName, q)}</span>
                   <span style={{ fontSize: 11, color: "#666" }}>
-                    {members ? `${members.length} member${members.length === 1 ? "" : "s"}` : "—"}
+                    {!members
+                      ? "—"
+                      : hits
+                        ? `${hits.length} of ${members.length} match`
+                        : `${members.length} member${members.length === 1 ? "" : "s"}`}
                   </span>
                   <span style={{ marginLeft: "auto", display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
                     {g.grants.map((gr, i) => (
@@ -1057,12 +1102,19 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                         No members — anyone relying on this group has no access.
                       </div>
                     ) : (
-                      members.map((p) => (
-                        <div key={p.id} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 12, padding: "3px 0" }}>
-                          <span style={{ fontWeight: 600 }}>{p.title}</span>
-                          <span style={{ color: "#666" }}>{p.email}</span>
-                        </div>
-                      ))
+                      <>
+                        {listed.map((p) => (
+                          <div key={p.id} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 12, padding: "3px 0" }}>
+                            <span style={{ fontWeight: 600 }}>{highlight(p.title ?? "", q)}</span>
+                            <span style={{ color: "#666" }}>{highlight(p.email ?? "", q)}</span>
+                          </div>
+                        ))}
+                        {hidden > 0 && (
+                          <div style={{ fontSize: 11, color: "#999", padding: "4px 0 0" }}>
+                            + {hidden} other member{hidden === 1 ? "" : "s"} in this group
+                          </div>
+                        )}
+                      </>
                     )}
                   </div>
                 )}

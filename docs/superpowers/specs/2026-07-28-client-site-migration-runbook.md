@@ -58,6 +58,58 @@ These are **not** config-driven. The client site must use these exact list/libra
 
 If the client insists on different names, that is a code change — cost it before promising.
 
+### ⚠ The client is renaming `DMS` → `CRS` at import (flagged 2026-08-03)
+
+Every object below is prefixed `DMS` in code today. **Nothing here is config-driven**, so
+none of it follows a rename on the site. Decided 2026-08-03 to document rather than refactor
+now; the code change is a `BRAND` constant that every name derives from, plus reading the list
+entity type back instead of hardcoding it.
+
+**Rename inventory** — 14 source files, ~110 occurrences:
+
+| Object | Today | Becomes | Occurrences |
+|---|---|---|---|
+| List | `DMS Config` | `CRS Config` | `Form.tsx`, `BulkUpload.tsx`, `FolderManager.tsx`, `FolderMap.tsx`, `GroupMapBuilder.tsx` — also URL-encoded as `DMS%20Config` |
+| List | `DMS Group Map` | `CRS Group Map` | `GroupMapBuilder.tsx`, `FolderManager.tsx` (incl. `DMS%20Group%20Map`) |
+| List | `DMS Folder Map` | `CRS Folder Map` | `dmsFolderMap.ts` `FOLDER_MAP_LIST` |
+| List | `DMS Term Abbreviation` | `CRS Term Abbreviation` | `folderAbbreviation.ts` `ABBREV_LIST` |
+| Content type | `DMS Folder` | `CRS Folder` | `FolderManager.tsx` `FOLDER_CONTENT_TYPE_NAME` |
+| Group prefix | `DMS_` | `CRS_` | `spGroupsFilter.ts` 19, `FolderManager.tsx` 2065 |
+| Group | `DMS_SITE_MEMBERS` | `CRS_SITE_MEMBERS` | `groupMapModel.ts` `SITE_ENTRY_GROUP_NAME` |
+| Group | `DMS_GLOBAL_UPLOADERS` | `CRS_GLOBAL_UPLOADERS` | `groupMapModel.ts` |
+| OData type | `SP.Data.DMS_x0020_Folder_x0020_MapListItem` | see below | `FolderMap.tsx` 8 |
+| UI copy | "your DMS administrator", `DMS-group-members-<date>.csv` | reword | `Form.tsx`, `BulkUpload.tsx`, `groupExportCsv.ts` |
+
+**Three of these fail SILENTLY — they are the ones that will cost a day:**
+
+1. **The `DMS_` prefix filter.** It is a filter, not a label. Against `CRS_` groups it matches
+   zero: the group search box in **User Access** returns nothing for every query, and the
+   site-entry self-heal reports `all DMS group members already have site entry ✓` having
+   granted nobody anything. The run looks clean.
+2. **`DMS_SITE_MEMBERS`.** Not found → no site-entry group → same clean-looking outcome, and
+   users get folder Limited Access with no way into the site root
+   (memory `dms-two-layer-access-site-plus-folder`).
+3. **The `DMS Folder` content type.** Reconciliation only *warns* when it is missing, by
+   design, so `Full Name` silently never reaches the details pane and every folder shows only
+   its abbreviation.
+
+The list titles and the OData type fail loudly (404s, and writes rejected).
+
+> **Trap: the OData entity type is frozen at list CREATION, not at rename.** Create a list
+> titled `CRS Folder Map` and it is `SP.Data.CRS_x0020_Folder_x0020_MapListItem`; create
+> `DMS Folder Map` and *rename* it later and it stays `SP.Data.DMS_x0020_...` forever. So it
+> **cannot** be derived from the new title. Read it back per site:
+>
+> ```
+> /_api/web/lists/getbytitle('CRS%20Folder%20Map')?$select=ListItemEntityTypeFullName
+> ```
+>
+> Same class of problem as the frozen column internal names (step 3.4) — do not guess it.
+
+**Order matters.** Rename the site objects and ship the matching code build together. A site
+renamed ahead of the build has no working uploads; a build shipped ahead of the site has none
+either. There is no version that tolerates both spellings.
+
 ---
 
 ## Phase 1 — Client-site provisioning (in order; each step feeds the next)
