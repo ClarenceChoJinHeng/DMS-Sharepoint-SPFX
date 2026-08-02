@@ -1783,17 +1783,24 @@ export default function BulkUpload({
         .dms-field .req { color: #d13438; font-style: normal; }
         .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
         .dms-field small { color: #666; font-size: 12px; font-weight: 400; }
-        /* Checkbox row: label beside the box, hint underneath and aligned with it. */
-        .dms-check { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
-        .dms-check input { margin: 0; }
-        .dms-check small { grid-column: 2; color: #666; font-size: 12px; }
-        /* Confidentiality info tooltip — pinned to the SELECT's right edge, not the
-           column's, so it lines up with the field rather than floating past it. */
-        .dms-conf { position: relative; margin-bottom: 16px; }
-        .dms-conf .dms-field { margin-bottom: 0; }
-        .dms-conf .dms-field select { max-width: calc(100% - 28px); }
-        .dms-info { position: absolute; left: calc(100% - 22px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
-        .dms-info-panel { display: none; position: absolute; top: -8px; left: calc(100% + 8px); z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
+        /* Document Date | Confidential Level | Legally Privileged on ONE line, per
+           the client mockup. A flex row rather than grid cells because the tick
+           exists for only one confidentiality level: when it is absent, date and
+           level fall back to an even split, so the row does not reflow around a
+           control that is not there. */
+        .dms-detail-row { display: flex; gap: 24px; align-items: flex-end; flex-wrap: wrap; }
+        .dms-detail-row > .dms-field { flex: 1 1 200px; min-width: 0; }
+        .dms-lp { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 38px; margin-bottom: 16px; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+        .dms-lp input { accent-color: #0f6c3f; width: 16px; height: 16px; margin: 0; cursor: pointer; }
+        /* Info tooltips sit on the LABEL, beside the field name. They used to be
+           absolutely positioned against the select's right edge, which had to be
+           re-tuned every time the grid changed; on the label there is nothing to
+           drift against. */
+        .dms-labelrow { display: flex; align-items: center; gap: 6px; }
+        .dms-info { position: relative; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
+        .dms-info-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; font-weight: 400; }
+        /* The rightmost icon on the row would push its panel past the card edge. */
+        .dms-info.align-right .dms-info-panel { left: auto; right: 0; }
         .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; }
         .dms-info-panel dl { margin: 0; }
         .dms-info-panel dt { margin-top: 12px; color: #0f6c3f; font-size: 13px; font-weight: 700; }
@@ -2214,7 +2221,7 @@ export default function BulkUpload({
           onChange={(e) => addFiles(e.target.files)}
         />
 
-        <div className="dms-grid" style={{ marginTop: 16 }}>
+        <div className="dms-detail-row" style={{ marginTop: 16 }}>
           <label className="dms-field">
             <span>
               Document Date <em className="req">*</em>
@@ -2233,51 +2240,62 @@ export default function BulkUpload({
             />
           </label>
 
-          {/* Confidential Level carries an info tooltip defining each term.
-              tabIndex makes it keyboard-reachable; :focus-within keeps the
-              panel open while it holds focus. */}
-          <div className="dms-conf">
-            {renderSelect(
-              "Confidential Level",
-              true,
-              confidentiality,
-              setConfidentiality,
-              options.confidentiality,
-              busy,
-            )}
-            <em
-              className="dms-info"
-              tabIndex={0}
-              role="button"
-              aria-label="What the confidentiality levels mean"
+          {/* Not renderSelect: the info icon belongs on the LABEL, and the label
+              is a <span> holding a real <label htmlFor> so clicking the icon does
+              not fall through and focus the select. */}
+          <div className="dms-field">
+            <span className="dms-labelrow">
+              <label htmlFor="dms-bulk-conf">
+                Confidential Level <em className="req">*</em>
+              </label>
+              <em
+                className="dms-info"
+                tabIndex={0}
+                role="button"
+                aria-label="What the confidentiality levels mean"
+              >
+                i
+                <span className="dms-info-panel" role="tooltip">
+                  {/* Legally Privileged is NOT defined here any more — it has its
+                      own control and its own icon beside it, and defining it in two
+                      places invites the two texts to drift apart.
+                      Highly Confidential is deliberately absent too: its term is
+                      removed from the term store for Phase 1, so the dropdown
+                      cannot offer it. */}
+                  <dl>
+                    <dt>Confidential</dt>
+                    <dd>
+                      This applies to sensitive business information that is
+                      intended strictly for use within the Group, on a need-to-know
+                      basis.
+                    </dd>
+                    <dt>Restricted</dt>
+                    <dd>
+                      This applies to business information that may be disclosed to
+                      external parties only if a non-disclosure agreement has been
+                      signed.
+                    </dd>
+                  </dl>
+                </span>
+              </em>
+            </span>
+            <select
+              id="dms-bulk-conf"
+              value={confidentiality}
+              disabled={busy}
+              title={
+                options.confidentiality.find((o) => o.id === confidentiality)
+                  ?.label ?? ""
+              }
+              onChange={(e) => setConfidentiality(e.target.value)}
             >
-              i
-              <span className="dms-info-panel" role="tooltip">
-                {/* Highly Confidential is deliberately absent — its term is removed
-                    from the term store for Phase 1, so the dropdown cannot offer it. */}
-                <dl>
-                  <dt>Legally Privileged</dt>
-                  <dd>
-                    This applies to confidential communications (email, advice,
-                    documents, conversations) between client and lawyer that are
-                    protected by law from being disclosed in a court of law or
-                    during legal proceedings.
-                  </dd>
-                  <dt>Confidential</dt>
-                  <dd>
-                    This applies to sensitive business information that is
-                    intended strictly for use within the Group, on a need-to-know
-                    basis.
-                  </dd>
-                  <dt>Restricted</dt>
-                  <dd>
-                    This applies to business information that may be disclosed to
-                    external parties only if a non-disclosure agreement has been
-                    signed.
-                  </dd>
-                </dl>
-              </span>
-            </em>
+              <option value="">--</option>
+              {options.confidentiality.map((o) => (
+                <option key={o.id} value={o.id} title={o.label}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Offered only for the level named by `legallyPrivilegedFor` in DMS
@@ -2286,19 +2304,32 @@ export default function BulkUpload({
               not clear the state behind it. */}
           {settings.legallyPrivilegedFor !== "" &&
             confidentiality === settings.legallyPrivilegedFor && (
-              <label className="dms-check" style={{ gridColumn: "1 / -1" }}>
-                <input
-                  type="checkbox"
-                  checked={legallyPrivileged}
-                  disabled={busy}
-                  onChange={(e) => setLegallyPrivileged(e.target.checked)}
-                />
-                <span>Legally Privileged</span>
-                <small>
-                  Tick if these are protected communications between client and
-                  lawyer.
-                </small>
-              </label>
+              <>
+                <label className="dms-lp">
+                  <input
+                    type="checkbox"
+                    checked={legallyPrivileged}
+                    disabled={busy}
+                    onChange={(e) => setLegallyPrivileged(e.target.checked)}
+                  />
+                  <span>Legally Privileged</span>
+                </label>
+                <em
+                  className="dms-info align-right"
+                  tabIndex={0}
+                  role="button"
+                  aria-label="What Legally Privileged means"
+                  style={{ marginBottom: 26 }}
+                >
+                  i
+                  <span className="dms-info-panel" role="tooltip">
+                    This applies to confidential communications (email, advice,
+                    documents, conversations) between client and lawyer that are
+                    protected by law from being disclosed in a court of law or
+                    during legal proceedings.
+                  </span>
+                </em>
+              </>
             )}
         </div>
       </div>
