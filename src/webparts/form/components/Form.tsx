@@ -47,6 +47,13 @@ const FIELDS = {
   // Distinct from the Group-led Projects "Group Project Name" folder level.
   projectName: "ProjectName",
   details: "_ExtendedDescription",
+  // Free-text note from the uploader, shown to the approver. Distinct from
+  // `details`/_ExtendedDescription, which is the built-in document Description.
+  remark: "Remark",
+  // Yes/No. Only meaningful when Confidentiality is the level named by the
+  // `legallyPrivilegedFor` setting; written as "false" otherwise so a replaced
+  // file cannot inherit a stale true from the document it overwrote.
+  legallyPrivileged: "LegallyPrivileged",
 };
 
 // FALLBACK map: logical Levels `column` key -> the two real Staging internal
@@ -263,10 +270,19 @@ type DmsSettings = {
     confidentiality: string;
     vendor: string;
     projectName: string;
+    remark: string;
+    legallyPrivileged: string;
     businessSegmentLabel: string;
     businessSegmentTid: string;
   };
   stagingLibrary: string;
+  // Term GUID of the ONE confidentiality level that offers the Legally Privileged
+  // tick. Config-driven rather than hardcoded because the levels are term-store
+  // data: renaming or re-creating a level changes its GUID, and a hardcoded value
+  // would silently stop offering the tick with nothing in the UI to explain why.
+  // Empty means "never offer it", which is the correct behaviour for a site that
+  // has not configured the row — better than guessing a level.
+  legallyPrivilegedFor: string;
   allowedFileTypes: AllowedFileTypes;
 };
 
@@ -283,10 +299,16 @@ const DEFAULT_SETTINGS: DmsSettings = {
     confidentiality: FIELDS.confidentiality,
     vendor: FIELDS.vendor,
     projectName: FIELDS.projectName,
+    remark: FIELDS.remark,
+    legallyPrivileged: FIELDS.legallyPrivileged,
     businessSegmentLabel: LEVEL_COLUMNS.BusinessSegment.label,
     businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
   },
   stagingLibrary: "Staging",
+  // Empty by default: the tick appears only once a site sets legallyPrivilegedFor
+  // to a confidentiality term GUID. Defaulting to a guessed level would offer a
+  // legal flag under the wrong heading.
+  legallyPrivilegedFor: "",
   // "unknown", not "configured": reaching this constant means DMS Config could not
   // be read, and the UI must say so rather than present these as configured values.
   // The old list here was [".pdf", ".xls", ".xlsx"] — missing .doc/.docx, which is
@@ -324,6 +346,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
   const [projectName, setProjectName] = useState<string>("");
+  const [remark, setRemark] = useState<string>("");
+  const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
   const [toast, setToast] = useState<{
@@ -548,12 +572,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           get("col_confidentiality") ?? DEFAULT_SETTINGS.columns.confidentiality,
         vendor: get("col_vendor") ?? DEFAULT_SETTINGS.columns.vendor,
         projectName: get("col_projectName") ?? DEFAULT_SETTINGS.columns.projectName,
+        remark: get("col_remark") ?? DEFAULT_SETTINGS.columns.remark,
+        legallyPrivileged:
+          get("col_legallyPrivileged") ?? DEFAULT_SETTINGS.columns.legallyPrivileged,
         businessSegmentLabel:
           get("col_businessSegment") ?? DEFAULT_SETTINGS.columns.businessSegmentLabel,
         businessSegmentTid:
           get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
       stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
+      legallyPrivilegedFor:
+        get("legallyPrivilegedFor") ?? DEFAULT_SETTINGS.legallyPrivilegedFor,
       // SettingValue is deliberately NOT consulted for file types any more —
       // AllowedFileTypes is the single source of truth. Spec 2026-07-30 §3.
       allowedFileTypes: resolveAllowedFileTypes(rawFileTypes),
@@ -882,6 +911,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setConfidentiality("");
     setVendor("");
     setProjectName("");
+    setRemark("");
+    setLegallyPrivileged(false);
     if (fileRef.current) fileRef.current.value = "";
   };
 
@@ -1173,6 +1204,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         FieldName: settings.columns.vendor,
         FieldValue: vendor.trim(),
       });
+      formValues.push({
+        FieldName: settings.columns.remark,
+        FieldValue: remark.trim(),
+      });
+      // Written on EVERY upload, and forced false unless the chosen confidentiality
+      // level is the one configured to offer it. The tick is hidden when the level
+      // changes, but hiding a control does not clear the state behind it, and on the
+      // replace path the list item is reused — so a document could inherit a legal
+      // flag from the file it overwrote. Deriving the value here rather than trusting
+      // the checkbox makes that impossible.
+      const privilegedApplies =
+        settings.legallyPrivilegedFor !== "" &&
+        confidentiality === settings.legallyPrivilegedFor;
+      formValues.push({
+        FieldName: settings.columns.legallyPrivileged,
+        FieldValue: privilegedApplies && legallyPrivileged ? "true" : "false",
+      });
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
@@ -1264,6 +1312,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-filecard { display: flex; align-items: center; justify-content: flex-start; gap: 16px; border: 1px dashed #8a8a8a; border-radius: 10px; padding: 16px; }
         .dms-filecard .name { font-weight: 600; }
         .dms-filecard .size { color: #666; font-size: 12px; }
+        /* Textarea inherits the input styling so Remark matches the fields around it —
+           without this it renders in the browser's default monospace at a random width. */
+        .dms-field textarea { font: inherit; width: 100%; box-sizing: border-box; padding: 8px 10px;
+          border: 1px solid #c8c8c8; border-radius: 4px; resize: vertical; }
+        .dms-field textarea:focus { outline: 2px solid #0f6c3f; outline-offset: -1px; }
+        /* Checkbox row: label beside the box, hint underneath and aligned with it. */
+        .dms-check { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
+        .dms-check input { margin: 0; }
+        .dms-check small { grid-column: 2; color: #666; font-size: 12px; }
         .dms-link { background: none; border: none; color: #0f6c3f; cursor: pointer; font-weight: 600; padding: 0; font-size: 13px; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
         .dms-field > span { font-weight: 600; }
@@ -1341,8 +1398,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         All fields marked <strong>*</strong> are required.
       </p>
 
-      {/* ── Upload a Document ───────────────────────────────────────────── */}
+      {/* ── Document Details ────────────────────────────────────────────── */}
       <div className="dms-section">
+        <p className="dms-section-title">Document Details</p>
         <div style={{ marginBottom: 16 }}>
           <label className="dms-field">
             <span>Document Name</span>
@@ -1462,13 +1520,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             />
           </label>
 
-          {renderSelect(
-            "Document Type",
-            true,
-            documentType,
-            setDocumentType,
-            options.documentType,
-          )}
+          {/* Document Type used to sit here. It moved into the folder card below:
+              it is part of the destination path (Unit → Year → Document Type), not a
+              property of the document, and grouping it with Unit and Year is what the
+              client's mockup shows. */}
 
           {/* Confidential Level carries an info tooltip defining each term.
               tabIndex makes it keyboard-reachable; :focus-within keeps the
@@ -1518,6 +1573,38 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               </span>
             </em>
           </div>
+
+          {/* Offered only for the level named by `legallyPrivilegedFor` in DMS Config.
+              Unset means never offered — see the setting's note. The value is re-derived
+              at upload time rather than trusted from here, because hiding the control
+              does not clear the state behind it. */}
+          {settings.legallyPrivilegedFor !== "" &&
+            confidentiality === settings.legallyPrivilegedFor && (
+              <label className="dms-check" style={{ gridColumn: "1 / -1" }}>
+                <input
+                  type="checkbox"
+                  checked={legallyPrivileged}
+                  onChange={(e) => setLegallyPrivileged(e.target.checked)}
+                />
+                <span>Legally Privileged</span>
+                <small>
+                  Tick if this is a protected communication between client and lawyer.
+                </small>
+              </label>
+            )}
+
+          {/* Full row: a remark is prose, and half a row wraps it to four lines. */}
+          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
+            <span>Remark</span>
+            <textarea
+              value={remark}
+              maxLength={250}
+              rows={3}
+              placeholder="Anything the approver should know about this document"
+              onChange={(e) => setRemark(e.target.value)}
+            />
+            <small>{remark.length}/250 characters</small>
+          </label>
         </div>
       </div>
 
@@ -1633,6 +1720,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           )}
 
           {renderSelect("Year", true, yearPeriod, setYearPeriod, options.yearPeriod)}
+
+          {/* Document Type completes the path: the deepest level is the permissioned
+              Unit folder, and Year / Document Type are ensure-created beneath it on
+              first use. It sits with Unit and Year because all three decide WHERE the
+              file lands, unlike the fields above, which describe the file itself. */}
+          {renderSelect(
+            "Document Type",
+            true,
+            documentType,
+            setDocumentType,
+            options.documentType,
+          )}
 
           {/* Graceful empty-state: a segment whose term set has no child terms yet
               (e.g. the non-GHO Head Offices before their Department/Unit trees are
