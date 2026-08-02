@@ -1222,6 +1222,19 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       for (const r of mapRows) {
         if (r.termGuid) mapByTerm.set(r.termGuid.toLowerCase(), r);
       }
+      // Each folder's name BEFORE this run, snapshotted once.
+      //
+      // Read live from the row instead and the Staging pass — which rewrites
+      // FolderUrl after a successful rename — would make the later Documents pass
+      // believe the name was already correct. Documents would skip the rename and
+      // the create step would make an empty folder at the new name, stranding the
+      // real one under the old name. Snapshotting keeps every library renaming
+      // from the same origin regardless of pass order.
+      const oldNameByTerm = new Map<string, string>();
+      for (const r of mapRows) {
+        const name = (r.folderUrl ?? "").split("/").pop() ?? "";
+        if (r.termGuid && name) oldNameByTerm.set(r.termGuid.toLowerCase(), name);
+      }
       const groupMap = await loadGroupMapForAssign();
       const { targets, incomplete: incompleteSegments, missingAbbrev, collisions } = await buildProvisionTargets();
       // A collision aborts BEFORE anything is created. Two siblings resolving to
@@ -1330,7 +1343,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // resolve by UniqueId, not by path.
             const mappedRow = t.termGuid ? mapByTerm.get(t.termGuid.toLowerCase()) : undefined;
             const wantName = t.relPath.split("/").pop() ?? "";
-            const oldName = (mappedRow?.folderUrl ?? "").split("/").pop() ?? "";
+            const oldName = t.termGuid ? oldNameByTerm.get(t.termGuid.toLowerCase()) ?? "" : "";
             // Case-insensitive: SharePoint treats sibling names as case-insensitive
             // for uniqueness, so renaming CORU → Coru would collide with itself and
             // report a conflict that is not one.
