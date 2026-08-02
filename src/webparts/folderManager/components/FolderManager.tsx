@@ -1511,8 +1511,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               ROLE_TO_PERMISSION[g.role] !== undefined &&
               (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
             );
-            if (applicable.length === 0) {
-              entries.push({ msg: `  ⚠ ${folderLabel} — no group-map groups for this tier (locked admin-only)`, ok: true });
+            // Only a LEAF (unit) folder is expected to carry Group Map rows — the model is
+            // leaf-only by design (see CLAUDE.md / the leaf-only authorization spec), so the
+            // segment and department tiers having none is the correct state, not a problem.
+            // Warning on them buried the real warnings under ~260 structurally unfixable
+            // ones. Parent tiers stay admin-only and silent; members reach their unit
+            // through the ancestor Read grants below.
+            if (applicable.length === 0 && t.isLeaf) {
+              entries.push({ msg: `  ⚠ ${folderLabel} — no group-map groups for this unit (locked admin-only)`, ok: true });
             }
             const grantedPids: Array<{ groupName: string; pid: number }> = [];
             for (const g of applicable) {
