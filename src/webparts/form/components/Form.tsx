@@ -957,6 +957,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (!yearPeriod) missing.push("Year");
     if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidential Level");
+    // The three name parts are required so every saved file carries the full
+    // [Project] - [Vendor] - [Document Name] - [Date] shape. composeUploadBase
+    // drops blank parts, so leaving these optional silently produced a shorter
+    // name than the convention promises — and after the fact a shortened name is
+    // indistinguishable from a deliberate one. Trimmed: a space is not a value.
+    if (!docName.trim()) missing.push("Document Name");
+    if (!projectName.trim()) missing.push("Project Name");
+    if (!vendor.trim()) missing.push("Vendor/Customer Name");
     if (missing.length > 0) {
       showToast(`Please complete: ${missing.join(", ")}.`, "error");
       return;
@@ -1010,7 +1018,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     });
     if (!mapping || !mapping.folderUniqueId) {
       showToast(
-        `This folder hasn't been mapped yet. Ask an administrator to run the reconciliation tool. (term ${leafTerm.label})`,
+        // Names BOTH causes. "Re-run reconciliation" alone was wrong half the time:
+        // since folder names come from DMS Term Abbreviation, a unit with no
+        // abbreviation row is skipped by every run, so re-running changes nothing.
+        `"${leafTerm.label}" has no folder yet. Your DMS administrator needs to give it an abbreviation in the DMS Term Abbreviation list, then run folder reconciliation.`,
         "error",
       );
       setStatus("");
@@ -1697,7 +1708,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
         <div className="dms-grid" style={{ marginTop: 16 }}>
           <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-            <span>Document Name</span>
+            <span>
+              Document Name <em className="req">*</em>
+            </span>
             {/* Typeable before a file is picked: the name is only read at upload
                 time, and leaving it enabled avoids a greyed-out first field. */}
             <input
@@ -1726,7 +1739,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           {/* Free-text Project Name — distinct from the Group-led Projects
               "Group Project Name" folder level in the card below. */}
           <label className="dms-field">
-            <span>Project Name</span>
+            <span>
+              Project Name <em className="req">*</em>
+            </span>
             <input
               type="text"
               value={projectName}
@@ -1738,7 +1753,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
           {/* Vendor is free text. It also feeds the auto-composed document name. */}
           <label className="dms-field">
-            <span>Vendor/Customer Name</span>
+            <span>
+              Vendor/Customer Name <em className="req">*</em>
+            </span>
             <input
               type="text"
               value={vendor}
