@@ -1316,6 +1316,91 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       setReconPlanned(plannedOps);
       setReconStartMs(reconStart);
       setReconNow(reconStart);
+      // ── RENAME PASS ────────────────────────────────────────────────────────
+      // Runs to completion across EVERY library before the create/lock loop, and
+      // before anything writes to the Folder Map.
+      //
+      // Two earlier attempts put this inside the library loop and both failed the
+      // same way. The Staging map row is the only record of a folder's previous
+      // name, so renaming Staging and refreshing that row destroyed the very
+      // information the Documents pass needed: Documents then saw "already
+      // correct", skipped the rename, and the create step made an empty folder at
+      // the new name while the real one kept the old one. Persisted, so re-running
+      // could not repair it either.
+      //
+      // Renaming first, then updating the row once, removes the ordering entirely.
+      // It also has to precede the create step regardless: `full` points at the new
+      // name, so creating first would put an empty folder exactly where the rename
+      // needs to land, and the rename would report a collision against it.
+      //
+      // Note this reverts a folder renamed by hand. Deliberate — the abbreviation
+      // list is the single source of truth and every library must agree — and
+      // harmless, because uploads resolve by UniqueId rather than by path.
+      const renameLibs = ["Staging", "Documents"] as LibTarget[];
+      const renameRoots = new Map<string, string>();
+      for (const lib of renameLibs) {
+        const r = await getLibraryRoot(lib);
+        if (r) renameRoots.set(lib, r);
+      }
+      for (const t of targets) {
+        if (!t.termGuid) continue; // segment containers have no term, so no abbreviation
+        const wantName = t.relPath.split("/").pop() ?? "";
+        const oldName = oldNameByTerm.get(t.termGuid.toLowerCase()) ?? "";
+        // Case-insensitive: SharePoint treats sibling names as case-insensitive for
+        // uniqueness, so CORU → Coru would collide with itself and report a
+        // conflict that is not one.
+        if (!oldName || !wantName || oldName.toLowerCase() === wantName.toLowerCase()) continue;
+        const parentRel = t.relPath.slice(0, t.relPath.lastIndexOf("/"));
+        let newStagingUrl = "";
+        for (const lib of renameLibs) {
+          const libRoot = renameRoots.get(lib);
+          if (!libRoot) continue;
+          const oldProbe = await probeFolderByPath(
+            context.spHttpClient,
+            siteUrl,
+            `${libRoot}${parentRel}/${oldName}`,
+          );
+          if (!oldProbe.folder) continue; // nothing under the old name here
+          const renamed = await renameFolder(
+            context.spHttpClient,
+            siteUrl,
+            oldProbe.folder.serverRelativeUrl,
+            wantName,
+          );
+          if (renamed.ok) {
+            entries.push({ msg: `  ✎ ${lib}${parentRel}: renamed ${oldName} → ${wantName}`, ok: true });
+            if (lib === "Staging") newStagingUrl = renamed.serverRelativeUrl ?? "";
+            await tick();
+          } else if (renamed.conflict) {
+            // Two terms want one folder name. Forcing it would merge two units'
+            // documents behind a single ACL — the isolation failure findCollisions
+            // exists to prevent — so this needs a person.
+            entries.push({
+              msg: `  ⚠ ${t.label} — cannot rename "${oldName}" to "${wantName}" in ${lib}: a folder of that name is already there. Fix the abbreviation, then re-run.`,
+              ok: false,
+            });
+          } else {
+            entries.push({
+              msg: `  ✗ ${t.label} — rename "${oldName}" → "${wantName}" in ${lib} FAILED (HTTP ${renamed.status}) ${renamed.detail ?? ""}`,
+              ok: false,
+            });
+          }
+        }
+        // Refresh the stored path only now, with every library already handled. The
+        // UniqueId is untouched by a rename, so the verification step later treats
+        // the row as valid and would otherwise leave FolderUrl permanently stale —
+        // it self-heals only when the folder is missing.
+        const row = mapByTerm.get(t.termGuid.toLowerCase());
+        if (newStagingUrl && row) {
+          await updateFolderMapping(context.spHttpClient, siteUrl, row.itemId, {
+            folderUniqueId: row.folderUniqueId,
+            folderUrl: newStagingUrl,
+            title: t.label,
+          });
+          row.folderUrl = newStagingUrl;
+        }
+      }
+
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const root = await getLibraryRoot(lib);
         if (!root) {
@@ -1326,74 +1411,6 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           const full = `${root}${t.relPath}`;
           const folderLabel = `${lib}${t.relPath}`;
           try {
-            // RENAME BEFORE CREATE. When an abbreviation is edited, `full` points
-            // at a name that does not exist yet, so the create below would make an
-            // empty folder there and the real one would keep its old name — and the
-            // subsequent rename would then collide with the folder we had just
-            // created. Renaming first makes the create a no-op.
-            //
-            // The old name comes from the Folder Map row's stored path. That row
-            // exists only for Staging, but every library mirrors the same relative
-            // tree, so it names the old folder in Documents too — which is how
-            // Documents gets renamed despite having no rows of its own.
-            //
-            // This also reverts a folder someone renamed by hand. Deliberate: the
-            // abbreviation list is the single source of truth for names and all
-            // libraries must agree. Nothing breaks either way, since uploads
-            // resolve by UniqueId, not by path.
-            const mappedRow = t.termGuid ? mapByTerm.get(t.termGuid.toLowerCase()) : undefined;
-            const wantName = t.relPath.split("/").pop() ?? "";
-            const oldName = t.termGuid ? oldNameByTerm.get(t.termGuid.toLowerCase()) ?? "" : "";
-            // Case-insensitive: SharePoint treats sibling names as case-insensitive
-            // for uniqueness, so renaming CORU → Coru would collide with itself and
-            // report a conflict that is not one.
-            if (
-              oldName.length > 0 &&
-              wantName.length > 0 &&
-              oldName.toLowerCase() !== wantName.toLowerCase()
-            ) {
-              const parentRel = t.relPath.slice(0, t.relPath.lastIndexOf("/"));
-              const oldFull = `${root}${parentRel}/${oldName}`;
-              const oldProbe = await probeFolderByPath(context.spHttpClient, siteUrl, oldFull);
-              if (oldProbe.folder) {
-                const renamed = await renameFolder(
-                  context.spHttpClient,
-                  siteUrl,
-                  oldProbe.folder.serverRelativeUrl,
-                  wantName,
-                );
-                if (renamed.ok) {
-                  entries.push({ msg: `  ✎ ${lib}${parentRel}: renamed ${oldName} → ${wantName}`, ok: true });
-                  // Refresh the stored path. The UniqueId is unchanged by a rename,
-                  // so the verification step below will report the row as valid and
-                  // would otherwise leave FolderUrl pointing at a path that no
-                  // longer exists — and stale forever, since it self-heals only on
-                  // a missing folder.
-                  if (lib === "Staging" && mappedRow && renamed.serverRelativeUrl) {
-                    await updateFolderMapping(context.spHttpClient, siteUrl, mappedRow.itemId, {
-                      folderUniqueId: mappedRow.folderUniqueId,
-                      folderUrl: renamed.serverRelativeUrl,
-                      title: t.label,
-                    });
-                    mappedRow.folderUrl = renamed.serverRelativeUrl;
-                  }
-                  await tick();
-                } else if (renamed.conflict) {
-                  // Two terms want one folder name. Forcing it would merge two
-                  // units' documents behind a single ACL — the isolation failure
-                  // findCollisions exists to prevent — so this needs a person.
-                  entries.push({
-                    msg: `  ⚠ ${t.label} — cannot rename "${oldName}" to "${wantName}" in ${lib}: a folder of that name is already there. Fix the abbreviation, then re-run.`,
-                    ok: false,
-                  });
-                } else {
-                  entries.push({
-                    msg: `  ✗ ${t.label} — rename "${oldName}" → "${wantName}" in ${lib} FAILED (HTTP ${renamed.status}) ${renamed.detail ?? ""}`,
-                    ok: false,
-                  });
-                }
-              }
-            }
             pushFolder(`${folderLabel} — creating…`, "run");
             const existed = await folderExists(full);
             if (!existed) {
