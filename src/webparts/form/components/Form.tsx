@@ -1393,10 +1393,164 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         @keyframes dms-popin { from { transform: scale(.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       `}</style>
 
-      <h2>Upload Document Form</h2>
+      {/* No page heading. The web part sits on a page that already titles itself,
+          so an <h2> here repeated the title directly above it. The section headings
+          below carry the document structure. */}
       <p className="dms-subtitle">
         All fields marked <strong>*</strong> are required.
       </p>
+
+      {/* ── Document Location ────────────────────────────────────────────── */}
+      {/* Deliberately BEFORE Document Details in SOURCE order, not reordered with
+          CSS: tab order follows the DOM, so a visual-only swap would have keyboard
+          users moving through the form in a different sequence from what they see. */}
+      <div className="dms-section">
+        <p className="dms-section-title">Document Location</p>
+
+        {deptLoading ? (
+          <p className="dms-dept-loading">Loading your access&hellip;</p>
+        ) : !privileged && validPaths.length === 0 ? (
+          <div className="dms-dept-error">
+            Your account isn&apos;t fully provisioned to upload — you need
+            membership at every level plus the unit uploader role. Contact your
+            administrator.
+          </div>
+        ) : null}
+
+        {/* Business Segment | Project toggle — a side shows only if the user can
+            actually upload there (privileged users see every configured side). */}
+        <div className="dms-radio-group">
+          <p>Upload to</p>
+          {(["BusinessSegment", "Project"] as const).map((side) => {
+            const sideModes = modes.filter((m) => m.side === side);
+            const offerable = privileged
+              ? sideModes
+              : sideModes.filter((m) =>
+                  validPaths.some((p) => p.modeKey === m.key),
+                );
+            if (offerable.length === 0) return null;
+            const active = activeMode()?.side === side;
+            return (
+              <label key={side}>
+                <input
+                  type="radio"
+                  name="sideToggle"
+                  checked={active}
+                  onChange={() => switchMode(offerable[0].key)}
+                />
+                {side === "BusinessSegment" ? "Business Segment" : "Project"}
+              </label>
+            );
+          })}
+        </div>
+
+        {/* Segment picker — only when the active side offers more than one mode. */}
+        {(() => {
+          const side = activeMode()?.side;
+          const sideModes = modes.filter((m) => m.side === side);
+          const offerable = privileged
+            ? sideModes
+            : sideModes.filter((m) =>
+                validPaths.some((p) => p.modeKey === m.key),
+              );
+          if (offerable.length <= 1) return null;
+          return (
+            <label className="dms-field">
+              <span>Segment</span>
+              <select
+                value={uploadMode}
+                onChange={(e) => switchMode(e.target.value)}
+              >
+                {offerable.map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })()}
+
+        {/* Restricted users: read-only breadcrumb of the resolved location. */}
+        {!privileged && activeMode() && (
+          <div className="dms-dept-badge">
+            <span className="dept-label">Uploading to:</span>
+            <span className="dept-name">
+              {[
+                activeMode()?.label,
+                ...(activeMode()?.levels ?? []).map(
+                  (_lvl, i) =>
+                    (levelChoices[i] ?? []).find(
+                      (o) => o.id === levelValues[i],
+                    )?.label,
+                ),
+              ]
+                .filter(Boolean)
+                .join(" › ")}
+            </span>
+          </div>
+        )}
+
+        <div className="dms-grid dms-grid-2">
+          {/* --- File-path fields, in folder order: Segment (above) -> level(s)
+                 -> Year -> Document Type. Every level spans the full row EXCEPT the
+                 deepest one, which shares its row with Year. --- */}
+          {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
+            renderSelect(
+              lvl.label,
+              true,
+              levelValues[i] ?? "",
+              (v) => {
+                const md = activeMode();
+                if (md) handleLevelChange(md, i, v);
+              },
+              levelChoices[i] ?? [],
+              deptLoading ||
+                isLevelLocked(i) ||
+                (i > 0 && !levelValues[i - 1]),
+              `Select ${lvl.label}`,
+              i < arr.length - 1,
+            ),
+          )}
+
+          {renderSelect("Year", true, yearPeriod, setYearPeriod, options.yearPeriod)}
+
+          {/* Document Type completes the path: the deepest level is the permissioned
+              Unit folder, and Year / Document Type are ensure-created beneath it on
+              first use. It sits with Unit and Year because all three decide WHERE the
+              file lands, unlike the fields below, which describe the file itself. */}
+          {renderSelect(
+            "Document Type",
+            true,
+            documentType,
+            setDocumentType,
+            options.documentType,
+          )}
+
+          {/* Graceful empty-state: a segment whose term set has no child terms yet
+              (e.g. the non-GHO Head Offices before their Department/Unit trees are
+              added) would otherwise show a dropdown with nothing but its
+              "Select …" placeholder. Name the missing level instead. */}
+          {(() => {
+            const md = activeMode();
+            if (!md || md.levels.length === 0 || deptLoading || levelChoices.length === 0) return null;
+            for (let i = 0; i < md.levels.length; i++) {
+              const parentChosen = i === 0 || !!levelValues[i - 1];
+              if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
+                return (
+                  <div
+                    key="dms-empty-level"
+                    style={{ gridColumn: "1 / -1", padding: "8px 12px", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, fontSize: 13, color: "#7a5b00" }}
+                  >
+                    No {md.levels[i].label.toLowerCase()} options are configured for this segment yet — ask your administrator to add them in the term store before uploading here.
+                  </div>
+                );
+              }
+            }
+            return null;
+          })()}
+        </div>
+      </div>
 
       {/* ── Document Details ────────────────────────────────────────────── */}
       <div className="dms-section">
@@ -1605,156 +1759,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             />
             <small>{remark.length}/250 characters</small>
           </label>
-        </div>
-      </div>
-
-      {/* ── Document Folder Information ──────────────────────────────────── */}
-      <div className="dms-section">
-        <p className="dms-section-title">Document Folder Information</p>
-
-        {deptLoading ? (
-          <p className="dms-dept-loading">Loading your access&hellip;</p>
-        ) : !privileged && validPaths.length === 0 ? (
-          <div className="dms-dept-error">
-            Your account isn&apos;t fully provisioned to upload — you need
-            membership at every level plus the unit uploader role. Contact your
-            administrator.
-          </div>
-        ) : null}
-
-        {/* Business Segment | Project toggle — a side shows only if the user can
-            actually upload there (privileged users see every configured side). */}
-        <div className="dms-radio-group">
-          <p>Upload to</p>
-          {(["BusinessSegment", "Project"] as const).map((side) => {
-            const sideModes = modes.filter((m) => m.side === side);
-            const offerable = privileged
-              ? sideModes
-              : sideModes.filter((m) =>
-                  validPaths.some((p) => p.modeKey === m.key),
-                );
-            if (offerable.length === 0) return null;
-            const active = activeMode()?.side === side;
-            return (
-              <label key={side}>
-                <input
-                  type="radio"
-                  name="sideToggle"
-                  checked={active}
-                  onChange={() => switchMode(offerable[0].key)}
-                />
-                {side === "BusinessSegment" ? "Business Segment" : "Project"}
-              </label>
-            );
-          })}
-        </div>
-
-        {/* Segment picker — only when the active side offers more than one mode. */}
-        {(() => {
-          const side = activeMode()?.side;
-          const sideModes = modes.filter((m) => m.side === side);
-          const offerable = privileged
-            ? sideModes
-            : sideModes.filter((m) =>
-                validPaths.some((p) => p.modeKey === m.key),
-              );
-          if (offerable.length <= 1) return null;
-          return (
-            <label className="dms-field">
-              <span>Segment</span>
-              <select
-                value={uploadMode}
-                onChange={(e) => switchMode(e.target.value)}
-              >
-                {offerable.map((m) => (
-                  <option key={m.key} value={m.key}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          );
-        })()}
-
-        {/* Restricted users: read-only breadcrumb of the resolved location. */}
-        {!privileged && activeMode() && (
-          <div className="dms-dept-badge">
-            <span className="dept-label">Uploading to:</span>
-            <span className="dept-name">
-              {[
-                activeMode()?.label,
-                ...(activeMode()?.levels ?? []).map(
-                  (_lvl, i) =>
-                    (levelChoices[i] ?? []).find(
-                      (o) => o.id === levelValues[i],
-                    )?.label,
-                ),
-              ]
-                .filter(Boolean)
-                .join(" › ")}
-            </span>
-          </div>
-        )}
-
-        <div className="dms-grid dms-grid-2">
-          {/* --- File-path fields, in folder order: Segment (above) -> level(s)
-                 -> Year. Every level spans the full row EXCEPT the deepest one,
-                 which shares its row with Year. Document Type also forms part of
-                 the path but is ensure-created on demand, so it lives above. --- */}
-          {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
-            renderSelect(
-              lvl.label,
-              true,
-              levelValues[i] ?? "",
-              (v) => {
-                const md = activeMode();
-                if (md) handleLevelChange(md, i, v);
-              },
-              levelChoices[i] ?? [],
-              deptLoading ||
-                isLevelLocked(i) ||
-                (i > 0 && !levelValues[i - 1]),
-              `Select ${lvl.label}`,
-              i < arr.length - 1,
-            ),
-          )}
-
-          {renderSelect("Year", true, yearPeriod, setYearPeriod, options.yearPeriod)}
-
-          {/* Document Type completes the path: the deepest level is the permissioned
-              Unit folder, and Year / Document Type are ensure-created beneath it on
-              first use. It sits with Unit and Year because all three decide WHERE the
-              file lands, unlike the fields above, which describe the file itself. */}
-          {renderSelect(
-            "Document Type",
-            true,
-            documentType,
-            setDocumentType,
-            options.documentType,
-          )}
-
-          {/* Graceful empty-state: a segment whose term set has no child terms yet
-              (e.g. the non-GHO Head Offices before their Department/Unit trees are
-              added) would otherwise show a dropdown with nothing but its
-              "Select …" placeholder. Name the missing level instead. */}
-          {(() => {
-            const md = activeMode();
-            if (!md || md.levels.length === 0 || deptLoading || levelChoices.length === 0) return null;
-            for (let i = 0; i < md.levels.length; i++) {
-              const parentChosen = i === 0 || !!levelValues[i - 1];
-              if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
-                return (
-                  <div
-                    key="dms-empty-level"
-                    style={{ gridColumn: "1 / -1", padding: "8px 12px", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, fontSize: 13, color: "#7a5b00" }}
-                  >
-                    No {md.levels[i].label.toLowerCase()} options are configured for this segment yet — ask your administrator to add them in the term store before uploading here.
-                  </div>
-                );
-              }
-            }
-            return null;
-          })()}
         </div>
       </div>
 
