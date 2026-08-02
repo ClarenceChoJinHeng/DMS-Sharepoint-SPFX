@@ -1413,7 +1413,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const f = await loadFullNameField(lib);
         if (f) fullNameFields.set(lib, f);
-        else entries.push({ msg: `⚠ ${lib}: no usable "${FULL_NAME_COLUMN_TITLE}" column — folders will show only their abbreviation`, ok: false });
+        // ok:true deliberately. This is a warning, not an error: `errorsBeforePrune`
+        // counts !ok entries and blocks the orphan prune, and that guard exists because
+        // a partial TERM STORE read returns a short target list that makes healthy map
+        // rows look deleted. A missing display column cannot shorten the target list, so
+        // gating prune on it would silently disable self-healing over a cosmetic column.
+        // The ⚠ still puts it in "Needs attention" where an admin will see it.
+        else entries.push({ msg: `⚠ ${lib}: no usable "${FULL_NAME_COLUMN_TITLE}" column — folders will show only their abbreviation`, ok: true });
       }
       let plannedOps = 0;
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
@@ -1575,8 +1581,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 }
               } catch (e) {
                 // Never fatal — a label failure must not stop the folder's ACL work,
-                // which is the part that actually controls access.
-                entries.push({ msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`, ok: false });
+                // which is the part that actually controls access. ok:true for the same
+                // reason as the missing-column notice above: it must not gate the prune.
+                entries.push({ msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`, ok: true });
               }
             }
             // Map Staging term folders only (the segment container has no term).
