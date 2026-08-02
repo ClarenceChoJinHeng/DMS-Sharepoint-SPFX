@@ -193,6 +193,7 @@ type GroupPick      = { id: string; displayName: string };
 type ExistingAssign = { uid: string; principalId: number; title: string; roleDefId: number; kept: boolean };
 type PendingAssign  = { uid: string; group: GroupPick; roleDefId: number };
 type LogEntry       = { msg: string; ok: boolean };
+type LogTab         = "All" | "Documents" | "Staging" | "Warnings" | "Errors";
 
 // Permission state now lives directly on the folder node so a single "Update"
 // commit can apply renames, new-folder creation, and permission edits together.
@@ -346,6 +347,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const [roleDefs,     setRoleDefs]     = useState<RoleDef[]>([]);
   const [ownerGroupId, setOwnerGroupId] = useState<number | null>(null);
   const [log,          setLog]          = useState<LogEntry[]>([]);
+  // Which slice of the log is on screen. "All" is the default because the prune,
+  // orphan-repair and site-entry passes name neither library, so they are reachable
+  // from nowhere else.
+  const [logTab,       setLogTab]       = useState<LogTab>("All");
   const [toast,        setToast]        = useState<{ message: string; error: boolean } | null>(null);
   const [expandedIds,  setExpandedIds]  = useState<Record<string, boolean>>({});
   // Section collapse state, keyed by section name; sections default to open.
@@ -355,12 +360,27 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // Live reconciliation progress (two-panel view + rotating cooldown text).
   const [reconRunning, setReconRunning] = useState(false);
   const [reconPhase,   setReconPhase]   = useState("");
-  const [folderFeed,   setFolderFeed]   = useState<ProgItem[]>([]);
-  const [assignFeed,   setAssignFeed]   = useState<ProgItem[]>([]);
+  // One feed per library per kind — four panels. A single merged pair made a
+  // 700-step run read as one undifferentiated wall; the client's question is
+  // always "how is Staging doing", never "how is the run doing".
+  const emptyFeeds = (): Record<LibTarget, ProgItem[]> => ({ Staging: [], Documents: [] });
+  const [folderFeeds,  setFolderFeeds]  = useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
+  const [assignFeeds,  setAssignFeeds]  = useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
   const [reconCounts,  setReconCounts]  = useState<{ folders: number; assigns: number }>({ folders: 0, assigns: 0 });
   // ETA: planned total throttled ops, run start time, and a ticking "now" so the
   // elapsed/remaining estimate repaints every second even between ops.
   const [reconPlanned, setReconPlanned] = useState(0);
+  /**
+   * Steps ATTEMPTED, which is what the ETA divides by.
+   *
+   * This used to reuse `reconCounts`, which counts things that CHANGED — folders
+   * created, groups assigned. On a re-run almost nothing changes, so the numerator
+   * stayed near zero while the denominator stayed at the full planned total, and
+   * the estimate ran away: a re-run that finished in three minutes advertised
+   * "~197m left". Attempted-vs-planned is the only pair that measures the same
+   * thing on both sides.
+   */
+  const [reconDone,    setReconDone]    = useState(0);
   const [reconStartMs, setReconStartMs] = useState<number | undefined>(undefined);
   const [reconNow,     setReconNow]     = useState(0);
 
@@ -390,12 +410,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   // Keep the live feeds short so hundreds of ops don't flood the DOM.
   const FEED_CAP = 40;
-  const pushFolder = (text: string, status: ProgItem["status"]): void =>
-    setFolderFeed((f) => [...f.slice(-(FEED_CAP - 1)), { text, status }]);
-  const setLastFolder = (text: string, status: ProgItem["status"]): void =>
-    setFolderFeed((f) => (f.length ? [...f.slice(0, -1), { text, status }] : [{ text, status }]));
-  const pushAssign = (text: string, status: ProgItem["status"]): void =>
-    setAssignFeed((a) => [...a.slice(-(FEED_CAP - 1)), { text, status }]);
+  const pushFolder = (lib: LibTarget, text: string, status: ProgItem["status"]): void =>
+    setFolderFeeds((f) => ({ ...f, [lib]: [...f[lib].slice(-(FEED_CAP - 1)), { text, status }] }));
+  const setLastFolder = (lib: LibTarget, text: string, status: ProgItem["status"]): void =>
+    setFolderFeeds((f) => ({
+      ...f,
+      [lib]: f[lib].length ? [...f[lib].slice(0, -1), { text, status }] : [{ text, status }],
+    }));
+  const pushAssign = (lib: LibTarget, text: string, status: ProgItem["status"]): void =>
+    setAssignFeeds((a) => ({ ...a, [lib]: [...a[lib].slice(-(FEED_CAP - 1)), { text, status }] }));
+  /** One planned step attempted — succeeded, skipped or failed alike. */
+  const step = (n = 1): void => setReconDone((d) => d + n);
   // Surfaces a 429 backoff wait in the rotating status line (safety-net path).
   const reconWaitNote = (ms: number): void =>
     setReconPhase(`Easing off — SharePoint is busy (${Math.round(ms / 1000)}s)…`);
@@ -1505,9 +1530,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     setReconConfirm(false);
     setBusy(true);
     setReconRunning(true);
-    setFolderFeed([]);
-    setAssignFeed([]);
+    setFolderFeeds(emptyFeeds());
+    setAssignFeeds(emptyFeeds());
     setReconCounts({ folders: 0, assigns: 0 });
+    setReconDone(0);
     setReconPlanned(0);
     setReconStartMs(undefined);
     setReconPhase("Generating folders…");
@@ -1763,14 +1789,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           const full = `${root}${t.relPath}`;
           const folderLabel = `${lib}${t.relPath}`;
           try {
-            pushFolder(`${folderLabel} — creating…`, "run");
+            pushFolder(lib, `${folderLabel} — creating…`, "run");
             const existed = await folderExists(full);
             if (!existed) {
               await createFolder(full);
               await breakInheritance(full);
               if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
               entries.push({ msg: `${folderLabel} — created + locked ✓`, ok: true });
-              setLastFolder(`${folderLabel} — created + locked`, "ok");
+              setLastFolder(lib, `${folderLabel} — created + locked`, "ok");
               bumpFolders();
               await tick();
             } else {
@@ -1779,14 +1805,18 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 await breakInheritance(full);
                 if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
                 entries.push({ msg: `${folderLabel} — existed, locked ✓`, ok: true });
-                setLastFolder(`${folderLabel} — existed, locked`, "ok");
+                setLastFolder(lib, `${folderLabel} — existed, locked`, "ok");
                 bumpFolders();
                 await tick();
               } else {
                 entries.push({ msg: `${folderLabel} — already locked, skipped`, ok: true });
-                setLastFolder(`${folderLabel} — already there`, "skip");
+                setLastFolder(lib, `${folderLabel} — already there`, "skip");
               }
             }
+            // Counted whichever branch ran, including "already there". Counting only
+            // the branches that WROTE something is what made the estimate run away
+            // on a re-run.
+            step();
             // Full Name: the abbreviation is the folder's name, so the raw term label
             // goes on the item to keep the tree readable in the details pane.
             //
@@ -1803,6 +1833,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             const fullNameField = fullNameFields.get(lib);
             const wantCtId = folderCtIds.get(lib);
             if (fullNameField || wantCtId) {
+              // Planned as one step per target per library, so it is counted here
+              // whether the merge turns out to be needed or not.
+              if (fullNameFields.has(lib)) step();
               try {
                 const state = await getFolderItemState(full, fullNameField);
                 const values: Record<string, string> = {};
@@ -1919,22 +1952,24 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               const roleDefId = roleDefs.find(r => r.name === ROLE_TO_PERMISSION[g.role])?.id;
               if (roleDefId === undefined) {
                 entries.push({ msg: `  ⚠ ${g.groupName} — no "${ROLE_TO_PERMISSION[g.role]}" role definition on site`, ok: false });
-                pushAssign(`${t.label}: "${ROLE_TO_PERMISSION[g.role]}" role missing on site`, "warn");
+                pushAssign(lib, `${t.label}: "${ROLE_TO_PERMISSION[g.role]}" role missing on site`, "warn");
+                step();
                 continue;
               }
+              step();
               try {
                 const pid = spGroupPrincipalId(g.groupId);
                 await addRoleAssignment(full, pid, roleDefId);
                 grantedPids.push({ groupName: g.groupName, pid });
                 entries.push({ msg: `  ↳ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}`, ok: true });
-                pushAssign(`${t.label} → ${g.groupName} (${ROLE_TO_PERMISSION[g.role]})`, "ok");
+                pushAssign(lib, `${t.label} → ${g.groupName} (${ROLE_TO_PERMISSION[g.role]})`, "ok");
                 bumpAssigns();
                 await tick();
               } catch (e) {
                 entries.push({ msg: `  ✗ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]} FAILED: ${(e as Error).message}`, ok: false });
                 // Most common cause: the SP group doesn't exist yet (or is a legacy Entra
                 // row). Surface the admin-needs-to-create-it message in the right panel.
-                pushAssign(`Group "${g.groupName}" not found — ask an administrator to create it`, "admin");
+                pushAssign(lib, `Group "${g.groupName}" not found — ask an administrator to create it`, "admin");
               }
             }
             // Browse access: grant each just-assigned group Read on every ANCESTOR folder on
@@ -1978,13 +2013,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               );
               if (gridProbe.folder) {
                 entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`, ok: true });
-                setLastFolder(`${t.label} grid: already complete, skipped`, "skip");
+                setLastFolder(lib, `${t.label} grid: already complete, skipped`, "skip");
+                // The fast path settles every planned grid step in one probe; the
+                // estimate has to see them land or it keeps counting them as pending.
+                step(gridTotal);
               } else {
-              pushFolder(`${t.label} grid: 0 / ${gridTotal}`, "run");
+              pushFolder(lib, `${t.label} grid: 0 / ${gridTotal}`, "run");
               for (const yr of yearLabels) {
                 const yearFolder = await ensureFolder(context.spHttpClient, siteUrl, full, yr);
+                step();
                 if (yearFolder) { grid++; bumpFolders(); }
-                setLastFolder(`${t.label} grid: ${grid} / ${gridTotal}`, "run");
+                setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal}`, "run");
                 // Only pace REAL writes. Charging the throttle delay to a folder that
                 // already existed is what made a no-op re-run as slow as a first run.
                 if (yearFolder?.created) await tick();
@@ -1993,14 +2032,15 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 // 429 throttle. One folder at a time + the inter-write delay keeps it safe.
                 for (const dt of docTypeLabels) {
                   const made = await ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt);
+                  step();
                   if (made) { grid++; bumpFolders(); }
-                  setLastFolder(`${t.label} grid: ${grid} / ${gridTotal}`, "run");
+                  setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal}`, "run");
                   if (made?.created) await tick();
                 }
               }
               }
               entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
-              setLastFolder(`${t.label} grid: ${grid} / ${gridTotal} ✓`, "ok");
+              setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal} ✓`, "ok");
             }
           } catch (e) {
             entries.push({ msg: `${lib}${t.relPath} — FAILED: ${(e as Error).message}`, ok: false });
@@ -2489,7 +2529,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               }}
               style={{ ...s.segBtn, ...(i === arr.length - 1 ? { borderRight: "none" } : {}), ...(tab === t ? s.segActive : {}) }}
             >
-              {t === "Reconciliation" ? "Folder Reconciliation" : t === "GroupMap" ? "Group Map" : t}
+              {/* "User Access" rather than "Group Map": the tab is where a client
+                  answers "who can reach this folder", and the list name is an
+                  implementation detail they never have to think about. */}
+              {t === "Reconciliation" ? "Folder Reconciliation" : t === "GroupMap" ? "User Access" : t}
             </button>
           ))}
         </div>
@@ -2536,7 +2579,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             </button>
           )}
 
-          {(reconRunning || folderFeed.length > 0 || assignFeed.length > 0) && (
+          {(reconRunning ||
+            folderFeeds.Staging.length > 0 || folderFeeds.Documents.length > 0 ||
+            assignFeeds.Staging.length > 0 || assignFeeds.Documents.length > 0) && (
             <div style={{ marginTop: 18 }}>
               <style>{"@keyframes fmspin{to{transform:rotate(360deg)}}"}</style>
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
@@ -2552,10 +2597,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                   )}
                 </strong>
                 <span style={{ fontSize: 12, color: "#666" }}>
-                  {reconCounts.folders} folders · {reconCounts.assigns} group assignments
+                  {reconCounts.folders} folders created · {reconCounts.assigns} groups assigned
                 </span>
                 {(() => {
-                  const completed = reconCounts.folders + reconCounts.assigns;
+                  // reconDone, NOT reconCounts: the estimate must divide by steps
+                  // ATTEMPTED. reconCounts only rises when something changed, so on a
+                  // re-run it sits near zero against a full planned total and the
+                  // estimate runs away — the "~197m left" on a three-minute re-run.
                   const elapsedMs = reconStartMs ? Math.max(0, reconNow - reconStartMs) : 0;
                   if (!reconRunning) {
                     // Final line after a run completes.
@@ -2563,47 +2611,65 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                       <span style={{ fontSize: 12, color: "#666" }}>· took {fmtDur(elapsedMs)}</span>
                     ) : null;
                   }
-                  const remainingOps = Math.max(0, reconPlanned - completed);
-                  // Use the live rate once we have a few samples; before that, a static
-                  // model from the delay + cooldown so a number shows immediately.
-                  const remainMs = completed >= 5
-                    ? remainingOps * (elapsedMs / completed)
+                  const remainingOps = Math.max(0, reconPlanned - reconDone);
+                  // Use the live rate once there are enough samples to mean anything.
+                  // 25, not 5: the first steps are all cheap "already there" skips, and
+                  // extrapolating a whole run from them under-reads it as badly as the
+                  // old counter over-read it.
+                  const remainMs = reconDone >= 25
+                    ? remainingOps * (elapsedMs / reconDone)
                     : remainingOps * (RECON_WRITE_DELAY_MS + RECON_EST_HTTP_MS)
                       + Math.floor(reconPlanned / RECON_BATCH_SIZE) * RECON_COOLDOWN_MS;
+                  const pct = reconPlanned > 0
+                    ? Math.min(100, Math.round((reconDone / reconPlanned) * 100))
+                    : 0;
                   return (
                     <span style={{ fontSize: 12, color: "#0f6c3f", fontWeight: 600 }}>
-                      · ~{fmtDur(remainMs)} left
-                      <span style={{ color: "#999", fontWeight: 400 }}> ({fmtDur(elapsedMs)} elapsed{reconPlanned > 0 ? `, ${completed}/${reconPlanned}` : ""})</span>
+                      · {pct}% · ~{fmtDur(remainMs)} left
+                      <span style={{ color: "#999", fontWeight: 400 }}> ({fmtDur(elapsedMs)} elapsed{reconPlanned > 0 ? `, ${reconDone}/${reconPlanned} steps` : ""})</span>
                     </span>
                   );
                 })()}
               </div>
-              {/* flexWrap + flex-basis makes the two panels sit side-by-side on wide
-                  screens and stack on narrow (mobile) — no media query needed. */}
-              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                {([
-                  { title: "Folders", feed: folderFeed },
-                  { title: "Group assignments", feed: assignFeed },
-                ] as const).map((panel) => (
-                  <div key={panel.title} style={{ flex: "1 1 280px", minWidth: 0, border: "1px solid #e5e5e5", borderRadius: 4, overflow: "hidden" }}>
-                    <div style={{ padding: "6px 10px", background: "#f7f7f7", fontSize: 12, fontWeight: 600, color: "#444", borderBottom: "1px solid #eee" }}>{panel.title}</div>
-                    {/* overflowX:auto lets the client slide left/right to read full paths;
-                        rows keep nowrap (no ellipsis clip) so the whole message is reachable. */}
-                    <div style={{ maxHeight: 260, overflowY: "auto", overflowX: "auto", padding: "4px 0" }}>
-                      {panel.feed.length === 0 ? (
-                        <div style={{ padding: "6px 10px", fontSize: 12, color: "#aaa" }}>—</div>
-                      ) : (
-                        panel.feed.map((it, i) => (
-                          <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 10px", fontSize: 12, color: it.status === "admin" ? "#b45309" : "#333" }}>
-                            {progIcon(it.status)}
-                            <span style={{ whiteSpace: "nowrap" }}>{it.text}</span>
-                          </div>
-                        ))
-                      )}
-                    </div>
+              {reconPlanned > 0 && reconRunning && (
+                <div style={{ height: 6, borderRadius: 4, background: "#ececec", overflow: "hidden", marginBottom: 12 }}>
+                  <div style={{ height: "100%", background: "#0f6c3f", borderRadius: 4, transition: "width .3s ease", width: `${Math.min(100, (reconDone / reconPlanned) * 100)}%` }} />
+                </div>
+              )}
+              {/* One row per library, two panels each. Grouping by library rather than
+                  by kind is what the client actually reads: "is Staging done" is a
+                  question, "are all folders done across both libraries" is not. */}
+              {(["Staging", "Documents"] as LibTarget[]).map((lib) => (
+                <div key={lib} style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#0f6c3f", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>{lib}</div>
+                  {/* flexWrap + flex-basis makes the two panels sit side-by-side on wide
+                      screens and stack on narrow (mobile) — no media query needed. */}
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    {([
+                      { title: `${lib} folders`, feed: folderFeeds[lib] },
+                      { title: `${lib} group assignments`, feed: assignFeeds[lib] },
+                    ] as const).map((panel) => (
+                      <div key={panel.title} style={{ flex: "1 1 280px", minWidth: 0, border: "1px solid #e5e5e5", borderRadius: 4, overflow: "hidden" }}>
+                        <div style={{ padding: "6px 10px", background: "#f7f7f7", fontSize: 12, fontWeight: 600, color: "#444", borderBottom: "1px solid #eee" }}>{panel.title}</div>
+                        {/* overflowX:auto lets the client slide left/right to read full paths;
+                            rows keep nowrap (no ellipsis clip) so the whole message is reachable. */}
+                        <div style={{ maxHeight: 220, overflowY: "auto", overflowX: "auto", padding: "4px 0" }}>
+                          {panel.feed.length === 0 ? (
+                            <div style={{ padding: "6px 10px", fontSize: 12, color: "#aaa" }}>—</div>
+                          ) : (
+                            panel.feed.map((it, i) => (
+                              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 10px", fontSize: 12, color: it.status === "admin" ? "#b45309" : "#333" }}>
+                                {progIcon(it.status)}
+                                <span style={{ whiteSpace: "nowrap" }}>{it.text}</span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -2680,38 +2746,79 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       )}
 
       {log.length > 0 && (() => {
-        // Split the log so the client sees clearly what succeeded vs what still needs
-        // action. "Needs attention" = failures and folders created without a group
-        // (the "no group-map groups (locked admin-only)" warnings + missing/failed grants).
-        const isAttention = (e: LogEntry): boolean =>
-          !e.ok || /no group-map groups|not found|FAILED|✗|⚠/.test(e.msg);
-        const attention = log.filter(isAttention);
-        const done = log.filter((e) => !isAttention(e));
+        /* The log is split by WHERE and by SEVERITY, because those answer different
+           questions: "what happened in Documents" and "what do I have to fix".
+           Warnings and Errors are filtered VIEWS, so an entry appears both in its
+           library tab and in its severity tab — that is the point of triage.
+
+           Severity comes from the marker the message carries, not from `ok`. The
+           two disagree on purpose elsewhere in this file: several genuine warnings
+           are pushed with ok:true so they cannot gate the orphan prune, and a
+           missing abbreviation is pushed with ok:false. The glyph is the author's
+           actual intent; the flag is a control signal. */
+        const isError = (e: LogEntry): boolean => /✗|FAILED|✖/.test(e.msg) || (!e.ok && !/⚠|\?/.test(e.msg));
+        const isWarning = (e: LogEntry): boolean => !isError(e) && /⚠|(^|\s)\?\s/.test(e.msg);
+        const errors = log.filter(isError);
+        const warnings = log.filter(isWarning);
+        // An entry naming both libraries belongs to both; one naming neither (the
+        // prune, orphan repair and site-entry passes) is reachable only from All,
+        // which is why All exists and is the default.
+        const forLib = (lib: string): LogEntry[] => log.filter((e) => e.msg.indexOf(lib) !== -1);
+        const tabs = [
+          { key: "All", rows: log },
+          { key: "Documents", rows: forLib("Documents") },
+          { key: "Staging", rows: forLib("Staging") },
+          { key: "Warnings", rows: warnings },
+          { key: "Errors", rows: errors },
+        ] as const;
+        const active = tabs.find((t) => t.key === logTab) ?? tabs[0];
+        const colourOf = (e: LogEntry): string =>
+          isError(e) ? "#d13438" : isWarning(e) ? "#b45309" : "#0f6c3f";
+        const glyphOf = (e: LogEntry): string =>
+          isError(e) ? "✗" : isWarning(e) ? "⚠" : "✓";
         return (
           <div style={s.logBox}>
-            <p style={{ ...s.logTitle, color: "#0f6c3f" }}>
-              ✓ Completed — created &amp; assigned ({done.length})
-            </p>
-            {done.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#999", marginBottom: 6 }}>None yet.</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {tabs.map((t) => {
+                const on = t.key === active.key;
+                const alert = (t.key === "Errors" && t.rows.length > 0)
+                  ? "#d13438"
+                  : (t.key === "Warnings" && t.rows.length > 0) ? "#b45309" : undefined;
+                return (
+                  <button
+                    key={t.key}
+                    onClick={() => setLogTab(t.key)}
+                    style={{
+                      padding: "5px 12px", borderRadius: 14, fontSize: 12, fontWeight: 600,
+                      cursor: "pointer", fontFamily: "inherit",
+                      border: `1px solid ${on ? (alert ?? "#0f6c3f") : "#d8d8d8"}`,
+                      background: on ? (alert ?? "#0f6c3f") : "#fff",
+                      color: on ? "#fff" : (alert ?? "#555"),
+                    }}
+                  >
+                    {t.key} ({t.rows.length})
+                  </button>
+                );
+              })}
+            </div>
+            {active.rows.length === 0 ? (
+              <div style={{ fontSize: 12, color: active.key === "Errors" || active.key === "Warnings" ? "#0f6c3f" : "#999" }}>
+                {active.key === "Errors"
+                  ? "No errors. 🎉"
+                  : active.key === "Warnings"
+                    ? "No warnings — every folder got a group."
+                    : "Nothing logged for this view."}
+              </div>
             ) : (
-              done.map((entry, i) => (
-                <div key={i} style={{ fontSize: 12, color: "#0f6c3f", marginBottom: 4, wordBreak: "break-word" }}>
-                  ✓ {entry.msg}
-                </div>
-              ))
-            )}
-            <p style={{ ...s.logTitle, marginTop: 14, color: attention.length > 0 ? "#b45309" : "#0f6c3f" }}>
-              ⚠ Needs attention — created without a group / errors ({attention.length})
-            </p>
-            {attention.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#0f6c3f" }}>None — every folder got a group. 🎉</div>
-            ) : (
-              attention.map((entry, i) => (
-                <div key={i} style={{ fontSize: 12, color: entry.ok ? "#b45309" : "#d13438", marginBottom: 4, wordBreak: "break-word" }}>
-                  {entry.ok ? "⚠" : "✗"} {entry.msg}
-                </div>
-              ))
+              // Scrolls rather than growing the page: a full run logs thousands of
+              // lines and the tab bar has to stay reachable.
+              <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                {active.rows.map((entry, i) => (
+                  <div key={i} style={{ fontSize: 12, color: colourOf(entry), marginBottom: 4, wordBreak: "break-word" }}>
+                    {glyphOf(entry)} {entry.msg}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         );

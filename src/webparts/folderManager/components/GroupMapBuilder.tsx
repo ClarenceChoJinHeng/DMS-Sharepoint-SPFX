@@ -122,6 +122,17 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // name instead of a raw GUID. Populated lazily as rows load.
   const [tierLabels, setTierLabels] = useState<Record<string, string>>({});
 
+  // Which of the two views is showing: the mapping table, or people-by-group.
+  const [accessView, setAccessView] = useState<"mappings" | "people">("mappings");
+  // Members per group id for the People view. Loaded lazily — one request per group,
+  // and a site can carry a hundred groups, so fetching them all on tab open would
+  // stall the view before the client had chosen anything to look at.
+  const [peopleByGroup, setPeopleByGroup] = useState<Record<string, SpGroupMember[]>>({});
+  const [peopleLoading, setPeopleLoading] = useState<Set<string>>(new Set());
+  const [peopleOpen, setPeopleOpen] = useState<Set<string>>(new Set());
+  const [peopleFilter, setPeopleFilter] = useState("");
+  const [loadingAllPeople, setLoadingAllPeople] = useState<{ done: number; total: number } | undefined>(undefined);
+
   // Member-management modal (opened from an existing-mapping row). Self-contained so
   // it never touches the add-mapping form's segment/tier/role state.
   const [memberModal, setMemberModal]       = useState<GroupPick | null>(null);
@@ -900,6 +911,169 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     </>
   );
 
+  /* ── People view ──────────────────────────────────────────────────────────────
+     One entry per GROUP, not per mapping row: a group commonly carries several
+     mappings (one per tier it covers), and listing the same people once per row is
+     what makes "who can reach this" hard to read in the table. */
+  type GroupEntry = {
+    groupId: string;
+    groupName: string;
+    /** Every mapping this group appears in, shown as chips on the header row. */
+    grants: Array<{ segment: string; tier: string; role: string }>;
+  };
+  const distinctGroups: GroupEntry[] = (() => {
+    const byId = new Map<string, GroupEntry>();
+    existing.forEach((r) => {
+      if (!r.GroupId) return;
+      const entry = byId.get(r.GroupId) ?? {
+        groupId: r.GroupId,
+        groupName: r.GroupName || r.GroupId,
+        grants: [],
+      };
+      entry.grants.push({
+        segment: r.Segment ? segmentLabelFor(r.Segment) : "",
+        tier: tierLabelFor(r),
+        role: r.Role ?? "",
+      });
+      byId.set(r.GroupId, entry);
+    });
+    const out: GroupEntry[] = [];
+    byId.forEach((v) => out.push(v));
+    return out.sort((a, b) => a.groupName.localeCompare(b.groupName));
+  })();
+
+  const fetchGroupPeople = async (groupId: string): Promise<void> => {
+    if (peopleByGroup[groupId]) return; // cached
+    setPeopleLoading((prev) => { const n = new Set(prev); n.add(groupId); return n; });
+    try {
+      const m = await getGroupMembers(context.spHttpClient, siteUrl, Number(groupId));
+      setPeopleByGroup((prev) => ({ ...prev, [groupId]: m }));
+    } catch {
+      // Cached as empty so a failed group does not re-request on every repaint.
+      setPeopleByGroup((prev) => ({ ...prev, [groupId]: [] }));
+      showToast("Could not load members for that group.", true);
+    } finally {
+      setPeopleLoading((prev) => { const n = new Set(prev); n.delete(groupId); return n; });
+    }
+  };
+
+  const toggleGroupOpen = (groupId: string): void => {
+    setPeopleOpen((prev) => {
+      const n = new Set(prev);
+      if (n.has(groupId)) n.delete(groupId);
+      else { n.add(groupId); fetchGroupPeople(groupId).catch(() => undefined); }
+      return n;
+    });
+  };
+
+  /** Sequential, not parallel — a burst of member reads is what trips the 429 throttle. */
+  const loadAllPeople = async (): Promise<void> => {
+    const need = distinctGroups.filter((g) => !peopleByGroup[g.groupId]);
+    setLoadingAllPeople({ done: 0, total: need.length });
+    for (let i = 0; i < need.length; i++) {
+      await fetchGroupPeople(need[i].groupId);
+      setLoadingAllPeople({ done: i + 1, total: need.length });
+    }
+    setLoadingAllPeople(undefined);
+    setPeopleOpen(new Set(distinctGroups.map((g) => g.groupId)));
+  };
+
+  const renderPeopleView = (): React.ReactElement => {
+    const q = peopleFilter.trim().toLowerCase();
+    // A person filter can only see groups already read, so it says so rather than
+    // silently reporting "no match" for groups it never looked inside.
+    const unloaded = distinctGroups.filter((g) => !peopleByGroup[g.groupId]).length;
+    const shown = q.length === 0
+      ? distinctGroups
+      : distinctGroups.filter((g) => {
+          if (g.groupName.toLowerCase().indexOf(q) !== -1) return true;
+          const m = peopleByGroup[g.groupId];
+          return !!m && m.some((p) =>
+            (p.title ?? "").toLowerCase().indexOf(q) !== -1 ||
+            (p.email ?? "").toLowerCase().indexOf(q) !== -1);
+        });
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+          <input
+            style={{ ...s.input, maxWidth: 320 }}
+            placeholder="Filter by person or group name…"
+            value={peopleFilter}
+            onChange={(e) => setPeopleFilter(e.target.value)}
+          />
+          <button
+            style={s.ghost}
+            disabled={busy || loadingAllPeople !== undefined || unloaded === 0}
+            title="Read the members of every mapped group, one at a time"
+            onClick={() => { loadAllPeople().catch(() => setLoadingAllPeople(undefined)); }}
+          >
+            {loadingAllPeople
+              ? `Loading… ${loadingAllPeople.done}/${loadingAllPeople.total}`
+              : unloaded === 0 ? "All members loaded" : `Load all members (${unloaded})`}
+          </button>
+          {q.length > 0 && unloaded > 0 && (
+            <span style={{ fontSize: 12, color: "#b45309" }}>
+              {unloaded} group(s) not read yet — load all to search inside them.
+            </span>
+          )}
+        </div>
+        {distinctGroups.length === 0 ? (
+          <p style={{ fontSize: 13, color: "#999" }}>No groups are mapped yet.</p>
+        ) : shown.length === 0 ? (
+          <p style={{ fontSize: 13, color: "#999" }}>No group or person matches &ldquo;{peopleFilter}&rdquo;.</p>
+        ) : (
+          shown.map((g) => {
+            const open = peopleOpen.has(g.groupId);
+            const loading = peopleLoading.has(g.groupId);
+            const members = peopleByGroup[g.groupId];
+            return (
+              <div key={g.groupId} style={{ border: "1px solid #e5e5e5", borderRadius: 6, marginBottom: 8, overflow: "hidden" }}>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => toggleGroupOpen(g.groupId)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGroupOpen(g.groupId); } }}
+                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer", background: open ? "#f4f8f5" : "#fff" }}
+                >
+                  <span style={{ color: "#0f6c3f", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
+                  <span style={{ fontWeight: 600, fontSize: 13 }}>{g.groupName}</span>
+                  <span style={{ fontSize: 11, color: "#666" }}>
+                    {members ? `${members.length} member${members.length === 1 ? "" : "s"}` : "—"}
+                  </span>
+                  <span style={{ marginLeft: "auto", display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {g.grants.map((gr, i) => (
+                      <span key={i} style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: "#0f6c3f", background: "#e8f5ee", border: "1px solid #b3d9c4", borderRadius: 10, padding: "2px 8px" }}>
+                        {gr.role}{gr.tier ? ` · ${gr.tier}` : ""}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+                {open && (
+                  <div style={{ borderTop: "1px solid #eee", padding: "6px 12px 10px 30px" }}>
+                    {loading ? (
+                      <div style={{ fontSize: 12, color: "#666", padding: "4px 0" }}>Loading members&hellip;</div>
+                    ) : !members || members.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "#b45309", padding: "4px 0" }}>
+                        No members — anyone relying on this group has no access.
+                      </div>
+                    ) : (
+                      members.map((p) => (
+                        <div key={p.id} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 12, padding: "3px 0" }}>
+                          <span style={{ fontWeight: 600 }}>{p.title}</span>
+                          <span style={{ color: "#666" }}>{p.email}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  };
+
   return (
     <div style={s.wrap}>
       <p style={s.intro}>
@@ -1118,9 +1292,35 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         )}
       </div>
 
+      {/* Two views of the same data. "Mappings" answers "which group is on which
+          folder"; "People" answers "who is in those groups", which is the question
+          the client actually asks and could previously only reach one group at a
+          time through the Members modal. */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, borderBottom: "1px solid #e1e1e1" }}>
+        {([
+          { key: "mappings" as const, label: `Existing mappings (${existing.length})` },
+          { key: "people" as const, label: `People (${distinctGroups.length} groups)` },
+        ]).map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setAccessView(t.key)}
+            style={{
+              padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+              fontFamily: "inherit", background: "none", border: "none",
+              borderBottom: `2px solid ${accessView === t.key ? "#0f6c3f" : "transparent"}`,
+              color: accessView === t.key ? "#0f6c3f" : "#666",
+              marginBottom: -1,
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {accessView === "people" ? renderPeopleView() : (
+      <>
       {/* Existing rows */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 6px" }}>
-        <h3 style={{ fontSize: 14, margin: 0 }}>Existing mappings ({existing.length})</h3>
         <button
           style={s.ghost}
           disabled={busy || exporting !== undefined || existing.length === 0}
@@ -1199,6 +1399,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           ))}
         </tbody>
       </table>
+      </>
+      )}
 
       {/* Member-management modal — separate from the add-mapping form. */}
       {memberModal && (
