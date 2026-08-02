@@ -30,10 +30,26 @@ export interface SpFieldLite {
  * column must never abort provisioning — the folders and their ACLs are the thing that
  * matters, and this is a label.
  */
+/**
+ * Reduce a display or internal name to a comparable key: strip SharePoint's `_x0020_`
+ * space encoding, drop every non-alphanumeric character, lowercase.
+ *
+ * So "Full Name", "FullName", "full name" and "Full_x0020_Name" all collapse to
+ * "fullname". Two people creating the same column on two libraries do not necessarily
+ * type the same spacing — that is exactly what happened on 2026-08-02, where Staging
+ * got "Full Name" and Documents got "FullName", and an exact-match comparison filled
+ * one library while silently skipping ~190 folders in the other. The variance is not
+ * worth a support round-trip, and nothing else plausibly collapses to this key.
+ */
+function nameKey(s: string): string {
+  return (s ?? "").replace(/_x0020_/gi, "").replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
 export function pickFullNameField(fields: SpFieldLite[]): string | undefined {
+  const wanted = nameKey(FULL_NAME_COLUMN_TITLE);
   const usable = fields.filter(
     (f) =>
-      (f.Title ?? "").trim().toLowerCase() === FULL_NAME_COLUMN_TITLE.toLowerCase() &&
+      (nameKey(f.Title) === wanted || nameKey(f.InternalName) === wanted) &&
       // A calculated or otherwise read-only field with this title would accept the MERGE
       // request and then silently ignore the value, so it is not a candidate at all.
       !f.ReadOnlyField &&

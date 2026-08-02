@@ -953,20 +953,45 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // see the folderFullName module for why the display name does not determine it.
   // Returns undefined when the column has not been added to that library yet, which
   // is a soft state: the run proceeds and simply writes no full names.
-  const loadFullNameField = async (lib: LibTarget): Promise<string | undefined> => {
+  const loadFullNameField = async (
+    lib: LibTarget,
+  ): Promise<{ internalName?: string; note?: string }> => {
+    // No $filter. A filter that fails returns the same undefined as a column that is
+    // genuinely absent, and the first run against a real site could not tell the two
+    // apart — CLAUDE.md gotcha #9. Reading all fields and matching in code costs one
+    // unfiltered read per library per run and removes the ambiguity.
+    const url =
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/fields` +
+      `?$select=Title,InternalName,TypeAsString,ReadOnlyField&$top=500`;
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/fields` +
-          `?$select=Title,InternalName,TypeAsString,ReadOnlyField` +
-          `&$filter=Title eq '${FULL_NAME_COLUMN_TITLE.replace(/'/g, "''")}'`,
+        url,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
-      if (!res.ok) return undefined;
+      if (!res.ok) {
+        const body = (await res.text().catch(() => "")).slice(0, 200);
+        return { note: `field read failed: HTTP ${res.status} ${body}` };
+      }
       const data = await res.json();
-      return pickFullNameField((data.value ?? []) as SpFieldLite[]);
-    } catch {
-      return undefined;
+      const fields = (data.value ?? []) as SpFieldLite[];
+      const internalName = pickFullNameField(fields);
+      if (internalName) return { internalName };
+      // Name the near-misses. "Column absent" and "column present but the wrong type"
+      // need different fixes, and the client cannot tell which one they are looking at.
+      const near = fields.filter((f) =>
+        (f.Title ?? "").trim().toLowerCase().indexOf("full") >= 0 ||
+        (f.InternalName ?? "").toLowerCase().indexOf("full") >= 0,
+      );
+      if (near.length > 0) {
+        const desc = near
+          .map((f) => `"${f.Title}" (${f.InternalName}, ${f.TypeAsString}${f.ReadOnlyField ? ", read-only" : ""})`)
+          .join("; ");
+        return { note: `no usable "${FULL_NAME_COLUMN_TITLE}" column. Closest match: ${desc}` };
+      }
+      return { note: `no column titled "${FULL_NAME_COLUMN_TITLE}" (${fields.length} fields read)` };
+    } catch (e) {
+      return { note: `field read threw: ${(e as Error).message}` };
     }
   };
 
@@ -1412,14 +1437,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       const fullNameFields = new Map<LibTarget, string>();
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const f = await loadFullNameField(lib);
-        if (f) fullNameFields.set(lib, f);
+        if (f.internalName) fullNameFields.set(lib, f.internalName);
         // ok:true deliberately. This is a warning, not an error: `errorsBeforePrune`
         // counts !ok entries and blocks the orphan prune, and that guard exists because
         // a partial TERM STORE read returns a short target list that makes healthy map
         // rows look deleted. A missing display column cannot shorten the target list, so
         // gating prune on it would silently disable self-healing over a cosmetic column.
         // The ⚠ still puts it in "Needs attention" where an admin will see it.
-        else entries.push({ msg: `⚠ ${lib}: no usable "${FULL_NAME_COLUMN_TITLE}" column — folders will show only their abbreviation`, ok: true });
+        else entries.push({ msg: `⚠ ${lib}: ${f.note ?? "no Full Name column"} — folders will show only their abbreviation`, ok: true });
       }
       let plannedOps = 0;
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
