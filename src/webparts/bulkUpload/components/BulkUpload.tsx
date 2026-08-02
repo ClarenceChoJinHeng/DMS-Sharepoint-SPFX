@@ -32,19 +32,27 @@ import {
  * BULK UPLOAD — a duplicate of the `form` web part, with two behaviour changes:
  *   1. Writes straight into the Documents library, bypassing Staging (and so
  *      bypassing content approval and the Auto-route flow).
- *   2. Files are queued in up to MAX_BATCHES independent "batches" — each batch
- *      has its own destination folder + metadata and up to MAX_FILES files.
- *      "Upload all" processes the batches sequentially.
- * TEMPORARY TOOL. See:
- *   docs/superpowers/specs/2026-07-24-bulk-upload-two-batch-design.md
+ *   2. Up to MAX_FILES files in ONE selection, sharing ONE destination folder
+ *      and ONE metadata set.
+ *
+ * Batching (two independent destinations per run) was removed in Phase 1 — see
+ *   docs/superpowers/specs/2026-08-03-bulk-upload-single-selection-design.md
+ * which supersedes 2026-07-24-bulk-upload-two-batch-design.md. The screen exists
+ * to migrate the client's HISTORICAL documents, which arrive already named and
+ * belong to one folder at a time, so one shared metadata set is sufficient.
+ *
+ * Files keep their own names here — the Form's
+ * [Project] - [Vendor] - [Name] - [Date] composition deliberately does NOT apply
+ * (one metadata set would hand all 50 files the same name).
+ *
+ * TEMPORARY TOOL. See also:
  *   docs/superpowers/specs/2026-07-23-bulk-upload-direct-to-documents-design.md
  *
  * Metadata tagging, group-based mode detection, the term cascade and per-Unit
  * folder routing are cloned from Form.tsx unchanged.
  * -------------------------------------------------------------------------- */
 
-const MAX_FILES = 50; // per batch
-const MAX_BATCHES = 2;
+const MAX_FILES = 50;
 
 // The Documents library's real URL segment differs from its display title:
 //   URL segment   = "Shared Documents"  (used to build server-relative paths)
@@ -63,7 +71,9 @@ const FIELDS = {
   // "Vendor/CustomerName" — the "/" encodes to _x002f_ in the internal name.
   // Verified against /fields 2026-07-28. The old "Vendor" column was deleted.
   vendor: "Vendor_x002f_CustomerName",
-  details: "_ExtendedDescription",
+  // A dedicated "Remark" column, NOT the built-in _ExtendedDescription — matches Form.tsx.
+  remark: "Remark",
+  legallyPrivileged: "LegallyPrivileged",
 };
 
 // FALLBACK map: logical Levels `column` key -> the two real internal names
@@ -106,50 +116,20 @@ type UploadMode = {
 // A fully authorised upload path for a restricted (non-privileged) user.
 type ValidPath = { modeKey: string; chain: TermOption[] };
 
-// One picked file in the draft config panel (no per-file rename any more).
+// One picked file. `key` survives removals so React rows stay stable.
 type PickedFile = { key: string; file: File };
 
 type Outcome = "uploaded" | "skipped" | "failed" | "tagFailed";
 type FileResult = { name: string; outcome: Outcome; detail?: string };
 
 // A resolved level term (label + id) plus the pair of column internal names it
-// writes to — everything needed to rebuild formValues without the live cascade.
-type BatchSelection = {
+// writes to — everything needed to build formValues once for the whole run.
+type LevelSelection = {
   column: string;
   label: string;
   id: string;
   labelCol?: string;
   tidCol?: string;
-};
-
-// A fully-configured, self-contained batch. Snapshots the draft at Save time so
-// it no longer depends on any live cascade/option state.
-type Batch = {
-  id: string;
-  files: File[];
-  modeKey: string;
-  modeLabel: string;
-  termSetGuid: string;
-  levelSelections: BatchSelection[];
-  docTypeId: string;
-  docTypeLabel: string;
-  yearId: string;
-  yearLabel: string;
-  confId: string;
-  confLabel: string;
-  vendorId: string;
-  vendorLabel: string;
-  documentDate: string; // ISO yyyy-mm-dd as entered; converted at upload
-  destinationLabel: string;
-};
-
-// Per-batch upload outcome for the results panel.
-type BatchOutcome = {
-  batchId: string;
-  label: string;
-  destinationLabel: string;
-  batchError?: string; // set when the whole batch could not be routed
-  results: FileResult[];
 };
 
 // Live per-file state for the upload progress bars. Byte-accurate: the upload
@@ -164,14 +144,17 @@ type FileState =
   | "failed"
   | "tagFailed"
   | "deleted";
-type LiveBatch = {
-  label: string;
-  destinationLabel: string;
-  // `sru` is the uploaded file's ServerRelativeUrl, captured once a file lands in
-  // the Documents library (done / tagFailed) so the per-row X can delete it after
-  // the fact. `pct` is real bytes-sent progress, 0-100, only meaningful while
-  // state === "uploading".
-  files: { name: string; size: number; state: FileState; sru?: string; pct: number }[];
+
+// `sru` is the uploaded file's ServerRelativeUrl, captured once a file lands in
+// the Documents library (done / tagFailed) so the per-row X can delete it after
+// the fact. `pct` is real bytes-sent progress, 0-100, only meaningful while
+// state === "uploading".
+type LiveFile = {
+  name: string;
+  size: number;
+  state: FileState;
+  sru?: string;
+  pct: number;
 };
 
 type OptionMap = {
@@ -304,10 +287,15 @@ type DmsSettings = {
     documentDate: string;
     confidentiality: string;
     vendor: string;
+    remark: string;
+    legallyPrivileged: string;
     businessSegmentLabel: string;
     businessSegmentTid: string;
   };
   stagingLibrary: string;
+  // Term GUID of the ONE confidentiality level that offers the Legally Privileged
+  // tick. Empty = never offered. Mirrors Form.tsx.
+  legallyPrivilegedFor: string;
   allowedFileTypes: AllowedFileTypes;
 };
 
@@ -324,10 +312,14 @@ const DEFAULT_SETTINGS: DmsSettings = {
     documentDate: FIELDS.documentDate,
     confidentiality: FIELDS.confidentiality,
     vendor: FIELDS.vendor,
+    remark: FIELDS.remark,
+    legallyPrivileged: FIELDS.legallyPrivileged,
     businessSegmentLabel: LEVEL_COLUMNS.BusinessSegment.label,
     businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
   },
   stagingLibrary: "Staging",
+  // Empty by default: the tick appears only once a site sets legallyPrivilegedFor.
+  legallyPrivilegedFor: "",
   // "unknown", not "configured": reaching this constant means DMS Config could not
   // be read, so the UI must not present these as configured values. Mirrors Form.tsx.
   allowedFileTypes: { kind: "unknown", types: FALLBACK_FILE_TYPES },
@@ -375,7 +367,7 @@ const postFileWithProgress = (
     xhr.send(file);
   });
 
-// Human-friendly file size for the progress rows.
+// Human-friendly file size for the file and progress rows.
 const fmtSize = (bytes: number): string =>
   bytes >= 1024 * 1024
     ? `${(bytes / (1024 * 1024)).toFixed(1)} MB`
@@ -397,7 +389,7 @@ const fmtSize = (bytes: number): string =>
  * know, and never reaches 100% until the upload genuinely resolves.
  *
  * The loop writes to the DOM through refs rather than through state — one file
- * uploads at a time, but 60 setState calls a second to re-render a batch list of
+ * uploads at a time, but 60 setState calls a second to re-render a list of
  * 50 rows is a waste.
  */
 const UploadingBar = ({
@@ -460,19 +452,18 @@ export default function BulkUpload({
   const siteUrl = context.pageContext.web.absoluteUrl;
   const webSru = context.pageContext.web.serverRelativeUrl.replace(/\/+$/, "");
   const fileRef = useRef<HTMLInputElement>(null);
-  const batchSeqRef = useRef<number>(1);
+  const fileSeqRef = useRef<number>(1);
   // Cached form digest for the XHR upload path (spHttpClient handles its own).
   // Digests expire — SharePoint tells us when, and we refresh a minute early.
   const digestRef = useRef<{ value: string; expiresAt: number } | null>(null);
 
   const [options, setOptions] = useState<OptionMap>(EMPTY_OPTIONS);
   const [deptLoading, setDeptLoading] = useState<boolean>(true);
-  // Privileged = site admin OR a GLOBAL-role uploader: bypasses tier detection
-  // and gets the full manual cascade (may upload anywhere).
+  // Privileged = site admin: bypasses tier detection and gets the full manual
+  // cascade (may upload anywhere).
   const [privileged, setPrivileged] = useState<boolean>(false);
 
-  // Generic N-level cascade state for the DRAFT config panel: one option list +
-  // one selected term id per level.
+  // Generic N-level cascade state: one option list + one selected term id per level.
   const [levelChoices, setLevelChoices] = useState<TermOption[][]>([]);
   const [levelValues, setLevelValues] = useState<string[]>([]);
   const [validPaths, setValidPaths] = useState<ValidPath[]>([]);
@@ -480,26 +471,24 @@ export default function BulkUpload({
   const [modes, setModes] = useState<UploadMode[]>([]);
   const [settings, setSettings] = useState<DmsSettings>(DEFAULT_SETTINGS);
 
-  // ── Queued batches ──
-  const [batches, setBatches] = useState<Batch[]>([]);
-  // The inline config panel: open while adding/editing a batch. editingId is the
-  // id of the batch being edited (null when adding a new one).
-  const [panelOpen, setPanelOpen] = useState<boolean>(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-
-  // ── Draft state (bound to the config panel) ──
+  // ── The one selection: files + the single metadata set they all share ──
   const [uploadMode, setUploadMode] = useState<string>("");
   const [picked, setPicked] = useState<PickedFile[]>([]);
+  const [dragOver, setDragOver] = useState<boolean>(false);
   const [documentType, setDocumentType] = useState<string>("");
   const [yearPeriod, setYearPeriod] = useState<string>("");
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
-  const [vendor, setVendor] = useState<string>("");
+  const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
+  const [remark, setRemark] = useState<string>("");
+  // Vendor stays wired but unset — the select is hidden (client request 2026-07-28).
+  const [vendor] = useState<string>("");
 
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
-  const [batchResults, setBatchResults] = useState<BatchOutcome[] | null>(null);
-  const [live, setLive] = useState<LiveBatch[] | null>(null);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [results, setResults] = useState<FileResult[] | null>(null);
+  const [live, setLive] = useState<LiveFile[] | null>(null);
   const [toast, setToast] = useState<{
     message: string;
     type: ToastType;
@@ -720,12 +709,17 @@ export default function BulkUpload({
         confidentiality:
           get("col_confidentiality") ?? DEFAULT_SETTINGS.columns.confidentiality,
         vendor: get("col_vendor") ?? DEFAULT_SETTINGS.columns.vendor,
+        remark: get("col_remark") ?? DEFAULT_SETTINGS.columns.remark,
+        legallyPrivileged:
+          get("col_legallyPrivileged") ?? DEFAULT_SETTINGS.columns.legallyPrivileged,
         businessSegmentLabel:
           get("col_businessSegment") ?? DEFAULT_SETTINGS.columns.businessSegmentLabel,
         businessSegmentTid:
           get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
       stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
+      legallyPrivilegedFor:
+        get("legallyPrivilegedFor") ?? DEFAULT_SETTINGS.legallyPrivilegedFor,
       // SettingValue is deliberately NOT consulted for file types any more —
       // AllowedFileTypes is the single source of truth. Spec 2026-07-30 §3.
       allowedFileTypes: resolveAllowedFileTypes(rawFileTypes),
@@ -767,7 +761,7 @@ export default function BulkUpload({
     }
   };
 
-  /* ---------- Cascade builders (draft panel) ------------------------------ */
+  /* ---------- Cascade builders -------------------------------------------- */
 
   const initCascade = async (mode: UploadMode): Promise<void> => {
     const tops = await loadTermSet(mode.termSetGuid).catch(
@@ -775,27 +769,6 @@ export default function BulkUpload({
     );
     setLevelChoices([tops]);
     setLevelValues([]);
-  };
-
-  // Rebuild the cascade option lists for a set of already-chosen level values
-  // (used when editing a saved batch — privileged users).
-  const restoreCascade = async (
-    mode: UploadMode,
-    values: string[],
-  ): Promise<void> => {
-    const tops = await loadTermSet(mode.termSetGuid).catch(
-      () => [] as TermOption[],
-    );
-    const choices: TermOption[][] = [tops];
-    for (let i = 0; i < values.length - 1; i++) {
-      if (!values[i]) break;
-      const kids = await loadTermChildren(mode.termSetGuid, values[i]).catch(
-        () => [] as TermOption[],
-      );
-      choices[i + 1] = kids;
-    }
-    setLevelChoices(choices);
-    setLevelValues(values);
   };
 
   const onLevelChange = async (
@@ -882,6 +855,24 @@ export default function BulkUpload({
   const isLevelLocked = (i: number): boolean =>
     !privileged && (levelChoices[i]?.length ?? 0) <= 1;
 
+  // `paths` and `isPrivileged` are passed in rather than read from state because
+  // init() calls this in the same tick it resolves them — state would still be
+  // the initial empty/false at that point.
+  const initModeCascade = (
+    mode: UploadMode,
+    paths: ValidPath[],
+    isPrivileged: boolean,
+  ): void => {
+    if (isPrivileged) {
+      initCascade(mode).catch(() => {
+        setLevelChoices([]);
+        setLevelValues([]);
+      });
+    } else {
+      applyRestrictedMode(paths, mode, []);
+    }
+  };
+
   /* ---------- Init -------------------------------------------------------- */
 
   useEffect(() => {
@@ -924,14 +915,30 @@ export default function BulkUpload({
         confidentiality: confs,
         // The vendor term set was deleted from the site 2026-07-29 — Vendor/Customer
         // Name is free text in the upload form now. Fetching it here was a guaranteed
-        // 404 on every load. The hidden-field plumbing below is left intact (client
+        // 404 on every load. The hidden-field plumbing is left intact (client
         // request 2026-07-28), so this stays an empty list rather than being removed.
         vendor: [],
       });
 
+      let paths: ValidPath[] = [];
       if (!isPrivileged) {
-        const paths = await resolveValidPaths(loadedModes, membership);
+        paths = await resolveValidPaths(loadedModes, membership);
         setValidPaths(paths);
+      }
+
+      // Open on a destination the user can actually reach, so both cards are
+      // populated from the first paint. The batch panel used to do this on
+      // "+ Add batch"; with one selection there is no such moment.
+      const offerable = new Set(paths.map((p) => p.modeKey));
+      const defaultMode = isPrivileged
+        ? loadedModes.filter((m) => m.side === "BusinessSegment")[0] ??
+          loadedModes[0]
+        : loadedModes.find(
+            (m) => m.side === "BusinessSegment" && offerable.has(m.key),
+          ) ?? loadedModes.find((m) => offerable.has(m.key));
+      if (defaultMode) {
+        setUploadMode(defaultMode.key);
+        initModeCascade(defaultMode, paths, isPrivileged);
       }
       setDeptLoading(false);
     };
@@ -943,108 +950,13 @@ export default function BulkUpload({
     });
   }, []);
 
-  /* ---------- Draft-panel helpers ----------------------------------------- */
-
-  // Default mode to open the config panel on, honouring the user's access.
-  const pickDefaultMode = (): UploadMode | undefined => {
-    if (privileged) {
-      const bs = modes.filter((m) => m.side === "BusinessSegment");
-      return bs[0] ?? modes[0];
-    }
-    const offerable = new Set(validPaths.map((p) => p.modeKey));
-    return (
-      modes.find((m) => m.side === "BusinessSegment" && offerable.has(m.key)) ??
-      modes.find((m) => offerable.has(m.key))
-    );
-  };
-
-  const resetDraft = (): void => {
-    setPicked([]);
-    setDocumentType("");
-    setLevelValues([]);
-    setLevelChoices([]);
-    setYearPeriod("");
-    setDocumentDate("");
-    setConfidentiality("");
-    setVendor("");
-    if (fileRef.current) fileRef.current.value = "";
-  };
-
-  const initDraftCascade = (mode: UploadMode): void => {
-    if (privileged) {
-      initCascade(mode).catch(() => {
-        setLevelChoices([]);
-        setLevelValues([]);
-      });
-    } else {
-      applyRestrictedMode(validPaths, mode, []);
-    }
-  };
-
-  const openAddPanel = (): void => {
-    if (batches.length >= MAX_BATCHES) {
-      showToast(`You can queue at most ${MAX_BATCHES} batches.`, "error");
-      return;
-    }
-    resetDraft();
-    setEditingId(null);
-    setPanelOpen(true);
-    setLive(null);
-    setBatchResults(null);
-    const dm = pickDefaultMode();
-    if (dm) {
-      setUploadMode(dm.key);
-      initDraftCascade(dm);
-    }
-  };
-
-  const editBatch = (batch: Batch): void => {
-    // The tile is hidden while editingId === batch.id (see render); Save replaces
-    // it in place, Cancel brings it back.
-    setEditingId(batch.id);
-    setPanelOpen(true);
-    setUploadMode(batch.modeKey);
-    const values = batch.levelSelections.map((s) => s.id);
-    const mode = modes.find((m) => m.key === batch.modeKey);
-    if (mode) {
-      if (privileged) {
-        restoreCascade(mode, values).catch(() => initDraftCascade(mode));
-      } else {
-        applyRestrictedMode(validPaths, mode, values);
-      }
-    }
-    setPicked(
-      batch.files.map((file, i) => ({
-        key: `${batch.id}-${i}-${file.name}`,
-        file,
-      })),
-    );
-    setDocumentType(batch.docTypeId);
-    setYearPeriod(batch.yearId);
-    setDocumentDate(batch.documentDate);
-    setConfidentiality(batch.confId);
-    setVendor(batch.vendorId);
-    setBatchResults(null);
-    setLive(null);
-  };
-
-  const removeBatch = (id: string): void => {
-    setBatches((prev) => prev.filter((b) => b.id !== id));
-    setLive(null);
-    setBatchResults(null);
-  };
-
-  const cancelPanel = (): void => {
-    setPanelOpen(false);
-    setEditingId(null);
-    resetDraft();
-  };
+  /* ---------- Selection helpers ------------------------------------------- */
 
   const switchMode = (modeKey: string): void => {
     setUploadMode(modeKey);
     const mode = modes.find((m) => m.key === modeKey);
     if (!mode) return;
-    initDraftCascade(mode);
+    initModeCascade(mode, validPaths, privileged);
   };
 
   const handleLevelChange = (
@@ -1061,114 +973,31 @@ export default function BulkUpload({
     applyRestrictedMode(validPaths, mode, values);
   };
 
-  const validateDraft = (): string[] => {
-    const missing: string[] = [];
-    if (picked.length === 0) missing.push("File");
-    const m = activeMode();
-    (m?.levels ?? []).forEach((lvl, i) => {
-      if (!levelValues[i]) missing.push(lvl.label);
-    });
-    if (!documentType) missing.push("Document Type");
-    if (!yearPeriod) missing.push("Year / Period");
-    if (!documentDate) missing.push("Document Date");
-    if (!confidentiality) missing.push("Confidentiality Level");
-    return missing;
-  };
-
-  const saveBatch = (): void => {
-    const missing = validateDraft();
-    if (missing.length > 0) {
-      showToast(`Please complete: ${missing.join(", ")}.`, "error");
-      return;
-    }
-
-    // Files upload under their original names — duplicate names within the batch
-    // would silently collide (first wins), so reject them here.
-    const names = picked.map((p) => p.file.name);
-    const collision = names.find(
-      (n, i) =>
-        names.findIndex((o) => o.toLowerCase() === n.toLowerCase()) !== i,
-    );
-    if (collision) {
-      showToast(
-        `Two or more files in this batch are named "${collision}". Remove the duplicate first.`,
-        "error",
-      );
-      return;
-    }
-
-    const mode = activeMode();
-    if (!mode || mode.levels.length === 0) {
-      showToast("No upload mode configured.", "error");
-      return;
-    }
-
-    const levelSelections: BatchSelection[] = mode.levels.map((lvl, i) => {
-      const opt = (levelChoices[i] ?? []).find((o) => o.id === levelValues[i]);
-      return {
-        column: lvl.column,
-        label: opt?.label ?? "",
-        id: opt?.id ?? "",
-        labelCol: lvl.labelCol,
-        tidCol: lvl.tidCol,
-      };
-    });
-
-    const dt = options.documentType.find((o) => o.id === documentType);
-    const yr = options.yearPeriod.find((o) => o.id === yearPeriod);
-    const cf = options.confidentiality.find((o) => o.id === confidentiality);
-    const vd = options.vendor.find((o) => o.id === vendor);
-
-    const destinationLabel = [
-      mode.label,
-      ...levelSelections.map((s) => s.label),
-    ]
-      .filter(Boolean)
-      .join(" › ");
-
-    const batch: Batch = {
-      id: editingId ?? `b${batchSeqRef.current++}`,
-      files: picked.map((p) => p.file),
-      modeKey: mode.key,
-      modeLabel: mode.label,
-      termSetGuid: mode.termSetGuid,
-      levelSelections,
-      docTypeId: documentType,
-      docTypeLabel: dt?.label ?? "",
-      yearId: yearPeriod,
-      yearLabel: yr?.label ?? "",
-      confId: confidentiality,
-      confLabel: cf?.label ?? "",
-      vendorId: vendor,
-      vendorLabel: vd?.label ?? "",
-      documentDate,
-      destinationLabel,
-    };
-
-    setBatches((prev) =>
-      editingId
-        ? prev.map((b) => (b.id === editingId ? batch : b))
-        : [...prev, batch],
-    );
-    setPanelOpen(false);
-    setEditingId(null);
-    resetDraft();
-  };
-
-  const clearAll = (): void => {
-    setBatches([]);
-    setBatchResults(null);
+  const resetForm = (): void => {
+    setPicked([]);
+    setDocumentType("");
+    setYearPeriod("");
+    setDocumentDate("");
+    setConfidentiality("");
+    setLegallyPrivileged(false);
+    setRemark("");
+    setResults(null);
+    setRunError(null);
     setLive(null);
-    cancelPanel();
+    setStatus("");
+    if (fileRef.current) fileRef.current.value = "";
+    const mode = activeMode();
+    if (mode) initModeCascade(mode, validPaths, privileged);
   };
 
-  /* ---------- File selection (draft panel) -------------------------------- */
-
+  /**
+   * Add files to the selection — APPENDS, it never replaces. Every file in this
+   * web part arrives here, from the picker or from a drop, which is the point:
+   * `accept` filters the DIALOG only and a drop bypasses it entirely, so the
+   * extension gate has to live at this one choke point. Spec 2026-08-03 §4.
+   */
   const addFiles = (list: FileList | null): void => {
     if (!list || list.length === 0) return;
-    // Every file in this web part arrives through addFiles — there is no drop
-    // handler — so the hard block for an empty AllowedFileTypes selection lives
-    // here rather than in the picker markup. Spec 2026-07-30 §3.
     const allowedTypes = settings.allowedFileTypes;
     if (allowedTypes.kind === "none") {
       showToast(NO_TYPES_MESSAGE, "error");
@@ -1176,37 +1005,42 @@ export default function BulkUpload({
     }
     const incoming = Array.from(list);
     const allowed: File[] = [];
-    let rejectedCount = 0;
+    const rejected: string[] = [];
     incoming.forEach((f) => {
       const ok = allowedTypes.types.some((ext) =>
         f.name.toLowerCase().endsWith(ext),
       );
       if (ok) allowed.push(f);
-      else rejectedCount++;
+      else rejected.push(f.name);
     });
 
-    if (rejectedCount > 0) {
+    // Named, not counted: "3 files were skipped" leaves the uploader hunting for
+    // which three in a list of fifty. The rest of the pick still proceeds.
+    if (rejected.length > 0) {
       showToast(
-        `Skipped ${rejectedCount} file(s) with a disallowed type. Allowed: ${allowedTypes.types.join(", ")}`,
+        `Not added — file type not allowed: ${rejected.join(", ")}. Allowed: ${allowedTypes.types.join(", ")}`,
         "error",
       );
     }
 
     setPicked((prev) => {
+      // The 50 applies to the COMBINED selection after this add, not per pick.
       const room = MAX_FILES - prev.length;
       if (room <= 0) {
-        showToast(`A batch can hold at most ${MAX_FILES} files.`, "error");
+        showToast(
+          `You can upload at most ${MAX_FILES} files at once. Remove some first.`,
+          "error",
+        );
         return prev;
       }
       if (allowed.length > room) {
         showToast(
-          `Only the first ${room} file(s) were added — the per-batch limit is ${MAX_FILES}.`,
+          `Only the first ${room} of these ${allowed.length} files were added — the limit is ${MAX_FILES} files in one upload.`,
           "error",
         );
       }
-      const seq = batchSeqRef.current;
-      const added = allowed.slice(0, room).map((file, i) => ({
-        key: `${seq}-${prev.length + i}-${file.name}`,
+      const added = allowed.slice(0, room).map((file) => ({
+        key: `f${fileSeqRef.current++}`,
         file,
       }));
       return [...prev, ...added];
@@ -1221,18 +1055,17 @@ export default function BulkUpload({
   };
 
   // Delete an already-uploaded file from the Documents library via the per-row X
-  // in the live progress panel (bulk upload writes straight to Documents). The
+  // in the live progress list (bulk upload writes straight to Documents). The
   // row keeps its `sru` (ServerRelativeUrl) captured at upload time, so the
   // delete targets the exact file regardless of any folder rename. Marks the row
   // "deleted" on success.
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
   const deleteUploaded = async (
-    batchIdx: number,
     fileIdx: number,
     sru: string,
     name: string,
   ): Promise<void> => {
-    const key = `${batchIdx}:${fileIdx}`;
+    const key = String(fileIdx);
     if (!window.confirm(`Delete "${name}" from Documents? This cannot be undone.`)) {
       return;
     }
@@ -1249,23 +1082,16 @@ export default function BulkUpload({
       }
       setLive((prev) =>
         prev
-          ? prev.map((lb, bi) =>
-              bi === batchIdx
-                ? {
-                    ...lb,
-                    files: lb.files.map((f, fi) =>
-                      fi === fileIdx
-                        ? { ...f, state: "deleted" as FileState, sru: undefined }
-                        : f,
-                    ),
-                  }
-                : lb,
+          ? prev.map((f, fi) =>
+              fi === fileIdx
+                ? { ...f, state: "deleted" as FileState, sru: undefined }
+                : f,
             )
           : prev,
       );
       showToast(`"${name}" deleted from Documents.`, "success");
     } catch (err) {
-      console.error("Delete from Staging failed:", name, err);
+      console.error("Delete from Documents failed:", name, err);
       showToast(`Could not delete "${name}". Please try again.`, "error");
     } finally {
       setDeletingKey(null);
@@ -1291,7 +1117,7 @@ export default function BulkUpload({
 
   /* ---------- Form digest (XHR upload path) -------------------------------- */
 
-  // A long batch can outlive one digest, so cache it with its real expiry and
+  // A long run can outlive one digest, so cache it with its real expiry and
   // re-request when close. `force` refetches unconditionally — used to retry once
   // after a 403, which is what an expired/rejected digest looks like.
   const fetchDigest = async (): Promise<string> => {
@@ -1322,25 +1148,47 @@ export default function BulkUpload({
     return fetchDigest();
   };
 
-  /* ---------- Upload one batch -------------------------------------------- */
+  /* ---------- Validation --------------------------------------------------- */
 
-  // Resolves the batch's destination folder, ensures Year/DocType subfolders, and
-  // uploads + tags each file. Never throws for routing problems — returns a
-  // batchError instead, so the caller can continue to the next batch.
-  const uploadBatch = async (
-    batch: Batch,
-    index: number,
-    total: number,
+  const validate = (): string[] => {
+    const missing: string[] = [];
+    if (picked.length === 0) missing.push("Files");
+    const m = activeMode();
+    (m?.levels ?? []).forEach((lvl, i) => {
+      if (!levelValues[i]) missing.push(lvl.label);
+    });
+    if (!yearPeriod) missing.push("Year");
+    if (!documentType) missing.push("Document Type");
+    if (!documentDate) missing.push("Document Date");
+    if (!confidentiality) missing.push("Confidential Level");
+    return missing;
+  };
+
+  /* ---------- Upload the selection ---------------------------------------- */
+
+  // Resolves the destination folder, ensures Year/DocType subfolders, then
+  // uploads + tags each file in turn. Never throws for routing problems —
+  // returns a runError instead, so the caller can render it in place.
+  const runUpload = async (
+    files: File[],
+    selections: LevelSelection[],
+    labels: {
+      modeLabel: string;
+      termSetGuid: string;
+      docTypeLabel: string;
+      yearLabel: string;
+      confLabel: string;
+      vendorLabel: string;
+    },
     onState: (fileIndex: number, state: FileState, sru?: string) => void,
     onPct: (fileIndex: number, pct: number) => void,
-  ): Promise<{ batchError?: string; results: FileResult[] }> => {
-    const tag = `Batch ${index + 1} of ${total}`;
-    const leaf = batch.levelSelections[batch.levelSelections.length - 1];
+  ): Promise<{ runError?: string; results: FileResult[] }> => {
+    const leaf = selections[selections.length - 1];
     if (!leaf || !leaf.id) {
-      return { batchError: "No destination folder selected.", results: [] };
+      return { runError: "No destination folder selected.", results: [] };
     }
 
-    setStatus(`${tag}: locating destination folder…`);
+    setStatus("Locating destination folder…");
     const mapping = await lookupFolderMapping(
       context.spHttpClient,
       siteUrl,
@@ -1351,7 +1199,10 @@ export default function BulkUpload({
     });
     if (!mapping || !mapping.folderUniqueId) {
       return {
-        batchError: `This folder hasn't been mapped yet. Ask an administrator to run the reconciliation tool. (term ${leaf.label})`,
+        // Names BOTH causes. "Re-run reconciliation" alone was wrong half the time:
+        // since folder names come from DMS Term Abbreviation, a unit with no
+        // abbreviation row is skipped by every run, so re-running changes nothing.
+        runError: `"${leaf.label}" has no folder yet. Your DMS administrator needs to give it an abbreviation in the DMS Term Abbreviation list, then run folder reconciliation.`,
         results: [],
       };
     }
@@ -1365,7 +1216,7 @@ export default function BulkUpload({
     );
     if (!stagingSru) {
       return {
-        batchError:
+        runError:
           "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation.",
         results: [],
       };
@@ -1380,7 +1231,7 @@ export default function BulkUpload({
         `${webSru}/${settings.stagingLibrary}/`,
       );
       return {
-        batchError:
+        runError:
           "Could not work out the Documents path for this unit folder. Check the stagingLibrary setting in DMS Config.",
         results: [],
       };
@@ -1404,7 +1255,7 @@ export default function BulkUpload({
       // tell" — and sending the user off to create a folder that already exists
       // is how the first report of this bug went wrong.
       return {
-        batchError: docsProbe.confirmedMissing
+        runError: docsProbe.confirmedMissing
           ? `The matching folder does not exist in Documents yet (${docsUnitPath}). Ask an administrator to run the reconciliation tool — it creates this folder with the correct permissions. Do not create it by hand: a hand-made folder inherits the library's root permissions and would widen access.`
           : `Could not verify the destination folder in Documents (HTTP ${docsProbe.status}). This usually means SharePoint was busy — most often because folder reconciliation is running at the same time. Wait for reconciliation to finish, then try again. The folder itself is probably fine.`,
         results: [],
@@ -1412,16 +1263,13 @@ export default function BulkUpload({
     }
     const docsUnitFolder = docsProbe.folder;
 
-    const yearLabel = sanitizeFolderSegment(batch.yearLabel);
-    const docTypeLabel = sanitizeFolderSegment(batch.docTypeLabel);
+    const yearLabel = sanitizeFolderSegment(labels.yearLabel);
+    const docTypeLabel = sanitizeFolderSegment(labels.docTypeLabel);
     if (!yearLabel || !docTypeLabel) {
-      return {
-        batchError: "Year and Document Type are required.",
-        results: [],
-      };
+      return { runError: "Year and Document Type are required.", results: [] };
     }
 
-    setStatus(`${tag}: preparing destination folders…`);
+    setStatus("Preparing destination folders…");
     // Year / Document Type subfolders are safe to create — they inherit the unit
     // folder's ACL, exactly as they do in Staging.
     const yearFolder = await ensureFolder(
@@ -1431,10 +1279,7 @@ export default function BulkUpload({
       yearLabel,
     );
     if (!yearFolder) {
-      return {
-        batchError: `Could not create the "${yearLabel}" folder.`,
-        results: [],
-      };
+      return { runError: `Could not create the "${yearLabel}" folder.`, results: [] };
     }
     const destFolder = await ensureFolder(
       context.spHttpClient,
@@ -1444,20 +1289,19 @@ export default function BulkUpload({
     );
     if (!destFolder) {
       return {
-        batchError: `Could not create the "${docTypeLabel}" folder.`,
+        runError: `Could not create the "${docTypeLabel}" folder.`,
         results: [],
       };
     }
     const folderId = destFolder.uniqueId;
 
-    // Batch metadata — identical for every file in this batch.
-    const selections: BatchSelection[] = batch.levelSelections.map((s) => ({
-      ...s,
-    }));
-    selections.unshift({
+    // One metadata set for every file in the selection — that is the point of
+    // this screen (spec 2026-08-03 §4).
+    const allSelections: LevelSelection[] = selections.map((s) => ({ ...s }));
+    allSelections.unshift({
       column: "BusinessSegment",
-      label: batch.modeLabel,
-      id: batch.termSetGuid,
+      label: labels.modeLabel,
+      id: labels.termSetGuid,
       labelCol: undefined,
       tidCol: undefined,
     });
@@ -1471,49 +1315,60 @@ export default function BulkUpload({
         tid: settings.columns.businessSegmentTid,
       },
     };
+    // Re-derived here rather than trusted from state: hiding the tick does not
+    // clear it, so a user who ticks it and then changes the level would otherwise
+    // stamp true on a level that never offers it. Mirrors Form.tsx.
+    const privilegedApplies =
+      settings.legallyPrivilegedFor !== "" &&
+      confidentiality === settings.legallyPrivilegedFor;
     const formValues: Array<{ FieldName: string; FieldValue: string }> = [
       {
         FieldName: settings.columns.documentType,
-        FieldValue: taxVal(batch.docTypeLabel, batch.docTypeId),
+        FieldValue: taxVal(labels.docTypeLabel, documentType),
       },
       {
         FieldName: settings.columns.yearPeriod,
-        FieldValue: taxVal(batch.yearLabel, batch.yearId),
+        FieldValue: taxVal(labels.yearLabel, yearPeriod),
       },
       {
         FieldName: settings.columns.confidentiality,
-        FieldValue: taxVal(batch.confLabel, batch.confId),
+        FieldValue: taxVal(labels.confLabel, confidentiality),
+      },
+      {
+        FieldName: settings.columns.legallyPrivileged,
+        FieldValue: privilegedApplies && legallyPrivileged ? "true" : "false",
       },
       {
         FieldName: settings.columns.documentDate,
-        FieldValue: toSpDate(batch.documentDate),
+        FieldValue: toSpDate(documentDate),
       },
-      ...buildLevelFormValues(levelCols, selections),
+      { FieldName: settings.columns.remark, FieldValue: remark.trim() },
+      ...buildLevelFormValues(levelCols, allSelections),
     ];
     // Vendor is intentionally NOT written. The field is hidden in the UI (client
-    // request, 2026-07-28) so batch.vendorId is always empty; the plumbing stays
-    // in place so un-hiding the select is the only change needed to restore it.
-    if (batch.vendorId) {
+    // request, 2026-07-28) so `vendor` is always empty; the plumbing stays in
+    // place so un-hiding the select is the only change needed to restore it.
+    if (vendor) {
       formValues.push({
         FieldName: settings.columns.vendor,
-        FieldValue: taxVal(batch.vendorLabel, batch.vendorId),
+        FieldValue: taxVal(labels.vendorLabel, vendor),
       });
     }
 
-    /* ----- Sequential per-file upload; one failure never stops the batch -- */
-    const results: FileResult[] = [];
+    /* ----- Sequential per-file upload; one failure never stops the run ---- */
+    const out: FileResult[] = [];
 
-    for (let i = 0; i < batch.files.length; i++) {
-      const file = batch.files[i];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      // Files keep their own names — no composition on this screen (spec §4).
       const finalName = file.name;
       onPct(i, 0);
       onState(i, "uploading");
-      setStatus(
-        `${tag}: uploading ${i + 1} of ${batch.files.length} — ${finalName}`,
-      );
+      setStatus(`Uploading ${i + 1} of ${files.length} — ${finalName}`);
 
       // Duplicate probe. On a clash we ask the user whether to overwrite; No
-      // keeps the existing skip behaviour, Yes re-uploads with overwrite=true.
+      // skips just this file, Yes re-uploads with overwrite=true. Either way the
+      // remaining files carry on — spec §4.
       let overwrite = false;
       try {
         const existsRes: SPHttpClientResponse = await context.spHttpClient.get(
@@ -1524,7 +1379,7 @@ export default function BulkUpload({
         if (existsRes.ok) {
           const confirmed = await askReplace(finalName);
           if (!confirmed) {
-            results.push({
+            out.push({
               name: finalName,
               outcome: "skipped",
               detail: "A file with this name already exists here.",
@@ -1573,7 +1428,7 @@ export default function BulkUpload({
             if (bodyText) detail += ` — ${bodyText.slice(0, 200)}`;
           }
           console.error("Upload failed:", finalName, folderId, detail);
-          results.push({ name: finalName, outcome: "failed", detail });
+          out.push({ name: finalName, outcome: "failed", detail });
           onState(i, "failed");
           continue;
         }
@@ -1586,7 +1441,7 @@ export default function BulkUpload({
           SPHttpClient.configurations.v1,
         );
         if (!itemRes.ok) {
-          results.push({
+          out.push({
             name: finalName,
             outcome: "tagFailed",
             detail: "Uploaded, but the item could not be retrieved to tag.",
@@ -1605,7 +1460,7 @@ export default function BulkUpload({
           },
         );
         if (!metaRes.ok) {
-          results.push({
+          out.push({
             name: finalName,
             outcome: "tagFailed",
             detail: `Uploaded, but tagging failed (HTTP ${metaRes.status}).`,
@@ -1621,7 +1476,7 @@ export default function BulkUpload({
         );
         if (fieldError) {
           console.error("Field update error:", finalName, fieldError);
-          results.push({
+          out.push({
             name: finalName,
             outcome: "tagFailed",
             detail: `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
@@ -1630,11 +1485,11 @@ export default function BulkUpload({
           continue;
         }
 
-        results.push({ name: finalName, outcome: "uploaded" });
+        out.push({ name: finalName, outcome: "uploaded" });
         onState(i, "done", uploadedSru);
       } catch (err) {
         console.error("Upload threw:", finalName, err);
-        results.push({
+        out.push({
           name: finalName,
           outcome: "failed",
           detail: err instanceof Error ? err.message : "Unexpected error.",
@@ -1643,134 +1498,119 @@ export default function BulkUpload({
       }
     }
 
-    return { results };
+    return { results: out };
   };
 
-  /* ---------- Upload all -------------------------------------------------- */
-
   const handleUpload = async (): Promise<void> => {
-    if (panelOpen) {
-      showToast("Save or cancel the batch you're editing first.", "error");
+    const missing = validate();
+    if (missing.length > 0) {
+      showToast(`Please complete: ${missing.join(", ")}.`, "error");
       return;
     }
-    if (batches.length === 0) {
-      showToast("Add at least one batch first.", "error");
+
+    // Files upload under their original names, so two identically named files in
+    // one selection would silently collide (first wins). Reject up front rather
+    // than half-way through the run.
+    const names = picked.map((p) => p.file.name);
+    const collision = names.find(
+      (n, i) => names.findIndex((o) => o.toLowerCase() === n.toLowerCase()) !== i,
+    );
+    if (collision) {
+      showToast(
+        `Two or more of the selected files are named "${collision}". Remove the duplicate first.`,
+        "error",
+      );
       return;
     }
+
+    const mode = activeMode();
+    if (!mode || mode.levels.length === 0) {
+      showToast("No upload mode configured.", "error");
+      return;
+    }
+
+    const selections: LevelSelection[] = mode.levels.map((lvl, i) => {
+      const opt = (levelChoices[i] ?? []).find((o) => o.id === levelValues[i]);
+      return {
+        column: lvl.column,
+        label: opt?.label ?? "",
+        id: opt?.id ?? "",
+        labelCol: lvl.labelCol,
+        tidCol: lvl.tidCol,
+      };
+    });
+
+    const files = picked.map((p) => p.file);
+    const labels = {
+      modeLabel: mode.label,
+      termSetGuid: mode.termSetGuid,
+      docTypeLabel:
+        options.documentType.find((o) => o.id === documentType)?.label ?? "",
+      yearLabel: options.yearPeriod.find((o) => o.id === yearPeriod)?.label ?? "",
+      confLabel:
+        options.confidentiality.find((o) => o.id === confidentiality)?.label ?? "",
+      vendorLabel: options.vendor.find((o) => o.id === vendor)?.label ?? "",
+    };
 
     setBusy(true);
-    setBatchResults(null);
+    setResults(null);
+    setRunError(null);
     // Seed the live progress list — every file starts "pending".
     setLive(
-      batches.map((b, i) => ({
-        label: `Batch ${i + 1}`,
-        destinationLabel: b.destinationLabel,
-        files: b.files.map((f) => ({
-          name: f.name,
-          size: f.size,
-          state: "pending" as FileState,
-          pct: 0,
-        })),
+      files.map((f) => ({
+        name: f.name,
+        size: f.size,
+        state: "pending" as FileState,
+        pct: 0,
       })),
     );
-    const outcomes: BatchOutcome[] = [];
+
+    const onState = (
+      fileIndex: number,
+      state: FileState,
+      sru?: string,
+    ): void => {
+      setLive((prev) =>
+        prev
+          ? prev.map((f, fi) =>
+              fi === fileIndex ? { ...f, state, ...(sru ? { sru } : {}) } : f,
+            )
+          : prev,
+      );
+    };
+    const onPct = (fileIndex: number, pct: number): void => {
+      setLive((prev) =>
+        prev ? prev.map((f, fi) => (fi === fileIndex ? { ...f, pct } : f)) : prev,
+      );
+    };
 
     try {
-      for (let b = 0; b < batches.length; b++) {
-        const batch = batches[b];
-        const onState = (
-          fileIndex: number,
-          state: FileState,
-          sru?: string,
-        ): void => {
-          setLive((prev) =>
-            prev
-              ? prev.map((lb, idx) =>
-                  idx === b
-                    ? {
-                        ...lb,
-                        files: lb.files.map((f, fi) =>
-                          fi === fileIndex
-                            ? { ...f, state, ...(sru ? { sru } : {}) }
-                            : f,
-                        ),
-                      }
-                    : lb,
-                )
-              : prev,
-          );
-        };
-        const onPct = (fileIndex: number, pct: number): void => {
-          setLive((prev) =>
-            prev
-              ? prev.map((lb, idx) =>
-                  idx === b
-                    ? {
-                        ...lb,
-                        files: lb.files.map((f, fi) =>
-                          fi === fileIndex ? { ...f, pct } : f,
-                        ),
-                      }
-                    : lb,
-                )
-              : prev,
-          );
-        };
-        const { batchError, results } = await uploadBatch(
-          batch,
-          b,
-          batches.length,
-          onState,
-          onPct,
-        );
-        if (batchError) {
-          // Routing failed before any file uploaded — show every row as failed.
-          setLive((prev) =>
-            prev
-              ? prev.map((lb, idx) =>
-                  idx === b
-                    ? {
-                        ...lb,
-                        files: lb.files.map((f) => ({
-                          ...f,
-                          state: "failed" as FileState,
-                        })),
-                      }
-                    : lb,
-                )
-              : prev,
-          );
-        }
-        outcomes.push({
-          batchId: batch.id,
-          label: `Batch ${b + 1}`,
-          destinationLabel: batch.destinationLabel,
-          batchError,
-          results,
-        });
-      }
-
-      setBatchResults(outcomes);
+      const outcome = await runUpload(files, selections, labels, onState, onPct);
       setStatus("");
+      if (outcome.runError) {
+        // Routing failed before any file uploaded — show every row as failed.
+        setLive((prev) =>
+          prev ? prev.map((f) => ({ ...f, state: "failed" as FileState })) : prev,
+        );
+        setRunError(outcome.runError);
+        setResults(outcome.results);
+        return;
+      }
+      setResults(outcome.results);
 
-      const totalOk = outcomes.reduce(
-        (n, o) => n + o.results.filter((r) => r.outcome === "uploaded").length,
-        0,
-      );
-      const anyProblem = outcomes.some(
-        (o) => !!o.batchError || o.results.some((r) => r.outcome !== "uploaded"),
-      );
-      if (!anyProblem && totalOk > 0) {
-        // Same dialog as the single-file Form. A toast was easy to miss at the end of
-        // a long run, and after 50 files the uploader needs an explicit "that worked"
-        // plus a way to go again without reloading the page.
+      const okCount = outcome.results.filter(
+        (r) => r.outcome === "uploaded",
+      ).length;
+      const anyProblem = outcome.results.some((r) => r.outcome !== "uploaded");
+      if (!anyProblem && okCount > 0) {
+        // Same dialog as the single-file Form. A toast was easy to miss at the end
+        // of a long run, and after 50 files the uploader needs an explicit "that
+        // worked" plus a way to go again without reloading the page.
         setDoneOpen(true);
-        // The queue has been fully processed — empty it so "Upload all" can't be
-        // clicked a second time and re-send the same files (which would raise a
-        // replace prompt per file). The results summary and the progress list are
-        // deliberately left on screen, so nothing is lost by dropping the queue.
-        // On a PARTIAL failure the batches are kept, so the user can edit and retry.
-        setBatches([]);
+        // The selection has been fully processed — empty it so Upload can't be
+        // clicked again and re-send the same files (which would raise a replace
+        // prompt per file). The progress list is deliberately left on screen.
+        setPicked([]);
       }
     } catch (err) {
       console.error("Bulk upload failed:", err);
@@ -1826,26 +1666,26 @@ export default function BulkUpload({
     tagFailed: "Uploaded, not tagged",
   };
 
+  // READY / LOADING rather than Uploaded / Uploading — the two states the
+  // uploading list is meant to distinguish at a glance (spec §3).
   const fpLabel: Record<FileState, string> = {
     pending: "Waiting",
-    uploading: "Uploading",
-    done: "Uploaded",
+    uploading: "Loading",
+    done: "Ready",
     skipped: "Skipped",
     failed: "Failed",
     tagFailed: "No tags",
     deleted: "Deleted",
   };
 
-  // Overall progress across all live batches. A file counts as "settled" once it
-  // reaches any terminal state; the one file in flight contributes its own byte
-  // fraction so the bar creeps forward instead of jumping a whole file at a time.
+  // Overall progress. A file counts as "settled" once it reaches any terminal
+  // state; the one file in flight contributes its own byte fraction so the bar
+  // creeps forward instead of jumping a whole file at a time.
   const liveTotals = (live ?? []).reduce(
-    (acc, lb) => {
-      lb.files.forEach((f) => {
-        acc.total += 1;
-        if (f.state !== "pending" && f.state !== "uploading") acc.done += 1;
-        else if (f.state === "uploading") acc.partial += f.pct / 100;
-      });
+    (acc, f) => {
+      acc.total += 1;
+      if (f.state !== "pending" && f.state !== "uploading") acc.done += 1;
+      else if (f.state === "uploading") acc.partial += f.pct / 100;
       return acc;
     },
     { total: 0, done: 0, partial: 0 },
@@ -1860,9 +1700,13 @@ export default function BulkUpload({
         )
       : 0;
 
-  const totalQueued = batches.reduce((n, b) => n + b.files.length, 0);
-  const canAdd = !panelOpen && batches.length < MAX_BATCHES;
-  const visibleBatches = batches.filter((b) => b.id !== editingId);
+  const resultCounts = {
+    uploaded: (results ?? []).filter((r) => r.outcome === "uploaded").length,
+    skipped: (results ?? []).filter((r) => r.outcome === "skipped").length,
+    failed: (results ?? []).filter((r) => r.outcome === "failed").length,
+    tagFailed: (results ?? []).filter((r) => r.outcome === "tagFailed").length,
+  };
+  const problemRows = (results ?? []).filter((r) => r.outcome !== "uploaded");
 
   /* ---------- Render ------------------------------------------------------ */
 
@@ -1870,37 +1714,47 @@ export default function BulkUpload({
     <section className="dms-form">
       <style>{`
         .dms-form { max-width: 960px; margin: 32px auto; padding: 0 24px 48px; font-family: 'Segoe UI', sans-serif; }
-        .dms-form h2 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: #1b1b1b; }
-        .dms-subtitle { margin: 0 0 12px; font-size: 14px; color: #666; }
+        .dms-subtitle { margin: 0 0 16px; font-size: 14px; color: #666; }
         .dms-warn { display: flex; gap: 10px; align-items: flex-start; background: #fff4e5; border: 1px solid #f0c070; border-radius: 6px; padding: 12px 14px; font-size: 13px; color: #7a4f00; margin: 0 0 24px; }
         .dms-section { background: #fff; border: 1px solid #e1e1e1; border-radius: 8px; padding: 24px; margin-bottom: 20px; }
         .dms-section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #0f6c3f; margin: 0 0 16px; }
-        .dms-drop { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px dashed #c8c8c8; border-radius: 6px; padding: 16px; }
-        .dms-drop .size { color: #666; font-size: 12px; }
+        /* Drop zone — same component and styling as the single-file Form's; the
+           only functional difference is the multiple attribute on the input. */
+        .dms-dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 8px; text-align: center; border: 1px dashed #9bbfaa; border-radius: 10px;
+          background: #f2f8f4; padding: 24px 16px; cursor: pointer; font-size: 13px;
+          transition: background .12s, border-color .12s; }
+        .dms-dropzone:hover, .dms-dropzone:focus-visible { border-color: #0f6c3f; background: #eaf4ee; }
+        /* .over fires on dragover — without a visible change there is no confirmation
+           the browser will accept the drop, and users let go over the wrong element. */
+        .dms-dropzone.over { border-color: #0f6c3f; border-style: solid; background: #e2efe7; }
+        .dms-dropzone-icon { width: 32px; height: 32px; color: #0f6c3f; }
+        .dms-dropzone .hint { color: #666; font-size: 12px; }
         .dms-link { background: none; border: none; color: #0f6c3f; cursor: pointer; font-weight: 600; padding: 0; font-size: 13px; }
         .dms-link:disabled { color: #9bbfaa; cursor: default; }
+        /* Selected summary bar: count on the left, "Add more" on the right. Add more
+           APPENDS — the one behaviour someone coming from the single-file form would
+           guess wrong, which is why it is a distinct control. */
+        .dms-selbar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+          background: #eaf4ee; border: 1px solid #b3d9c4; border-radius: 10px; padding: 12px 16px;
+          font-size: 13px; font-weight: 600; color: #0f6c3f; }
         /* Scrolls instead of paginating — the whole selection is always reachable. */
-        .dms-filelist { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; }
-        .dms-filerow { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 12px; align-items: center; border: 1px solid #ececec; border-radius: 6px; padding: 10px 12px; background: #fafafa; }
-        .dms-filerow .orig { font-size: 13px; font-weight: 600; word-break: break-all; }
-        .dms-filerow .size { font-size: 12px; color: #666; }
-        .dms-remove { background: none; border: none; cursor: pointer; color: #d13438; font-size: 15px; line-height: 1; padding: 4px; }
-        .dms-count { font-size: 12px; color: #666; }
-        .dms-filelist-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
-        .dms-fileblock { margin-top: 20px; border-top: 1px solid #ececec; padding-top: 16px; }
-        .dms-fileblock-title { font-size: 13px; font-weight: 700; color: #1b1b1b; margin: 0 0 12px; }
+        .dms-filelist { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; }
+        .dms-filerow { display: flex; align-items: center; gap: 12px; border: 1px solid #ececec; border-radius: 8px; padding: 10px 12px; background: #fafafa; font-size: 13px; }
+        .dms-filerow .fname { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: #1b1b1b; }
+        .dms-filerow .size { flex: 0 0 auto; font-size: 12px; color: #666; }
+        .dms-remove { flex: 0 0 auto; background: none; border: none; cursor: pointer; color: #d13438; font-size: 15px; line-height: 1; padding: 4px; }
+        .dms-remove:disabled { color: #c9a3a4; cursor: default; }
         /* Live per-file progress */
-        .dms-progress { margin-top: 16px; }
-        .dms-progress-batch { border: 1px solid #e1e1e1; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; background: #fff; }
-        .dms-progress-head { font-size: 13px; font-weight: 700; color: #0f6c3f; margin-bottom: 12px; }
-        .dms-progress-list { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding-right: 6px; }
+        .dms-progress-list { margin-top: 12px; max-height: 360px; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding-right: 6px; }
         /* One row per file: status tag · name · size · live bar · % · remove */
         .dms-fp-row { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 10px 12px; border-radius: 6px; background: #fafafa; }
-        .dms-fp-row.done { background: #eaf7f0; }
+        /* No green wash on a finished row — the READY tag carries the state in
+           text, and 50 green rows drown out the ones that need attention. */
         .dms-fp-row.skipped, .dms-fp-row.tagFailed { background: #fff4e5; }
         .dms-fp-row.failed { background: #fdf3f3; }
         .dms-fp-row.deleted { background: #f2f2f2; }
-        .dms-fp-tag { flex: 0 0 84px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #999; }
+        .dms-fp-tag { flex: 0 0 74px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #999; }
         .dms-fp-tag.done, .dms-fp-tag.uploading { color: #0f6c3f; }
         .dms-fp-tag.skipped, .dms-fp-tag.tagFailed { color: #7a4f00; }
         .dms-fp-tag.failed { color: #d13438; }
@@ -1920,32 +1774,35 @@ export default function BulkUpload({
         .dms-fp-x { flex: 0 0 auto; background: none; border: none; cursor: pointer; color: #d13438; font-size: 14px; line-height: 1; padding: 2px 4px; }
         .dms-fp-x:disabled { color: #c9a3a4; cursor: default; }
         .dms-fp-xspacer { flex: 0 0 22px; }
-        /* Overall progress bar (above the form) */
-        .dms-overall { margin: 0 0 16px; }
+        /* Overall progress header */
         .dms-overall-head { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: #333; margin-bottom: 6px; }
         .dms-overall-track { height: 10px; border-radius: 6px; background: #ececec; overflow: hidden; }
         .dms-overall-fill { height: 100%; background: #0f6c3f; border-radius: 6px; transition: width .3s ease; }
-        /* Replace-file confirmation popup */
-        .dms-popup-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.25); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 9998; display: flex; align-items: center; justify-content: center; padding: 16px; }
-        .dms-popup { background: #fff; border-radius: 16px; padding: 40px 40px 32px; text-align: center; max-width: 420px; width: 100%; box-shadow: 0 8px 40px rgba(0,0,0,.15); }
-        .dms-popup-svg { width: 110px; height: 110px; display: block; margin: 0 auto 20px; }
-        .dms-popup-title { font-size: 22px; font-weight: 700; color: #0f6c3f; margin: 0 0 12px; }
-        .dms-popup-msg { font-size: 14px; color: #555; margin: 0 0 28px; line-height: 1.6; }
-        /* Stacked buttons for the success dialog — matches the Form. */
-        .dms-popup-stack { display:flex; flex-direction: column; align-items:center; gap: 10px; }
-        .dms-popup-stack .dms-popup-btn { width: 100%; max-width: 200px; }
-        .dms-popup-actions { display:flex; align-items:center; justify-content:center; gap: 12px; }
-        .dms-popup-btn { min-width: 96px; border-radius: 6px; padding: 11px 22px; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
-        .dms-popup-btn.confirm { background: #0f6c3f; color: #fff; border: none; }
-        .dms-popup-btn.confirm:hover { background: #0a5230; }
-        .dms-popup-btn.cancel { background: #fff; color: #0f6c3f; border: 1px solid #0f6c3f; }
-        .dms-popup-btn.cancel:hover { background: #f0f6f2; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
         .dms-field > span { font-weight: 600; }
         .dms-field .req { color: #d13438; font-style: normal; }
-        .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 4px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; }
+        .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
         .dms-field small { color: #666; font-size: 12px; font-weight: 400; }
-        .dms-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 24px; }
+        /* Checkbox row: label beside the box, hint underneath and aligned with it. */
+        .dms-check { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; }
+        .dms-check input { margin: 0; }
+        .dms-check small { grid-column: 2; color: #666; font-size: 12px; }
+        /* Confidentiality info tooltip — pinned to the SELECT's right edge, not the
+           column's, so it lines up with the field rather than floating past it. */
+        .dms-conf { position: relative; margin-bottom: 16px; }
+        .dms-conf .dms-field { margin-bottom: 0; }
+        .dms-conf .dms-field select { max-width: calc(100% - 28px); }
+        .dms-info { position: absolute; left: calc(100% - 22px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
+        .dms-info-panel { display: none; position: absolute; top: -8px; left: calc(100% + 8px); z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
+        .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; }
+        .dms-info-panel dl { margin: 0; }
+        .dms-info-panel dt { margin-top: 12px; color: #0f6c3f; font-size: 13px; font-weight: 700; }
+        .dms-info-panel dt:first-of-type { margin-top: 0; }
+        .dms-info-panel dd { margin: 4px 0 0; color: #444; font-size: 12px; font-weight: 400; line-height: 1.45; }
+        .dms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
+        /* Unit | Year | Document Type on one row. Together they name exactly one
+           destination folder, so they read better as a set than stacked. */
+        .dms-grid-3 { grid-template-columns: 1.8fr 0.9fr 1.3fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; align-items: center; }
         .dms-radio-group p { margin: 0; font-size: 13px; }
         .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; color: #1b1b1b; }
@@ -1962,38 +1819,32 @@ export default function BulkUpload({
         .dms-btn.secondary { background: #fff; border-color: #0f6c3f; color: #0f6c3f; }
         .dms-btn.secondary:disabled { border-color: #c8c8c8; color: #9b9b9b; cursor: default; }
         .dms-status { margin-top: 16px; font-size: 13px; }
-        /* Batch tiles */
-        .dms-batchlist { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
-        .dms-batch-tile { display: flex; gap: 14px; align-items: center; border: 1px solid #b3d9c4; border-radius: 8px; background: #fff; padding: 14px 16px; }
-        .dms-batch-tile .ico { font-size: 30px; line-height: 1; }
-        .dms-batch-tile .body { flex: 1; min-width: 0; }
-        .dms-batch-tile .bt-title { font-weight: 700; color: #0f6c3f; font-size: 14px; }
-        .dms-batch-tile .bt-path { font-size: 12px; color: #333; margin-top: 2px; word-break: break-word; }
-        .dms-batch-tile .bt-meta { font-size: 11px; color: #666; margin-top: 4px; }
-        .dms-batch-tile .bt-actions { display: flex; flex-direction: column; gap: 6px; }
-        .dms-batch-tile .bt-actions button { background: none; border: none; cursor: pointer; font: inherit; font-size: 12px; padding: 0; }
-        .dms-batch-tile .bt-edit { color: #0f6c3f; }
-        .dms-batch-tile .bt-remove { color: #d13438; }
-        .dms-batch-tile .bt-actions button:disabled { color: #9b9b9b; cursor: default; }
-        .dms-add-batch { display: inline-flex; align-items: center; gap: 6px; background: #f4f8f5; border: 1px dashed #b3d9c4; color: #0f6c3f; border-radius: 6px; padding: 10px 16px; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
-        .dms-add-batch:disabled { border-color: #ddd; color: #9b9b9b; cursor: default; }
-        .dms-panel { border: 1px solid #d6e6dc; border-radius: 8px; padding: 20px; margin-top: 8px; background: #fbfdfc; }
-        .dms-panel-title { font-size: 13px; font-weight: 700; color: #0f6c3f; margin: 0 0 16px; }
         /* Results */
-        .dms-results { margin-top: 20px; }
-        .dms-batch-result { border: 1px solid #e1e1e1; border-radius: 8px; padding: 16px; margin-bottom: 14px; }
-        .dms-batch-result h4 { margin: 0 0 4px; font-size: 14px; color: #1b1b1b; }
-        .dms-batch-result .bt-dest { font-size: 12px; color: #666; margin: 0 0 10px; }
+        .dms-results { margin-top: 20px; border: 1px solid #e1e1e1; border-radius: 8px; padding: 16px; background: #fff; }
         .dms-results-summary { font-size: 13px; font-weight: 600; margin: 0 0 10px; }
-        .dms-batch-error { background: #fdf3f3; color: #d13438; border: 1px solid #f1c0c0; border-radius: 4px; padding: 10px 14px; font-size: 13px; }
+        .dms-run-error { background: #fdf3f3; color: #d13438; border: 1px solid #f1c0c0; border-radius: 4px; padding: 10px 14px; font-size: 13px; }
         .dms-result { display: flex; gap: 10px; align-items: baseline; font-size: 13px; padding: 7px 10px; border-radius: 4px; margin-bottom: 6px; }
         .dms-result .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
         .dms-result .fname { word-break: break-all; }
         .dms-result .why { color: #666; font-size: 12px; }
-        .dms-result.uploaded { background: #e8f5ee; } .dms-result.uploaded .tag { color: #0f6c3f; }
         .dms-result.skipped { background: #fff4e5; } .dms-result.skipped .tag { color: #7a4f00; }
         .dms-result.failed { background: #fdf3f3; } .dms-result.failed .tag { color: #d13438; }
         .dms-result.tagFailed { background: #fff4e5; } .dms-result.tagFailed .tag { color: #7a4f00; }
+        /* Popups */
+        .dms-popup-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.25); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); z-index: 9998; display: flex; align-items: center; justify-content: center; padding: 16px; }
+        .dms-popup { background: #fff; border-radius: 16px; padding: 40px 40px 32px; text-align: center; max-width: 420px; width: 100%; box-shadow: 0 8px 40px rgba(0,0,0,.15); }
+        .dms-popup-svg { width: 110px; height: 110px; display: block; margin: 0 auto 20px; }
+        .dms-popup-title { font-size: 22px; font-weight: 700; color: #0f6c3f; margin: 0 0 12px; }
+        .dms-popup-msg { font-size: 14px; color: #555; margin: 0 0 28px; line-height: 1.6; }
+        /* Stacked buttons for the success dialog — matches the Form. */
+        .dms-popup-stack { display:flex; flex-direction: column; align-items:center; gap: 10px; }
+        .dms-popup-stack .dms-popup-btn { width: 100%; max-width: 200px; }
+        .dms-popup-actions { display:flex; align-items:center; justify-content:center; gap: 12px; }
+        .dms-popup-btn { min-width: 96px; border-radius: 6px; padding: 11px 22px; font-size: 14px; font-weight: 600; font-family: inherit; cursor: pointer; }
+        .dms-popup-btn.confirm { background: #0f6c3f; color: #fff; border: none; }
+        .dms-popup-btn.confirm:hover { background: #0a5230; }
+        .dms-popup-btn.cancel { background: #fff; color: #0f6c3f; border: 1px solid #0f6c3f; }
+        .dms-popup-btn.cancel:hover { background: #f0f6f2; }
         .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
         .dms-toast.error { background: #d13438; color: #fff; }
         .dms-toast.success { background: #0f6c3f; color: #fff; }
@@ -2001,16 +1852,14 @@ export default function BulkUpload({
         .dms-toast-close:hover { opacity: 1; }
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         @media (max-width: 640px) {
-          .dms-grid { grid-template-columns: 1fr; }
+          .dms-grid, .dms-grid-3 { grid-template-columns: 1fr; }
           .dms-toast { left: 12px; right: 12px; min-width: unset; top: 12px; }
         }
       `}</style>
 
-      <h2>Bulk upload</h2>
       <p className="dms-subtitle">
-        Queue up to {MAX_BATCHES} batches of {MAX_FILES} files each — every batch
-        goes to its own folder with its own metadata. All fields marked{" "}
-        <strong>*</strong> are required.
+        Up to {MAX_FILES} documents in one go, all filed to the same folder with
+        the same details. All fields marked <strong>*</strong> are required.
       </p>
       <div className="dms-warn">
         <span aria-hidden="true">⚠</span>
@@ -2018,90 +1867,16 @@ export default function BulkUpload({
           <strong>Temporary tool.</strong> Files go straight into the{" "}
           <strong>Documents</strong> library — they skip Staging and the approval
           step entirely, and are visible to everyone with access to the
-          destination folder as soon as they upload.
+          destination folder as soon as they upload. Files keep the names they
+          already have, so name them before uploading.
         </span>
       </div>
 
-      {/* ── Live upload progress (above the form) ───────────────────────── */}
-      {live && (
-        <div className="dms-section">
-          <p className="dms-section-title">Upload progress</p>
-          {liveTotals.total > 0 && (
-            <div className="dms-overall">
-              <div className="dms-overall-head">
-                <span>
-                  {liveTotals.done} of {liveTotals.total} file
-                  {liveTotals.total === 1 ? "" : "s"} processed
-                </span>
-                <span>{livePct}%</span>
-              </div>
-              <div className="dms-overall-track">
-                <div
-                  className="dms-overall-fill"
-                  style={{ width: `${livePct}%` }}
-                />
-              </div>
-            </div>
-          )}
-          <div className="dms-progress">
-            {live.map((lb, bi) => (
-              <div className="dms-progress-batch" key={bi}>
-                <div className="dms-progress-head">
-                  {lb.label} — {lb.destinationLabel}
-                </div>
-                <div className="dms-progress-list">
-                  {lb.files.map((f, fi) => {
-                    const canDelete =
-                      (f.state === "done" || f.state === "tagFailed") && !!f.sru;
-                    const rowKey = `${bi}:${fi}`;
-                    return (
-                      <div className={`dms-fp-row ${f.state}`} key={fi}>
-                        <span className={`dms-fp-tag ${f.state}`}>
-                          {fpLabel[f.state]}
-                        </span>
-                        <span className="dms-fp-name" title={f.name}>
-                          {f.name}
-                        </span>
-                        <span className="dms-fp-size">{fmtSize(f.size)}</span>
-                        {f.state === "uploading" ? (
-                          <UploadingBar
-                            target={f.pct}
-                            label={`Uploading ${f.name}`}
-                          />
-                        ) : (
-                          <span className="dms-fp-gap" aria-hidden="true" />
-                        )}
-                        {canDelete ? (
-                          <button
-                            type="button"
-                            className="dms-fp-x"
-                            aria-label={`Delete ${f.name} from Documents`}
-                            title="Delete this file from Documents"
-                            disabled={deletingKey === rowKey}
-                            onClick={() => {
-                              deleteUploaded(bi, fi, f.sru as string, f.name).catch(
-                                () => undefined,
-                              );
-                            }}
-                          >
-                            ✕
-                          </button>
-                        ) : (
-                          <span className="dms-fp-xspacer" aria-hidden="true" />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ── Batches ─────────────────────────────────────────────────────── */}
+      {/* ── Documents Folder Information ─────────────────────────────────── */}
+      {/* Deliberately BEFORE Documents Details in SOURCE order, not reordered
+          with CSS: tab order follows the DOM. Mirrors Form.tsx. */}
       <div className="dms-section">
-        <p className="dms-section-title">Batches</p>
+        <p className="dms-section-title">Documents Folder Information</p>
 
         {deptLoading ? (
           <p className="dms-dept-loading">Loading your access&hellip;</p>
@@ -2113,345 +1888,419 @@ export default function BulkUpload({
           </div>
         ) : null}
 
-        {visibleBatches.length > 0 && (
-          <div className="dms-batchlist">
-            {visibleBatches.map((b) => {
-              const n = batches.findIndex((x) => x.id === b.id) + 1;
-              return (
-                <div className="dms-batch-tile" key={b.id}>
-                  <div className="ico" aria-hidden="true">
-                    📁
-                  </div>
-                  <div className="body">
-                    <div className="bt-title">Batch {n}</div>
-                    <div className="bt-path">{b.destinationLabel}</div>
-                    <div className="bt-meta">
-                      {[b.yearLabel, b.docTypeLabel, `${b.files.length} files`]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </div>
-                  </div>
-                  <div className="bt-actions">
-                    <button
-                      type="button"
-                      className="bt-edit"
-                      disabled={busy || panelOpen}
-                      onClick={() => editBatch(b)}
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      className="bt-remove"
-                      disabled={busy || panelOpen}
-                      onClick={() => removeBatch(b.id)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
+        {/* Business Segment | Project toggle — a side shows only if the user can
+            actually upload there (privileged users see every configured side). */}
+        <div className="dms-radio-group">
+          <p>Upload to</p>
+          {(["BusinessSegment", "Project"] as const).map((side) => {
+            const sideModes = modes.filter((m) => m.side === side);
+            const offerable = privileged
+              ? sideModes
+              : sideModes.filter((m) =>
+                  validPaths.some((p) => p.modeKey === m.key),
+                );
+            if (offerable.length === 0) return null;
+            const active = activeMode()?.side === side;
+            return (
+              <label key={side}>
+                <input
+                  type="radio"
+                  name="bulkSideToggle"
+                  checked={active}
+                  disabled={busy}
+                  onChange={() => switchMode(offerable[0].key)}
+                />
+                {side === "BusinessSegment" ? "Business Segment" : "Project"}
+              </label>
+            );
+          })}
+        </div>
+
+        {/* Segment picker. Shown whenever a segment is offered, even if there is
+            only one — a single-option select still answers "where am I". */}
+        {(() => {
+          const side = activeMode()?.side;
+          const sideModes = modes.filter((m) => m.side === side);
+          const offerable = privileged
+            ? sideModes
+            : sideModes.filter((m) =>
+                validPaths.some((p) => p.modeKey === m.key),
               );
-            })}
+          if (offerable.length === 0) return null;
+          return (
+            <label className="dms-field">
+              <span>
+                Segment <em className="req">*</em>
+              </span>
+              <select
+                value={uploadMode}
+                disabled={busy}
+                onChange={(e) => switchMode(e.target.value)}
+              >
+                {offerable.map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          );
+        })()}
+
+        {/* Restricted users: read-only breadcrumb of the resolved location. */}
+        {!privileged && activeMode() && (
+          <div className="dms-dept-badge">
+            <span className="dept-label">Uploading to:</span>
+            <span className="dept-name">
+              {[
+                activeMode()?.label,
+                ...(activeMode()?.levels ?? []).map(
+                  (_lvl, i) =>
+                    (levelChoices[i] ?? []).find(
+                      (o) => o.id === levelValues[i],
+                    )?.label,
+                ),
+              ]
+                .filter(Boolean)
+                .join(" › ")}
+            </span>
           </div>
         )}
 
-        {!panelOpen && !deptLoading && (
-          <button
-            type="button"
-            className="dms-add-batch"
-            disabled={!canAdd || busy}
-            onClick={openAddPanel}
-            title={
-              batches.length >= MAX_BATCHES
-                ? `Maximum ${MAX_BATCHES} batches`
-                : undefined
+        <div className="dms-grid dms-grid-3">
+          {/* File-path fields, in folder order: Segment (above) -> level(s) ->
+              Year -> Document Type. Intermediate levels span the full row; the
+              deepest one shares a row of three with Year and Document Type,
+              which is the set that identifies a single destination folder. */}
+          {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
+            renderSelect(
+              lvl.label,
+              true,
+              levelValues[i] ?? "",
+              (v) => {
+                const md = activeMode();
+                if (md) handleLevelChange(md, i, v);
+              },
+              levelChoices[i] ?? [],
+              busy ||
+                deptLoading ||
+                isLevelLocked(i) ||
+                (i > 0 && !levelValues[i - 1]),
+              `Select ${lvl.label}`,
+              i < arr.length - 1,
+            ),
+          )}
+
+          {renderSelect(
+            "Year",
+            true,
+            yearPeriod,
+            setYearPeriod,
+            options.yearPeriod,
+            busy,
+          )}
+
+          {renderSelect(
+            "Document Type",
+            true,
+            documentType,
+            setDocumentType,
+            options.documentType,
+            busy,
+          )}
+
+          {/* Graceful empty-state: a segment whose term set has no child terms yet
+              (the non-GHO Head Offices before their Department/Unit trees are
+              added) would otherwise show a dead "Select …" dropdown. */}
+          {(() => {
+            const md = activeMode();
+            if (!md || md.levels.length === 0 || deptLoading || levelChoices.length === 0) return null;
+            for (let i = 0; i < md.levels.length; i++) {
+              const parentChosen = i === 0 || !!levelValues[i - 1];
+              if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
+                return (
+                  <div
+                    key="dms-empty-level"
+                    style={{ gridColumn: "1 / -1", padding: "8px 12px", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, fontSize: 13, color: "#7a5b00" }}
+                  >
+                    No {md.levels[i].label.toLowerCase()} options are configured for this segment yet — ask your administrator to add them in the term store before uploading here.
+                  </div>
+                );
+              }
             }
-          >
-            + Add batch
-          </button>
-        )}
+            return null;
+          })()}
 
-        {/* ── Inline config panel ──────────────────────────────────────── */}
-        {panelOpen && (
-          <div className="dms-panel">
-            <p className="dms-panel-title">
-              {editingId
-                ? "Edit batch"
-                : `Configure batch ${batches.length + 1}`}
-            </p>
+          {/* Spans the row, matching the Form. One shared remark for the whole
+              selection, like every other field on this screen. */}
+          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
+            <span>Remark</span>
+            <input
+              type="text"
+              value={remark}
+              maxLength={250}
+              disabled={busy}
+              onChange={(e) => setRemark(e.target.value)}
+            />
+            <small>Max. 250 characters</small>
+          </label>
+        </div>
+      </div>
 
-            {/* Files */}
-            {/* The whole card is clickable to open the file picker — same as the
-                single-file form. The label is a plain span, not a button, so the
-                container is the only interactive element (no nested buttons). */}
-            <div
-              className="dms-drop"
-              role="button"
-              tabIndex={busy ? -1 : 0}
-              aria-disabled={busy}
-              style={{ cursor: busy ? "default" : "pointer" }}
-              onClick={() => { if (!busy) fileRef.current?.click(); }}
-              onKeyDown={(e) => {
-                if (busy) return;
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  fileRef.current?.click();
-                }
-              }}
-            >
-              <span className="size">
-                {picked.length === 0
-                  ? "Click here to select files"
-                  : `${picked.length} file(s) selected`}
+      {/* ── Documents Details ───────────────────────────────────────────── */}
+      <div className="dms-section">
+        <p className="dms-section-title">Documents Details</p>
+
+        {/* The file area has three states: empty drop zone, selected list, and
+            live upload progress. Spec 2026-08-03 §3. */}
+        {settings.allowedFileTypes.kind === "none" ? (
+          /* An empty AllowedFileTypes selection is a hard block, not a silent
+             fallback — spec 2026-07-30 §3. The message names the column and the
+             list because the client is the one who fixes it, in one click. */
+          <div className="dms-dropzone" style={{ opacity: 0.6 }}>
+            <span>{NO_TYPES_MESSAGE}</span>
+          </div>
+        ) : live ? (
+          <>
+            <div className="dms-overall-head">
+              <span>
+                {liveTotals.done} of {liveTotals.total} document
+                {liveTotals.total === 1 ? "" : "s"} processed
               </span>
-              <span
-                className="dms-link"
-                style={busy ? { color: "#9bbfaa" } : undefined}
-              >
-                {picked.length === 0 ? "Select files" : "Add more files"}
-              </span>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                accept={
-                  // undefined rather than "": an empty accept attribute means "no
-                  // filter" and would offer every file in the dialog. addFiles
-                  // blocks them anyway, but not offering them is clearer.
-                  settings.allowedFileTypes.kind === "none"
-                    ? undefined
-                    : settings.allowedFileTypes.types.join(",")
-                }
-                style={{ display: "none" }}
-                onChange={(e) => addFiles(e.target.files)}
+              <span>{livePct}%</span>
+            </div>
+            <div className="dms-overall-track">
+              <div
+                className="dms-overall-fill"
+                style={{ width: `${livePct}%` }}
               />
             </div>
-
-            {/* (Selected-file list is rendered below the metadata form.) */}
-
-            {/* Destination + metadata */}
-            <div style={{ marginTop: 20 }}>
-              <div className="dms-radio-group">
-                <p>Upload into:</p>
-                {(["BusinessSegment", "Project"] as const).map((side) => {
-                  const sideModes = modes.filter((m) => m.side === side);
-                  const offerable = privileged
-                    ? sideModes
-                    : sideModes.filter((m) =>
-                        validPaths.some((p) => p.modeKey === m.key),
-                      );
-                  if (offerable.length === 0) return null;
-                  const active = activeMode()?.side === side;
-                  return (
-                    <label key={side}>
-                      <input
-                        type="radio"
-                        name="bulkSideToggle"
-                        checked={active}
-                        onChange={() => switchMode(offerable[0].key)}
-                      />
-                      {side === "BusinessSegment"
-                        ? "Business Segment"
-                        : "Project"}
-                    </label>
-                  );
-                })}
-              </div>
-
-              {(() => {
-                const side = activeMode()?.side;
-                const sideModes = modes.filter((m) => m.side === side);
-                const offerable = privileged
-                  ? sideModes
-                  : sideModes.filter((m) =>
-                      validPaths.some((p) => p.modeKey === m.key),
-                    );
-                if (offerable.length <= 1) return null;
+            {/* Completed rows stay visible and keep their order, so the header
+                count can be checked against the list. */}
+            <div className="dms-progress-list">
+              {live.map((f, fi) => {
+                const canDelete =
+                  (f.state === "done" || f.state === "tagFailed") && !!f.sru;
                 return (
-                  <label className="dms-field">
-                    <span>Segment</span>
-                    <select
-                      value={uploadMode}
-                      onChange={(e) => switchMode(e.target.value)}
-                    >
-                      {offerable.map((m) => (
-                        <option key={m.key} value={m.key}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                );
-              })()}
-
-              {!privileged && activeMode() && (
-                <div className="dms-dept-badge">
-                  <span className="dept-label">Uploading to:</span>
-                  <span className="dept-name">
-                    {[
-                      activeMode()?.label,
-                      ...(activeMode()?.levels ?? []).map(
-                        (_lvl, i) =>
-                          (levelChoices[i] ?? []).find(
-                            (o) => o.id === levelValues[i],
-                          )?.label,
-                      ),
-                    ]
-                      .filter(Boolean)
-                      .join(" › ")}
-                  </span>
-                </div>
-              )}
-
-              <div className="dms-grid">
-                {(activeMode()?.levels ?? []).map((lvl, i) =>
-                  renderSelect(
-                    lvl.label,
-                    true,
-                    levelValues[i] ?? "",
-                    (v) => {
-                      const md = activeMode();
-                      if (md) handleLevelChange(md, i, v);
-                    },
-                    levelChoices[i] ?? [],
-                    deptLoading ||
-                      isLevelLocked(i) ||
-                      (i > 0 && !levelValues[i - 1]),
-                    "--",
-                    true,
-                  ),
-                )}
-
-                {/* Graceful empty-state: a segment whose term set has no child terms
-                    yet (non-GHO Head Offices before their trees are added) would show a
-                    dead "--" dropdown. Name the missing level instead. */}
-                {(() => {
-                  const md = activeMode();
-                  if (!md || md.levels.length === 0 || deptLoading || levelChoices.length === 0) return null;
-                  for (let i = 0; i < md.levels.length; i++) {
-                    const parentChosen = i === 0 || !!levelValues[i - 1];
-                    if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
-                      return (
-                        <div
-                          key="dms-empty-level"
-                          style={{ gridColumn: "1 / -1", padding: "8px 12px", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, fontSize: 13, color: "#7a5b00" }}
-                        >
-                          No {md.levels[i].label.toLowerCase()} options are configured for this segment yet — ask your administrator to add them in the term store before uploading here.
-                        </div>
-                      );
-                    }
-                  }
-                  return null;
-                })()}
-
-                {renderSelect(
-                  "Year / Period",
-                  true,
-                  yearPeriod,
-                  setYearPeriod,
-                  options.yearPeriod,
-                )}
-
-                {renderSelect(
-                  "Document Type",
-                  true,
-                  documentType,
-                  setDocumentType,
-                  options.documentType,
-                )}
-
-                <label className="dms-field">
-                  <span>
-                    Document Date <em className="req">*</em>
-                  </span>
-                  <input
-                    type="date"
-                    value={documentDate}
-                    max={(() => {
-                      const d = new Date();
-                      const mm = d.getMonth() + 1;
-                      const day = d.getDate();
-                      return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
-                    })()}
-                    onChange={(e) => setDocumentDate(e.target.value)}
-                  />
-                </label>
-
-                {renderSelect(
-                  "Confidentiality Level",
-                  true,
-                  confidentiality,
-                  setConfidentiality,
-                  options.confidentiality,
-                )}
-
-                {/* Vendor is hidden for now (client request, 2026-07-28). The
-                    state, term-set load and formValues push all stay wired up —
-                    restoring the field is just un-commenting this select.
-                    {renderSelect(
-                      "Vendor (if applicable)",
-                      false,
-                      vendor,
-                      setVendor,
-                      options.vendor,
-                    )} */}
-              </div>
-
-              {/* Selected files — listed below the form */}
-              {picked.length > 0 && (
-                <div className="dms-fileblock">
-                  <p className="dms-fileblock-title">Selected files</p>
-                  <div className="dms-filelist">
-                    {picked.map((p) => (
-                      <div className="dms-filerow" key={p.key}>
-                        <div>
-                          <div className="orig">{p.file.name}</div>
-                          <div className="size">
-                            {(p.file.size / 1024).toFixed(1)} KB
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          className="dms-remove"
-                          aria-label={`Remove ${p.file.name}`}
-                          disabled={busy}
-                          onClick={() => removeFile(p.key)}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="dms-filelist-foot">
-                    <span className="dms-count">
-                      {picked.length} file{picked.length === 1 ? "" : "s"}{" "}
-                      selected ({MAX_FILES} max).
+                  <div className={`dms-fp-row ${f.state}`} key={fi}>
+                    <span className={`dms-fp-tag ${f.state}`}>
+                      {fpLabel[f.state]}
                     </span>
+                    <span className="dms-fp-name" title={f.name}>
+                      {f.name}
+                    </span>
+                    <span className="dms-fp-size">{fmtSize(f.size)}</span>
+                    {f.state === "uploading" ? (
+                      <UploadingBar
+                        target={f.pct}
+                        label={`Uploading ${f.name}`}
+                      />
+                    ) : (
+                      <span className="dms-fp-gap" aria-hidden="true" />
+                    )}
+                    {canDelete ? (
+                      <button
+                        type="button"
+                        className="dms-fp-x"
+                        aria-label={`Delete ${f.name} from Documents`}
+                        title="Delete this file from Documents"
+                        disabled={busy || deletingKey === String(fi)}
+                        onClick={() => {
+                          deleteUploaded(fi, f.sru as string, f.name).catch(
+                            () => undefined,
+                          );
+                        }}
+                      >
+                        ✕
+                      </button>
+                    ) : (
+                      <span className="dms-fp-xspacer" aria-hidden="true" />
+                    )}
                   </div>
-                </div>
-              )}
-
-              <div className="dms-actions">
-                <button
-                  type="button"
-                  className="dms-btn secondary"
-                  onClick={cancelPanel}
-                  disabled={busy}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="dms-btn primary"
-                  onClick={saveBatch}
-                  disabled={busy}
-                >
-                  Save batch
-                </button>
-              </div>
+                );
+              })}
             </div>
+          </>
+        ) : picked.length === 0 ? (
+          /* Click anywhere to open the picker, or drop files on it. */
+          <div
+            className={`dms-dropzone${dragOver ? " over" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => fileRef.current?.click()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                fileRef.current?.click();
+              }
+            }}
+            // preventDefault on dragOver is what makes the element a valid drop
+            // target; without it the browser navigates to the file instead.
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              addFiles(e.dataTransfer?.files ?? null);
+            }}
+          >
+            {/* Inlined rather than imported: an <img> would need an asset loader
+                and a second network request for a 20-line glyph. */}
+            <svg className="dms-dropzone-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 3v10m0 0 4-4m-4 4-4-4" fill="none" stroke="currentColor"
+                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none"
+                stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <span>
+              <span className="dms-link">Choose multiple documents</span> or drop
+              them here
+            </span>
+            <span className="hint">Max. {MAX_FILES} files.</span>
           </div>
+        ) : (
+          <>
+            <div className="dms-selbar">
+              <span>
+                {picked.length} document{picked.length === 1 ? "" : "s"} selected
+              </span>
+              <button
+                type="button"
+                className="dms-link"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+              >
+                Add more
+              </button>
+            </div>
+            <div className="dms-filelist">
+              {picked.map((p) => (
+                <div className="dms-filerow" key={p.key}>
+                  <span className="fname" title={p.file.name}>
+                    {p.file.name}
+                  </span>
+                  <span className="size">{fmtSize(p.file.size)}</span>
+                  <button
+                    type="button"
+                    className="dms-remove"
+                    aria-label={`Remove ${p.file.name}`}
+                    disabled={busy}
+                    onClick={() => removeFile(p.key)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
         )}
+
+        {/* One input serves the drop zone and Add more. `multiple` is the only
+            functional difference from the Form's single-file picker; `accept`
+            filters the DIALOG only, which is why addFiles re-checks. */}
+        <input
+          ref={fileRef}
+          type="file"
+          multiple
+          accept={
+            // undefined rather than "": an empty accept attribute means "no
+            // filter" and would offer every file in the dialog. addFiles blocks
+            // them anyway, but not offering them is clearer.
+            settings.allowedFileTypes.kind === "none"
+              ? undefined
+              : settings.allowedFileTypes.types.join(",")
+          }
+          style={{ display: "none" }}
+          onChange={(e) => addFiles(e.target.files)}
+        />
+
+        <div className="dms-grid" style={{ marginTop: 16 }}>
+          <label className="dms-field">
+            <span>
+              Document Date <em className="req">*</em>
+            </span>
+            <input
+              type="date"
+              value={documentDate}
+              disabled={busy}
+              max={(() => {
+                const d = new Date();
+                const mm = d.getMonth() + 1;
+                const day = d.getDate();
+                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+              })()}
+              onChange={(e) => setDocumentDate(e.target.value)}
+            />
+          </label>
+
+          {/* Confidential Level carries an info tooltip defining each term.
+              tabIndex makes it keyboard-reachable; :focus-within keeps the
+              panel open while it holds focus. */}
+          <div className="dms-conf">
+            {renderSelect(
+              "Confidential Level",
+              true,
+              confidentiality,
+              setConfidentiality,
+              options.confidentiality,
+              busy,
+            )}
+            <em
+              className="dms-info"
+              tabIndex={0}
+              role="button"
+              aria-label="What the confidentiality levels mean"
+            >
+              i
+              <span className="dms-info-panel" role="tooltip">
+                {/* Highly Confidential is deliberately absent — its term is removed
+                    from the term store for Phase 1, so the dropdown cannot offer it. */}
+                <dl>
+                  <dt>Legally Privileged</dt>
+                  <dd>
+                    This applies to confidential communications (email, advice,
+                    documents, conversations) between client and lawyer that are
+                    protected by law from being disclosed in a court of law or
+                    during legal proceedings.
+                  </dd>
+                  <dt>Confidential</dt>
+                  <dd>
+                    This applies to sensitive business information that is
+                    intended strictly for use within the Group, on a need-to-know
+                    basis.
+                  </dd>
+                  <dt>Restricted</dt>
+                  <dd>
+                    This applies to business information that may be disclosed to
+                    external parties only if a non-disclosure agreement has been
+                    signed.
+                  </dd>
+                </dl>
+              </span>
+            </em>
+          </div>
+
+          {/* Offered only for the level named by `legallyPrivilegedFor` in DMS
+              Config. Unset means never offered. The value is re-derived at upload
+              time rather than trusted from here, because hiding the control does
+              not clear the state behind it. */}
+          {settings.legallyPrivilegedFor !== "" &&
+            confidentiality === settings.legallyPrivilegedFor && (
+              <label className="dms-check" style={{ gridColumn: "1 / -1" }}>
+                <input
+                  type="checkbox"
+                  checked={legallyPrivileged}
+                  disabled={busy}
+                  onChange={(e) => setLegallyPrivileged(e.target.checked)}
+                />
+                <span>Legally Privileged</span>
+                <small>
+                  Tick if these are protected communications between client and
+                  lawyer.
+                </small>
+              </label>
+            )}
+        </div>
       </div>
 
       {/* ── Actions ─────────────────────────────────────────────────────── */}
@@ -2459,82 +2308,53 @@ export default function BulkUpload({
         <button
           type="button"
           className="dms-btn secondary"
-          onClick={clearAll}
-          disabled={busy || (batches.length === 0 && !panelOpen)}
+          onClick={resetForm}
+          disabled={busy}
         >
-          Clear
+          Cancel
         </button>
         <button
           type="button"
           className="dms-btn primary"
-          onClick={handleUpload}
-          disabled={busy || deptLoading || panelOpen || batches.length === 0}
-          title={
-            panelOpen
-              ? "Save or cancel the batch you're editing first"
-              : undefined
-          }
+          onClick={() => {
+            handleUpload().catch(() => undefined);
+          }}
+          disabled={busy || deptLoading || picked.length === 0}
         >
           {busy
             ? "Uploading…"
-            : `Upload all${totalQueued > 0 ? ` (${totalQueued} files)` : ""}`}
+            : `Upload${picked.length > 0 ? ` (${picked.length})` : ""}`}
         </button>
       </div>
 
       {status && <p className="dms-status">{status}</p>}
 
-      {/* ── Per-batch results ───────────────────────────────────────────── */}
-      {batchResults && (
+      {/* ── Results ─────────────────────────────────────────────────────── */}
+      {results && (
         <div className="dms-results">
-          {batchResults.map((bo, bi) => {
-            const s = {
-              uploaded: bo.results.filter((r) => r.outcome === "uploaded")
-                .length,
-              skipped: bo.results.filter((r) => r.outcome === "skipped").length,
-              failed: bo.results.filter((r) => r.outcome === "failed").length,
-              tagFailed: bo.results.filter((r) => r.outcome === "tagFailed")
-                .length,
-            };
-            const allOk =
-              !bo.batchError &&
-              s.uploaded === bo.results.length &&
-              bo.results.length > 0;
-            const shownRows = allOk
-              ? []
-              : bo.results.filter((r) => r.outcome !== "uploaded");
-            return (
-              <div className="dms-batch-result" key={`${bo.batchId}-${bi}`}>
-                <h4>{bo.label}</h4>
-                <p className="bt-dest">{bo.destinationLabel}</p>
-                {bo.batchError ? (
-                  <div className="dms-batch-error">{bo.batchError}</div>
-                ) : (
-                  <>
-                    <p className="dms-results-summary">
-                      {s.uploaded} uploaded
-                      {s.skipped > 0 && `, ${s.skipped} skipped`}
-                      {s.failed > 0 && `, ${s.failed} failed`}
-                      {s.tagFailed > 0 &&
-                        `, ${s.tagFailed} uploaded without tags`}
-                      .
-                      {s.tagFailed > 0 &&
-                        " Files listed as “uploaded, not tagged” are already in Documents — fix their metadata in the library rather than re-uploading."}
-                    </p>
-                    {shownRows.map((r, i) => (
-                      <div
-                        className={`dms-result ${r.outcome}`}
-                        key={`${r.name}-${i}`}
-                      >
-                        <span className="tag">{outcomeLabel[r.outcome]}</span>
-                        <span className="fname">{r.name}</span>
-                        {r.detail && <span className="why">{r.detail}</span>}
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            );
-          })}
+          {runError ? (
+            <div className="dms-run-error">{runError}</div>
+          ) : (
+            <>
+              <p className="dms-results-summary">
+                {resultCounts.uploaded} uploaded
+                {resultCounts.skipped > 0 && `, ${resultCounts.skipped} skipped`}
+                {resultCounts.failed > 0 && `, ${resultCounts.failed} failed`}
+                {resultCounts.tagFailed > 0 &&
+                  `, ${resultCounts.tagFailed} uploaded without tags`}
+                .
+                {resultCounts.tagFailed > 0 &&
+                  " Files listed as “uploaded, not tagged” are already in Documents — fix their metadata in the library rather than re-uploading."}
+              </p>
+              {problemRows.map((r, i) => (
+                <div className={`dms-result ${r.outcome}`} key={`${r.name}-${i}`}>
+                  <span className="tag">{outcomeLabel[r.outcome]}</span>
+                  <span className="fname">{r.name}</span>
+                  {r.detail && <span className="why">{r.detail}</span>}
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
 
@@ -2611,7 +2431,7 @@ export default function BulkUpload({
                 className="dms-popup-btn cancel"
                 onClick={() => {
                   setDoneOpen(false);
-                  clearAll();
+                  resetForm();
                 }}
               >
                 Upload More

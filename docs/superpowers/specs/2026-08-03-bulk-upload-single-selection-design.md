@@ -1,7 +1,8 @@
 # Bulk Upload — Single Selection — Design
 
 **Date:** 2026-08-03
-**Status:** Agreed, not yet implemented
+**Status:** Implemented in 1.0.71.0 (`feat/folder-abbreviations`) — awaiting the tenant
+verification in §7
 **Supersedes:** `2026-07-24-bulk-upload-two-batch-design.md` (batching deferred to Phase 2)
 **Related:** `2026-07-28-bulk-upload-progress-and-scroll-design.md`, and the Form relayout
 shipped in 1.0.62.0 – 1.0.68.0
