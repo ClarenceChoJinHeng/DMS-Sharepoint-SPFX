@@ -1355,8 +1355,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-dropzone .size { color: #666; font-size: 12px; }
         /* READY badge and the trailing action. margin-left:auto pushes "Change
            Document" to the far edge so the row reads name-first, action-last. */
-        .dms-filecard-ready { background: #0f6c3f; color: #fff; font-size: 11px; font-weight: 700;
-          letter-spacing: .06em; border-radius: 4px; padding: 3px 8px; }
+        .dms-filecard-ready { color: #0f6c3f; font-size: 11px; font-weight: 700;
+          letter-spacing: .06em; }
         .dms-filecard-action { margin-left: auto; }
         /* Textarea inherits the input styling so Remark matches the fields around it —
            without this it renders in the browser's default monospace at a random width. */
