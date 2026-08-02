@@ -28,6 +28,7 @@ import {
   findCollisions,
   lookupAbbrev,
 } from "../../../shared/folderAbbreviation";
+import { FULL_NAME_COLUMN_TITLE, pickFullNameField, SpFieldLite } from "../../../shared/folderFullName";
 
 // A "mode" is a top-level container folder under the library root. These used to
 // be hardcoded (Departments / Projects); they are now discovered dynamically so
@@ -90,7 +91,12 @@ const DEFAULT_GRID_MODE: GridMode = "off";
 // deepest terms (upload targets) that get the Year × Document Type grid beneath.
 // assignTerm is the term used to look up DMS Group Map rows for THIS folder's tier:
 // the term-set GUID for the segment container, the term GUID for dept/unit folders.
-type ProvTarget = { termGuid: string | null; assignTerm: string; relPath: string; label: string; section: string; isLeaf: boolean };
+// fullName is the RAW term label for this one folder, written to the Full Name column
+// so the abbreviated folder still says what it is. It is deliberately not `label`:
+// label is a breadcrumb ("GHO > Group Finance > Treasury") built for the log and the
+// map row Title, and putting a breadcrumb in a per-folder column would repeat the
+// whole path on every row.
+type ProvTarget = { termGuid: string | null; assignTerm: string; relPath: string; label: string; fullName: string; section: string; isLeaf: boolean };
 
 // DMS Group Map role → SharePoint permission level. GLOBAL is a privileged
 // uploader bypass (not folder-scoped) and is never assigned to a folder.
@@ -924,6 +930,100 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     return (data.value ?? []).map((t: { id: string; labels: Array<{ name: string }> }) => ({ id: t.id, label: t.labels[0].name }));
   };
 
+  // Name of a term SET (not a term), used as the full name of the segment container
+  // folder. Soft-fails to undefined: a missing label is cosmetic, and unlike the term
+  // TREE this value feeds nothing that prune or routing depends on.
+  const loadTermSetName = async (termSetId: string): Promise<string | undefined> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      const name = (data.localizedNames ?? [])[0]?.name;
+      return typeof name === "string" && name.trim() !== "" ? name : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Resolve the Full Name column's INTERNAL name on a library, live. Never guessed —
+  // see the folderFullName module for why the display name does not determine it.
+  // Returns undefined when the column has not been added to that library yet, which
+  // is a soft state: the run proceeds and simply writes no full names.
+  const loadFullNameField = async (lib: LibTarget): Promise<string | undefined> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/fields` +
+          `?$select=Title,InternalName,TypeAsString,ReadOnlyField` +
+          `&$filter=Title eq '${FULL_NAME_COLUMN_TITLE.replace(/'/g, "''")}'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      return pickFullNameField((data.value ?? []) as SpFieldLite[]);
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Read the current Full Name on a folder's list item, so an unchanged value costs a
+  // cheap GET instead of a throttled write. Undefined means "unknown" (empty, or the
+  // read failed) and the caller writes.
+  const getFolderFullName = async (
+    serverRelativeUrl: string,
+    internalName: string,
+  ): Promise<string | undefined> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
+          `?@f='${encodeServerRelativePath(serverRelativeUrl)}'&$select=${internalName}`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      const v = data[internalName];
+      return typeof v === "string" && v !== "" ? v : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Write the full term label onto a folder's list item. Throws on failure so the
+  // caller can report it against the folder rather than losing it silently.
+  const setFolderFullName = async (
+    serverRelativeUrl: string,
+    internalName: string,
+    value: string,
+  ): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
+        `?@f='${encodeServerRelativePath(serverRelativeUrl)}'`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+          // MERGE leaves every other field alone; IF-MATCH:* skips the etag round-trip.
+          "X-HTTP-Method": "MERGE",
+          "IF-MATCH": "*",
+        },
+        body: JSON.stringify({ [internalName]: value }),
+      },
+    );
+    // validateUpdateListItem returns 200 on field errors, but a plain MERGE does not —
+    // it 4xxs. Still surface the body: "field does not exist" and "read-only" read
+    // identically as a bare status code.
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(`HTTP ${res.status} ${detail}`);
+    }
+  };
+
   // Load DMS Group Map keyed by term (lowercased UnitTermGuid) → its group rows.
   // Same list/fields the upload form reads. A term can have several rows (one per
   // role), so a folder gets every mapped group at its role's permission level.
@@ -1086,7 +1186,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const modes = await loadReconModes();
     for (const mode of modes) {
       // Segment container: not a mapped term, but groups target it via the term-set GUID.
-      out.push({ termGuid: null, assignTerm: mode.termSetGuid, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, section: mode.stagingFolder, isLeaf: false });
+      // Its full name is the TERM SET's name, read live. mode.stagingFolder cannot serve
+      // here — in DMS Config it already holds the abbreviation ("GHO"), which is exactly
+      // the string Full Name exists to explain. Falls back to the folder name if the read
+      // fails, so a term-store hiccup costs a label, not the run.
+      const segmentFullName = (await loadTermSetName(mode.termSetGuid)) ?? mode.stagingFolder;
+      out.push({ termGuid: null, assignTerm: mode.termSetGuid, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, fullName: segmentFullName, section: mode.stagingFolder, isLeaf: false });
       // A failure anywhere in this segment's tree marks the WHOLE segment incomplete.
       // Targets gathered before the failure are kept (creating a subset of folders is
       // harmless and idempotent) — but prune must not run against a partial picture.
@@ -1122,7 +1227,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         const topSeg = seg(top.id, top.label);
         if (topSeg === undefined) continue; // reported; its children are unreachable
         abbrevTargets.push({ parentPath: `/${mode.stagingFolder}`, termGuid: top.id, abbreviation: topSeg, label: top.label });
-        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, section: mode.stagingFolder, isLeaf: false };
+        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false };
         out.push(topTarget);
         // Recurse; returns whether the term had children. A term with no children
         // is a leaf (the upload target) and gets the Year × Document Type grid.
@@ -1142,6 +1247,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               assignTerm: child.id,
               relPath: `/${mode.stagingFolder}/${topSeg}/${pathChain.join("/")}`,
               label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
+              fullName: child.label,
               section: mode.stagingFolder,
               isLeaf: false,
             };
@@ -1300,10 +1406,20 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // they're excluded — the live rate absorbs their real time. Worst case (assumes
       // nothing exists yet); re-runs finish faster as existing folders skip.
       const gridPerLeaf = yearLabels.length > 0 ? yearLabels.length * (1 + docTypeLabels.length) : 0;
+      // Resolved once per library, before the estimate, because whether the column
+      // exists changes the op count. Absent on a library = that library gets no full
+      // names and is told so once, rather than once per folder.
+      const fullNameFields = new Map<LibTarget, string>();
+      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+        const f = await loadFullNameField(lib);
+        if (f) fullNameFields.set(lib, f);
+        else entries.push({ msg: `⚠ ${lib}: no usable "${FULL_NAME_COLUMN_TITLE}" column — folders will show only their abbreviation`, ok: false });
+      }
       let plannedOps = 0;
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         for (const t of targets) {
           plannedOps += 1;
+          if (fullNameFields.has(lib)) plannedOps += 1;
           if (t.isLeaf) plannedOps += gridPerLeaf;
           const rows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
           plannedOps += rows.filter(g =>
@@ -1433,6 +1549,34 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               } else {
                 entries.push({ msg: `${folderLabel} — already locked, skipped`, ok: true });
                 setLastFolder(`${folderLabel} — already there`, "skip");
+              }
+            }
+            // Full Name: the abbreviation is the folder's name, so the raw term label
+            // goes on the item to keep the tree readable in the details pane.
+            //
+            // Written on every run, not only at creation, for two reasons: it backfills
+            // the trees that already exist (this column arrives after they were built),
+            // and it is how a RENAMED term's label catches up — the rename pass above
+            // moves the folder when the ABBREVIATION changes, but a term relabelled in
+            // the term store with its abbreviation untouched changes nothing on disk and
+            // would otherwise keep its stale full name forever.
+            //
+            // The read guard keeps that cheap: an unchanged value costs one GET, which
+            // is not throttled, instead of a write that is. On a settled tree this is
+            // the normal case, so the extra pass is close to free.
+            const fullNameField = fullNameFields.get(lib);
+            if (fullNameField) {
+              try {
+                const current = await getFolderFullName(full, fullNameField);
+                if (current !== t.fullName) {
+                  await setFolderFullName(full, fullNameField, t.fullName);
+                  entries.push({ msg: `  ↳ ${FULL_NAME_COLUMN_TITLE} = ${t.fullName}`, ok: true });
+                  await tick();
+                }
+              } catch (e) {
+                // Never fatal — a label failure must not stop the folder's ACL work,
+                // which is the part that actually controls access.
+                entries.push({ msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`, ok: false });
               }
             }
             // Map Staging term folders only (the segment container has no term).
