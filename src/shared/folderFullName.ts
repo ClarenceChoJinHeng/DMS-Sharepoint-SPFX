@@ -57,8 +57,25 @@ export function pickFullNameField(fields: SpFieldLite[]): string | undefined {
       // arbitrary term label, and writing to it would fail per-item rather than up front.
       (f.TypeAsString === "Text" || f.TypeAsString === "Note"),
   );
-  // Prefer single-line text when a site somehow has both: it is what the provisioning
-  // step asks for, and it renders on one line in the details pane.
-  const single = usable.find((f) => f.TypeAsString === "Text");
-  return (single ?? usable[0])?.InternalName;
+  if (usable.length === 0) return undefined;
+  if (usable.length === 1) return usable[0].InternalName;
+
+  // More than one candidate. Adding a content type brings its own column, so a library
+  // can end up with "FullName" (created by hand) beside "Full Name" (from the content
+  // type) — both Text, both writable, both matching the relaxed key. Live 2026-08-03:
+  // `FullName` held the data while `FullName0`/"Full Name" was the one the details pane
+  // rendered, so every folder looked empty.
+  //
+  // Resolve on the EXACT documented title. A list cannot hold two columns with the same
+  // display name, so this matches at most one, and it picks the column the client was
+  // told to create — the one their content type and details pane are bound to.
+  const exact = usable.find(
+    (f) => (f.Title ?? "").trim().toLowerCase() === FULL_NAME_COLUMN_TITLE.toLowerCase(),
+  );
+  if (exact) return exact.InternalName;
+
+  // Several near-names and no exact title: there is no principled way to choose, and
+  // guessing writes hundreds of folders to a column that may be the wrong one. Refuse —
+  // the caller lists the candidates so a person can delete the stray column.
+  return undefined;
 }

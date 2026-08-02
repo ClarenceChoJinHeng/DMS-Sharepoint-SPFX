@@ -66,12 +66,29 @@ describe("pickFullNameField", () => {
     expect(pickFullNameField([field({ TypeAsString: "Note", InternalName: "FullName" })])).toBe("FullName");
   });
 
-  it("prefers single-line text when a site has both", () => {
+  it("picks the exactly-titled column when a content type adds a second one", () => {
+    // Live 2026-08-03. Creating the column by hand and then adding a content type left
+    // Documents with two writable Text columns matching the relaxed key. "FullName" held
+    // the data; "Full Name" (FullName0) was the one the details pane rendered, so every
+    // folder looked empty. A list cannot hold two columns with the same display name, so
+    // the exact title resolves to exactly one — the column the client was told to create,
+    // and the one their content type and form are bound to.
     expect(
       pickFullNameField([
-        field({ TypeAsString: "Note", InternalName: "FullNameNote" }),
-        field({ TypeAsString: "Text", InternalName: "Full_x0020_Name" }),
+        field({ Title: "FullName", InternalName: "FullName" }),
+        field({ Title: "Full Name", InternalName: "FullName0" }),
       ]),
-    ).toBe("Full_x0020_Name");
+    ).toBe("FullName0");
+  });
+
+  it("refuses to choose between near-names when none is titled exactly", () => {
+    // No principled winner, and guessing writes hundreds of folders to a column that may
+    // be the wrong one. Undefined makes the caller list both so a person can delete one.
+    expect(
+      pickFullNameField([
+        field({ Title: "FullName", InternalName: "FullName" }),
+        field({ Title: "Full-Name", InternalName: "FullName0" }),
+      ]),
+    ).toBeUndefined();
   });
 });
