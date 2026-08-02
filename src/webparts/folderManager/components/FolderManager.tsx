@@ -36,6 +36,10 @@ import { FULL_NAME_COLUMN_TITLE, pickFullNameField, SpFieldLite } from "../../..
 // Operations, …) or any future top-level folder naming.
 type Mode      = string;
 type LibTarget = "Staging" | "Documents";
+// Folder-derived content type that carries the Full Name column, so the value shows in
+// the details pane. Matched by NAME because its id differs per library. Optional: a site
+// without it still provisions normally, it just shows nothing in the pane.
+const FOLDER_CONTENT_TYPE_NAME = "DMS Folder";
 // The three top-level tabs. The two library tabs drive the folder tree; the
 // Reconciliation tab is the term-store-driven provisioner (create + lock + map).
 type Tab       = LibTarget | "Reconciliation" | "GroupMap";
@@ -995,35 +999,73 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     }
   };
 
-  // Read the current Full Name on a folder's list item, so an unchanged value costs a
-  // cheap GET instead of a throttled write. Undefined means "unknown" (empty, or the
-  // read failed) and the caller writes.
-  const getFolderFullName = async (
-    serverRelativeUrl: string,
-    internalName: string,
-  ): Promise<string | undefined> => {
+  // Resolve the DMS Folder content type's id on a library, by NAME.
+  //
+  // SharePoint's built-in Folder content type cannot take a custom column: its list
+  // settings page offers only "Delete this content type", and adding a field link by API
+  // fails too (verified 2026-08-03). So a folder that should show Full Name in the details
+  // pane has to carry a folder-derived content type that does accept columns, and this run
+  // stamps it — a folder created through the REST API gets the plain Folder type whatever
+  // the library's default-content-type setting says, because that governs the New button
+  // only.
+  //
+  // Resolved per library: the two libraries hold separate list-scoped copies of the same
+  // site content type, with DIFFERENT ids. Undefined when it is absent, which is a soft
+  // state — a site that has not provisioned it still gets all its folders.
+  const loadFolderContentTypeId = async (lib: LibTarget): Promise<string | undefined> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
-          `?@f='${encodeServerRelativePath(serverRelativeUrl)}'&$select=${internalName}`,
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/ContentTypes?$select=Id,Name`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (!res.ok) return undefined;
       const data = await res.json();
-      const v = data[internalName];
-      return typeof v === "string" && v !== "" ? v : undefined;
+      const rows = (data.value ?? []) as Array<{ Id?: { StringValue?: string }; Name?: string }>;
+      const hit = rows.find(
+        (c) => (c.Name ?? "").trim().toLowerCase() === FOLDER_CONTENT_TYPE_NAME.toLowerCase(),
+      );
+      return hit?.Id?.StringValue;
     } catch {
       return undefined;
     }
   };
 
-  // Write the full term label onto a folder's list item. Throws on failure so the
-  // caller can report it against the folder rather than losing it silently.
-  const setFolderFullName = async (
+  // Read what a folder's list item already holds, so an unchanged folder costs a cheap GET
+  // instead of a throttled write. Undefined fields mean "unknown" (empty, or the read
+  // failed) and the caller writes.
+  const getFolderItemState = async (
     serverRelativeUrl: string,
-    internalName: string,
-    value: string,
+    internalName?: string,
+  ): Promise<{ fullName?: string; contentTypeId?: string }> => {
+    try {
+      // The column is optional: a library can carry the content type before anyone adds
+      // Full Name to it, and the content type must still be stamped in that state.
+      const select = internalName ? `${internalName},ContentTypeId` : "ContentTypeId";
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
+          `?@f='${encodeServerRelativePath(serverRelativeUrl)}'&$select=${select}`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return {};
+      const data = await res.json();
+      const v = internalName ? data[internalName] : undefined;
+      const ct = data.ContentTypeId;
+      return {
+        fullName: typeof v === "string" && v !== "" ? v : undefined,
+        contentTypeId: typeof ct === "string" && ct !== "" ? ct : undefined,
+      };
+    } catch {
+      return {};
+    }
+  };
+
+  // Write the given fields onto a folder's list item. Throws on failure so the caller can
+  // report it against the folder rather than losing it silently.
+  const setFolderItemFields = async (
+    serverRelativeUrl: string,
+    values: Record<string, string>,
   ): Promise<void> => {
     const res: SPHttpClientResponse = await context.spHttpClient.post(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
@@ -1037,7 +1079,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           "X-HTTP-Method": "MERGE",
           "IF-MATCH": "*",
         },
-        body: JSON.stringify({ [internalName]: value }),
+        body: JSON.stringify(values),
       },
     );
     // validateUpdateListItem returns 200 on field errors, but a plain MERGE does not —
@@ -1435,7 +1477,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // exists changes the op count. Absent on a library = that library gets no full
       // names and is told so once, rather than once per folder.
       const fullNameFields = new Map<LibTarget, string>();
+      const folderCtIds = new Map<LibTarget, string>();
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+        const ct = await loadFolderContentTypeId(lib);
+        if (ct) folderCtIds.set(lib, ct);
+        else entries.push({ msg: `⚠ ${lib}: no "${FOLDER_CONTENT_TYPE_NAME}" content type — folders keep the built-in Folder type and the details pane will not show Full Name`, ok: true });
         const f = await loadFullNameField(lib);
         if (f.internalName) fullNameFields.set(lib, f.internalName);
         // ok:true deliberately. This is a warning, not an error: `errorsBeforePrune`
@@ -1596,12 +1642,25 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // is not throttled, instead of a write that is. On a settled tree this is
             // the normal case, so the extra pass is close to free.
             const fullNameField = fullNameFields.get(lib);
-            if (fullNameField) {
+            const wantCtId = folderCtIds.get(lib);
+            if (fullNameField || wantCtId) {
               try {
-                const current = await getFolderFullName(full, fullNameField);
-                if (current !== t.fullName) {
-                  await setFolderFullName(full, fullNameField, t.fullName);
-                  entries.push({ msg: `  ↳ ${FULL_NAME_COLUMN_TITLE} = ${t.fullName}`, ok: true });
+                const state = await getFolderItemState(full, fullNameField);
+                const values: Record<string, string> = {};
+                if (fullNameField && state.fullName !== t.fullName) values[fullNameField] = t.fullName;
+                // Stamp the content type in the SAME merge — no extra request, no extra
+                // throttle cost. Compared case-insensitively because SharePoint is not
+                // consistent about the hex casing it returns.
+                if (wantCtId && (state.contentTypeId ?? "").toLowerCase() !== wantCtId.toLowerCase()) {
+                  values.ContentTypeId = wantCtId;
+                }
+                if (Object.keys(values).length > 0) {
+                  await setFolderItemFields(full, values);
+                  const what = [
+                    fullNameField && values[fullNameField] !== undefined ? `${FULL_NAME_COLUMN_TITLE} = ${t.fullName}` : "",
+                    values.ContentTypeId !== undefined ? `content type → ${FOLDER_CONTENT_TYPE_NAME}` : "",
+                  ].filter(Boolean).join(", ");
+                  entries.push({ msg: `  ↳ ${what}`, ok: true });
                   await tick();
                 }
               } catch (e) {
