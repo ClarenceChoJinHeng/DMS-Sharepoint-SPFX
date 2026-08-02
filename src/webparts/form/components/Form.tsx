@@ -1389,6 +1389,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
         /* Folder card runs 2-up so the deepest level and Year pair evenly. */
         .dms-grid-2 { grid-template-columns: 1fr 1fr; }
+        /* Unit | Year | Document Type on one row. Together they name exactly one
+           destination folder, so they read better as a set than stacked. */
+        .dms-grid-3 { grid-template-columns: 1fr 1fr 1fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; }
         .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; color: #1b1b1b; }
         .dms-radio-group input[type="radio"] { accent-color: #0f6c3f; width: 16px; height: 16px; cursor: pointer; }
@@ -1444,12 +1447,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         All fields marked <strong>*</strong> are required.
       </p>
 
-      {/* ── Document Location ────────────────────────────────────────────── */}
+      {/* ── Document Folder Information ──────────────────────────────────── */}
       {/* Deliberately BEFORE Document Details in SOURCE order, not reordered with
           CSS: tab order follows the DOM, so a visual-only swap would have keyboard
           users moving through the form in a different sequence from what they see. */}
       <div className="dms-section">
-        <p className="dms-section-title">Document Location</p>
+        <p className="dms-section-title">Document Folder Information</p>
 
         {deptLoading ? (
           <p className="dms-dept-loading">Loading your access&hellip;</p>
@@ -1488,7 +1491,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           })}
         </div>
 
-        {/* Segment picker — only when the active side offers more than one mode. */}
+        {/* Segment picker. Shown whenever a segment is offered, even if there is
+            only one: the mockup includes it, and hiding it made the form open on
+            "Department" with no indication of which segment those departments
+            belonged to. A single-option select still answers "where am I". */}
         {(() => {
           const side = activeMode()?.side;
           const sideModes = modes.filter((m) => m.side === side);
@@ -1497,10 +1503,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             : sideModes.filter((m) =>
                 validPaths.some((p) => p.modeKey === m.key),
               );
-          if (offerable.length <= 1) return null;
+          if (offerable.length === 0) return null;
           return (
             <label className="dms-field">
-              <span>Segment</span>
+              <span>
+                Segment <em className="req">*</em>
+              </span>
               <select
                 value={uploadMode}
                 onChange={(e) => switchMode(e.target.value)}
@@ -1535,10 +1543,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           </div>
         )}
 
-        <div className="dms-grid dms-grid-2">
+        <div className="dms-grid dms-grid-3">
           {/* --- File-path fields, in folder order: Segment (above) -> level(s)
-                 -> Year -> Document Type. Every level spans the full row EXCEPT the
-                 deepest one, which shares its row with Year. --- */}
+                 -> Year -> Document Type. Intermediate levels span the full row;
+                 the deepest one shares a row of three with Year and Document Type,
+                 which is the set that identifies a single destination folder. --- */}
           {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
             renderSelect(
               lvl.label,
@@ -1593,6 +1602,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             }
             return null;
           })()}
+
+          {/* Spans the row. Single-line rather than a textarea, matching the
+              mockup — 250 characters is a sentence, not a paragraph, and a tall
+              box invites people to write one. */}
+          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
+            <span>Remark</span>
+            <input
+              type="text"
+              value={remark}
+              maxLength={250}
+              onChange={(e) => setRemark(e.target.value)}
+            />
+            <small>Max. 250 characters</small>
+          </label>
         </div>
       </div>
 
@@ -1790,18 +1813,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               </label>
             )}
 
-          {/* Full row: a remark is prose, and half a row wraps it to four lines. */}
-          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-            <span>Remark</span>
-            <textarea
-              value={remark}
-              maxLength={250}
-              rows={3}
-              placeholder="Anything the approver should know about this document"
-              onChange={(e) => setRemark(e.target.value)}
-            />
-            <small>{remark.length}/250 characters</small>
-          </label>
+          {/* Remark lives in the folder card above, per the mockup. */}
         </div>
       </div>
 
