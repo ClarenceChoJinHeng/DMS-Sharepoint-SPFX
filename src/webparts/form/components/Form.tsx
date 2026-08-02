@@ -1382,7 +1382,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         /* Stop short of the column edge so the info icon, which is positioned just
            past 100%, sits inside the card instead of overhanging it. */
         .dms-conf .dms-field select { max-width: calc(100% - 28px); }
-        .dms-info { position: absolute; left: calc(100% + 6px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
+        /* Sits 6px past the SELECT's right edge, not the column's. The select stops
+           28px short (see .dms-conf select below), so pinning the icon to 100% left
+           a 28px gap and pushed it past where Vendor ends in the row above. */
+        .dms-info { position: absolute; left: calc(100% - 22px); bottom: 10px; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
         /* Opens to the right of the icon, into the empty third grid column.
            280px keeps it inside the card rather than spilling past its edge. */
         .dms-info-panel { display: none; position: absolute; top: -8px; left: calc(100% + 8px); z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; }
