@@ -112,7 +112,22 @@ boundary, not a cosmetic one.
    permissions are the outer of two layers, and the weaker one.
 2. **Hand-written navigation links are not permission-trimmed** against their target in modern
    SharePoint. A restricted page still shows its nav link, and clicking it gives Access Denied.
-   Not a leak, but it reads as a bug — remove the link as well as restricting the page.
+   Not a leak — but it reads as a bug, so it will be raised.
+
+   Hiding the link needs **audience targeting** on the navigation link, and audience targeting
+   accepts only **Azure AD security groups or M365 groups**. It does **not** accept SharePoint
+   site groups, which is what every `DMS_*`/`CRS_*` group in this system is. So the blocker is
+   the *kind* of group, not the client's willingness to grant group-creation rights — worth
+   getting that distinction right before saying it out loud, and worth verifying in the tenant
+   by opening the nav editor and checking whether a `DMS_` group appears in the audience picker
+   at all.
+
+   **The remedy that needs no groups: remove the link.** The page stays reachable by direct URL
+   for those permitted, and everyone else neither sees it nor can open it. For the admin pages
+   (Folder Manager, Bulk Upload) that is better than targeting anyway — administrators bookmark
+   them, and there is no link for anyone else to click. If the client later wants a genuinely
+   audience-targeted link, the ask is one Azure AD security group, which is a far smaller
+   request than open group-creation rights.
 3. **Site collection administrators and the site Owners group always retain access.** "Only
    specific people" means "only specific people, plus administrators".
 4. **The home page is excluded** — see the rule above.
