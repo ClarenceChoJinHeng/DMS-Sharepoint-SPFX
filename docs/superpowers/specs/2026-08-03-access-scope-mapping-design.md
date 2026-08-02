@@ -92,8 +92,42 @@ reach nothing, and if the run dies in that window, that is the state it stays in
   does not hide the library behind it. This is navigation hygiene; folder ACLs remain the
   security model. Worth stating in the UI, because "only specific people can access the page"
   reads like a stronger guarantee than it is.
+
+### 5a. What a Page row does and does not guarantee
+
+Asked directly during the design review, and the answer belongs in the spec rather than in a
+chat log.
+
+**It does hold.** Item-level permissions on a `Site Pages` item are enforced server-side. A
+non-member opening the URL gets Access Denied; the page is trimmed from search results; and it
+disappears from the Site Pages library listing, so its very existence is hidden. This is a real
+boundary, not a cosmetic one.
+
+**Four limits to state to the client before promising anything:**
+
+1. **It hides the page, not the data on it.** Documents shown by a web part remain reachable by
+   direct library URL, search, the mobile app and sync. What actually stops that is the folder
+   ACLs, which are independent and already in force — the web parts run as the signed-in user,
+   so someone who *did* reach a page still sees only what their folder permissions allow. Page
+   permissions are the outer of two layers, and the weaker one.
+2. **Hand-written navigation links are not permission-trimmed** against their target in modern
+   SharePoint. A restricted page still shows its nav link, and clicking it gives Access Denied.
+   Not a leak, but it reads as a bug — remove the link as well as restricting the page.
+3. **Site collection administrators and the site Owners group always retain access.** "Only
+   specific people" means "only specific people, plus administrators".
+4. **The home page is excluded** — see the rule above.
 - **Break inheritance before granting**, at every scope — the order the folder pass already
   uses. Granting first and breaking second discards the grant.
+- **`copyRoleAssignments=false`, always.** This single parameter decides whether the feature
+  does anything. With `true`, breaking inheritance copies every inherited grant forward, so the
+  page stays visible to exactly the same people — and the run reports success. The failure is
+  invisible from the log; the only symptom is that nothing changed. `clearSubscopes=true` with
+  it, matching `breakInheritance` in `FolderManager.tsx`.
+- **Re-add the site Owners group after every break.** The corollary of the rule above: once
+  inheritance is broken with `copyRoleAssignments=false`, the only remaining access is site
+  collection administrators plus whatever is explicitly granted. An owner who is not also a site
+  collection admin loses the page. The folder pass already re-adds `ownerGroupId` with Full
+  Control; the library and page passes must do the same.
 - The site's root web has unique permissions by definition, so the `Site` pass grants directly
   with no break step. A library and a page each need the break.
 
@@ -143,7 +177,10 @@ Needs the tenant.
 3. Add a `Library` row for `Documents`, reconcile, confirm the library's inheritance is broken
    and the group holds the role.
 4. Add a `Page` row for a non-home page, reconcile, confirm a non-member gets 403 on that page
-   and the rest of the site still works.
+   and the rest of the site still works. Check as a **non-member who previously could open it** —
+   a break that copied its role assignments forward looks identical in the log and only differs
+   here. Also confirm the page is gone from that user's search results and from their Site Pages
+   listing, and that a site Owner who is not a site collection admin can still open it.
 5. Add a `Page` row for the home page and confirm the run **refuses** it by name.
 6. Grant a group Read on a library by hand, reconcile, confirm `UNMAPPED GRANT` is reported and
    the grant is left alone.
