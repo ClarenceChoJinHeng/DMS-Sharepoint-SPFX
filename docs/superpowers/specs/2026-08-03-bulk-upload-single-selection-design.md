@@ -17,6 +17,10 @@ metadata selection, edited through a side panel. `Batch`, `BatchSelection`, `Bat
 
 Phase 1 drops batching. One folder destination, one metadata set, up to 50 files.
 
+The screen's purpose is **migrating the client's historical documents** into the Documents
+library — not day-to-day filing, which is what the Form is for. That is why one shared
+metadata set is sufficient, and why the files arrive already named.
+
 This is a **net deletion**. The mechanism the new screens need already exists —
 `postFileWithProgress`, `UploadingBar` and the per-file `FileState` union all stay.
 
@@ -58,16 +62,21 @@ can be checked against the list.
   a dropped `.exe` through. Rejected files are reported by name and dropped from the
   selection; the rest proceed.
 - **One metadata set applies to every file.** That is the point of the screen.
-- **Document naming.** The Form composes
-  `[Project] - [Vendor] - [Document Name] - [Date]`. Bulk Upload has no per-file Document
-  Name and no Project/Vendor fields in these mockups, so each file **keeps its original
-  name**. Renaming 50 files identically would produce 50 collisions.
+- **Files keep their own names.** This screen exists to bring the client's **historical
+  documents** into the Documents library, and in Phase 1 they name those files themselves
+  before uploading. So no composition here — the Form's
+  `[Project] - [Vendor] - [Document Name] - [Date]` rule does not apply. Applying it would
+  also be impossible: there is one metadata set for the whole selection, so all 50 files
+  would be handed the same name.
 - **Per-file failure is not fatal.** A file that fails upload or tagging is marked failed
   and the run continues. The existing `Outcome` union (`uploaded` / `skipped` / `failed` /
   `tagFailed`) already covers this and stays.
-- **Replace prompts.** The single-file "Replace Existing File" dialog does not scale to 50.
-  Phase 1: a same-named file is **skipped** and reported as such in the summary, with no
-  prompt. Prompting per file would make a 50-file run unattendable.
+- **Replace prompts, one file at a time.** A same-named file raises the existing "Replace
+  Existing File" dialog, and the run waits for the answer before continuing. Yes overwrites
+  that file, No skips it and records `skipped`; either way the remaining files carry on.
+  Historical uploads are exactly where a genuine re-upload and an accidental duplicate look
+  alike from the outside, and only the person doing it can tell them apart — so this is a
+  decision the screen must not make on its own, even at the cost of an unattended run.
 
 ## 5. Removed
 
@@ -93,4 +102,6 @@ Not automatable — needs the tenant.
 4. Drop a disallowed type; confirm it is rejected by name and the others survive.
 5. Upload; confirm the per-file bars, the header count, and that every file lands in
    `…/Unit/Year/DocumentType` carrying the shared metadata.
-6. Re-upload one same-named file; confirm it is skipped and reported, with no prompt.
+6. Re-upload a selection containing two same-named files; confirm the dialog appears for
+   each in turn, that Yes overwrites and No records `skipped`, and that files after the
+   prompt still upload.
