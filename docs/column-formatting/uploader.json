@@ -4,7 +4,7 @@
   "style": {
     "display": "=if([$File_x0020_Type] == '', 'none', 'flex')",
     "align-items": "center",
-    "height": "70%",
+    "height": "0%",
     "min-width": "0"
   },
   "children": [
