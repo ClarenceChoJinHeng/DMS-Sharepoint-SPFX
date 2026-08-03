@@ -55,17 +55,24 @@ function formatSize(bytes: string): string {
 
 const s = {
   root:        { fontFamily: "'Segoe UI', Tahoma, sans-serif", color: "#323130", background: "#fff", padding: "0 0 40px" } as React.CSSProperties,
-  backLink:    { color: "#0f6cbd", textDecoration: "none", fontSize: 14, display: "inline-flex", alignItems: "center", gap: 4, marginBottom: 12 } as React.CSSProperties,
+  backLink:    { color: "rgba(0, 104, 74, 1)", textDecoration: "none", fontSize: 14, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 12 } as React.CSSProperties,
   docTitle:    { margin: "0 0 4px", fontSize: 38, fontWeight: 600, color: "#201f1e" } as React.CSSProperties,
   docMeta:     { fontSize: 13, color: "#605e5c", display: "flex", gap: 8, alignItems: "center", marginBottom: 24 } as React.CSSProperties,
   dot:         { color: "#c8c6c4" } as React.CSSProperties,
-  grid:        { display: "grid", gridTemplateColumns: "220px 1fr 296px", gap: 24, alignItems: "start" } as React.CSSProperties,
+  // minmax(0, 1fr) on the centre column: a bare 1fr floors at the iframe's
+  // min-content width, so the preview could never give ground. Narrower rails +
+  // a tighter gap hand ~70px back to the preview.
+  grid:        { display: "grid", gridTemplateColumns: "196px minmax(0, 1fr) 280px", gap: 16, alignItems: "start" } as React.CSSProperties,
   sectionTitle:{ fontSize: 14, fontWeight: 600, color: "#201f1e", marginBottom: 12 } as React.CSSProperties,
   avatar:      { width: 36, height: 36, borderRadius: "50%", background: "#0f6cbd", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 } as React.CSSProperties,
   authorName:  { fontWeight: 600, fontSize: 14, color: "#201f1e" } as React.CSSProperties,
   authorDate:  { fontSize: 12, color: "#605e5c", marginTop: 2 } as React.CSSProperties,
-  metaLabel:   { color: "#605e5c", paddingBottom: 8, paddingRight: 12, verticalAlign: "top" as const, fontSize: 13, whiteSpace: "nowrap" as const },
-  metaValue:   { fontWeight: 500, paddingBottom: 8, fontSize: 13, color: "#201f1e", verticalAlign: "top" as const },
+  // Details stack vertically — label above value — so a long value (a deep
+  // Location path, a full vendor name) wraps into the column's own width
+  // instead of being squeezed into whatever the label leaves of a 196px rail.
+  detailRow:   { marginBottom: 14 } as React.CSSProperties,
+  metaLabel:   { color: "#605e5c", fontSize: 13, marginBottom: 2 } as React.CSSProperties,
+  metaValue:   { fontWeight: 500, fontSize: 13, color: "#201f1e", lineHeight: 1.35, overflowWrap: "break-word" as const } as React.CSSProperties,
   panel:       { border: "1px solid #edebe9", borderRadius: 4, padding: 20, position: "sticky" as const, top: 16, background: "#fff", boxShadow: "0 2px 6px rgba(0,0,0,0.08)" } as React.CSSProperties,
   panelTitle:  { fontWeight: 700, fontSize: 16, color: "#201f1e" } as React.CSSProperties,
   panelHint:   { fontSize: 13, color: "#605e5c", marginBottom: 16, lineHeight: 1.4 } as React.CSSProperties,
@@ -465,7 +472,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     <div style={s.root}>
 
       <a href={backUrl()} style={s.backLink}>
-        ← Back to document list
+        {/* A bare "<" must be escaped as an expression — JSX reads a literal
+            left angle bracket in children as the start of a tag. */}
+        <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 700 }}>{"<"}</span>
+        Back to document list
       </a>
 
       <h1 style={s.docTitle}>{item.FileLeafRef}</h1>
@@ -480,9 +490,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
       <div style={s.grid}>
 
-        {/* Left — Submitted by + Metadata */}
+        {/* Left — Uploaded by + Details */}
         <div>
-          <div style={s.sectionTitle}>Submitted by</div>
+          <div style={s.sectionTitle}>Uploaded by</div>
           <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 28 }}>
             <div style={s.avatar}>{initials(item.Author.Title)}</div>
             <div>
@@ -492,17 +502,13 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           </div>
 
           <hr style={{ border: "none", borderTop: "1px solid #edebe9", margin: "0 0 16px" }} />
-          <div style={s.sectionTitle}>Metadata</div>
-          <table style={{ borderCollapse: "collapse", width: "100%" }}>
-            <tbody>
-              {metadata.map(([label, value]) => (
-                <tr key={label}>
-                  <td style={s.metaLabel}>{label}</td>
-                  <td style={s.metaValue}>{value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div style={s.sectionTitle}>Details</div>
+          {metadata.map(([label, value]) => (
+            <div key={label} style={s.detailRow}>
+              <div style={s.metaLabel}>{label}</div>
+              <div style={s.metaValue}>{value}</div>
+            </div>
+          ))}
         </div>
 
         {/* Center — Preview */}
@@ -510,7 +516,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           <div style={s.sectionTitle}>Preview</div>
           <iframe
             src={previewUrl}
-            style={{ width: "100%", height: "calc(100vh - 220px)", minHeight: 600, border: "none", borderRadius: 4 }}
+            style={{ width: "100%", height: "calc(100vh - 200px)", minHeight: 640, border: "none", borderRadius: 4, display: "block" }}
             title="Document preview"
             allowFullScreen
           />
@@ -521,7 +527,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span style={s.panelTitle}>Approval</span>
           </div>
-          <p style={s.panelHint}>Please review the document and its metadata.</p>
+          <p style={s.panelHint}>Please review the document and its details.</p>
 
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Approval status</div>
