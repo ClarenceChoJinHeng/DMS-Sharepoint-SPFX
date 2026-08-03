@@ -47,7 +47,10 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   (shared columns — zero new columns). All 4 term sets exist flat in the `DMS Metadata` term
   group (GUIDs below) and are in the code fallbacks: `DEFAULT_MODES` in `Form.tsx` +
   `BulkUpload.tsx`, `RECON_MODES` in `FolderManager.tsx`. DMS Config `mode` rows are the
-  runtime source of truth — the 3 new rows still need creating. 2027 segments need new level
+  runtime source of truth — **3 rows now exist, verified live 2026-08-03**: `mode_gho`,
+  `mode_minamas_ho`, `mode_nbpol_ho`, all carrying the shared `[Department, Unit]` Levels JSON.
+  Upstream Malaysia has **no** mode row, deliberately (its GUID above is the stale placeholder),
+  so that segment is never offered and reconciliation never walks it. 2027 segments need new level
   columns first (see the spec + `2026-07-21-segment-onboarding-plan.md`).
 - **User path auto-detection:** the form reads the user's **SharePoint group** memberships via SP
   REST (`spGroups.ts`, `/_api/web/...` — **no Graph, no admin consent**; Graph was fully retired in
