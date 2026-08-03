@@ -103,14 +103,45 @@ const DEFAULT_GRID_MODE: GridMode = "off";
 // label is a breadcrumb ("GHO > Group Finance > Treasury") built for the log and the
 // map row Title, and putting a breadcrumb in a per-folder column would repeat the
 // whole path on every row.
-type ProvTarget = { termGuid: string | null; assignTerm: string; relPath: string; label: string; fullName: string; section: string; isLeaf: boolean };
+// ancestorTerms is every term GUID ABOVE this folder on its own branch, outermost
+// first. It exists for departmental fan-out: a Group Map row on a non-leaf term
+// grants its role on every folder beneath it, so each folder needs to know which
+// terms could be reaching down onto it. Empty for the top tier.
+type ProvTarget = { termGuid: string | null; assignTerm: string; ancestorTerms: string[]; relPath: string; label: string; fullName: string; section: string; isLeaf: boolean };
 
 // DMS Group Map role → SharePoint permission level. GLOBAL is a privileged
 // uploader bypass (not folder-scoped) and is never assigned to a folder.
+//
+// APR was "Design" until 2026-08-03. Design includes Add Items and Delete Items,
+// so approvers could always upload and "approve only" was never enforceable —
+// which is exactly the Head-of #2 persona. DMS Approve and DMS Delete are custom
+// levels the client creates once per site (copy Contribute / copy Read; see the
+// role-personas spec §3.1).
+//
+// Deploying before those levels exist fails SAFELY and visibly: the assignment
+// loop logs `no "<name>" role definition on site` and skips that one grant.
+// Nobody loses access — an existing approver keeps the Design grant already on
+// the folder — the change simply does not take effect until the level is made.
+//
+// HC is absent by design: Highly Confidential is Phase 2 (see groupMapModel).
 const ROLE_TO_PERMISSION: Record<string, string> = {
   MEMBER: "Read",
   UPL: "Contribute",
-  APR: "Design",
+  APR: "DMS Approve",
+  DEL: "DMS Delete",
+};
+
+// Which roles each library accepts — the isolation rule that keeps viewers off
+// pending documents.
+//
+// A table, not the inline ternary it replaces. That ternary read "Staging gets
+// everything except MEMBER", which silently admitted every FUTURE role: DEL
+// would have landed on Staging the day it was added, handing deleters other
+// people's pending documents. Listing roles explicitly means a new role reaches
+// no library until someone names it here.
+const LIBRARY_ROLES: Record<LibTarget, string[]> = {
+  Staging: ["UPL", "APR"],
+  Documents: ["MEMBER", "DEL"],
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1324,14 +1355,18 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // rows the upload form reads (termSet_yearPeriod / termSet_documentType), so the
   // grid matches the form on any tenant with no code edit. Falls back to the built-in
   // YEAR_TERMSET / DOCTYPE_TERMSET constants per-key if the row or the list is missing.
-  const loadReconGridTermSets = async (): Promise<{ year: string; docType: string; gridMode: GridMode }> => {
+  type ReconSettings = { year: string; docType: string; gridMode: GridMode; fanOut: boolean };
+  const RECON_SETTINGS_FALLBACK: ReconSettings = {
+    year: YEAR_TERMSET, docType: DOCTYPE_TERMSET, gridMode: DEFAULT_GRID_MODE, fanOut: false,
+  };
+  const loadReconGridTermSets = async (): Promise<ReconSettings> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
-      if (!res.ok) return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET, gridMode: DEFAULT_GRID_MODE };
+      if (!res.ok) return RECON_SETTINGS_FALLBACK;
       const data = await res.json();
       const map: Record<string, string> = {};
       ((data.value ?? []) as Array<{ Title: string; SettingValue: string }>).forEach(
@@ -1347,9 +1382,22 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         year: map.termSet_yearPeriod || YEAR_TERMSET,
         docType: map.termSet_documentType || DOCTYPE_TERMSET,
         gridMode,
+        // Departmental fan-out is OPT-IN, and defaults off even though the design
+        // wants it on. The reason is historical data, not caution for its own sake:
+        // until 2026-07-29 the old isChainAuthorized required a MEMBER row at EVERY
+        // tier, so sites provisioned before then can still carry leftover
+        // department-tier MEMBER rows. Fanning those would silently grant Read on
+        // every unit folder in Documents — precisely the cross-unit leak the
+        // isolation model exists to prevent, applied to rows nobody remembers
+        // creating.
+        //
+        // So the run REPORTS what would fan while this is off (see the assignment
+        // loop) and grants nothing. An admin reads that list, deletes the leftovers,
+        // and only then sets the row to "on".
+        fanOut: (map.recon_departmentFanOut || "").toLowerCase() === "on",
       };
     } catch {
-      return { year: YEAR_TERMSET, docType: DOCTYPE_TERMSET, gridMode: DEFAULT_GRID_MODE };
+      return RECON_SETTINGS_FALLBACK;
     }
   };
 
@@ -1424,7 +1472,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // the string Full Name exists to explain. Falls back to the folder name if the read
       // fails, so a term-store hiccup costs a label, not the run.
       const segmentFullName = (await loadTermSetName(mode.termSetGuid)) ?? mode.stagingFolder;
-      out.push({ termGuid: null, assignTerm: mode.termSetGuid, relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, fullName: segmentFullName, section: mode.stagingFolder, isLeaf: false });
+      // ancestorTerms is empty here AND the term-set GUID is deliberately never
+      // put into any descendant's ancestorTerms: a SEGMENT-tier row does not fan
+      // down. Same reason fan-out is opt-in at all — sites provisioned before
+      // 2026-07-29 can carry leftover segment-tier MEMBER rows, and fanning one
+      // would grant Read across an entire business segment.
+      out.push({ termGuid: null, assignTerm: mode.termSetGuid, ancestorTerms: [], relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, fullName: segmentFullName, section: mode.stagingFolder, isLeaf: false });
       // A failure anywhere in this segment's tree marks the WHOLE segment incomplete.
       // Targets gathered before the failure are kept (creating a subset of folders is
       // harmless and idempotent) — but prune must not run against a partial picture.
@@ -1471,13 +1524,21 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         const topSeg = seg(top.id, top.label, 1);
         if (topSeg === undefined) continue; // reported; its children are unreachable
         abbrevTargets.push({ parentPath: `/${mode.stagingFolder}`, termGuid: top.id, abbreviation: topSeg, label: top.label });
-        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false };
+        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, ancestorTerms: [], relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false };
         out.push(topTarget);
         // Recurse; returns whether the term had children. A term with no children
         // is a leaf (the upload target) and gets the Year × Document Type grid.
         // `ancestors` carries raw labels for display, `pathAncestors` the sanitised
         // segments for the folder path — they can differ and must not be conflated.
-        const walk = async (parentId: string, ancestors: string[], pathAncestors: string[]): Promise<boolean> => {
+        // `termAncestors` mirrors `ancestors` but carries term GUIDs rather than
+        // labels, and INCLUDES top (which `ancestors` excludes) because a row on
+        // the top tier fans down just like any other non-leaf row.
+        const walk = async (
+          parentId: string,
+          ancestors: string[],
+          pathAncestors: string[],
+          termAncestors: string[],
+        ): Promise<boolean> => {
           const children = await loadReconChildren(mode.termSetGuid, parentId);
           for (const child of children) {
             // ancestors excludes `top`, so a direct child of top has depth 2.
@@ -1485,11 +1546,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             if (childSeg === undefined) continue; // reported; skip this subtree
             const chain = [...ancestors, child.label];
             const pathChain = [...pathAncestors, childSeg];
+            const termChain = [...termAncestors, child.id];
             const parentPath = `/${mode.stagingFolder}/${topSeg}${pathAncestors.length > 0 ? "/" + pathAncestors.join("/") : ""}`;
             abbrevTargets.push({ parentPath, termGuid: child.id, abbreviation: childSeg, label: child.label });
             const childTarget: ProvTarget = {
               termGuid: child.id,
               assignTerm: child.id,
+              ancestorTerms: termAncestors,
               relPath: `/${mode.stagingFolder}/${topSeg}/${pathChain.join("/")}`,
               label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
               fullName: child.label,
@@ -1497,11 +1560,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               isLeaf: false,
             };
             out.push(childTarget);
-            childTarget.isLeaf = !(await walk(child.id, chain, pathChain));
+            childTarget.isLeaf = !(await walk(child.id, chain, pathChain, termChain));
           }
           return children.length > 0;
         };
-        topTarget.isLeaf = !(await walk(top.id, [], []));
+        topTarget.isLeaf = !(await walk(top.id, [], [], [top.id]));
       }
       } catch (e) {
         incomplete.push(`${mode.stagingFolder} — ${(e as Error).message}`);
@@ -1631,6 +1694,15 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // (formModel.sanitizeFolderSegment), so reconciliation and Form.tsx always agree on
       // the folder name — e.g. a Document Type term containing illegal chars like "/".
       const gridSets = await loadReconGridTermSets();
+      // State the fan-out mode up front. Off is the default and is the state in
+      // which a Head of Department silently does not work, so it must be visible
+      // at the top of the log rather than inferred from the absence of grants.
+      entries.push({
+        msg: gridSets.fanOut
+          ? `Departmental fan-out: ON — a mapping on a department reaches every unit beneath it`
+          : `Departmental fan-out: off (recon_departmentFanOut) — parent-tier mappings are reported, not granted`,
+        ok: true,
+      });
       let yearLabels: string[] = [];
       let docTypeLabels: string[] = [];
       if (gridSets.gridMode === "off") {
@@ -1683,11 +1755,24 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           plannedOps += 1;
           if (fullNameFields.has(lib)) plannedOps += 1;
           if (t.isLeaf) plannedOps += gridPerLeaf;
-          const rows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
-          plannedOps += rows.filter(g =>
-            ROLE_TO_PERMISSION[g.role] !== undefined &&
-            (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
-          ).length;
+          // Count exactly what the assignment loop will attempt: this folder's own
+          // rows PLUS any fanned down from a parent tier, de-duplicated on
+          // group + role the same way. The estimate divides elapsed time by ops
+          // COMPLETED, so counting a different set here is what produced the
+          // "~197m left" on a three-minute run — the numerator and denominator
+          // must measure the same thing.
+          const countKeys = new Set<string>();
+          // Ancestors only when fan-out is actually on — a reported-but-not-granted
+          // row costs no write, and counting it would inflate the estimate.
+          const terms = gridSets.fanOut ? [t.assignTerm, ...t.ancestorTerms] : [t.assignTerm];
+          for (const term of terms) {
+            for (const g of groupMap.get(term.toLowerCase()) ?? []) {
+              if (ROLE_TO_PERMISSION[g.role] === undefined) continue;
+              if (LIBRARY_ROLES[lib].indexOf(g.role) === -1) continue;
+              countKeys.add(`${g.groupId}|${g.role}`);
+            }
+          }
+          plannedOps += countKeys.size;
         }
       }
       const reconStart = Date.now();
@@ -1931,24 +2016,96 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // UPL/APR only; Documents gets MEMBER (viewer) groups only. Idempotent
             // (add-role merges). A folder whose term has no rows is flagged.
             const groupRows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
-            // Isolation rule: MEMBER (base/viewer) groups are Documents-only and must
-            // NEVER land on Staging (else a viewer could see pending docs). Staging gets
-            // UPL/APR only; Documents gets MEMBER only.
-            const applicable = groupRows.filter(g =>
-              ROLE_TO_PERMISSION[g.role] !== undefined &&
-              (lib === "Staging" ? g.role !== "MEMBER" : g.role === "MEMBER"),
-            );
+
+            // Departmental fan-out. A row on a NON-LEAF term (a department) applies
+            // to that folder AND to every folder beneath it, at the row's own level —
+            // the mirror of the ancestor Read fan-UP below. Without it, Head of
+            // Department is indistinguishable from Head of Unit: unit folders have
+            // unique permissions, so a department-tier grant stops dead at the
+            // department folder and never reaches a single unit.
+            //
+            // Leaf rows never fan, because a leaf has no descendants — unit isolation
+            // holds by construction rather than by a special case that could be got
+            // wrong. And since the model is leaf-only today (no department rows exist
+            // on any site), this is inert until an admin deliberately creates one.
+            //
+            // NOTE for deeper Levels chains than [Department, Unit]: with a 2027
+            // segment (Region -> Estate/Mill) a Region-tier row reaches everything
+            // below it. That is the honest meaning of a Region row, but it is wider
+            // than "departmental fan-out" suggests — review before onboarding those
+            // segments. Spec §4.1.
+            const inherited: Array<{ row: GroupMapRow; fromTerm: string }> = [];
+            for (const anc of t.ancestorTerms) {
+              for (const g of groupMap.get(anc.toLowerCase()) ?? []) {
+                inherited.push({ row: g, fromTerm: anc });
+              }
+            }
+
+            // Isolation rule: which roles this library accepts. MEMBER (base/viewer)
+            // groups are Documents-only and must NEVER land on Staging, else a viewer
+            // could read pending documents. A fanned row is filtered identically —
+            // inheriting a grant must not widen which library it reaches.
+            const accepts = (role: string): boolean =>
+              ROLE_TO_PERMISSION[role] !== undefined &&
+              LIBRARY_ROLES[lib].indexOf(role) !== -1;
+
+            const applicable = groupRows.filter(g => accepts(g.role));
+            const fanned = inherited.filter(i => accepts(i.row.role));
+
+            // One list, direct rows first, de-duplicated on group + role. A group
+            // holding BOTH a unit row and a department row for the same role would
+            // otherwise be granted twice: harmless (add-role merges) but it doubles
+            // the log and makes the run look like it did more work than it did.
+            // Direct wins, so the log attributes the grant to the nearer row.
+            const seenGrant = new Set<string>();
+            const toGrant: Array<{ row: GroupMapRow; viaTerm?: string }> = [];
+            const g0 = (r: GroupMapRow): string => r.groupName || r.groupId;
+            for (const g of applicable) {
+              const k = `${g.groupId}|${g.role}`;
+              if (seenGrant.has(k)) continue;
+              seenGrant.add(k);
+              toGrant.push({ row: g });
+            }
+            for (const i of fanned) {
+              const k = `${i.row.groupId}|${i.row.role}`;
+              if (seenGrant.has(k)) continue;
+              seenGrant.add(k);
+              // Opt-in. While recon_departmentFanOut is off we REPORT the grant and
+              // make none — see loadReconGridTermSets for why a leftover
+              // department-tier row makes silently granting unacceptable. Reported
+              // as a warning, not an error: this is the configured behaviour, and an
+              // error would gate the orphan prune on it.
+              if (!gridSets.fanOut) {
+                entries.push({
+                  msg: `  ⚠ ${g0(i.row)} would inherit ${ROLE_TO_PERMISSION[i.row.role]} on ${folderLabel} from a parent-tier mapping — not granted (recon_departmentFanOut is off)`,
+                  ok: true,
+                });
+                continue;
+              }
+              toGrant.push({ row: i.row, viaTerm: i.fromTerm });
+            }
+
             // Only a LEAF (unit) folder is expected to carry Group Map rows — the model is
             // leaf-only by design (see CLAUDE.md / the leaf-only authorization spec), so the
             // segment and department tiers having none is the correct state, not a problem.
             // Warning on them buried the real warnings under ~260 structurally unfixable
             // ones. Parent tiers stay admin-only and silent; members reach their unit
             // through the ancestor Read grants below.
-            if (applicable.length === 0 && t.isLeaf) {
+            //
+            // Tested against toGrant, not applicable: a unit reached ONLY by a
+            // department row is properly provisioned, and calling it "admin-only"
+            // would send an admin hunting for a row that should not exist.
+            if (toGrant.length === 0 && t.isLeaf) {
               entries.push({ msg: `  ⚠ ${folderLabel} — no group-map groups for this unit (locked admin-only)`, ok: true });
             }
             const grantedPids: Array<{ groupName: string; pid: number }> = [];
-            for (const g of applicable) {
+            for (const { row: g, viaTerm } of toGrant) {
+              // Fanned grants are logged distinctly. "Why does this group hold
+              // DMS Approve on a unit folder with no row for it" is otherwise
+              // unanswerable from the log, and an unexplained grant is
+              // indistinguishable from a bug.
+              const arrow = viaTerm ? "↳↓" : "↳";
+              const via = viaTerm ? " (inherited from a parent-tier mapping)" : "";
               const roleDefId = roleDefs.find(r => r.name === ROLE_TO_PERMISSION[g.role])?.id;
               if (roleDefId === undefined) {
                 entries.push({ msg: `  ⚠ ${g.groupName} — no "${ROLE_TO_PERMISSION[g.role]}" role definition on site`, ok: false });
@@ -1961,8 +2118,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 const pid = spGroupPrincipalId(g.groupId);
                 await addRoleAssignment(full, pid, roleDefId);
                 grantedPids.push({ groupName: g.groupName, pid });
-                entries.push({ msg: `  ↳ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}`, ok: true });
-                pushAssign(lib, `${t.label} → ${g.groupName} (${ROLE_TO_PERMISSION[g.role]})`, "ok");
+                entries.push({ msg: `  ${arrow} ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}${via}`, ok: true });
+                pushAssign(lib, `${t.label} → ${g.groupName} (${ROLE_TO_PERMISSION[g.role]})${via}`, "ok");
                 bumpAssigns();
                 await tick();
               } catch (e) {

@@ -12,6 +12,9 @@ import {
   GroupMapDraft,
   GroupMapWriteRow,
   SITE_ENTRY_GROUP_NAME,
+  SELECTABLE_ROLES,
+  PERSONAS,
+  personaByKey,
 } from "../../../shared/groupMapModel";
 import {
   searchSiteGroups,
@@ -40,7 +43,22 @@ type ModePick = { label: string; termSetGuid: string };
 type TermLite = { id: string; label: string };
 type ExistingRow = GroupMapWriteRow & { itemId: number };
 
-const ROLES: GroupMapRole[] = ["MEMBER", "UPL", "APR", "GLOBAL"];
+// Sourced from the shared model rather than redeclared here, so the picker and
+// the GroupMapRole type cannot drift apart — and so HC stays out of the UI in
+// one place instead of two.
+const ROLES: GroupMapRole[] = SELECTABLE_ROLES;
+
+// What each role actually gets you, in the admin's words rather than the
+// permission level's. "APR" alone tells an administrator nothing about whether
+// an approver can also upload, which is the entire distinction between the
+// Head-of bundles.
+const ROLE_HINT: Record<string, string> = {
+  MEMBER: "Read approved documents",
+  UPL:    "Upload to Staging",
+  APR:    "Approve pending items",
+  DEL:    "Delete approved documents",
+  GLOBAL: "Privileged bypass — all segments",
+};
 const GROUP_MAP_LIST = "DMS Group Map";
 const CONFIG_LIST = "DMS Config";
 
@@ -61,6 +79,9 @@ const s: Record<string, React.CSSProperties> = {
   roleRow:    { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 },
   roleBtn:    { padding: "5px 12px", fontSize: 12, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
   roleActive: { background: "#0f6c3f", color: "#fff", borderColor: "#0f6c3f" },
+  roleHint:   { fontSize: 12, color: "#605e5c", marginTop: 4 },
+  personaBox: { border: "1px solid #e1e1e1", borderRadius: 4, padding: 10, marginTop: 6, background: "#fff", fontSize: 12 },
+  personaRow: { display: "flex", gap: 8, alignItems: "center", marginBottom: 4, flexWrap: "wrap" },
   pickedChip: { display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 10px", background: "#eef6f0", border: "1px solid #b7dcc4", borderRadius: 4, fontSize: 12 },
   chipX:      { border: "none", background: "transparent", cursor: "pointer", color: "#0f6c3f", fontWeight: 700 },
   seglvl:     { marginTop: 6, fontSize: 12, color: "#0f6c3f", background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 },
@@ -102,6 +123,13 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const [mode, setMode]           = useState<ModePick | undefined>(undefined);
   const [cascade, setCascade]     = useState<TermLite[][]>([]); // options per level
   const [chosen, setChosen]       = useState<TermLite[]>([]);   // picked term per level
+  // The persona being provisioned. Purely a GUIDE: it never writes rows by itself.
+  // A persona is 2–4 separate groups, and creating them in one click means a
+  // failure halfway leaves a half-provisioned person whose access nobody can read
+  // off the screen. The panel instead shows which rows exist and which are still
+  // missing, and the admin adds them one at a time — slower, but the state is
+  // always true.
+  const [persona, setPersona]     = useState<string>("");
   const [tierGuid, setTierGuid]   = useState<string>("");
 
   // Group search box
@@ -878,14 +906,82 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   // Role + Segment + Tier selectors. Shared by both flows: rendered INSIDE the
   // create panel (one-shot create) and below an already-picked group (add mapping).
+  // Which roles the chosen tier already has a mapping for. Drives the persona
+  // checklist. Keyed on the TIER, not the group: a persona is "this person, on
+  // this unit", and it is satisfied by whichever groups carry those roles there.
+  const rolesMappedAtTier: Set<string> = (() => {
+    const out = new Set<string>();
+    if (!tierGuid) return out;
+    const want = tierGuid.trim().toLowerCase();
+    existing.forEach((r) => {
+      if ((r.UnitTermGuid ?? "").trim().toLowerCase() === want) out.add((r.Role ?? "").toUpperCase());
+    });
+    return out;
+  })();
+
+  const chosenPersona = personaByKey(persona);
+
+  const personaPanel = (
+    <>
+      <label style={s.label}>Persona (optional)</label>
+      <select
+        style={s.select}
+        disabled={busy}
+        value={persona}
+        onChange={(e) => setPersona(e.target.value)}
+      >
+        <option value="">— none: pick a role directly —</option>
+        {PERSONAS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+      </select>
+      {chosenPersona && (
+        <div style={s.personaBox}>
+          <div style={{ marginBottom: 6, color: "#444" }}>{chosenPersona.summary}</div>
+          <div style={{ marginBottom: 6, color: "#444" }}>
+            Needs <strong>{chosenPersona.roles.length}</strong> mapping
+            {chosenPersona.roles.length === 1 ? "" : "s"} on the tier you select below.
+            Add them one at a time — click a role to start it.
+          </div>
+          {!tierGuid && <div style={{ color: "#8a6d00" }}>Select a segment and tier to see which are already in place.</div>}
+          {chosenPersona.roles.map((r) => {
+            const done = rolesMappedAtTier.has(r);
+            return (
+              <div key={r} style={s.personaRow}>
+                <span style={{ width: 16, color: done ? "#107c10" : "#a19f9d" }}>{done ? "✓" : "○"}</span>
+                <button
+                  disabled={busy}
+                  style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}), minWidth: 72 }}
+                  onClick={() => pickRole(r)}
+                >
+                  {r}
+                </button>
+                <span style={{ color: "#605e5c" }}>{ROLE_HINT[r]}</span>
+                {done && <span style={{ color: "#107c10" }}>already mapped here</span>}
+              </div>
+            );
+          })}
+          {/* Stated on the screen, not just in the spec: this is the one difference
+              between the two Head-of scopes, and getting it wrong grants a unit head
+              the whole department. */}
+          <div style={{ marginTop: 8, color: "#605e5c" }}>
+            <strong>Head of Unit</strong> — pick their <em>unit</em> as the tier.{" "}
+            <strong>Head of Department</strong> — pick the <em>department</em>; the mapping
+            then reaches every unit beneath it.
+          </div>
+        </div>
+      )}
+    </>
+  );
+
   const selectionFields = (
     <>
+      {personaPanel}
       <label style={s.label}>Role</label>
       <div style={s.roleRow}>
         {ROLES.map((r) => (
           <button
             key={r}
             disabled={busy}
+            title={ROLE_HINT[r]}
             style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}) }}
             onClick={() => pickRole(r)}
           >
@@ -893,6 +989,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           </button>
         ))}
       </div>
+      {role && <div style={s.roleHint}>{ROLE_HINT[role]}</div>}
 
       {role && role !== "GLOBAL" && (
         <>
@@ -1151,7 +1248,17 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         the group right here and add its members. This writes a clean row into the{" "}
         <strong>DMS Group Map</strong> list. Member changes take effect <strong>immediately</strong>;
         new/deleted <em>rows</em> need a <strong>Folder Reconciliation</strong> run to apply folder
-        permissions (MEMBER → Read, UPL → Contribute, APR → Design).
+        permissions (MEMBER → Read, UPL → Contribute, APR → DMS Approve, DEL → DMS Delete).
+      </p>
+      {/* Named on the screen because the failure is quiet: reconciliation warns and
+          skips the assignment, so an approver simply never gains the level and the
+          run still reports success overall. */}
+      <p style={s.intro}>
+        <strong>DMS Approve</strong> and <strong>DMS Delete</strong> are custom permission
+        levels an administrator creates once per site (Site settings → Site permissions →
+        Permission levels). Until they exist, reconciliation reports{" "}
+        <em>no &quot;DMS Approve&quot; role definition on site</em> and skips those grants —
+        nobody loses access, but approve-only and delete do not take effect.
       </p>
 
       {canManage === false && (

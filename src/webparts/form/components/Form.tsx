@@ -688,9 +688,43 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       const chain = await loadTermPath(mode.termSetGuid, leaf.termGuid).catch(
         () => [] as TermOption[],
       );
-      if (isLeafChainValid(chain.map((c) => c.id), leaf.termGuid)) {
-        out.push({ modeKey: mode.key, chain });
-      }
+      if (!isLeafChainValid(chain.map((c) => c.id), leaf.termGuid)) continue;
+
+      // A row on a NON-LEAF term (a department) authorises every unit beneath it —
+      // the upload-side mirror of reconciliation's departmental fan-out. Without
+      // it the two halves of the permission model disagree: reconciliation grants
+      // a Head of Department Contribute on every unit folder, and then the form
+      // offers them a Unit dropdown with nothing in it, because the chain
+      // terminates at the department. Halves that disagree are worse than either
+      // half alone — the user is told they cannot do what their folder ACL says
+      // they can.
+      //
+      // This EXTENDS leaf-only authorisation rather than retreating from it. The
+      // rule removed on 2026-07-29 demanded a MEMBER row at every tier and refused
+      // correctly provisioned uploaders; this only adds paths a deliberate
+      // department-tier row already grants, and never infers a row that is absent.
+      //
+      // Depth is bounded by the mode's Levels chain, so it terminates even if the
+      // term store ever returned a cycle. A leaf row costs no extra call: prefix
+      // length already equals the chain length, so expand() pushes and returns.
+      const expand = async (prefix: TermOption[]): Promise<void> => {
+        if (prefix.length >= mode.levels.length) {
+          out.push({ modeKey: mode.key, chain: prefix });
+          return;
+        }
+        const kids = await loadTermChildren(
+          mode.termSetGuid,
+          prefix[prefix.length - 1].id,
+        ).catch(() => [] as TermOption[]);
+        if (kids.length === 0) {
+          // A term with no children IS a leaf, whatever the Levels chain claims.
+          // A half-populated term store must not cost a user their own unit.
+          out.push({ modeKey: mode.key, chain: prefix });
+          return;
+        }
+        for (const k of kids) await expand([...prefix, k]);
+      };
+      await expand(chain);
     }
     return out;
   };

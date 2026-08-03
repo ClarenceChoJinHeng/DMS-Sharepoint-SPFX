@@ -111,11 +111,33 @@ behaviour — but it is a wider grant than anyone will picture from the phrase "
 fan-out", and it must be reviewed when those segments are onboarded rather than discovered
 afterwards. Recorded here and in `2026-07-21-segment-onboarding-plan.md`.
 
-### 4.2 Zero regression risk today
+### 4.2 Fan-out is opt-in, and defaults OFF
 
-The model is leaf-only by design: **no department-tier rows exist on any site**. Fan-out is
-therefore inert until an administrator deliberately creates the first one. That is what
-makes it safe to ship mid-UAT.
+Added during implementation, against the original intent, because of historical data.
+
+The plan above assumed no department-tier rows exist, since the model is leaf-only. That is
+true of rows created *today* — but until 2026-07-29 the old `isChainAuthorized` **required a
+`MEMBER` row at every tier**, so any site provisioned before then can still carry leftover
+segment- and department-tier `MEMBER` rows that nobody remembers creating.
+
+Fanning one of those would silently grant Read on **every unit folder in Documents** —
+precisely the cross-unit leak the isolation model exists to prevent, and invisible because
+nothing in the UI shows a row's blast radius.
+
+So a `recon_departmentFanOut` setting row on `DMS Config` gates it:
+
+| Value | Behaviour |
+| --- | --- |
+| absent / anything else | **off** — every fanned grant is **reported** and none is made |
+| `on` | grants applied |
+
+The run states the mode as its first log line, because "off" is the state in which a Head
+of Department silently does not work, and that must be visible rather than inferred from an
+absence of grants. The intended sequence is: reconcile, read the `would inherit …` warnings,
+delete the leftovers, then switch it on.
+
+**Segment-tier rows never fan at all**, at any setting. A segment-tier leftover is the
+widest possible accident, and unlike a department row there is no persona that wants one.
 
 ## 5. The library rule, restated
 
@@ -166,7 +188,11 @@ Needs the tenant. Both custom permission levels must exist first.
    level the upload would succeed and everything else would look identical.
 2. **Head-of #3** — add `_DEL`. Delete an approved document in Documents: works. Confirm
    they still cannot upload.
-3. **Head of Department** — one department-tier `_APR` row, no unit rows. Reconcile.
+3. **Fan-out off (the default)** — create a department-tier `_APR` row and reconcile with
+   `recon_departmentFanOut` absent. Confirm the log opens with `Departmental fan-out: off`,
+   reports `would inherit DMS Approve on …` for each unit, and that the group holds **no**
+   new grant on any unit folder. Then set the row to `on` for the next check.
+4. **Head of Department** — one department-tier `_APR` row, no unit rows. Reconcile.
    Confirm the group holds DMS Approve on **every** unit folder under that department in
    Staging, and on **no** unit under a sibling department.
 4. **Isolation** — the same run must not have granted that `_APR` row anything in
