@@ -225,7 +225,13 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
-    if (res.status === 404) return { ok: false, reason: "the folder does not exist yet" };
+    // 404 covers two cases and SharePoint does not separate them: the folder is
+    // not there, or the caller cannot even resolve it — which for an approver
+    // means they lack library-level Read on Documents (the DMS_SITE_MEMBERS
+    // grant). Both refuse, but they have different fixes, so name both.
+    if (res.status === 404) {
+      return { ok: false, reason: "it does not exist yet, or your account has no access to the Documents library at all" };
+    }
     if (!res.ok) {
       console.error("Approval destination check failed:", res.status, unitDocs);
       return { ok: false, reason: `it could not be verified (HTTP ${res.status})` };
@@ -234,32 +240,40 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
     // Three distinct outcomes that this once collapsed into one message.
     //
-    // `{"odata.null": true}` — ListItemAllFields resolved to nothing, with HTTP
-    // 200, so the 404 branch above never sees it and HasUniqueRoleAssignments is
-    // undefined. Reporting that as "not locked down" was a false statement about a
-    // folder's security and cost a debugging session: the named folder was checked
-    // by hand, found correctly locked, and the two could not be reconciled. Same
-    // trap as the AllowedFileTypes column (CLAUDE.md #11) — a VALUE cannot
-    // distinguish "false" from "absent"; only its presence can.
+    // `{"odata.null": true}` — the folder RESOLVED (or we would be in the 404
+    // branch above) but its list item was security-trimmed away. This is a PASS,
+    // and the reasoning is worth spelling out because the obvious reading is the
+    // opposite one.
     //
-    // Two causes produce this and the response is IDENTICAL for both: the folder
-    // is genuinely missing, or the approver has no access to it and SharePoint
-    // security-trimmed the item to null. That is by design — trimming is meant to
-    // be indistinguishable from absence, so nobody can probe for the existence of
-    // things they cannot reach. So the message names both rather than guessing,
-    // because the two have opposite fixes (run reconciliation / grant the
-    // approver their unit's base group) and picking the wrong one sends an
-    // administrator looking for a folder that is sitting right there.
+    // An approver holds `_APR`, which is Staging-only by the isolation rule
+    // (LIBRARY_ROLES in FolderManager.tsx). Their Documents access comes from
+    // DMS_SITE_MEMBERS, which holds Read at LIBRARY level. So:
     //
-    // A correctly provisioned approver DOES have Documents access: every Head-of
-    // persona is `{Unit}` + `_APR`, and the base `{Unit}` group is what carries
-    // Read on Documents. `_APR` alone is Staging-only by the isolation rule, so an
-    // approver missing their base group hits this every time.
+    //   • Locked properly — reconciliation broke inheritance with
+    //     copyRoleAssignments=false and granted only site Owners + the unit's
+    //     MEMBER group. The library grant does not reach it, the approver is not
+    //     on it, the item is trimmed → null. SAFE.
+    //   • Created by Auto-route and still INHERITING — the library-level Read
+    //     flows straight down, so the item IS readable and returns
+    //     HasUniqueRoleAssignments: false. DANGEROUS, caught below.
+    //   • Missing — GetFolderByServerRelativeUrl 404s. DANGEROUS, caught above.
+    //
+    // The dangerous state is the VISIBLE one, because inheritance is precisely
+    // what makes it visible. So a trimmed item on a folder that resolved is
+    // positive evidence of unique permissions excluding the caller — proof of
+    // locking, not absence of proof.
+    //
+    // Previous versions got this backwards twice: first reporting "not locked
+    // down" (a false claim about a correctly locked folder), then "missing or
+    // invisible" — which blocked every correctly provisioned approver and implied
+    // the fix was to add them to the unit's MEMBER group. That would have widened
+    // Documents access for every approver on the site to work around a bug here.
+    //
+    // Rests on one assumption: the caller can resolve the folder at all, which
+    // needs library-level Read from DMS_SITE_MEMBERS. Without it they 404 and are
+    // refused — safe, and the 404 message names that cause.
     if (d === null || d["odata.null"] === true) {
-      return {
-        ok: false,
-        reason: "it is either missing, or your account cannot see it — SharePoint reports both the same way",
-      };
+      return { ok: true };
     }
     // Property genuinely absent, as opposed to false: the permissions could not be
     // evaluated from this account. Still refuses — a guard that cannot see must
@@ -284,14 +298,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       if (action === "Approved") {
         const ready = await documentsUnitFolderReady(item.File.ServerRelativeUrl);
         if (!ready.ok) {
-          // "Run Folder Reconciliation" is only the right advice for SOME of the
-          // reasons — it does nothing for an approver who is simply missing their
-          // unit's base group, which is the most common cause. Naming both keeps
-          // the approver from being sent round a loop that cannot fix their case.
           setSubmitError(
             `This unit's folder is not ready in the Documents library, so the document was NOT approved (${ready.reason}). ` +
-            `Ask an administrator to run Folder Reconciliation, and to check you are in your unit's base group ` +
-            `(the one without a _UPL or _APR suffix) — approving publishes to Documents, so it needs access there too.`,
+            `Ask an administrator to run Folder Reconciliation, then approve again.`,
           );
           // Leave `decision` as the approver chose it — the selection is still valid, it is
           // the destination that is not ready.
