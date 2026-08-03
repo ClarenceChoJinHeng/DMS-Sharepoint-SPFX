@@ -72,7 +72,10 @@ const s = {
   // instead of being squeezed into whatever the label leaves of a 196px rail.
   detailRow:   { marginBottom: 14 } as React.CSSProperties,
   metaLabel:   { color: "#605e5c", fontSize: 13, marginBottom: 2 } as React.CSSProperties,
-  metaValue:   { fontWeight: 500, fontSize: 13, color: "#201f1e", lineHeight: 1.35, overflowWrap: "break-word" as const } as React.CSSProperties,
+  // maxHeight + scroll so a pasted essay in Remark or Details cannot push the
+  // rest of the Details list below the fold — the approver would never scroll
+  // past it to find Confidential Level.
+  metaValue:   { fontWeight: 500, fontSize: 13, color: "#201f1e", lineHeight: 1.35, overflowWrap: "break-word" as const, maxHeight: 132, overflowY: "auto" as const } as React.CSSProperties,
   panel:       { border: "1px solid #edebe9", borderRadius: 4, padding: 20, position: "sticky" as const, top: 16, background: "#fff", boxShadow: "0 2px 6px rgba(0,0,0,0.08)" } as React.CSSProperties,
   panelTitle:  { fontWeight: 700, fontSize: 16, color: "#201f1e" } as React.CSSProperties,
   panelHint:   { fontSize: 13, color: "#605e5c", marginBottom: 16, lineHeight: 1.4 } as React.CSSProperties,
@@ -450,16 +453,38 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     return org.length ? org.join(" › ") : "—";
   })();
 
+  // Every column an approver is deciding on, in the same order as the Staging
+  // views (memory `dms-staging-column-order`): where it is, then what it is,
+  // then who it is for, then how sensitive, then the free text.
+  //
+  // FieldValuesAsText returns EVERY field on the item, so nothing here needs a
+  // wider $select — only the right response key. It double-encodes underscores,
+  // hence the _x005f_ form first with the plain internal name as a fallback.
+  //
+  // Business Segment / Department / Unit are not redundant with Location:
+  // Location is the folder path, which is ABBREVIATED (GHO › GCA › EG), while
+  // these three carry the terms' full labels. An approver needs the full label
+  // to be sure which unit they are publishing to.
   const metadata: [string, string][] = [
-    ["Location",           orgLocation],
-    ["Document Type",      pick("Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
-    ["Confidential Level", pick("Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
-    ["Year",               pick("Year", "Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
+    ["Location",             orgLocation],
+    ["Business Segment",     pick("Business_x005f_x0020_x005f_Segment", "Business_x0020_Segment")],
+    ["Department",           pick("Department")],
+    ["Unit",                 pick("Unit")],
+    ["Document Type",        pick("Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
+    ["Year",                 pick("Year", "Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
+    // Already formatted to the site locale by SharePoint — displayed as returned,
+    // never re-parsed. Parsing it here would reintroduce the M/D/YYYY trap.
+    ["Document Date",        pick("DocumentDate")],
     // ProjectName has no encoded characters, so its response key is unencoded.
-    ["Project Name",       pick("ProjectName")],
-    // Vendor_x002f_CustomerName does, and FieldValuesAsText double-encodes the
-    // underscores in response keys — hence the _x005f_ form first.
+    ["Project Name",         pick("ProjectName")],
     ["Vendor/Customer Name", pick("Vendor_x005f_x002f_x005f_CustomerName", "Vendor_x002f_CustomerName")],
+    ["Confidential Level",   pick("Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
+    // Yes/No comes back as the words, not a boolean — so a false reads "No"
+    // rather than blank, which is the whole point on a privilege flag.
+    ["Legally Privileged",   pick("LegallyPrivileged")],
+    // The built-in Description. Its leading underscore is encoded too.
+    ["Details",              pick("_x005f_ExtendedDescription", "_ExtendedDescription")],
+    ["Remark",               pick("Remark")],
   ];
 
   // Pending is a system state only — approvers pick Approved or Rejected.
