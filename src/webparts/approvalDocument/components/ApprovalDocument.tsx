@@ -37,7 +37,12 @@ function initials(name: string): string {
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
-  const date = d.toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  // 08/Jan/2035 — DD/MMM/YYYY, matching the Staging views' column formatting.
+  // en-GB gives "08 Jan 2035"; some ICU builds append a dot to the month, so strip it.
+  const date = d
+    .toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+    .replace(/\./g, "")
+    .replace(/\s+/g, "/");
   const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
   return `${date} ${time}`;
 }

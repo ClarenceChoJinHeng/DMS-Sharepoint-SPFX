@@ -154,6 +154,14 @@ Unit                  / UnitTid
 
 ## Critical Rules / Gotchas
 1. **DocumentDate** — send as `M/D/YYYY` (US site locale). ISO `YYYY-MM-DD` is rejected. Use `toSpDate()` in Form.tsx.
+   **Display is a separate concern:** every user-facing date reads **`DD/MMM/YYYY`** (`08/Jan/2035`) — the
+   agreed client format. In code that's `formatDate()` in `ApprovalDocument.tsx`; in SharePoint views it's
+   column formatting (there is no month-name token, so build it with
+   `substring('JanFebMarAprMayJunJulAugSepOctNovDec', getMonth(@currentField) * 3, getMonth(@currentField) * 3 + 3)`
+   — `getMonth()` is **0-based**, which is exactly why the `* 3` offset lands right; do not "fix" it by adding 1).
+   Formatting is display-only: sort, filter and the Auto-route flow all still use the stored value. Never
+   re-parse a date SharePoint already formatted (see the `Document Date` row in ApprovalDocument) — that
+   reintroduces the M/D/YYYY trap.
 2. **Project Name column** — must be bound to the **Project** term set (94ce322b-4515-4fda-8f50-35709f1f521d). Re-bind: Staging library settings > Project Name column > Term Set. NOT the Department term set.
 3. **`Promise.allSettled` unavailable** — SPFx tsconfig doesn't target ES2020. Use per-set `try/catch` inside `Promise.all`.
 4. **`validateUpdateListItem` returns HTTP 200 even on field errors.** Check `HasException` on each result.

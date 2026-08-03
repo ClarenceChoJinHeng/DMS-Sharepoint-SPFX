@@ -2933,6 +2933,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           isError(e) ? "#d13438" : isWarning(e) ? "#b45309" : "#0f6c3f";
         const glyphOf = (e: LogEntry): string =>
           isError(e) ? "✗" : isWarning(e) ? "⚠" : "✓";
+        // Most messages were written with their own leading glyph, from before the
+        // renderer added one — hence "⚠ ⚠ Documents/…". Strip it at RENDER only:
+        // isError/isWarning classify by reading that glyph out of the text, so
+        // removing it from the stored message would silently demote every warning
+        // to a success. Leading spaces are preserved because indentation is how
+        // per-folder detail lines are nested under their folder.
+        const textOf = (e: LogEntry): string =>
+          e.msg.replace(/^(\s*)[✓⚠✗✖]\s*/, "$1");
         return (
           <div style={s.logBox}>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
@@ -2972,7 +2980,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               <div style={{ maxHeight: 420, overflowY: "auto" }}>
                 {active.rows.map((entry, i) => (
                   <div key={i} style={{ fontSize: 12, color: colourOf(entry), marginBottom: 4, wordBreak: "break-word" }}>
-                    {glyphOf(entry)} {entry.msg}
+                    {glyphOf(entry)} {textOf(entry)}
                   </div>
                 ))}
               </div>
