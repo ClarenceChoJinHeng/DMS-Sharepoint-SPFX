@@ -14,6 +14,7 @@ import {
   SITE_ENTRY_GROUP_NAME,
   SELECTABLE_ROLES,
   PERSONAS,
+  PERSONA_FAMILIES,
   personaByKey,
 } from "../../../shared/groupMapModel";
 import {
@@ -82,6 +83,7 @@ const s: Record<string, React.CSSProperties> = {
   roleHint:   { fontSize: 12, color: "#605e5c", marginTop: 4 },
   personaBox: { border: "1px solid #e1e1e1", borderRadius: 4, padding: 10, marginTop: 6, background: "#fff", fontSize: 12 },
   personaRow: { display: "flex", gap: 8, alignItems: "center", marginBottom: 4, flexWrap: "wrap" },
+  personaBlocked: { border: "1px solid #f2c9a0", background: "#fff8f0", borderRadius: 4, padding: "6px 8px", marginBottom: 6, color: "#8a4b00" },
   pickedChip: { display: "inline-flex", alignItems: "center", gap: 8, padding: "5px 10px", background: "#eef6f0", border: "1px solid #b7dcc4", borderRadius: 4, fontSize: 12 },
   chipX:      { border: "none", background: "transparent", cursor: "pointer", color: "#0f6c3f", fontWeight: 700 },
   seglvl:     { marginTop: 6, fontSize: 12, color: "#0f6c3f", background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline", padding: 0 },
@@ -921,6 +923,21 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   const chosenPersona = personaByKey(persona);
 
+  // Is the picked tier a leaf (a unit)? pickTerm only appends the next cascade
+  // level when the chosen term HAS children, so an equal length means the deepest
+  // pick has none. Derived rather than counting mode.levels, because a term store
+  // can be shallower than its configured Levels chain and the folder tree follows
+  // the terms, not the config.
+  const tierIsLeaf = chosen.length > 0 && cascade.length === chosen.length;
+  // Only meaningful once a tier is picked; until then neither warning applies.
+  const scopeMismatch: string | undefined =
+    !chosenPersona || !tierGuid ? undefined
+    : chosenPersona.scope === "department" && tierIsLeaf
+      ? `${chosenPersona.family} covers every unit under a department, but you have picked a unit. Pick the department instead, or use the matching Head of Unit group.`
+    : chosenPersona.scope === "unit" && !tierIsLeaf
+      ? `${chosenPersona.family} covers one unit, but you have picked a tier that has units beneath it. This would reach all of them.`
+    : undefined;
+
   const personaPanel = (
     <>
       <label style={s.label}>Persona (optional)</label>
@@ -931,42 +948,66 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         onChange={(e) => setPersona(e.target.value)}
       >
         <option value="">— none: pick a role directly —</option>
-        {PERSONAS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        {/* Grouped exactly as the client's own document lists them, so an admin
+            reading from that document finds the same twelve groups here. */}
+        {PERSONA_FAMILIES.map((fam) => (
+          <optgroup key={fam} label={fam}>
+            {PERSONAS.filter((p) => p.family === fam).map((p) => (
+              <option key={p.key} value={p.key}>
+                {p.label}{p.unavailable ? " (not available)" : ""}
+              </option>
+            ))}
+          </optgroup>
+        ))}
       </select>
       {chosenPersona && (
         <div style={s.personaBox}>
-          <div style={{ marginBottom: 6, color: "#444" }}>{chosenPersona.summary}</div>
           <div style={{ marginBottom: 6, color: "#444" }}>
-            Needs <strong>{chosenPersona.roles.length}</strong> mapping
-            {chosenPersona.roles.length === 1 ? "" : "s"} on the tier you select below.
-            Add them one at a time — click a role to start it.
+            <strong>{chosenPersona.family}</strong> — {chosenPersona.summary}
           </div>
-          {!tierGuid && <div style={{ color: "#8a6d00" }}>Select a segment and tier to see which are already in place.</div>}
-          {chosenPersona.roles.map((r) => {
-            const done = rolesMappedAtTier.has(r);
-            return (
-              <div key={r} style={s.personaRow}>
-                <span style={{ width: 16, color: done ? "#107c10" : "#a19f9d" }}>{done ? "✓" : "○"}</span>
-                <button
-                  disabled={busy}
-                  style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}), minWidth: 72 }}
-                  onClick={() => pickRole(r)}
-                >
-                  {r}
-                </button>
-                <span style={{ color: "#605e5c" }}>{ROLE_HINT[r]}</span>
-                {done && <span style={{ color: "#107c10" }}>already mapped here</span>}
+
+          {chosenPersona.unavailable ? (
+            // Shown rather than hidden: this is one of the client's numbered
+            // groups, and an admin who cannot find it will assume it was missed.
+            <div style={s.personaBlocked}>{chosenPersona.unavailable}</div>
+          ) : (
+            <>
+              <div style={{ marginBottom: 6, color: "#444" }}>
+                Needs <strong>{chosenPersona.roles.length}</strong> mapping
+                {chosenPersona.roles.length === 1 ? "" : "s"} at the{" "}
+                <strong>{chosenPersona.scope}</strong> tier. Add them one at a time — click a
+                role to start it.
               </div>
-            );
-          })}
-          {/* Stated on the screen, not just in the spec: this is the one difference
-              between the two Head-of scopes, and getting it wrong grants a unit head
-              the whole department. */}
-          <div style={{ marginTop: 8, color: "#605e5c" }}>
-            <strong>Head of Unit</strong> — pick their <em>unit</em> as the tier.{" "}
-            <strong>Head of Department</strong> — pick the <em>department</em>; the mapping
-            then reaches every unit beneath it.
-          </div>
+              {!tierGuid && <div style={{ color: "#8a6d00" }}>Select a segment and tier to see which are already in place.</div>}
+              {scopeMismatch && <div style={s.personaBlocked}>{scopeMismatch}</div>}
+              {chosenPersona.roles.map((r) => {
+                const done = rolesMappedAtTier.has(r);
+                return (
+                  <div key={r} style={s.personaRow}>
+                    <span style={{ width: 16, color: done ? "#107c10" : "#a19f9d" }}>{done ? "✓" : "○"}</span>
+                    <button
+                      disabled={busy}
+                      style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}), minWidth: 72 }}
+                      onClick={() => pickRole(r)}
+                    >
+                      {r}
+                    </button>
+                    <span style={{ color: "#605e5c" }}>{ROLE_HINT[r]}</span>
+                    {done && <span style={{ color: "#107c10" }}>already mapped here</span>}
+                  </div>
+                );
+              })}
+              {chosenPersona.scope === "department" && (
+                // A department mapping is inert unless fan-out is switched on, and
+                // the failure is silent: the folder gets the grant, no unit does.
+                <div style={{ marginTop: 8, color: "#8a6d00" }}>
+                  Reaching the units beneath the department needs{" "}
+                  <strong>recon_departmentFanOut = on</strong> in DMS Config, then a Folder
+                  Reconciliation run. Without it this mapping stops at the department folder.
+                </div>
+              )}
+            </>
+          )}
         </div>
       )}
     </>

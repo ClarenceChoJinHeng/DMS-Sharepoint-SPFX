@@ -7,6 +7,7 @@ import {
   GroupMapWriteRow,
   GroupMapDraft,
   PERSONAS,
+  PERSONA_FAMILIES,
   SELECTABLE_ROLES,
   personaByKey,
 } from "./groupMapModel";
@@ -20,18 +21,48 @@ describe("personas", () => {
     }
   });
 
-  it("gives every persona a distinct key and a distinct role set", () => {
+  it("gives every persona a distinct key", () => {
     const keys = PERSONAS.map((p) => p.key);
     expect(new Set(keys).size).toBe(keys.length);
-    // Two personas with identical roles would be indistinguishable once provisioned —
-    // the 2x2 of Head-of bundles collapses if approve+upload equals approve+upload+delete.
-    const sets = PERSONAS.map((p) => p.roles.slice().sort().join("+"));
-    expect(new Set(sets).size).toBe(sets.length);
+  });
+
+  it("gives each family a distinct role set — else its numbered groups collapse", () => {
+    // Within a family, two identical role sets would be indistinguishable once
+    // provisioned: the 2x2 of Head-of bundles collapses if approve+upload equals
+    // approve+upload+delete. ACROSS families they are MEANT to repeat — Head of
+    // Department and Head of Unit differ only by scope.
+    for (const fam of PERSONA_FAMILIES) {
+      const sets = PERSONAS.filter((p) => p.family === fam)
+        .map((p) => p.roles.slice().sort().join("+"));
+      expect(new Set(sets).size).toBe(sets.length);
+    }
   });
 
   it("gives every Head-of persona the approve role — that is what makes it a Head-of", () => {
     for (const p of PERSONAS) {
-      if (p.key.indexOf("headof") === 0) expect(p.roles).toContain("APR");
+      if (p.family.indexOf("Head of") === 0) expect(p.roles).toContain("APR");
+    }
+  });
+
+  it("matches Head of Department and Head of Unit role-for-role, differing only in scope", () => {
+    // The client's document lists them as eight groups with identical wording. If
+    // these ever diverge, one family has silently gained or lost a capability.
+    const hod = PERSONAS.filter((p) => p.family === "Head of Department");
+    const hou = PERSONAS.filter((p) => p.family === "Head of Unit");
+    expect(hod.length).toBe(4);
+    expect(hou.length).toBe(4);
+    for (let i = 0; i < hod.length; i++) {
+      expect(hou[i].roles).toEqual(hod[i].roles);
+      expect(hod[i].scope).toBe("department");
+      expect(hou[i].scope).toBe("unit");
+    }
+  });
+
+  it("scopes every non-Head-of-Department persona to the unit", () => {
+    // A PIC or an employee fanned across a department would be a silent
+    // cross-unit grant — the exact leak the isolation model exists to prevent.
+    for (const p of PERSONAS) {
+      if (p.family !== "Head of Department") expect(p.scope).toBe("unit");
     }
   });
 
@@ -39,9 +70,27 @@ describe("personas", () => {
     expect(personaByKey("pic3")?.roles).toEqual(["UPL"]);
   });
 
-  it("offers no HC persona or HC role in Phase 1 — the term does not exist", () => {
-    for (const p of PERSONAS) expect(p.roles).not.toContain("HC");
+  it("lists PIC 2 but marks it unavailable rather than hiding it", () => {
+    // Silently dropping one of the client's own numbered groups reads as an
+    // oversight, and an admin would go hunting for it.
+    const pic2 = personaByKey("pic2");
+    expect(pic2).toBeDefined();
+    expect(pic2?.unavailable).toBeTruthy();
+    expect(pic2?.roles).toEqual(["HC"]);
+  });
+
+  it("keeps HC out of every provisionable persona and out of the role picker", () => {
+    for (const p of PERSONAS) {
+      if (p.unavailable) continue; // pic2 IS HC by definition, and is blocked
+      expect(p.roles).not.toContain("HC");
+    }
     expect(SELECTABLE_ROLES).not.toContain("HC");
+  });
+
+  it("covers all four families", () => {
+    for (const fam of PERSONA_FAMILIES) {
+      expect(PERSONAS.filter((p) => p.family === fam).length).toBeGreaterThan(0);
+    }
   });
 
   it("returns undefined for an unknown persona key rather than throwing", () => {

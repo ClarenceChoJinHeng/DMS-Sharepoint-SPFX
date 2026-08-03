@@ -46,22 +46,84 @@ export const SELECTABLE_ROLES: GroupMapRole[] = ["MEMBER", "UPL", "APR", "DEL", 
  */
 export interface Persona {
   key: string;
+  /** Family heading in the picker, matching the client's own document. */
+  family: "Head of Department" | "Head of Unit" | "PIC" | "SDG Employee";
   label: string;
   /** Atomic roles this persona holds. Order is display order. */
   roles: GroupMapRole[];
+  /**
+   * Which tier the rows belong on.
+   *
+   * "department" — a non-leaf term. The mapping reaches every unit beneath it via
+   * reconciliation's fan-out, which must be switched ON
+   * (`recon_departmentFanOut`) or the person gets the department folder and no
+   * units at all.
+   * "unit" — the leaf term; their own unit only.
+   *
+   * This is the ONLY difference between the two Head-of families: identical
+   * roles, different tier. Getting it backwards hands a unit head an entire
+   * department.
+   */
+  scope: "department" | "unit";
   /** Shown under the label, so an admin can tell #1 from #4 without the spec open. */
   summary: string;
+  /**
+   * Set when the persona cannot be provisioned on this build. Listed anyway, and
+   * greyed out: silently omitting one of the client's own numbered groups reads
+   * as an oversight, and an admin would go hunting for it.
+   */
+  unavailable?: string;
 }
 
+/**
+ * The client's twelve groups, from their document of 2026-08-03, as membership
+ * combinations of atomic per-unit groups. No bundle group is ever created.
+ *
+ * The client's document repeats "see all unit under the department" under Head of
+ * UNIT as well — confirmed 2026-07-31 as a copy-paste error, so Head of Unit is
+ * scoped to its own unit here. That one phrase is the difference between a unit
+ * head seeing one unit and seeing twelve, so it is recorded rather than assumed
+ * silently. See 2026-07-16-highly-confidential-securing-design.md §4.4.
+ *
+ * "see all unit" also confirms every Head-of group holds the base MEMBER role:
+ * approvers get view rights by the client's model. That is a separate question
+ * from whether the approval page REQUIRES Documents access in order to approve —
+ * it does not; see documentsUnitFolderReady in ApprovalDocument.tsx.
+ */
 export const PERSONAS: Persona[] = [
-  { key: "headof1",  label: "Head of — approve + upload",          roles: ["MEMBER", "UPL", "APR"],        summary: "Reads approved documents, uploads, and approves." },
-  { key: "headof2",  label: "Head of — approve only",              roles: ["MEMBER", "APR"],               summary: "Approves but cannot upload. Needs the DMS Approve permission level." },
-  { key: "headof3",  label: "Head of — approve + delete",          roles: ["MEMBER", "APR", "DEL"],        summary: "Approves and deletes approved documents; cannot upload." },
-  { key: "headof4",  label: "Head of — approve + upload + delete", roles: ["MEMBER", "UPL", "APR", "DEL"], summary: "Uploads, approves, and deletes approved documents." },
-  { key: "pic1",     label: "PIC — upload + read",                 roles: ["MEMBER", "UPL"],               summary: "Uploads, and reads approved documents." },
-  { key: "pic3",     label: "PIC — upload only",                   roles: ["UPL"],                         summary: "Uploads and sees only their own pending items. No access to Documents." },
-  { key: "employee", label: "SDG Employee",                        roles: ["MEMBER"],                      summary: "Reads approved documents. Cannot upload." },
+  // ── Head of Department — the four bundles, at the DEPARTMENT tier ──────────
+  { key: "hod1", family: "Head of Department", scope: "department", label: "1 — approve + upload",          roles: ["MEMBER", "UPL", "APR"],        summary: "Sees and uploads to every unit under the department, and approves." },
+  { key: "hod2", family: "Head of Department", scope: "department", label: "2 — approve only",              roles: ["MEMBER", "APR"],               summary: "Sees every unit and approves, but cannot upload. Needs the DMS Approve level." },
+  { key: "hod3", family: "Head of Department", scope: "department", label: "3 — approve + delete",          roles: ["MEMBER", "APR", "DEL"],        summary: "Approves and deletes approved documents. Cannot upload." },
+  { key: "hod4", family: "Head of Department", scope: "department", label: "4 — approve + upload + delete", roles: ["MEMBER", "UPL", "APR", "DEL"], summary: "Uploads, approves, and deletes approved documents." },
+
+  // ── Head of Unit — identical roles, at the UNIT tier ───────────────────────
+  { key: "hou1", family: "Head of Unit", scope: "unit", label: "1 — approve + upload",          roles: ["MEMBER", "UPL", "APR"],        summary: "Sees and uploads to their own unit, and approves." },
+  { key: "hou2", family: "Head of Unit", scope: "unit", label: "2 — approve only",              roles: ["MEMBER", "APR"],               summary: "Sees their unit and approves, but cannot upload. Needs the DMS Approve level." },
+  { key: "hou3", family: "Head of Unit", scope: "unit", label: "3 — approve + delete",          roles: ["MEMBER", "APR", "DEL"],        summary: "Approves and deletes approved documents. Cannot upload." },
+  { key: "hou4", family: "Head of Unit", scope: "unit", label: "4 — approve + upload + delete", roles: ["MEMBER", "UPL", "APR", "DEL"], summary: "Uploads, approves, and deletes approved documents." },
+
+  // ── PIC ────────────────────────────────────────────────────────────────────
+  { key: "pic1", family: "PIC", scope: "unit", label: "1 — upload + view", roles: ["MEMBER", "UPL"], summary: "Uploads, and reads their unit's approved documents." },
+  {
+    key: "pic2", family: "PIC", scope: "unit", label: "2 — Highly Confidential only", roles: ["HC"],
+    summary: "Uploads and views Highly Confidential, and must NOT see Confidential or Restricted.",
+    // Not a missing feature so much as a missing term: HC left Phase 1 on
+    // 2026-08-01 and its term was deleted, so the level cannot be chosen on an
+    // upload and the two HC libraries do not exist. The code is on
+    // feat/hc-libraries; its §14 lists the four restore steps, two of which fail
+    // silently.
+    unavailable: "Phase 2 — Highly Confidential is out of scope and its term has been deleted from the term store.",
+  },
+  { key: "pic3", family: "PIC", scope: "unit", label: "3 — upload only", roles: ["UPL"], summary: "Uploads and sees only their own pending items. No access to Documents at all." },
+
+  // ── SDG Employee ───────────────────────────────────────────────────────────
+  { key: "employee", family: "SDG Employee", scope: "unit", label: "No power — view only", roles: ["MEMBER"], summary: "Reads their own unit's approved documents. Cannot upload or approve." },
 ];
+
+/** Family headings in display order, so the picker cannot drift from the model. */
+export const PERSONA_FAMILIES: Array<Persona["family"]> =
+  ["Head of Department", "Head of Unit", "PIC", "SDG Employee"];
 
 /** Look up a persona by key. Returns undefined rather than throwing — the caller renders nothing. */
 export function personaByKey(key: string): Persona | undefined {
