@@ -231,6 +231,27 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       return { ok: false, reason: `it could not be verified (HTTP ${res.status})` };
     }
     const d = await res.json();
+
+    // Three distinct outcomes that this once collapsed into one message.
+    //
+    // `{"odata.null": true}` means ListItemAllFields resolved to NOTHING — the
+    // folder is not there, or is not reachable as a list item. It arrives with
+    // HTTP 200, so the 404 branch above never sees it. Reporting that as "not
+    // locked down" is a false statement about a folder's security, and it cost a
+    // whole debugging session: the folder named in the message was checked, found
+    // correctly locked, and nobody could reconcile the two. Same trap as the
+    // AllowedFileTypes column (CLAUDE.md #11) — the VALUE cannot distinguish
+    // "false" from "absent"; only its presence can.
+    if (d === null || d["odata.null"] === true) {
+      return { ok: false, reason: "it does not exist in the Documents library yet" };
+    }
+    // Property genuinely absent, as opposed to false: the permissions could not be
+    // evaluated from this account. Still refuses — a guard that cannot see must
+    // not wave things through — but it must not claim to know what it did not read.
+    if (typeof d.HasUniqueRoleAssignments !== "boolean") {
+      console.error("Approval destination check: HasUniqueRoleAssignments not readable", d);
+      return { ok: false, reason: "its permissions could not be read from your account" };
+    }
     if (d.HasUniqueRoleAssignments !== true) {
       return { ok: false, reason: "it is not locked down — it would be readable by every DMS user" };
     }
