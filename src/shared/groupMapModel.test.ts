@@ -6,7 +6,80 @@ import {
   suggestGroupName,
   GroupMapWriteRow,
   GroupMapDraft,
+  PERSONAS,
+  SELECTABLE_ROLES,
+  personaByKey,
 } from "./groupMapModel";
+
+describe("personas", () => {
+  it("never invents a bundle group — every persona is a set of atomic roles", () => {
+    const atomic = ["MEMBER", "UPL", "APR", "DEL", "HC"];
+    for (const p of PERSONAS) {
+      expect(p.roles.length).toBeGreaterThan(0);
+      for (const r of p.roles) expect(atomic).toContain(r);
+    }
+  });
+
+  it("gives every persona a distinct key and a distinct role set", () => {
+    const keys = PERSONAS.map((p) => p.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    // Two personas with identical roles would be indistinguishable once provisioned —
+    // the 2x2 of Head-of bundles collapses if approve+upload equals approve+upload+delete.
+    const sets = PERSONAS.map((p) => p.roles.slice().sort().join("+"));
+    expect(new Set(sets).size).toBe(sets.length);
+  });
+
+  it("gives every Head-of persona the approve role — that is what makes it a Head-of", () => {
+    for (const p of PERSONAS) {
+      if (p.key.indexOf("headof") === 0) expect(p.roles).toContain("APR");
+    }
+  });
+
+  it("keeps PIC 3 off Documents by omitting the base group", () => {
+    expect(personaByKey("pic3")?.roles).toEqual(["UPL"]);
+  });
+
+  it("offers no HC persona or HC role in Phase 1 — the term does not exist", () => {
+    for (const p of PERSONAS) expect(p.roles).not.toContain("HC");
+    expect(SELECTABLE_ROLES).not.toContain("HC");
+  });
+
+  it("returns undefined for an unknown persona key rather than throwing", () => {
+    expect(personaByKey("nope")).toBeUndefined();
+  });
+});
+
+describe("roleFromGroupName — DEL and HC suffixes", () => {
+  it("derives DEL from a _DEL suffix", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_DEL")).toBe("DEL");
+  });
+
+  it("derives HC from an _HC suffix, so a Phase 2 group is not misread as MEMBER", () => {
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_HC")).toBe("HC");
+  });
+
+  it("does not mistake a unit whose name merely ends in those letters", () => {
+    // No underscore before the suffix — this is a unit called "MODEL", not a DEL group.
+    expect(roleFromGroupName("DMS_GHO_GF_MODEL")).toBe("MEMBER");
+  });
+});
+
+describe("suggestGroupName — new role suffixes", () => {
+  it("suffixes DEL", () => {
+    expect(suggestGroupName("GHO", ["Group Finance"], "DEL")).toBe("DMS_GHO_Group Finance_DEL");
+  });
+
+  it("leaves MEMBER unsuffixed — the base group is identified by having no suffix", () => {
+    expect(suggestGroupName("GHO", ["Group Finance"], "MEMBER")).toBe("DMS_GHO_Group Finance");
+  });
+
+  it("round-trips: a suggested name parses back to the role it was built for", () => {
+    for (const role of SELECTABLE_ROLES) {
+      if (role === "GLOBAL") continue; // fixed name, no tier
+      expect(roleFromGroupName(suggestGroupName("GHO", ["GF", "CORU"], role))).toBe(role);
+    }
+  });
+});
 
 describe("roleFromGroupName", () => {
   it("derives APR from an _APR suffix", () => {
