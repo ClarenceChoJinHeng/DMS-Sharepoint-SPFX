@@ -55,8 +55,15 @@ function formatSize(bytes: string): string {
 
 const s = {
   root:        { fontFamily: "'Segoe UI', Tahoma, sans-serif", color: "#323130", background: "#fff", padding: "0 0 40px" } as React.CSSProperties,
-  backLink:    { color: "rgba(0, 104, 74, 1)", textDecoration: "none", fontSize: 14, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, marginBottom: 12 } as React.CSSProperties,
-  docTitle:    { margin: "0 0 4px", fontSize: 38, fontWeight: 600, color: "#201f1e" } as React.CSSProperties,
+  // A full-width band, tinted from the same green as the link so the two read as
+  // one control. The tint is an alpha of the brand green rather than a second
+  // hex value — one colour to change if the brand shifts.
+  backBand:    { background: "rgba(0, 104, 74, 0.08)", borderRadius: 4, padding: "10px 16px", marginBottom: 20 } as React.CSSProperties,
+  backLink:    { color: "rgba(0, 104, 74, 1)", textDecoration: "none", fontSize: 14, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 } as React.CSSProperties,
+  // 22px, not 38. Filenames here are composed — [Project] - [Vendor] - [Name] -
+  // [DDMMYY] — so they are long by design and ran to three enormous lines.
+  // overflowWrap breaks a single unspaced run rather than letting it overhang.
+  docTitle:    { margin: "0 0 6px", fontSize: 22, lineHeight: 1.3, fontWeight: 600, color: "#201f1e", overflowWrap: "break-word" as const } as React.CSSProperties,
   docMeta:     { fontSize: 13, color: "#605e5c", display: "flex", gap: 8, alignItems: "center", marginBottom: 24 } as React.CSSProperties,
   dot:         { color: "#c8c6c4" } as React.CSSProperties,
   // minmax(0, 1fr) on the centre column: a bare 1fr floors at the iframe's
@@ -496,12 +503,14 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   return (
     <div style={s.root}>
 
-      <a href={backUrl()} style={s.backLink}>
-        {/* A bare "<" must be escaped as an expression — JSX reads a literal
-            left angle bracket in children as the start of a tag. */}
-        <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 700 }}>{"<"}</span>
-        Back to document list
-      </a>
+      <div style={s.backBand}>
+        <a href={backUrl()} style={s.backLink}>
+          {/* A bare "<" must be escaped as an expression — JSX reads a literal
+              left angle bracket in children as the start of a tag. */}
+          <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 700 }}>{"<"}</span>
+          Back to document list
+        </a>
+      </div>
 
       <h1 style={s.docTitle}>{item.FileLeafRef}</h1>
       <div style={s.docMeta}>
