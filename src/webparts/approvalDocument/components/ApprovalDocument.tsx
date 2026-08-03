@@ -234,16 +234,32 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
     // Three distinct outcomes that this once collapsed into one message.
     //
-    // `{"odata.null": true}` means ListItemAllFields resolved to NOTHING — the
-    // folder is not there, or is not reachable as a list item. It arrives with
-    // HTTP 200, so the 404 branch above never sees it. Reporting that as "not
-    // locked down" is a false statement about a folder's security, and it cost a
-    // whole debugging session: the folder named in the message was checked, found
-    // correctly locked, and nobody could reconcile the two. Same trap as the
-    // AllowedFileTypes column (CLAUDE.md #11) — the VALUE cannot distinguish
-    // "false" from "absent"; only its presence can.
+    // `{"odata.null": true}` — ListItemAllFields resolved to nothing, with HTTP
+    // 200, so the 404 branch above never sees it and HasUniqueRoleAssignments is
+    // undefined. Reporting that as "not locked down" was a false statement about a
+    // folder's security and cost a debugging session: the named folder was checked
+    // by hand, found correctly locked, and the two could not be reconciled. Same
+    // trap as the AllowedFileTypes column (CLAUDE.md #11) — a VALUE cannot
+    // distinguish "false" from "absent"; only its presence can.
+    //
+    // Two causes produce this and the response is IDENTICAL for both: the folder
+    // is genuinely missing, or the approver has no access to it and SharePoint
+    // security-trimmed the item to null. That is by design — trimming is meant to
+    // be indistinguishable from absence, so nobody can probe for the existence of
+    // things they cannot reach. So the message names both rather than guessing,
+    // because the two have opposite fixes (run reconciliation / grant the
+    // approver their unit's base group) and picking the wrong one sends an
+    // administrator looking for a folder that is sitting right there.
+    //
+    // A correctly provisioned approver DOES have Documents access: every Head-of
+    // persona is `{Unit}` + `_APR`, and the base `{Unit}` group is what carries
+    // Read on Documents. `_APR` alone is Staging-only by the isolation rule, so an
+    // approver missing their base group hits this every time.
     if (d === null || d["odata.null"] === true) {
-      return { ok: false, reason: "it does not exist in the Documents library yet" };
+      return {
+        ok: false,
+        reason: "it is either missing, or your account cannot see it — SharePoint reports both the same way",
+      };
     }
     // Property genuinely absent, as opposed to false: the permissions could not be
     // evaluated from this account. Still refuses — a guard that cannot see must
@@ -268,9 +284,14 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       if (action === "Approved") {
         const ready = await documentsUnitFolderReady(item.File.ServerRelativeUrl);
         if (!ready.ok) {
+          // "Run Folder Reconciliation" is only the right advice for SOME of the
+          // reasons — it does nothing for an approver who is simply missing their
+          // unit's base group, which is the most common cause. Naming both keeps
+          // the approver from being sent round a loop that cannot fix their case.
           setSubmitError(
             `This unit's folder is not ready in the Documents library, so the document was NOT approved (${ready.reason}). ` +
-            `Ask an administrator to run Folder Reconciliation, then approve again.`,
+            `Ask an administrator to run Folder Reconciliation, and to check you are in your unit's base group ` +
+            `(the one without a _UPL or _APR suffix) — approving publishes to Documents, so it needs access there too.`,
           );
           // Leave `decision` as the approver chose it — the selection is still valid, it is
           // the destination that is not ready.
