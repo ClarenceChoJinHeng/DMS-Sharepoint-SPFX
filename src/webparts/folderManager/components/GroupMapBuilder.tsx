@@ -89,6 +89,8 @@ const s: Record<string, React.CSSProperties> = {
 
 export default function GroupMapBuilder({ context, siteUrl }: Props): React.ReactElement {
   const [modes, setModes]       = useState<ModePick[]>([]);
+  // True when DMS Config returned no usable `mode` rows at all — see the mount effect.
+  const [modesUnreadable, setModesUnreadable] = useState(false);
   const [existing, setExisting] = useState<ExistingRow[]>([]);
   const [busy, setBusy]         = useState(false);
   const [toast, setToast]       = useState<{ message: string; error: boolean } | undefined>(undefined);
@@ -301,7 +303,15 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   /* ── Mount ─────────────────────────────────────────────────────────────── */
 
   useEffect(() => {
-    loadModes().then(setModes).catch(() => setModes([]));
+    // An empty mode list is not a neutral state: every Segment cell falls back to a
+    // raw GUID and the segment picker offers nothing, which reads as "the data is
+    // wrong" rather than "the config could not be read". Say which it is.
+    loadModes()
+      .then((m) => {
+        setModes(m);
+        if (m.length === 0) setModesUnreadable(true);
+      })
+      .catch(() => { setModes([]); setModesUnreadable(true); });
     loadExisting().then(setExisting).catch(() => setExisting([]));
     loadCanManage().then(setCanManage).catch(() => setCanManage(false));
   }, []);
@@ -710,8 +720,16 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const draftErrors = validateDraft(draft);
   const canAdd = draftErrors.length === 0 && !busy;
 
+  // Term GUIDs are compared LOWERCASED, matching DMS Group Map, DMS Folder Map and
+  // buildAbbrevIndex. SharePoint is not consistent about GUID casing between what a
+  // text column stores and what the term store returns, and a case-sensitive compare
+  // here degraded the Segment column to a raw GUID — and, worse, made isStaleRow flag
+  // a perfectly healthy row as stale.
+  const sameGuid = (a: string, b: string): boolean =>
+    (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
   const segmentLabelFor = (guid: string): string => {
-    const m = modes.find((x) => x.termSetGuid === guid);
+    const m = modes.find((x) => sameGuid(x.termSetGuid, guid));
     return m ? m.label : guid;
   };
 
@@ -720,7 +738,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // should be deleted + recreated. (Only meaningful once modes have loaded; GLOBAL rows
   // carry no segment and are never stale.)
   const isStaleRow = (r: ExistingRow): boolean =>
-    modes.length > 0 && !!r.Segment && !modes.some((m) => m.termSetGuid === r.Segment);
+    modes.length > 0 && !!r.Segment && !modes.some((m) => sameGuid(m.termSetGuid, r.Segment));
 
   /** Same text the Tier column shows, reused so the CSV and the screen never disagree. */
   const tierLabelFor = (r: ExistingRow): string => {
@@ -1348,6 +1366,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           folder"; "People" answers "who is in those groups", which is the question
           the client actually asks and could previously only reach one group at a
           time through the Members modal. */}
+      {modesUnreadable && (
+        <div style={{ fontSize: 12, color: "#b45309", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, padding: "8px 12px", marginBottom: 12 }}>
+          Could not read any <strong>mode</strong> rows from <strong>{CONFIG_LIST}</strong>, so the
+          Segment column below shows raw term-set GUIDs and the segment picker is empty. The
+          mappings themselves are fine — this is a config read, not your data.
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: 6, marginBottom: 12, borderBottom: "1px solid #e1e1e1" }}>
         {([
           { key: "mappings" as const, label: `Existing mappings (${existing.length})` },
