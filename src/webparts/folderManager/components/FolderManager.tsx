@@ -25,7 +25,7 @@ import {
 } from "../../../shared/dmsFolderMap";
 import { sanitizeFolderSegment, parseLevels, parseReconModes, RawModeRow } from "../../../shared/formModel";
 import {
-  ABBREV_LIST,
+  abbrevListTitle,
   AbbrevCollision,
   AbbrevRow,
   AbbrevTarget,
@@ -1434,7 +1434,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
    * Term GUID → folder-name abbreviation.
    *
    * Lives here rather than in the shared module because a shared file that imports
-   * `@microsoft/sp-http` cannot be unit tested — see the note on ABBREV_LIST.
+   * `@microsoft/sp-http` cannot be unit tested — see the note on abbrevListTitle().
    *
    * Deliberately NOT wrapped in a catch returning an empty map: an unreadable list
    * must abort the run. An empty index makes every term look unmapped, which would
@@ -1442,13 +1442,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
    */
   const loadAbbrevRows = async (): Promise<OrphanAbbrevRow[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(ABBREV_LIST)}')/items?$select=Id,TermGuid,Title,Level,Abbreviation&$top=5000`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(abbrevListTitle())}')/items?$select=Id,TermGuid,Title,Level,Abbreviation&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`${ABBREV_LIST} read failed: HTTP ${res.status}. ${body}`);
+      throw new Error(`${abbrevListTitle()} read failed: HTTP ${res.status}. ${body}`);
     }
     const data = await res.json();
     // Id/Title/Level are read for the orphan-repair pass, which matches a dead row
@@ -2233,7 +2233,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         for (const c of collisions) {
           entries.push({ msg: `✖ COLLISION in ${c.parentPath}: "${c.abbreviation}" is used by ${c.labels.join(" | ")}`, ok: false });
         }
-        entries.push({ msg: `Nothing was created. Give each of these a distinct abbreviation in ${ABBREV_LIST}, then run again.`, ok: false });
+        entries.push({ msg: `Nothing was created. Give each of these a distinct abbreviation in ${abbrevListTitle()}, then run again.`, ok: false });
         setLog((prev) => [...prev, ...entries]);
         showToast(`${collisions.length} abbreviation collision(s) — nothing was created.`, false);
         setBusy(false);
@@ -2242,7 +2242,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // Not fatal: every other term still provisions. But it must be loud, because
       // a unit with no folder has no map row and its uploaders are blocked.
       for (const m of missingAbbrev) {
-        entries.push({ msg: `⚠ SKIPPED (no abbreviation): ${m.label} — add a row to ${ABBREV_LIST} for term ${m.termGuid}`, ok: false });
+        entries.push({ msg: `⚠ SKIPPED (no abbreviation): ${m.label} — add a row to ${abbrevListTitle()} for term ${m.termGuid}`, ok: false });
       }
       // Surface enumeration failures as real errors. Without this they were invisible:
       // the segment just produced no targets, the run looked clean, and prune would
@@ -3021,7 +3021,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               !enumeratedTerms.has(r.termGuid.trim().toLowerCase()),
           );
           if (orphanRows.length === 0) {
-            entries.push({ msg: `${ABBREV_LIST}: no orphaned rows ✓`, ok: true });
+            entries.push({ msg: `${abbrevListTitle()}: no orphaned rows ✓`, ok: true });
           } else {
             const plan = planOrphanRepairs(orphanRows, missingAbbrev);
             const groupRows =
@@ -3036,7 +3036,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 (g) => g.termGuid.toLowerCase() === oldGuid,
               );
               try {
-                await patchListItem(ABBREV_LIST, rep.orphan.itemId, {
+                await patchListItem(abbrevListTitle(), rep.orphan.itemId, {
                   TermGuid: rep.term.termGuid,
                 });
               } catch (e) {
@@ -3087,7 +3087,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             }
 
             entries.push({
-              msg: `${ABBREV_LIST}: ${plan.repairs.length} repaired, ${plan.ambiguous.length} ambiguous, ${plan.unmatched.length} orphaned`,
+              msg: `${abbrevListTitle()}: ${plan.repairs.length} repaired, ${plan.ambiguous.length} ambiguous, ${plan.unmatched.length} orphaned`,
               ok: plan.ambiguous.length === 0 && plan.unmatched.length === 0,
             });
           }

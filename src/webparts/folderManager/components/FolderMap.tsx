@@ -9,13 +9,18 @@ import { primeNames } from "../../../shared/spNaming";
 const LIST_NAME = (): string => cachedListTitle(LIST_SUFFIX.folderMap);
 const LIST_ENC  = (): string => encodeURIComponent(LIST_NAME());
 
-// LIST_TYPE is deliberately NOT resolved and must stay "DMS".
-//
-// SharePoint derives a list's item entity type from the name it was CREATED with; renaming the
-// title never moves it. Verified live 2026-08-05 against the client's fully CRS-renamed site,
-// which still reports SP.Data.DMS_x0020_Folder_x0020_MapListItem. Deriving this from the current
-// title would break every write on exactly the sites the rename was meant to support.
-const LIST_TYPE = "SP.Data.DMS_x0020_Folder_x0020_MapListItem";
+/**
+ * The item entity type, READ FROM THE LIST rather than derived from its title.
+ *
+ * SharePoint builds this from the name a list was CREATED with. A rename never moves it — a list
+ * renamed to "CRS Folder Map" still reports SP.Data.DMS_x0020_Folder_x0020_MapListItem (verified
+ * live 2026-08-05) — but a list RECREATED under the new name does change. So neither hardcoded
+ * value is right for both, and the title cannot tell them apart. Only the list itself can.
+ *
+ * Falls back to the legacy value if the read fails, which is what the code did before.
+ */
+const LEGACY_LIST_TYPE = "SP.Data.DMS_x0020_Folder_x0020_MapListItem";
+let listType = LEGACY_LIST_TYPE;
 
 type TermOption = { id: string; label: string };
 type ModeInfo  = { key: string; label: string; termSetGuid: string };
@@ -151,7 +156,7 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
       {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          __metadata: { type: LIST_TYPE },
+          __metadata: { type: listType },
           Title:      selectedModeKey,
           TermLabel:  term.label,
           FolderName: newFolderName.trim(),
@@ -200,6 +205,19 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
       // Names FIRST: every read below resolves through the cache, and an unprimed cache falls
       // back to the legacy DMS titles, which 404 on a CRS-renamed site.
       await primeNames(context.spHttpClient, siteUrl);
+      // Then the entity type, from the list itself — see LEGACY_LIST_TYPE for why it cannot be
+      // derived from the title. A failed read leaves the legacy value.
+      try {
+        const typeRes = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${LIST_ENC()}')?$select=ListItemEntityTypeFullName`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (typeRes.ok) {
+          const tj = await typeRes.json();
+          if (tj.ListItemEntityTypeFullName) listType = tj.ListItemEntityTypeFullName as string;
+        }
+      } catch { /* keep the legacy value */ }
       const loadedModes = await loadModes();
       setModes(loadedModes);
 
