@@ -133,6 +133,24 @@ boundary, not a cosmetic one.
 4. **The home page is excluded** — see the rule above.
 - **Break inheritance before granting**, at every scope — the order the folder pass already
   uses. Granting first and breaking second discards the grant.
+- **Re-add the site-entry group with Read after breaking a LIBRARY.** Found while planning the
+  implementation on 2026-08-04, and it is the sharpest edge in this spec.
+
+  The approval guard resolves the destination folder in Documents **as the signed-in
+  approver** (role-personas spec §10). That works only because `DMS_SITE_MEMBERS` holds Read
+  on the Documents library *by inheritance from the web* — approvers are deliberately not in
+  any Documents folder group. A `Library` row for `Documents` breaks that inheritance with
+  `copyRoleAssignments=false`, which discards the inherited Read, and then **every approver on
+  the site 404s on every destination folder and approval is refused** — while the
+  reconciliation log reports a clean, successful run.
+
+  So the library pass re-adds **two** principals after every break, not one: site Owners with
+  Full Control (already required above) and the site-entry group with Read. The second is not
+  a convenience; it is what keeps approval working.
+
+  Stated as a rule rather than left to the implementer because the symptom is maximally
+  misleading: approval breaks for everyone, nothing in the log mentions it, and the change
+  that caused it was made against a different scope entirely.
 - **`copyRoleAssignments=false`, always.** This single parameter decides whether the feature
   does anything. With `true`, breaking inheritance copies every inherited grant forward, so the
   page stays visible to exactly the same people — and the run reports success. The failure is

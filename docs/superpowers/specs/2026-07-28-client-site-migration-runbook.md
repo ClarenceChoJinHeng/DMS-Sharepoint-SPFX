@@ -116,11 +116,46 @@ either. There is no version that tolerates both spellings.
 
 ### 1. Site + app catalog
 1. Create/identify the client site collection. Record its URL.
-2. Decide **tenant** app catalog vs **site-collection** app catalog. Site-collection scope is
-   lower-friction and matches how this was tested; tenant scope is required if you want the
-   extensions auto-provisioned tenant-wide (interacts with M-04b).
-3. Upload the `.sppkg`, deploy, add the app to the site.
-4. Confirm no pending API-permission approvals appear (M-12).
+2. **DECIDED (2026-08-04): site-collection app catalog only. Tenant ("global") scope is refused by
+   the client.** The tenant catalog would put a copy of the `.sppkg` in the shared service
+   provider's hands and would need tenant-wide upload rights for Clarence — both rejected. A
+   SharePoint Administrator runs **one line, once** (SPO Management Shell, as SharePoint Admin or
+   Global Admin):
+   ```powershell
+   Connect-SPOService -Url https://sdguthrie-admin.sharepoint.com
+   Add-SPOSiteCollectionAppCatalog -Site https://sdguthrie.sharepoint.com/sites/CRS
+   ```
+   Silent on success. Verify by browsing to `/sites/CRS/AppCatalog/Forms/AllItems.aspx` — an empty
+   *Apps for SharePoint* library. Reversible with `Remove-SPOSiteCollectionAppCatalog`.
+   **Hand the client `docs/client/site-collection-app-catalog-setup.md`** — the step-by-step version
+   of this, written for their admin: opening Windows PowerShell 5.1 (already installed on Windows;
+   NOT PowerShell 7 / pwsh / Cloud Shell, where the module cannot load), the module check + install,
+   both commands, verification, an error table, and the security-review Q&A.
+   The admin never receives or touches the package; Clarence does the first deploy and every one
+   after. **No second ask is needed** — Clarence is already Site Collection Admin on `/sites/CRS`
+   via ownership of the *Guthrie Central Repository System Owners* M365 group (group owners are
+   SCAs automatically on group-connected sites, which is also why he is absent from *All People*).
+   Consequence: the extensions can never be auto-provisioned tenant-wide — M-04b is now a decision
+   to make, not an option to weigh.
+3. **VERIFIED 2026-08-04 on `dcidigitalcom.sharepoint.com/sites/CRSSimTest`** (rehearsal of the
+   above on our own tenant): a **site Owner who is NOT a Site Collection Administrator can upload
+   and Deploy**. Crystal Kong, Owner via the M365 group and absent from the SCA list, deployed
+   `sd-gatrie-client-side-solution` 1.0.84.0 → `Valid app package = Yes`, `Deployed = Yes`,
+   `Enabled = Yes`, `Added to all sites = No`, no errors. So SCA is **not** the floor for deployment
+   — site Owner suffices. Keep this as the fallback offer if SDG wants to strip Clarence's SCA;
+   on a group-connected site that means removing him from M365 group owners and adding him
+   **directly** to the `CRS Owners` SharePoint group.
+   Note `Added to all sites` is tenant-wide deployment and is **inert** in a site collection
+   catalog — which is exactly the property the client wants.
+4. Upload the `.sppkg` to `/sites/CRS/AppCatalog`, Deploy, then get the web parts onto a page.
+   Because `skipFeatureDeployment: true`, check the web part picker **first** — the parts may
+   already be available site-collection-wide with no install. If absent: Site contents → New → App
+   → *From Your Organization* → `sd-gatrie-client-side-solution` → Add (or classic
+   `/_layouts/15/addanapp.aspx`), wait ~60s, hard refresh.
+5. Confirm no pending API-permission approvals appear (M-12) — `webApiPermissionRequests` is empty,
+   so the trust dialog must list **nothing**. Screenshot it; it is the strongest single artifact for
+   the client's security review. The App Catalog's *add-in retirement* banner is about legacy
+   SharePoint Add-ins, NOT SPFx — do not let it be conflated in that review.
 
 ### 2. Term store — rebuild in-site (**GUIDs will all be new**)
 Term sets are **per site collection**. The ClarenceDMSTesting GUIDs in CLAUDE.md are dead on
@@ -450,8 +485,13 @@ unscoped work.
 
 ## Open questions to resolve before starting
 
-1. Tenant or site-collection app catalog? (drives M-04b)
-2. Are the extensions in scope? If yes, M-04 + M-04b are blockers, not warnings.
+1. ~~Tenant or site-collection app catalog?~~ **CLOSED 2026-08-04 — site-collection only.**
+   See Phase 1 step 1.2.
+2. Are the extensions in scope? Now the live blocker, because (1) removed the tenant-wide escape
+   hatch. `hideAppBar` is in `componentIds`, `uploadCommand` is **not** (M-04), and neither has an
+   `elements.xml` (M-04b) — so under a site-collection catalog with `skipFeatureDeployment: true`
+   neither extension gets provisioned at all. Either drop both from scope, or add `elements.xml`
+   and flip `skipFeatureDeployment` to `false`.
 3. Do Upstream Malaysia / Minamas / NBPOL get their own Department/Unit trees, or keep sharing GHO's?
 4. Who creates the client's `DMS No Reply` equivalent mailbox, and when?
 5. Will Clarence hold Site Collection Admin on the client site? Required for the in-site term store,

@@ -114,6 +114,47 @@ Edit Items, not Add Items, so approve-without-upload is a legal combination.
 > loses access; the change simply does not take effect, and "approve only" stays
 > unenforced. Create both levels before the next reconciliation run.
 
+### 3.2 Two levels, not three — and one line of the client's document cannot be built
+
+The client restated the four Head-of groups on 2026-08-03 with per-capability bullets. Three
+of the four questions that raised are settled; the fourth is a platform limit.
+
+**Uploaders keep Delete on Staging, so `UPL` stays on stock Contribute.** The document's
+"Cannot Delete Files on Staging" under group 1 was confirmed a typo — groups 1 and 4 *can*
+delete their Staging files, and group 4's "unit level only" goes with it. This is recorded
+because the opposite reading was the expensive one: it would have needed a third custom level
+(Contribute minus Delete Items) and, to keep group 4's delete narrower than its upload, a
+fifth role that must never fan. None of that is built, deliberately.
+
+Two consequences follow from keeping Delete, neither of which is a defect to be fixed later:
+
+- **Delete Items is folder-scoped, not author-scoped.** "An uploader sees only their own
+  pending items" is Draft Item Security — a *view* filter. Anyone with Contribute on a unit
+  folder can delete a colleague's pending file if they reach it by direct URL. Browsing is
+  security-trimmed and will not reveal this.
+- **A department head's delete fans with their upload.** Delete rides on the same Contribute
+  grant, so Head-of #1 and #4 can delete in every unit under the department, not only their
+  own. There is no way to fan Add without fanning Delete while `UPL` is one role at one level.
+
+**Every uploader gets the same level.** The client's document only addresses the Head-of
+families, but `UPL` is a single role: whatever level it maps to reaches PIC #1 and #3 too.
+Confirmed 2026-08-03 that this is intended, so there is one upload level site-wide rather
+than a delete-free variant and a suffix an admin can pick wrongly.
+
+**Group 4 holds `DEL`.** Its bullets omit Documents while its heading names it; the heading is
+right, and `hod4`/`hou4` in `PERSONAS` already carry `DEL`.
+
+**"Cannot Edit files on staging" (groups 2 and 3) is not expressible, and is not implemented.**
+*Approve Items* has a hard dependency on *Edit Items* in SharePoint's permission model —
+unticking Edit silently clears Approve with it, because approving **is** an edit to the item
+(it writes `_ModerationStatus`). So `DMS Approve` necessarily carries Edit Items.
+
+This is stated in the spec rather than quietly ticked, because a permission level that claims
+a restriction it does not enforce is worse than an honest grant: it ends up in a handover
+document as a security guarantee. What the level *does* deliver is no **Add** and no
+**Delete** — an approver of groups 2 and 3 cannot introduce a file or destroy one, only move
+one through the workflow. That is the sentence to give the client in place of "cannot edit".
+
 ## 4. Departmental fan-out
 
 A Group Map row on a **non-leaf** term is applied to that folder *and* to every folder
