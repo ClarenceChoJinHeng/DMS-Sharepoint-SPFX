@@ -1,10 +1,13 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
-import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember } from "../../../shared/spGroups";
-import { SITE_ENTRY_GROUP_NAME } from "../../../shared/groupMapModel";
+import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember, createSiteGroup } from "../../../shared/spGroups";
+import { SITE_ENTRY_GROUP_NAME, isForbiddenPageTarget } from "../../../shared/groupMapModel";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import GroupMapBuilder from "./GroupMapBuilder";
+import StagingAccess from "./StagingAccess";
+import PageAccess from "./PageAccess";
+import SiteAccess from "./SiteAccess";
 import {
   loadFolderMapRows,
   FolderMapRow,
@@ -43,9 +46,27 @@ type LibTarget = "Staging" | "Documents";
 // the details pane. Matched by NAME because its id differs per library. Optional: a site
 // without it still provisions normally, it just shows nothing in the pane.
 const FOLDER_CONTENT_TYPE_NAME = "DMS Folder";
-// The three top-level tabs. The two library tabs drive the folder tree; the
-// Reconciliation tab is the term-store-driven provisioner (create + lock + map).
+// The top-level tabs. The two library tabs drive the folder tree; Reconciliation is the
+// term-store-driven provisioner (create + lock + map); GroupMap is folder-scope access;
+// StagingAccess is library-scope entry — who may OPEN the Staging library at all.
 type Tab       = LibTarget | "Reconciliation" | "GroupMap";
+
+/**
+ * Sub-tabs of User Access, one per SCOPE a group can be granted on.
+ *
+ * Nested rather than seven tabs across the top: they are four answers to one question — who can
+ * reach what — and at top level they read as unrelated features. Ordered as an admin provisions,
+ * which is also the order the access fails in: create the group and map its folders, let its
+ * people into the site, let them open the library, then the page.
+ */
+type AccessTab = "Folder" | "Site" | "StagingLibrary" | "Page";
+
+const ACCESS_TABS: Array<{ key: AccessTab; label: string }> = [
+  { key: "Folder",         label: "Folder Access" },
+  { key: "Site",           label: "Site Access" },
+  { key: "StagingLibrary", label: "Staging Library Access" },
+  { key: "Page",           label: "Page Access" },
+];
 
 // Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
 // Each maps a term set to the segment container folder its terms live under.
@@ -123,12 +144,53 @@ type ProvTarget = { termGuid: string | null; assignTerm: string; ancestorTerms: 
 // Nobody loses access — an existing approver keeps the Design grant already on
 // the folder — the change simply does not take effect until the level is made.
 //
+// UPL dropped from "Contribute" to "DMS Upload" on 2026-08-04. Contribute includes
+// Delete Items, so every uploader — PIC included — could delete any file in their
+// unit folder, not just their own uploads (Delete Items is folder-scoped, never
+// author-scoped). That made the client's rule "a PIC must get approval from the
+// head of unit before deleting" unenforceable. DMS Upload is Contribute minus
+// Delete Items; PICs raise a deletion REQUEST instead. See the
+// deletion-request-approval spec.
+//
+// DELS restores Staging delete for the people who should have it — the head-of
+// groups that also upload (Head of Department/Unit 1 and 4). It is a SEPARATE role
+// rather than a second upload level so the capability is carried by an explicit
+// group name (`_DELS`) instead of an admin remembering which of two upload
+// suffixes means "with delete". A wrong pick between two upload roles is invisible
+// until someone deletes something.
+//
+// DELS and DEL share the "DMS Delete" level — Read + Delete Items is what a deleter
+// needs in either library — and are kept apart by LIBRARY_ROLES below: DELS is
+// Staging-only, DEL is Documents-only. So the client still creates only three
+// custom levels.
+//
 // HC is absent by design: Highly Confidential is Phase 2 (see groupMapModel).
 const ROLE_TO_PERMISSION: Record<string, string> = {
   MEMBER: "Read",
-  UPL: "Contribute",
+  UPL: "DMS Upload",
   APR: "DMS Approve",
   DEL: "DMS Delete",
+  DELS: "DMS Delete",
+  // The C-level view role, 2026-08-04. Plain Read, like MEMBER — the difference is not
+  // the level but how far the grant travels: every folder in every segment.
+  // Documents-only (see LIBRARY_ROLES); a viewer on Staging would be reading other
+  // people's pending drafts, which is the isolation rule the whole model rests on.
+  //
+  // SEGVIEW is deliberately ABSENT. It was retired the day after it was added, and
+  // omitting it here is what makes it inert: accepts() requires a level, so a leftover
+  // SEGVIEW row is skipped on every folder in every library rather than being granted
+  // something approximate.
+  GLOBAL: "Read",
+  // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
+  // library at all — Limited Access on the parent chain lets a direct folder URL through but
+  // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without
+  // this. Deliberately Read and not the group's own level: DMS Upload at library scope would
+  // reach everything in the library that inherits, not just their unit folder.
+  //
+  // Safe at folder scope by construction: ENTRY is absent from LIBRARY_ROLES below, and the
+  // folder loop grants only what that table lists. A hand-written ENTRY row at Folder scope
+  // is skipped rather than approximated.
+  ENTRY: "Read",
 };
 
 // Which roles each library accepts — the isolation rule that keeps viewers off
@@ -139,9 +201,14 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
 // would have landed on Staging the day it was added, handing deleters other
 // people's pending documents. Listing roles explicitly means a new role reaches
 // no library until someone names it here.
+//
+// DELS and DEL both map to "DMS Delete" but must never cross: a DELS row on
+// Documents would hand a Staging deleter other people's approved documents, and a
+// DEL row on Staging would hand a Documents deleter other people's pending ones.
+// The level cannot tell them apart, so this table is the only thing that does.
 const LIBRARY_ROLES: Record<LibTarget, string[]> = {
-  Staging: ["UPL", "APR"],
-  Documents: ["MEMBER", "DEL"],
+  Staging: ["UPL", "APR", "DELS"],
+  Documents: ["MEMBER", "DEL", "GLOBAL"],
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -264,9 +331,16 @@ const s: Record<string, React.CSSProperties> = {
   h2:            { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   subtitle:      { fontSize: 13, color: "#666", margin: "0 0 24px" },
   toggleWrap:    { display: "flex", justifyContent: "center", marginBottom: 24 },
-  seg:           { display: "flex", border: "1px solid #0f6c3f", borderRadius: 8, overflow: "hidden" },
-  segBtn:        { padding: "8px 22px", fontSize: 13, fontFamily: "'Segoe UI', sans-serif", fontWeight: 600, cursor: "pointer", background: "#fff", color: "#0f6c3f", border: "none", borderRight: "1px solid #0f6c3f" },
+  // flexWrap + narrower padding since the tab count reached seven: without wrapping the bar
+  // overflows the web part on a laptop and the last tabs become unreachable.
+  seg:           { display: "flex", flexWrap: "wrap", justifyContent: "center", maxWidth: "100%", border: "1px solid #0f6c3f", borderRadius: 8, overflow: "hidden" },
+  segBtn:        { padding: "8px 16px", fontSize: 13, fontFamily: "'Segoe UI', sans-serif", fontWeight: 600, cursor: "pointer", background: "#fff", color: "#0f6c3f", border: "none", borderRight: "1px solid #0f6c3f" },
   segActive:     { background: "#0f6c3f", color: "#fff" },
+  // Sub-tabs inside User Access. Underline rather than a boxed segment so it cannot be mistaken
+  // for a second row of top-level tabs; wraps, because four labels this long do not fit narrow.
+  subTabBar:     { display: "flex", flexWrap: "wrap", gap: 4, borderBottom: "1px solid #e1e1e1", marginBottom: 16 },
+  subTab:        { padding: "8px 14px", fontSize: 13, fontFamily: "'Segoe UI', sans-serif", fontWeight: 600, cursor: "pointer", background: "transparent", color: "#605e5c", border: "none", borderBottom: "2px solid transparent", marginBottom: -1 },
+  subTabActive:  { color: "#0f6c3f", borderBottom: "2px solid #0f6c3f" },
   secHeader:     { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", margin: "0 0 10px", padding: "4px 0" },
   secTitle:      { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".07em", color: "#0f6c3f", margin: 0 },
   ico:           { fontSize: 11, color: "#0f6c3f", lineHeight: 1, flexShrink: 0 },
@@ -368,6 +442,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // Active tab. The two library tabs keep libTarget in sync (drives the folder
   // tree); the Reconciliation tab shows the provisioner instead.
   const [tab,          setTab]          = useState<Tab>("Staging");
+  // Which access scope is showing inside User Access. Folder first: it is where groups are
+  // created, so every other scope depends on it having been used at least once.
+  const [accessTab,    setAccessTab]    = useState<AccessTab>("Folder");
   const [libTarget,    setLibTarget]    = useState<LibTarget>("Staging");
   // Top-level container folders discovered under the library root, in display order.
   const [sections,     setSections]     = useState<Mode[]>([]);
@@ -607,6 +684,58 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       );
     }
     return n;
+  };
+
+  // The only call in this component that REMOVES access. Deliberately narrow: it takes
+  // a principal, not a role definition, because SharePoint's removeroleassignment drops
+  // every binding that principal holds on that folder. Callers must therefore have
+  // already established that the ONLY binding there is the one they mean to remove —
+  // see the ancestor-read revoke in the assignment loop, which checks the group holds
+  // exactly "Read" and holds no Group Map row of its own at that tier.
+  //
+  // Limited Access is NOT removed by this and must not be: SharePoint maintains it on
+  // parent folders so a user can reach a child they are granted on. Stripping it would
+  // break access to the unit folder itself, which is the opposite of the intent.
+  const removeRoleAssignment = async (path: string, principalId: number): Promise<void> => {
+    const res = await withThrottleRetry(() => context.spHttpClient.post(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/removeroleassignment(principalid=${principalId})?@f='${encodeServerRelativePath(path)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    ));
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const json = await res.json();
+        const sp = json?.error?.message?.value ?? json?.error?.message ?? json?.["odata.error"]?.message?.value;
+        if (sp) msg += ` — ${sp}`;
+      } catch {
+        msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      }
+      throw new Error(msg);
+    }
+  };
+
+  // Library-scope grant. Separate from addRoleAssignment because that one addresses a
+  // FOLDER by server-relative path; a list is addressed by its GUID, and the two endpoints
+  // are not interchangeable. Takes the `/_api/web/lists(guid'…')` base already built by the
+  // caller, so the GUID is resolved once per library rather than per grant.
+  const addRoleAssignmentToList = async (listBase: string, principalId: number, roleDefId: number): Promise<void> => {
+    const res = await withThrottleRetry(() => context.spHttpClient.post(
+      `${listBase}/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    ));
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const json = await res.json();
+        const sp = json?.error?.message?.value ?? json?.error?.message ?? json?.["odata.error"]?.message?.value;
+        if (sp) msg += ` — ${sp}`;
+      } catch {
+        msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      }
+      throw new Error(msg);
+    }
   };
 
   const addRoleAssignment = async (path: string, principalId: number, roleDefId: number): Promise<void> => {
@@ -1164,9 +1293,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const data = await res.json();
     for (const r of (data.value ?? []) as Array<{ GroupName?: string; GroupId?: string; UnitTermGuid?: string; Role?: string }>) {
       const term = (r.UnitTermGuid ?? "").toLowerCase();
-      if (!term || !r.GroupId) continue;
+      const role = (r.Role ?? "").toUpperCase();
+      if (!r.GroupId) continue;
+      // A GLOBAL row carries NO term by design — it is not scoped to a segment, so
+      // buildGroupMapRow forces Segment and UnitTermGuid empty. The termless guard
+      // below therefore used to discard it, which is why GLOBAL granted nothing
+      // anywhere. Keyed under "" instead, which is where the C-level fan-down looks
+      // for it. Every OTHER termless row is still dropped: without a term there is no
+      // folder to grant on, so it is a broken row, not a wide one.
+      if (!term && role !== "GLOBAL") continue;
       const arr = map.get(term) ?? [];
-      arr.push({ groupId: r.GroupId, groupName: r.GroupName ?? r.GroupId, role: (r.Role ?? "").toUpperCase() });
+      arr.push({ groupId: r.GroupId, groupName: r.GroupName ?? r.GroupId, role });
       map.set(term, arr);
     }
     return map;
@@ -1355,9 +1492,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // rows the upload form reads (termSet_yearPeriod / termSet_documentType), so the
   // grid matches the form on any tenant with no code edit. Falls back to the built-in
   // YEAR_TERMSET / DOCTYPE_TERMSET constants per-key if the row or the list is missing.
-  type ReconSettings = { year: string; docType: string; gridMode: GridMode; fanOut: boolean };
+  type ReconSettings = { year: string; docType: string; gridMode: GridMode; fanOut: boolean; revokeAncestorRead: boolean };
   const RECON_SETTINGS_FALLBACK: ReconSettings = {
     year: YEAR_TERMSET, docType: DOCTYPE_TERMSET, gridMode: DEFAULT_GRID_MODE, fanOut: false,
+    revokeAncestorRead: false,
   };
   const loadReconGridTermSets = async (): Promise<ReconSettings> => {
     try {
@@ -1395,6 +1533,22 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // loop) and grants nothing. An admin reads that list, deletes the leftovers,
         // and only then sets the row to "on".
         fanOut: (map.recon_departmentFanOut || "").toLowerCase() === "on",
+        // Ancestor browse Read is no longer granted at all: the client's rule is that
+        // a Head of Unit cannot see the department folder and a Head of Department
+        // cannot see the segment folder. Only a C-level (segment-tier) row sees from
+        // the segment down.
+        //
+        // But reconciliation has only ever ADDED assignments, so every site already
+        // provisioned carries the ancestor Read grants made by earlier runs. Removing
+        // the granting code fixes new folders and changes nothing on existing ones —
+        // the requirement would read as met while every current user still saw their
+        // parents, and the run log would report a clean pass.
+        //
+        // Hence a revoke pass, and hence it is OPT-IN. This is the first operation in
+        // this codebase that deletes anything, so the default REPORTS every candidate
+        // and removes none. An admin reads that list, satisfies themselves it contains
+        // only what they expect, and then sets the row to "on".
+        revokeAncestorRead: (map.recon_revokeAncestorRead || "").toLowerCase() === "on",
       };
     } catch {
       return RECON_SETTINGS_FALLBACK;
@@ -1624,7 +1778,369 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     try {
       const fullCtrlId = roleDefs.find(r => r.name === "Full Control")?.id;
       const readId = roleDefs.find(r => r.name === "Read")?.id;
-      if (readId === undefined) entries.push({ msg: `⚠ "Read" role definition not found — ancestor browse access will be skipped`, ok: false });
+      // Read now serves two purposes: recognising a leftover ancestor browse grant (they
+      // are all exactly Read) and granting site entry below. Without it the run still
+      // provisions folders correctly — it just cannot do either of those.
+      if (readId === undefined) entries.push({ msg: `⚠ "Read" role definition not found — site entry and ancestor-browse cleanup will be skipped`, ok: false });
+
+      // ── Site entry, FIRST ──────────────────────────────────────────────────────
+      //
+      // Find or create DMS_SITE_MEMBERS and give it Read on the web. Until now this was a
+      // sentence in a runbook ("Set up site entry"), and the only thing that noticed it had
+      // been skipped was a warning at the very END of the run — by which point every folder
+      // was already locked. A step that exists only in prose gets skipped.
+      //
+      // Order is not cosmetic. A folder grant alone confers Limited Access: the user can
+      // open that folder by direct link, but the site root denies them, so they cannot
+      // reach anything by navigating. Lock folders first and grant entry afterwards and
+      // there is a window in which a correctly provisioned uploader can reach nothing at
+      // all — and if the run dies in that window, that is the state the site is left in.
+      // Granting entry first means the worst case is a user who can open the site and sees
+      // nothing yet, which the next run resolves.
+      //
+      // See the access-scope-mapping spec §4 and the site-entry-access-layer spec.
+      try {
+        setReconPhase("Ensuring site entry…");
+        const allSiteGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+        let entry = allSiteGroups.find(
+          (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+        );
+        if (!entry) {
+          const made = await createSiteGroup(context.spHttpClient, siteUrl, SITE_ENTRY_GROUP_NAME);
+          entry = { id: made.id, title: made.title };
+          entries.push({ msg: `${SITE_ENTRY_GROUP_NAME} created`, ok: true });
+        }
+        const entryId = entry.id;
+        if (readId === undefined) {
+          entries.push({ msg: `⚠ ${SITE_ENTRY_GROUP_NAME}: cannot grant site Read — no "Read" role definition`, ok: false });
+        } else {
+          // The root web always has unique permissions, so there is no inheritance to break
+          // here — unlike a library or a page. Grant directly.
+          //
+          // Checked before granting rather than leaning on addroleassignment being
+          // idempotent, purely so the log distinguishes "already had it" from "granted
+          // now". Both outcomes are fine; only one of them is news.
+          const webRas = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/roleassignments?$select=PrincipalId`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          let holds = false;
+          if (webRas.ok) {
+            const raJson = await webRas.json();
+            holds = ((raJson.value ?? []) as Array<{ PrincipalId?: number }>)
+              .some((ra) => ra.PrincipalId === entryId);
+          }
+          if (holds) {
+            entries.push({ msg: `${SITE_ENTRY_GROUP_NAME}: already holds a role on the site ✓`, ok: true });
+          } else {
+            const grant = await withThrottleRetry(() => context.spHttpClient.post(
+              `${siteUrl}/_api/web/roleassignments/addroleassignment(principalid=${entryId},roledefid=${readId})`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            ));
+            entries.push(grant.ok
+              ? { msg: `${SITE_ENTRY_GROUP_NAME} → Read on the site ✓`, ok: true }
+              : { msg: `⚠ ${SITE_ENTRY_GROUP_NAME} → Read on the site FAILED (HTTP ${grant.status}) — users will reach folders by direct link only`, ok: false });
+          }
+        }
+      } catch (e) {
+        // Never fatal. Folder provisioning is still worth doing, and the failure is named
+        // rather than swallowed so it is not mistaken for a folder problem.
+        entries.push({ msg: `⚠ Site entry could not be ensured — ${(e as Error).message}`, ok: false });
+      }
+
+      // ── Library-scope grants ───────────────────────────────────────────────────
+      //
+      // A Group Map row with Scope = Library grants its role on a whole LIBRARY rather
+      // than on a unit folder. Target holds the library title. See the
+      // access-scope-mapping spec.
+      //
+      // Runs after site entry and before the folder passes: breaking a library's
+      // inheritance resets what flows down to its folders, so doing it after the folders
+      // were locked would mean the next run is the first one that is actually correct.
+      try {
+        setReconPhase("Applying library access…");
+        // Read the scoped rows directly. loadGroupMapForAssign keys by term and drops
+        // Scope/Target, which a library row does not have and does not need.
+        //
+        // Scope/Target are newer than this list, and a $select naming a column that does
+        // not exist fails the WHOLE request with 400 — so a site without the columns must
+        // not lose its folder provisioning over it. Absent columns simply mean no library
+        // rows exist yet.
+        const scopedRes = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!scopedRes.ok) {
+          entries.push({ msg: `Library access: skipped — Scope/Target columns not present on DMS Group Map`, ok: true });
+        } else {
+          const scopedJson = await scopedRes.json();
+          const libRows = ((scopedJson.value ?? []) as Array<{ GroupId?: string; GroupName?: string; Role?: string; Scope?: string; Target?: string }>)
+            .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "library")
+            .filter((r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "");
+          if (libRows.length === 0) {
+            entries.push({ msg: `Library access: no Library-scope mappings`, ok: true });
+          } else {
+            // Needed to re-grant after a break — see below. Resolved here rather than
+            // threaded out of the site-entry pass so this block stands alone.
+            const groupsNow = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+            const entryPid = groupsNow.find(
+              (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+            )?.id;
+            const brokenThisRun = new Set<string>();
+            for (const row of libRows) {
+              const lib = (row.Target ?? "").trim();
+              const role = (row.Role ?? "").toUpperCase();
+              const levelName = ROLE_TO_PERMISSION[role];
+              const roleDefId = roleDefs.find((r) => r.name === levelName)?.id;
+              const label = `${row.GroupName || row.GroupId} → ${lib}`;
+              if (levelName === undefined) {
+                entries.push({ msg: `  ⚠ ${label}: role "${role}" grants nothing (retired or unknown) — skipped`, ok: false });
+                continue;
+              }
+              if (roleDefId === undefined) {
+                entries.push({ msg: `  ⚠ ${label}: no "${levelName}" role definition on site — skipped`, ok: false });
+                continue;
+              }
+              const listRes = await context.spHttpClient.get(
+                `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')?$select=Id,HasUniqueRoleAssignments`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              );
+              if (!listRes.ok) {
+                entries.push({ msg: `  ⚠ ${label}: library "${lib}" not found — check the Target value`, ok: false });
+                continue;
+              }
+              const listJson = await listRes.json();
+              const listId: string = listJson.Id;
+              const listBase = `${siteUrl}/_api/web/lists(guid'${listId}')`;
+              // Did the site-entry group have access to this library BEFORE we touched it?
+              //
+              // This decides whether it is restored after the break, and it is asked rather
+              // than assumed. Documents MUST keep it — the approval guard resolves the
+              // destination folder as the approver and depends on that Read. Staging must
+              // NOT gain it: site entry means "can open the site", and a plain member who is
+              // neither uploader nor approver has no business reaching Staging at all.
+              //
+              // Deciding by library NAME would bake that into a constant and be wrong the
+              // moment a library is renamed or a third one appears. Preserving whatever was
+              // already in force cannot be wrong about either.
+              let entryHadAccess = false;
+              if (entryPid !== undefined) {
+                const before = await context.spHttpClient.get(
+                  `${listBase}/roleassignments?$select=PrincipalId`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                );
+                if (before.ok) {
+                  const bj = await before.json();
+                  entryHadAccess = ((bj.value ?? []) as Array<{ PrincipalId?: number }>)
+                    .some((ra) => ra.PrincipalId === entryPid);
+                }
+              }
+              if (listJson.HasUniqueRoleAssignments !== true && !brokenThisRun.has(listId)) {
+                // copyRoleAssignments=false, always. With true, every inherited grant is
+                // copied forward, so the library stays visible to exactly the same people
+                // and the run reports success — a failure that is invisible from the log.
+                const broke = await withThrottleRetry(() => context.spHttpClient.post(
+                  `${listBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ));
+                if (!broke.ok) {
+                  entries.push({ msg: `  ✗ ${lib}: could not break inheritance (HTTP ${broke.status}) — nothing granted`, ok: false });
+                  continue;
+                }
+                brokenThisRun.add(listId);
+                entries.push({ msg: `  ↳ ${lib}: inheritance broken (no permissions copied)`, ok: true });
+                // Two principals go back on, and BOTH are load-bearing.
+                //
+                // Owners: with nothing copied, the only remaining access is site collection
+                // administrators. An owner who is not also a site collection admin would
+                // lose the library.
+                if (fullCtrlId !== undefined) {
+                  try {
+                    await addRoleAssignmentToList(listBase, ownerGroupId as number, fullCtrlId);
+                    entries.push({ msg: `  ↳ ${lib}: site Owners → Full Control restored`, ok: true });
+                  } catch (e) {
+                    entries.push({ msg: `  ✗ ${lib}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                  }
+                }
+                // Site entry: the approval guard resolves the destination folder in
+                // Documents AS THE APPROVER, and that works only because the site-entry
+                // group holds Read on the library by INHERITANCE. Breaking inheritance
+                // discards it, and every approver on the site then 404s on every
+                // destination folder — approval refused for everyone, with a log that says
+                // the run succeeded. See the access-scope-mapping spec §5.
+                if (!entryHadAccess) {
+                  // It did not have access before, so it does not get any now. Logged rather
+                  // than silent: on Staging this is the correct and intended outcome, and an
+                  // unexplained absence here would look like the restore had failed.
+                  entries.push({ msg: `  ↳ ${lib}: ${SITE_ENTRY_GROUP_NAME} had no access before — not granted (site entry is not library access)`, ok: true });
+                } else if (entryPid !== undefined && readId !== undefined) {
+                  try {
+                    await addRoleAssignmentToList(listBase, entryPid, readId);
+                    entries.push({ msg: `  ↳ ${lib}: ${SITE_ENTRY_GROUP_NAME} → Read restored (keeps approval working)`, ok: true });
+                  } catch (e) {
+                    entries.push({ msg: `  ✗ ${lib}: could not restore ${SITE_ENTRY_GROUP_NAME} — approvals may fail — ${(e as Error).message}`, ok: false });
+                  }
+                } else {
+                  entries.push({ msg: `  ⚠ ${lib}: ${SITE_ENTRY_GROUP_NAME} or "Read" not resolved — approvals may fail until it holds Read here`, ok: false });
+                }
+              }
+              try {
+                await addRoleAssignmentToList(listBase, spGroupPrincipalId(row.GroupId ?? ""), roleDefId);
+                entries.push({ msg: `  ↳ ${label} → ${levelName} (library)`, ok: true });
+                pushAssign("Documents", `${lib} → ${row.GroupName} (${levelName}, library scope)`, "ok");
+                bumpAssigns();
+                await tick();
+              } catch (e) {
+                entries.push({ msg: `  ✗ ${label} → ${levelName} FAILED: ${(e as Error).message}`, ok: false });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({ msg: `⚠ Library access skipped — ${(e as Error).message}`, ok: false });
+      }
+
+      // ── PAGE ACCESS PASS ──────────────────────────────────────────────────────
+      // Re-asserts every `Scope = Page` row, so page access self-heals the same way folder
+      // and library access do.
+      //
+      // The client's rule, 2026-08-05: page and library access are DERIVED from the role, not
+      // curated per page. An uploader has the upload form because they are an uploader — so a
+      // grant removed by hand in SharePoint is drift to be repaired, not a decision to respect.
+      // The supported way to revoke is to remove the mapping (which deletes the row and the
+      // grant together) or to delete the group.
+      //
+      // That is a deliberate reversal of the "curated state should not self-heal" argument, and
+      // it holds only because the row IS the record of the role. If page grants ever become
+      // hand-curated exceptions, this pass has to become report-only.
+      try {
+        setReconPhase("Applying page access…");
+        const pgRes = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!pgRes.ok) {
+          entries.push({ msg: `Page access: skipped — Scope/Target columns not present on DMS Group Map`, ok: true });
+        } else {
+          const pgJson = await pgRes.json();
+          const pageRows = ((pgJson.value ?? []) as Array<{ GroupId?: string; GroupName?: string; Role?: string; Scope?: string; Target?: string }>)
+            .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "page")
+            .filter((r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "");
+          if (pageRows.length === 0) {
+            entries.push({ msg: `Page access: no Page-scope mappings`, ok: true });
+          } else if (readId === undefined) {
+            entries.push({ msg: `⚠ Page access: no "Read" role definition on site — skipped`, ok: false });
+          } else {
+            const PAGES_LIST = "Site Pages";
+            const pagesBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(PAGES_LIST)}')`;
+            // The site's real welcome page, not just the "home.aspx" constant: a renamed welcome
+            // page would slip past the constant, and locking it makes the whole site unreachable
+            // for everyone who is not an administrator.
+            let welcome = "";
+            try {
+              const wRes = await context.spHttpClient.get(
+                `${siteUrl}/_api/web/RootFolder?$select=WelcomePage`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              );
+              if (wRes.ok) {
+                const wj = await wRes.json();
+                welcome = ((wj.WelcomePage ?? "") as string).split("/").pop()?.toLowerCase() ?? "";
+              }
+            } catch { /* fall back to the constant alone */ }
+
+            const itemsRes = await context.spHttpClient.get(
+              `${pagesBase}/items?$select=Id,FileLeafRef,HasUniqueRoleAssignments&$top=500`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!itemsRes.ok) {
+              entries.push({ msg: `⚠ Page access: could not read ${PAGES_LIST} (HTTP ${itemsRes.status}) — skipped`, ok: false });
+            } else {
+              const itemsJson = await itemsRes.json();
+              const items = ((itemsJson.value ?? []) as Array<{ Id: number; FileLeafRef?: string; HasUniqueRoleAssignments?: boolean }>)
+                .map((p) => ({ id: p.Id, file: (p.FileLeafRef ?? "").toLowerCase(), unique: p.HasUniqueRoleAssignments === true }));
+
+              // Grouped by page so inheritance is broken ONCE per page rather than once per row.
+              const byPage = new Map<string, typeof pageRows>();
+              for (const r of pageRows) {
+                const key = (r.Target ?? "").trim().toLowerCase();
+                byPage.set(key, [...(byPage.get(key) ?? []), r]);
+              }
+
+              for (const [file, rowsForPage] of Array.from(byPage.entries())) {
+                if (isForbiddenPageTarget(file) || file === welcome) {
+                  // Refused by name, every run, rather than applied once and regretted. The row
+                  // is left in place: deleting authored data on the client's behalf is not this
+                  // pass's job, and the refusal is logged so it can be removed deliberately.
+                  entries.push({ msg: `  ⚠ ${file}: the site home page cannot be restricted — ${rowsForPage.length} mapping(s) refused`, ok: false });
+                  continue;
+                }
+                const item = items.find((p) => p.file === file);
+                if (!item) {
+                  entries.push({ msg: `  ⚠ ${file}: page not found in ${PAGES_LIST} — check the Target value`, ok: false });
+                  continue;
+                }
+                const itemBase = `${pagesBase}/items(${item.id})`;
+                if (!item.unique) {
+                  // copyRoleAssignments=false, as everywhere else: with true, every inherited
+                  // grant is carried forward, so the page stays visible to exactly the same
+                  // people and the run reports success.
+                  const broke = await withThrottleRetry(() => context.spHttpClient.post(
+                    `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                    SPHttpClient.configurations.v1,
+                    { headers: { Accept: "application/json;odata=nometadata" } },
+                  ));
+                  if (!broke.ok) {
+                    entries.push({ msg: `  ✗ ${file}: could not break inheritance (HTTP ${broke.status}) — nothing granted`, ok: false });
+                    continue;
+                  }
+                  entries.push({ msg: `  ↳ ${file}: inheritance broken (no permissions copied)`, ok: true });
+                  // typeof, not !== undefined: ownerGroupId is `number | null` when the
+                  // associated owner group could not be resolved, and null would slip past an
+                  // undefined check straight into the request as "null".
+                  if (fullCtrlId !== undefined && typeof ownerGroupId === "number") {
+                    try {
+                      await addRoleAssignmentToList(itemBase, ownerGroupId, fullCtrlId);
+                      entries.push({ msg: `  ↳ ${file}: site Owners → Full Control restored`, ok: true });
+                    } catch (e) {
+                      entries.push({ msg: `  ✗ ${file}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                    }
+                  }
+                }
+                for (const row of rowsForPage) {
+                  const label = `${row.GroupName || row.GroupId} → ${file}`;
+                  // ALWAYS Read, never the row's own level. A page is opened or it is not, and
+                  // granting "DMS Upload" on a page item would be a meaningless binding that
+                  // reads, in the permissions UI, like an upload right on the page.
+                  if ((row.Role ?? "").toUpperCase() !== "ENTRY") {
+                    entries.push({ msg: `  ⚠ ${label}: role "${row.Role}" on a Page row — granting Read (page access is Read by definition)`, ok: true });
+                  }
+                  try {
+                    await addRoleAssignmentToList(itemBase, spGroupPrincipalId(row.GroupId ?? ""), readId);
+                    entries.push({ msg: `  ↳ ${label} → Read (page)`, ok: true });
+                    pushAssign("Documents", `${file} → ${row.GroupName} (Read, page scope)`, "ok");
+                    bumpAssigns();
+                    await tick();
+                  } catch (e) {
+                    entries.push({ msg: `  ✗ ${label} FAILED: ${(e as Error).message}`, ok: false });
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({ msg: `⚠ Page access skipped — ${(e as Error).message}`, ok: false });
+      }
+
       // Ancestor rel-paths of a target, excluding the folder itself and the library root.
       // e.g. "/A/B/C" -> ["/A", "/A/B"]. Used to grant each unit group Read up its own path
       // so members can browse down to their folder; siblings without a grant stay
@@ -1658,6 +2174,18 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       }
       const groupMap = await loadGroupMapForAssign();
       const { targets, incomplete: incompleteSegments, missingAbbrev, collisions, abbrevRows } = await buildProvisionTargets();
+      // relPath → the term that folder stands for. Every ancestor folder is itself a
+      // target (the segment folder and each department folder both get one), so this
+      // covers the whole tree. The ancestor-read revoke needs it to answer the one
+      // question that separates a leftover browse grant from a legitimate one: does
+      // this group hold a Group Map row AT this tier? A department-tier viewer's Read
+      // on its own department folder must survive; a unit group's Read on that same
+      // folder must not.
+      const termByRelPath = new Map<string, string>();
+      for (const t of targets) termByRelPath.set(t.relPath, (t.assignTerm ?? "").toLowerCase());
+      // Role assignments per ancestor path, fetched once. A twelve-unit department
+      // would otherwise re-read the same department folder twelve times per library.
+      const ancAssignCache = new Map<string, ExistingAssign[]>();
       // A collision aborts BEFORE anything is created. Two siblings resolving to
       // one path means one folder, one ACL, and two units' documents inside it —
       // the isolation the whole permission model rests on. A partial run would
@@ -1701,6 +2229,15 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         msg: gridSets.fanOut
           ? `Departmental fan-out: ON — a mapping on a department reaches every unit beneath it`
           : `Departmental fan-out: off (recon_departmentFanOut) — parent-tier mappings are reported, not granted`,
+        ok: true,
+      });
+      // Stated up front for the same reason as fan-out: "off" is the state in which the
+      // visibility rule silently does not apply to anything already provisioned, and
+      // that must be visible rather than inferred from an absence of removals.
+      entries.push({
+        msg: gridSets.revokeAncestorRead
+          ? `Ancestor browse Read: REVOKING — groups lose Read on folders above their own tier`
+          : `Ancestor browse Read: report only (recon_revokeAncestorRead) — leftovers are listed, nothing is removed`,
         ok: true,
       });
       let yearLabels: string[] = [];
@@ -2085,6 +2622,29 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               toGrant.push({ row: i.row, viaTerm: i.fromTerm });
             }
 
+            // C-level view fan-down. A GLOBAL row carries no term at all and reaches
+            // every folder in every segment, at Read, in Documents only.
+            //
+            // NOT gated by recon_departmentFanOut, and that is the whole reason it is a
+            // role of its own. The gate exists because a leftover segment- or
+            // department-tier MEMBER row from before 2026-07-29 is indistinguishable,
+            // BY TIER, from a deliberate wide grant, so tier-based fanning has to be
+            // opt-in. A GLOBAL row has no tier to be mistaken for and has never granted
+            // anything until now: the explicit role name is the consent, so no switch is
+            // needed and none should be added.
+            //
+            // MEMBER keeps its guard untouched — a segment-tier MEMBER row still fans
+            // nowhere, at any setting.
+            //
+            // GLOBAL rows are stored with an empty UnitTermGuid, so they key on "".
+            for (const g of groupMap.get("") ?? []) {
+              if (g.role !== "GLOBAL" || !accepts(g.role)) continue;
+              const k = `${g.groupId}|${g.role}`;
+              if (seenGrant.has(k)) continue;
+              seenGrant.add(k);
+              toGrant.push({ row: g, viaTerm: "(all segments)" });
+            }
+
             // Only a LEAF (unit) folder is expected to carry Group Map rows — the model is
             // leaf-only by design (see CLAUDE.md / the leaf-only authorization spec), so the
             // segment and department tiers having none is the correct state, not a problem.
@@ -2129,19 +2689,64 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 pushAssign(lib, `Group "${g.groupName}" not found — ask an administrator to create it`, "admin");
               }
             }
-            // Browse access: grant each just-assigned group Read on every ANCESTOR folder on
-            // its own path (same library), so members can navigate down to their unit.
-            // Ancestors get Read only (never edit) — pass-through, not write targets. Siblings
-            // get no grant, so SharePoint security-trims them: a user sees only their corridor.
+            // Ancestor browse Read: no longer granted, and actively revoked.
+            //
+            // This pass used to grant each group Read on every ancestor folder on its
+            // path so members could click down to their unit. The client's rule as of
+            // 2026-08-04 is the opposite: a Head of Unit must not see the department
+            // folder, a Head of Department must not see the segment folder, and only a
+            // C-level segment-tier row sees from the segment down. Siblings were always
+            // security-trimmed, so what the corridor exposed was the ancestor folders
+            // themselves — exactly what must now be hidden.
+            //
+            // Navigation is replaced by direct links (SharePoint keeps Limited Access on
+            // the parents, so a direct URL to the unit folder still opens) plus the
+            // landing web part that resolves a user's folders for them. Without that
+            // component the library root looks empty to every non-admin — the two halves
+            // ship together.
             if (grantedPids.length > 0 && readId !== undefined) {
               for (const anc of ancestorRelPaths(t.relPath)) {
                 const ancFull = `${root}${anc}`;
+                const ancTerm = termByRelPath.get(anc) ?? "";
+                let existing = ancAssignCache.get(ancFull);
+                if (existing === undefined) {
+                  existing = await getRoleAssignments(ancFull);
+                  ancAssignCache.set(ancFull, existing);
+                }
                 for (const gp of grantedPids) {
+                  // The site-entry group is what lets anyone open the site at all.
+                  // It is never a browse leftover and must never be a candidate.
+                  if (gp.groupName === SITE_ENTRY_GROUP_NAME) continue;
+                  // Only an assignment that is EXACTLY Read qualifies. A real grant at
+                  // this tier (DMS Approve, DMS Upload, DMS Delete) is someone's actual
+                  // access, not a browse artefact.
+                  const held = existing.find(a => a.principalId === gp.pid && a.roleDefId === readId);
+                  if (!held) continue;
+                  // A group with its own row at this tier is SUPPOSED to hold Read here
+                  // — that is what a department-tier or segment-tier viewer is. Removing
+                  // it would delete the C-level and Head-of-Department view access this
+                  // whole change exists to preserve.
+                  const ownRowHere = (groupMap.get(ancTerm) ?? [])
+                    .some(r => spGroupPrincipalId(r.groupId) === gp.pid);
+                  if (ownRowHere) continue;
+                  if (!gridSets.revokeAncestorRead) {
+                    entries.push({
+                      msg: `  ⚠ ${gp.groupName} holds Read (browse) on ${anc} — would be removed (recon_revokeAncestorRead is off)`,
+                      ok: true,
+                    });
+                    continue;
+                  }
                   try {
-                    await addRoleAssignment(ancFull, gp.pid, readId);
-                    entries.push({ msg: `  ↳ ${gp.groupName} → Read (browse) on ${anc}`, ok: true });
+                    await removeRoleAssignment(ancFull, gp.pid);
+                    // Drop it from the cache too: a second unit under the same
+                    // department must not report removing the same grant twice.
+                    ancAssignCache.set(ancFull, existing.filter(a => a !== held));
+                    existing = ancAssignCache.get(ancFull) as ExistingAssign[];
+                    entries.push({ msg: `  ⤫ ${gp.groupName} — Read (browse) removed from ${anc}`, ok: true });
+                    pushAssign(lib, `${anc} → ${gp.groupName} Read removed (ancestor browse)`, "ok");
+                    await tick();
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${gp.groupName} → Read (browse) on ${anc} FAILED: ${(e as Error).message}`, ok: false });
+                    entries.push({ msg: `  ✗ ${gp.groupName} — failed to remove Read on ${anc}: ${(e as Error).message}`, ok: false });
                   }
                 }
               }
@@ -2204,9 +2809,19 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           }
         }
       }
-      // Site-entry self-heal: ensure every member of any DMS_* group is also in
+      // Site-entry self-heal: ensure every member of a group we MANAGE is also in
       // DMS_SITE_MEMBERS, so users added the native way (bypassing the web part's
       // auto-add) can still open the site. See site-entry-access-layer spec §7a.
+      //
+      // "Managed" comes from the Group Map's GroupId column, NOT from a title prefix.
+      // Until 2026-08-04 this filtered on `title.startsWith("DMS_")`, which the client's
+      // new prefix-less convention (GHO_GF_CORU_UPLOADER) matches zero of — and the failure
+      // is silent: nobody gets site entry and the run still reports ✓, producing "only SOME
+      // users cannot open the site", the hardest version of this to diagnose.
+      //
+      // Reading the list is also strictly more accurate than the name test ever was: it
+      // finds a group whatever it is called, covers every Scope in one query, and skips a
+      // group somebody hand-named with our prefix but never actually mapped.
       try {
         setReconPhase("Syncing site-entry group…");
         const allGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
@@ -2218,11 +2833,31 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         } else {
           const entryMembers = await getGroupMembers(context.spHttpClient, siteUrl, entryGroup.id);
           const already = new Set(entryMembers.map((m) => m.loginName.toLowerCase()));
-          const dmsGroups = allGroups.filter(
-            (g) => g.title.toUpperCase().indexOf("DMS_") === 0 && g.id !== entryGroup.id,
+          // GroupId ONLY. That column predates Scope/Target, so this cannot hit the
+          // whole-request HTTP 400 that naming a nonexistent $select column causes
+          // (CLAUDE.md #11) — no fallback query needed, and every scope is included.
+          const managedIds = new Set<number>();
+          const idRes = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId&$top=5000`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
           );
+          if (idRes.ok) {
+            const idJson = await idRes.json();
+            for (const r of (idJson.value ?? []) as Array<{ GroupId?: string }>) {
+              const n = Number((r.GroupId ?? "").toString().trim());
+              if (n > 0 && n % 1 === 0) managedIds.add(n);
+            }
+          } else {
+            entries.push({ msg: `⚠ site-entry sync: could not read Group Map ids (HTTP ${idRes.status}) — no members synced`, ok: false });
+          }
+          managedIds.delete(entryGroup.id);
+          const managedGroups = allGroups.filter((g) => managedIds.has(g.id));
+          if (idRes.ok && managedIds.size === 0) {
+            entries.push({ msg: `${SITE_ENTRY_GROUP_NAME}: no mapped groups in Group Map — nothing to sync`, ok: true });
+          }
           let healed = 0;
-          for (const g of dmsGroups) {
+          for (const g of managedGroups) {
             const members = await getGroupMembers(context.spHttpClient, siteUrl, g.id).catch(() => []);
             for (const m of members) {
               if (already.has(m.loginName.toLowerCase())) continue;
@@ -2236,7 +2871,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           entries.push({
             msg: healed > 0
               ? `${SITE_ENTRY_GROUP_NAME}: added ${healed} member(s) missing site entry ✓`
-              : `${SITE_ENTRY_GROUP_NAME}: all DMS group members already have site entry ✓`,
+              : `${SITE_ENTRY_GROUP_NAME}: all mapped-group members already have site entry ✓`,
             ok: true,
           });
         }
@@ -2689,14 +3324,40 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               {/* "User Access" rather than "Group Map": the tab is where a client
                   answers "who can reach this folder", and the list name is an
                   implementation detail they never have to think about. */}
-              {t === "Reconciliation" ? "Folder Reconciliation" : t === "GroupMap" ? "User Access" : t}
+              {t === "Reconciliation" ? "Folder Reconciliation"
+                : t === "GroupMap" ? "User Access"
+                : t}
             </button>
           ))}
         </div>
       </div>
 
       {tab === "GroupMap" ? (
-        <GroupMapBuilder context={context} siteUrl={siteUrl} />
+        <div>
+          {/* Sub-tab bar. Deliberately a different shape from the top-level segmented control —
+              underlined rather than boxed — so the nesting is legible at a glance instead of
+              looking like a second row of unrelated tabs. */}
+          <div style={s.subTabBar}>
+            {ACCESS_TABS.map((a) => (
+              <button
+                key={a.key}
+                onClick={() => setAccessTab(a.key)}
+                style={{ ...s.subTab, ...(accessTab === a.key ? s.subTabActive : {}) }}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+          {accessTab === "Folder" ? (
+            <GroupMapBuilder context={context} siteUrl={siteUrl} />
+          ) : accessTab === "Site" ? (
+            <SiteAccess context={context} siteUrl={siteUrl} />
+          ) : accessTab === "StagingLibrary" ? (
+            <StagingAccess context={context} siteUrl={siteUrl} library="Staging" />
+          ) : (
+            <PageAccess context={context} siteUrl={siteUrl} />
+          )}
+        </div>
       ) : tab === "Reconciliation" ? (
         <div>
           <p style={{ fontSize: 13, color: "#444", lineHeight: 1.5, margin: "0 0 16px" }}>
