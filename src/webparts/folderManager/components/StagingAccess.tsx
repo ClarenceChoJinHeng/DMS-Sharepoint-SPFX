@@ -25,7 +25,7 @@ import {
   buildGroupMapRow,
   LIBRARY_ENTRY_ROLE,
   STAGING_FACING_ROLES,
-  SITE_ENTRY_GROUP_NAME,
+  siteEntryGroupTitle,
 } from "../../../shared/groupMapModel";
 import { fetchAllSiteGroups, SpGroup } from "../../../shared/spGroups";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
@@ -411,7 +411,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
   // explicitly — it exists to let people onto the site, and putting it here would give every
   // member of the site access to Staging, which is the one thing the model forbids.
   const candidates = groups
-    .filter((g) => g.title.trim().toLowerCase() !== SITE_ENTRY_GROUP_NAME.toLowerCase())
+    .filter((g) => g.title.trim().toLowerCase() !== siteEntryGroupTitle().toLowerCase())
     .filter((g) => STAGING_FACING_ROLES.indexOf(roleFromGroupName(g.title)) !== -1)
     .sort((a, b) => a.title.localeCompare(b.title));
 
@@ -439,7 +439,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
   // hand-made grant in SharePoint cannot sit unexplained in the library ACL.
   const unmanaged = (live ?? []).filter((l) => {
     if (rowByGroupId.has(String(l.principalId))) return false;
-    if (l.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase()) return false;
+    if (l.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase()) return false;
     // Owners/admins and anyone with Full Control are meant to be here.
     if (l.levels.indexOf("Full Control") !== -1) return false;
     // LIMITED ACCESS IS NOT LIBRARY ACCESS, and listing it was this panel's first bug.

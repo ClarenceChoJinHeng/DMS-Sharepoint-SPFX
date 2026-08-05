@@ -1,6 +1,9 @@
 // Pure, SPFx-free helpers for the Group Map Builder. No @microsoft/* imports —
 // keep this unit-testable in plain Jest (same pattern as formModel).
 
+// naming.ts is pure too, so importing it here keeps that property.
+import { cachedSiteEntryName } from "./naming";
+
 /**
  * DEL, DELS and HC are library-scoped like the rest: DEL grants delete on
  * Documents, DELS grants delete on STAGING, HC grants Contribute on HC Approval
@@ -264,7 +267,13 @@ export function personaByKey(key: string): Persona | undefined {
  * an upload-routing role. Adding a user to any DMS group via the Members modal also adds them
  * here so nobody is left locked out of the site.
  */
-export const SITE_ENTRY_GROUP_NAME = "DMS_SITE_MEMBERS";
+/**
+ * A FUNCTION, not a constant, because the name is discovered per site — CRS_SITE_MEMBERS on a
+ * renamed site, DMS_SITE_MEMBERS otherwise. Resolved by primeNames(); see cachedSiteEntryName.
+ */
+export function siteEntryGroupTitle(): string {
+  return cachedSiteEntryName();
+}
 
 /**
  * What a Group Map row grants access to. See the access-scope-mapping spec.

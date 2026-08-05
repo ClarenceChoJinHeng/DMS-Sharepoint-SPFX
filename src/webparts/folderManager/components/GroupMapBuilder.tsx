@@ -12,7 +12,7 @@ import {
   GroupMapDraft,
   GroupMapWriteRow,
   normalizeScope,
-  SITE_ENTRY_GROUP_NAME,
+  siteEntryGroupTitle,
   SELECTABLE_ROLES,
   PERSONAS,
   PERSONA_FAMILIES,
@@ -557,7 +557,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         .catch(() => [])
         .then((all) => {
           const hit = all.find(
-            (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+            (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
           );
           return hit ? hit.id : null;
         });
@@ -576,15 +576,15 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       // Skip when the group being edited IS the entry group; re-adding is idempotent.
       let entryNote = "";
       const isEntryGroup =
-        memberModal.displayName.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase();
+        memberModal.displayName.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase();
       if (!isEntryGroup) {
         const entryId = await resolveEntryGroupId();
         if (entryId === null) {
-          entryNote = ` (note: ${SITE_ENTRY_GROUP_NAME} not found — create it so they can open the site)`;
+          entryNote = ` (note: ${siteEntryGroupTitle()} not found — create it so they can open the site)`;
         } else {
           await addGroupMember(context.spHttpClient, siteUrl, entryId, p.loginName).catch(
             () => {
-              entryNote = ` (warning: could not add to ${SITE_ENTRY_GROUP_NAME})`;
+              entryNote = ` (warning: could not add to ${siteEntryGroupTitle()})`;
             },
           );
         }

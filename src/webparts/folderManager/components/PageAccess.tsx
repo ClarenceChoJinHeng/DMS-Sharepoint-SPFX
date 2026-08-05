@@ -26,7 +26,7 @@ import {
   buildGroupMapRow,
   LIBRARY_ENTRY_ROLE,
   isForbiddenPageTarget,
-  SITE_ENTRY_GROUP_NAME,
+  siteEntryGroupTitle,
 } from "../../../shared/groupMapModel";
 import { fetchAllSiteGroups, fetchBuiltInGroupIds, SpGroup } from "../../../shared/spGroups";
 import { policyForPage, VIEW_ONLY_ROLES } from "../../../shared/pageAccessPolicy";
@@ -150,7 +150,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
    * with no escape hatch just sends the admin to SharePoint to do it unsupervised.
    */
   const allGroups = groups
-    .filter((g) => g.title.trim().toLowerCase() !== SITE_ENTRY_GROUP_NAME.toLowerCase())
+    .filter((g) => g.title.trim().toLowerCase() !== siteEntryGroupTitle().toLowerCase())
     .filter((g) => VIEW_ONLY_ROLES.indexOf(roleFromGroupName(g.title)) === -1)
     .sort((a, b) => a.title.localeCompare(b.title));
 

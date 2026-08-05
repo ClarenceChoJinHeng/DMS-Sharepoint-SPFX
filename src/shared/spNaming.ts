@@ -12,6 +12,7 @@ import {
   resolveWritePrefix,
   folderContentTypeName,
   siteEntryGroupName,
+  setSiteEntryName,
 } from "./naming";
 
 /**
@@ -44,7 +45,45 @@ export function makeListProbe(sp: SPHttpClient, siteUrl: string): ListProbe {
  * returns the legacy name — the behaviour the codebase had before any of this existed. A naming
  * failure must not stop a web part from loading.
  */
+/**
+ * Resolved once per page session. Unlike the list titles there is no per-suffix cache to lean on,
+ * and primeNames() is called from several loaders, so without this the group query would repeat.
+ */
+let siteEntryLookup: Promise<void> | undefined;
+
+/**
+ * Which of CRS_SITE_MEMBERS / DMS_SITE_MEMBERS exists on this site.
+ *
+ * Folded into primeNames so every component that already primes gets it for free — the site-entry
+ * name is consulted in five places across four components, and a component that resolved its lists
+ * but not this would create a duplicate group.
+ *
+ * Memoised on the PROMISE, not a boolean. primeNames is called from several loaders that start
+ * concurrently, and a flag set after the await would let two of them issue the request before
+ * either recorded that it had. Sharing the promise makes concurrent callers await one lookup.
+ */
+async function primeSiteEntry(sp: SPHttpClient, siteUrl: string): Promise<void> {
+  if (!siteEntryLookup) {
+    siteEntryLookup = (async () => {
+      try {
+        const res: SPHttpClientResponse = await sp.get(
+          `${siteUrl}/_api/web/sitegroups?$select=Title&$top=500`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        setSiteEntryName(((data.value ?? []) as Array<{ Title?: string }>).map((g) => g.Title ?? ""));
+      } catch {
+        // Leave the legacy name; a failed probe must not stop a web part loading.
+      }
+    })();
+  }
+  return siteEntryLookup;
+}
+
 export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<void> {
+  await primeSiteEntry(sp, siteUrl);
   const probe = makeListProbe(sp, siteUrl);
   for (const suffix of [
     LIST_SUFFIX.config,

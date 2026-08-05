@@ -18,7 +18,7 @@ import * as React from "react";
 import { useEffect, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
-import { SITE_ENTRY_GROUP_NAME } from "../../../shared/groupMapModel";
+import { siteEntryGroupTitle } from "../../../shared/groupMapModel";
 import {
   fetchAllSiteGroups,
   createSiteGroup,
@@ -142,7 +142,7 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
       // Before the Group Map read: resolves "CRS Group Map" vs "DMS Group Map" once per session.
       await primeNames(context.spHttpClient, siteUrl);
       const all = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
-      const eg = all.find((g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase());
+      const eg = all.find((g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase());
       setEntry(eg);
       const grants = await loadWebGrants();
       setWebGrants(grants);
@@ -208,7 +208,7 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
     setBusy(true);
     try {
       let eg = entry;
-      if (!eg) eg = await createSiteGroup(context.spHttpClient, siteUrl, SITE_ENTRY_GROUP_NAME);
+      if (!eg) eg = await createSiteGroup(context.spHttpClient, siteUrl, siteEntryGroupTitle());
       const defs = await context.spHttpClient.get(
         `${siteUrl}/_api/web/roledefinitions?$select=Id,Name`,
         SPHttpClient.configurations.v1,
@@ -225,7 +225,7 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
       );
       if (!grant.ok) throw new Error(`addroleassignment HTTP ${grant.status}`);
       await reload();
-      showToast(`${SITE_ENTRY_GROUP_NAME} is set up and can open the site.`, false);
+      showToast(`${siteEntryGroupTitle()} is set up and can open the site.`, false);
     } catch (e) {
       showToast(`Set-up failed: ${(e as Error).message}`, true);
     } finally {
@@ -313,17 +313,17 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
             <div style={s.dangerBox}>
               {!entry ? (
                 <>
-                  <strong>{SITE_ENTRY_GROUP_NAME} does not exist.</strong> Until it does, nobody can
+                  <strong>{siteEntryGroupTitle()} does not exist.</strong> Until it does, nobody can
                   open this site except owners and administrators.
                 </>
               ) : entryHasRole === undefined ? (
                 <>
-                  <strong>{SITE_ENTRY_GROUP_NAME} exists</strong>, but its site permissions could
+                  <strong>{siteEntryGroupTitle()} exists</strong>, but its site permissions could
                   not be read, so whether it works is unknown.
                 </>
               ) : (
                 <>
-                  <strong>{SITE_ENTRY_GROUP_NAME} exists but holds no permission on the site</strong>,
+                  <strong>{siteEntryGroupTitle()} exists but holds no permission on the site</strong>,
                   so its members still cannot open it.
                 </>
               )}
@@ -337,7 +337,7 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
 
           {setUpDone && (
             <div style={s.okBox}>
-              <strong>{SITE_ENTRY_GROUP_NAME}</strong> holds <strong>Read</strong> on the site.
+              <strong>{siteEntryGroupTitle()}</strong> holds <strong>Read</strong> on the site.
               Anyone in it can open the site; what they see inside is decided by their folder and
               library permissions.
             </div>

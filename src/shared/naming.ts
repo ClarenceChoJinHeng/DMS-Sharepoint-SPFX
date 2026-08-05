@@ -139,6 +139,46 @@ export function siteEntryGroupName(prefix: string): string {
   return `${prefix}_SITE_MEMBERS`;
 }
 
+/** Every title the site-entry group could have, in preference order. */
+export const SITE_ENTRY_CANDIDATES = CANDIDATE_PREFIXES.map(siteEntryGroupName);
+
+/**
+ * The site-entry group's live title.
+ *
+ * Resolved separately from the lists, and NOT derived from the list prefix, because the two
+ * diverge in practice: verified live 2026-08-05, a site with CRS lists and CRS permission levels
+ * still had DMS_SITE_MEMBERS.
+ *
+ * Getting this wrong is worse than a 404. The site-entry pass CREATES the group when it cannot
+ * find one — so a stale name means a second, empty group is created, granted Read on the web, and
+ * then fed every member by the self-heal, while everyone's real access sits in the original. Two
+ * groups that both look correct, and no error anywhere.
+ *
+ * Defaults to the LEGACY name until resolved, matching the behaviour before this existed.
+ */
+let siteEntryName: string = siteEntryGroupName(LEGACY_PREFIX);
+
+export function cachedSiteEntryName(): string {
+  return siteEntryName;
+}
+
+/**
+ * Record which candidate actually exists on this site.
+ *
+ * Takes the titles rather than performing the lookup, so this module stays SPFx-free. A set
+ * matching nothing leaves the legacy name: creating `DMS_SITE_MEMBERS` on a site that has neither
+ * is what the code did before, and is recoverable with a rename.
+ */
+export function setSiteEntryName(existingGroupTitles: string[]): void {
+  const titles = (existingGroupTitles ?? []).map((t) => (t ?? "").trim().toLowerCase());
+  for (const candidate of SITE_ENTRY_CANDIDATES) {
+    if (titles.indexOf(candidate.toLowerCase()) !== -1) {
+      siteEntryName = candidate;
+      return;
+    }
+  }
+}
+
 /** `<P>_` — the prefix new group names are built from. */
 export function groupPrefix(prefix: string): string {
   return `${prefix}_`;

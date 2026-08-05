@@ -2,7 +2,7 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember, createSiteGroup } from "../../../shared/spGroups";
-import { SITE_ENTRY_GROUP_NAME, isForbiddenPageTarget } from "../../../shared/groupMapModel";
+import { siteEntryGroupTitle, isForbiddenPageTarget } from "../../../shared/groupMapModel";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { IFolderManagerProps } from "./IFolderManagerProps";
@@ -1842,16 +1842,16 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         setReconPhase("Ensuring site entry…");
         const allSiteGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
         let entry = allSiteGroups.find(
-          (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+          (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
         );
         if (!entry) {
-          const made = await createSiteGroup(context.spHttpClient, siteUrl, SITE_ENTRY_GROUP_NAME);
+          const made = await createSiteGroup(context.spHttpClient, siteUrl, siteEntryGroupTitle());
           entry = { id: made.id, title: made.title };
-          entries.push({ msg: `${SITE_ENTRY_GROUP_NAME} created`, ok: true });
+          entries.push({ msg: `${siteEntryGroupTitle()} created`, ok: true });
         }
         const entryId = entry.id;
         if (readId === undefined) {
-          entries.push({ msg: `⚠ ${SITE_ENTRY_GROUP_NAME}: cannot grant site Read — no "Read" role definition`, ok: false });
+          entries.push({ msg: `⚠ ${siteEntryGroupTitle()}: cannot grant site Read — no "Read" role definition`, ok: false });
         } else {
           // The root web always has unique permissions, so there is no inheritance to break
           // here — unlike a library or a page. Grant directly.
@@ -1871,7 +1871,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               .some((ra) => ra.PrincipalId === entryId);
           }
           if (holds) {
-            entries.push({ msg: `${SITE_ENTRY_GROUP_NAME}: already holds a role on the site ✓`, ok: true });
+            entries.push({ msg: `${siteEntryGroupTitle()}: already holds a role on the site ✓`, ok: true });
           } else {
             const grant = await withThrottleRetry(() => context.spHttpClient.post(
               `${siteUrl}/_api/web/roleassignments/addroleassignment(principalid=${entryId},roledefid=${readId})`,
@@ -1879,8 +1879,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               { headers: { Accept: "application/json;odata=nometadata" } },
             ));
             entries.push(grant.ok
-              ? { msg: `${SITE_ENTRY_GROUP_NAME} → Read on the site ✓`, ok: true }
-              : { msg: `⚠ ${SITE_ENTRY_GROUP_NAME} → Read on the site FAILED (HTTP ${grant.status}) — users will reach folders by direct link only`, ok: false });
+              ? { msg: `${siteEntryGroupTitle()} → Read on the site ✓`, ok: true }
+              : { msg: `⚠ ${siteEntryGroupTitle()} → Read on the site FAILED (HTTP ${grant.status}) — users will reach folders by direct link only`, ok: false });
           }
         }
       } catch (e) {
@@ -1926,7 +1926,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // threaded out of the site-entry pass so this block stands alone.
             const groupsNow = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
             const entryPid = groupsNow.find(
-              (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+              (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
             )?.id;
             const brokenThisRun = new Set<string>();
             for (const row of libRows) {
@@ -2017,16 +2017,16 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                   // It did not have access before, so it does not get any now. Logged rather
                   // than silent: on Staging this is the correct and intended outcome, and an
                   // unexplained absence here would look like the restore had failed.
-                  entries.push({ msg: `  ↳ ${lib}: ${SITE_ENTRY_GROUP_NAME} had no access before — not granted (site entry is not library access)`, ok: true });
+                  entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} had no access before — not granted (site entry is not library access)`, ok: true });
                 } else if (entryPid !== undefined && readId !== undefined) {
                   try {
                     await addRoleAssignmentToList(listBase, entryPid, readId);
-                    entries.push({ msg: `  ↳ ${lib}: ${SITE_ENTRY_GROUP_NAME} → Read restored (keeps approval working)`, ok: true });
+                    entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} → Read restored (keeps approval working)`, ok: true });
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${lib}: could not restore ${SITE_ENTRY_GROUP_NAME} — approvals may fail — ${(e as Error).message}`, ok: false });
+                    entries.push({ msg: `  ✗ ${lib}: could not restore ${siteEntryGroupTitle()} — approvals may fail — ${(e as Error).message}`, ok: false });
                   }
                 } else {
-                  entries.push({ msg: `  ⚠ ${lib}: ${SITE_ENTRY_GROUP_NAME} or "Read" not resolved — approvals may fail until it holds Read here`, ok: false });
+                  entries.push({ msg: `  ⚠ ${lib}: ${siteEntryGroupTitle()} or "Read" not resolved — approvals may fail until it holds Read here`, ok: false });
                 }
               }
               try {
@@ -2755,7 +2755,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 for (const gp of grantedPids) {
                   // The site-entry group is what lets anyone open the site at all.
                   // It is never a browse leftover and must never be a candidate.
-                  if (gp.groupName === SITE_ENTRY_GROUP_NAME) continue;
+                  if (gp.groupName === siteEntryGroupTitle()) continue;
                   // Only an assignment that is EXACTLY Read qualifies. A real grant at
                   // this tier (DMS Approve, DMS Upload, DMS Delete) is someone's actual
                   // access, not a browse artefact.
@@ -2865,10 +2865,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         setReconPhase("Syncing site-entry group…");
         const allGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
         const entryGroup = allGroups.find(
-          (g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase(),
+          (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
         );
         if (!entryGroup) {
-          entries.push({ msg: `⚠ ${SITE_ENTRY_GROUP_NAME} not found — run "Set up site entry" first (site-entry sync skipped)`, ok: false });
+          entries.push({ msg: `⚠ ${siteEntryGroupTitle()} not found — run "Set up site entry" first (site-entry sync skipped)`, ok: false });
         } else {
           const entryMembers = await getGroupMembers(context.spHttpClient, siteUrl, entryGroup.id);
           const already = new Set(entryMembers.map((m) => m.loginName.toLowerCase()));
@@ -2893,7 +2893,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           managedIds.delete(entryGroup.id);
           const managedGroups = allGroups.filter((g) => managedIds.has(g.id));
           if (idRes.ok && managedIds.size === 0) {
-            entries.push({ msg: `${SITE_ENTRY_GROUP_NAME}: no mapped groups in Group Map — nothing to sync`, ok: true });
+            entries.push({ msg: `${siteEntryGroupTitle()}: no mapped groups in Group Map — nothing to sync`, ok: true });
           }
           let healed = 0;
           for (const g of managedGroups) {
@@ -2909,8 +2909,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           }
           entries.push({
             msg: healed > 0
-              ? `${SITE_ENTRY_GROUP_NAME}: added ${healed} member(s) missing site entry ✓`
-              : `${SITE_ENTRY_GROUP_NAME}: all mapped-group members already have site entry ✓`,
+              ? `${siteEntryGroupTitle()}: added ${healed} member(s) missing site entry ✓`
+              : `${siteEntryGroupTitle()}: all mapped-group members already have site entry ✓`,
             ok: true,
           });
         }
