@@ -2,6 +2,15 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient } from "@microsoft/sp-http";
 import { IApprovalDocumentProps } from "./IApprovalDocumentProps";
+import {
+  buildQueue,
+  nextUndecidedIndex,
+  statusToDecision,
+  swapState,
+  Decision,
+  QueueEntry as QueueEntryOf,
+} from "../../../shared/approvalQueue";
+import { previewTarget } from "../../../shared/filePreview";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,7 +36,10 @@ interface IFieldText {
   [internalName: string]: string;
 }
 
-type Decision = "Approved" | "Rejected" | "Pending";
+// Decision, the queue shape, and the queue rules all come from src/shared/approvalQueue.ts —
+// pure and unit-tested there, because "which document is next" and "what a swap clears" are the
+// parts of this feature that fail silently rather than visibly.
+type QueueEntry = QueueEntryOf<IFileItem>;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -105,6 +117,20 @@ const s = {
   popupTitle:  { fontSize: 22, fontWeight: 700, color: "#0f6c3f", margin: "0 0 12px" } as React.CSSProperties,
   popupMsg:    { fontSize: 14, color: "#555", margin: "0 0 28px", lineHeight: 1.6 } as React.CSSProperties,
   popupBtn:    { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 6, padding: "12px 28px", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", minWidth: 183 } as React.CSSProperties,
+  // Secondary popup button — only used when a primary is present, so the two are distinguishable.
+  popupBtnGhost:{ background: "#fff", color: "#201f1e", border: "1px solid #8a8886", marginTop: 10 } as React.CSSProperties,
+  navRow:      { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" as const, marginBottom: 8 } as React.CSSProperties,
+  navControls: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const } as React.CSSProperties,
+  navBtn:      { padding: "5px 12px", fontSize: 13, fontFamily: "inherit", fontWeight: 600, color: "#0f6c3f", background: "#fff", border: "1px solid #0f6c3f", borderRadius: 4, cursor: "pointer" } as React.CSSProperties,
+  navBtnOff:   { color: "#a19f9d", borderColor: "#c8c6c4", cursor: "not-allowed" } as React.CSSProperties,
+  navCount:    { fontSize: 13, color: "#605e5c", minWidth: 74, textAlign: "center" as const } as React.CSSProperties,
+  navBadge:    { fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 10 } as React.CSSProperties,
+  navBadgeOk:  { color: "#0f6c3f", background: "#e7f4ec", border: "1px solid #b7dcc4" } as React.CSSProperties,
+  navBadgeNo:  { color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3" } as React.CSSProperties,
+  // Shared frame for the non-iframe previews, so an image and a "no preview" message occupy the
+  // same space an iframe would and the three-column layout does not shift between documents.
+  previewBox:  { display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "calc(100vh - 240px)", minHeight: 600, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "hidden", padding: 12, boxSizing: "border-box" as const } as React.CSSProperties,
+  previewLink: { fontSize: 13, color: "#0f6cbd" } as React.CSSProperties,
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -119,6 +145,25 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const [fetchError, setFetchError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [fieldText, setFieldText]   = useState<IFieldText>({});
+
+  /**
+   * The approver's queue: the pending documents they can see, oldest first.
+   *
+   * Captured ONCE at mount and never re-queried. Deciding removes a document from the
+   * server-side pending set, so a refetch would make items vanish from under the approver's
+   * position and turn Next into an unpredictable jump. Instead each entry carries its own
+   * `decided` flag, so positions stay fixed for the life of the page.
+   */
+  const [queue, setQueue]       = useState<QueueEntry[]>([]);
+  const [pos, setPos]           = useState(0);
+  /**
+   * True while a swap's FieldValuesAsText is in flight.
+   *
+   * Not reusing `loading`: that blanks the whole page, which would flash the entire layout on
+   * every Next press. The queue entry already holds everything the header and preview need, so
+   * only the metadata labels are genuinely pending.
+   */
+  const [swapping, setSwapping] = useState(false);
 
   const webUrl = context.pageContext.web.absoluteUrl;
 
@@ -136,6 +181,51 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     if (!fileRef) return base;
     const folder = fileRef.slice(0, fileRef.lastIndexOf("/"));
     return `${base}?id=${encodeURIComponent(folder)}`;
+  };
+
+  /** Per-item metadata labels. Cannot be batched into the queue query — FieldValuesAsText is
+   *  a per-item endpoint — so it is the one thing a swap has to wait for. */
+  const loadFieldText = async (itemId: number): Promise<void> => {
+    try {
+      const textRes = await context.spHttpClient.get(
+        `${webUrl}/_api/web/lists/getbytitle('Staging')/items(${itemId})/FieldValuesAsText`,
+        SPHttpClient.configurations.v1,
+      );
+      if (textRes.ok) setFieldText(await textRes.json() as IFieldText);
+    } catch { /* labels are non-critical */ }
+  };
+
+  /**
+   * Build the queue: every Pending item this account can read, oldest first.
+   *
+   * SCOPE COMES FROM PERMISSIONS, not from a filter. Inheritance is broken per unit folder in
+   * Staging, so SharePoint security-trims the query and an approver gets exactly their unit's
+   * pending files — with no filter logic here and nothing to keep in sync as units are added.
+   * A Full Control account therefore sees every pending file on the site, which is what $top=200
+   * is really guarding against: not correctness, just how much an admin pulls while testing.
+   *
+   * A failure leaves the queue empty, which renders the page exactly as it behaved before this
+   * feature. The queue is a convenience on top of a page that already works; failing to build it
+   * must never block the decision the approver came to make.
+   */
+  const loadQueue = async (current: IFileItem): Promise<void> => {
+    try {
+      const url =
+        `${webUrl}/_api/web/lists/getbytitle('Staging')/items` +
+        `?$filter=OData__ModerationStatus%20eq%202` +
+        `&$expand=File,Author` +
+        `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl` +
+        `&$orderby=Created%20asc&$top=200`;
+      const res = await context.spHttpClient.get(url, SPHttpClient.configurations.v1);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { value: IFileItem[] };
+      const { queue: entries, index } = buildQueue(data.value ?? [], current);
+      setQueue(entries);
+      setPos(index);
+    } catch (err) {
+      console.error("[ApprovalDoc] queue query failed — continuing as a single document:", err);
+      setQueue([]);
+    }
   };
 
   const loadItem = async (): Promise<void> => {
@@ -157,20 +247,48 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       }
       const data: IFileItem = await res.json();
       setItem(data);
-      const statusMap: Record<number, Decision> = { 0: "Approved", 1: "Rejected", 2: "Pending" };
-      setDecision(statusMap[data.OData__ModerationStatus] ?? "Pending");
-      try {
-        const textUrl = `${webUrl}/_api/web/lists/getbytitle('Staging')/items(${itemId})/FieldValuesAsText`;
-        const textRes = await context.spHttpClient.get(textUrl, SPHttpClient.configurations.v1);
-        if (textRes.ok) {
-          const ft = await textRes.json() as IFieldText;
-          setFieldText(ft);
-        }
-      } catch { /* labels are non-critical */ }
+      setDecision(statusToDecision(data.OData__ModerationStatus));
+      await loadFieldText(itemId);
+      // After the document, never before: a queue failure must not stop the page loading, and
+      // the current item has to be known so it can be placed in the queue.
+      await loadQueue(data);
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Could not load this document.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * Move to another position in the queue.
+   *
+   * Every piece of per-document state is reset here. `comments` is the one that matters beyond
+   * cosmetics: carrying a comment onto the next document would attach one approver's reasoning
+   * to a different document's audit trail.
+   */
+  const goTo = async (index: number): Promise<void> => {
+    const entry = queue[index];
+    if (!entry || index === pos) return;
+    const reset = swapState(entry);
+    setPos(index);
+    setItem(entry.item);
+    setDecision(reset.decision);
+    setComments(reset.comments);
+    setSubmitError(reset.submitError);
+    setSubmitted(reset.submitted);
+    setFieldText(reset.fieldText);
+    // replaceState, not pushState: Back should return the approver to the Staging library they
+    // came from, not walk them backwards through their own review session one document at a time.
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.set("itemId", String(entry.item.ID));
+      window.history.replaceState(undefined, "", u.toString());
+    } catch { /* a failed URL rewrite is cosmetic — the page already shows the new document */ }
+    setSwapping(true);
+    try {
+      await loadFieldText(entry.item.ID);
+    } finally {
+      setSwapping(false);
     }
   };
 
@@ -387,6 +505,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           }
         }
       }
+      // Mark this position decided so it stays navigable but cannot be resubmitted, and so
+      // "Approve another file" can find the next piece of real work.
+      setQueue((q) => q.map((e, i) => (i === pos ? { ...e, decided: action } : e)));
       setSubmitted(action);
     } catch (err) {
       console.error("[ApprovalDoc] submitDecision failed:", err);
@@ -468,14 +589,35 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       },
     };
     const { title, message, icon } = popups[submitted];
+    const nextIdx = nextUndecidedIndex(queue, pos);
     return (
       <div style={s.popupOverlay} role="dialog" aria-modal="true">
         <div style={s.popupCard}>
           <div style={{ marginBottom: 20 }}>{icon}</div>
           <div style={s.popupTitle}>{title}</div>
-          <div style={s.popupMsg}>{message}</div>
-          <button style={s.popupBtn} onClick={() => { window.location.href = backUrl(); }}>
-            Back to Document
+          <div style={s.popupMsg}>
+            {message}
+            {/* Only when the queue exists and is finished. Saying "that was the last one" when the
+                queue query failed would be a claim we cannot support. */}
+            {queue.length > 0 && nextIdx === -1 && (
+              <div style={{ marginTop: 10, fontWeight: 600, color: "#0f6c3f" }}>
+                That was the last document waiting for your approval.
+              </div>
+            )}
+          </div>
+          {/* Primary advances to the next UNDECIDED item, whereas Prev/Next move by position.
+              Deliberate: after deciding, the approver wants the next piece of work; while
+              browsing, they want the next document in the list. */}
+          {nextIdx !== -1 && (
+            <button style={s.popupBtn} onClick={() => { goTo(nextIdx).catch(() => undefined); }}>
+              Approve another file
+            </button>
+          )}
+          <button
+            style={nextIdx !== -1 ? { ...s.popupBtn, ...s.popupBtnGhost } : s.popupBtn}
+            onClick={() => { window.location.href = backUrl(); }}
+          >
+            Back to library
           </button>
         </div>
       </div>
@@ -484,15 +626,19 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
   // ── Main ───────────────────────────────────────────────────────────────────
 
-  const tenantRoot = webUrl.split('/sites/')[0];
-  const encodedPath = item.File.ServerRelativeUrl
-    .split('/')
-    .map((s: string) => encodeURIComponent(s))
-    .join('/');
-  // #view=FitH is a PDF Open Parameter the browser's native PDF viewer honors —
-  // fits the page to the iframe's width instead of its height, which otherwise
-  // leaves empty gutters on portrait pages when the viewer defaults to fit-height.
-  const previewUrl = `${tenantRoot}${encodedPath}#view=FitH`;
+  // Whether the position on screen has already been decided in this session. Drives the badge
+  // and disables Ok, so stepping back to confirm a decision cannot resubmit it.
+  const currentDecided: Decision | null = queue[pos]?.decided ?? null;
+
+  // Per-type preview. PDFs used to be the only thing that rendered, because a raw file URL in an
+  // iframe is a PDF viewer and nothing else — SharePoint serves an Office document as a download,
+  // so the pane silently stayed blank. See src/shared/filePreview.ts.
+  const preview = previewTarget(
+    item.FileLeafRef,
+    item.File.ServerRelativeUrl,
+    webUrl.split('/sites/')[0],
+    webUrl,
+  );
 
   // Read whichever key SharePoint returns: the double-encoded name (what the OData
   // response actually uses) first, then the plain internal name as a fallback.
@@ -593,23 +739,94 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
           <hr style={{ border: "none", borderTop: "1px solid #edebe9", margin: "0 0 16px" }} />
           <div style={s.sectionTitle}>Details</div>
-          {metadata.map(([label, value]) => (
-            <div key={label} style={s.detailRow}>
-              <div style={s.metaLabel}>{label}</div>
-              <div style={s.metaValue}>{value}</div>
-            </div>
-          ))}
+          {/* Muted rather than blanked during a swap: the labels come from a per-item endpoint
+              that cannot be batched into the queue query, so they are always a moment behind the
+              document itself. Hiding the rows would collapse the column and shift the layout on
+              every Next press. */}
+          <div style={swapping ? { opacity: 0.45, transition: "opacity .15s" } : undefined}>
+            {metadata.map(([label, value]) => (
+              <div key={label} style={s.detailRow}>
+                <div style={s.metaLabel}>{label}</div>
+                <div style={s.metaValue}>{value}</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Center — Preview */}
         <div>
-          <div style={s.sectionTitle}>Preview</div>
-          <iframe
-            src={previewUrl}
-            style={{ width: "100%", height: "calc(100vh - 200px)", minHeight: 640, border: "none", borderRadius: 4, display: "block" }}
-            title="Document preview"
-            allowFullScreen
-          />
+          {/* Queue navigation. Rendered only when a queue exists — with a single document, or
+              after a failed queue query, the page keeps its original bare "Preview" heading. */}
+          {queue.length > 1 ? (
+            <div style={s.navRow}>
+              <div style={s.sectionTitle}>Preview</div>
+              <div style={s.navControls}>
+                <button
+                  style={{ ...s.navBtn, ...(pos === 0 || swapping ? s.navBtnOff : {}) }}
+                  disabled={pos === 0 || swapping}
+                  onClick={() => { goTo(pos - 1).catch(() => undefined); }}
+                >
+                  ‹ Prev
+                </button>
+                {/* Position in the WHOLE queue, decided items included. A number that moved
+                    backwards as you worked would be worse than no number at all. */}
+                <span style={s.navCount}>{pos + 1} of {queue.length}</span>
+                <button
+                  style={{ ...s.navBtn, ...(pos >= queue.length - 1 || swapping ? s.navBtnOff : {}) }}
+                  disabled={pos >= queue.length - 1 || swapping}
+                  onClick={() => { goTo(pos + 1).catch(() => undefined); }}
+                >
+                  Next ›
+                </button>
+                {currentDecided && (
+                  <span style={{ ...s.navBadge, ...(currentDecided === "Approved" ? s.navBadgeOk : s.navBadgeNo) }}>
+                    {currentDecided === "Approved" ? "✓ Approved" : "✕ Rejected"}
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div style={s.sectionTitle}>Preview</div>
+          )}
+          {preview.kind === "image" ? (
+            // An <img>, not an iframe: it honours object-fit, so a portrait scan and a wide
+            // spreadsheet screenshot both fit the pane instead of being cropped or scrollbarred.
+            <div style={s.previewBox}>
+              <img
+                src={preview.url}
+                alt={item.FileLeafRef}
+                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }}
+              />
+            </div>
+          ) : preview.kind === "none" ? (
+            // Say so, and offer the file. A blank pane reads as a broken page, and an approver
+            // who cannot see the document must not be nudged into deciding anyway.
+            <div style={{ ...s.previewBox, flexDirection: "column", gap: 12, color: "#605e5c", fontSize: 14 }}>
+              <div>
+                No preview is available for <strong>{item.FileLeafRef}</strong>.
+              </div>
+              <a href={preview.fileUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
+                Open the file in a new tab
+              </a>
+            </div>
+          ) : (
+            <div>
+              <iframe
+                src={preview.url}
+                style={{ width: "100%", height: "calc(100vh - 240px)", minHeight: 600, border: "none", borderRadius: 4, display: "block" }}
+                title={`Preview of ${item.FileLeafRef}`}
+                allowFullScreen
+              />
+              {/* Always offered, whatever the kind. Office Online occasionally refuses a file it
+                  cannot render — a macro-enabled workbook, a document open for editing elsewhere —
+                  and the approver needs a way through that does not involve leaving the queue. */}
+              <div style={{ marginTop: 6, textAlign: "right" }}>
+                <a href={preview.fileUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
+                  Open in a new tab
+                </a>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Right — Approval panel */}
@@ -669,13 +886,26 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
           {submitError && <div style={s.errText}>{submitError}</div>}
 
+          {/* Already decided in this session: the record exists, and resubmitting would fire the
+              moderation and copy calls a second time. An approver can step back to confirm what
+              they did — not to redo it. */}
+          {currentDecided && (
+            <div style={{ fontSize: 12, color: "#605e5c", marginBottom: 8 }}>
+              You {currentDecided === "Approved" ? "approved" : "rejected"} this document in this
+              session. Use Next to continue.
+            </div>
+          )}
           {/* Pending is no longer selectable — require an explicit Approved/Rejected choice. */}
           <button
             onClick={() => { submitDecision(decision).catch(() => undefined); }}
-            disabled={submitting || decision === "Pending"}
-            style={{ ...s.btnApprove, opacity: submitting || decision === "Pending" ? 0.7 : 1, cursor: decision === "Pending" ? "not-allowed" : "pointer" }}
+            disabled={submitting || swapping || decision === "Pending" || currentDecided !== null}
+            style={{
+              ...s.btnApprove,
+              opacity: submitting || swapping || decision === "Pending" || currentDecided !== null ? 0.7 : 1,
+              cursor: decision === "Pending" || currentDecided !== null ? "not-allowed" : "pointer",
+            }}
           >
-            {submitting ? "Saving…" : "Ok"}
+            {submitting ? "Saving…" : currentDecided ? "Already decided" : "Ok"}
           </button>
           <button onClick={() => { window.location.href = backUrl(); }} disabled={submitting} style={{ ...s.btnSendBack, opacity: submitting ? 0.7 : 1 }}>
             Cancel
