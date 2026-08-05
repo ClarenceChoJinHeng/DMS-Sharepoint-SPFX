@@ -2,9 +2,19 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFolderManagerProps } from "./IFolderManagerProps";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 
-const LIST_NAME = "DMS Folder Map";
-const LIST_ENC  = "DMS%20Folder%20Map";
+// Title is RESOLVED — the client renames the list to "CRS Folder Map" at import.
+const LIST_NAME = (): string => cachedListTitle(LIST_SUFFIX.folderMap);
+const LIST_ENC  = (): string => encodeURIComponent(LIST_NAME());
+
+// LIST_TYPE is deliberately NOT resolved and must stay "DMS".
+//
+// SharePoint derives a list's item entity type from the name it was CREATED with; renaming the
+// title never moves it. Verified live 2026-08-05 against the client's fully CRS-renamed site,
+// which still reports SP.Data.DMS_x0020_Folder_x0020_MapListItem. Deriving this from the current
+// title would break every write on exactly the sites the rename was meant to support.
 const LIST_TYPE = "SP.Data.DMS_x0020_Folder_x0020_MapListItem";
 
 type TermOption = { id: string; label: string };
@@ -81,7 +91,7 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
 
   const loadModes = async (): Promise<ModeInfo[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,TermSetGuid&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=Title,ModeLabel,TermSetGuid&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -100,7 +110,7 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
 
   const loadEntries = async (): Promise<MapEntry[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${LIST_ENC}')/items?$select=Id,Title,TermLabel,FolderName&$orderby=Title,TermLabel`,
+      `${siteUrl}/_api/web/lists/getbytitle('${LIST_ENC()}')/items?$select=Id,Title,TermLabel,FolderName&$orderby=Title,TermLabel`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
@@ -136,7 +146,7 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
 
     setSaving(true);
     const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${LIST_ENC}')/items`,
+      `${siteUrl}/_api/web/lists/getbytitle('${LIST_ENC()}')/items`,
       SPHttpClient.configurations.v1,
       {
         headers: { "Content-Type": "application/json" },
@@ -164,7 +174,7 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
   const deleteEntry = async (id: number, label: string): Promise<void> => {
     setSaving(true);
     const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${LIST_ENC}')/items(${id})`,
+      `${siteUrl}/_api/web/lists/getbytitle('${LIST_ENC()}')/items(${id})`,
       SPHttpClient.configurations.v1,
       {
         headers: {
@@ -187,6 +197,9 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
 
   useEffect(() => {
     const init = async (): Promise<void> => {
+      // Names FIRST: every read below resolves through the cache, and an unprimed cache falls
+      // back to the legacy DMS titles, which 404 on a CRS-renamed site.
+      await primeNames(context.spHttpClient, siteUrl);
       const loadedModes = await loadModes();
       setModes(loadedModes);
 
@@ -237,7 +250,7 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
 
       {listMissing && (
         <div style={s.errNote}>
-          <strong>List not found.</strong> Create a SharePoint list named <strong>&ldquo;{LIST_NAME}&rdquo;</strong> with
+          <strong>List not found.</strong> Create a SharePoint list named <strong>&ldquo;{LIST_NAME()}&rdquo;</strong> with
           two extra columns: <code>TermLabel</code> (Single line of text) and{" "}
           <code>FolderName</code> (Single line of text). Then refresh this page.
         </div>

@@ -27,6 +27,8 @@ import {
   readAllowedFileTypesField,
   resolveAllowedFileTypes,
 } from "../../../shared/allowedFileTypes";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 
 /* ----------------------------------------------------------------------------
  * BULK UPLOAD — a duplicate of the `form` web part, with two behaviour changes:
@@ -584,13 +586,23 @@ export default function BulkUpload({
 
   /* ---------- Config + group-map readers ---------------------------------- */
 
+  /**
+   * Live title of one of our lists — "CRS Config" on a renamed site, "DMS Config" otherwise.
+   * Primed per call so there is no ordering dependency; the cache short-circuits after the first.
+   */
+  const listName = async (suffix: string): Promise<string> => {
+    await primeNames(context.spHttpClient, siteUrl);
+    return encodeURIComponent(cachedListTitle(suffix));
+  };
+
   const loadModes = async (): Promise<UploadMode[]> => {
+    const config = await listName(LIST_SUFFIX.config);
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,Category,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('${config}')/items?$select=Title,ModeLabel,Category,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
-    if (!res.ok) throw new Error("DMS Config list not found");
+    if (!res.ok) throw new Error(`${decodeURIComponent(config)} list not found`);
     const data = await res.json();
     return (data.value ?? []).map(
       (item: {
@@ -616,12 +628,13 @@ export default function BulkUpload({
   };
 
   const loadGroupMap = async (): Promise<GroupMapRow[]> => {
+    const groupMap = await listName(LIST_SUFFIX.groupMap);
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId,GroupName,Segment,UnitTermGuid,Role&$top=5000`,
+      `${siteUrl}/_api/web/lists/getbytitle('${groupMap}')/items?$select=GroupId,GroupName,Segment,UnitTermGuid,Role&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
-    if (!res.ok) throw new Error("DMS Group Map list not found");
+    if (!res.ok) throw new Error(`${decodeURIComponent(groupMap)} list not found`);
     const data = await res.json();
     return (data.value ?? []).map(
       (r: {
@@ -650,7 +663,7 @@ export default function BulkUpload({
     select: string,
   ): Promise<SPHttpClientResponse> =>
     context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=${select}&$filter=ConfigType eq 'setting'`,
+      `${siteUrl}/_api/web/lists/getbytitle('${await listName(LIST_SUFFIX.config)}')/items?$select=${select}&$filter=ConfigType eq 'setting'`,
       SPHttpClient.configurations.v1,
       // Pinned to nometadata so multi-choice fields arrive as a plain array.
       { headers: { Accept: "application/json;odata=nometadata" } },

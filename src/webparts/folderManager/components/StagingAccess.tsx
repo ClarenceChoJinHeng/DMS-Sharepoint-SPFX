@@ -28,10 +28,15 @@ import {
   SITE_ENTRY_GROUP_NAME,
 } from "../../../shared/groupMapModel";
 import { fetchAllSiteGroups, SpGroup } from "../../../shared/spGroups";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 
 type Props = { context: WebPartContext; siteUrl: string; library: string };
 
-const GROUP_MAP_LIST = "DMS Group Map";
+// Resolved, not hardcoded: the client renames this to "CRS Group Map" at import (confirmed on
+// their site 2026-08-05). Read from the cache primed in reload(), which always runs on mount
+// before any write this component can make.
+const groupMapList = (): string => cachedListTitle(LIST_SUFFIX.groupMap);
 
 /** A Group Map row granting library entry. */
 type EntryRow = { itemId: number; groupId: string; groupName: string; role: GroupMapRole };
@@ -122,7 +127,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
    */
   const loadRows = async (): Promise<EntryRow[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items` +
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(groupMapList())}')/items` +
         `?$select=Id,GroupId,GroupName,Role,Scope,Target&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: GET },
@@ -179,6 +184,8 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
   const reload = async (firstLoad = false): Promise<void> => {
     if (firstLoad) setLoading(true);
     try {
+      // Before any list read: resolves "CRS Group Map" vs "DMS Group Map" once per session.
+      await primeNames(context.spHttpClient, siteUrl);
       const g = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
       const r = await loadRows();
       const l = await loadLive();
@@ -240,7 +247,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
       target: library,
     });
     const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(groupMapList())}')/items`,
       SPHttpClient.configurations.v1,
       {
         headers: { ...GET, "Content-Type": "application/json;odata=nometadata" },
@@ -255,7 +262,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
   const deleteRow = async (itemId: number): Promise<void> => {
     const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items(${itemId})`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(groupMapList())}')/items(${itemId})`,
       SPHttpClient.configurations.v1,
       { headers: { ...GET, "IF-MATCH": "*", "X-HTTP-Method": "DELETE" } },
     );
@@ -465,7 +472,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
       {scopeMissing && (
         <div style={s.dangerBox}>
           The <strong>Scope</strong> and <strong>Target</strong> columns are missing from{" "}
-          <strong>{GROUP_MAP_LIST}</strong>. Add them (both single line of text) before using this
+          <strong>{groupMapList()}</strong>. Add them (both single line of text) before using this
           tab — without them a library mapping cannot be saved at all.
         </div>
       )}

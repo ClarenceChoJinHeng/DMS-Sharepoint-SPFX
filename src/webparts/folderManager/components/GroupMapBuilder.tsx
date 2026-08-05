@@ -38,6 +38,8 @@ import {
   GroupExportRow,
   NO_MEMBERS,
 } from "../../../shared/groupExportCsv";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 
 type Props = { context: WebPartContext; siteUrl: string };
 type GroupPick = { id: string; displayName: string };
@@ -69,8 +71,10 @@ const ROLE_HINT: Record<string, string> = {
   // other people's unapproved drafts is the one thing this role must not do.
   GLOBAL:  "C-level view — every segment, Documents only, read only",
 };
-const GROUP_MAP_LIST = "DMS Group Map";
-const CONFIG_LIST = "DMS Config";
+// Resolved, not hardcoded — the client renames both to CRS at import (confirmed on their site
+// 2026-08-05). Read from the cache primed in the mount effect, which runs before any write.
+const GROUP_MAP_LIST = (): string => cachedListTitle(LIST_SUFFIX.groupMap);
+const CONFIG_LIST = (): string => cachedListTitle(LIST_SUFFIX.config);
 
 const s: Record<string, React.CSSProperties> = {
   wrap:       { fontSize: 13, color: "#242424", lineHeight: 1.5 },
@@ -244,7 +248,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   const loadModes = async (): Promise<ModePick[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG_LIST)}')/items?$select=ModeLabel,TermSetGuid,Levels&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG_LIST())}')/items?$select=ModeLabel,TermSetGuid,Levels&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
@@ -272,7 +276,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     loadTerms(`${siteUrl}/_api/v2.1/termStore/sets/${termSetGuid}/terms/${parentId}/children`);
 
   const loadExisting = async (): Promise<ExistingRow[]> => {
-    const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items`;
+    const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST())}')/items`;
     const get = (select: string): Promise<SPHttpClientResponse> => context.spHttpClient.get(
       `${base}?$select=${select}&$top=5000`,
       SPHttpClient.configurations.v1,
@@ -309,7 +313,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   const postRow = async (row: GroupMapWriteRow): Promise<void> => {
     const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST())}')/items`,
       SPHttpClient.configurations.v1,
       {
         headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json;odata=nometadata" },
@@ -325,7 +329,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   const deleteRow = async (itemId: number): Promise<void> => {
     const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items(${itemId})`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST())}')/items(${itemId})`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata", "IF-MATCH": "*", "X-HTTP-Method": "DELETE" } },
     );
@@ -389,17 +393,25 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   /* ── Mount ─────────────────────────────────────────────────────────────── */
 
   useEffect(() => {
-    // An empty mode list is not a neutral state: every Segment cell falls back to a
-    // raw GUID and the segment picker offers nothing, which reads as "the data is
-    // wrong" rather than "the config could not be read". Say which it is.
-    loadModes()
-      .then((m) => {
-        setModes(m);
-        if (m.length === 0) setModesUnreadable(true);
+    // Names FIRST. Every read below goes through cachedListTitle, and an unprimed cache resolves
+    // to the legacy DMS titles — which 404 on a CRS-renamed site and would present as "the config
+    // could not be read" rather than "the list is called something else".
+    primeNames(context.spHttpClient, siteUrl)
+      .catch(() => undefined)
+      .then(() => {
+        // An empty mode list is not a neutral state: every Segment cell falls back to a
+        // raw GUID and the segment picker offers nothing, which reads as "the data is
+        // wrong" rather than "the config could not be read". Say which it is.
+        loadModes()
+          .then((m) => {
+            setModes(m);
+            if (m.length === 0) setModesUnreadable(true);
+          })
+          .catch(() => { setModes([]); setModesUnreadable(true); });
+        loadExisting().then(setExisting).catch(() => setExisting([]));
+        loadCanManage().then(setCanManage).catch(() => setCanManage(false));
       })
-      .catch(() => { setModes([]); setModesUnreadable(true); });
-    loadExisting().then(setExisting).catch(() => setExisting([]));
-    loadCanManage().then(setCanManage).catch(() => setCanManage(false));
+      .catch(() => undefined);
   }, []);
 
   // Whenever the mappings change, resolve any new tier labels.
@@ -713,7 +725,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       if (msg === DUPLICATE_GROUP) {
         showToast("A group with that name already exists — use Back to search and select it instead.", true);
       } else if (msg.indexOf("does not exist") !== -1) {
-        showToast("Couldn't write the mapping: the 'DMS Group Map' list is missing. No group was created — create/rename that list, then try again.", true);
+        showToast(`Couldn't write the mapping: the '${GROUP_MAP_LIST()}' list is missing. No group was created — create/rename that list, then try again.`, true);
       } else {
         showToast(`Create failed: ${msg} — no group was left behind.`, true);
       }
@@ -1713,7 +1725,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           time through the Members modal. */}
       {modesUnreadable && (
         <div style={{ fontSize: 12, color: "#b45309", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, padding: "8px 12px", marginBottom: 12 }}>
-          Could not read any <strong>mode</strong> rows from <strong>{CONFIG_LIST}</strong>, so the
+          Could not read any <strong>mode</strong> rows from <strong>{CONFIG_LIST()}</strong>, so the
           Segment column below shows raw term-set GUIDs and the segment picker is empty. The
           mappings themselves are fine — this is a config read, not your data.
         </div>

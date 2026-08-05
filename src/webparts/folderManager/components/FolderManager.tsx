@@ -3,6 +3,8 @@ import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember, createSiteGroup } from "../../../shared/spGroups";
 import { SITE_ENTRY_GROUP_NAME, isForbiddenPageTarget } from "../../../shared/groupMapModel";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import GroupMapBuilder from "./GroupMapBuilder";
 import StagingAccess from "./StagingAccess";
@@ -167,6 +169,8 @@ type ProvTarget = { termGuid: string | null; assignTerm: string; ancestorTerms: 
 // HC is absent by design: Highly Confidential is Phase 2 (see groupMapModel).
 const ROLE_TO_PERMISSION: Record<string, string> = {
   MEMBER: "Read",
+  // Re-pointed at the site's actual prefix by applyPermissionPrefix() below. The DMS values are
+  // the legacy default, used until the role definitions have been read.
   UPL: "DMS Upload",
   APR: "DMS Approve",
   DEL: "DMS Delete",
@@ -192,6 +196,32 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // is skipped rather than approximated.
   ENTRY: "Read",
 };
+
+/**
+ * Re-point the three custom levels at whatever prefix this site uses.
+ *
+ * MUTATES the map in place rather than replacing it, so the half-dozen existing readers
+ * (`ROLE_TO_PERMISSION[g.role]`, the accepts() guard, the op counter) pick up the change with no
+ * re-wiring — and so a reader that runs before detection still gets a usable legacy value instead
+ * of undefined, which those guards read as "this role grants nothing".
+ *
+ * Resolved from the site's OWN role definitions, never from the list prefix. Those two genuinely
+ * diverge: verified live 2026-08-05, the client's site has CRS lists and CRS levels but a DMS
+ * content type and a DMS_SITE_MEMBERS group. Deriving one from the other is right today and wrong
+ * on the next site.
+ */
+function applyPermissionPrefix(levelNames: string[]): void {
+  const prefix = levelNames.indexOf("CRS Upload") !== -1 ? "CRS"
+    : levelNames.indexOf("DMS Upload") !== -1 ? "DMS"
+    : undefined;
+  // No match: leave the legacy values. Reconciliation then logs `no "DMS Upload" role definition
+  // on site` and grants nothing for that role — visible, and better than guessing at a name.
+  if (prefix === undefined) return;
+  ROLE_TO_PERMISSION.UPL = `${prefix} Upload`;
+  ROLE_TO_PERMISSION.APR = `${prefix} Approve`;
+  ROLE_TO_PERMISSION.DEL = `${prefix} Delete`;
+  ROLE_TO_PERMISSION.DELS = `${prefix} Delete`;
+}
 
 // Which roles each library accepts — the isolation rule that keeps viewers off
 // pending documents.
@@ -764,6 +794,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       if (!res.ok) return;
       const data = await res.json();
       const all = (data.value ?? []) as Array<{ Id: number; Name: string; Hidden: boolean; RoleTypeKind: number }>;
+      // Detect the custom-level prefix from the UNFILTERED list, before the hidden/system levels
+      // are dropped — the filter is about what an admin may pick, not about what exists.
+      applyPermissionPrefix(all.map(r => r.Name));
       setRoleDefs(all.filter(r => !r.Hidden && r.RoleTypeKind !== 1 && r.RoleTypeKind !== 7).map(r => ({ id: r.Id, name: r.Name })));
     };
     const loadOwnerGroup = async (): Promise<void> => {
@@ -776,7 +809,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       const data = await res.json();
       if (data.Id != null) setOwnerGroupId(data.Id as number);
     };
-    Promise.all([loadRoleDefs(), loadOwnerGroup()]).catch(() => undefined);
+    // Names first, then everything else. Every list read in this component resolves through the
+    // cache, and an unprimed cache falls back to the legacy DMS titles — which 404 on a
+    // CRS-renamed site and would present as an empty term store rather than a naming problem.
+    primeNames(context.spHttpClient, siteUrl)
+      .catch(() => undefined)
+      .then(() => Promise.all([loadRoleDefs(), loadOwnerGroup()]))
+      .catch(() => undefined);
   }, []);
 
   /* ── Tree ────────────────────────────────────────────────────────────────────── */
@@ -1284,7 +1323,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // role), so a folder gets every mapped group at its role's permission level.
   const loadGroupMapForAssign = async (): Promise<Map<string, GroupMapRow[]>> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupName,GroupId,UnitTermGuid,Role&$top=5000`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupName,GroupId,UnitTermGuid,Role&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
@@ -1347,7 +1386,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     Array<{ itemId: number; termGuid: string; groupName: string }>
   > => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=Id,GroupName,UnitTermGuid&$top=5000`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=Id,GroupName,UnitTermGuid&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
@@ -1450,7 +1489,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const out = new Map<string, string[]>();
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=TermSetGuid,Levels&$filter=ConfigType eq 'mode'`,
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=TermSetGuid,Levels&$filter=ConfigType eq 'mode'`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
@@ -1475,7 +1514,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const loadReconModes = async (): Promise<Array<{ termSetGuid: string; stagingFolder: string }>> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
@@ -1500,7 +1539,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const loadReconGridTermSets = async (): Promise<ReconSettings> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
@@ -1563,7 +1602,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const fallback = { delayMs: RECON_WRITE_DELAY_MS, batchSize: RECON_BATCH_SIZE, cooldownMs: RECON_COOLDOWN_MS };
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
@@ -1869,7 +1908,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // not lose its folder provisioning over it. Absent columns simply mean no library
         // rows exist yet.
         const scopedRes = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
           SPHttpClient.configurations.v1,
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
@@ -2022,7 +2061,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       try {
         setReconPhase("Applying page access…");
         const pgRes = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
           SPHttpClient.configurations.v1,
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
@@ -2838,7 +2877,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           // (CLAUDE.md #11) — no fallback query needed, and every scope is included.
           const managedIds = new Set<number>();
           const idRes = await context.spHttpClient.get(
-            `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId&$top=5000`,
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupId&$top=5000`,
             SPHttpClient.configurations.v1,
             { headers: { Accept: "application/json;odata=nometadata" } },
           );
@@ -3010,7 +3049,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               let groupsFixed = 0;
               for (const g of affected) {
                 try {
-                  await patchListItem("DMS Group Map", g.itemId, {
+                  await patchListItem(cachedListTitle(LIST_SUFFIX.groupMap), g.itemId, {
                     UnitTermGuid: rep.term.termGuid,
                   });
                   groupsFixed++;

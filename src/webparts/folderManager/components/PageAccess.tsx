@@ -31,10 +31,15 @@ import {
 import { fetchAllSiteGroups, fetchBuiltInGroupIds, SpGroup } from "../../../shared/spGroups";
 import { policyForPage, VIEW_ONLY_ROLES } from "../../../shared/pageAccessPolicy";
 import { roleFromGroupName } from "../../../shared/groupMapModel";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 
 type Props = { context: WebPartContext; siteUrl: string };
 
-const GROUP_MAP_LIST = "DMS Group Map";
+// Resolved, not hardcoded — the client renames this to "CRS Group Map" at import (confirmed on
+// their site 2026-08-05). Read from the cache primed in reloadAll(), which runs on mount before
+// any write this component can make.
+const groupMapList = (): string => cachedListTitle(LIST_SUFFIX.groupMap);
 const PAGES_LIST = "Site Pages";
 
 type PageItem = { itemId: number; fileName: string; title: string; unique: boolean };
@@ -207,7 +212,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
 
   const loadRows = async (): Promise<EntryRow[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items` +
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(groupMapList())}')/items` +
         `?$select=Id,GroupId,GroupName,Role,Scope,Target&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: GET },
@@ -249,6 +254,8 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   const reloadAll = async (firstLoad = false): Promise<void> => {
     if (firstLoad) setLoading(true);
     try {
+      // Before any list read: resolves "CRS Group Map" vs "DMS Group Map" once per session.
+      await primeNames(context.spHttpClient, siteUrl);
       const w = await loadWelcome();
       const p = await loadPages();
       const g = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
@@ -335,7 +342,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
       target,
     });
     const res = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(groupMapList())}')/items`,
       SPHttpClient.configurations.v1,
       {
         headers: { ...GET, "Content-Type": "application/json;odata=nometadata" },
@@ -350,7 +357,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
 
   const deleteRow = async (itemId: number): Promise<void> => {
     const res = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items(${itemId})`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(groupMapList())}')/items(${itemId})`,
       SPHttpClient.configurations.v1,
       { headers: { ...GET, "IF-MATCH": "*", "X-HTTP-Method": "DELETE" } },
     );
@@ -567,7 +574,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
       {scopeMissing && (
         <div style={s.dangerBox}>
           The <strong>Scope</strong> and <strong>Target</strong> columns are missing from{" "}
-          <strong>{GROUP_MAP_LIST}</strong>. Add them before using this tab.
+          <strong>{groupMapList()}</strong>. Add them before using this tab.
         </div>
       )}
       {loadError && <div style={s.dangerBox}>Could not load: {loadError}</div>}

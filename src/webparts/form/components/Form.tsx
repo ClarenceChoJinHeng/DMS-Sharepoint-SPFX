@@ -9,6 +9,8 @@ import {
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
 import { formatFileSize } from "../../../shared/fileSize";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 import {
   parseLevels,
   collectMembership,
@@ -460,13 +462,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   /* ---------- Config + group-map readers ---------------------------------- */
 
+  /**
+   * Live title of one of our lists — "CRS Config" on a renamed site, "DMS Config" otherwise.
+   *
+   * Primed here rather than in a mount effect so there is no ordering dependency: every loader
+   * primes, and after the first the cache short-circuits. Verified live 2026-08-05 — the client's
+   * site has CRS lists and CRS permission levels but a DMS content type, DMS_SITE_MEMBERS and a
+   * DMS entity type, which is why the prefix is resolved per artefact and never applied globally.
+   */
+  const listName = async (suffix: string): Promise<string> => {
+    await primeNames(context.spHttpClient, siteUrl);
+    return encodeURIComponent(cachedListTitle(suffix));
+  };
+
   const loadModes = async (): Promise<UploadMode[]> => {
+    const config = await listName(LIST_SUFFIX.config);
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=Title,ModeLabel,Category,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('${config}')/items?$select=Title,ModeLabel,Category,TermSetGuid,StagingFolder,Levels,SortOrder&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
-    if (!res.ok) throw new Error("DMS Config list not found");
+    if (!res.ok) throw new Error(`${decodeURIComponent(config)} list not found`);
     const data = await res.json();
     return (data.value ?? []).map(
       (item: {
@@ -492,12 +508,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   };
 
   const loadGroupMap = async (): Promise<GroupMapRow[]> => {
+    const groupMap = await listName(LIST_SUFFIX.groupMap);
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Group%20Map')/items?$select=GroupId,GroupName,Segment,UnitTermGuid,Role&$top=5000`,
+      `${siteUrl}/_api/web/lists/getbytitle('${groupMap}')/items?$select=GroupId,GroupName,Segment,UnitTermGuid,Role&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
-    if (!res.ok) throw new Error("DMS Group Map list not found");
+    if (!res.ok) throw new Error(`${decodeURIComponent(groupMap)} list not found`);
     const data = await res.json();
     return (data.value ?? []).map(
       (r: {
@@ -527,7 +544,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     select: string,
   ): Promise<SPHttpClientResponse> =>
     context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('DMS%20Config')/items?$select=${select}&$filter=ConfigType eq 'setting'`,
+      `${siteUrl}/_api/web/lists/getbytitle('${await listName(LIST_SUFFIX.config)}')/items?$select=${select}&$filter=ConfigType eq 'setting'`,
       SPHttpClient.configurations.v1,
       // Pinned to nometadata so multi-choice fields arrive as a plain array.
       { headers: { Accept: "application/json;odata=nometadata" } },

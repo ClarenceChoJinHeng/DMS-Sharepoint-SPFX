@@ -1,11 +1,31 @@
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { encodeServerRelativePath } from "./pathEncoding";
+import { cachedListTitle, LIST_SUFFIX } from "./naming";
+import { primeNames } from "./spNaming";
 
 // Re-exported so existing consumers (FolderManager) can keep importing it from here.
 export { encodeServerRelativePath };
 
-/** The rename-proof lookup list. Field internal names have no spaces. */
+/**
+ * The rename-proof lookup list. Field internal names have no spaces.
+ *
+ * LEGACY DEFAULT only — the live title is resolved per call, because the client renames this
+ * list to "CRS Folder Map" at import (confirmed on their site 2026-08-05).
+ */
 export const FOLDER_MAP_LIST = "DMS Folder Map";
+
+/**
+ * The live, URL-encoded title of the folder-map list.
+ *
+ * Note the list's ENTITY TYPE does NOT follow the rename: SharePoint derives
+ * SP.Data.DMS_x0020_Folder_x0020_MapListItem from the name the list was created with, and a
+ * title change never moves it — verified live 2026-08-05 on a fully CRS-renamed site. So
+ * anything writing __metadata must keep the DMS form even there.
+ */
+const mapList = async (spHttpClient: SPHttpClient, siteUrl: string): Promise<string> => {
+  await primeNames(spHttpClient, siteUrl);
+  return encodeURIComponent(cachedListTitle(LIST_SUFFIX.folderMap));
+};
 
 export interface FolderMapping {
   termGuid: string;
@@ -22,7 +42,7 @@ export async function lookupFolderMapping(
   termGuid: string,
 ): Promise<FolderMapping | null> {
   const url =
-    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items` +
+    `${siteUrl}/_api/web/lists/getbytitle('${await mapList(spHttpClient, siteUrl)}')/items` +
     `?$select=Title,TermGuid,FolderUniqueId,FolderUrl,Section&$filter=TermGuid eq '${termGuid}'&$top=1`;
   const res: SPHttpClientResponse = await spHttpClient.get(
     url,
@@ -62,7 +82,7 @@ export async function loadFolderMapRows(
 ): Promise<FolderMapRow[]> {
   const rows: FolderMapRow[] = [];
   let url: string | null =
-    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items` +
+    `${siteUrl}/_api/web/lists/getbytitle('${await mapList(spHttpClient, siteUrl)}')/items` +
     `?$select=Id,Title,TermGuid,FolderUniqueId,FolderUrl,Section&$top=5000`;
   while (url) {
     const res: SPHttpClientResponse = await spHttpClient.get(
@@ -200,7 +220,7 @@ export async function writeFolderMapping(
   m: FolderMapping,
 ): Promise<void> {
   const res: SPHttpClientResponse = await spHttpClient.post(
-    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items`,
+    `${siteUrl}/_api/web/lists/getbytitle('${await mapList(spHttpClient, siteUrl)}')/items`,
     SPHttpClient.configurations.v1,
     {
       headers: {
@@ -303,7 +323,7 @@ export async function updateFolderMapping(
   };
   if (patch.title !== undefined) body.Title = patch.title;
   const res: SPHttpClientResponse = await spHttpClient.post(
-    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items(${itemId})`,
+    `${siteUrl}/_api/web/lists/getbytitle('${await mapList(spHttpClient, siteUrl)}')/items(${itemId})`,
     SPHttpClient.configurations.v1,
     {
       headers: {
@@ -332,7 +352,7 @@ export async function deleteFolderMapRow(
   itemId: number,
 ): Promise<void> {
   const res: SPHttpClientResponse = await spHttpClient.post(
-    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(FOLDER_MAP_LIST)}')/items(${itemId})`,
+    `${siteUrl}/_api/web/lists/getbytitle('${await mapList(spHttpClient, siteUrl)}')/items(${itemId})`,
     SPHttpClient.configurations.v1,
     {
       headers: {

@@ -30,10 +30,15 @@ import {
   SpGroupMember,
   PersonPick,
 } from "../../../shared/spGroups";
+import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 
 type Props = { context: WebPartContext; siteUrl: string };
 
-const GROUP_MAP_LIST = "DMS Group Map";
+// Resolved, not hardcoded — the client renames this to "CRS Group Map" at import (confirmed on
+// their site 2026-08-05). Read from the cache primed in reload(), which runs on mount before the
+// Group Map is read.
+const groupMapList = (): string => cachedListTitle(LIST_SUFFIX.groupMap);
 
 type WebGrant = { principalId: number; title: string; levels: string[] };
 /** A user who holds a mapped group but is missing site entry. */
@@ -117,7 +122,7 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
    */
   const loadMappedGroupIds = async (): Promise<number[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items?$select=GroupId&$top=5000`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(groupMapList())}')/items?$select=GroupId&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: GET },
     );
@@ -134,6 +139,8 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
   const reload = async (firstLoad = false): Promise<void> => {
     if (firstLoad) setLoading(true);
     try {
+      // Before the Group Map read: resolves "CRS Group Map" vs "DMS Group Map" once per session.
+      await primeNames(context.spHttpClient, siteUrl);
       const all = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
       const eg = all.find((g) => g.title.trim().toLowerCase() === SITE_ENTRY_GROUP_NAME.toLowerCase());
       setEntry(eg);
