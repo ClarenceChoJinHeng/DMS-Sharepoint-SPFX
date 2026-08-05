@@ -10,10 +10,10 @@ import {
   SpGroupMember,
   PersonPick,
   DUPLICATE_GROUP,
-  filterDmsGroups,
+  filterSelectableGroups,
 } from "./spGroupsFilter";
 
-export { SpGroup, SpGroupMember, PersonPick, DUPLICATE_GROUP, filterDmsGroups } from "./spGroupsFilter";
+export { SpGroup, SpGroupMember, PersonPick, DUPLICATE_GROUP, filterSelectableGroups } from "./spGroupsFilter";
 
 const GET_HEADERS = { Accept: "application/json;odata=nometadata" };
 const POST_HEADERS = {
@@ -40,12 +40,62 @@ export async function fetchAllSiteGroups(sp: SPHttpClient, siteUrl: string): Pro
   }));
 }
 
+/**
+ * The site's three built-in association groups (Owners / Members / Visitors).
+ *
+ * These are what the old "DMS_" title filter existed to keep out of the group picker: an
+ * admin mapping "Site Owners" onto a unit folder would grant that folder to everyone with
+ * site ownership. With the prefix gone (2026-08-04) they have to be excluded by id.
+ *
+ * Cached per site for the page session — three requests, asked for on every keystroke of
+ * the group search otherwise.
+ *
+ * A group that fails to resolve is simply omitted rather than throwing. Losing one id means
+ * one built-in becomes pickable, which is visible in the list; throwing would take out the
+ * group search entirely.
+ */
+const builtInIdCache = new Map<string, number[]>();
+
+export async function fetchBuiltInGroupIds(sp: SPHttpClient, siteUrl: string): Promise<number[]> {
+  const cached = builtInIdCache.get(siteUrl);
+  if (cached) return cached;
+  const ids: number[] = [];
+  // Sequential, not Promise.all: three cheap requests, and per-call try/catch is required
+  // anyway because Promise.allSettled is unavailable on this tsconfig target (CLAUDE.md #3).
+  for (const assoc of ["AssociatedOwnerGroup", "AssociatedMemberGroup", "AssociatedVisitorGroup"]) {
+    try {
+      const res = await sp.get(
+        `${siteUrl}/_api/web/${assoc}?$select=Id`,
+        SPHttpClient.configurations.v1,
+        { headers: GET_HEADERS },
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (typeof data?.Id === "number") ids.push(data.Id);
+    } catch {
+      // Omit this one; see the note above on why this is not fatal.
+    }
+  }
+  builtInIdCache.set(siteUrl, ids);
+  return ids;
+}
+
+/**
+ * Groups an admin may map, matching q. Built-ins are resolved and excluded HERE rather than
+ * by the caller, so no call site can forget to pass them — the previous title-prefix filter
+ * was unmissable by construction, and this keeps that property.
+ */
 export async function searchSiteGroups(
   sp: SPHttpClient,
   siteUrl: string,
   q: string,
+  extraExcludeIds?: number[],
 ): Promise<SpGroup[]> {
-  return filterDmsGroups(await fetchAllSiteGroups(sp, siteUrl), q);
+  const [all, builtIns] = [
+    await fetchAllSiteGroups(sp, siteUrl),
+    await fetchBuiltInGroupIds(sp, siteUrl),
+  ];
+  return filterSelectableGroups(all, q, [...builtIns, ...(extraExcludeIds ?? [])]);
 }
 
 /**

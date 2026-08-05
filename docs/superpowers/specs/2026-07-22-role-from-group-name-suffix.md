@@ -81,3 +81,99 @@ click any other role button — the suffix only sets the default.
 - Object-ID matching, term-store cascade, folder ACL assignment.
 - `buildGroupMapRow`, `isDuplicateRow`, `validateDraft`.
 - The `DMS Group Map` list schema.
+
+---
+
+# AMENDMENT 2026-08-04 — prefix-less names, long-form suffixes
+
+**Status:** AGREED. Client asked for `GHO_GF_CORU_UPLOADER` on 2026-08-04; raised as
+breaking, reaffirmed, implemented.
+
+```
+DMS_GHO_GF_CORU_UPL   →   GHO_GF_CORU_UPLOADER
+```
+
+Two independent changes in one name: the `DMS_` prefix goes, and role suffixes become
+whole words.
+
+## A. Suffix matching becomes a table, sorted longest-first
+
+The original chain hand-ordered `endsWith` tests, with a comment explaining that `_DELS`
+must be tested before `_DEL` because one is a prefix of the other. Long-form names add
+more collisions — `_UPL` is a prefix of `_UPLOADER` — and the failure mode is severe: an
+unmatched suffix falls through to **`MEMBER`**, which the library rule puts on
+**Documents**. An intended Staging uploader would silently become a Documents reader.
+
+Replaced by a suffix table **sorted by length descending**, which makes collisions
+structurally impossible instead of a comment somebody has to honour:
+
+| Role | Accepted suffixes | Library |
+| --- | --- | --- |
+| `APR` | `_APPROVER`, `_APR` | Staging |
+| `UPL` | `_UPLOADER`, `_UPL` | Staging |
+| `DELS` | `_DELETER_STAGING`, `_DELS` | Staging |
+| `DEL` | `_DELETER_DOCUMENTS`, `_DEL` | Documents |
+| `HC` | `_HC` | HC (Phase 2) |
+| `SEGVIEW` | `_SEGVIEW` | retired — parsed only so it cannot read as `MEMBER` |
+| `MEMBER` | *(no suffix — the base group)* | Documents |
+| `GLOBAL` | *(never derived; admin picks it by hand)* | Documents |
+
+**Short forms stay accepted permanently.** Groups already exist on the test site with
+`_UPL`/`_APR`; dropping them would strand those rows. Only *new* names are written
+long-form.
+
+`_DELETER_STAGING` / `_DELETER_DOCUMENTS` are **our** long forms — the client specified
+only `UPLOADER`. They still need confirming, which is cheap because both short forms keep
+working regardless.
+
+## B. The prefix was the discriminator, so it is replaced — not deleted
+
+`DMS_` was never decoration; it was the only test for "is this site group ours?". Three
+consumers relied on it, two of them failing *silently* without it:
+
+| Consumer | Purpose | With `GHO_…` |
+| --- | --- | --- |
+| `filterDmsGroups` | group-picker search | group never appears — visible |
+| `FolderManager` site-entry self-heal | add managed groups' members to the site-entry group | **silent** — no site entry, run still reports ✓ |
+| `naming.matchesAnyGroupPrefix` | CRS/DMS half-rename tolerance | **silent**, same |
+
+The self-heal case produces "only *some* users cannot open the site" while reporting
+success — the hardest version to diagnose.
+
+Two different replacements, because the two consumers ask different questions:
+
+**The picker asks "may an admin map this group?"** It must show groups *not yet* mapped,
+so Group Map membership cannot be the test. The real requirement was always *exclude the
+built-ins* so nobody maps `Site Owners` to a unit folder. Now excluded by **group id**,
+read from `AssociatedOwnerGroup`/`AssociatedMemberGroup`/`AssociatedVisitorGroup` plus the
+site-entry group. Ids rather than titles because built-in titles derive from the site
+title (`Clarence DMS Testing Owners`) — any title blocklist breaks on the next site.
+
+**The self-heal asks "which groups do we manage?"** Already stored: every managed group
+has a **`GroupId`** in the Group Map list. Enumerating those rows is strictly more accurate
+than a name filter, and additionally stops syncing a group somebody hand-named with our
+prefix but never mapped. This is the better design independent of the rename; the rename
+is what forces it.
+
+## C. Blast radius is bounded — the name is a hint, not the authority
+
+- Reconciliation grants permissions from the row's **`Role` column**, never the title.
+- `roleFromGroupName` drives only (a) the **pre-selected** role when an admin picks a
+  group, and (b) the **mismatch warning** when typed name and picked role disagree.
+
+A missed suffix therefore corrupts nothing — it makes the default wrong and makes the
+warning fire on every correctly-named group, training admins to click past it. The
+failure being prevented is usability, not security.
+
+## D. `DMS_SITE_MEMBERS` deliberately keeps its name
+
+Not a segment/role group, the client did not ask, and it is live on the test site holding
+site-level Read — renaming it removes site access for every user until reconciliation
+re-runs. Its eventual `DMS`→`CRS` rename belongs to `naming.ts`. Flagged to the client,
+not decided here.
+
+## E. Migration: none required
+
+Existing `DMS_*` groups keep working — short suffixes still parse, and neither new
+discriminator looks at the prefix. If the client renames groups in `groups.aspx`, Group Map
+rows still join by `GroupId`, so a rename is safe and needs no reconciliation run.

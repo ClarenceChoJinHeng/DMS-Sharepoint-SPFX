@@ -11,6 +11,7 @@ import {
   GroupMapRole,
   GroupMapDraft,
   GroupMapWriteRow,
+  normalizeScope,
   SITE_ENTRY_GROUP_NAME,
   SELECTABLE_ROLES,
   PERSONAS,
@@ -53,12 +54,20 @@ const ROLES: GroupMapRole[] = SELECTABLE_ROLES;
 // permission level's. "APR" alone tells an administrator nothing about whether
 // an approver can also upload, which is the entire distinction between the
 // Head-of bundles.
+// DEL and DELS are one letter apart and grant delete in DIFFERENT libraries, so
+// the hints name the library rather than the action. "Delete documents" vs
+// "Delete files" would be indistinguishable at a glance, and picking the wrong one
+// grants delete over the wrong set of documents.
 const ROLE_HINT: Record<string, string> = {
   MEMBER: "Read approved documents",
-  UPL:    "Upload to Staging",
+  UPL:    "Upload to Staging (cannot delete)",
   APR:    "Approve pending items",
-  DEL:    "Delete approved documents",
-  GLOBAL: "Privileged bypass — all segments",
+  DEL:    "Delete approved documents — Documents library",
+  DELS:   "Delete pending files — Staging library",
+  // C-level. Reads wide, writes nothing, and Documents only — the hint says "Documents"
+  // out loud because "view everything" would imply Staging too, and a C-level reading
+  // other people's unapproved drafts is the one thing this role must not do.
+  GLOBAL:  "C-level view — every segment, Documents only, read only",
 };
 const GROUP_MAP_LIST = "DMS Group Map";
 const CONFIG_LIST = "DMS Config";
@@ -116,6 +125,36 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const [modesUnreadable, setModesUnreadable] = useState(false);
   const [existing, setExisting] = useState<ExistingRow[]>([]);
   const [busy, setBusy]         = useState(false);
+  // Persona dropdown open state + its container, for the click-away close. A ref on the
+  // wrapper rather than a blur handler on the button: clicking an OPTION blurs the
+  // button, so a blur-close would dismiss the list before the click registered and
+  // nothing could ever be selected.
+  const [personaOpen, setPersonaOpen] = useState(false);
+  const personaRef = useRef<HTMLDivElement>(null);
+  // Set when the Scope/Target columns are absent from DMS Group Map. Surfaced rather than
+  // silently degraded: without them every row can only ever be a Folder row, so an admin
+  // who picks Site or Library would write a mapping that reconciliation reads as a folder
+  // row with no term — and blames the term store for it.
+  const [scopeColumnsMissing, setScopeColumnsMissing] = useState(false);
+
+  // Close on a click outside the dropdown, or on Escape. Bound only while open, so the
+  // page carries no listeners the rest of the time. `mousedown` rather than `click`:
+  // a click that starts outside and ends inside would otherwise leave the list open.
+  useEffect(() => {
+    if (!personaOpen) return undefined;
+    const onDocMouseDown = (e: MouseEvent): void => {
+      if (!personaRef.current?.contains(e.target as Node)) setPersonaOpen(false);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setPersonaOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [personaOpen]);
   const [toast, setToast]       = useState<{ message: string; error: boolean } | undefined>(undefined);
   const [canManage, setCanManage] = useState<boolean | undefined>(undefined); // undefined = still checking
 
@@ -233,14 +272,28 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     loadTerms(`${siteUrl}/_api/v2.1/termStore/sets/${termSetGuid}/terms/${parentId}/children`);
 
   const loadExisting = async (): Promise<ExistingRow[]> => {
-    const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items?$select=Id,GroupId,GroupName,Segment,UnitTermGuid,Role&$top=5000`,
+    const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST)}')/items`;
+    const get = (select: string): Promise<SPHttpClientResponse> => context.spHttpClient.get(
+      `${base}?$select=${select}&$top=5000`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
+    // Scope and Target are newer than this list. A $select naming a column that does not
+    // exist fails the WHOLE request with HTTP 400 — not a null value, not a missing key —
+    // so asking for them unconditionally would blank the mappings table on every site that
+    // has not had the columns added, and the symptom reads as "my mappings disappeared"
+    // rather than "a column is missing".
+    //
+    // So: ask for them, and fall back to the original field set when rejected. Same
+    // reasoning as readAllowedFileTypesField (CLAUDE.md #11) — the only reliable signal
+    // for "column absent" is the request failing, never the value that comes back.
+    let res = await get("Id,GroupId,GroupName,Segment,UnitTermGuid,Role,Scope,Target");
+    const hasScopeColumns = res.ok;
+    if (!res.ok) res = await get("Id,GroupId,GroupName,Segment,UnitTermGuid,Role");
+    setScopeColumnsMissing(!hasScopeColumns);
     if (!res.ok) return [];
     const data = await res.json();
-    return ((data.value ?? []) as Array<{ Id: number; GroupId?: string; GroupName?: string; Segment?: string; UnitTermGuid?: string; Role?: string }>)
+    return ((data.value ?? []) as Array<{ Id: number; GroupId?: string; GroupName?: string; Segment?: string; UnitTermGuid?: string; Role?: string; Scope?: string; Target?: string }>)
       .map((r) => ({
         itemId: r.Id,
         GroupId: r.GroupId ?? "",
@@ -248,6 +301,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         Segment: r.Segment ?? "",
         UnitTermGuid: r.UnitTermGuid ?? "",
         Role: (r.Role ?? "").toUpperCase() as GroupMapRole,
+        // Blank reads as Folder — every row written before the column existed is one.
+        Scope: normalizeScope(r.Scope),
+        Target: r.Target ?? "",
       }));
   };
 
@@ -641,7 +697,11 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       clearGroup();
       setNewName("");
       setStagedMembers([]);
-      setRole(""); setMode(undefined); setCascade([]); setChosen([]); setTierGuid("");
+      // Persona resets with the rest. Leaving it selected was worse than untidy: the
+      // panel kept showing "needs N mappings at the <tier> tier" with its ✓/○ list,
+      // now describing a group that is no longer selected — so the next group created
+      // would be checked off against the previous group's progress.
+      setRole(""); setMode(undefined); setCascade([]); setChosen([]); setTierGuid(""); setPersona("");
       const memberNote = staged === 0
         ? " — edit members from its row, then run Folder Reconciliation."
         : failedMembers === 0
@@ -855,14 +915,54 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     }
   };
 
+  /**
+   * Delete a mapping row — and, when it was that group's LAST row, the SharePoint group
+   * with it.
+   *
+   * Why the group goes too: nothing in this system revokes a role assignment, so a group
+   * left behind with no mappings keeps every grant it already holds on every folder. The
+   * Group Map then says the group has no access while SharePoint says it has all of it,
+   * and the question that arrives later is "why can this person still see it". Deleting
+   * the group is what actually removes the access, because the principal ceases to exist.
+   *
+   * Why only on the LAST row: a group is normally several rows — a Head of Unit 4 group is
+   * five. Removing the DELS row because that one capability is no longer wanted must not
+   * take the group and its members with it.
+   *
+   * The residual case, which this cannot fix and does not pretend to: deleting ONE of
+   * several rows leaves that specific grant on the folders, because the group survives.
+   * The toast says so rather than implying the change has taken effect.
+   */
   const onDelete = async (itemId: number): Promise<void> => {
+    const row = existing.find((r) => r.itemId === itemId);
+    const gid = Number(row?.GroupId ?? NaN);
+    const siblings = existing.filter((r) => Number(r.GroupId) === gid && r.itemId !== itemId);
+    const lastRowForGroup = !!row && !isNaN(gid) && gid > 0 && siblings.length === 0;
     setBusy(true);
     try {
       await deleteRow(itemId);
+      let groupDeleted = false;
+      if (lastRowForGroup) {
+        try {
+          await deleteSiteGroup(context.spHttpClient, siteUrl, gid);
+          groupDeleted = true;
+        } catch (e) {
+          // The row is already gone. Report the group failure plainly instead of
+          // rolling back — re-creating the row would leave a mapping the admin just
+          // deleted, and silence here is what produces the leftover-access complaint.
+          showToast(`Row deleted, but the group "${row?.GroupName}" could not be removed: ${(e as Error).message} — delete it from Site permissions, or it keeps its folder access.`, true);
+        }
+      }
       setExisting(await loadExisting());
       setSelected((prev) => { const n = new Set(prev); n.delete(itemId); return n; });
       setConfirmDel(undefined);
-      showToast("Row deleted — re-run Folder Reconciliation to apply the change.", false);
+      if (groupDeleted) {
+        showToast(`Row deleted, and group "${row?.GroupName}" removed with it — that was its last mapping, so its folder access is gone.`, false);
+      } else if (lastRowForGroup) {
+        // Toast already shown by the catch above.
+      } else {
+        showToast(`Row deleted. "${row?.GroupName}" still has ${siblings.length} other mapping(s), so the group is kept — it also keeps the folder grant from this row until it is removed by hand.`, false);
+      }
     } catch (e) {
       showToast(`Delete failed: ${(e as Error).message}`, true);
     } finally {
@@ -941,25 +1041,74 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const personaPanel = (
     <>
       <label style={s.label}>Persona (optional)</label>
-      <select
-        style={s.select}
-        disabled={busy}
-        value={persona}
-        onChange={(e) => setPersona(e.target.value)}
-      >
-        <option value="">— none: pick a role directly —</option>
-        {/* Grouped exactly as the client's own document lists them, so an admin
-            reading from that document finds the same twelve groups here. */}
-        {PERSONA_FAMILIES.map((fam) => (
-          <optgroup key={fam} label={fam}>
-            {PERSONAS.filter((p) => p.family === fam).map((p) => (
-              <option key={p.key} value={p.key}>
-                {p.label}{p.unavailable ? " (not available)" : ""}
-              </option>
+      {/* A custom dropdown, not a native <select>.
+          The native one could not be made to behave: which direction its popup opens,
+          and when it dismisses, are decided by the browser and OS — so a twelve-item
+          list on a scrolling page opened UPWARD and closed on the smallest stray
+          movement. No CSS or attribute changes either behaviour. This opens downward,
+          stays open until a choice is made or the user clicks away, and scrolls
+          internally rather than growing past the page. */}
+      <div ref={personaRef} style={{ position: "relative" }}>
+        <button
+          type="button"
+          disabled={busy}
+          aria-haspopup="listbox"
+          aria-expanded={personaOpen}
+          style={{ ...s.select, textAlign: "left", cursor: busy ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
+          onClick={() => setPersonaOpen(!personaOpen)}
+        >
+          <span>{chosenPersona ? `${chosenPersona.family} — ${chosenPersona.label}` : "— none: pick a role directly —"}</span>
+          <span style={{ marginLeft: 8, color: "#605e5c" }}>{personaOpen ? "▲" : "▼"}</span>
+        </button>
+        {personaOpen && (
+          <div
+            role="listbox"
+            style={{
+              position: "absolute", top: "100%", left: 0, right: 0, zIndex: 30,
+              marginTop: 2, maxHeight: 320, overflowY: "auto",
+              background: "#fff", border: "1px solid #c8c6c4", borderRadius: 4,
+              boxShadow: "0 4px 12px rgba(0,0,0,0.18)",
+            }}
+          >
+            <div
+              role="option"
+              aria-selected={!persona}
+              style={{ padding: "7px 10px", cursor: "pointer", color: "#605e5c" }}
+              onClick={() => { setPersona(""); setPersonaOpen(false); }}
+            >
+              — none: pick a role directly —
+            </div>
+            {/* Grouped exactly as the client's own document lists them, so an admin
+                reading from that document finds the same groups here. */}
+            {PERSONA_FAMILIES.map((fam) => (
+              <div key={fam}>
+                <div style={{ padding: "6px 10px", background: "#f3f2f1", fontWeight: 600, color: "#323130", position: "sticky", top: 0 }}>
+                  {fam}
+                </div>
+                {PERSONAS.filter((p) => p.family === fam).map((p) => {
+                  const selected = p.key === persona;
+                  return (
+                    <div
+                      key={p.key}
+                      role="option"
+                      aria-selected={selected}
+                      title={p.summary}
+                      style={{
+                        padding: "7px 10px 7px 20px", cursor: "pointer",
+                        background: selected ? "#deecf9" : undefined,
+                        color: p.unavailable ? "#a19f9d" : "#242424",
+                      }}
+                      onClick={() => { setPersona(p.key); setPersonaOpen(false); }}
+                    >
+                      {p.label}{p.unavailable ? " (not available)" : ""}
+                    </div>
+                  );
+                })}
+              </div>
             ))}
-          </optgroup>
-        ))}
-      </select>
+          </div>
+        )}
+      </div>
       {chosenPersona && (
         <div style={s.personaBox}>
           <div style={{ marginBottom: 6, color: "#444" }}>
@@ -978,7 +1127,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                 <strong>{chosenPersona.scope}</strong> tier. Add them one at a time — click a
                 role to start it.
               </div>
-              {!tierGuid && <div style={{ color: "#8a6d00" }}>Select a segment and tier to see which are already in place.</div>}
+              {!tierGuid && <div style={{ color: "#8a6d00", marginBottom: 8 }}>Select a segment and tier to see which are already in place.</div>}
               {scopeMismatch && <div style={s.personaBlocked}>{scopeMismatch}</div>}
               {chosenPersona.roles.map((r) => {
                 const done = rolesMappedAtTier.has(r);
@@ -993,7 +1142,10 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                       {r}
                     </button>
                     <span style={{ color: "#605e5c" }}>{ROLE_HINT[r]}</span>
-                    {done && <span style={{ color: "#107c10" }}>already mapped here</span>}
+                    {/* "already mapped here" read as jargon — an admin could not tell
+                        whether it meant "done, skip it" or "you have a duplicate". It
+                        means the first, so it now says so in those words. */}
+                    {done && <span style={{ color: "#107c10" }}>✓ done — no need to add again</span>}
                   </div>
                 );
               })}
@@ -1289,17 +1441,41 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         the group right here and add its members. This writes a clean row into the{" "}
         <strong>DMS Group Map</strong> list. Member changes take effect <strong>immediately</strong>;
         new/deleted <em>rows</em> need a <strong>Folder Reconciliation</strong> run to apply folder
-        permissions (MEMBER → Read, UPL → Contribute, APR → DMS Approve, DEL → DMS Delete).
+        permissions (MEMBER → Read, UPL → DMS Upload, APR → DMS Approve, DEL → DMS Delete on
+        Documents, DELS → DMS Delete on Staging).
       </p>
       {/* Named on the screen because the failure is quiet: reconciliation warns and
           skips the assignment, so an approver simply never gains the level and the
-          run still reports success overall. */}
+          run still reports success overall.
+
+          DMS Upload is called out separately from the other two because its failure
+          mode is worse. APR and DEL previously had no level at all, so a missing one
+          only meant "not yet in effect". UPL used to point at Contribute, which always
+          exists — so once it points at DMS Upload, a site without that level gives
+          every NEWLY provisioned unit no uploader grant whatsoever. Existing uploaders
+          keep the Contribute grant already on their folder (nothing revokes), which is
+          exactly why nobody notices until a new unit is onboarded. */}
       <p style={s.intro}>
-        <strong>DMS Approve</strong> and <strong>DMS Delete</strong> are custom permission
-        levels an administrator creates once per site (Site settings → Site permissions →
-        Permission levels). Until they exist, reconciliation reports{" "}
-        <em>no &quot;DMS Approve&quot; role definition on site</em> and skips those grants —
-        nobody loses access, but approve-only and delete do not take effect.
+        <strong>DMS Upload</strong>, <strong>DMS Approve</strong> and <strong>DMS Delete</strong>{" "}
+        are custom permission levels an administrator creates once per site (Site settings →
+        Site permissions → Permission levels): copy <em>Contribute</em> and untick Delete Items;
+        copy <em>Contribute</em>, tick Approve Items and untick Add Items, Delete Items and
+        Delete Versions; copy <em>Read</em> and tick Delete Items. Until they exist,
+        reconciliation reports <em>no &quot;DMS Approve&quot; role definition on site</em> and
+        skips those grants — nobody loses access, but approve-only and delete do not take
+        effect, and a newly provisioned unit gets no uploader grant at all.
+      </p>
+      {/* DEL vs DELS is one letter for two different libraries, so it is spelled out
+          here as well as in the role tooltips. An admin who picks DEL intending
+          "can clear out junk in Staging" grants delete over APPROVED documents
+          instead, and the run log looks identical either way. */}
+      <p style={s.intro}>
+        <strong>DEL</strong> deletes <em>approved</em> documents in the Documents library.{" "}
+        <strong>DELS</strong> deletes <em>pending</em> files in Staging. They share one
+        permission level and differ only in which library they are allowed to reach, so
+        picking the wrong one grants delete over the wrong set of documents. Uploaders
+        (<strong>UPL</strong>) cannot delete at all — that is deliberate, so a PIC must ask a
+        head of unit.
       </p>
 
       {canManage === false && (
@@ -1399,7 +1575,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               disabled={busy}
               autoFocus
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="e.g. DMS_GHO_Finance_UPL"
+              placeholder="e.g. GHO_GF_CORU_UPLOADER"
             />
             {nameRoleMismatch() && (
               <div style={{ fontSize: 12, color: "#a4262c", marginTop: 4 }}>
@@ -1448,10 +1624,21 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
             {createErrors.length > 0 && (
               <div style={s.missing}>Before creating: {createErrors.join(" ")}</div>
             )}
+            {/* The reason, restated beside the button. The scope warning already appears up
+                in the persona panel, but that is far enough away that a disabled button
+                reads as "the tool is broken" rather than "you picked the wrong tier" —
+                which is exactly how it got reported. */}
+            {scopeMismatch && (
+              <div style={s.missing}>Before creating: {scopeMismatch}</div>
+            )}
             <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
               <button
-                style={createErrors.length === 0 && !busy ? s.addBtn : s.addBtnOff}
-                disabled={createErrors.length > 0 || busy}
+                // The disabled STYLE must track the disabled STATE. Styling on createErrors
+                // alone left this looking clickable while scopeMismatch silently blocked it,
+                // and a button that appears to do nothing is worse than the mis-scoped
+                // mapping it was added to prevent.
+                style={createErrors.length === 0 && !busy && !scopeMismatch ? s.addBtn : s.addBtnOff}
+                disabled={createErrors.length > 0 || busy || !!scopeMismatch}
                 onClick={() => { onCreateAndMap().catch(() => undefined); }}
               >
                 Create group &amp; add mapping
@@ -1469,7 +1656,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           <div style={s.ddwrap}>
             <input
               style={s.input}
-              placeholder="Type to search this site's DMS_ groups…"
+              placeholder="Type to search this site's groups…"
               value={query}
               disabled={busy}
               onChange={(e) => setQuery(e.target.value)}
@@ -1503,7 +1690,17 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               <div style={s.missing}>Before adding: {draftErrors.join(" ")}</div>
             )}
 
-            <button style={canAdd ? s.addBtn : s.addBtnOff} disabled={!canAdd} onClick={() => { onAdd().catch(() => undefined); }}>
+            {/* Scope mismatch BLOCKS, it does not merely warn. A Head of Department
+                mapped at the unit tier is the worst kind of wrong: the row is valid,
+                reconciliation grants it happily, and the head silently ends up seeing
+                one unit instead of the whole department. Nothing downstream can detect
+                that — the row looks exactly like a legitimate unit mapping — so this
+                is the only place it can be caught. */}
+            <button
+              style={canAdd && !scopeMismatch ? s.addBtn : s.addBtnOff}
+              disabled={!canAdd || !!scopeMismatch}
+              onClick={() => { onAdd().catch(() => undefined); }}
+            >
               Add mapping
             </button>
           </>
@@ -1607,19 +1804,17 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               </td>
               <td style={s.td}>{r.Role}</td>
               <td style={s.td}>
-                {confirmDel === r.itemId ? (
-                  <span style={{ display: "inline-flex", gap: 6 }}>
-                    <button style={s.delBtn} disabled={busy} onClick={() => { onDelete(r.itemId).catch(() => undefined); }}>Yes, delete</button>
-                    <button style={s.ghost} disabled={busy} onClick={() => setConfirmDel(undefined)}>Cancel</button>
-                  </span>
-                ) : (
-                  <span style={{ display: "inline-flex", gap: 6 }}>
-                    {canManage === true && (
-                      <button style={s.ghost} disabled={busy} onClick={() => openMemberModal(r)} title="Add or remove members of this group">Members</button>
-                    )}
-                    <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
-                  </span>
-                )}
+                {/* Confirmation moved OUT of the row and into a modal (below). Since
+                    2026-08-04 deleting the last row for a group also deletes the
+                    SharePoint group and its membership, and site groups are NOT
+                    recoverable from the recycle bin. A two-button inline confirm in a
+                    table cell gave that no more weight than removing a mapping. */}
+                <span style={{ display: "inline-flex", gap: 6 }}>
+                  {canManage === true && (
+                    <button style={s.ghost} disabled={busy} onClick={() => openMemberModal(r)} title="Add or remove members of this group">Members</button>
+                  )}
+                  <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
+                </span>
               </td>
             </tr>
           ))}
@@ -1627,6 +1822,76 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       </table>
       </>
       )}
+
+      {/* Delete-mapping confirmation — a modal, not an inline Yes/Cancel in the table cell.
+          Since 2026-08-04 removing a group's LAST mapping also deletes the SharePoint group
+          and its membership, and a deleted site group is NOT recoverable from the recycle
+          bin. The wording therefore has to differ between the two cases: an admin who
+          thinks they are tidying a mapping must not silently destroy a group and everyone's
+          access with it, and an admin who IS clearing out a group should be told the access
+          goes too — that is the whole reason the behaviour exists. */}
+      {confirmDel !== undefined && (() => {
+        const row = existing.find((r) => r.itemId === confirmDel);
+        const gid = Number(row?.GroupId ?? NaN);
+        const others = existing.filter((r) => Number(r.GroupId) === gid && r.itemId !== confirmDel);
+        const lastRow = !!row && !isNaN(gid) && gid > 0 && others.length === 0;
+        return (
+          <div style={s.modalOverlay} onClick={() => setConfirmDel(undefined)}>
+            <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
+              <div style={s.modalHead}>
+                <span>{lastRow ? "Delete mapping and group?" : "Delete mapping?"}</span>
+                <button style={s.chipX} onClick={() => setConfirmDel(undefined)} title="Close">✕</button>
+              </div>
+              <div style={s.modalBody}>
+                {lastRow ? (
+                  <div style={s.dangerBox}>
+                    <p style={{ margin: "0 0 8px" }}>
+                      ⚠ This is the <strong>last mapping</strong> for{" "}
+                      <strong>{row?.GroupName}</strong>, so the SharePoint group will be
+                      deleted along with it.
+                    </p>
+                    <ul style={{ margin: "0 0 8px 18px", padding: 0 }}>
+                      <li>The group&apos;s <strong>folder access is removed</strong> — that is the point: a group left behind keeps every permission it already holds.</li>
+                      <li>Its <strong>membership list is lost</strong>. The user accounts are not touched, but who was in the group is not recoverable.</li>
+                      <li>A deleted SharePoint group is <strong>not in the recycle bin</strong>. This cannot be undone.</li>
+                    </ul>
+                    <p style={{ margin: 0 }}>
+                      Keep the group? Add another mapping for it first, then delete this row.
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    <p style={{ margin: "0 0 8px" }}>
+                      Remove the <strong>{row?.Role}</strong> mapping for{" "}
+                      <strong>{row?.GroupName}</strong>?
+                    </p>
+                    <p style={{ margin: "0 0 8px" }}>
+                      The group is <strong>kept</strong> — it still has {others.length} other
+                      mapping{others.length === 1 ? "" : "s"}.
+                    </p>
+                    {/* Stated because it is the one thing that surprises people: removing a
+                        row does not remove the permission it created. Nothing in this tool
+                        revokes a role assignment, so the group keeps this grant on the
+                        folder until someone strips it by hand — and the list will no longer
+                        show that it exists. */}
+                    <p style={{ margin: 0, color: "#8a6d00" }}>
+                      Note: the folder permission this row created stays in place until it is
+                      removed by hand in SharePoint. Deleting the row stops it being
+                      re-applied; it does not take the access away.
+                    </p>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", padding: 12 }}>
+                <button style={s.ghost} disabled={busy} onClick={() => setConfirmDel(undefined)}>Cancel</button>
+                <button style={s.delBtn} disabled={busy} onClick={() => { onDelete(confirmDel).catch(() => undefined); }}>
+                  {lastRow ? "Delete mapping and group" : "Delete mapping"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Member-management modal — separate from the add-mapping form. */}
       {memberModal && (

@@ -482,8 +482,10 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
       </p>
 
       <div style={styles.note}>
-        Groups here are <strong>native SharePoint site groups</strong> on this site (names
-        starting <strong>DMS_</strong>). Create and manage them in the DMS Admin Tool&rsquo;s
+        Groups here are <strong>native SharePoint site groups</strong> on this site, named
+        <strong> segment_department_unit_ROLE</strong> (e.g. <strong>GHO_GF_CORU_UPLOADER</strong>).
+        The site&rsquo;s own Owners, Members and Visitors groups are excluded so they cannot be
+        mapped to a folder by mistake. Create and manage them in the DMS Admin Tool&rsquo;s
         Group Map tab — no Microsoft Graph approval is involved.
       </div>
 
