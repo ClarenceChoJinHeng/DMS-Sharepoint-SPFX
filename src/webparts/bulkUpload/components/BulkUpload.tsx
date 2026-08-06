@@ -27,7 +27,7 @@ import {
   readAllowedFileTypesField,
   resolveAllowedFileTypes,
 } from "../../../shared/allowedFileTypes";
-import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { cachedListTitle, LIST_SUFFIX, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 
 /* ----------------------------------------------------------------------------
@@ -730,7 +730,13 @@ export default function BulkUpload({
         businessSegmentTid:
           get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
-      stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
+      // The library's LIVE title wins over the config row — see the same note in Form.tsx.
+      // NOTE this holds the TITLE. The path-swap sites below need the URL SEGMENT, which is a
+      // different string since the rename, and they read libraryUrlSegment() instead.
+      stagingLibrary: ((): string => {
+        const configured = (get("stagingLibrary") ?? "").trim();
+        return configured.length > 0 && configured !== "Staging" ? configured : libraryTitle();
+      })(),
       legallyPrivilegedFor:
         get("legallyPrivilegedFor") ?? DEFAULT_SETTINGS.legallyPrivilegedFor,
       // SettingValue is deliberately NOT consulted for file types any more —
@@ -1120,7 +1126,11 @@ export default function BulkUpload({
   // Anchored on the web-relative prefix rather than a global replace, so a
   // folder that happens to be named "Staging" deeper in the tree is not mangled.
   const toDocumentsPath = (stagingSru: string): string | null => {
-    const prefix = `${webSru}/${settings.stagingLibrary}/`;
+    // URL SEGMENT, not the title: this slices a server-relative path. Since the rename the
+    // two differ ("Approval Document" vs "/ApprovalDocument"), and using the title here
+    // matches nothing — the guard below returns null and the caller reports "could not work
+    // out the Documents path" for every folder.
+    const prefix = `${webSru}/${libraryUrlSegment()}/`;
     if (stagingSru.toLowerCase().indexOf(prefix.toLowerCase()) !== 0) {
       return null;
     }
@@ -1241,11 +1251,16 @@ export default function BulkUpload({
         "Could not swap library segment. stagingSru:",
         stagingSru,
         "expected prefix:",
-        `${webSru}/${settings.stagingLibrary}/`,
+        `${webSru}/${libraryUrlSegment()}/`,
+        "(resolved library title:",
+        settings.stagingLibrary,
+        ")",
       );
       return {
         runError:
-          "Could not work out the Documents path for this unit folder. Check the stagingLibrary setting in DMS Config.",
+          "Could not work out the Documents path for this unit folder. The upload library's " +
+          "folder path did not match what was expected — ask an administrator to check the " +
+          "library has not been renamed since the last deployment.",
         results: [],
       };
     }

@@ -200,3 +200,68 @@ export function matchesAnyGroupPrefix(title: string): boolean {
   const t = (title ?? "").trim().toUpperCase();
   return CANDIDATE_PREFIXES.some((p) => t.indexOf(`${p}_`) === 0);
 }
+
+/* ---------------------------------------------------------------------------
+ * The upload/approval library.
+ *
+ * Unlike the config lists this needs TWO names, and they are not interchangeable:
+ *
+ *   title       -> getbytitle('...')      — 4 call sites in ApprovalDocument, 1 in FolderManager
+ *   urlSegment  -> split('/<segment>/')   — 5 call sites that slice a server-relative path
+ *
+ * They were identical while the library was called "Staging", which is exactly why the old
+ * code could hardcode one literal for both. Verified live 2026-08-06 they now differ: the
+ * library was created as `ApprovalDocument` for a clean URL and then retitled to
+ * `Approval Document`, giving title "Approval Document" and URL ".../ApprovalDocument".
+ *
+ * Keeping them as one resolved PAIR is deliberate. A wrong title 404s — loud, obvious. A
+ * wrong url segment does not: `split("/Staging/")` on a path with no such segment yields a
+ * one-element array, so the caller reads `undefined` and carries on, routing a file nowhere
+ * while reporting success. The pair can only be right or absent, never half-right.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Candidate titles, in probe order: the current name, the pre-retitle name, then the
+ * historical one. `Staging` last so an un-migrated site still works untouched.
+ */
+export const LIBRARY_CANDIDATES = ["Approval Document", "ApprovalDocument", "Staging"];
+
+/** The historical name, used for both halves until a probe resolves them. */
+export const LEGACY_LIBRARY = "Staging";
+
+export interface LibraryNames {
+  /** List title, for getbytitle(). */
+  title: string;
+  /** Final path segment of the library root, for path splitting. No slashes. */
+  urlSegment: string;
+}
+
+let libraryNames: LibraryNames = { title: LEGACY_LIBRARY, urlSegment: LEGACY_LIBRARY };
+
+export function cachedLibrary(): LibraryNames {
+  return libraryNames;
+}
+
+/** Convenience readers, so call sites stay short. */
+export const libraryTitle = (): string => libraryNames.title;
+export const libraryUrlSegment = (): string => libraryNames.urlSegment;
+
+/**
+ * Record the resolved pair. Takes the values rather than performing the lookup, keeping this
+ * module free of SPFx imports — the same split as setSiteEntryName.
+ *
+ * The url segment is derived from the library's RootFolder rather than from its title,
+ * because the title is the half that changes. A blank or slash-only segment is rejected: it
+ * would reduce `split("//")` to matching every separator in the document tree.
+ */
+export function setLibraryNames(title: string, serverRelativeUrl: string): void {
+  const t = (title ?? "").trim();
+  const segment = (serverRelativeUrl ?? "").split("/").filter(Boolean).pop() ?? "";
+  if (t.length === 0 || segment.length === 0) return;
+  libraryNames = { title: t, urlSegment: segment };
+}
+
+/** Test seam, and the escape hatch after a rename mid-session. */
+export function clearLibraryCache(): void {
+  libraryNames = { title: LEGACY_LIBRARY, urlSegment: LEGACY_LIBRARY };
+}

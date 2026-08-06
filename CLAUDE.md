@@ -12,7 +12,18 @@ Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 - **Tenant:** `dcidigitalcom.sharepoint.com` | **Site:** `/sites/ClarenceDMSTesting` (rebuilding here
   after being locked out of the old `/sites/SPFX-Sandbox-Testing-Ground`; serve.json still points at
   the old sandbox)
-- **Staging library:** `Staging`
+- **Upload/approval library:** title **`Approval Document`**, URL **`/ApprovalDocument`** — they
+  DIFFER, and both are needed. Recreated 2026-08-06 (the old `Staging` library was deleted, losing
+  its 182 test items and folder ACLs; reconciliation rebuilds the folders). Created without the
+  space so the URL stays clean, then retitled. **Never hardcode either half:** `libraryTitle()` and
+  `libraryUrlSegment()` in `src/shared/naming.ts` resolve them as one pair via `primeNames()`,
+  probing `Approval Document` → `ApprovalDocument` → `Staging`. A wrong title 404s loudly; a wrong
+  URL segment fails SILENTLY (`split("/Staging/")` returns a 1-element array, so the caller reads
+  `undefined` and routes the file nowhere while reporting success). `LibTarget`/`TARGETS` keep
+  `"Staging"` as a LOGICAL key — it is also the stored `Target` value on Group Map library-scope
+  rows — and map to the real title at the API boundary via `libApiTitle()`.
+  The `stagingLibrary` **DMS Config row is superseded**: it still reads `Staging` on migrated sites
+  and would 404, so the live title wins unless that row holds some other non-legacy name.
 - **Single-site DMS** — the cross-site/multi-site model was retired 2026-07-26 (a new site draws from
   the same tenant storage quota → no space saved). Package is **Graph-free** (Share Guard retired).
   See memories `dms-single-site-decision`, specs `2026-07-26-cross-site-upload-retirement.md` +
@@ -69,8 +80,14 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
 - **Folder NAMES come from `DMS Term Abbreviation`** (keyed by term GUID), NOT from term labels —
   `GHO/GCA/GMB_STRATCOMMS`. Segment codes come from `StagingFolder` on the DMS Config `mode` row.
   Term labels stay full and drive the upload dropdowns; the full label is written to the
-  **`Full Name`** column on every folder, and folders carry the **`DMS Folder`** content type so
-  the details pane renders it. Three rules: a term with **no abbreviation is SKIPPED**, never
+  **`Full Name`** column on every folder, and folders carry the **`CRS Folder`** content type so
+  the details pane renders it. That name is resolved, not hardcoded: `FOLDER_CONTENT_TYPE_CANDIDATES`
+  in `FolderManager.tsx` probes `CRS Folder` then `DMS Folder`, preferring the first, so a library
+  mid-rename is not stamped with the type being retired. `CRS Folder` was created 2026-08-06 (site
+  content type, group `CRS Content Types`, **parent group `Folder Content Types`, parent `Folder`** —
+  a Document/Item parent will not attach to a folder). It must be added to BOTH libraries with the
+  `Full Name` column on it, and hidden from the New button. `DMS Folder` still exists and cannot be
+  deleted until reconciliation has re-stamped the `Documents` folders. Three rules: a term with **no abbreviation is SKIPPED**, never
   guessed (no folder → that unit cannot upload); abbreviations must be **unique among siblings**
   or two units merge into one folder with one ACL (reconciliation aborts before creating
   anything); changing one **renames a live folder** on the next run. Spec
@@ -122,7 +139,12 @@ NBPOL Head Office:             77c3993b-0c3c-4a18-89d9-d69209886322
 > (`94ce322b-…`, lookupStyle "parentMatch") are **retired** by the multi-segment model.
 > WARN: Handover PDF lists e1163337-93bb-4b6e-847e-346f51cc6806 for Project Name — this GUID does NOT exist in the tenant. Do not use it.
 
-## Staging Library — Column Internal Names
+## Approval Document Library — Column Internal Names
+> Re-verified 2026-08-06 against the recreated library (`/fields`). All 15 present and correct.
+> Recreating is what makes this section load-bearing: internal names are derived from the title a
+> column is CREATED with, once, permanently — so a column must be created under the name that
+> yields the required internal name, then renamed. `DocumentDate` displays as "Document Date" but
+> has no `_x0020_` precisely because it was made that way.
 Verified against live `/fields` API. Do NOT guess from display names.
 ```
 Document_x0020_Type        <- "Document Type" (migrated 2026-07-24 from the old frozen Department_x0020_Type)
@@ -132,7 +154,12 @@ Confidentiality_x0020_Level
 LegallyPrivileged          <- Yes/No, written as the STRING "true"/"false"; shown only for the level
                               named by the `legallyPrivilegedFor` DMS Config row (blank = never offered)
 Remark                     <- a DEDICATED column, not the built-in _ExtendedDescription
-Full_x0020_Name            <- on FOLDERS, not files: the term's real label behind the abbreviated
+Full_x0020_Name            <- on the recreated library. The OLD Staging library had `FullName0`
+                              (created as "FullName", then renamed) and `Documents` still does —
+                              which is why pickFullNameField matches on DISPLAY TITLE or internal
+                              name, never internal name alone: nameKey keeps digits, so
+                              "FullName0" would never match "fullname".
+                           <- on FOLDERS, not files: the term's real label behind the abbreviated
                               folder name. Read the internal name back — the resolver matches
                               however the space was typed. Needs the `DMS Folder` content type to
                               reach the details pane.
@@ -193,10 +220,26 @@ Unit                  / UnitTid
     `{ "results": [...] }` while `nometadata`/`minimalmetadata` return a plain array — pin the
     `Accept` header rather than relying on the default.
 
+12. **A list's title and its URL are independent, and only one of them fails loudly.** SharePoint
+    fixes a list's URL at CREATION and never moves it on rename — which is how `CRS Config` sits at
+    `/Lists/Config` and `Approval Document` at `/ApprovalDocument`. Use that deliberately: create a
+    library without spaces, then retitle. But it means **one literal can no longer serve both**.
+    `getbytitle('<wrong>')` returns 404 — obvious. `path.split("/<wrong>/")` returns a 1-element
+    array, so `[1]` is `undefined` and the code carries on: the file routes nowhere, the log says
+    success. Always resolve the pair together from `RootFolder/ServerRelativeUrl` on the response
+    that also carried the Title (`primeNames` → `libraryTitle()` / `libraryUrlSegment()`), never
+    derive one from the other. Same class of bug as #9: the loud failure is the safe one.
+    Recreating a list ALSO changes `ListItemEntityTypeFullName` (renaming does not) — read it off
+    the list at runtime, as `FolderMap.tsx` does, or `__metadata` writes break.
+
 ## Architecture: Direct REST (not Power Automate)
 The 3 instant flows (GetTermSetValues, DepartmentProjectList, UploadToStaging) use "When Power Apps calls a flow (V2)" trigger — not callable from SPFx. Form.tsx uses `context.spHttpClient` directly.
 
-The **Auto-route** automated flow fires server-side after content approval to move approved files to department libraries. Web part job ends at "upload to Staging."
+The **Auto-route** automated flow fires server-side after content approval to move approved files to
+department libraries. Web part job ends at "upload to the approval library."
+> ⚠ **The flow splits approved-file paths on `Staging/`** (memory `dms-autoroute-path-based-routing`).
+> The library is now at `/ApprovalDocument`, so **the flow must be edited to match** or it silently
+> stops routing — approvals succeed, nothing lands in Documents, and no error is raised anywhere.
 
 ## RBAC
 | Group | SP Permission Level | Scope | Can do |

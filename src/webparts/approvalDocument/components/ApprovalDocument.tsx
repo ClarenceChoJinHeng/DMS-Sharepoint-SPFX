@@ -11,13 +11,23 @@ import {
   QueueEntry as QueueEntryOf,
 } from "../../../shared/approvalQueue";
 import { previewTarget } from "../../../shared/filePreview";
+import { libraryTitle, libraryUrlSegment } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-// Library URL segments used to map a Staging path to its Documents twin. "Shared Documents"
-// is the Documents library's URL segment even though its display name is "Documents".
-const STAGING_URL_SEGMENT = "Staging";
+// Library URL segments used to map an approval-library path to its Documents twin.
+// "Shared Documents" is the Documents library's URL segment even though its display name is
+// "Documents" — a fixed built-in, so it stays a constant.
+//
+// The approval library's segment is NOT a constant: it is resolved at mount by primeNames,
+// because its title and URL no longer match (title "Approval Document", URL
+// "/ApprovalDocument"). Always read it through the function — a module-level const would be
+// evaluated at import time, before priming, and silently freeze the legacy "Staging".
 const DOCUMENTS_URL_SEGMENT = "Shared Documents";
+
+/** getbytitle() needs the title; path splitting needs the URL segment. They differ. */
+const libTitleEnc = (): string => encodeURIComponent(libraryTitle());
 
 interface IFileItem {
   ID: number;
@@ -176,7 +186,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   // Back link → the file's own folder in Staging (not the library root), so the
   // approver lands where the document lives instead of having to drill back in.
   const backUrl = (): string => {
-    const base = `${webUrl}/Staging/Forms/AllItems.aspx`;
+    const base = `${webUrl}/${encodeURIComponent(libraryUrlSegment())}/Forms/AllItems.aspx`;
     const fileRef = item?.File?.ServerRelativeUrl;
     if (!fileRef) return base;
     const folder = fileRef.slice(0, fileRef.lastIndexOf("/"));
@@ -188,7 +198,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const loadFieldText = async (itemId: number): Promise<void> => {
     try {
       const textRes = await context.spHttpClient.get(
-        `${webUrl}/_api/web/lists/getbytitle('Staging')/items(${itemId})/FieldValuesAsText`,
+        `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items(${itemId})/FieldValuesAsText`,
         SPHttpClient.configurations.v1,
       );
       if (textRes.ok) setFieldText(await textRes.json() as IFieldText);
@@ -211,7 +221,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const loadQueue = async (current: IFileItem): Promise<void> => {
     try {
       const url =
-        `${webUrl}/_api/web/lists/getbytitle('Staging')/items` +
+        `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items` +
         `?$filter=OData__ModerationStatus%20eq%202` +
         `&$expand=File,Author` +
         `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl` +
@@ -237,7 +247,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     }
     try {
       const url =
-        `${webUrl}/_api/web/lists/getbytitle('Staging')/items(${itemId})` +
+        `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items(${itemId})` +
         `?$expand=File,Author` +
         `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl`;
       const res = await context.spHttpClient.get(url, SPHttpClient.configurations.v1);
@@ -292,7 +302,15 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     }
   };
 
-  useEffect(() => { loadItem().catch(() => undefined); }, []);
+  // primeNames FIRST, and awaited: every read below addresses the library by title or by URL
+  // segment, and both are wrong until it resolves. It never throws — an unresolvable name
+  // leaves the legacy "Staging" pair rather than blocking the page.
+  useEffect(() => {
+    primeNames(context.spHttpClient, webUrl)
+      .catch(() => undefined)
+      .then(() => loadItem())
+      .catch(() => undefined);
+  }, []);
 
   const getDigest = async (): Promise<string> => {
     const res = await context.spHttpClient.post(
@@ -330,7 +348,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
     // Swap the library segment, anchored on the web-relative prefix so a folder that
     // happens to be named "Staging" deeper in the tree is not mangled.
-    const prefix = `${webSru}/${STAGING_URL_SEGMENT}/`;
+    const prefix = `${webSru}/${libraryUrlSegment()}/`;
     if (unitStaging.toLowerCase().indexOf(prefix.toLowerCase()) !== 0) {
       return { ok: false, reason: "could not work out the Documents path" };
     }
@@ -433,7 +451,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       // IIS's maxUrlLength once the server-relative path gets long/deep
       // (nested subcategory nesting can add up fast). See sp-rest-alias-vs-inline-literal-400-error memory.
       const safeUrl     = item.File.ServerRelativeUrl.replace(/'/g, "''");
-      const itemBase    = `${webUrl}/_api/web/lists/getbytitle('Staging')/items(${item.ID})`;
+      const itemBase    = `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items(${item.ID})`;
       const headers     = { "X-RequestDigest": digest, Accept: "application/json;odata=nometadata" };
 
       if (action === "Approved") {
@@ -655,7 +673,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   // the deepest three path segments — Year, Document Type, and the filename — which are
   // shown separately below and are not part of the org location.
   const orgLocation = ((): string => {
-    const after = item.File.ServerRelativeUrl.split("/Staging/")[1];
+    const after = item.File.ServerRelativeUrl.split(`/${libraryUrlSegment()}/`)[1];
     if (!after) return "—";
     const parts = after.split("/");
     const org = parts.slice(0, Math.max(0, parts.length - 3));
@@ -871,7 +889,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" as const }}>
               {(() => {
                 // Segment › … › Unit, from the live Staging path (segment-agnostic).
-                const after = item.File.ServerRelativeUrl.split('/Staging/')[1];
+                const after = item.File.ServerRelativeUrl.split(`/${libraryUrlSegment()}/`)[1];
                 const parts = after ? after.split('/') : [];
                 const crumbs = parts.slice(0, Math.max(0, parts.length - 3));
                 return crumbs.map((crumb, i) => (

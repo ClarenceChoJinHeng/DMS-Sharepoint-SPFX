@@ -9,7 +9,7 @@ import {
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
 import { formatFileSize } from "../../../shared/fileSize";
-import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import {
   parseLevels,
@@ -612,7 +612,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         businessSegmentTid:
           get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
-      stagingLibrary: get("stagingLibrary") ?? DEFAULT_SETTINGS.stagingLibrary,
+      // The library's LIVE title wins over the config row. That row predates the rename and
+      // still reads "Staging" on a migrated site, which now 404s — honouring it would break
+      // uploads on exactly the sites that migrated correctly. An admin who deliberately set
+      // some other name still wins; only the stale legacy literal is ignored.
+      stagingLibrary: ((): string => {
+        const configured = (get("stagingLibrary") ?? "").trim();
+        return configured.length > 0 && configured !== "Staging" ? configured : libraryTitle();
+      })(),
       legallyPrivilegedFor:
         get("legallyPrivilegedFor") ?? DEFAULT_SETTINGS.legallyPrivilegedFor,
       // SettingValue is deliberately NOT consulted for file types any more —

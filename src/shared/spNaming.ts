@@ -13,6 +13,8 @@ import {
   folderContentTypeName,
   siteEntryGroupName,
   setSiteEntryName,
+  LIBRARY_CANDIDATES,
+  setLibraryNames,
 } from "./naming";
 
 /**
@@ -82,8 +84,48 @@ async function primeSiteEntry(sp: SPHttpClient, siteUrl: string): Promise<void> 
   return siteEntryLookup;
 }
 
+/**
+ * Which of the candidate titles the upload/approval library has, and the URL segment that
+ * goes with it.
+ *
+ * Both halves come from ONE request per candidate, because they must agree: the response
+ * carries the Title and RootFolder/ServerRelativeUrl together, so there is no window in
+ * which a resolved title is paired with a stale segment.
+ *
+ * Memoised on the PROMISE for the same reason as primeSiteEntry — several loaders call
+ * primeNames concurrently, and a flag set after the await would let two of them issue the
+ * probes before either recorded that it had.
+ */
+let libraryLookup: Promise<void> | undefined;
+
+async function primeLibrary(sp: SPHttpClient, siteUrl: string): Promise<void> {
+  if (!libraryLookup) {
+    libraryLookup = (async () => {
+      for (const candidate of LIBRARY_CANDIDATES) {
+        try {
+          const res: SPHttpClientResponse = await sp.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(candidate)}')` +
+              `?$select=Title,RootFolder/ServerRelativeUrl&$expand=RootFolder`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (!res.ok) continue; // not under this title; try the next
+          const data = await res.json();
+          setLibraryNames(data?.Title ?? candidate, data?.RootFolder?.ServerRelativeUrl ?? "");
+          return;
+        } catch {
+          // A network failure on one candidate must not stop the others being tried.
+        }
+      }
+      // Nothing matched: leave the legacy pair, which is what the code used before this existed.
+    })();
+  }
+  return libraryLookup;
+}
+
 export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<void> {
   await primeSiteEntry(sp, siteUrl);
+  await primeLibrary(sp, siteUrl);
   const probe = makeListProbe(sp, siteUrl);
   for (const suffix of [
     LIST_SUFFIX.config,

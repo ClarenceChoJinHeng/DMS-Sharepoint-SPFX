@@ -11,6 +11,13 @@ import {
   groupPrefix,
   matchesAnyGroupPrefix,
   ListProbe,
+  LIBRARY_CANDIDATES,
+  LEGACY_LIBRARY,
+  cachedLibrary,
+  libraryTitle,
+  libraryUrlSegment,
+  setLibraryNames,
+  clearLibraryCache,
 } from "./naming";
 
 /** A probe that says yes only to the titles it is given. Records calls, to prove caching. */
@@ -143,5 +150,63 @@ describe("matchesAnyGroupPrefix", () => {
     expect(matchesAnyGroupPrefix("MYCRS_GHO")).toBe(false);   // prefix must be at the start
     expect(matchesAnyGroupPrefix("")).toBe(false);
     expect(matchesAnyGroupPrefix(undefined as unknown as string)).toBe(false);
+  });
+});
+
+describe("library name pair", () => {
+  beforeEach(() => clearLibraryCache());
+
+  it("defaults to the legacy name for BOTH halves until resolved", () => {
+    // A site that has not been migrated must behave exactly as it did before this existed.
+    expect(libraryTitle()).toBe(LEGACY_LIBRARY);
+    expect(libraryUrlSegment()).toBe(LEGACY_LIBRARY);
+  });
+
+  it("keeps a renamed title and its unchanged url segment apart", () => {
+    // The live 2026-08-06 case: created as ApprovalDocument, retitled to "Approval Document".
+    setLibraryNames("Approval Document", "/sites/Example/ApprovalDocument");
+    expect(libraryTitle()).toBe("Approval Document");
+    expect(libraryUrlSegment()).toBe("ApprovalDocument");
+    expect(cachedLibrary()).toEqual({ title: "Approval Document", urlSegment: "ApprovalDocument" });
+  });
+
+  it("takes only the last path segment, never the whole url", () => {
+    // Using the full server-relative url as a split token would match nothing.
+    setLibraryNames("Approval Document", "/sites/Deep/Nested/Web/ApprovalDocument");
+    expect(libraryUrlSegment()).toBe("ApprovalDocument");
+  });
+
+  it("tolerates a trailing slash on the root url", () => {
+    setLibraryNames("Approval Document", "/sites/Example/ApprovalDocument/");
+    expect(libraryUrlSegment()).toBe("ApprovalDocument");
+  });
+
+  it("trims the title but leaves the segment exact", () => {
+    setLibraryNames("  Approval Document  ", "/sites/Example/ApprovalDocument");
+    expect(libraryTitle()).toBe("Approval Document");
+  });
+
+  it("refuses a blank title or an unusable url, keeping the legacy pair", () => {
+    // A segment of "" would reduce split("//") to matching every separator in the tree, so a
+    // half-resolved pair must never be stored — absent is recoverable, wrong is not.
+    setLibraryNames("", "/sites/Example/ApprovalDocument");
+    expect(cachedLibrary()).toEqual({ title: LEGACY_LIBRARY, urlSegment: LEGACY_LIBRARY });
+    setLibraryNames("Approval Document", "");
+    expect(cachedLibrary()).toEqual({ title: LEGACY_LIBRARY, urlSegment: LEGACY_LIBRARY });
+    setLibraryNames("Approval Document", "///");
+    expect(cachedLibrary()).toEqual({ title: LEGACY_LIBRARY, urlSegment: LEGACY_LIBRARY });
+  });
+
+  it("survives undefined from a malformed response", () => {
+    setLibraryNames(undefined as unknown as string, undefined as unknown as string);
+    expect(cachedLibrary()).toEqual({ title: LEGACY_LIBRARY, urlSegment: LEGACY_LIBRARY });
+  });
+
+  it("probes the current name first and the legacy name last", () => {
+    // Order is the whole contract: a site mid-migration can answer to more than one, and the
+    // newest must win. Staging last so an un-migrated site still costs the fewest requests.
+    expect(LIBRARY_CANDIDATES[0]).toBe("Approval Document");
+    expect(LIBRARY_CANDIDATES[LIBRARY_CANDIDATES.length - 1]).toBe(LEGACY_LIBRARY);
+    expect(LIBRARY_CANDIDATES.indexOf("ApprovalDocument")).toBeGreaterThan(0);
   });
 });

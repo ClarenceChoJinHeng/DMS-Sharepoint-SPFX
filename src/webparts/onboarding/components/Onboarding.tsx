@@ -2,10 +2,19 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { searchSiteGroups } from "../../../shared/spGroups";
+// Aliased: getLibraryRoot() already has a local parameter called libraryTitle.
+import { libraryTitle as resolvedLibraryTitle } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 import { IOnboardingProps } from "./IOnboardingProps";
 
+// Logical keys, not live titles — same split as FolderManager's LibTarget. These drive the UI
+// toggle and the log lines; resolveLibTitle() maps to what SharePoint actually answers to.
 const TARGETS = ["Staging", "Documents"] as const;
 type Target = (typeof TARGETS)[number];
+
+/** The approval library was renamed; "Documents" is a built-in and was not. */
+const resolveLibTitle = (lib: string): string =>
+  (lib === "Staging" ? resolvedLibraryTitle() : lib);
 const SECTIONS = ["Departments", "Projects"] as const;
 type Section = (typeof SECTIONS)[number];
 
@@ -193,6 +202,10 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
   };
 
   useEffect(() => {
+    // Fire-and-forget is fine here, unlike ApprovalDocument: nothing on this page reads a
+    // library name until the admin clicks Provision, long after this resolves. It still has to
+    // be started at mount, because resolveLibTitle() reads a cache rather than awaiting.
+    primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
     loadRoleDefs().catch(() => undefined);
     loadOwnerGroup().catch(() => undefined);
   }, []);
@@ -219,7 +232,7 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
 
   const getLibraryRoot = async (libraryTitle: string): Promise<string | null> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitle)}')/RootFolder?$select=ServerRelativeUrl`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(resolveLibTitle(libraryTitle))}')/RootFolder?$select=ServerRelativeUrl`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );

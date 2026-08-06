@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember, createSiteGroup } from "../../../shared/spGroups";
 import { siteEntryGroupTitle, isForbiddenPageTarget } from "../../../shared/groupMapModel";
-import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import GroupMapBuilder from "./GroupMapBuilder";
@@ -43,11 +43,37 @@ import { FULL_NAME_COLUMN_TITLE, pickFullNameField, SpFieldLite } from "../../..
 // the tool works with the multi-segment model (Group Head Office, Group Upstream
 // Operations, …) or any future top-level folder naming.
 type Mode      = string;
+/**
+ * The two libraries, as a LOGICAL key — not necessarily what either is called on the site.
+ *
+ * "Staging" is kept as the key rather than renamed to "Approval Document" because it is also
+ * the value stored in the Group Map's `Target` column on every library-scope row, and it
+ * indexes LIBRARY_ROLES and the progress feeds. Renaming the key would silently orphan that
+ * stored data. Translate to the real title at the API boundary instead — libApiTitle().
+ */
 type LibTarget = "Staging" | "Documents";
+
+/**
+ * The title SharePoint actually answers to, for a logical library key.
+ *
+ * Only the approval library moved: "Documents" is a built-in whose title has not changed, and
+ * a Target value an admin already typed as the new name passes through untouched.
+ */
+const libApiTitle = (lib: string): string => (lib === "Staging" ? libraryTitle() : lib);
 // Folder-derived content type that carries the Full Name column, so the value shows in
 // the details pane. Matched by NAME because its id differs per library. Optional: a site
 // without it still provisions normally, it just shows nothing in the pane.
-const FOLDER_CONTENT_TYPE_NAME = "DMS Folder";
+//
+// Two names are accepted, newest first, for the same reason list titles are probed per
+// suffix rather than from one global prefix: the client renames every DMS-named artefact
+// to CRS by hand, one at a time, so a site legitimately spends time with CRS lists and a
+// DMS-named content type. Probing both is what keeps a half-renamed site working — and
+// unlike a list, a miss here is silent, because an absent content type is a supported
+// state rather than an error.
+const FOLDER_CONTENT_TYPE_CANDIDATES = ["CRS Folder", "DMS Folder"];
+// Whichever candidate this library actually has, recorded by loadFolderContentTypeId.
+// Only ever read for log lines, so the fallback to the preferred name is cosmetic.
+let resolvedFolderCtName: string | undefined;
 // The top-level tabs. The two library tabs drive the folder tree; Reconciliation is the
 // term-store-driven provisioner (create + lock + map); GroupMap is folder-scope access;
 // StagingAccess is library-scope entry — who may OPEN the Staging library at all.
@@ -590,7 +616,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     // real HTTP status on genuine failure rather than reporting a false "not found"
     // (CLAUDE.md gotcha #9 — a transient status is not missing data).
     const res: SPHttpClientResponse = await withThrottleRetry(() => context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/RootFolder?$select=ServerRelativeUrl`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/RootFolder?$select=ServerRelativeUrl`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     ), reconWaitNote);
@@ -1192,7 +1218,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     // apart — CLAUDE.md gotcha #9. Reading all fields and matching in code costs one
     // unfiltered read per library per run and removes the ambiguity.
     const url =
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/fields` +
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/fields` +
       `?$select=Title,InternalName,TypeAsString,ReadOnlyField&$top=500`;
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
@@ -1242,17 +1268,26 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const loadFolderContentTypeId = async (lib: LibTarget): Promise<string | undefined> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/ContentTypes?$select=Id,Name`,
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/ContentTypes?$select=Id,Name`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (!res.ok) return undefined;
       const data = await res.json();
       const rows = (data.value ?? []) as Array<{ Id?: { StringValue?: string }; Name?: string }>;
-      const hit = rows.find(
-        (c) => (c.Name ?? "").trim().toLowerCase() === FOLDER_CONTENT_TYPE_NAME.toLowerCase(),
-      );
-      return hit?.Id?.StringValue;
+      // Preference order, not "whichever matches first in the library's list": a library
+      // mid-rename can carry BOTH, and stamping the one being retired would mean the next
+      // run has to rewrite every folder again.
+      for (const candidate of FOLDER_CONTENT_TYPE_CANDIDATES) {
+        const hit = rows.find(
+          (c) => (c.Name ?? "").trim().toLowerCase() === candidate.toLowerCase(),
+        );
+        if (hit?.Id?.StringValue) {
+          resolvedFolderCtName = candidate;
+          return hit.Id.StringValue;
+        }
+      }
+      return undefined;
     } catch {
       return undefined;
     }
@@ -1944,7 +1979,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 continue;
               }
               const listRes = await context.spHttpClient.get(
-                `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')?$select=Id,HasUniqueRoleAssignments`,
+                `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=Id,HasUniqueRoleAssignments`,
                 SPHttpClient.configurations.v1,
                 { headers: { Accept: "application/json;odata=nometadata" } },
               );
@@ -2314,7 +2349,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const ct = await loadFolderContentTypeId(lib);
         if (ct) folderCtIds.set(lib, ct);
-        else entries.push({ msg: `⚠ ${lib}: no "${FOLDER_CONTENT_TYPE_NAME}" content type — folders keep the built-in Folder type and the details pane will not show Full Name`, ok: true });
+        // Names both candidates: "no CRS Folder content type" on a site that still has the
+        // DMS-named one would read as a missing artefact rather than a rename half-done.
+        else entries.push({ msg: `⚠ ${lib}: no ${FOLDER_CONTENT_TYPE_CANDIDATES.map(n => `"${n}"`).join(" or ")} content type — folders keep the built-in Folder type and the details pane will not show Full Name`, ok: true });
         const f = await loadFullNameField(lib);
         if (f.internalName) fullNameFields.set(lib, f.internalName);
         // ok:true deliberately. This is a warning, not an error: `errorsBeforePrune`
@@ -2511,7 +2548,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                   await setFolderItemFields(full, values);
                   const what = [
                     fullNameField && values[fullNameField] !== undefined ? `${FULL_NAME_COLUMN_TITLE} = ${t.fullName}` : "",
-                    values.ContentTypeId !== undefined ? `content type → ${FOLDER_CONTENT_TYPE_NAME}` : "",
+                    values.ContentTypeId !== undefined ? `content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}` : "",
                   ].filter(Boolean).join(", ");
                   entries.push({ msg: `  ↳ ${what}`, ok: true });
                   await tick();
