@@ -514,6 +514,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const [sections,     setSections]     = useState<Mode[]>([]);
   const [tree,         setTree]         = useState<Record<Mode, FolderNode[]>>({});
   const [libRoot,      setLibRoot]      = useState<string | null>(null);
+  // Has primeNames() resolved? The tree CANNOT load before it has. Every library read goes
+  // through libApiTitle(), which maps the logical key "Staging" to the live title — and until
+  // priming lands that returns the legacy default, so getbytitle('Staging') 404s on this site
+  // (the library is titled "Approval Document") and the tab renders "No top-level folders under
+  // Staging yet" on a library holding 200 of them. Documents hid the bug: its title never
+  // changed, so it loaded correctly whether primed or not.
+  const [namesReady,   setNamesReady]   = useState(false);
   const [loading,      setLoading]      = useState(true);
   const [busy,         setBusy]         = useState(false);
   const [roleDefs,     setRoleDefs]     = useState<RoleDef[]>([]);
@@ -848,6 +855,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     // CRS-renamed site and would present as an empty term store rather than a naming problem.
     primeNames(context.spHttpClient, siteUrl)
       .catch(() => undefined)
+      // Set even when priming FAILED: the cache then holds the legacy defaults, which is the
+      // best guess available and is what this component used before priming existed. Leaving
+      // the flag false would strand the tree on a permanent spinner over a transient GET.
+      .then(() => setNamesReady(true))
       .then(() => Promise.all([loadRoleDefs(), loadOwnerGroup()]))
       .catch(() => undefined);
   }, []);
@@ -891,9 +902,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     setLoading(false);
   };
 
+  // Waits for namesReady — see the flag's declaration. Re-runs when it flips, so the tree
+  // loads as soon as the titles are known rather than needing a manual Refresh.
   useEffect(() => {
+    if (!namesReady) return;
     loadTree().catch(() => { setLoading(false); showToast("Could not load folders. Check your permissions.", true); });
-  }, [libTarget]);
+  }, [libTarget, namesReady]);
 
   /* ── Generic tree mutation helpers (recursive, keyed by node id) ───────────────── */
 
