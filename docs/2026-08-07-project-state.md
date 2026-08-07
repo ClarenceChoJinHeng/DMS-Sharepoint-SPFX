@@ -157,7 +157,23 @@ row ignored** — with granting back, the two passes would fight.
    > Draft Item Security is "any user who can read items", but under approver-only every folder
    > would vanish for every non-approver. Reconciliation now approves the folders it provisions
    > — only in libraries that actually moderate, and only when not already approved.
-   > **Re-run reconciliation after deploying that build, before tightening draft security.**
+   >
+   > ⚠ **That approval covers the segment/department/unit folders ONLY — not the Year ×
+   > Document Type grid underneath them.** Two reasons it cannot, as written:
+   > - The grid's **fast path** settles the whole grid with one probe when the last folder
+   >   exists, so a per-folder approval inside that loop never fires on an existing site.
+   > - `ensureFolder` is shared with `Form.tsx` / `BulkUpload.tsx`, and an uploader running it
+   >   **cannot approve** — `OData__ModerationStatus = 0` needs `ApproveItems`, which a PIC does
+   >   not hold. So uploaders keep minting Pending Year/Doc-Type folders between runs.
+   >
+   > **Therefore do NOT tighten Draft Item Security to approver-only.** Under that setting a PIC
+   > would see their unit folder as empty and could not browse to their own pending files.
+   > Closing this properly needs a library-wide sweep (page by `ID gt <last>` — `ID` is always
+   > indexed, so it cannot trip the 5,000-item list-view threshold the way a filter on
+   > `FSObjType` / `OData__ModerationStatus` can) approving every pending FOLDER at the end of a
+   > run. That is ~6,000 writes on a first run and is **not built**, because per-uploader
+   > isolation — the only thing that wanted approver-only — is out of scope
+   > (`dms-per-uploader-isolation-rejected`). Build it only if that decision reverses.
 6. **Upload → approve** end to end.
 7. **Auto-route flow**, in this order: path split `Staging/` → `ApprovalDocument/`; then stamp
    `Author` + `Created` on the Documents copy via `validateUpdateListItem`; then verify the copy
@@ -176,8 +192,9 @@ row ignored** — with granting back, the two passes would fight.
   PICs while an approver sees all — **plus** the Auto-route flow **moving** approved files out of
   Staging, since approved items are visible to everyone with Read. Both halves are needed; the
   draft setting alone leaves approved files visible.
-  - Requires folders to be **Approved**, or the corridor goes invisible again
-    (`dms-content-approval-blocks-uploader`).
+  - Requires **every** folder to be Approved — including the Year × Document Type grid, which
+    reconciliation does **not** approve and uploaders **cannot** (see the ⚠ under §3 item 5).
+    Without that sweep the corridor goes invisible again (`dms-content-approval-blocks-uploader`).
   - Requires `CRS Approve` to contain `ApproveItems` — see §3.1.
 - **Documents library isolation is not replicable.** Draft security needs an unapproved state,
   and Documents is the approved archive. `Created By` there is the flow's account, not the

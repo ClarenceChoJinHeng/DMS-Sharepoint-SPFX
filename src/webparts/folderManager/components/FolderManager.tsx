@@ -2416,6 +2416,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         //
         // So approve the folders as they are provisioned. Files are untouched: they are the
         // things actually under review, and approving them here would defeat the whole point.
+        //
+        // SCOPE: structural folders (segment / department / unit) ONLY — NOT the Year ×
+        // Document Type grid under each unit. See the note at the grid loop for why, and why
+        // Draft Item Security must therefore stay at "any user who can read items".
         try {
           const modRes: SPHttpClientResponse = await context.spHttpClient.get(
             `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=EnableModeration`,
@@ -2906,6 +2910,21 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // Under leaf (unit) folders, pre-create the Year × Document Type grid.
             // These inherit the unit's ACL (no lock, no map). Idempotent via
             // ensureFolder. Logged as a per-unit count, not one line per folder.
+            //
+            // These grid folders are NOT approved, and deliberately so — two reasons it
+            // cannot be done here:
+            //   1. The fast path below settles the entire grid on ONE probe, so a per-folder
+            //      approve in this loop would never fire on a site that already has its grid.
+            //   2. ensureFolder is shared with Form.tsx / BulkUpload.tsx, where the caller is
+            //      an UPLOADER. Writing OData__ModerationStatus = 0 needs ApproveItems, which
+            //      a PIC does not hold — so uploaders keep creating Pending grid folders
+            //      between runs no matter what this pass does.
+            // Consequence: Draft Item Security must stay "any user who can read items". Under
+            // approver-only, a PIC sees an empty unit folder and cannot browse to their own
+            // pending files. Closing it needs an end-of-run library sweep (page by `ID gt`,
+            // never a $filter on FSObjType — the grid puts these libraries over the 5,000-item
+            // list-view threshold). Not built: the only requirement that wanted approver-only
+            // was per-uploader isolation, which is out of scope.
             if (t.isLeaf && yearLabels.length > 0) {
               const gridTotal = yearLabels.length * (1 + docTypeLabels.length);
               let grid = 0;
