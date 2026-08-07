@@ -184,10 +184,36 @@ row ignored** — with granting back, the two passes would fight.
 7. **Auto-route flow**, in this order: path split `Staging/` → `ApprovalDocument/`; then stamp
    `Author` + `Created` on the Documents copy via `validateUpdateListItem`; then verify the copy
    and delete the source. The path split alone is **already broken** by the rename.
-8. **Re-add page access** through the Page Access tab, not from the old CSV.
+8. **Re-add page access** — now on its own **Page Access** page, not a tab. Audited 2026-08-07:
+   **zero Page-scope rows exist**, so all ten Site Pages run on inherited site permissions and
+   every admin page is reachable by anyone who can open the site. Five pages need rows:
+   `Folder-Access.aspx`, `Site-Access.aspx`, `Approval-Library-Access.aspx`, `Page-Access.aspx`
+   and the Folder Manager page.
+   > `Target` matches on **`FileLeafRef`**, the page's FILE name — which SharePoint fixes at
+   > creation and does NOT change when the page title is edited (same trap as a list's URL).
+   > A typo'd Target writes a row reconciliation re-asserts forever against nothing, silently.
+   > `Site-Acess.aspx` was created misspelled and renamed to `Site-Access.aspx` before any row
+   > referenced it.
 9. **Delete `DMS Folder`** once reconciliation has re-stamped `Documents`.
-10. Rename `DMS_SITE_MEMBERS` → `CRS_SITE_MEMBERS` (optional; code probes both, and the group id
-    survives a rename — never delete and recreate it).
+10. ~~Rename `DMS_SITE_MEMBERS` → `CRS_SITE_MEMBERS`~~ — **DONE 2026-08-07, with all 17 groups.**
+    Every `DMS_`-prefixed site group was renamed prefix-less (`DMS_GHO_GF_CORU_UPL` →
+    `GHO_GF_CORU_UPL`); `DMS_SITE_MEMBERS` alone kept a prefix and became `CRS_SITE_MEMBERS`,
+    because that group is resolved BY NAME from a fixed candidate list — strip its prefix and
+    the site-entry pass creates a second, empty one and starts feeding it members while the
+    real access sits in the original. Ran via `rename-crs-groups.js` (Downloads): 17 renamed,
+    0 failed, 0 skipped. Verified after: zero `DMS_` groups remain and the site-entry group is
+    still **id 40** — renamed, never recreated, so its membership and every folder grant
+    survived.
+    > The code never needed this: no production path matches on a prefix. `roleFromGroupName`
+    > reads the SUFFIX, the Group Map joins on the integer `GroupId`, and `spGroupsFilter`
+    > excludes by id. `matchesAnyGroupPrefix()` and `groupPrefix()` in `naming.ts` DO require
+    > one, but have **zero production callers** — dead code, and a hazard: wiring
+    > `matchesAnyGroupPrefix` back into a group search would silently drop every prefix-less
+    > group. Delete them or leave them, but do not use them.
+11. **Update `GroupName` on the CRS Group Map rows** to the renamed titles (the CORU row →
+    `GHO_GF_CORU_UPL`). `GroupId` is the join so access is unaffected, but reconciliation
+    compares the stored name against the site-entry title to decide NOT to grant that group
+    ancestor-browse Read — a stale name defeats that check.
 
 ---
 
