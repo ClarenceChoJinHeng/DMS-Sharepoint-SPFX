@@ -189,3 +189,52 @@ row ignored** — with granting back, the two passes would fight.
 - **Reconciliation logs saying `Staging/…` are not stale** — that is the logical library key, not
   a path. See §2.1. A log is stale if it says `content type → DMS Folder` or *"Ancestor browse
   Read: report only"*.
+
+---
+
+## 6. In design — configurable folder structure (started 2026-08-06/07)
+
+**Spec:** `docs/superpowers/specs/2026-08-06-configurable-folder-structure-chain-design.md`.
+Design agreed, **no code written**. Nothing in `src/` has changed for this.
+
+**The ask.** The client wants to add a folder tier below Unit — e.g. `Function` containing
+`Human Resource` — and place it anywhere in the path (before Year, between Year and Document Type,
+or after Document Type), then upload into it. They cannot edit JSON and will not have a developer
+available, so a config-file answer is not an answer.
+
+**Three pieces, build in order:**
+
+1. **The chain model** (spec above). Unify `Levels` and the hardcoded below-Unit folders into one
+   ordered chain per mode, each entry flagged `permissioned` true/false. Absent flag means `true`,
+   so the three live mode rows are untouched. **Internal milestone — never ships to the client
+   alone.**
+2. **Structure Manager UI.** An admin web part that authors the chain — name a tier, pick its term
+   set, drag it into position — and creates the required columns. This is the actual client
+   deliverable. No spec yet.
+3. **Subtree migration.** Move existing content under a newly inserted tier. No spec yet; findings
+   so far are recorded in the piece 1 spec under "Piece 3 — findings and outstanding tests".
+
+**The hazard to understand before touching `FolderManager.tsx`:** reconciliation creates a folder
+per term *and breaks inheritance* for every chain entry. Unfiltered, the new non-permissioned
+entries would produce thousands of ACL'd Year and Document Type folders. The client explicitly
+declined any inheritance break below Unit (2026-08-06). The guard is a `permissioned === true`
+filter before the walk.
+
+**Auto-route findings from this discussion** (observed in the live flow, 2026-08-07):
+
+- Trigger is `When an item is created or modified` — correct, and must not be changed. Power
+  Automate offers no "when approval status changes" trigger for SharePoint.
+- `Copy file` uses `If another file is already there: Replace`, so a re-fire to the *same* path
+  overwrites harmlessly.
+- But the destination is built from the **live folder path**, so a folder move sends the copy to a
+  new path and orphans the old one. **Migration must therefore run against both libraries at once,
+  with the flow disabled** — see §3.7, which already needs the `Staging/` → `ApprovalDocument/`
+  path-split fix.
+- **Unverified:** the approval email sits in the same branch after `Copy file` and is probably not
+  idempotent, so metadata edits on an approved file may re-send it. Read the branch condition to
+  confirm. If real, this is a live bug unrelated to the folder-structure work.
+
+**Blocked on site maintenance:** the folder-move test (does approval status survive a move within
+the library?). Procedure and expectation table are in the spec. If status does *not* survive,
+migration gets materially more expensive and "new uploads only" should be re-proposed to the client
+despite their having rejected it.

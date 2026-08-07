@@ -32,7 +32,9 @@ client never sees the JSON at any point.
   never ships to them.
 - **Migrating existing files** when a tier is inserted above existing content. Separate spec
   (piece 3). Decided 2026-08-06: legacy subtrees move under one admin-chosen value per unit, as a
-  folder-subtree move, not a file-by-file move.
+  folder-subtree move, not a file-by-file move. Findings gathered so far are recorded below under
+  "Piece 3 — findings and outstanding tests", so the eventual spec starts from evidence rather
+  than assumption.
 - **Ordering of non-tier fields** (Document Date, Confidentiality, Remark, filename parts).
 - **Breaking inheritance below Unit.** Explicitly declined by the client 2026-08-06 — every folder
   below Unit inherits the Unit's ACL, including new tiers.
@@ -200,6 +202,85 @@ sees it.
   `Year → Document Type` path.
 - Manual: insert a tier before Year, between Year and Document Type, and after Document Type;
   confirm the path, the metadata columns, and that reconciliation creates nothing below Unit.
+
+---
+
+## Piece 3 — findings and outstanding tests
+
+Recorded 2026-08-07 during design discussion. **Piece 3 has no spec yet.** This section exists so
+whoever writes it starts from what is known rather than re-deriving it.
+
+### Established
+
+**The client wants migration, not coexistence.** Confirmed 2026-08-06. When a tier is inserted
+above existing content, the existing subtree moves under it, so a unit ends up with one shape, not
+two side by side.
+
+**Cost scales with insertion depth**, because a folder move carries its whole subtree:
+
+| Insert position | What moves | Volume per unit |
+|---|---|---|
+| Above Year (top) | the Year subtrees | a few folder moves |
+| Between Year and Document Type | the Document Type subtrees | years × a few |
+| Below Document Type (bottom) | the **files** themselves | thousands |
+
+Inserting at the top is cheap. Inserting at the bottom is the expensive case and should be
+called out to the client before they choose a position.
+
+**The legacy value is an admin decision, not a derivable one.** Nothing in the system knows whether
+a 2026 invoice was Human Resource or Finance. The admin picks one target value per unit when adding
+the tier, with a preview of what will move before anything happens.
+
+### Auto-route flow — verified from the live flow, 2026-08-07
+
+Two properties observed directly:
+
+- **Trigger is `When an item is created or modified`.** This is correct and must not be changed —
+  Power Automate offers no "when approval status changes" trigger for SharePoint, so
+  created-or-modified plus a moderation-status condition is the only way to catch an approval.
+- **`Copy file` is set to `If another file is already there: Replace`.** So a re-fire that resolves
+  to the *same* destination path overwrites in place. No duplicate files from metadata edits.
+
+Two consequences follow, and both matter to piece 3:
+
+1. **Replace protects only an unchanged path.** The destination is a `concat(...)` built from the
+   live folder path, which is what makes the flow rename-proof. A folder *move* changes that path,
+   so a re-fire after migration copies to the NEW Documents path while the old copy remains at the
+   old path — an orphan, not a replacement.
+
+   **Therefore migration must operate on BOTH libraries as a single run, with the flow disabled for
+   its duration.** Migrating `Approval Document` alone leaves `Documents` in the old shape, and the
+   next approval in that unit silently starts building a second tree. This is a firm scope
+   conclusion, not a suggestion.
+
+2. **The approval email is probably not idempotent.** `Send an email from a shared mailbox` sits in
+   the same True branch after `Copy file`. Replace makes the file idempotent; nothing makes the
+   email idempotent. If the branch condition tests approval status alone, every metadata edit on an
+   already-approved file re-sends the approval notification to the uploader. **Unverified** — the
+   condition itself has not been read. If confirmed this is a live bug independent of this feature,
+   not something migration introduces.
+
+### Outstanding tests — blocked on site maintenance
+
+To run on `/sites/ClarenceDMSTesting` against a throwaway unit folder, never real data. Set up
+`TESTUNIT/2026/Invoice/` holding one approved file (let Auto-route copy it to Documents) and one
+pending file, then create `TESTUNIT/Human Resource/` and **Move to** the `2026` folder under it.
+
+| Check | Expectation | Result |
+|---|---|---|
+| Approval status on the approved file | Still Approved — same list item, path only changed | |
+| Approval status on the pending file | Still Pending | |
+| List item `ID` of both | Unchanged | |
+| Metadata columns (`Unit`, `UnitTid`, `Year`, `Document_x0020_Type`) | Unchanged — stored values, not derived from path | |
+| Version history | Preserved (Move keeps it; Copy would not) | |
+| Documents library copy | Still at the OLD path — the move does not touch Documents | |
+| Permissions on moved files | Unchanged — still inheriting from TESTUNIT | |
+| Read the flow's branch condition | Confirms or clears the duplicate-email question above | |
+
+**If approval status does NOT survive the move**, migration becomes materially more expensive —
+every moved file needs re-approving or its status re-stamped by an admin process. That is the point
+at which "new uploads only, two shapes side by side" should be reconsidered, despite the client
+having rejected it.
 
 ---
 
