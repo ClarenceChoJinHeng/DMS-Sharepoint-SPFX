@@ -49,6 +49,14 @@
           "manifest": "./src/webparts/onboarding/OnboardingWebPart.manifest.json"
         }
       ]
+    },
+    "user-access-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/userAccess/UserAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/UserAccessWebPart.manifest.json"
+        }
+      ]
     }
   },
   "externals": {},
@@ -56,6 +64,7 @@
     "FormWebPartStrings": "lib/webparts/form/loc/{locale}.js",
     "BulkUploadWebPartStrings": "lib/webparts/bulkUpload/loc/{locale}.js",
     "FolderManagerWebPartStrings": "lib/webparts/folderManager/loc/{locale}.js",
-    "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js"
+    "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js",
+    "UserAccessWebPartStrings": "lib/webparts/userAccess/loc/{locale}.js"
   }
 }

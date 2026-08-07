@@ -6,10 +6,6 @@ import { siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { IFolderManagerProps } from "./IFolderManagerProps";
-import GroupMapBuilder from "./GroupMapBuilder";
-import StagingAccess from "./StagingAccess";
-import PageAccess from "./PageAccess";
-import SiteAccess from "./SiteAccess";
 import {
   loadFolderMapRows,
   FolderMapRow,
@@ -75,26 +71,13 @@ const FOLDER_CONTENT_TYPE_CANDIDATES = ["CRS Folder", "DMS Folder"];
 // Only ever read for log lines, so the fallback to the preferred name is cosmetic.
 let resolvedFolderCtName: string | undefined;
 // The top-level tabs. The two library tabs drive the folder tree; Reconciliation is the
-// term-store-driven provisioner (create + lock + map); GroupMap is folder-scope access;
-// StagingAccess is library-scope entry — who may OPEN the Staging library at all.
-type Tab       = LibTarget | "Reconciliation" | "GroupMap";
-
-/**
- * Sub-tabs of User Access, one per SCOPE a group can be granted on.
- *
- * Nested rather than seven tabs across the top: they are four answers to one question — who can
- * reach what — and at top level they read as unrelated features. Ordered as an admin provisions,
- * which is also the order the access fails in: create the group and map its folders, let its
- * people into the site, let them open the library, then the page.
- */
-type AccessTab = "Folder" | "Site" | "StagingLibrary" | "Page";
-
-const ACCESS_TABS: Array<{ key: AccessTab; label: string }> = [
-  { key: "Folder",         label: "Folder Access" },
-  { key: "Site",           label: "Site Access" },
-  { key: "StagingLibrary", label: "Staging Library Access" },
-  { key: "Page",           label: "Page Access" },
-];
+// term-store-driven provisioner (create + lock + map).
+//
+// The four ACCESS surfaces (folder, site, library, page) left this web part on 2026-08-07 for
+// their own "User Access" page — spec `2026-08-07-access-webpart-split-design.md`. They were
+// sub-tabs here, which buried the most frequent task (a person joins or moves) one level below
+// the least frequent ones. What remains is structure and provisioning only.
+type Tab       = LibTarget | "Reconciliation";
 
 // Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
 // Each maps a term set to the segment container folder its terms live under.
@@ -400,11 +383,6 @@ const s: Record<string, React.CSSProperties> = {
   seg:           { display: "flex", flexWrap: "wrap", justifyContent: "center", maxWidth: "100%", border: "1px solid #0f6c3f", borderRadius: 8, overflow: "hidden" },
   segBtn:        { padding: "8px 16px", fontSize: 13, fontFamily: "'Segoe UI', sans-serif", fontWeight: 600, cursor: "pointer", background: "#fff", color: "#0f6c3f", border: "none", borderRight: "1px solid #0f6c3f" },
   segActive:     { background: "#0f6c3f", color: "#fff" },
-  // Sub-tabs inside User Access. Underline rather than a boxed segment so it cannot be mistaken
-  // for a second row of top-level tabs; wraps, because four labels this long do not fit narrow.
-  subTabBar:     { display: "flex", flexWrap: "wrap", gap: 4, borderBottom: "1px solid #e1e1e1", marginBottom: 16 },
-  subTab:        { padding: "8px 14px", fontSize: 13, fontFamily: "'Segoe UI', sans-serif", fontWeight: 600, cursor: "pointer", background: "transparent", color: "#605e5c", border: "none", borderBottom: "2px solid transparent", marginBottom: -1 },
-  subTabActive:  { color: "#0f6c3f", borderBottom: "2px solid #0f6c3f" },
   secHeader:     { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", margin: "0 0 10px", padding: "4px 0" },
   secTitle:      { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".07em", color: "#0f6c3f", margin: 0 },
   ico:           { fontSize: 11, color: "#0f6c3f", lineHeight: 1, flexShrink: 0 },
@@ -506,9 +484,6 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // Active tab. The two library tabs keep libTarget in sync (drives the folder
   // tree); the Reconciliation tab shows the provisioner instead.
   const [tab,          setTab]          = useState<Tab>("Staging");
-  // Which access scope is showing inside User Access. Folder first: it is where groups are
-  // created, so every other scope depends on it having been used at least once.
-  const [accessTab,    setAccessTab]    = useState<AccessTab>("Folder");
   const [libTarget,    setLibTarget]    = useState<LibTarget>("Staging");
   // Top-level container folders discovered under the library root, in display order.
   const [sections,     setSections]     = useState<Mode[]>([]);
@@ -3491,59 +3466,29 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     <section style={s.wrap}>
       <style>{`.fm-in:focus { outline: none; box-shadow: 0 0 0 2px rgba(15,108,63,.18); }`}</style>
 
-      <h2 style={s.h2}>Folder &amp; Group Manager</h2>
+      <h2 style={s.h2}>Folder Manager</h2>
       <p style={s.subtitle}>Rename, create, and assign permissions to folders at any depth — then apply it all at once.</p>
 
-      {/* Tab bar: two library views + the term-store reconciliation provisioner */}
+      {/* Tab bar: two library views + the term-store reconciliation provisioner.
+          Access lives on its own page now — see the User Access web part. */}
       <div style={s.toggleWrap}>
         <div style={s.seg}>
-          {(["Staging", "Documents", "Reconciliation", "GroupMap"] as Tab[]).map((t, i, arr) => (
+          {(["Staging", "Documents", "Reconciliation"] as Tab[]).map((t, i, arr) => (
             <button key={t}
               onClick={() => {
                 setTab(t);
                 setReconConfirm(false);
-                if (t !== "Reconciliation" && t !== "GroupMap") { setLibTarget(t as LibTarget); setExpandedIds({}); }
+                if (t !== "Reconciliation") { setLibTarget(t as LibTarget); setExpandedIds({}); }
               }}
               style={{ ...s.segBtn, ...(i === arr.length - 1 ? { borderRight: "none" } : {}), ...(tab === t ? s.segActive : {}) }}
             >
-              {/* "User Access" rather than "Group Map": the tab is where a client
-                  answers "who can reach this folder", and the list name is an
-                  implementation detail they never have to think about. */}
-              {t === "Reconciliation" ? "Folder Reconciliation"
-                : t === "GroupMap" ? "User Access"
-                : t}
+              {t === "Reconciliation" ? "Folder Reconciliation" : t}
             </button>
           ))}
         </div>
       </div>
 
-      {tab === "GroupMap" ? (
-        <div>
-          {/* Sub-tab bar. Deliberately a different shape from the top-level segmented control —
-              underlined rather than boxed — so the nesting is legible at a glance instead of
-              looking like a second row of unrelated tabs. */}
-          <div style={s.subTabBar}>
-            {ACCESS_TABS.map((a) => (
-              <button
-                key={a.key}
-                onClick={() => setAccessTab(a.key)}
-                style={{ ...s.subTab, ...(accessTab === a.key ? s.subTabActive : {}) }}
-              >
-                {a.label}
-              </button>
-            ))}
-          </div>
-          {accessTab === "Folder" ? (
-            <GroupMapBuilder context={context} siteUrl={siteUrl} />
-          ) : accessTab === "Site" ? (
-            <SiteAccess context={context} siteUrl={siteUrl} />
-          ) : accessTab === "StagingLibrary" ? (
-            <StagingAccess context={context} siteUrl={siteUrl} library="Staging" />
-          ) : (
-            <PageAccess context={context} siteUrl={siteUrl} />
-          )}
-        </div>
-      ) : tab === "Reconciliation" ? (
+      {tab === "Reconciliation" ? (
         <div>
           <p style={{ fontSize: 13, color: "#444", lineHeight: 1.5, margin: "0 0 16px" }}>
             Build the folder tree from the <strong>term store</strong> in both{" "}
@@ -3734,7 +3679,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         </>
       )}
 
-      {tab !== "Reconciliation" && tab !== "GroupMap" && (
+      {tab !== "Reconciliation" && (
         <div style={s.actions}>
           <button onClick={() => loadTree().catch(() => undefined)} disabled={busy || loading}
             style={{ ...s.btn, marginRight: "auto", background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>

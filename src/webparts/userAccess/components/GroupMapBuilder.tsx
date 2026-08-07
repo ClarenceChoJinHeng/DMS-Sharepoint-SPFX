@@ -40,7 +40,7 @@ import {
   NO_MEMBERS,
 } from "../../../shared/groupExportCsv";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
-import { primeNames } from "../../../shared/spNaming";
+import { primeNames, permissionLevelNames } from "../../../shared/spNaming";
 
 type Props = { context: WebPartContext; siteUrl: string };
 type GroupPick = { id: string; displayName: string };
@@ -162,6 +162,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   }, [personaOpen]);
   const [toast, setToast]       = useState<{ message: string; error: boolean } | undefined>(undefined);
   const [canManage, setCanManage] = useState<boolean | undefined>(undefined); // undefined = still checking
+  // The three custom permission levels, named for THIS site. Hardcoding "DMS Upload" here while
+  // reconciliation grants "CRS Upload" tells an admin to create a level nothing will ever use.
+  const [levels, setLevels] = useState<{ upload: string; approve: string; del: string }>({
+    upload: "Upload", approve: "Approve", del: "Delete",
+  });
+  // The role reference below is four dense paragraphs. Collapsed by default so the FORM is the
+  // first thing on the page — the client's "too complicated" was partly this wall of text.
+  const [rolesOpen, setRolesOpen] = useState(false);
 
   // Draft selections
   const [group, setGroup]         = useState<GroupPick | undefined>(undefined);
@@ -400,6 +408,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     // to the legacy DMS titles — which 404 on a CRS-renamed site and would present as "the config
     // could not be read" rather than "the list is called something else".
     primeNames(context.spHttpClient, siteUrl)
+      .catch(() => undefined)
+      .then(() => permissionLevelNames(context.spHttpClient, siteUrl))
+      .then((n) => setLevels(n))
       .catch(() => undefined)
       .then(() => {
         // An empty mode list is not a neutral state: every Segment cell falls back to a
@@ -1454,44 +1465,70 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       <p style={s.intro}>
         Map a <strong>native SharePoint site group</strong> to a segment, tier, and role — or create
         the group right here and add its members. This writes a clean row into the{" "}
-        <strong>DMS Group Map</strong> list. Member changes take effect <strong>immediately</strong>;
-        new/deleted <em>rows</em> need a <strong>Folder Reconciliation</strong> run to apply folder
-        permissions (MEMBER → Read, UPL → DMS Upload, APR → DMS Approve, DEL → DMS Delete on
-        Documents, DELS → DMS Delete on Staging).
+        <strong>{GROUP_MAP_LIST()}</strong> list.
       </p>
-      {/* Named on the screen because the failure is quiet: reconciliation warns and
-          skips the assignment, so an approver simply never gains the level and the
-          run still reports success overall.
 
-          DMS Upload is called out separately from the other two because its failure
-          mode is worse. APR and DEL previously had no level at all, so a missing one
-          only meant "not yet in effect". UPL used to point at Contribute, which always
-          exists — so once it points at DMS Upload, a site without that level gives
-          every NEWLY provisioned unit no uploader grant whatsoever. Existing uploaders
-          keep the Contribute grant already on their folder (nothing revokes), which is
-          exactly why nobody notices until a new unit is onboarded. */}
-      <p style={s.intro}>
-        <strong>DMS Upload</strong>, <strong>DMS Approve</strong> and <strong>DMS Delete</strong>{" "}
-        are custom permission levels an administrator creates once per site (Site settings →
-        Site permissions → Permission levels): copy <em>Contribute</em> and untick Delete Items;
-        copy <em>Contribute</em>, tick Approve Items and untick Add Items, Delete Items and
-        Delete Versions; copy <em>Read</em> and tick Delete Items. Until they exist,
-        reconciliation reports <em>no &quot;DMS Approve&quot; role definition on site</em> and
-        skips those grants — nobody loses access, but approve-only and delete do not take
-        effect, and a newly provisioned unit gets no uploader grant at all.
-      </p>
-      {/* DEL vs DELS is one letter for two different libraries, so it is spelled out
-          here as well as in the role tooltips. An admin who picks DEL intending
-          "can clear out junk in Staging" grants delete over APPROVED documents
-          instead, and the run log looks identical either way. */}
-      <p style={s.intro}>
-        <strong>DEL</strong> deletes <em>approved</em> documents in the Documents library.{" "}
-        <strong>DELS</strong> deletes <em>pending</em> files in Staging. They share one
-        permission level and differ only in which library they are allowed to reach, so
-        picking the wrong one grants delete over the wrong set of documents. Uploaders
-        (<strong>UPL</strong>) cannot delete at all — that is deliberate, so a PIC must ask a
-        head of unit.
-      </p>
+      {/* Collapsed by default. Everything below is reference an admin needs ONCE (when the
+          permission levels are first created, or when choosing between DEL and DELS) and never
+          again — but it used to sit above the form on every visit. */}
+      <button
+        onClick={() => setRolesOpen((v) => !v)}
+        style={{
+          background: "none", border: "none", padding: "0 0 10px", cursor: "pointer",
+          fontFamily: "'Segoe UI', sans-serif", fontSize: 13, fontWeight: 600, color: "#0f6c3f",
+        }}
+      >
+        {rolesOpen ? "▾" : "▸"} How roles and permission levels work
+      </button>
+
+      {rolesOpen && (
+        <>
+          <p style={s.intro}>
+            Member changes take effect <strong>immediately</strong>; new or deleted{" "}
+            <em>rows</em> need a <strong>Folder Reconciliation</strong> run to apply folder
+            permissions (MEMBER → Read, UPL → {levels.upload}, APR → {levels.approve},
+            DEL → {levels.del} on Documents, DELS → {levels.del} on the approval library).
+          </p>
+          {/* Named on the screen because the failure is quiet: reconciliation warns and
+              skips the assignment, so an approver simply never gains the level and the
+              run still reports success overall.
+
+              Upload is called out separately from the other two because its failure
+              mode is worse. APR and DEL previously had no level at all, so a missing one
+              only meant "not yet in effect". UPL used to point at Contribute, which always
+              exists — so once it points at the custom level, a site without that level gives
+              every NEWLY provisioned unit no uploader grant whatsoever. Existing uploaders
+              keep the Contribute grant already on their folder (nothing revokes), which is
+              exactly why nobody notices until a new unit is onboarded.
+
+              The names are RESOLVED, not hardcoded: telling an admin to create "DMS Upload"
+              on a site where reconciliation grants "CRS Upload" sends them to build a level
+              nothing will ever use, and the resulting log line looks identical. */}
+          <p style={s.intro}>
+            <strong>{levels.upload}</strong>, <strong>{levels.approve}</strong> and{" "}
+            <strong>{levels.del}</strong> are custom permission levels an administrator creates
+            once per site (Site settings → Site permissions → Permission levels): copy{" "}
+            <em>Contribute</em> and untick Delete Items; copy <em>Contribute</em>, tick Approve
+            Items and untick Add Items, Delete Items and Delete Versions; copy <em>Read</em> and
+            tick Delete Items. Until they exist, reconciliation reports{" "}
+            <em>no &quot;{levels.approve}&quot; role definition on site</em> and skips those
+            grants — nobody loses access, but approve-only and delete do not take effect, and a
+            newly provisioned unit gets no uploader grant at all.
+          </p>
+          {/* DEL vs DELS is one letter for two different libraries, so it is spelled out
+              here as well as in the role tooltips. An admin who picks DEL intending
+              "can clear out junk in the approval library" grants delete over APPROVED
+              documents instead, and the run log looks identical either way. */}
+          <p style={s.intro}>
+            <strong>DEL</strong> deletes <em>approved</em> documents in the Documents library.{" "}
+            <strong>DELS</strong> deletes <em>pending</em> files in the approval library. They
+            share one permission level and differ only in which library they are allowed to
+            reach, so picking the wrong one grants delete over the wrong set of documents.
+            Uploaders (<strong>UPL</strong>) cannot delete at all — that is deliberate, so a PIC
+            must ask a head of unit.
+          </p>
+        </>
+      )}
 
       {canManage === false && (
         <div style={{ ...s.card, borderColor: "#f0c000", background: "#fff8e1" }}>

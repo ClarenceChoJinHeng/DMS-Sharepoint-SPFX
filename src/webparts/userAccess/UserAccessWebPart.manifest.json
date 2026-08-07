@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "cd188c96-57e4-4b6c-8ac6-6757143b3c87",
+  "alias": "UserAccessWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "User Access" },
+    "description": { "default": "Admin tool — map SharePoint groups to segments, tiers and roles across folders, the site, the approval library and pages" },
+    "officeFabricIconFontName": "SecurityGroup",
+    "properties": {}
+  }]
+}
