@@ -67,9 +67,17 @@ the other 20 were `ENTRY`/`Page` rows, four of which pointed at SharePoint **sys
 (`Limited Access System Group`, `SharingLinks.…`), and several at MEMBER/GLOBAL/SEGVIEW groups
 that the page policy now excludes. Page access is to be re-added through the Page Access tab.
 
-> ⚠ **`UnitTermGuid` on that row is `9aef23bf-…`, the GUID for `Group Finance` (Department), not
-> `CORU` (Unit) which is `3be3e50c-…`.** The group name says CORU. Verify before trusting the
-> first run — a department-tier row fans to every unit under GF now that fan-out defaults on.
+> ⚠ **The `UnitTermGuid` was typed by hand and is wrong.** It reads `9aef23bf-62a9-4ff9-aaad-
+> d02fc90e5eaf`, which is **`Group Finance` (Department)**. `CORU` (Unit) is
+> **`3be3e50c-b90a-4187-9915-85f4a5f1eb49`**.
+>
+> This is not cosmetic: with `recon_departmentFanOut` now defaulting ON, a department-tier row
+> fans the UPLOADER grant to **every one of the nine units under GF**, not just CORU. Correct the
+> cell before the first reconciliation run.
+>
+> General rule this illustrates: **never hand-type a term GUID.** Copy it from the term store or
+> from `CRS Term Abbreviation`. A mistyped GUID does not error — it silently maps a group to the
+> wrong folder, or to none, and reconciliation reports success either way.
 
 ---
 
@@ -120,10 +128,13 @@ row ignored** — with granting back, the two passes would fight.
 
 ## 3. Outstanding — in order
 
-1. **Fix `CRS Approve`.** Decoded 2026-08-07 from its BasePermissions: it has `ApproveItems` but
-   **NOT `ViewListItems` and NOT `EditListItems`**. An approver sees an empty queue and cannot
-   write the moderation status. It *does* have `DeleteListItems` and `ManageLists`, both worth
-   questioning — Delete makes every approver a deleter regardless of the `DELS` role.
+1. ~~Fix `CRS Approve`~~ — **VERIFIED CORRECT 2026-08-07.** It grants **View Items, Edit Items,
+   Approve Items, Open Items** and *not* Add, Delete or Manage Lists. Exactly what draft-item
+   security needs, and Delete correctly withheld so approving is not deleting.
+   > Decoding note, because this cost a false alarm: in a `BasePermissions` mask the **bit index
+   > is `PermissionKind - 1`**, not `PermissionKind`. Read off by one and the result is plausible
+   > but shifted — View reads as Add, Edit as Delete. If you decode a mask by hand, sanity-check
+   > it against the Permission Levels UI before acting on it.
 2. **Deploy** v1.0.84.0. Bump to 1.0.85.0 and rebuild if the site keeps serving the cached bundle.
 3. **`Documents` library** — attach `CRS Folder`, add `Full Name` to it.
 4. **Verify the Group Map row's `UnitTermGuid`** (§1.4).
