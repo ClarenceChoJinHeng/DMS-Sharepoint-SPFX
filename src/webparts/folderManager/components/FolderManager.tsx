@@ -1623,8 +1623,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // contain no units. That is the persona not working rather than working narrowly.
         // An explicit "off" still turns it off.
         fanOut: (map.recon_departmentFanOut || "on").toLowerCase() === "on",
-        // Ancestor browse Read is no longer granted at all: the client's rule is that
-        // a Head of Unit cannot see the department folder and a Head of Department
+        // SUPERSEDED 2026-08-07 — kept for the history, because the reasoning below is why
+        // the field still exists rather than being deleted outright. The client withdrew the
+        // rule it served; ancestor Read is granted again on every run, and this is hard-off.
+        //
+        // Original note: Ancestor browse Read is no longer granted at all: the client's rule
+        // is that a Head of Unit cannot see the department folder and a Head of Department
         // cannot see the segment folder. Only a C-level (segment-tier) row sees from
         // the segment down.
         //
@@ -2332,13 +2336,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           : `Departmental fan-out: off (recon_departmentFanOut) — parent-tier mappings are reported, not granted`,
         ok: true,
       });
-      // Stated up front for the same reason as fan-out: "off" is the state in which the
-      // visibility rule silently does not apply to anything already provisioned, and
-      // that must be visible rather than inferred from an absence of removals.
+      // Unconditional since 2026-08-07: there is no longer an "off" state to report. The
+      // banner used to describe the revoke pass, which is hard-off — so on a run that was
+      // busily GRANTING ancestor Read it announced "nothing is removed", which is true and
+      // entirely beside the point. Stated positively, it now matches the ↳ lines below it.
       entries.push({
-        msg: gridSets.revokeAncestorRead
-          ? `Ancestor browse Read: REVOKING — groups lose Read on folders above their own tier`
-          : `Ancestor browse Read: report only (recon_revokeAncestorRead) — leftovers are listed, nothing is removed`,
+        msg: `Ancestor browse Read: GRANTING — each group gets Read up its own path so it can browse down to its folder; siblings stay security-trimmed`,
         ok: true,
       });
       let yearLabels: string[] = [];
@@ -2799,7 +2802,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 pushAssign(lib, `Group "${g.groupName}" not found — ask an administrator to create it`, "admin");
               }
             }
-            // Ancestor browse Read: no longer granted, and actively revoked.
+            // Ancestor browse Read: granted, so a user can click down to their folder.
             //
             // This pass used to grant each group Read on every ancestor folder on its
             // path so members could click down to their unit.
