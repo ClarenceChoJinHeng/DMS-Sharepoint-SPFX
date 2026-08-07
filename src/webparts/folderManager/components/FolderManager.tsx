@@ -206,11 +206,16 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // Documents-only (see LIBRARY_ROLES); a viewer on Staging would be reading other
   // people's pending drafts, which is the isolation rule the whole model rests on.
   //
-  // SEGVIEW is deliberately ABSENT. It was retired the day after it was added, and
-  // omitting it here is what makes it inert: accepts() requires a level, so a leftover
-  // SEGVIEW row is skipped on every folder in every library rather than being granted
-  // something approximate.
   GLOBAL: "Read",
+  // SEGVIEW — un-retired 2026-08-07 for the client's second C-Level shape, "view its own
+  // business segment only". Same level as GLOBAL and the same fan-DOWN; the difference is
+  // only how far it travels. A GLOBAL row is termless and reaches every segment; a SEGVIEW
+  // row carries a SEGMENT term and reaches that segment's folders alone.
+  //
+  // Documents-only, like GLOBAL, and for the same reason — see LIBRARY_ROLES. This is the
+  // one role where a mistake is both quiet and wide: a SEGVIEW row wrongly accepted on
+  // Staging hands one person every unapproved draft in an entire business segment.
+  SEGVIEW: "Read",
   // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
   // library at all — Limited Access on the parent chain lets a direct folder URL through but
   // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without
@@ -262,9 +267,12 @@ function applyPermissionPrefix(levelNames: string[]): void {
 // Documents would hand a Staging deleter other people's approved documents, and a
 // DEL row on Staging would hand a Documents deleter other people's pending ones.
 // The level cannot tell them apart, so this table is the only thing that does.
+// SEGVIEW joins GLOBAL on Documents ONLY (2026-08-07). Both are C-Level view roles and
+// neither may ever appear in the Staging list: a segment-wide viewer on Staging reads every
+// unapproved draft in that segment, which is the exact isolation this table exists to hold.
 const LIBRARY_ROLES: Record<LibTarget, string[]> = {
   Staging: ["UPL", "APR", "DELS"],
-  Documents: ["MEMBER", "DEL", "GLOBAL"],
+  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW"],
 };
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1606,7 +1614,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // So the run REPORTS what would fan while this is off (see the assignment
         // loop) and grants nothing. An admin reads that list, deletes the leftovers,
         // and only then sets the row to "on".
-        fanOut: (map.recon_departmentFanOut || "").toLowerCase() === "on",
+        // Defaults ON as of 2026-08-07. Head of Department is a department-scoped persona,
+        // and unit folders have unique permissions, so with this off an HoD row grants Read
+        // on the department folder and nothing else — a folder that appears, to them, to
+        // contain no units. That is the persona not working rather than working narrowly.
+        // An explicit "off" still turns it off.
+        fanOut: (map.recon_departmentFanOut || "on").toLowerCase() === "on",
         // Ancestor browse Read is no longer granted at all: the client's rule is that
         // a Head of Unit cannot see the department folder and a Head of Department
         // cannot see the segment folder. Only a C-level (segment-tier) row sees from
@@ -1622,7 +1635,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // this codebase that deletes anything, so the default REPORTS every candidate
         // and removes none. An admin reads that list, satisfies themselves it contains
         // only what they expect, and then sets the row to "on".
-        revokeAncestorRead: (map.recon_revokeAncestorRead || "").toLowerCase() === "on",
+        // HARD OFF as of 2026-08-07, config row ignored. The requirement it served was
+        // withdrawn, and the ancestor Read it stripped is now granted again on every run —
+        // so an admin flipping this row would have the two passes fight, and would break
+        // in-library navigation for every user. Kept as a field rather than deleted so the
+        // setting name stays recognisable if it reappears in a client's config list.
+        revokeAncestorRead: false,
       };
     } catch {
       return RECON_SETTINGS_FALLBACK;
@@ -2260,6 +2278,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // Role assignments per ancestor path, fetched once. A twelve-unit department
       // would otherwise re-read the same department folder twelve times per library.
       const ancAssignCache = new Map<string, ExistingAssign[]>();
+      // Ancestor browse grants MADE by this run, keyed `${ancestorFullPath}|${principalId}`.
+      // Kept apart from ancAssignCache rather than appended to it: an ExistingAssign carries
+      // uid/title/kept read back from SharePoint, and inventing those to represent a grant we
+      // just made would put fabricated data into a structure other passes read as truth.
+      // Twelve units under one department means eleven repeat grants without this.
+      const ancGranted = new Set<string>();
       // A collision aborts BEFORE anything is created. Two siblings resolving to
       // one path means one folder, one ACL, and two units' documents inside it —
       // the isolation the whole permission model rests on. A partial run would
@@ -2688,7 +2712,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               // department-tier row makes silently granting unacceptable. Reported
               // as a warning, not an error: this is the configured behaviour, and an
               // error would gate the orphan prune on it.
-              if (!gridSets.fanOut) {
+              //
+              // SEGVIEW is EXEMPT from the gate, for exactly the reason GLOBAL needs no gate:
+              // the role name is itself the consent. The gate exists because a leftover
+              // segment- or department-tier MEMBER row is indistinguishable BY TIER from a
+              // deliberate wide grant. SEGVIEW cannot be that — it granted nothing on any
+              // site until 2026-08-07, so every row that exists was written deliberately, and
+              // a segment-tier row IS its intended shape rather than a legacy accident.
+              if (!gridSets.fanOut && i.row.role !== "SEGVIEW") {
                 entries.push({
                   msg: `  ⚠ ${g0(i.row)} would inherit ${ROLE_TO_PERMISSION[i.row.role]} on ${folderLabel} from a parent-tier mapping — not granted (recon_departmentFanOut is off)`,
                   ok: true,
@@ -2768,61 +2799,53 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // Ancestor browse Read: no longer granted, and actively revoked.
             //
             // This pass used to grant each group Read on every ancestor folder on its
-            // path so members could click down to their unit. The client's rule as of
-            // 2026-08-04 is the opposite: a Head of Unit must not see the department
-            // folder, a Head of Department must not see the segment folder, and only a
-            // C-level segment-tier row sees from the segment down. Siblings were always
-            // security-trimmed, so what the corridor exposed was the ancestor folders
-            // themselves — exactly what must now be hidden.
+            // path so members could click down to their unit.
             //
-            // Navigation is replaced by direct links (SharePoint keeps Limited Access on
-            // the parents, so a direct URL to the unit folder still opens) plus the
-            // landing web part that resolves a user's folders for them. Without that
-            // component the library root looks empty to every non-admin — the two halves
-            // ship together.
+            // RESTORED 2026-08-07, having been removed on 2026-08-04. The 2026-08-04 rule
+            // ("a Head of Unit must not see the department folder, a Head of Department
+            // must not see the segment folder") was WITHDRAWN by the client's next
+            // restatement: navigation now starts at the business segment for every family,
+            // in both libraries. "View the unit folder ONLY" meant not seeing SIBLING
+            // units — which siblings already are, since they carry no grant and SharePoint
+            // security-trims them.
+            //
+            // Removing the grant was never visible on an existing site, because earlier
+            // runs had already made the assignments and reconciliation only ever added.
+            // It bites on a NEW library: every folder is new, none gets ancestor Read, and
+            // the library root renders empty for every non-admin. That is exactly the state
+            // the recreated Approval Document library is in, which is how this was caught.
             if (grantedPids.length > 0 && readId !== undefined) {
               for (const anc of ancestorRelPaths(t.relPath)) {
                 const ancFull = `${root}${anc}`;
-                const ancTerm = termByRelPath.get(anc) ?? "";
-                let existing = ancAssignCache.get(ancFull);
-                if (existing === undefined) {
+                // Declared with a definite type rather than inferred from the cache read:
+                // the loop below reassigns it after each grant, which loses the narrowing
+                // that the undefined-check would otherwise give.
+                const cached = ancAssignCache.get(ancFull);
+                let existing: ExistingAssign[];
+                if (cached === undefined) {
                   existing = await getRoleAssignments(ancFull);
                   ancAssignCache.set(ancFull, existing);
+                } else {
+                  existing = cached;
                 }
                 for (const gp of grantedPids) {
-                  // The site-entry group is what lets anyone open the site at all.
-                  // It is never a browse leftover and must never be a candidate.
+                  // The site-entry group reaches the site, never a folder. It is not part
+                  // of anyone's browse path and must not be granted one.
                   if (gp.groupName === siteEntryGroupTitle()) continue;
-                  // Only an assignment that is EXACTLY Read qualifies. A real grant at
-                  // this tier (DMS Approve, DMS Upload, DMS Delete) is someone's actual
-                  // access, not a browse artefact.
-                  const held = existing.find(a => a.principalId === gp.pid && a.roleDefId === readId);
-                  if (!held) continue;
-                  // A group with its own row at this tier is SUPPOSED to hold Read here
-                  // — that is what a department-tier or segment-tier viewer is. Removing
-                  // it would delete the C-level and Head-of-Department view access this
-                  // whole change exists to preserve.
-                  const ownRowHere = (groupMap.get(ancTerm) ?? [])
-                    .some(r => spGroupPrincipalId(r.groupId) === gp.pid);
-                  if (ownRowHere) continue;
-                  if (!gridSets.revokeAncestorRead) {
-                    entries.push({
-                      msg: `  ⚠ ${gp.groupName} holds Read (browse) on ${anc} — would be removed (recon_revokeAncestorRead is off)`,
-                      ok: true,
-                    });
-                    continue;
-                  }
+                  // Idempotent: a second unit under the same department must not re-grant
+                  // Read its parent already holds. The cache makes that one probe per
+                  // ancestor per run rather than one per unit.
+                  const grantKey = `${ancFull}|${gp.pid}`;
+                  if (ancGranted.has(grantKey)) continue;
+                  if (existing.some(a => a.principalId === gp.pid && a.roleDefId === readId)) continue;
                   try {
-                    await removeRoleAssignment(ancFull, gp.pid);
-                    // Drop it from the cache too: a second unit under the same
-                    // department must not report removing the same grant twice.
-                    ancAssignCache.set(ancFull, existing.filter(a => a !== held));
-                    existing = ancAssignCache.get(ancFull) as ExistingAssign[];
-                    entries.push({ msg: `  ⤫ ${gp.groupName} — Read (browse) removed from ${anc}`, ok: true });
-                    pushAssign(lib, `${anc} → ${gp.groupName} Read removed (ancestor browse)`, "ok");
+                    await addRoleAssignment(ancFull, gp.pid, readId);
+                    ancGranted.add(grantKey);
+                    entries.push({ msg: `  ↳ ${gp.groupName} — Read (browse) on ${anc}`, ok: true });
+                    pushAssign(lib, `${anc} → ${gp.groupName} Read (ancestor browse)`, "ok");
                     await tick();
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${gp.groupName} — failed to remove Read on ${anc}: ${(e as Error).message}`, ok: false });
+                    entries.push({ msg: `  ✗ ${gp.groupName} — failed to grant Read on ${anc}: ${(e as Error).message}`, ok: false });
                   }
                 }
               }

@@ -45,24 +45,32 @@ describe("personas", () => {
     }
   });
 
-  it("gives every Head-of persona the approve role — that is what makes it a Head-of", () => {
-    for (const p of PERSONAS) {
-      if (p.family.indexOf("Head of") === 0) expect(p.roles).toContain("APR");
-    }
+  it("gives approve to Head of Unit and to nobody else", () => {
+    // Reversed on 2026-08-07: approval used to belong to every Head-of family. The client
+    // moved it to Head of Unit alone, so an APR appearing on any other persona means the
+    // department tier has quietly regained the power to approve its units' documents.
+    const approvers = PERSONAS.filter((p) => p.roles.indexOf("APR") !== -1);
+    expect(approvers.map((p) => p.key)).toEqual(["hou"]);
   });
 
-  it("matches Head of Department and Head of Unit role-for-role, differing only in scope", () => {
-    // The client's document lists them as eight groups with identical wording. If
-    // these ever diverge, one family has silently gained or lost a capability.
+  it("keeps Head of Department to view + delete, department-scoped", () => {
     const hod = PERSONAS.filter((p) => p.family === "Head of Department");
+    expect(hod.length).toBe(1);
+    expect(hod[0].scope).toBe("department");
+    expect(hod[0].roles).toEqual(["MEMBER", "DEL"]);
+    // DEL is the DOCUMENTS delete. DELS would put a department head on Staging, which
+    // LIBRARY_ROLES routes there — and HoD has no Staging access at all.
+    expect(hod[0].roles).not.toContain("DELS");
+    expect(hod[0].roles).not.toContain("UPL");
+  });
+
+  it("keeps Head of Unit to approve + view, unit-scoped", () => {
     const hou = PERSONAS.filter((p) => p.family === "Head of Unit");
-    expect(hod.length).toBe(4);
-    expect(hou.length).toBe(4);
-    for (let i = 0; i < hod.length; i++) {
-      expect(hou[i].roles).toEqual(hod[i].roles);
-      expect(hod[i].scope).toBe("department");
-      expect(hou[i].scope).toBe("unit");
-    }
+    expect(hou.length).toBe(1);
+    expect(hou[0].scope).toBe("unit");
+    expect(hou[0].roles).toEqual(["MEMBER", "APR"]);
+    // Deleting approved documents belongs to the department head, not the unit head.
+    expect(hou[0].roles).not.toContain("DEL");
   });
 
   it("scopes every persona below C-Level and Head of Department to the unit", () => {
@@ -76,23 +84,24 @@ describe("personas", () => {
     }
   });
 
-  it("offers GLOBAL as the only C-Level role, and keeps retired SEGVIEW out", () => {
-    // SEGVIEW was retired on 2026-08-04, the day after it was added: the client
-    // settled on a single global C-level rather than one per segment. It stays in
-    // the type so roleFromGroupName still recognises the suffix (see below), but it
-    // must never become offerable again.
+  it("offers both C-Level shapes — all segments, and one segment", () => {
+    // SEGVIEW was retired on 2026-08-04 and UN-retired on 2026-08-07: the client's third
+    // restatement asks for both "view the entire business segments" and "view its own
+    // business segment only". The two differ only in reach — GLOBAL rows are termless and
+    // reach everything, a SEGVIEW row carries a segment term and reaches that segment.
     expect(SELECTABLE_ROLES).toContain("GLOBAL");
-    expect(SELECTABLE_ROLES).not.toContain("SEGVIEW");
+    expect(personaByKey("clevel_global")?.roles).toEqual(["GLOBAL"]);
+    expect(personaByKey("clevel_segment")?.roles).toEqual(["SEGVIEW"]);
     expect(personaByKey("clevel_global")?.unavailable).toBeUndefined();
-    expect(personaByKey("clevel_segment")).toBeUndefined();
-    expect(PERSONAS.filter((p) => p.family === "C-Level").length).toBe(1);
+    expect(personaByKey("clevel_segment")?.unavailable).toBeUndefined();
+    expect(PERSONAS.filter((p) => p.family === "C-Level").length).toBe(2);
   });
 
-  it("still parses a retired _SEGVIEW group rather than letting it fall through to MEMBER", () => {
-    // The reason SEGVIEW was not deleted outright. A group created during the one
-    // day the role existed would otherwise parse as MEMBER and be granted Read at
-    // whatever tier its row sits on. Recognised-but-inert fails safe; mis-parsed
-    // grants access nobody asked for.
+  it("parses a _SEGVIEW group rather than letting it fall through to MEMBER", () => {
+    // Why SEGVIEW was never deleted outright, and why that turned out to matter: groups
+    // created during the one day the role first existed still parse correctly now that it
+    // is live again. Mis-parsing one as MEMBER would grant Read at whatever tier its row
+    // sits on — for a segment-tier row, an entire business segment.
     expect(roleFromGroupName("DMS_MHO_SEGVIEW")).toBe("SEGVIEW");
   });
 
@@ -111,34 +120,27 @@ describe("personas", () => {
     // group — the SDG Employee role. Bundling MEMBER in here made every PIC a Documents
     // reader by default: the wrong default for a permission, and not what the client's
     // "can see the files in the unit" line meant.
-    expect(personaByKey("pic1")?.roles).toEqual(["UPL"]);
+    expect(personaByKey("pic")?.roles).toEqual(["UPL"]);
   });
 
-  it("offers exactly one PIC upload persona, plus the unavailable HC one", () => {
-    // PIC 1 and PIC 3 collapsed once "own files only" was dropped as unachievable and
-    // MEMBER came out of PIC 1: both are UPL alone. Two identical entries in a picker are
-    // a trap, not a choice.
+  it("offers exactly one PIC persona, with no confidentiality variants", () => {
+    // Confirmed 2026-08-07: any PIC may upload at ANY confidentiality level, all three.
+    // Confidentiality is metadata the uploader picks on the form; it is not a permission,
+    // so it cannot produce a second PIC persona. The old "Highly Confidential only" entry
+    // is gone rather than greyed out — a picker row nobody can ever choose is a question
+    // the client asks once and gets answered every time.
     const pics = PERSONAS.filter((p) => p.family === "PIC");
-    const selectable = pics.filter((p) => !p.unavailable);
-    expect(selectable.length).toBe(1);
-    expect(selectable[0].roles).toEqual(["UPL"]);
+    expect(pics.length).toBe(1);
+    expect(pics[0].roles).toEqual(["UPL"]);
+    expect(pics[0].unavailable).toBeUndefined();
+    expect(personaByKey("pic2")).toBeUndefined();
     expect(personaByKey("pic3")).toBeUndefined();
   });
 
-  it("lists PIC 2 but marks it unavailable rather than hiding it", () => {
-    // Silently dropping one of the client's own numbered groups reads as an
-    // oversight, and an admin would go hunting for it.
-    const pic2 = personaByKey("pic2");
-    expect(pic2).toBeDefined();
-    expect(pic2?.unavailable).toBeTruthy();
-    expect(pic2?.roles).toEqual(["HC"]);
-  });
-
-  it("keeps HC out of every provisionable persona and out of the role picker", () => {
-    for (const p of PERSONAS) {
-      if (p.unavailable) continue; // pic2 IS HC by definition, and is blocked
-      expect(p.roles).not.toContain("HC");
-    }
+  it("keeps HC out of every persona and out of the role picker", () => {
+    // The role string survives for the Phase 2 HC-library work on feat/hc-libraries, but
+    // nothing offers it: no persona, and not the picker.
+    for (const p of PERSONAS) expect(p.roles).not.toContain("HC");
     expect(SELECTABLE_ROLES).not.toContain("HC");
   });
 
@@ -377,37 +379,48 @@ describe("suffixForRole", () => {
   });
 });
 
-describe("PERSONAS — Staging delete belongs to the upload groups only", () => {
-  // The client's document is explicit that Head-of groups 2 and 3 cannot delete
-  // on Staging, and equally explicit that a PIC needs the head of unit's approval
-  // first. Both facts are carried by which personas hold DELS, so a wrong entry
-  // here is a silent permission grant rather than a visible bug.
+describe("PERSONAS — delete belongs to the Head of Department, in Documents only", () => {
+  // Rewritten 2026-08-07. Delete used to ride with upload across four HoD and four HoU
+  // bundles; the client's third restatement gives delete to the Head of Department and
+  // says nothing about Staging delete at all. A wrong entry here is a silent permission
+  // grant rather than a visible bug, which is why each half is asserted separately.
   const rolesOf = (key: string): string[] => personaByKey(key)?.roles ?? [];
 
-  it.each(["hod1", "hod4", "hou1", "hou4"])("gives %s Staging delete", (key) => {
-    expect(rolesOf(key)).toContain("DELS");
-    expect(rolesOf(key)).toContain("UPL");
+  it("gives Documents delete to the Head of Department", () => {
+    expect(rolesOf("hod")).toContain("DEL");
   });
 
-  it.each(["hod2", "hod3", "hou2", "hou3"])("withholds Staging delete from %s", (key) => {
-    expect(rolesOf(key)).not.toContain("DELS");
-    expect(rolesOf(key)).not.toContain("UPL");
+  it("gives Staging delete to nobody", () => {
+    // DELS is deliberately kept as a role — an admin can still author a row by hand and
+    // reconciliation honours it — but no persona offers it, so no group is created with
+    // it. If this ever fails, some persona has quietly gained the power to delete other
+    // people's pending documents.
+    const withStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELS") !== -1);
+    expect(withStagingDelete).toEqual([]);
   });
 
-  it("gives the PIC upload without Staging delete", () => {
-    // The client's rule: "if any PIC wants to delete they need approval from the head of
-    // unit first". Enforced by withholding DELS, not by trusting the process.
-    expect(rolesOf("pic1")).toContain("UPL");
-    expect(rolesOf("pic1")).not.toContain("DELS");
+  it("keeps the PIC to upload alone", () => {
+    expect(rolesOf("pic")).toEqual(["UPL"]);
   });
 
-  it("keeps Documents delete and Staging delete distinct", () => {
-    // Group 3 deletes in Documents only; group 4 in both. If these ever coincide
-    // by accident, one role is standing in for the other and the library rule
-    // stops meaning anything.
-    expect(rolesOf("hod3")).toContain("DEL");
-    expect(rolesOf("hod3")).not.toContain("DELS");
-    expect(rolesOf("hod4")).toEqual(expect.arrayContaining(["DEL", "DELS"]));
+  it("never puts DEL and DELS on the same persona", () => {
+    // They map to the same permission LEVEL and are told apart only by LIBRARY_ROLES. A
+    // persona holding both would reach approved documents AND other people's pending ones,
+    // and the library rule would stop meaning anything.
+    for (const p of PERSONAS) {
+      const both = p.roles.indexOf("DEL") !== -1 && p.roles.indexOf("DELS") !== -1;
+      expect(both).toBe(false);
+    }
+  });
+
+  it("keeps C-Level and Head of Department off every Staging role", () => {
+    // The families that see widest must never reach unapproved drafts: a C-Level on
+    // Staging reads a whole segment's, an HoD a whole department's.
+    for (const key of ["clevel_global", "clevel_segment", "hod"]) {
+      for (const stagingRole of ["UPL", "APR", "DELS"]) {
+        expect(rolesOf(key)).not.toContain(stagingRole);
+      }
+    }
   });
 });
 

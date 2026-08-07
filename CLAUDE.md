@@ -241,18 +241,56 @@ department libraries. Web part job ends at "upload to the approval library."
 > The library is now at `/ApprovalDocument`, so **the flow must be edited to match** or it silently
 > stops routing — approvals succeed, nothing lands in Documents, and no error is raised anywhere.
 
-## RBAC
-| Group | SP Permission Level | Scope | Can do |
-|-------|--------------------|----|------|
-| Admin | Full Control | Site | Everything |
-| Approver | **Design** | Department Folder in Staging Library (their dept only) | Review & approve pending items for their dept |
-| Approver | **Read** | Department Folder in Documents Library (their dept only) | Read approved docs for their dept |
-| Uploader | **Contribute** | Department Folder in Staging Library (their dept only) | Upload + tag; sees only their own pending items |
-| Uploader | **Read** | Department Folder in Documents Library (their dept only) | Read approved docs for their dept |
-| Reader | **Read** | Department Folder in Documents Library (their dept only) | Read approved docs only |
+## RBAC — six personas (2026-08-07, spec `2026-08-07-role-model-simplification-design.md`)
+Twelve personas collapsed to six when the client moved approval to Head of Unit and made Head of
+Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source of truth.
 
-> Design is the only non-Full-Control SP level that includes "approve items".
+| Persona | Roles | Scope | Documents | Approval Document (Staging) |
+|---|---|---|---|---|
+| C-Level (global) | `GLOBAL` | all segments | view everything | **none** |
+| C-Level (segment) | `SEGVIEW` | one segment | view that segment, all the way down | **none** |
+| Head of Department | `MEMBER`, `DEL` | department | view **every unit under the dept**, + delete approved docs | **none** — does NOT approve |
+| Head of Unit | `MEMBER`, `APR` | unit | view own path | **approve + view every file in their unit** |
+| PIC | `UPL` | unit | none unless also given the base group | upload at **any** confidentiality level |
+| SDG Employee | `MEMBER` | unit | view own path | none |
+
+- **Navigation starts at the business segment in BOTH libraries.** Reconciliation grants each
+  group `Read` up its own path (the "ancestor browse" corridor); siblings get nothing and stay
+  security-trimmed. This was deleted on 2026-08-04 for a requirement the client then withdrew, and
+  **restored 2026-08-07** — its absence is invisible on an existing site but renders a NEW library
+  empty for every non-admin.
+- **`recon_departmentFanOut` now defaults ON.** Unit folders have unique permissions, so without
+  it a Head of Department sees a department folder that appears to contain no units.
+- **`recon_revokeAncestorRead` is hard-off**, config row ignored — it would fight the restored
+  grant and break navigation.
+- **Confidentiality is metadata, not a permission.** Any PIC may upload at any level; there is no
+  HC persona and `HC` is offered nowhere.
+- **`DELS` (Staging delete) belongs to no persona.** Kept as a role so a hand-authored row still
+  works, but nothing creates a group with it.
+- **`SEGVIEW`/`GLOBAL` must NEVER appear in `LIBRARY_ROLES.Staging`** — a segment-wide viewer
+  there reads every unapproved draft in the segment.
+
+> Design is the only non-Full-Control SP level that includes "approve items" — but this site uses
+> the custom `CRS Approve` level, so **verify it actually contains Approve Items**: draft-item
+> security and the whole approval flow key off that permission, not off a group name.
 > Inheritance is broken per department folder in BOTH libraries — not at library level.
+
+> ❌ **PER-UPLOADER FILE ISOLATION IS OUT OF SCOPE (decided 2026-08-06).** The client asked for
+> uploaders in the same `*_UPL` group to see only their own files inside the shared unit folder
+> (Clarence not seeing Bayajit's). **The unit folder is the smallest confidentiality boundary this
+> system has** — do not re-propose either mechanism:
+> - **List item-level permissions (`ReadSecurity=2`)** exempts only holders of **Manage Lists**, which
+>   is evaluated at LIBRARY scope. Approvers hold Design on the FOLDER and nothing at library root,
+>   so they would be restricted too and approval would break. Granting them library-level rights to
+>   fix it re-opens cross-department visibility — the exact thing the folder ACLs exist to prevent.
+>   Also library-wide only (no per-unit opt-out) and it risks hiding admin-created folders from
+>   uploaders, breaking navigation and the form's folder resolution.
+> - **Per-file unique ACLs at upload** works and scales to the pending-queue depth, but the client
+>   expects volumes that approach SharePoint's **50,000 unique-permission-scope ceiling** per list,
+>   with performance degrading well before it. Rejected as a long-term design.
+>
+> The structural answer if a client genuinely needs two people isolated: **they belong in different
+> units.** Adding a unit costs one term + one abbreviation + 3 groups and stays inside the model.
 
 ## Allowed File Types
 Driven by the **`AllowedFileTypes`** multi-select Choice column on `DMS Config`

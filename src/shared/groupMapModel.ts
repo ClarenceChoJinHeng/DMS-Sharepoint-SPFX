@@ -113,7 +113,11 @@ export const STAGING_FACING_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS"];
  * above). Keeping the list here rather than in the component means the type and
  * the picker cannot drift apart.
  */
-export const SELECTABLE_ROLES: GroupMapRole[] = ["MEMBER", "UPL", "APR", "DEL", "DELS", "GLOBAL"];
+// SEGVIEW rejoined 2026-08-07, when the client asked for a per-segment C-Level alongside the
+// global one. HC stays out: it is Phase 2, its term is deleted, and offering it would let an
+// admin author a row that can never be granted.
+export const SELECTABLE_ROLES: GroupMapRole[] =
+  ["MEMBER", "UPL", "APR", "DEL", "DELS", "GLOBAL", "SEGVIEW"];
 
 /**
  * The client's personas, as membership combinations of atomic per-unit groups.
@@ -191,21 +195,40 @@ export const PERSONAS: Persona[] = [
     summary: "Reads every segment, department and unit in the Documents library, down to Document Type. No Staging access, no upload, no approve.",
   },
 
-  // ── Head of Department — the four bundles, at the DEPARTMENT tier ──────────
-  // DELS rides with UPL on groups 1 and 4 and on no others. Staging delete belongs
-  // to exactly the head-of groups that also upload: groups 2 and 3 are approve-only
-  // and the client's document says plainly they cannot delete on Staging. PIC holds
-  // UPL without DELS, which is the whole point of splitting the two.
-  { key: "hod1", family: "Head of Department", scope: "department", label: "1 — approve + upload",          roles: ["MEMBER", "UPL", "APR", "DELS"],        summary: "Sees and uploads to every unit under the department, approves, and deletes pending files." },
-  { key: "hod2", family: "Head of Department", scope: "department", label: "2 — approve only",              roles: ["MEMBER", "APR"],                      summary: "Sees every unit and approves, but cannot upload or delete. Needs the DMS Approve level." },
-  { key: "hod3", family: "Head of Department", scope: "department", label: "3 — approve + delete",          roles: ["MEMBER", "APR", "DEL"],               summary: "Approves and deletes approved documents. Cannot upload, and cannot delete on Staging." },
-  { key: "hod4", family: "Head of Department", scope: "department", label: "4 — approve + upload + delete", roles: ["MEMBER", "UPL", "APR", "DELS", "DEL"], summary: "Uploads, approves, deletes pending files, and deletes approved documents." },
+  // One segment, not all twelve. GLOBAL narrowed by a term — see the SEGVIEW note in
+  // ROLE_TO_PERMISSION. Documents only, for the same reason as GLOBAL: a C-Level on Staging
+  // would be reading an entire segment's unapproved drafts.
+  {
+    key: "clevel_segment", family: "C-Level", scope: "segment", label: "Segment — view one business segment",
+    roles: ["SEGVIEW"],
+    summary: "Reads one business segment and every department and unit under it, in the Documents library. No Staging access, no upload, no approve.",
+  },
 
-  // ── Head of Unit — identical roles, at the UNIT tier ───────────────────────
-  { key: "hou1", family: "Head of Unit", scope: "unit", label: "1 — approve + upload",          roles: ["MEMBER", "UPL", "APR", "DELS"],        summary: "Sees and uploads to their own unit, approves, and deletes pending files." },
-  { key: "hou2", family: "Head of Unit", scope: "unit", label: "2 — approve only",              roles: ["MEMBER", "APR"],                      summary: "Sees their unit and approves, but cannot upload or delete. Needs the DMS Approve level." },
-  { key: "hou3", family: "Head of Unit", scope: "unit", label: "3 — approve + delete",          roles: ["MEMBER", "APR", "DEL"],               summary: "Approves and deletes approved documents. Cannot upload, and cannot delete on Staging." },
-  { key: "hou4", family: "Head of Unit", scope: "unit", label: "4 — approve + upload + delete", roles: ["MEMBER", "UPL", "APR", "DELS", "DEL"], summary: "Uploads, approves, deletes pending files, and deletes approved documents." },
+  // ── Head of Department — view + delete, at the DEPARTMENT tier ─────────────
+  //
+  // ONE persona, not four. The four bundles existed to combine approve/upload/delete at
+  // department tier; the client's 2026-08-07 restatement moved approval to Head of Unit and
+  // left HoD with breadth as its only distinction.
+  //
+  // DEL is Documents-only by LIBRARY_ROLES, so an HoD group never reaches Staging. Note the
+  // grant FANS OUT: department scope plus recon_departmentFanOut puts delete on every unit
+  // folder under the department, not just the department folder. Wide, and intended.
+  {
+    key: "hod", family: "Head of Department", scope: "department", label: "View + delete, department-wide",
+    roles: ["MEMBER", "DEL"],
+    summary: "Reads every unit under their department in Documents, and can delete approved documents there. Cannot upload, cannot approve, and has no Staging access.",
+  },
+
+  // ── Head of Unit — the approver, at the UNIT tier ──────────────────────────
+  //
+  // ONE persona, not four, and the only family that approves. MEMBER rides with APR because
+  // the client's model gives every head-of group view rights; it is not a technical
+  // requirement of approving (see documentsUnitFolderReady in ApprovalDocument.tsx).
+  {
+    key: "hou", family: "Head of Unit", scope: "unit", label: "Approve + view own unit",
+    roles: ["MEMBER", "APR"],
+    summary: "Approves every file in their own unit and reads the unit's approved documents. Cannot upload or delete, and sees no sibling unit.",
+  },
 
   // ── PIC ────────────────────────────────────────────────────────────────────
   //
@@ -230,20 +253,21 @@ export const PERSONAS: Persona[] = [
   // can read items", because the stricter value hid pending folders from readers and 403'd
   // Contribute uploaders (memory dms-content-approval-blocks-uploader). It is a
   // LIBRARY-wide setting, so it could not vary per persona even if we wanted it to.
+  //
+  // CONFIDENTIALITY IS NOT A PERMISSION. Confirmed 2026-08-07: any PIC may upload at any
+  // confidentiality level, all three. So there is no HC persona and no confidentiality-scoped
+  // upload role — the level is metadata the uploader chooses on the form, and it drives
+  // labelling, not access. The old "Highly Confidential only" persona is removed rather than
+  // left greyed out: a picker entry the client will never choose is a question they have to
+  // ask once and get answered every time.
+  //
+  // The HC role string itself is KEPT and simply unused, for the same reason as DELS — the
+  // Phase 2 HC-library work on feat/hc-libraries still refers to it, and removing it here
+  // means re-adding suffix parsing and permission mapping the day it comes back.
   {
-    key: "pic1", family: "PIC", scope: "unit", label: "Upload + view Staging",
+    key: "pic", family: "PIC", scope: "unit", label: "Upload",
     roles: ["UPL"],
-    summary: "Uploads to their unit and sees the unit's pending files — not only their own, which SharePoint cannot enforce. Cannot delete, and has no Documents access unless also added to the unit's base group.",
-  },
-  {
-    key: "pic2", family: "PIC", scope: "unit", label: "2 — Highly Confidential only", roles: ["HC"],
-    summary: "Uploads and views Highly Confidential, and must NOT see Confidential or Restricted.",
-    // Not a missing feature so much as a missing term: HC left Phase 1 on
-    // 2026-08-01 and its term was deleted, so the level cannot be chosen on an
-    // upload and the two HC libraries do not exist. The code is on
-    // feat/hc-libraries; its §14 lists the four restore steps, two of which fail
-    // silently.
-    unavailable: "Phase 2 — Highly Confidential is out of scope and its term has been deleted from the term store.",
+    summary: "Uploads to their unit at any confidentiality level, and sees the unit's pending files. Cannot approve or delete, and has no Documents access unless also added to the unit's base group.",
   },
 
   // ── SDG Employee ───────────────────────────────────────────────────────────
