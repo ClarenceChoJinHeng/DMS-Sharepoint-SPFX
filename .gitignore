@@ -42,3 +42,7 @@ obj
 
 # Dev harness generated bundle
 dev/**/*.bundle.js
+
+# Client data exports — migration scratch, not source
+/DMS Group Map.csv
+/DMS Term Abbreviation.csv

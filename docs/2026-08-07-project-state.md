@@ -158,22 +158,28 @@ row ignored** — with granting back, the two passes would fight.
    > would vanish for every non-approver. Reconciliation now approves the folders it provisions
    > — only in libraries that actually moderate, and only when not already approved.
    >
-   > ⚠ **That approval covers the segment/department/unit folders ONLY — not the Year ×
-   > Document Type grid underneath them.** Two reasons it cannot, as written:
-   > - The grid's **fast path** settles the whole grid with one probe when the last folder
-   >   exists, so a per-folder approval inside that loop never fires on an existing site.
-   > - `ensureFolder` is shared with `Form.tsx` / `BulkUpload.tsx`, and an uploader running it
-   >   **cannot approve** — `OData__ModerationStatus = 0` needs `ApproveItems`, which a PIC does
-   >   not hold. So uploaders keep minting Pending Year/Doc-Type folders between runs.
+   > ✅ **VERIFIED WORKING 2026-08-07 06:31**, after deploying the build with the fix. Querying
+   > `$filter=FSObjType eq 1 and OData__ModerationStatus ne 0` returned just **two** rows —
+   > `2024` and `Term Sheet` — so every structural folder is now Approved.
+   >
+   > ⚠ Those two survivors are the point: they are **Year / Document Type folders created by an
+   > upload**, and reconciliation will never approve them. `recon_gridMode` is **off** on this
+   > site, so the grid is not pre-created — the upload form mints these on first use, and the
+   > caller is a PIC who **cannot approve** (`OData__ModerationStatus = 0` needs `ApproveItems`).
+   > Turning `recon_gridMode` on would not fix it either: the grid's fast path settles the whole
+   > grid on one probe, so a per-folder approve inside that loop never fires on a settled site.
    >
    > **Therefore do NOT tighten Draft Item Security to approver-only.** Under that setting a PIC
    > would see their unit folder as empty and could not browse to their own pending files.
-   > Closing this properly needs a library-wide sweep (page by `ID gt <last>` — `ID` is always
-   > indexed, so it cannot trip the 5,000-item list-view threshold the way a filter on
-   > `FSObjType` / `OData__ModerationStatus` can) approving every pending FOLDER at the end of a
-   > run. That is ~6,000 writes on a first run and is **not built**, because per-uploader
-   > isolation — the only thing that wanted approver-only — is out of scope
-   > (`dms-per-uploader-isolation-rejected`). Build it only if that decision reverses.
+   > Closing it needs an end-of-run library sweep approving every pending FOLDER — page by
+   > `ID gt <last>`, since `ID` is always indexed and cannot trip the 5,000-item list-view
+   > threshold the way a filter on `FSObjType` / `OData__ModerationStatus` can. **Not built:**
+   > per-uploader isolation, the only requirement that ever wanted approver-only, is out of
+   > scope (`dms-per-uploader-isolation-rejected`). Build it only if that decision reverses.
+   >
+   > Reading the run log: on a **re-run** the approval lines are absent because there is nothing
+   > left to approve. Silence here means settled, not skipped — confirm with the query above
+   > rather than by counting `↳ approved` lines.
 6. **Upload → approve** end to end.
 7. **Auto-route flow**, in this order: path split `Staging/` → `ApprovalDocument/`; then stamp
    `Author` + `Created` on the Documents copy via `validateUpdateListItem`; then verify the copy
