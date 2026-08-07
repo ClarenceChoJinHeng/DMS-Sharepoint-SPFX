@@ -1,5 +1,8 @@
 // Pure, SPFx-free model helpers for the multi-segment upload form.
 // No imports from @microsoft/* here — keep this unit-testable in plain Jest.
+//
+// groupMapModel is pure too (it imports only naming, also pure), so this preserves that.
+import { normalizeRoleValue } from "./groupMapModel";
 
 /** One cascade level within a mode: a labelled dropdown that writes one column. */
 export interface Level {
@@ -135,7 +138,13 @@ export function collectMembership(
   const uploaderLeaves: UploaderLeaf[] = [];
   for (const r of rows) {
     if (!wanted.has(normGuid(r.groupId))) continue;
-    const role = (r.role ?? "").trim().toUpperCase();
+    // normalizeRoleValue, NOT a raw uppercase compare. The Group Map's Role is a Choice column
+    // whose values are LONG FORM — "UPLOADER", not "UPL" — so `role === "UPL"` never matched a
+    // real row. Reconciliation already normalised (it granted the folder), the form did not, and
+    // the two halves disagreed in the worst direction: the uploader's folder ACL was correct
+    // while the form told them "your account isn't fully provisioned to upload". Verified live
+    // 2026-08-07 against a row reading UPLOADER on a correctly provisioned user.
+    const role = normalizeRoleValue(r.role ?? "");
     if (role === "GLOBAL") continue; // read-only role, no term, no upload
     if (r.termGuid) memberTerms.add(normGuid(r.termGuid));
     if (role === "UPL") {

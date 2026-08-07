@@ -86,6 +86,45 @@ describe("collectMembership", () => {
     expect(m.memberTerms.size).toBe(0);
     expect(m.uploaderLeaves).toEqual([]);
   });
+
+  // The regression this block exists for. Every test above uses the SHORT code "UPL", which is
+  // why the bug survived: the Group Map's Role is a Choice column holding LONG FORM values, so
+  // live rows read "UPLOADER" and the old `role === "UPL"` compare never matched one.
+  //
+  // The failure was silent and asymmetric. Reconciliation normalised the role and granted the
+  // folder ACL, so permissions looked correct in SharePoint — while the form collected no
+  // uploader leaf and told a correctly provisioned user "your account isn't fully provisioned
+  // to upload". Verified live 2026-08-07.
+  describe("long-form role values (the Choice column's actual values)", () => {
+    const longForm: GroupMapRow[] = [
+      { groupId: "53", groupName: "GHO_GF_CORU_UPL", segment: "set-gho", termGuid: "t-coru", role: "UPLOADER" },
+      { groupId: "60", groupName: "GHO_GF_CORU_APR", segment: "set-gho", termGuid: "t-coru", role: "APPROVER" },
+    ];
+
+    it("treats UPLOADER as UPL", () => {
+      const m = collectMembership(longForm, ["53"]);
+      expect(m.uploaderLeaves).toEqual([{ termGuid: "t-coru", segment: "set-gho" }]);
+    });
+
+    it("does not treat APPROVER as an uploader", () => {
+      // Normalising must not turn every long-form role into an upload grant.
+      const m = collectMembership(longForm, ["60"]);
+      expect(m.uploaderLeaves).toEqual([]);
+      expect(m.memberTerms).toEqual(new Set(["t-coru"]));
+    });
+
+    it("still honours the short code, so existing rows keep working", () => {
+      const m = collectMembership(rows, ["g-gco-upl"]);
+      expect(m.uploaderLeaves).toEqual([{ termGuid: "t-gco", segment: "set-gho" }]);
+    });
+
+    it("ignores an unknown role rather than inventing one", () => {
+      const odd: GroupMapRow[] = [
+        { groupId: "99", groupName: "Odd", segment: "set-gho", termGuid: "t-x", role: "SOMETHING_ELSE" },
+      ];
+      expect(collectMembership(odd, ["99"]).uploaderLeaves).toEqual([]);
+    });
+  });
 });
 
 describe("isLeafChainValid", () => {
