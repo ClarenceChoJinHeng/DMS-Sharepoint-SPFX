@@ -26,6 +26,7 @@ import {
   LIBRARY_ENTRY_ROLE,
   STAGING_FACING_ROLES,
   siteEntryGroupTitle,
+  normalizeRoleValue,
 } from "../../../shared/groupMapModel";
 import { fetchAllSiteGroups, SpGroup } from "../../../shared/spGroups";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
@@ -145,7 +146,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
         itemId: r.Id,
         groupId: (r.GroupId ?? "").trim(),
         groupName: r.GroupName ?? "",
-        role: (r.Role ?? "").toUpperCase() as GroupMapRole,
+        role: normalizeRoleValue(r.Role ?? "") as GroupMapRole,
       }));
   };
 

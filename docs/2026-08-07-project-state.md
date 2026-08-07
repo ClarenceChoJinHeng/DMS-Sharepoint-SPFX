@@ -57,7 +57,7 @@ content type still in use.
 
 | Title | GroupId | Segment | UnitTermGuid | Role | Scope |
 | --- | --- | --- | --- | --- | --- |
-| `DMS_GHO_GF_CORU_UPL` | 53 | `08dd94cb-…` | `9aef23bf-…` | UPLOADER | Folder |
+| `DMS_GHO_GF_CORU_UPL` | 53 | `08dd94cb-…` | `3be3e50c-…` | UPLOADER | Folder |
 
 Deliberately one row: a small blast radius for the first reconciliation on a library that has
 never been reconciled.
@@ -67,17 +67,28 @@ the other 20 were `ENTRY`/`Page` rows, four of which pointed at SharePoint **sys
 (`Limited Access System Group`, `SharingLinks.…`), and several at MEMBER/GLOBAL/SEGVIEW groups
 that the page policy now excludes. Page access is to be re-added through the Page Access tab.
 
-> ⚠ **The `UnitTermGuid` was typed by hand and is wrong.** It reads `9aef23bf-62a9-4ff9-aaad-
-> d02fc90e5eaf`, which is **`Group Finance` (Department)**. `CORU` (Unit) is
-> **`3be3e50c-b90a-4187-9915-85f4a5f1eb49`**.
->
-> This is not cosmetic: with `recon_departmentFanOut` now defaulting ON, a department-tier row
-> fans the UPLOADER grant to **every one of the nine units under GF**, not just CORU. Correct the
-> cell before the first reconciliation run.
->
-> General rule this illustrates: **never hand-type a term GUID.** Copy it from the term store or
-> from `CRS Term Abbreviation`. A mistyped GUID does not error — it silently maps a group to the
-> wrong folder, or to none, and reconciliation reports success either way.
+That single row produced **two** silent-failure findings on 2026-08-07. Both are fixed; both are
+worth knowing, because neither would have raised an error.
+
+**(a) The `UnitTermGuid` was hand-typed and wrong — FIXED.** It held
+`9aef23bf-62a9-4ff9-aaad-d02fc90e5eaf` (`Group Finance`, a **Department**) instead of
+`3be3e50c-b90a-4187-9915-85f4a5f1eb49` (`CORU`, the **Unit**). With `recon_departmentFanOut`
+defaulting ON, that would have fanned the uploader grant to **all nine units under GF**.
+
+No safety net catches this: orphan repair only fires on a GUID **absent** from the term store,
+and this one was perfectly valid — just wrong. Only the group *name* disagreed with it, and
+nothing compares those. **Never hand-type a term GUID; copy it.**
+
+**(b) The `Role` column read `UPLOADER`, which the code did not recognise — FIXED IN CODE.**
+`ROLE_TO_PERMISSION` keys on the short codes (`UPL`, `APR`, …). The long-form suffixes belong to
+group *names* (`_UPLOADER`), and an admin filling the column in by hand naturally matched them.
+`accepts()` found no permission level, so the row was **skipped**, and the log would have said
+*"no group-map groups for this unit (locked admin-only)"* — indistinguishable from a missing row.
+
+`normalizeRoleValue()` in `groupMapModel.ts` now accepts both forms (and tolerates casing,
+spaces and hyphens), wired into all six read sites across `FolderManager`, `GroupMapBuilder` and
+`StagingAccess`. An unrecognised value passes through unchanged so it still fails `accepts()` —
+defaulting it to anything would grant access nobody asked for.
 
 ---
 
@@ -137,7 +148,7 @@ row ignored** — with granting back, the two passes would fight.
    > it against the Permission Levels UI before acting on it.
 2. **Deploy** v1.0.84.0. Bump to 1.0.85.0 and rebuild if the site keeps serving the cached bundle.
 3. **`Documents` library** — attach `CRS Folder`, add `Full Name` to it.
-4. **Verify the Group Map row's `UnitTermGuid`** (§1.4).
+4. ~~Verify the Group Map row's `UnitTermGuid`~~ — **DONE**, see §1.4.
 5. **Reconcile one unit.** Look for `↳ … Read (browse) on /GHO` — the restored corridor. Absent
    means non-admins see an empty library. Also check whether new folders come out **Pending**;
    if so, reconciliation needs to stamp `OData__ModerationStatus = 0` on folders it creates.

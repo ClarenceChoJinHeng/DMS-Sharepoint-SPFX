@@ -17,6 +17,7 @@ import {
   GroupMapRole,
   normalizeScope,
   isForbiddenPageTarget,
+  normalizeRoleValue,
 } from "./groupMapModel";
 
 describe("personas", () => {
@@ -376,6 +377,49 @@ describe("suffixForRole", () => {
       if (role === "MEMBER" || role === "GLOBAL") continue; // no suffix by design
       expect(roleFromGroupName(`GHO_GF_CORU${suffixForRole(role)}`)).toBe(role);
     }
+  });
+});
+
+describe("normalizeRoleValue — the Role COLUMN, not the group name", () => {
+  // Live 2026-08-07: the only row on the test site had Role = "UPLOADER", because the GROUP
+  // NAMES use long suffixes now and an admin filling the column in by hand matched them. It was
+  // skipped silently, and the log said "no group-map groups for this unit" — which reads as a
+  // missing row, sending the admin to look for one that is sitting right there.
+  it("maps the long forms an admin will actually type", () => {
+    expect(normalizeRoleValue("UPLOADER")).toBe("UPL");
+    expect(normalizeRoleValue("APPROVER")).toBe("APR");
+    expect(normalizeRoleValue("DELETER_DOCUMENTS")).toBe("DEL");
+    expect(normalizeRoleValue("DELETER_STAGING")).toBe("DELS");
+    expect(normalizeRoleValue("VIEWER")).toBe("MEMBER");
+  });
+
+  it("passes short codes through untouched", () => {
+    for (const code of ["MEMBER", "UPL", "APR", "DEL", "DELS", "GLOBAL", "SEGVIEW", "ENTRY"]) {
+      expect(normalizeRoleValue(code)).toBe(code);
+    }
+  });
+
+  it("tolerates the casing, spacing and hyphens of a hand-typed cell", () => {
+    expect(normalizeRoleValue("  uploader ")).toBe("UPL");
+    expect(normalizeRoleValue("Deleter Documents")).toBe("DEL");
+    expect(normalizeRoleValue("deleter-staging")).toBe("DELS");
+  });
+
+  it("never invents a role from an unrecognised value", () => {
+    // Passing the value through unchanged means it still fails accepts() and is skipped. The
+    // dangerous alternative is defaulting to something — MEMBER would grant Read on a folder
+    // to a group the admin meant to give nothing.
+    expect(normalizeRoleValue("SUPERVISOR")).toBe("SUPERVISOR");
+    expect(normalizeRoleValue("")).toBe("");
+    expect(normalizeRoleValue("   ")).toBe("");
+    expect(normalizeRoleValue(undefined as unknown as string)).toBe("");
+  });
+
+  it("cannot re-map an already-valid short code via an alias", () => {
+    // DEL must never become DELS or vice versa: they map to the same permission LEVEL and are
+    // told apart only by LIBRARY_ROLES, so a swap crosses Staging and Documents.
+    expect(normalizeRoleValue("DEL")).toBe("DEL");
+    expect(normalizeRoleValue("DELS")).toBe("DELS");
   });
 });
 

@@ -2,7 +2,7 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember, createSiteGroup } from "../../../shared/spGroups";
-import { siteEntryGroupTitle, isForbiddenPageTarget } from "../../../shared/groupMapModel";
+import { siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { IFolderManagerProps } from "./IFolderManagerProps";
@@ -1375,7 +1375,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     const data = await res.json();
     for (const r of (data.value ?? []) as Array<{ GroupName?: string; GroupId?: string; UnitTermGuid?: string; Role?: string }>) {
       const term = (r.UnitTermGuid ?? "").toLowerCase();
-      const role = (r.Role ?? "").toUpperCase();
+      // Accepts the long-form value an admin naturally types now that the GROUP NAMES use
+      // long suffixes ("UPLOADER" for UPL). Unrecognised values pass through and still fail
+      // accepts() below, so this widens what works without widening what is granted.
+      const role = normalizeRoleValue(r.Role ?? "");
       if (!r.GroupId) continue;
       // A GLOBAL row carries NO term by design — it is not scoped to a segment, so
       // buildGroupMapRow forces Segment and UnitTermGuid empty. The termless guard
@@ -1984,7 +1987,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             const brokenThisRun = new Set<string>();
             for (const row of libRows) {
               const lib = (row.Target ?? "").trim();
-              const role = (row.Role ?? "").toUpperCase();
+              const role = normalizeRoleValue(row.Role ?? "");
               const levelName = ROLE_TO_PERMISSION[role];
               const roleDefId = roleDefs.find((r) => r.name === levelName)?.id;
               const label = `${row.GroupName || row.GroupId} → ${lib}`;
@@ -2212,7 +2215,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                   // ALWAYS Read, never the row's own level. A page is opened or it is not, and
                   // granting "DMS Upload" on a page item would be a meaningless binding that
                   // reads, in the permissions UI, like an upload right on the page.
-                  if ((row.Role ?? "").toUpperCase() !== "ENTRY") {
+                  if (normalizeRoleValue(row.Role ?? "") !== "ENTRY") {
                     entries.push({ msg: `  ⚠ ${label}: role "${row.Role}" on a Page row — granting Read (page access is Read by definition)`, ok: true });
                   }
                   try {

@@ -443,6 +443,42 @@ export function isDuplicateRow(
  * GLOBAL is absent deliberately: it is a privileged bypass the admin picks by hand, never
  * derived from a name. MEMBER is absent because it IS the no-suffix base group.
  */
+/**
+ * Normalise a `Role` COLUMN value to the short code the permission tables key on.
+ *
+ * The group NAME suffixes were changed to long form in 2026-08-05 (`_UPLOADER`, `_APPROVER`),
+ * so an admin filling in the Group Map by hand naturally types "UPLOADER" in the Role column
+ * too — and on 2026-08-07 one did, on the only row on the test site. Nothing normalised it, so
+ * `accepts()` found no permission level and the row was SKIPPED. The log then said "no
+ * group-map groups for this unit (locked admin-only)", which reads as a missing row rather than
+ * a rejected one: the admin goes looking for a row that is sitting right there.
+ *
+ * Accepting both forms costs nothing and is unambiguous — no long form is a prefix of another
+ * short code. Returns "" for anything unrecognised, which callers already treat as skip.
+ */
+const ROLE_ALIASES: Record<string, GroupMapRole> = {
+  UPLOADER: "UPL",
+  APPROVER: "APR",
+  DELETER_DOCUMENTS: "DEL",
+  DELETER_STAGING: "DELS",
+  MEMBER: "MEMBER",
+  VIEWER: "MEMBER",
+  SEGMENTVIEW: "SEGVIEW",
+};
+
+/** Every short code the permission tables key on. Listed, not derived — the union is a type. */
+const SHORT_ROLE_CODES = ["MEMBER", "UPL", "APR", "DEL", "DELS", "SEGVIEW", "HC", "GLOBAL", "ENTRY"];
+
+export function normalizeRoleValue(raw: string): string {
+  const v = (raw ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  if (v.length === 0) return "";
+  // A short code wins outright, so this can never re-map an already-valid value.
+  if (SHORT_ROLE_CODES.indexOf(v) !== -1) return v;
+  // Unrecognised values pass through unchanged, so they still fail accepts() and are skipped
+  // rather than silently becoming some role nobody asked for.
+  return ROLE_ALIASES[v] ?? v;
+}
+
 export type RoleSuffix = { suffix: string; role: GroupMapRole };
 
 const ROLE_SUFFIXES_UNSORTED: RoleSuffix[] = [

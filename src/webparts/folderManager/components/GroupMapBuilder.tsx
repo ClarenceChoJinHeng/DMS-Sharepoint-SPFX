@@ -17,6 +17,7 @@ import {
   PERSONAS,
   PERSONA_FAMILIES,
   personaByKey,
+  normalizeRoleValue,
 } from "../../../shared/groupMapModel";
 import {
   searchSiteGroups,
@@ -304,7 +305,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         GroupName: r.GroupName ?? "",
         Segment: r.Segment ?? "",
         UnitTermGuid: r.UnitTermGuid ?? "",
-        Role: (r.Role ?? "").toUpperCase() as GroupMapRole,
+        // Long-form values ("UPLOADER") normalise to the short code the tables key on, so a
+        // hand-authored row shows as the role it means rather than as an unknown.
+        Role: normalizeRoleValue(r.Role ?? "") as GroupMapRole,
         // Blank reads as Folder — every row written before the column existed is one.
         Scope: normalizeScope(r.Scope),
         Target: r.Target ?? "",
@@ -1028,7 +1031,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     if (!tierGuid) return out;
     const want = tierGuid.trim().toLowerCase();
     existing.forEach((r) => {
-      if ((r.UnitTermGuid ?? "").trim().toLowerCase() === want) out.add((r.Role ?? "").toUpperCase());
+      if ((r.UnitTermGuid ?? "").trim().toLowerCase() === want) out.add(normalizeRoleValue(r.Role ?? ""));
     });
     return out;
   })();
@@ -1253,7 +1256,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       entry.grants.push({
         segment: r.Segment ? segmentLabelFor(r.Segment) : "",
         tier: tierLabelFor(r),
-        role: r.Role ?? "",
+        role: normalizeRoleValue(r.Role ?? ""),
       });
       byId.set(r.GroupId, entry);
     });
