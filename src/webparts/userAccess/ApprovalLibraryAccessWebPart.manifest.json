@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
-  "id": "02007994-7d63-4178-9a43-2b6ec96f9e44",
-  "alias": "FolderManagerWebPart",
+  "id": "591eb30f-4bb3-4853-a799-a41c5664d7fc",
+  "alias": "ApprovalLibraryAccessWebPart",
   "componentType": "WebPart",
 
   "version": "*",
@@ -14,9 +14,9 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "Folder Manager" },
-    "description": { "default": "Admin tool — browse and rename folders in the approval and Documents libraries, and provision the whole tree from the term store" },
-    "officeFabricIconFontName": "FolderOpen",
+    "title": { "default": "Approval Library Access" },
+    "description": { "default": "Admin tool — who may open the approval library at all" },
+    "officeFabricIconFontName": "DocumentApproval",
     "properties": {}
   }]
 }

@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
-  "id": "cd188c96-57e4-4b6c-8ac6-6757143b3c87",
-  "alias": "UserAccessWebPart",
+  "id": "695640a1-5bf9-4582-adbe-30a988c4945a",
+  "alias": "SiteAccessWebPart",
   "componentType": "WebPart",
 
   "version": "*",
@@ -14,9 +14,9 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "User Access" },
-    "description": { "default": "Admin tool — map SharePoint groups to segments, tiers and roles across folders, the site, the approval library and pages" },
-    "officeFabricIconFontName": "SecurityGroup",
+    "title": { "default": "Site Access" },
+    "description": { "default": "Admin tool — who may open this site at all (site-entry group membership)" },
+    "officeFabricIconFontName": "Globe",
     "properties": {}
   }]
 }

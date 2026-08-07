@@ -3,7 +3,7 @@
   "solution": {
     "name": "sd-gatrie-client-side-solution",
     "id": "4c93b50e-03c1-4005-a280-add0da86c86f",
-    "version": "1.0.84.0",
+    "version": "1.0.85.0",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
@@ -38,7 +38,11 @@
           "3a8f2e6d-1b4c-4a7f-8e9d-2c5b7f3a1e6d",
           "02007994-7d63-4178-9a43-2b6ec96f9e44",
           "7b3e9c14-2a8d-4f61-9b0e-5d3c8a1f4e72",
-          "299700f0-9a8e-4367-8018-1f9d54b92705"
+          "299700f0-9a8e-4367-8018-1f9d54b92705",
+          "a5955b3e-0945-4ad4-9cb1-db8006c7fa7f",
+          "695640a1-5bf9-4582-adbe-30a988c4945a",
+          "591eb30f-4bb3-4853-a799-a41c5664d7fc",
+          "2d6d7010-8bc0-4ac2-8573-fe694db220f8"
         ]
       }
     ]

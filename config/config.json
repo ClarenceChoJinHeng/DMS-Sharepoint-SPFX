@@ -50,11 +50,23 @@
         }
       ]
     },
-    "user-access-web-part": {
+    "user-access-web-parts": {
       "components": [
         {
-          "entrypoint": "./lib/webparts/userAccess/UserAccessWebPart.js",
-          "manifest": "./src/webparts/userAccess/UserAccessWebPart.manifest.json"
+          "entrypoint": "./lib/webparts/userAccess/FolderAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/FolderAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/SiteAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/SiteAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/ApprovalLibraryAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/ApprovalLibraryAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/PageAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/PageAccessWebPart.manifest.json"
         }
       ]
     }

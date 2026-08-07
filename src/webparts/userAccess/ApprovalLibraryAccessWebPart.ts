@@ -4,13 +4,13 @@ import { Version } from "@microsoft/sp-core-library";
 import { type IPropertyPaneConfiguration } from "@microsoft/sp-property-pane";
 import { BaseClientSideWebPart } from "@microsoft/sp-webpart-base";
 
-import UserAccess from "./components/UserAccess";
-import { IUserAccessProps } from "./components/IUserAccessProps";
+import ApprovalLibraryAccessPage from "./components/ApprovalLibraryAccessPage";
+import { IAccessProps } from "./components/IAccessProps";
 
-export default class UserAccessWebPart extends BaseClientSideWebPart<Record<string, never>> {
+export default class ApprovalLibraryAccessWebPart extends BaseClientSideWebPart<Record<string, never>> {
   public render(): void {
-    const element: React.ReactElement<IUserAccessProps> = React.createElement(
-      UserAccess,
+    const element: React.ReactElement<IAccessProps> = React.createElement(
+      ApprovalLibraryAccessPage,
       { context: this.context },
     );
     ReactDom.render(element, this.domElement);

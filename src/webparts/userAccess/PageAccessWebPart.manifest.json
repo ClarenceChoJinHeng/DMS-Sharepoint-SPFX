@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
-  "id": "02007994-7d63-4178-9a43-2b6ec96f9e44",
-  "alias": "FolderManagerWebPart",
+  "id": "2d6d7010-8bc0-4ac2-8573-fe694db220f8",
+  "alias": "PageAccessWebPart",
   "componentType": "WebPart",
 
   "version": "*",
@@ -14,9 +14,9 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "Folder Manager" },
-    "description": { "default": "Admin tool — browse and rename folders in the approval and Documents libraries, and provision the whole tree from the term store" },
-    "officeFabricIconFontName": "FolderOpen",
+    "title": { "default": "Page Access" },
+    "description": { "default": "Admin tool — who may open each page on this site" },
+    "officeFabricIconFontName": "Page",
     "properties": {}
   }]
 }
