@@ -149,9 +149,15 @@ row ignored** — with granting back, the two passes would fight.
 2. **Deploy** v1.0.84.0. Bump to 1.0.85.0 and rebuild if the site keeps serving the cached bundle.
 3. **`Documents` library** — attach `CRS Folder`, add `Full Name` to it.
 4. ~~Verify the Group Map row's `UnitTermGuid`~~ — **DONE**, see §1.4.
-5. **Reconcile one unit.** Look for `↳ … Read (browse) on /GHO` — the restored corridor. Absent
-   means non-admins see an empty library. Also check whether new folders come out **Pending**;
-   if so, reconciliation needs to stamp `OData__ModerationStatus = 0` on folders it creates.
+5. ~~Reconcile one unit~~ — **DONE 2026-08-07, and it passed.** The log showed
+   `↳ DMS_GHO_GF_CORU_UPL → CRS Upload`, `↳ … Read (browse) on /GHO` and `on /GHO/GF`, and
+   `content type → CRS Folder` across every Documents folder. Only CORU was granted, confirming
+   the term-GUID fix; the row being honoured at all confirms the Role normaliser.
+   > **Folders came out Pending** (`OData__ModerationStatus = 2` on all of them). Harmless while
+   > Draft Item Security is "any user who can read items", but under approver-only every folder
+   > would vanish for every non-approver. Reconciliation now approves the folders it provisions
+   > — only in libraries that actually moderate, and only when not already approved.
+   > **Re-run reconciliation after deploying that build, before tightening draft security.**
 6. **Upload → approve** end to end.
 7. **Auto-route flow**, in this order: path split `Staging/` → `ApprovalDocument/`; then stamp
    `Author` + `Created` on the Documents copy via `validateUpdateListItem`; then verify the copy

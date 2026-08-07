@@ -1307,11 +1307,18 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   const getFolderItemState = async (
     serverRelativeUrl: string,
     internalName?: string,
-  ): Promise<{ fullName?: string; contentTypeId?: string }> => {
+    withModeration?: boolean,
+  ): Promise<{ fullName?: string; contentTypeId?: string; moderationStatus?: number }> => {
     try {
       // The column is optional: a library can carry the content type before anyone adds
       // Full Name to it, and the content type must still be stamped in that state.
-      const select = internalName ? `${internalName},ContentTypeId` : "ContentTypeId";
+      //
+      // OData__ModerationStatus is requested ONLY when the library has content approval on.
+      // Naming a field that does not exist fails the WHOLE request with HTTP 400 — not a null
+      // (CLAUDE.md #11) — so on a library without moderation this would break the Full Name
+      // and content-type writes too.
+      const base = internalName ? `${internalName},ContentTypeId` : "ContentTypeId";
+      const select = withModeration ? `${base},OData__ModerationStatus` : base;
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
           `?@f='${encodeServerRelativePath(serverRelativeUrl)}'&$select=${select}`,
@@ -1322,9 +1329,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       const data = await res.json();
       const v = internalName ? data[internalName] : undefined;
       const ct = data.ContentTypeId;
+      const mod = data.OData__ModerationStatus;
       return {
         fullName: typeof v === "string" && v !== "" ? v : undefined,
         contentTypeId: typeof ct === "string" && ct !== "" ? ct : undefined,
+        moderationStatus: typeof mod === "number" ? mod : undefined,
       };
     } catch {
       return {};
@@ -1335,7 +1344,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // report it against the folder rather than losing it silently.
   const setFolderItemFields = async (
     serverRelativeUrl: string,
-    values: Record<string, string>,
+    // Numbers as well as strings: OData__ModerationStatus is an integer, and quoting it
+    // makes SharePoint reject the merge (memory sp-column-formatting-gotchas records the
+    // same trap on the read side — the status is an integer, never a label).
+    values: Record<string, string | number>,
   ): Promise<void> => {
     const res: SPHttpClientResponse = await context.spHttpClient.post(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
@@ -2376,6 +2388,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // names and is told so once, rather than once per folder.
       const fullNameFields = new Map<LibTarget, string>();
       const folderCtIds = new Map<LibTarget, string>();
+      /** Libraries with content approval on — the only ones a moderation status may be written to. */
+      const moderatedLibs = new Set<LibTarget>();
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
         const ct = await loadFolderContentTypeId(lib);
         if (ct) folderCtIds.set(lib, ct);
@@ -2391,6 +2405,31 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // gating prune on it would silently disable self-healing over a cosmetic column.
         // The ⚠ still puts it in "Needs attention" where an admin will see it.
         else entries.push({ msg: `⚠ ${lib}: ${f.note ?? "no Full Name column"} — folders will show only their abbreviation`, ok: true });
+
+        // Does this library moderate? Folders created in a content-approval library arrive
+        // PENDING (verified live 2026-08-07: every folder in Approval Document was status 2),
+        // and a pending FOLDER is hidden from anyone who cannot see drafts. Today that is
+        // nobody, because Draft Item Security is "any user who can read items" — but the
+        // moment it is tightened to approver-only for per-uploader isolation, every folder
+        // vanishes for every non-approver and the library renders empty. Same failure as
+        // memory dms-content-approval-blocks-uploader, reached from a different direction.
+        //
+        // So approve the folders as they are provisioned. Files are untouched: they are the
+        // things actually under review, and approving them here would defeat the whole point.
+        try {
+          const modRes: SPHttpClientResponse = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=EnableModeration`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (modRes.ok && (await modRes.json()).EnableModeration === true) {
+            moderatedLibs.add(lib);
+            entries.push({ msg: `${lib}: content approval is on — provisioned folders will be approved so they stay visible`, ok: true });
+          }
+        } catch {
+          // Unreadable means "assume not moderated": writing OData__ModerationStatus to a
+          // library without moderation fails the whole merge, taking Full Name with it.
+        }
       }
       let plannedOps = 0;
       for (const lib of ["Staging", "Documents"] as LibTarget[]) {
@@ -2565,8 +2604,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               // whether the merge turns out to be needed or not.
               if (fullNameFields.has(lib)) step();
               try {
-                const state = await getFolderItemState(full, fullNameField);
-                const values: Record<string, string> = {};
+                const moderated = moderatedLibs.has(lib);
+                const state = await getFolderItemState(full, fullNameField, moderated);
+                const values: Record<string, string | number> = {};
                 if (fullNameField && state.fullName !== t.fullName) values[fullNameField] = t.fullName;
                 // Stamp the content type in the SAME merge — no extra request, no extra
                 // throttle cost. Compared case-insensitively because SharePoint is not
@@ -2574,11 +2614,18 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 if (wantCtId && (state.contentTypeId ?? "").toLowerCase() !== wantCtId.toLowerCase()) {
                   values.ContentTypeId = wantCtId;
                 }
+                // 0 = Approved. Rides in the same merge for the same reason as the content
+                // type. Only when this library moderates, and only when it is not already 0 —
+                // a folder an admin approved by hand must not be rewritten every run.
+                if (moderated && state.moderationStatus !== undefined && state.moderationStatus !== 0) {
+                  values.OData__ModerationStatus = 0;
+                }
                 if (Object.keys(values).length > 0) {
                   await setFolderItemFields(full, values);
                   const what = [
                     fullNameField && values[fullNameField] !== undefined ? `${FULL_NAME_COLUMN_TITLE} = ${t.fullName}` : "",
                     values.ContentTypeId !== undefined ? `content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}` : "",
+                    values.OData__ModerationStatus !== undefined ? `approved (folder was pending — would be invisible under approver-only draft security)` : "",
                   ].filter(Boolean).join(", ");
                   entries.push({ msg: `  ↳ ${what}`, ok: true });
                   await tick();
