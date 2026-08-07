@@ -1,7 +1,9 @@
 # Splitting Folder & Group Manager into two web parts
 
 **Date:** 2026-08-07
-**Status:** proposed — awaiting go-ahead
+**Status:** BUILT 2026-08-07 (`2baf48f`) — but **one page per surface**, not the single tabbed
+page proposed in §2. The client chose four pages when asked. §2 and §4 below are amended to
+match what was built; the reasoning in §1 and §3 is unchanged and is what justified either shape.
 **Trigger:** client feedback that the Folder & Group Manager is "too complicated".
 
 ---
@@ -25,9 +27,21 @@ inside the least frequent surface. The nesting *is* the complexity the client is
 **Page A — "Folder Manager"** (existing web part, retitled)
 Staging · Documents · Folder Reconciliation. Structure and provisioning.
 
-**Page B — "User Access"** (new web part)
-Folder Access · Site Access · Approval Library Access · Page Access. People and roles.
-The sub-tabs become the top-level tabs, so nothing is nested.
+**Pages B–E — one per access surface**, each its own web part:
+
+| Page | Web part | Component | Id |
+|---|---|---|---|
+| Folder Access | `FolderAccessWebPart` | `GroupMapBuilder` | `a5955b3e-…` |
+| Site Access | `SiteAccessWebPart` | `SiteAccess` | `695640a1-…` |
+| Approval Library Access | `ApprovalLibraryAccessWebPart` | `StagingAccess` | `591eb30f-…` |
+| Page Access | `PageAccessWebPart` | `PageAccess` | `2d6d7010-…` |
+
+All four share one directory (`src/webparts/userAccess/`), one bundle
+(`user-access-web-parts`) and one loc file — only the entry point and manifest differ.
+`AccessShell.tsx` gives them common chrome so they cannot drift apart visually.
+
+Four pages rather than one tabbed page means **four Page Access rows**, which is the point:
+the person who manages folder mappings need not be the person who manages site entry.
 
 ## 3. Why this is low risk
 
@@ -71,19 +85,34 @@ The current help text is stale and contributes to the "complicated" impression:
 
 ## 6. The seam this creates — and the mitigation
 
-Splitting the pages splits a workflow: **mapping a group on Page B does nothing to folder
-ACLs until Folder Reconciliation runs on Page A.** That is already true today, but today
-the two are one click apart.
+Splitting the pages splits a workflow: **mapping a group on Folder Access does nothing to
+folder ACLs until Folder Reconciliation runs on Folder Manager.** That was already true, but
+the two used to be one click apart.
 
-Mitigation, cheapest first:
+The note therefore sits on **Folder Access alone**. Verified 2026-08-07 by call-site count:
+`SiteAccess`, `StagingAccess` and `PageAccess` each call `addroleassignment` directly and take
+effect immediately; only `GroupMapBuilder` writes rows and defers to reconciliation. The
+single-page version showed that caveat above all four surfaces, which was false for three.
 
-1. After a successful mapping write, the confirmation states that folder permissions apply
-   on the next reconciliation, **with a link to the Folder Manager page**.
-2. Reconciliation already reports newly mapped units, so the reverse direction needs nothing.
+Do **not** trigger reconciliation from an access page: it is a long, throttled, page-bound run
+(it warns before unload), and burying it behind a routine mapping is how it gets interrupted
+halfway.
 
-Do **not** trigger reconciliation from the access page: it is a long, throttled,
-page-bound run (it warns before unload), and burying it behind a routine mapping is how it
-gets interrupted halfway.
+## 6a. Packaging trap — new web parts are not registered automatically
+
+`config/package-solution.json` pins an explicit `features[0].componentIds` array. A web part
+absent from it is **compiled, bundled, and then silently dropped from the `.sppkg`** — the
+build reports success, and the only symptom is that the web part never appears in the toolbox.
+The first attempt at this split lost its web part exactly this way.
+
+**Verify the package, not the build log:**
+
+```
+node -e "const s=require('fs').readFileSync('sharepoint/solution/sd-gatrie.sppkg').toString('latin1');
+const m=new Set([...s.matchAll(/WebPart_([0-9a-f-]{36})\.xml/g)].map(x=>x[1]));console.log([...m])"
+```
+
+Bump `solution.version` on every packaging change so the tenant treats it as an upgrade.
 
 ## 7. Out of scope
 
