@@ -3,6 +3,11 @@
 Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
+> 📍 **Current site state, and what is outstanding: `docs/2026-08-07-project-state.md`.**
+> Read it before acting on anything in this file. THIS file holds the rules; that one holds what
+> is actually true on `/sites/ClarenceDMSTesting` right now — which lists exist, that the library
+> was recreated as `Approval Document`, what has been deployed, and the open items in order.
+
 ---
 
 ## Project Identity
