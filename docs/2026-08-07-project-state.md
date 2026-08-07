@@ -180,7 +180,22 @@ row ignored** — with granting back, the two passes would fight.
    > Reading the run log: on a **re-run** the approval lines are absent because there is nothing
    > left to approve. Silence here means settled, not skipped — confirm with the query above
    > rather than by counting `↳ approved` lines.
-6. **Upload → approve** end to end.
+6. **Upload → approve** end to end. **UPLOAD HALF DONE 2026-08-07** — verified by a real
+   unprivileged PIC (member of `GHO_GF_CORU_UPL` only), which proved the whole chain: site
+   entry, ancestor-browse corridor, folder ACL, group→role resolution, term ancestry, form.
+   > This is what caught the `collectMembership` bug (`2d73c47`): `Role` is a Choice column
+   > holding LONG FORM values, so live rows read `UPLOADER` while the form compared against
+   > `UPL` and refused a correctly provisioned uploader. Reconciliation had already normalised
+   > and granted the folder, so SharePoint looked right and only the form disagreed.
+   >
+   > **Test as a NON-ADMIN or the test is worthless.** `Form.tsx` gates the error on
+   > `!privileged && validPaths.length === 0`, so a site collection admin — or an M365 group
+   > owner, who is an SCA via the `…_o` claim without appearing under their own name — always
+   > sees a working form whether the code is right or not. One tester was an explicitly-added
+   > SCA and would have produced a false pass.
+   >
+   > Expected UI for a single-path user: Department and Unit locked with a breadcrumb rather
+   > than dropdowns. That is correct, not a failure — a two-unit user gets live dropdowns.
 7. **Auto-route flow**, in this order: path split `Staging/` → `ApprovalDocument/`; then stamp
    `Author` + `Created` on the Documents copy via `validateUpdateListItem`; then verify the copy
    and delete the source. The path split alone is **already broken** by the rename.
