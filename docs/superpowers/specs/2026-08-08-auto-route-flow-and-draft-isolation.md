@@ -82,9 +82,22 @@ to their own file inside. Uploaders cannot fix this: setting the status needs `A
 **Backlog:** `C:\Users\clare\Downloads\approve-folders.js` — console script, previews by default,
 `await approveFolders({apply:true})` to write. Ran 2026-08-08: 6 folders approved.
 
-**Ongoing:** a dedicated flow, separate from Auto-route.
+**Built and verified 2026-08-09** — flow `CRS — Approve new folders in Approval Document`, separate
+from Auto-route.
 
 - Trigger: **When an item is created**, list = the library **GUID** as a custom value
+  - **Not** "created or modified": the action below *modifies* the item, so that trigger
+    re-fires itself, the condition is still true (still a folder), and it loops until Power
+    Automate's loop protection stops it.
+  - **Split-on tracking ID must not be empty.** Saving with a present-but-blank value fails with
+    *"The 'clientTrackingId' value is not valid. The value cannot be null or all whitespace
+    characters."* The UI renders blank and absent identically, so clearing it does not help — put
+    `@{triggerOutputs()?['body/ID']}` in it. Same class as the empty trigger-condition row that
+    reports "Invalid settings": **cleared is not the same as not there.**
+  - The tracking-ID box and the trigger-condition box look alike and sit in the same panel. The
+    condition row is the one with an **✕** beside it (conditions are a removable list); the tracking
+    ID is a plain field. Pasting the tracking ID over the condition silently removes the
+    `{IsFolder}` guard — see the warning below for what that costs.
 - **Trigger condition** (Settings → Trigger conditions):
   `@equals(triggerOutputs()?['body/{IsFolder}'], true)`
 - One action — `Send an HTTP request to SharePoint`:
@@ -96,6 +109,28 @@ to their own file inside. Uploaders cannot fix this: setting the status needs `A
 > **The `{IsFolder}` guard is the entire safety of this flow.** If it ever approves a FILE, that
 > file skips human approval, becomes visible to everyone with Read, and Auto-route ships it to
 > Documents. Test it deliberately: upload a file and confirm it stays *Waiting for Approval*.
+
+**Verified end to end 2026-08-09**, upload as a PIC (`clarencechojinheng`) with a second PIC
+(`chocheetuck4`, guest) in the same `_UPL` group:
+
+| Check | Result |
+|---|---|
+| Flow fires on the new `Document Type` folder | succeeded, 0.4s |
+| `{IsFolder}` guard holds | the uploaded FILE stayed *Waiting for Approval* |
+| Peer PIC can navigate the new folder | yes — reaches `2024/Tax Return` |
+| Peer PIC cannot see the file inside | yes — folder renders **empty** for them |
+
+The last two together are the deliverable: navigation works, isolation holds.
+
+**Also fixed the same day — reconciliation's moderation merge.** It was sending `Full Name`,
+`ContentTypeId` and `OData__ModerationStatus` in ONE merge, which SharePoint rejects with HTTP 500
+*"You cannot change moderation status and set other item properties at that same time."*
+Compounding it: **in a moderated library any property write re-pends the item**, so the earlier runs
+that stamped `Full Name` had silently knocked the whole tree back to Pending, and uploaders then hit
+*"The mapped unit folder no longer exists"* — the UniqueId lookup 404s for a user who cannot see a
+pending folder. Nothing was deleted; the message named the symptom, not the cause. `FolderManager.tsx`
+now writes properties first, then moderation status in its **own** merge, and re-approves when either
+the folder was pending or the property write just re-pended it.
 
 Reconciliation also has a folder-approval pass for the structural tiers, but it does **not** cover
 the Year × Document Type grid (`recon_gridMode` is off, and the grid fast path would skip it
@@ -349,8 +384,14 @@ and nothing in the run history flags it.
 - **Rejected email `Reason`** — unverified whether `{ModerationComment}` from `Get item` carries the
   comment, or whether the branch's `Get Reject Comment` output is required. Test one rejection with
   a comment typed in.
-- **`{IsFolder}` trigger guard** on the folder-approval flow is untested from the negative side —
-  upload a file and confirm it stays *Waiting for Approval* rather than being auto-approved.
 - Some SharePoint groups still carry the `DMS_` prefix (e.g. `DMS_GHO_GF_CORU_UPL`) — re-run
   `rename-crs-groups.js` in preview mode to enumerate what the first pass missed.
-- `recon_gridMode` is **off**; Year/Doc-Type folders are created on demand and rely on the §3 flow.
+- Both flow connections still run as a personal account; move them to the service account before
+  handover — a password change stops folder approval and routing **silently**.
+- Reconciliation logs a moderation-approve failure as `ok: true`, alongside cosmetic `Full Name`
+  failures. Right for a label, wrong for an approve: a failed approve locks uploaders out of their
+  own folders. Worth separating so it cannot hide in a wall of warnings again.
+- `recon_gridMode` is **off**; Year/Doc-Type folders are created on demand and rely on the §3 flow,
+  which makes that flow a single point of failure for navigation. Turning `gridMode` on would have
+  reconciliation pre-create the grid **as an admin** (born Approved, flow off the critical path), at
+  the cost of Year × Document Type folders per unit up front. Undecided.

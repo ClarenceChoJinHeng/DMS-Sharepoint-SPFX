@@ -2607,20 +2607,38 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 if (wantCtId && (state.contentTypeId ?? "").toLowerCase() !== wantCtId.toLowerCase()) {
                   values.ContentTypeId = wantCtId;
                 }
-                // 0 = Approved. Rides in the same merge for the same reason as the content
-                // type. Only when this library moderates, and only when it is not already 0 —
-                // a folder an admin approved by hand must not be rewritten every run.
-                if (moderated && state.moderationStatus !== undefined && state.moderationStatus !== 0) {
-                  values.OData__ModerationStatus = 0;
-                }
+                // Moderation status MUST travel in its own merge. SharePoint rejects any
+                // request that sets it alongside another field:
+                //   "You cannot change moderation status and set other item properties at
+                //    that same time." (-2146232832, HTTP 500)
+                //
+                // It must also run AFTER the property merge, never before: in a moderated
+                // library ANY property write re-pends the item. Approving first and then
+                // writing Full Name leaves the folder Pending, which is not cosmetic — a
+                // pending folder is invisible to an uploader under approver-only draft
+                // security, and the upload form then reports "the mapped unit folder no
+                // longer exists" because its UniqueId lookup 404s for that user.
+                const wrote: string[] = [];
                 if (Object.keys(values).length > 0) {
                   await setFolderItemFields(full, values);
-                  const what = [
-                    fullNameField && values[fullNameField] !== undefined ? `${FULL_NAME_COLUMN_TITLE} = ${t.fullName}` : "",
-                    values.ContentTypeId !== undefined ? `content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}` : "",
-                    values.OData__ModerationStatus !== undefined ? `approved (folder was pending — would be invisible under approver-only draft security)` : "",
-                  ].filter(Boolean).join(", ");
-                  entries.push({ msg: `  ↳ ${what}`, ok: true });
+                  if (fullNameField && values[fullNameField] !== undefined) {
+                    wrote.push(`${FULL_NAME_COLUMN_TITLE} = ${t.fullName}`);
+                  }
+                  if (values.ContentTypeId !== undefined) {
+                    wrote.push(`content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}`);
+                  }
+                }
+                // Re-approve when the folder was already pending, OR when the write above
+                // just re-pended it. Missing that second case is what silently un-approves
+                // a settled tree on every run.
+                const rePended = Object.keys(values).length > 0;
+                const wasPending = state.moderationStatus !== undefined && state.moderationStatus !== 0;
+                if (moderated && (rePended || wasPending)) {
+                  await setFolderItemFields(full, { OData__ModerationStatus: 0 });
+                  wrote.push("approved (a pending folder is invisible under approver-only draft security)");
+                }
+                if (wrote.length > 0) {
+                  entries.push({ msg: `  ↳ ${wrote.join(", ")}`, ok: true });
                   await tick();
                 }
               } catch (e) {
