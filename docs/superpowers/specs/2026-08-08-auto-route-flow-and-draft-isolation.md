@@ -260,11 +260,76 @@ Title is **`Documents`**, URL is **`/Shared Documents`**. Same trap as
 approval. All but one correctly take the False branch. A run whose True branch is **skipped** is
 not a failure. Consider a trigger condition on moderation status if the noise becomes a problem.
 
+### 5.7 Content approval on `Documents` hides everything the flow routes
+
+Verified 2026-08-08. If `Documents` has **content approval on**, every item the flow creates there —
+the `Year`/`Document Type` folders from `Create new folder` **and the copied file itself** — arrives
+**Pending**, and is therefore invisible to every read-only viewer. The uploader gets an approval
+email whose link is denied, and the unit sees a folder that appears not to exist. It looks exactly
+like a permissions bug and is not one.
+
+**How to spot it without a query:** the library's view bar shows **`Approve/reject Items`** and
+**`Show All Files`**. SharePoint adds those two views *only* when moderation is enabled. Confirm with
+`getbytitle('Documents')?$select=EnableModeration,DraftVersionVisibility`.
+
+**Fix:** Library settings → Versioning settings → *Require content approval* = **No**. Everything
+Pending becomes visible immediately; no re-approval pass is needed.
+
+`Documents` must never be moderated — §1 already rules it out as an isolation mechanism, and this is
+a second, independent reason. Approval happens in the approval library; anything reaching
+`Documents` is approved by definition.
+
+Nothing in the code enables it — reconciliation only *reads* `EnableModeration`
+(`FolderManager.tsx`) to decide whether to stamp new folders Approved. If it is on, a human turned
+it on.
+
+### 5.8 A PIC needs the base `_MEMBER` group to open the link in the email
+
+`*_UPL` grants upload on the approval library and **nothing in `Documents`** (see the persona table
+in CLAUDE.md). So a PIC who is only in `_UPL` receives "your document is now available" and is
+denied on the link. That is the model behaving correctly, not a broken link — note the denial URL
+still carries `Type=item&listItemId=…`, i.e. SharePoint *resolved* the file and then refused.
+
+A PIC who should be able to read their unit's approved documents must **also** be a member of the
+unit's base group (e.g. `GHO_GF_CORU`). Uploading and viewing are deliberately separate grants.
+
+### 5.9 The notification emails — expressions must track the library rename
+
+Both emails (approved, and rejected in the `Condition 1` True branch) parse the folder path out of
+`{Path}` by splitting on the library's **URL segment**:
+
+```
+Segment:       @{first(split(split(body('Get_item')?['{Path}'], 'ApprovalDocument/')?[1], '/'))}
+File Location: @{replace(substring(split(body('Get_item')?['{Path}'], 'ApprovalDocument/')?[1], 0,
+                 sub(length(split(body('Get_item')?['{Path}'], 'ApprovalDocument/')?[1]), 1)), '/', ' > ')}
+```
+
+They were authored against `Staging/`. After the rename `?[1]` became **null**, and
+`split(null,'/')` / `substring(null,…)` / `length(null)` threw
+`InvalidTemplate … the provided value is of type 'Null'` — failing the whole run at the last action.
+Same class of failure as §4.1: **one stale token, silent null, loud error somewhere else.**
+
+Two more differences between the branches, both easy to get wrong by copy-paste:
+
+| | Approved | Rejected |
+|---|---|---|
+| File link | `@{replace(body('Get_item')?['{Link}'], '/ApprovalDocument/', '/Shared%20Documents/')}` | `@{body('Get_item')?['{Link}']}` — **unreplaced** |
+| Date label | `Approved on` | `Rejected on` |
+
+A rejected file is **not moved**; it stays in the approval library, where the author exception keeps
+it visible to its uploader. Rewriting its link to `/Shared%20Documents/` points at a file that was
+never there.
+
+Also: the body must read **`Document_x0020_Type`**. The retired `Department_x0020_Type` fails
+*quietly* — `?['Label']` on null just renders blank — so the email sends with an empty Document Type
+and nothing in the run history flags it.
+
 ## 6. Migration checklist for a new site
 
 1. Read the new library's **GUID** and confirm `BaseTemplate = 101`.
 2. **Approval Document**: content approval **on**, Draft Item Security = **approver + author**.
-3. **Documents**: content approval **off**. Do not attempt isolation here.
+3. **Documents**: content approval **off** — verify, do not assume (§5.7). If the view bar shows
+   `Approve/reject Items`, it is on and every routed file will be invisible.
 4. Recreate both flows from §3 and §4. Use a **service account** for both connections — with a
    personal account, a password change stops folder approval and routing silently.
 5. Header keys with **no colons**; `Accept: application/json;odata=nometadata` on every HTTP action.
@@ -273,14 +338,19 @@ not a failure. Consider a trigger condition on moderation status if the noise be
    - the Documents copy shows the PIC in `Created By` **and** `Modified By`, with the original `Created`
    - the source is **gone** from the approval library
    - a second PIC cannot see the first PIC's pending file
+   - the uploader can **open the link in the email** — needs the base `_MEMBER` group (§5.8)
 8. Clear any pre-existing `status=0` files from the approval library by hand — the flow only fires
    on change, so it will never collect them.
+9. Check both email bodies for the library's own URL segment and `Document_x0020_Type` (§5.9).
 
 ## 7. Known outstanding
 
-- **The notification email** (`Send an email from a shared mailbox (V2)`) fails with
-  `InvalidTemplate ... type 'Null'` — a dynamic reference that no longer resolves after the list
-  was re-pointed. It is the last action so nothing depends on it, but it fails every run and will
-  mask the next real error.
 - Leftover approved files in the approval library from before §4.4 existed.
+- **Rejected email `Reason`** — unverified whether `{ModerationComment}` from `Get item` carries the
+  comment, or whether the branch's `Get Reject Comment` output is required. Test one rejection with
+  a comment typed in.
+- **`{IsFolder}` trigger guard** on the folder-approval flow is untested from the negative side —
+  upload a file and confirm it stays *Waiting for Approval* rather than being auto-approved.
+- Some SharePoint groups still carry the `DMS_` prefix (e.g. `DMS_GHO_GF_CORU_UPL`) — re-run
+  `rename-crs-groups.js` in preview mode to enumerate what the first pass missed.
 - `recon_gridMode` is **off**; Year/Doc-Type folders are created on demand and rely on the §3 flow.

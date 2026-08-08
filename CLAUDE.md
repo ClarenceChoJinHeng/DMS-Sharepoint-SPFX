@@ -287,6 +287,22 @@ condition `@equals(triggerOutputs()?['body/{IsFolder}'], true)` that MERGEs
 `{"OData__ModerationStatus": 0}`. That `{IsFolder}` guard is the whole safety of it — approving a
 FILE would skip human approval and hand it straight to Auto-route.
 
+**`Documents` must have content approval OFF — verify it on every site.** If it is on, every item
+the Auto-route flow creates there (the `Year`/`Document Type` folders AND the copied file) arrives
+**Pending** and is invisible to every read-only viewer: the uploader's approval email link is
+denied, and the unit sees a folder that looks empty or absent. It presents as a permissions bug and
+is not one. Tell-tale without a query: the view bar shows `Approve/reject Items` + `Show All Files`,
+views SharePoint adds only when moderation is on. Fix = Versioning settings → *Require content
+approval* = No; everything Pending becomes visible at once. Nothing in the code enables it —
+reconciliation only READS `EnableModeration` to decide whether to stamp new folders Approved.
+Spec §5.7.
+
+**A PIC needs the base `_MEMBER` group to open the emailed link.** `*_UPL` grants upload on the
+approval library and NOTHING in `Documents` — so an upload-only PIC gets "your document is now
+available" and an AccessDenied. Working as designed (the denial URL still carries `listItemId`, so
+the file resolved and was then refused), but the client must decide: PICs who should read their
+unit's approved documents go in the unit base group too. Spec §5.8.
+
 **Documents — NOT achievable, do not re-attempt.** Hiding an item from someone with Read requires
 moderation; seeing a hidden item requires `Approve Items`; and **`Approve Items` cannot be
 separated from `Edit Items`** (verified in the permission-level editor — ticking one ticks the
