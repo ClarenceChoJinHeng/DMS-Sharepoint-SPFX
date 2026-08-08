@@ -1114,7 +1114,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           style={{ ...s.select, textAlign: "left", cursor: busy ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}
           onClick={() => setPersonaOpen(!personaOpen)}
         >
-          <span>{chosenPersona ? `${chosenPersona.family} — ${chosenPersona.label}` : "— none: pick a role directly —"}</span>
+          {/* "pick a role directly" described the role chips, which are gone. The persona is
+              the only way in now, so the placeholder has to say that. */}
+          <span>{chosenPersona ? `${chosenPersona.family} — ${chosenPersona.label}` : "— select a persona —"}</span>
           <span style={{ marginLeft: 8, color: "#605e5c" }}>{personaOpen ? "▲" : "▼"}</span>
         </button>
         {personaOpen && (
@@ -1184,8 +1186,10 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               <div style={{ marginBottom: 6, color: "#444" }}>
                 Needs <strong>{chosenPersona.roles.length}</strong> mapping
                 {chosenPersona.roles.length === 1 ? "" : "s"} at the{" "}
-                <strong>{chosenPersona.scope}</strong> tier. Add them one at a time — click a
-                role to start it.
+                <strong>{chosenPersona.scope}</strong> tier
+                {chosenPersona.roles.length === 1
+                  ? ". The first is selected below — pick a segment and tier, then add it."
+                  : ". The first is selected below; add it, then click the second."}
               </div>
               {!tierGuid && <div style={{ color: "#8a6d00", marginBottom: 8 }}>Select a segment and tier to see which are already in place.</div>}
               {scopeMismatch && <div style={s.personaBlocked}>{scopeMismatch}</div>}
