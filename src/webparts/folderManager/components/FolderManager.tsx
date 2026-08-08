@@ -1751,11 +1751,16 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // the string Full Name exists to explain. Falls back to the folder name if the read
       // fails, so a term-store hiccup costs a label, not the run.
       const segmentFullName = (await loadTermSetName(mode.termSetGuid)) ?? mode.stagingFolder;
-      // ancestorTerms is empty here AND the term-set GUID is deliberately never
-      // put into any descendant's ancestorTerms: a SEGMENT-tier row does not fan
-      // down. Same reason fan-out is opt-in at all — sites provisioned before
-      // 2026-07-29 can carry leftover segment-tier MEMBER rows, and fanning one
-      // would grant Read across an entire business segment.
+      // The term-set GUID IS now placed in every descendant's ancestorTerms (2026-08-09),
+      // so a segment-tier row can reach the segment's folders — which is what the C-Level
+      // "view one business segment" persona is.
+      //
+      // The original reason it was withheld still stands and is still enforced, just one
+      // layer down instead of here: sites provisioned before 2026-07-29 can carry leftover
+      // segment-tier MEMBER rows, and fanning one would grant Read across an entire
+      // business segment. The fanned loop therefore accepts a segment-tier inheritance for
+      // **SEGVIEW only** (see segmentTermSets there). Withholding the term entirely was the
+      // blunter version of the same rule and made the intended role unusable.
       out.push({ termGuid: null, assignTerm: mode.termSetGuid, ancestorTerms: [], relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, fullName: segmentFullName, section: mode.stagingFolder, isLeaf: false });
       // A failure anywhere in this segment's tree marks the WHOLE segment incomplete.
       // Targets gathered before the failure are kept (creating a subset of folders is
@@ -1803,7 +1808,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         const topSeg = seg(top.id, top.label, 1);
         if (topSeg === undefined) continue; // reported; its children are unreachable
         abbrevTargets.push({ parentPath: `/${mode.stagingFolder}`, termGuid: top.id, abbreviation: topSeg, label: top.label });
-        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, ancestorTerms: [], relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false };
+        // ancestorTerms leads with the SEGMENT (the term-set GUID) since 2026-08-09, so a
+        // segment-tier row reaches this department and everything under it. Restricted to
+        // SEGVIEW in the fanned loop — see segmentTermSets there.
+        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, ancestorTerms: [mode.termSetGuid], relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false };
         out.push(topTarget);
         // Recurse; returns whether the term had children. A term with no children
         // is a leaf (the upload target) and gets the Year × Document Type grid.
@@ -1843,7 +1851,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           }
           return children.length > 0;
         };
-        topTarget.isLeaf = !(await walk(top.id, [], [], [top.id]));
+        // termAncestors starts with the SEGMENT then the top term, so every descendant
+        // inherits both. Outermost first, matching the ProvTarget contract.
+        topTarget.isLeaf = !(await walk(top.id, [], [], [mode.termSetGuid, top.id]));
       }
       } catch (e) {
         incomplete.push(`${mode.stagingFolder} — ${(e as Error).message}`);
@@ -2304,6 +2314,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       }
       const groupMap = await loadGroupMapForAssign();
       const { targets, incomplete: incompleteSegments, missingAbbrev, collisions, abbrevRows } = await buildProvisionTargets();
+      // The segment tier, identified by term-set GUID. Derived from the targets already in
+      // hand — a segment container is the one target with no term of its own — rather than
+      // re-reading the modes, so the two can never disagree about what "a segment" is.
+      // Used by the fan-down to let SEGVIEW, and only SEGVIEW, inherit from this tier.
+      const segmentTermSets = new Set<string>(
+        targets.filter((t) => t.termGuid === null).map((t) => t.assignTerm.toLowerCase()),
+      );
       // relPath → the term that folder stands for. Every ancestor folder is itself a
       // target (the segment folder and each department folder both get one), so this
       // covers the whole tree. The ancestor-read revoke needs it to answer the one
@@ -2846,6 +2863,24 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               if (!gridSets.fanOut && i.row.role !== "SEGVIEW") {
                 entries.push({
                   msg: `  ⚠ ${g0(i.row)} would inherit ${permissionForRole(lib, i.row.role)} on ${folderLabel} from a parent-tier mapping — not granted (recon_departmentFanOut is off)`,
+                  ok: true,
+                });
+                continue;
+              }
+              // A SEGMENT-tier row reaches descendants for SEGVIEW alone (2026-08-09). The
+              // segment term-set GUID is now in every descendant's ancestorTerms so the
+              // C-Level "one business segment" persona can work at all — but a leftover
+              // segment-tier MEMBER row from before 2026-07-29 is indistinguishable BY TIER
+              // from a deliberate one, and honouring it would hand a viewer Read across an
+              // entire business segment. SEGVIEW cannot be such a leftover: it granted
+              // nothing on any site until 2026-08-07, so every row that exists was written
+              // on purpose. The role name is the consent, exactly as it is for GLOBAL.
+              //
+              // NOT gated on recon_departmentFanOut either: that switch is about DEPARTMENT
+              // rows, and turning it off must not silently disable a C-Level.
+              if (segmentTermSets.has((i.fromTerm ?? "").toLowerCase()) && i.row.role !== "SEGVIEW") {
+                entries.push({
+                  msg: `  ⚠ ${g0(i.row)} sits on the SEGMENT tier and would reach ${folderLabel} — not granted (only SEGVIEW fans down from a segment)`,
                   ok: true,
                 });
                 continue;

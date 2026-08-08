@@ -815,8 +815,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     const m = modes.find((x) => x.termSetGuid === termSetGuid);
     setMode(m);
     setChosen([]);
-    setTierGuid("");
     setCascade([]);
+    // A SEGMENT-scope persona (C-Level — one business segment) has no tier to pick: the
+    // segment IS the tier. A segment-tier row is written with UnitTermGuid equal to the
+    // TERM SET guid — see GroupMapWriteRow — so set it here rather than making the admin
+    // choose a department they are not scoped to. Read via personaByKey, not the derived
+    // `chosenPersona` further down, so this does not depend on declaration order.
+    const p = personaByKey(persona);
+    setTierGuid(m && p?.scope === "segment" ? m.termSetGuid : "");
     if (m) {
       const tops = await loadTops(m.termSetGuid).catch(() => [] as TermLite[]);
       setCascade([tops]);
@@ -1086,9 +1092,34 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // can be shallower than its configured Levels chain and the folder tree follows
   // the terms, not the config.
   const tierIsLeaf = chosen.length > 0 && cascade.length === chosen.length;
-  // Only meaningful once a tier is picked; until then neither warning applies.
+
+  /**
+   * How many tier dropdowns the chosen persona is allowed to see (2026-08-09).
+   *
+   * Previously every level the term store could load was rendered, so a Head of Department
+   * was walked all the way down to a unit and then TOLD OFF for picking one. The scope is
+   * known before the admin touches anything, so the deeper levels should not exist rather
+   * than be a mistake waiting to be made.
+   *
+   *   segment    → 0. The segment IS the tier; the Segment dropdown already chose it.
+   *   department → 1. Top-level terms of a segment's set ARE its departments.
+   *   unit       → all of them.
+   *
+   * Without a persona (no longer reachable from this page, but the state is still
+   * expressible) the full chain shows, which is the old behaviour.
+   */
+  const maxTierLevels =
+    !chosenPersona ? cascade.length
+    : chosenPersona.scope === "segment" ? 0
+    : chosenPersona.scope === "department" ? 1
+    : cascade.length;
+  const visibleCascade = cascade.slice(0, maxTierLevels);
+
+  // Only meaningful once a tier is picked; until then neither warning applies. A
+  // segment-scope persona can no longer mis-pick — it has no tier dropdown at all — so it
+  // is exempt rather than being given a third message it can never act on.
   const scopeMismatch: string | undefined =
-    !chosenPersona || !tierGuid ? undefined
+    !chosenPersona || !tierGuid || chosenPersona.scope === "segment" ? undefined
     : chosenPersona.scope === "department" && tierIsLeaf
       ? `${chosenPersona.family} covers every unit under a department, but you have picked a unit. Pick the department instead, or use the matching Head of Unit group.`
     : chosenPersona.scope === "unit" && !tierIsLeaf
@@ -1253,10 +1284,10 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
             {modes.map((m) => <option key={m.termSetGuid} value={m.termSetGuid}>{m.label}</option>)}
           </select>
 
-          {mode && (
+          {mode && visibleCascade.length > 0 && (
             <>
               <label style={s.label}>Tier (where this group applies) <span style={s.req}>*</span></label>
-              {cascade.map((opts, i) => (
+              {visibleCascade.map((opts, i) => (
                 <select
                   key={i}
                   style={{ ...s.select, marginBottom: 6 }}
