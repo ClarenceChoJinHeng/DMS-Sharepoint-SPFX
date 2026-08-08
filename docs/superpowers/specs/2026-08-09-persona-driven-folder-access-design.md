@@ -142,7 +142,14 @@ it reaches, and that table is code.
 
 ## 7. Consequence to state to the client
 
-**Every PIC will read every approved document in their unit, at any confidentiality level.**
+**In the `Documents` library, every PIC will read every approved document in their unit, at any
+confidentiality level.**
+
+Scope, stated precisely because the two libraries behave differently and that difference IS the
+product: in the **approval library** a PIC still sees only their OWN pending and rejected files.
+Draft isolation is untouched by this change — re-verified 2026-08-09 with two PICs in the same
+`_UPL` group, one of whom saw an empty folder while the other's pending file sat inside it. The
+widening applies to approved documents only.
 
 That follows from the request and is consistent with the existing model — confidentiality is
 metadata, not a permission, and the unit folder is already the smallest boundary this system has.
