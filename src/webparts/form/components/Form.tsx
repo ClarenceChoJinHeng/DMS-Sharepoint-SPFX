@@ -394,7 +394,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const showToast = (message: string, type: ToastType): void => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ message, type });
-    toastTimerRef.current = setTimeout(() => setToast(null), 5000);
+    // Errors self-dismiss; the success state must NOT. It renders as a modal
+    // with two deliberate exits ("Back to Document" / "Upload More"), so a timer
+    // yanks the dialog out from under someone mid-decision — and if it fires
+    // while they are still reading, a completed upload looks like it vanished.
+    if (type !== "success") {
+      toastTimerRef.current = setTimeout(() => setToast(null), 5000);
+    }
   };
 
   const activeMode = (): UploadMode | undefined =>
@@ -989,7 +995,22 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setFile(undefined);
     setDocName("");
     setDocumentType("");
-    setLevelValues([]);
+    // Rebuild the cascade rather than blanking it. A restricted uploader's
+    // Department/Unit are DERIVED from their group memberships and locked, so
+    // clearing them to [] left the two fields empty with no way to re-select —
+    // the tier detection runs once at mount, so only a page refresh brought them
+    // back. That made "Upload More" strictly worse than reloading the form.
+    const m = activeMode();
+    if (!m) {
+      setLevelValues([]);
+    } else if (privileged) {
+      initCascade(m).catch(() => {
+        setLevelChoices([]);
+        setLevelValues([]);
+      });
+    } else {
+      applyRestrictedMode(validPaths, m, []);
+    }
     setYearPeriod("");
     setDocumentDate("");
     setConfidentiality("");
