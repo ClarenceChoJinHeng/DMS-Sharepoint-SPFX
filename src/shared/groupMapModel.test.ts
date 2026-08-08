@@ -14,6 +14,7 @@ import {
   PERSONA_FAMILIES,
   SELECTABLE_ROLES,
   personaByKey,
+  personaTouchesStaging,
   GroupMapRole,
   normalizeScope,
   isForbiddenPageTarget,
@@ -54,23 +55,29 @@ describe("personas", () => {
     expect(approvers.map((p) => p.key)).toEqual(["hou"]);
   });
 
-  it("keeps Head of Department to view + delete, department-scoped", () => {
+  it("keeps Head of Department to delete, department-scoped", () => {
     const hod = PERSONAS.filter((p) => p.family === "Head of Department");
     expect(hod.length).toBe(1);
     expect(hod[0].scope).toBe("department");
-    expect(hod[0].roles).toEqual(["MEMBER", "DEL"]);
+    // MEMBER dropped 2026-08-09: DEL maps to "CRS Delete" = Read + Delete Items, so the read
+    // was always there. The second membership only made it look as though it were not.
+    expect(hod[0].roles).toEqual(["DEL"]);
     // DEL is the DOCUMENTS delete. DELS would put a department head on Staging, which
     // LIBRARY_ROLES routes there — and HoD has no Staging access at all.
     expect(hod[0].roles).not.toContain("DELS");
     expect(hod[0].roles).not.toContain("UPL");
   });
 
-  it("keeps Head of Unit to approve + view, unit-scoped", () => {
+  it("keeps Head of Unit to approve + delete pending, unit-scoped", () => {
     const hou = PERSONAS.filter((p) => p.family === "Head of Unit");
     expect(hou.length).toBe(1);
     expect(hou[0].scope).toBe("unit");
-    expect(hou[0].roles).toEqual(["MEMBER", "APR"]);
-    // Deleting approved documents belongs to the department head, not the unit head.
+    // 2026-08-09: MEMBER dropped (APR now carries Documents read by itself) and DELS added —
+    // the client's "they should have the power to delete" pending or rejected files.
+    expect(hou[0].roles).toEqual(["APR", "DELS"]);
+    // Deleting APPROVED documents still belongs to the department head. DELS is Staging-only
+    // by LIBRARY_ROLES, so this assertion keeps the two deletes apart at the model level as
+    // well as the library level.
     expect(hou[0].roles).not.toContain("DEL");
   });
 
@@ -434,17 +441,54 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
     expect(rolesOf("hod")).toContain("DEL");
   });
 
-  it("gives Staging delete to nobody", () => {
-    // DELS is deliberately kept as a role — an admin can still author a row by hand and
-    // reconciliation honours it — but no persona offers it, so no group is created with
-    // it. If this ever fails, some persona has quietly gained the power to delete other
-    // people's pending documents.
+  it("gives Staging delete to the Head of Unit, and to nobody else", () => {
+    // Reversed 2026-08-09. DELS used to belong to NO persona — kept alive only so a
+    // hand-authored row would still work. The client assigned it to the Head of Unit, whose
+    // job it already is to act on pending work.
+    //
+    // "And to nobody else" is the half that still matters: DELS is the power to delete other
+    // people's PENDING documents. Anyone else acquiring it is a silent grant, which is why
+    // this asserts the exact set rather than just that HoU has it.
     const withStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELS") !== -1);
-    expect(withStagingDelete).toEqual([]);
+    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou"]);
   });
 
   it("keeps the PIC to upload alone", () => {
+    // Still UPL only, even though a PIC now reads Documents too. That read comes from
+    // LIBRARY_ROLES listing UPL under Documents — NOT from adding MEMBER here. If this ever
+    // grows a second role, the "one group per person" property has been lost.
     expect(rolesOf("pic")).toEqual(["UPL"]);
+  });
+
+  it("leaves SDG Employee as the only persona that is purely MEMBER", () => {
+    // Since 2026-08-09 every other persona carries its own Documents read, so the base group
+    // means exactly what its name says: someone who views and does nothing else. A second
+    // MEMBER-only persona would be an alias for it, and two names for one thing is how an
+    // admin ends up assigning the wrong one.
+    const memberOnly = PERSONAS.filter(
+      (p) => p.roles.length === 1 && p.roles[0] === "MEMBER",
+    );
+    expect(memberOnly.map((p) => p.key)).toEqual(["employee"]);
+  });
+
+  // The Folder Access page groups personas behind a library toggle (2026-08-09). These assert
+  // the grouping it derives, because the client's first sketch of that toggle had the two lists
+  // swapped — and a UI that files C-Level under the approval library is suggesting the widest
+  // accidental grant this system has.
+  it("puts exactly Head of Unit and PIC on the approval-library side of the toggle", () => {
+    const staging = PERSONAS.filter(personaTouchesStaging).map((p) => p.key);
+    expect(staging.sort()).toEqual(["hou", "pic"]);
+  });
+
+  it("keeps every C-Level and viewer persona off the approval-library side", () => {
+    // GLOBAL/SEGVIEW on Staging would read every unapproved draft in a segment; MEMBER would
+    // read a unit's. Asserted through the same helper the UI calls, so the screen cannot
+    // disagree with the model.
+    for (const key of ["clevel_global", "clevel_segment", "hod", "employee"]) {
+      const p = personaByKey(key);
+      expect(p).toBeDefined();
+      expect(personaTouchesStaging(p!)).toBe(false);
+    }
   });
 
   it("never puts DEL and DELS on the same persona", () => {

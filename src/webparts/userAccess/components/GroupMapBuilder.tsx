@@ -13,10 +13,11 @@ import {
   GroupMapWriteRow,
   normalizeScope,
   siteEntryGroupTitle,
-  SELECTABLE_ROLES,
   PERSONAS,
   PERSONA_FAMILIES,
   personaByKey,
+  personaTouchesStaging,
+  Persona,
   normalizeRoleValue,
 } from "../../../shared/groupMapModel";
 import {
@@ -48,10 +49,10 @@ type ModePick = { label: string; termSetGuid: string };
 type TermLite = { id: string; label: string };
 type ExistingRow = GroupMapWriteRow & { itemId: number };
 
-// Sourced from the shared model rather than redeclared here, so the picker and
-// the GroupMapRole type cannot drift apart — and so HC stays out of the UI in
-// one place instead of two.
-const ROLES: GroupMapRole[] = SELECTABLE_ROLES;
+// The role list that used to feed the picker is gone with the picker itself (2026-08-09).
+// SELECTABLE_ROLES still exists in the model as the set of roles a Group Map row may legally
+// carry — it just no longer drives anything on screen. ROLE_HINT below is still used: the
+// persona checklist shows each role's plain-English meaning next to it.
 
 // What each role actually gets you, in the admin's words rather than the
 // permission level's. "APR" alone tells an administrator nothing about whether
@@ -185,6 +186,18 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // always true.
   const [persona, setPersona]     = useState<string>("");
   const [tierGuid, setTierGuid]   = useState<string>("");
+
+  /**
+   * Which library's personas to offer (2026-08-09). Documents first: five of the six personas
+   * live there, and it is the safer default to land on.
+   *
+   * The split is DERIVED — personaTouchesStaging() reads the persona's own roles — so the two
+   * lists cannot disagree with what the personas actually grant. That matters more than it
+   * looks. The client's first sketch of this toggle had the lists swapped, which would have
+   * filed the C-Level personas under the approval library; GLOBAL/SEGVIEW there reads every
+   * unapproved draft in a segment, so a UI that merely SUGGESTS it is a defect in itself.
+   */
+  const [libraryTab, setLibraryTab] = useState<"Documents" | "Staging">("Documents");
 
   // Group search box
   const [query, setQuery]         = useState("");
@@ -1047,6 +1060,24 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     return out;
   })();
 
+  /** Personas belonging to the selected library tab. Derived, never hand-listed — see libraryTab. */
+  const personaInTab = (p: Persona): boolean =>
+    personaTouchesStaging(p) === (libraryTab === "Staging");
+
+  /**
+   * Selecting a persona now SELECTS ITS ROLE too (2026-08-09). The role chips are gone, so
+   * without this the admin would pick a persona and have no way to start a mapping.
+   *
+   * First role, not "first unmapped": tierGuid is usually still empty at this point, so
+   * rolesMappedAtTier has nothing to say yet. The checklist below shows what is already done
+   * and lets them switch to the second role — Head of Unit is the only persona with one.
+   */
+  const choosePersona = (p: Persona): void => {
+    setPersona(p.key);
+    setPersonaOpen(false);
+    if (!p.unavailable && p.roles.length > 0) pickRole(p.roles[0]);
+  };
+
   const chosenPersona = personaByKey(persona);
 
   // Is the picked tier a leaf (a unit)? pickTerm only appends the next cascade
@@ -1100,18 +1131,21 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
               role="option"
               aria-selected={!persona}
               style={{ padding: "7px 10px", cursor: "pointer", color: "#605e5c" }}
-              onClick={() => { setPersona(""); setPersonaOpen(false); }}
+              onClick={() => { setPersona(""); setRole(""); setPersonaOpen(false); }}
             >
-              — none: pick a role directly —
+              — none —
             </div>
             {/* Grouped exactly as the client's own document lists them, so an admin
-                reading from that document finds the same groups here. */}
+                reading from that document finds the same groups here — then filtered to
+                the selected library, so the two tabs never offer the same persona twice. */}
             {PERSONA_FAMILIES.map((fam) => (
               <div key={fam}>
-                <div style={{ padding: "6px 10px", background: "#f3f2f1", fontWeight: 600, color: "#323130", position: "sticky", top: 0 }}>
-                  {fam}
-                </div>
-                {PERSONAS.filter((p) => p.family === fam).map((p) => {
+                {PERSONAS.filter(personaInTab).some((p) => p.family === fam) && (
+                  <div style={{ padding: "6px 10px", background: "#f3f2f1", fontWeight: 600, color: "#323130", position: "sticky", top: 0 }}>
+                    {fam}
+                  </div>
+                )}
+                {PERSONAS.filter((p) => p.family === fam && personaInTab(p)).map((p) => {
                   const selected = p.key === persona;
                   return (
                     <div
@@ -1124,7 +1158,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                         background: selected ? "#deecf9" : undefined,
                         color: p.unavailable ? "#a19f9d" : "#242424",
                       }}
-                      onClick={() => { setPersona(p.key); setPersonaOpen(false); }}
+                      onClick={() => choosePersona(p)}
                     >
                       {p.label}{p.unavailable ? " (not available)" : ""}
                     </div>
@@ -1194,20 +1228,12 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const selectionFields = (
     <>
       {personaPanel}
-      <label style={s.label}>Role</label>
-      <div style={s.roleRow}>
-        {ROLES.map((r) => (
-          <button
-            key={r}
-            disabled={busy}
-            title={ROLE_HINT[r]}
-            style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}) }}
-            onClick={() => pickRole(r)}
-          >
-            {r}
-          </button>
-        ))}
-      </div>
+      {/* The free-choice role grid was removed 2026-08-09. Picking a persona already sets the
+          roles, so seven chips underneath were either redundant or an invitation to build a
+          combination the model never intended — the client's words were that the role naming
+          "is confusing for users". The persona checklist above is now the only way to start a
+          mapping, and DELS — previously the one role no persona carried, and so the reason to
+          keep a manual path — now belongs to Head of Unit. */}
       {role && <div style={s.roleHint}>{ROLE_HINT[role]}</div>}
 
       {role && role !== "GLOBAL" && (
@@ -1538,6 +1564,40 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       )}
 
       <div style={s.card}>
+        {/* Library toggle — decides which personas are on offer. Above the group field
+            because it frames everything below it: an admin picks the library they are
+            granting in, THEN who they are granting to. */}
+        <label style={s.label}>Library</label>
+        <div style={s.roleRow}>
+          {([
+            { key: "Documents" as const, label: "Documents", hint: "The approved archive — C-Level, Head of Department, SDG Employee" },
+            { key: "Staging" as const, label: "Approval Document", hint: "Upload and approval — Head of Unit, PIC (these also read their unit in Documents)" },
+          ]).map((t) => (
+            <button
+              key={t.key}
+              disabled={busy}
+              title={t.hint}
+              style={{ ...s.roleBtn, ...(libraryTab === t.key ? s.roleActive : {}), minWidth: 150 }}
+              onClick={() => {
+                if (libraryTab === t.key) return;
+                setLibraryTab(t.key);
+                // The selected persona belongs to the tab being left, so it would sit there
+                // describing a library the admin is no longer looking at. Clearing the role
+                // with it matters more: a stale role is what actually gets WRITTEN.
+                setPersona("");
+                setRole("");
+              }}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div style={s.roleHint}>
+          {libraryTab === "Documents"
+            ? "Who may read (and delete) approved documents."
+            : "Who may upload and approve. Head of Unit and PIC also read their own unit in Documents — one group covers both."}
+        </div>
+
         {/* Group */}
         <label style={s.label}>Group</label>
         {group ? (

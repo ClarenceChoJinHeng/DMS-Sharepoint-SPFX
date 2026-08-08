@@ -109,9 +109,15 @@ export const LIBRARY_ENTRY_ROLE: GroupMapRole = "ENTRY";
 export const STAGING_FACING_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS"];
 
 /**
- * The roles an administrator may pick in the builder. Excludes HC (Phase 2, see
- * above). Keeping the list here rather than in the component means the type and
- * the picker cannot drift apart.
+ * The canonical set of roles that can be DERIVED FROM A GROUP NAME — not, since 2026-08-09, a
+ * list of anything the UI offers.
+ *
+ * The Folder Access page no longer has a role picker: an admin chooses a PERSONA and its roles
+ * are applied. The name is kept because the group-name round-trip tests iterate this list, and
+ * because it still answers "which roles are legal in a Group Map row". Read "selectable" as
+ * "authorable", not "on screen" — the picker it was named for no longer exists.
+ *
+ * Excludes HC (Phase 2, see above) and ENTRY (library-scope only, written by another tab).
  */
 // SEGVIEW rejoined 2026-08-07, when the client asked for a per-segment C-Level alongside the
 // global one. HC stays out: it is Phase 2, its term is deleted, and offering it would let an
@@ -213,21 +219,34 @@ export const PERSONAS: Persona[] = [
   // DEL is Documents-only by LIBRARY_ROLES, so an HoD group never reaches Staging. Note the
   // grant FANS OUT: department scope plus recon_departmentFanOut puts delete on every unit
   // folder under the department, not just the department folder. Wide, and intended.
+  //
+  // MEMBER DROPPED 2026-08-09, and unlike Head of Unit this one was redundant all along:
+  // DEL maps to "CRS Delete", which is Read + Delete Items. The read was already there; the
+  // second membership only made it look as though it were not.
   {
     key: "hod", family: "Head of Department", scope: "department", label: "View + delete, department-wide",
-    roles: ["MEMBER", "DEL"],
+    roles: ["DEL"],
     summary: "Reads every unit under their department in Documents, and can delete approved documents there. Cannot upload, cannot approve, and has no Staging access.",
   },
 
   // ── Head of Unit — the approver, at the UNIT tier ──────────────────────────
   //
-  // ONE persona, not four, and the only family that approves. MEMBER rides with APR because
-  // the client's model gives every head-of group view rights; it is not a technical
-  // requirement of approving (see documentsUnitFolderReady in ApprovalDocument.tsx).
+  // ONE persona, not four, and the only family that approves.
+  //
+  // MEMBER DROPPED 2026-08-09. It used to ride along purely to grant Documents read, which
+  // APR now carries by itself (LIBRARY_ROLES lists APR under Documents, downgraded to Read).
+  // Keeping it would leave the admin two memberships to maintain and no way to tell which one
+  // was load-bearing. See 2026-08-09-persona-driven-folder-access-design.md.
+  //
+  // DELS ADDED the same day. It is approval-library delete — the power to remove a pending or
+  // rejected file — and it belonged to NO persona before, surviving only so a hand-authored
+  // row would still work. That is the Head of Unit's job by the client's own description.
+  // It is deliberately NOT Documents delete: LIBRARY_ROLES keeps DELS off Documents, so a
+  // Head of Unit still cannot remove an APPROVED document. That stays with Head of Department.
   {
     key: "hou", family: "Head of Unit", scope: "unit", label: "Approve + view own unit",
-    roles: ["MEMBER", "APR"],
-    summary: "Approves every file in their own unit and reads the unit's approved documents. Cannot upload or delete, and sees no sibling unit.",
+    roles: ["APR", "DELS"],
+    summary: "Approves every file in their own unit, can delete pending or rejected files there, and reads the unit's approved documents. Cannot upload, cannot delete approved documents, and sees no sibling unit.",
   },
 
   // ── PIC ────────────────────────────────────────────────────────────────────
@@ -264,19 +283,49 @@ export const PERSONAS: Persona[] = [
   // The HC role string itself is KEPT and simply unused, for the same reason as DELS — the
   // Phase 2 HC-library work on feat/hc-libraries still refers to it, and removing it here
   // means re-adding suffix parsing and permission mapping the day it comes back.
+  //
+  // 2026-08-09: UPL now grants Documents READ as well, so a PIC no longer needs the base
+  // group. The paragraph above still holds — whether a PIC may read the approved archive was
+  // a separate DECISION — but the client has now made it, for every PIC. What changed is the
+  // answer, not the reasoning: it is granted by the same group rather than by a second one.
   {
     key: "pic", family: "PIC", scope: "unit", label: "Upload",
     roles: ["UPL"],
-    summary: "Uploads to their unit at any confidentiality level, and sees the unit's pending files. Cannot approve or delete, and has no Documents access unless also added to the unit's base group.",
+    summary: "Uploads to their unit at any confidentiality level, sees the unit's pending files, and reads the unit's approved documents. Cannot approve or delete.",
   },
 
   // ── SDG Employee ───────────────────────────────────────────────────────────
+  //
+  // Now the ONLY persona whose whole purpose is MEMBER. Since 2026-08-09 every other persona
+  // carries its own Documents read, so this one means exactly what its name says: someone who
+  // views and does nothing else.
   { key: "employee", family: "SDG Employee", scope: "unit", label: "No power — view only", roles: ["MEMBER"], summary: "Reads their own unit's approved documents. Cannot upload or approve." },
 ];
 
 /** Family headings in display order, so the picker cannot drift from the model. */
 export const PERSONA_FAMILIES: Array<Persona["family"]> =
   ["C-Level", "Head of Department", "Head of Unit", "PIC", "SDG Employee"];
+
+/**
+ * Does this persona act on the APPROVAL LIBRARY at all? Drives the Folder Access page's
+ * library toggle (2026-08-09).
+ *
+ * DERIVED from STAGING_FACING_ROLES rather than listed as a per-persona field, because a hand-
+ * maintained list is a second place for the same fact to be wrong — and being wrong here is not
+ * cosmetic. The client's first draft of this toggle filed the C-Level personas under the
+ * approval library; presenting GLOBAL/SEGVIEW as an approval-library shape is the widest
+ * accidental grant this system can suggest, since a segment-wide viewer there reads every
+ * unapproved draft in the segment. Deriving it means the grouping cannot disagree with the
+ * roles the persona actually carries.
+ *
+ * Note "at all": since 2026-08-09 Head of Unit and PIC grant in BOTH libraries. They are filed
+ * under the approval library because that is what distinguishes them — every other persona is
+ * Documents-only.
+ */
+export function personaTouchesStaging(p: Persona): boolean {
+  for (const r of p.roles) if (STAGING_FACING_ROLES.indexOf(r) > -1) return true;
+  return false;
+}
 
 /** Look up a persona by key. Returns undefined rather than throwing — the caller renders nothing. */
 export function personaByKey(key: string): Persona | undefined {

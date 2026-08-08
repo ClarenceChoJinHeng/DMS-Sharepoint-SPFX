@@ -322,9 +322,9 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
 |---|---|---|---|---|
 | C-Level (global) | `GLOBAL` | all segments | view everything | **none** |
 | C-Level (segment) | `SEGVIEW` | one segment | view that segment, all the way down | **none** |
-| Head of Department | `MEMBER`, `DEL` | department | view **every unit under the dept**, + delete approved docs | **none** — does NOT approve |
-| Head of Unit | `MEMBER`, `APR` | unit | view own path | **approve + view every file in their unit** |
-| PIC | `UPL` | unit | none unless also given the base group | upload at **any** confidentiality level |
+| Head of Department | `DEL` | department | view **every unit under the dept**, + delete approved docs | **none** — does NOT approve |
+| Head of Unit | `APR`, `DELS` | unit | view own path | **approve + view every file in their unit, + delete pending/rejected** |
+| PIC | `UPL` | unit | **view own path** | upload at **any** confidentiality level |
 | SDG Employee | `MEMBER` | unit | view own path | none |
 
 - **Navigation starts at the business segment in BOTH libraries.** Reconciliation grants each
@@ -338,8 +338,23 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   grant and break navigation.
 - **Confidentiality is metadata, not a permission.** Any PIC may upload at any level; there is no
   HC persona and `HC` is offered nowhere.
-- **`DELS` (Staging delete) belongs to no persona.** Kept as a role so a hand-authored row still
-  works, but nothing creates a group with it.
+- **ONE GROUP PER PERSON (2026-08-09, spec `2026-08-09-persona-driven-folder-access-design.md`).**
+  `UPL` and `APR` now appear in **both** libraries, so a PIC or Head of Unit no longer needs the
+  unit's base group to read Documents — hence `MEMBER` dropped from HoU, and from HoD where `DEL`
+  (= Read + Delete Items) already covered it. **The level is library-dependent:**
+  `permissionForRole(lib, role)` downgrades `UPL`/`APR` to **`Read`** on Documents. Never read
+  `ROLE_TO_PERMISSION` directly — the flat table would grant `CRS Upload` there, letting every PIC
+  edit approved documents. `DELS` stays Staging-only, so a Head of Unit still cannot delete an
+  approved document. Migration = redeploy + **re-run reconciliation**; no row changes.
+  Consequence to keep stating: **every PIC now reads every approved document in their unit**, at any
+  confidentiality level.
+- **`DELS` now belongs to Head of Unit** (was: no persona). It is delete on the **approval library
+  only** — pending and rejected files.
+- **Folder Access is persona-only.** The role chips are gone: picking a persona applies its roles.
+  A library toggle above the group field splits the personas — Documents (C-Level ×2, HoD, SDG
+  Employee) vs Approval Document (HoU, PIC). That grouping is **derived** via
+  `personaTouchesStaging()`, never hand-listed: filing C-Level under the approval library would
+  present the widest accidental grant in the system as normal.
 - **`SEGVIEW`/`GLOBAL` must NEVER appear in `LIBRARY_ROLES.Staging`** — a segment-wide viewer
   there reads every unapproved draft in the segment.
 

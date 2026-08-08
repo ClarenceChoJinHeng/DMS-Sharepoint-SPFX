@@ -253,10 +253,35 @@ function applyPermissionPrefix(levelNames: string[]): void {
 // SEGVIEW joins GLOBAL on Documents ONLY (2026-08-07). Both are C-Level view roles and
 // neither may ever appear in the Staging list: a segment-wide viewer on Staging reads every
 // unapproved draft in that segment, which is the exact isolation this table exists to hold.
+// UPL and APR joined Documents on 2026-08-09 so one group serves a person in both libraries —
+// a PIC no longer needs the unit's base group just to read the approved archive. See
+// 2026-08-09-persona-driven-folder-access-design.md. DELS stays Staging-only: a Head of Unit
+// deletes PENDING work, never an approved document.
 const LIBRARY_ROLES: Record<LibTarget, string[]> = {
   Staging: ["UPL", "APR", "DELS"],
-  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW"],
+  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR"],
 };
+
+/**
+ * Roles whose Documents grant is READ, whatever they mean on the approval library.
+ *
+ * This is the whole safety of letting one group serve both libraries. ROLE_TO_PERMISSION is
+ * flat — one level per role — so listing UPL under Documents WITHOUT this would grant
+ * "CRS Upload" there: Contribute minus Delete. Every PIC could then add and edit APPROVED
+ * documents in their unit, with no approval step and nothing in any log to show for it. The
+ * request was read-only; the flat table alone would have delivered write.
+ *
+ * A short exception list rather than a second full table, because the table is what an editor
+ * reads to answer "what does this role do", and two of them would let the answer depend on
+ * which one they happened to open.
+ */
+const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR"];
+
+/** The level a role grants IN A GIVEN LIBRARY. Always use this, never the raw table. */
+function permissionForRole(lib: LibTarget, role: string): string | undefined {
+  if (lib === "Documents" && DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1) return "Read";
+  return ROLE_TO_PERMISSION[role];
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1993,7 +2018,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             for (const row of libRows) {
               const lib = (row.Target ?? "").trim();
               const role = normalizeRoleValue(row.Role ?? "");
-              const levelName = ROLE_TO_PERMISSION[role];
+              // Library scope, but resolved the same way as folder scope on purpose. A
+              // hand-written UPL row targeting Documents would otherwise grant CRS Upload at
+              // the LIBRARY ROOT — write access to every folder that inherits. Downgrading it
+              // to Read here costs nothing for the rows that belong at this scope (ENTRY is
+              // Read either way) and closes that off.
+              const levelName = permissionForRole(lib as LibTarget, role);
               const roleDefId = roleDefs.find((r) => r.name === levelName)?.id;
               const label = `${row.GroupName || row.GroupId} → ${lib}`;
               if (levelName === undefined) {
@@ -2442,7 +2472,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           const terms = gridSets.fanOut ? [t.assignTerm, ...t.ancestorTerms] : [t.assignTerm];
           for (const term of terms) {
             for (const g of groupMap.get(term.toLowerCase()) ?? []) {
-              if (ROLE_TO_PERMISSION[g.role] === undefined) continue;
+              if (permissionForRole(lib, g.role) === undefined) continue;
               if (LIBRARY_ROLES[lib].indexOf(g.role) === -1) continue;
               countKeys.add(`${g.groupId}|${g.role}`);
             }
@@ -2747,7 +2777,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // could read pending documents. A fanned row is filtered identically —
             // inheriting a grant must not widen which library it reaches.
             const accepts = (role: string): boolean =>
-              ROLE_TO_PERMISSION[role] !== undefined &&
+              permissionForRole(lib, role) !== undefined &&
               LIBRARY_ROLES[lib].indexOf(role) !== -1;
 
             const applicable = groupRows.filter(g => accepts(g.role));
@@ -2785,7 +2815,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               // a segment-tier row IS its intended shape rather than a legacy accident.
               if (!gridSets.fanOut && i.row.role !== "SEGVIEW") {
                 entries.push({
-                  msg: `  ⚠ ${g0(i.row)} would inherit ${ROLE_TO_PERMISSION[i.row.role]} on ${folderLabel} from a parent-tier mapping — not granted (recon_departmentFanOut is off)`,
+                  msg: `  ⚠ ${g0(i.row)} would inherit ${permissionForRole(lib, i.row.role)} on ${folderLabel} from a parent-tier mapping — not granted (recon_departmentFanOut is off)`,
                   ok: true,
                 });
                 continue;
@@ -2837,10 +2867,14 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               // indistinguishable from a bug.
               const arrow = viaTerm ? "↳↓" : "↳";
               const via = viaTerm ? " (inherited from a parent-tier mapping)" : "";
-              const roleDefId = roleDefs.find(r => r.name === ROLE_TO_PERMISSION[g.role])?.id;
+              // Resolved ONCE, per library. Read straight from ROLE_TO_PERMISSION and an
+              // uploader's Documents grant would say "CRS Upload" in the log while the
+              // assignment said Read — or worse, actually be CRS Upload.
+              const levelName = permissionForRole(lib, g.role);
+              const roleDefId = roleDefs.find(r => r.name === levelName)?.id;
               if (roleDefId === undefined) {
-                entries.push({ msg: `  ⚠ ${g.groupName} — no "${ROLE_TO_PERMISSION[g.role]}" role definition on site`, ok: false });
-                pushAssign(lib, `${t.label}: "${ROLE_TO_PERMISSION[g.role]}" role missing on site`, "warn");
+                entries.push({ msg: `  ⚠ ${g.groupName} — no "${levelName}" role definition on site`, ok: false });
+                pushAssign(lib, `${t.label}: "${levelName}" role missing on site`, "warn");
                 step();
                 continue;
               }
@@ -2849,12 +2883,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 const pid = spGroupPrincipalId(g.groupId);
                 await addRoleAssignment(full, pid, roleDefId);
                 grantedPids.push({ groupName: g.groupName, pid });
-                entries.push({ msg: `  ${arrow} ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]}${via}`, ok: true });
-                pushAssign(lib, `${t.label} → ${g.groupName} (${ROLE_TO_PERMISSION[g.role]})${via}`, "ok");
+                entries.push({ msg: `  ${arrow} ${g.groupName} → ${levelName}${via}`, ok: true });
+                pushAssign(lib, `${t.label} → ${g.groupName} (${levelName})${via}`, "ok");
                 bumpAssigns();
                 await tick();
               } catch (e) {
-                entries.push({ msg: `  ✗ ${g.groupName} → ${ROLE_TO_PERMISSION[g.role]} FAILED: ${(e as Error).message}`, ok: false });
+                entries.push({ msg: `  ✗ ${g.groupName} → ${levelName} FAILED: ${(e as Error).message}`, ok: false });
                 // Most common cause: the SP group doesn't exist yet (or is a legacy Entra
                 // row). Surface the admin-needs-to-create-it message in the right panel.
                 pushAssign(lib, `Group "${g.groupName}" not found — ask an administrator to create it`, "admin");
