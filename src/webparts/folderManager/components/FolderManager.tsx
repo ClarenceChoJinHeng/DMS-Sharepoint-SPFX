@@ -2649,33 +2649,63 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 // security, and the upload form then reports "the mapped unit folder no
                 // longer exists" because its UniqueId lookup 404s for that user.
                 const wrote: string[] = [];
-                if (Object.keys(values).length > 0) {
-                  await setFolderItemFields(full, values);
-                  if (fullNameField && values[fullNameField] !== undefined) {
-                    wrote.push(`${FULL_NAME_COLUMN_TITLE} = ${t.fullName}`);
+                // The property write and the approve are caught SEPARATELY, because they are
+                // not equally serious. A failed Full Name is cosmetic — the folder still
+                // controls access correctly, just with a blank label in the details pane. A
+                // failed APPROVE leaves the folder Pending, which hides it from every
+                // uploader but its creator and makes the upload form report "the mapped unit
+                // folder no longer exists". One shared catch reported both as ok:true, so the
+                // serious one hid inside a wall of the cosmetic one.
+                try {
+                  if (Object.keys(values).length > 0) {
+                    await setFolderItemFields(full, values);
+                    if (fullNameField && values[fullNameField] !== undefined) {
+                      wrote.push(`${FULL_NAME_COLUMN_TITLE} = ${t.fullName}`);
+                    }
+                    if (values.ContentTypeId !== undefined) {
+                      wrote.push(`content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}`);
+                    }
                   }
-                  if (values.ContentTypeId !== undefined) {
-                    wrote.push(`content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}`);
-                  }
+                } catch (e) {
+                  // Not fatal, and deliberately ok:true — a label failure must not stop the
+                  // folder's ACL work, which is the part that actually controls access, nor
+                  // gate the orphan prune.
+                  entries.push({ msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`, ok: true });
                 }
                 // Re-approve when the folder was already pending, OR when the write above
                 // just re-pended it. Missing that second case is what silently un-approves
                 // a settled tree on every run.
+                //
+                // Runs even if the property write threw: a folder left Pending by a failed
+                // Full Name still needs approving, and skipping it would turn a cosmetic
+                // failure into an access one.
                 const rePended = Object.keys(values).length > 0;
                 const wasPending = state.moderationStatus !== undefined && state.moderationStatus !== 0;
                 if (moderated && (rePended || wasPending)) {
-                  await setFolderItemFields(full, { OData__ModerationStatus: 0 });
-                  wrote.push("approved (a pending folder is invisible under approver-only draft security)");
+                  try {
+                    await setFolderItemFields(full, { OData__ModerationStatus: 0 });
+                    wrote.push("approved (a pending folder is invisible under approver-only draft security)");
+                  } catch (e) {
+                    // ok:FALSE. An access failure, not a label failure: the folder stays
+                    // Pending and its unit cannot reach their own files inside it. It must
+                    // read as an error and it must gate the clean-run guards.
+                    entries.push({
+                      msg: `  ✗ ${folderLabel} — COULD NOT APPROVE, folder stays pending and will be invisible to its uploaders: ${(e as Error).message}`,
+                      ok: false,
+                    });
+                  }
                 }
                 if (wrote.length > 0) {
                   entries.push({ msg: `  ↳ ${wrote.join(", ")}`, ok: true });
                   await tick();
                 }
               } catch (e) {
-                // Never fatal — a label failure must not stop the folder's ACL work,
-                // which is the part that actually controls access. ok:true for the same
-                // reason as the missing-column notice above: it must not gate the prune.
-                entries.push({ msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`, ok: true });
+                // Only getFolderItemState can reach here now — both writes catch their own.
+                // A failed READ means we could not tell what the folder already had, so
+                // nothing was attempted. ok:true: it changed nothing and must not gate the
+                // orphan prune, but it IS worth surfacing, because a folder whose state is
+                // unreadable is also a folder we did not approve.
+                entries.push({ msg: `  ⚠ ${folderLabel} — could not read folder state, ${FULL_NAME_COLUMN_TITLE} and approval skipped: ${(e as Error).message}`, ok: true });
               }
             }
             // Map Staging term folders only (the segment container has no term).

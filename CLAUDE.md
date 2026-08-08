@@ -390,6 +390,15 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
 >
 > The structural answer if a client genuinely needs two people isolated: **they belong in different
 > units.** Adding a unit costs one term + one abbreviation + 3 groups and stays inside the model.
+>
+> 📄 **Client-facing answer, ready to show: `docs/client/document-visibility-within-a-unit.md`.**
+> Plain language, no jargon — use it instead of re-deriving the argument. Its framing is the one
+> that lands: *drafts and rejections are already private; approved documents are shared because the
+> unit must be able to find its own records.* It also carries the honest caveat: this IS possible if
+> the folder structure changes (a per-person folder under each unit), so never say "impossible"
+> flat. Say **impossible without changing the filing from unit-based to person-based** — the cost
+> that usually decides it is that "all of CORU's 2026 Tax Returns" stops being a folder you open and
+> becomes a search.
 
 ## Allowed File Types
 Driven by the **`AllowedFileTypes`** multi-select Choice column on `DMS Config`

@@ -388,9 +388,11 @@ and nothing in the run history flags it.
   `rename-crs-groups.js` in preview mode to enumerate what the first pass missed.
 - Both flow connections still run as a personal account; move them to the service account before
   handover — a password change stops folder approval and routing **silently**.
-- Reconciliation logs a moderation-approve failure as `ok: true`, alongside cosmetic `Full Name`
-  failures. Right for a label, wrong for an approve: a failed approve locks uploaders out of their
-  own folders. Worth separating so it cannot hide in a wall of warnings again.
+- ~~Reconciliation logs a moderation-approve failure as `ok: true`~~ — **fixed 2026-08-09.** The
+  property write and the approve now have their own `try/catch`: a failed `Full Name` stays
+  `ok: true` (cosmetic — the ACLs are still correct), a failed approve is `ok: false` and says the
+  folder will be invisible to its uploaders. The approve also runs even when the property write
+  threw, so a cosmetic failure can no longer cascade into an access one.
 - `recon_gridMode` is **off**; Year/Doc-Type folders are created on demand and rely on the §3 flow,
   which makes that flow a single point of failure for navigation. Turning `gridMode` on would have
   reconciliation pre-create the grid **as an admin** (born Approved, flow off the critical path), at
