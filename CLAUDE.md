@@ -240,11 +240,63 @@ Unit                  / UnitTid
 ## Architecture: Direct REST (not Power Automate)
 The 3 instant flows (GetTermSetValues, DepartmentProjectList, UploadToStaging) use "When Power Apps calls a flow (V2)" trigger — not callable from SPFx. Form.tsx uses `context.spHttpClient` directly.
 
-The **Auto-route** automated flow fires server-side after content approval to move approved files to
-department libraries. Web part job ends at "upload to the approval library."
-> ⚠ **The flow splits approved-file paths on `Staging/`** (memory `dms-autoroute-path-based-routing`).
-> The library is now at `/ApprovalDocument`, so **the flow must be edited to match** or it silently
-> stops routing — approvals succeed, nothing lands in Documents, and no error is raised anywhere.
+The **Auto-route** automated flow fires server-side after content approval and **MOVES** approved
+files to `Documents` — copy, stamp, delete source. Web part job ends at "upload to the approval
+library."
+
+> 📘 **Full flow configuration + migration runbook:
+> `docs/superpowers/specs/2026-08-08-auto-route-flow-and-draft-isolation.md`.**
+> Power Automate config is NOT in source control — that spec is the only record of it. Rebuild
+> from it verbatim; several settings look cosmetic and are not.
+
+Working as of 2026-08-08, verified with a guest uploader and an admin approver:
+- Path split is on **`ApprovalDocument/`** (the URL segment, no space) — was `Staging/`.
+- The copy keeps the **uploader** in `Created By`, `Modified By` and `Created`, via
+  `validateUpdateListItem` with `bNewDocumentUpdate: true` (`Author`, `Editor`, `Created`).
+  `Created` must be `M/d/yyyy h:mm tt` on that endpoint; a MERGE to the same item wants ISO.
+- The source item is then **DELETED by item id** (`X-HTTP-Method: DELETE`), gated on the stamp
+  succeeding. The connector's `Delete file` action does NOT work here — its `File Identifier`
+  never resolves, because the trigger is a *list* trigger pointed at a library.
+- **The delete is load-bearing for security, not housekeeping:** an approved file left behind is
+  visible to every PIC in the unit, which defeats the draft isolation below.
+
+> ⚠ **Power Automate header keys must NOT include the colon.** The key box wants `Accept`, not
+> `Accept:`. With the colon the header does not exist, and the symptoms look unrelated to each
+> other: responses silently come back `odata=verbose` (so every `body('X')?['Field']` is null →
+> *"Not well formatted JSON stream"*), `validateUpdateListItem` reports `HasException: false`
+> and changes nothing, and a MERGE goes as a plain POST (*"The parameter AuthorId does not exist
+> in method GetById"*). This cost two hours on 2026-08-08 and produced a false conclusion that
+> `Author` was unwritable. Read the action's raw **Inputs** — the colon is visible there and
+> nowhere else. And **never** conclude a field is unwritable from a clean response: re-read the item.
+
+## Per-uploader file isolation — approval library YES, Documents NO (2026-08-08)
+Spec `2026-08-08-auto-route-flow-and-draft-isolation.md`. This **reverses** the 2026-08-06
+"out of scope" decision for the approval library, and **confirms** it for Documents.
+
+**Approval Document — works, built, verified.** Content approval **on**, Draft Item Security =
+*"Only users who can approve items (and the author)"* (`DraftVersionVisibility = 2`). A PIC sees
+their own pending/rejected files; a peer PIC sees nothing; the Head of Unit sees all because they
+hold `ApproveItems`. Approved files leave via Auto-route. The **author exception works for FILES**
+(verified with a guest account) but NOT for a folder created by someone else — hence folder approval.
+
+**Folders must be Approved or navigation breaks.** The upload form ensure-creates `Year` and
+`Document Type` folders **as the uploader**, so they arrive Pending and are invisible to every
+other PIC — who then cannot reach their own file inside. Uploaders cannot self-fix (needs
+`ApproveItems`). Backlog: `Downloads/approve-folders.js`. Ongoing: a **separate** flow with trigger
+condition `@equals(triggerOutputs()?['body/{IsFolder}'], true)` that MERGEs
+`{"OData__ModerationStatus": 0}`. That `{IsFolder}` guard is the whole safety of it — approving a
+FILE would skip human approval and hand it straight to Auto-route.
+
+**Documents — NOT achievable, do not re-attempt.** Hiding an item from someone with Read requires
+moderation; seeing a hidden item requires `Approve Items`; and **`Approve Items` cannot be
+separated from `Edit Items`** (verified in the permission-level editor — ticking one ticks the
+other). So view-only oversight roles cannot see other people's files. `ReadSecurity = 2` is also
+out: its exemption is `Manage Lists` at LIBRARY scope, so folder-scoped approvers would be
+restricted too, and it hides every reconciliation-created folder from uploaders. Per-file ACLs hit
+the 50k scope ceiling. A per-uploader folder tier would work but changes the client's fixed folder
+architecture. **The unit folder remains the smallest confidentiality boundary — the answer to
+"these two must not see each other" is separate units.** A `Created By = [Me]` view is a
+convenience only and must never be described as isolation.
 
 ## RBAC — six personas (2026-08-07, spec `2026-08-07-role-model-simplification-design.md`)
 Twelve personas collapsed to six when the client moved approval to Head of Unit and made Head of
@@ -280,10 +332,21 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
 > security and the whole approval flow key off that permission, not off a group name.
 > Inheritance is broken per department folder in BOTH libraries — not at library level.
 
-> ❌ **PER-UPLOADER FILE ISOLATION IS OUT OF SCOPE (decided 2026-08-06).** The client asked for
+> ⚠ **PARTIALLY SUPERSEDED 2026-08-08** — see the per-uploader isolation section above and spec
+> `2026-08-08-auto-route-flow-and-draft-isolation.md`. In the **approval library** isolation IS
+> achievable and is now built, using content approval + Draft Item Security (approver + author),
+> because the only roles there are uploader and approver. Everything below still stands for
+> **Documents**, where view-only oversight roles make it impossible.
+>
+> ❌ **PER-UPLOADER FILE ISOLATION IN `Documents` IS OUT OF SCOPE (2026-08-06, re-confirmed
+> 2026-08-08).** The client asked for
 > uploaders in the same `*_UPL` group to see only their own files inside the shared unit folder
 > (Clarence not seeing Bayajit's). **The unit folder is the smallest confidentiality boundary this
-> system has** — do not re-propose either mechanism:
+> system has** — do not re-propose any of these mechanisms:
+> - **Moderation in `Documents`** — would require every viewer (HoD, HoU, SEGVIEW, GLOBAL) to hold
+>   `Approve Items` just to read, and **`Approve Items` cannot be separated from `Edit Items`**
+>   (verified in the permission-level editor 2026-08-08: ticking one ticks the other). The client
+>   requires those roles to be view-only, so this is a dead end, not a configuration problem.
 > - **List item-level permissions (`ReadSecurity=2`)** exempts only holders of **Manage Lists**, which
 >   is evaluated at LIBRARY scope. Approvers hold Design on the FOLDER and nothing at library root,
 >   so they would be restricted too and approval would break. Granting them library-level rights to
