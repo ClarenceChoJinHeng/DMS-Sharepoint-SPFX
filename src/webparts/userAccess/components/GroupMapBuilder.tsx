@@ -1121,7 +1121,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     });
   };
 
-  const allSelected = existing.length > 0 && selected.size === existing.length;
+  // NOTE: `allSelected` is defined below, after existingForDisplay — the checkbox must reflect
+  // the rows on screen, not the full set held for the delete paths.
 
   /**
    * The mappings table, ordered so a persona's rows sit together.
@@ -1134,16 +1135,30 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
    * being scattered by whatever order the list returned, which is how "Head of Unit needs two
    * rows" becomes visible rather than something you have to already know.
    */
-  const existingForDisplay = existing.slice().sort((a, b) => {
-    const g = (a.GroupName || a.GroupId).localeCompare(b.GroupName || b.GroupId);
-    if (g !== 0) return g;
-    const t = (a.UnitTermGuid ?? "").localeCompare(b.UnitTermGuid ?? "");
-    if (t !== 0) return t;
-    return (a.Role ?? "").localeCompare(b.Role ?? "");
-  });
+  const existingForDisplay = existing
+    // FOLDER rows only. This is the Folder Access page; a library, site or page mapping belongs
+    // to Site Access / Approval Library Access / Page Access, and showing it here invited the
+    // question "why is a library row in my folder list" — with no answer available on this page.
+    //
+    // DISPLAY only. `existing` still holds every row, and must: onDeleteGroup removes a group's
+    // mappings before deleting the SharePoint group, and onDelete decides whether a row is the
+    // group's LAST one. Filtering the source would leave library and page rows behind pointing
+    // at a group that no longer exists, and would make a row look like the last when it is not.
+    .filter((r) => normalizeScope(r.Scope) === "Folder")
+    .sort((a, b) => {
+      const g = (a.GroupName || a.GroupId).localeCompare(b.GroupName || b.GroupId);
+      if (g !== 0) return g;
+      const t = (a.UnitTermGuid ?? "").localeCompare(b.UnitTermGuid ?? "");
+      if (t !== 0) return t;
+      return (a.Role ?? "").localeCompare(b.Role ?? "");
+    });
+
+  // Both keyed on what is VISIBLE. "Select all" reaching rows the admin cannot see, and then
+  // deleting them, is the kind of surprise this page must not have.
+  const allSelected = existingForDisplay.length > 0 && selected.size === existingForDisplay.length;
 
   const toggleAll = (): void => {
-    setSelected(allSelected ? new Set() : new Set(existing.map((r) => r.itemId)));
+    setSelected(allSelected ? new Set() : new Set(existingForDisplay.map((r) => r.itemId)));
   };
 
   // Delete every checked row, then reload once. Reloads even on failure so the list
@@ -2000,7 +2015,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
       <div style={{ display: "flex", gap: 6, marginBottom: 12, borderBottom: "1px solid #e1e1e1" }}>
         {([
-          { key: "mappings" as const, label: `Existing mappings (${existing.length})` },
+          // Counts what is shown. A tally including library and page rows would not match the
+          // list beneath it, and a count you cannot reconcile with the rows is worse than none.
+          { key: "mappings" as const, label: `Folder mappings (${existingForDisplay.length})` },
           { key: "people" as const, label: `People (${distinctGroups.length} groups)` },
         ]).map((t) => (
           <button
@@ -2049,7 +2066,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         <thead>
           <tr>
             <th style={{ ...s.th, width: 28 }}>
-              <input type="checkbox" checked={allSelected} disabled={busy || existing.length === 0} onChange={toggleAll} title="Select all" />
+              <input type="checkbox" checked={allSelected} disabled={busy || existingForDisplay.length === 0} onChange={toggleAll} title="Select all" />
             </th>
             <th style={s.th}>Group</th>
             <th style={s.th}>Segment</th>
@@ -2059,8 +2076,21 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           </tr>
         </thead>
         <tbody>
-          {existing.length === 0 && (
-            <tr><td style={s.td} colSpan={6}>No mappings yet.</td></tr>
+          {existingForDisplay.length === 0 && (
+            <tr>
+              <td style={s.td} colSpan={6}>
+                No folder mappings yet.
+                {existing.length > 0 && (
+                  // Says where the rows went. Without this, an admin who can see mappings exist
+                  // elsewhere reads an empty table as the page being broken.
+                  <span style={{ color: "#605e5c" }}>
+                    {" "}This site has {existing.length} mapping(s) for libraries, the site or
+                    pages — those are managed on Site Access, Approval Library Access and Page
+                    Access.
+                  </span>
+                )}
+              </td>
+            </tr>
           )}
           {/* Sorted for READING, not stored order. A persona is several rows against one group
               (Head of Unit is Approver + Delete pending files), and scattered through the list
