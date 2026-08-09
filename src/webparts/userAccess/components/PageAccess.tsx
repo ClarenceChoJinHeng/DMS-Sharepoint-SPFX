@@ -134,6 +134,16 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
    * misclick costs far more than this one does.
    */
   const [confirmReopen, setConfirmReopen] = useState<PageItem | undefined>(undefined);
+
+  /**
+   * The group whose full member list is open, if any.
+   *
+   * The cell shows three names with the rest on hover — fine for a glance, useless for the
+   * actual question ("is this the right seven people?"), and unreachable on a touch screen or by
+   * keyboard. A tooltip is a hint; deciding who may open a page needs a list you can read,
+   * scroll and copy from.
+   */
+  const [membersModal, setMembersModal] = useState<SpGroup | undefined>(undefined);
   const [confirmFirstLock, setConfirmFirstLock] = useState<SpGroup[] | undefined>(undefined);
   // Escape hatch for the page-specific filter. Off by default and reset whenever the page
   // changes, so it can never silently stay on from a previous selection.
@@ -829,7 +839,17 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                         return (
                           <span title={m.map((x) => `${x.title}${x.email ? ` <${x.email}>` : ""}`).join("\n")}>
                             {shown}
-                            {m.length > 3 && <span style={s.no}> +{m.length - 3} more</span>}
+                            {/* Always offered, not only when the list is truncated. "Are these
+                                the right three?" is the same question as "are these the right
+                                seven?", and a control that appears only sometimes is one an
+                                admin never learns is there. */}
+                            <button
+                              style={{ ...s.ghost, marginLeft: 6, padding: "1px 6px", fontSize: 11 }}
+                              onClick={() => setMembersModal(g)}
+                              title={`Show all ${m.length} member${m.length === 1 ? "" : "s"} of ${g.title}`}
+                            >
+                              {m.length > 3 ? `+${m.length - 3} more` : "View"}
+                            </button>
                           </span>
                         );
                       })()}
@@ -892,6 +912,41 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
           </div>
         </div>
       )}
+
+      {membersModal && (() => {
+        const m = membersByGroup[membersModal.id] ?? [];
+        return (
+          <div style={s.modalOverlay} onClick={() => setMembersModal(undefined)}>
+            <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
+              <div style={s.modalHead}>
+                {membersModal.title} — {m.length} member{m.length === 1 ? "" : "s"}
+              </div>
+              {/* Scrolls rather than growing: a unit group is small, but this same list is the
+                  one an admin will open on a segment-wide group one day, and a modal taller
+                  than the window has no way back to its close button. */}
+              <div style={{ ...s.modalBody, maxHeight: "50vh", overflowY: "auto" }}>
+                {m.length === 0 ? (
+                  <span style={{ color: "#b45309" }}>
+                    This group has no members, so allowing it grants nobody access.
+                  </span>
+                ) : (
+                  m.map((x) => (
+                    <div key={x.id} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "3px 0" }}>
+                      <span style={{ fontWeight: 600 }}>{x.title}</span>
+                      {/* Selectable, so an admin can copy an address out to ask someone whether
+                          they should be here — which is the usual next step after reading it. */}
+                      <span style={{ color: "#666", userSelect: "text" }}>{x.email}</span>
+                    </div>
+                  ))
+                )}
+              </div>
+              <div style={s.modalFoot}>
+                <button style={s.ghost} onClick={() => setMembersModal(undefined)}>Close</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {confirmReopen && (
         <div style={s.modalOverlay} onClick={() => setConfirmReopen(undefined)}>
