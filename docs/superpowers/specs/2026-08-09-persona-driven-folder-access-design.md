@@ -118,9 +118,51 @@ arbitrary without knowing why, and the same slip is easy to repeat.
 Head of Unit and PIC grant in **both** libraries, so they are filed under the approval library — the
 thing that distinguishes them from every other persona, which is Documents-only.
 
-**Role chips are removed.** Selecting a persona applies its roles directly; there is no manual role
-path from this page. `DELS`, previously the only reason to keep one, now lives inside the Head of
-Unit persona.
+**Tier dropdowns follow the persona's scope.** Previously every level the term store could load was
+rendered, so a Head of Department was walked down to a unit and then told off for picking one:
+
+| Scope | Tier dropdowns |
+|---|---|
+| `segment` (C-Level) | none — the Segment dropdown already chose it |
+| `department` (HoD) | one; a segment's top-level terms ARE its departments |
+| `unit` | the full chain |
+
+C-Level **Global** shows neither Segment nor Tier — it is termless, and that block already sat
+behind `role !== "GLOBAL"`.
+
+**Role chips are removed, and adding a persona writes EVERY row it needs.** Selecting a persona
+applies its roles directly; there is no manual role path from this page, and Head of Unit's `APR` +
+`DELS` are written together. The old one-row-at-a-time flow existed so a half-failed multi-write
+could not leave someone half-provisioned — sound while the admin could SEE the roles, but with the
+chips gone the roles are an implementation detail, and the client read the two-step checklist as
+"the Head of Unit might not get delete". The risk is answered by reporting instead: rows go one at a
+time and the toast names how many landed and which failed. `Create group` rolls the whole group back
+instead, which is safe only there — the group did not exist a moment earlier.
+
+The persona checklist is read-only: it ticks each role so a partial add stays visible, but offers no
+choice the tool has already made.
+
+### 5.1 Making segment scope actually grant something
+
+A segment-tier row carries `UnitTermGuid = the segment's term-set GUID`, so it was always
+*authorable* — but reconciliation deliberately kept that GUID out of every descendant's
+`ancestorTerms`, so the row granted on the segment container folder and nowhere beneath it. C-Level
+(segment) could be created and did nothing.
+
+The GUID is now included, and the protection it provided moves one layer down rather than
+disappearing: the fan-down accepts a segment-tier inheritance for **`SEGVIEW` only**
+(`segmentTermSets` in `FolderManager.tsx`). The original hazard was a leftover segment-tier `MEMBER`
+row from before 2026-07-29 — indistinguishable BY TIER from a deliberate one, and worth Read across
+an entire business segment if honoured. `SEGVIEW` cannot be such a leftover: it granted nothing on
+any site until 2026-08-07, so every row that exists was written on purpose. The role name is the
+consent, exactly as it is for `GLOBAL`.
+
+Not gated on `recon_departmentFanOut`: that switch is about DEPARTMENT rows, and turning it off must
+not silently disable a C-Level.
+
+Verified 2026-08-09 — `↳↓ … (inherited from a parent-tier mapping)` on every department and unit
+under GHO, **and no such line anywhere under MHO or NBPOLHO, or anywhere in the approval library.**
+Those two absences are the test; the grants are just the feature.
 
 `SELECTABLE_ROLES` survives as the canonical set of name-derivable roles — the group-name round-trip
 tests iterate it — but no longer feeds a picker. Its doc comment must say so, or "selectable" will
