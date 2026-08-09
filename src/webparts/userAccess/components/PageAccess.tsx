@@ -28,7 +28,7 @@ import {
   isForbiddenPageTarget,
   siteEntryGroupTitle,
 } from "../../../shared/groupMapModel";
-import { fetchAllSiteGroups, fetchBuiltInGroupIds, SpGroup } from "../../../shared/spGroups";
+import { fetchAllSiteGroups, fetchBuiltInGroupIds, getGroupMembers, SpGroup, SpGroupMember } from "../../../shared/spGroups";
 import { policyForPage, VIEW_ONLY_ROLES } from "../../../shared/pageAccessPolicy";
 import { roleFromGroupName } from "../../../shared/groupMapModel";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
@@ -93,6 +93,21 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   const [target, setTarget]   = useState<string>("");
   const [groups, setGroups]   = useState<SpGroup[]>([]);
   const [rows, setRows]       = useState<EntryRow[]>([]);
+
+  /**
+   * Members per group, for the Members column. A group absent from the map has not been read yet.
+   *
+   * Fetched separately rather than folded into the group list, because the group list is ONE
+   * request and this is one PER GROUP: batching them into the initial load would hold the whole
+   * table behind ten round-trips. The column fills in as answers arrive; the rest of each row is
+   * useful immediately.
+   *
+   * A group that fails to read is recorded as empty rather than retried. That reads the same as
+   * a genuinely empty group, which is acceptable precisely because this column is ADVISORY — it
+   * answers "who is in here" at a glance and is never what an access decision rests on. The
+   * Access now column remains the authority on what the page actually permits.
+   */
+  const [membersByGroup, setMembersByGroup] = useState<Record<number, SpGroupMember[]>>({});
   const [live, setLive]       = useState<LiveGrant[] | undefined>(undefined);
   const [welcome, setWelcome] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -105,6 +120,20 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [toast, setToast]     = useState<{ message: string; error: boolean } | undefined>(undefined);
   const [confirmRemove, setConfirmRemove] = useState<EntryRow[] | undefined>(undefined);
+
+  /**
+   * Confirm before reopening a page to everyone.
+   *
+   * Every other destructive action here is confirmed; this one was a single click that widens
+   * access to every group on the site AND discards the page's permission list. It sat next to
+   * text an admin reads while doing something else, which is where accidental clicks happen.
+   *
+   * Kept rather than removed, though the client asked about removing it: restricting a page
+   * would otherwise be one-way from this tool, and the only way back is four levels into
+   * SharePoint's own permission screens — the place this web part exists to avoid, and where a
+   * misclick costs far more than this one does.
+   */
+  const [confirmReopen, setConfirmReopen] = useState<PageItem | undefined>(undefined);
   const [confirmFirstLock, setConfirmFirstLock] = useState<SpGroup[] | undefined>(undefined);
   // Escape hatch for the page-specific filter. Off by default and reset whenever the page
   // changes, so it can never silently stay on from a previous selection.
@@ -170,6 +199,37 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
     : eligible.concat(mappedButIneligible).sort((a, b) => a.title.localeCompare(b.title));
 
   const hiddenCount = allGroups.length - candidates.length;
+
+  /**
+   * Fill the Members column, one group at a time.
+   *
+   * SEQUENTIAL, not Promise.all. Ten simultaneous calls is how a tenant starts returning 429s,
+   * and the column is decoration on a table that is already usable — it has no claim on the
+   * request budget. Rows fill in visibly, which also tells the admin it is still working.
+   *
+   * `cancelled` guards the unmount: the loop can outlive the component when someone switches
+   * page mid-fetch, and setting state afterwards is a React warning and a leak.
+   *
+   * Keyed on the candidate ids, so switching between "uploader groups only" and "all groups"
+   * fetches just the ones newly on screen — anything already read is skipped.
+   */
+  const candidateIds = candidates.map((g) => g.id).join(",");
+  useEffect(() => {
+    let cancelled = false;
+    const run = async (): Promise<void> => {
+      for (const g of candidates) {
+        if (cancelled) return;
+        if (membersByGroup[g.id] !== undefined) continue;
+        const members = await getGroupMembers(context.spHttpClient, siteUrl, g.id).catch(
+          () => [] as SpGroupMember[],
+        );
+        if (cancelled) return;
+        setMembersByGroup((prev) => ({ ...prev, [g.id]: members }));
+      }
+    };
+    run().catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [candidateIds]);
 
   /**
    * The site's welcome page, read rather than assumed.
@@ -625,7 +685,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
               <button
                 style={s.ghost}
                 disabled={busy}
-                onClick={() => { onResetInheritance(page).catch(() => undefined); }}
+                onClick={() => setConfirmReopen(page)}
               >
                 Open to everyone again
               </button>
@@ -720,6 +780,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
               <tr>
                 <th style={{ ...s.th, width: 28 }} />
                 <th style={s.th}>Group</th>
+                <th style={s.th}>Members</th>
                 <th style={s.th}>Mapped here</th>
                 <th style={s.th}>Access now</th>
                 <th style={s.th} />
@@ -749,6 +810,30 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                       />
                     </td>
                     <td style={s.td}>{g.title}</td>
+                    {/* Who is actually in the group. "Allow GHO_GF_CORU_UPL" is a decision about
+                        PEOPLE, and the group name only names them if you already know the
+                        convention — which the client, by their own account, does not.
+                        Names only, no emails: the cell has to stay scannable down a column of
+                        ten. The full list including emails is in the title attribute. */}
+                    <td style={s.td}>
+                      {(() => {
+                        const m = membersByGroup[g.id];
+                        if (m === undefined) return <span style={s.no}>loading…</span>;
+                        if (m.length === 0) {
+                          // Amber, not grey. An empty group that has been ALLOWED grants nobody
+                          // anything, and reads as configured — the one state worth interrupting
+                          // a scan for.
+                          return <span style={{ color: "#b45309" }}>no members</span>;
+                        }
+                        const shown = m.slice(0, 3).map((x) => x.title).join(", ");
+                        return (
+                          <span title={m.map((x) => `${x.title}${x.email ? ` <${x.email}>` : ""}`).join("\n")}>
+                            {shown}
+                            {m.length > 3 && <span style={s.no}> +{m.length - 3} more</span>}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td style={s.td}>{row ? <span style={s.yes}>Yes</span> : <span style={s.no}>No</span>}</td>
                     <td style={s.td}>
                       {!page.unique
@@ -804,6 +889,45 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
           <div style={s.hint}>
             &ldquo;Mapped here&rdquo; is what this tab records; &ldquo;Access now&rdquo; is what the
             page&rsquo;s permissions actually say.
+          </div>
+        </div>
+      )}
+
+      {confirmReopen && (
+        <div style={s.modalOverlay} onClick={() => setConfirmReopen(undefined)}>
+          <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
+            <div style={s.modalHead}>Reopen {confirmReopen.title} to everyone?</div>
+            <div style={s.modalBody}>
+              <strong>Anyone with access to this site will be able to open this page</strong>,
+              including people who cannot upload.
+              <div style={{ marginTop: 8 }}>
+                It also clears the page&rsquo;s own permission list. Any group allowed here — and
+                any access granted directly in SharePoint — is discarded, and would have to be
+                allowed again to re-restrict the page.
+              </div>
+              {/* Named because it is the part people do not expect: the mapping rows survive a
+                  reset, so the tab keeps saying "Mapped here: Yes" for a page that is now open
+                  to everybody. Better said here than discovered later. */}
+              <div style={{ marginTop: 8, color: "#605e5c" }}>
+                The mappings recorded on this tab are kept, so this page will still show
+                &ldquo;Mapped here: Yes&rdquo; — those rows take effect again only if you restrict
+                the page a second time.
+              </div>
+            </div>
+            <div style={s.modalFoot}>
+              <button style={s.ghost} onClick={() => setConfirmReopen(undefined)}>Cancel</button>
+              <button
+                style={s.delBtn}
+                disabled={busy}
+                onClick={() => {
+                  const p = confirmReopen;
+                  setConfirmReopen(undefined);
+                  onResetInheritance(p).catch(() => undefined);
+                }}
+              >
+                Reopen to everyone
+              </button>
+            </div>
           </div>
         </div>
       )}
