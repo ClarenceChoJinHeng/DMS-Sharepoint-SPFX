@@ -692,6 +692,29 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // action. Called from the create panel's bottom button, which is only enabled
   // once the name + role + segment + tier are all chosen. On success we land on
   // the freshly created group so the admin can add its members next.
+  /**
+   * Every row the current draft should produce — one per role of the chosen persona.
+   *
+   * A persona used to be added a role at a time, on the reasoning that a half-failed
+   * multi-write leaves someone half-provisioned. That was right while the admin could SEE
+   * the roles: the checklist showed which were done. With the role chips gone (2026-08-09)
+   * the roles are an implementation detail, and asking an admin to notice that Head of Unit
+   * needs a second click is asking them to remember something the tool already knows —
+   * the client's words: "the HoU actually will have delete by default".
+   *
+   * The half-provisioned risk is answered by REPORTING instead: rows go one at a time and
+   * the caller names how many landed and which role failed, so the screen still tells the
+   * truth after a partial failure.
+   *
+   * Declared above both call sites deliberately — onCreateAndMap is the first.
+   */
+  const draftRows = (d: GroupMapDraft): GroupMapWriteRow[] => {
+    const p = personaByKey(persona);
+    const roles: GroupMapRole[] =
+      p && !p.unavailable && p.roles.length > 0 ? p.roles : ([d.role].filter(Boolean) as GroupMapRole[]);
+    return roles.map((r) => buildGroupMapRow({ ...d, role: r }));
+  };
+
   const onCreateAndMap = async (): Promise<void> => {
     const title = newName.trim();
     if (!title || createErrors.length > 0) return;
@@ -703,14 +726,20 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       // "one shot" never leaves an orphan group behind (which would then collide with
       // a retry as "already exists"). Keeps the action atomic.
       try {
-        const row = buildGroupMapRow({
+        // EVERY row the persona needs, not just the first. A Head of Unit is APR + DELS,
+        // and the admin never sees those names — see draftRows. If any row fails the whole
+        // create is rolled back below, which is the right trade here and not in onAdd: the
+        // group did not exist a moment ago, so removing it restores the exact prior state
+        // rather than destroying something.
+        for (const row of draftRows({
           groupId: newGroup.id,
           groupName: newGroup.displayName,
           role: role as GroupMapRole,
           segmentGuid: mode?.termSetGuid,
           tierGuid,
-        });
-        await postRow(row);
+        })) {
+          await postRow(row);
+        }
       } catch (mapErr) {
         await deleteSiteGroup(context.spHttpClient, siteUrl, Number(newGroup.id)).catch(() => undefined);
         throw mapErr;
@@ -944,17 +973,42 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   };
 
   const onAdd = async (): Promise<void> => {
-    const row = buildGroupMapRow(draft);
-    if (isDuplicateRow(existing, row)) { showToast("This exact mapping already exists.", true); return; }
+    const rows = draftRows(draft);
+    const fresh = rows.filter((r) => !isDuplicateRow(existing, r));
+    if (fresh.length === 0) { showToast("This exact mapping already exists.", true); return; }
     setBusy(true);
+    const added: string[] = [];
+    let failedRole = "";
+    let failedWhy = "";
     try {
-      await postRow(row);
+      for (const r of fresh) {
+        try {
+          await postRow(r);
+          added.push(r.Role);
+        } catch (e) {
+          failedRole = r.Role;
+          failedWhy = (e as Error).message;
+          break; // stop at the first failure; the toast names what did and did not land
+        }
+      }
       setExisting(await loadExisting());
-      // reset the draft (keep the picked group for quick multi-role mapping)
-      setRole(""); setMode(undefined); setCascade([]); setChosen([]); setTierGuid("");
-      showToast("Row added — re-run Folder Reconciliation to apply permissions.", false);
-    } catch (e) {
-      showToast(`Add failed: ${(e as Error).message}`, true);
+      if (added.length > 0) {
+        // reset the draft (keep the picked group for quick multi-role mapping)
+        setRole(""); setMode(undefined); setCascade([]); setChosen([]); setTierGuid("");
+      }
+      if (failedRole) {
+        showToast(
+          added.length > 0
+            ? `Added ${added.join(", ")}, but ${failedRole} failed: ${failedWhy}. Re-add from this page.`
+            : `Add failed: ${failedWhy}`,
+          true,
+        );
+      } else {
+        showToast(
+          `${added.length} row(s) added (${added.join(", ")}) — re-run Folder Reconciliation to apply permissions.`,
+          false,
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -1219,28 +1273,23 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                 {chosenPersona.roles.length === 1 ? "" : "s"} at the{" "}
                 <strong>{chosenPersona.scope}</strong> tier
                 {chosenPersona.roles.length === 1
-                  ? ". The first is selected below — pick a segment and tier, then add it."
-                  : ". The first is selected below; add it, then click the second."}
+                  ? ", written when you add it."
+                  : `, both written together when you add it.`}
               </div>
-              {!tierGuid && <div style={{ color: "#8a6d00", marginBottom: 8 }}>Select a segment and tier to see which are already in place.</div>}
+              {!tierGuid && <div style={{ color: "#8a6d00", marginBottom: 8 }}>Choose where this group applies to see what is already in place.</div>}
               {scopeMismatch && <div style={s.personaBlocked}>{scopeMismatch}</div>}
+              {/* A READ-ONLY list since 2026-08-09, not a set of buttons. Adding now writes
+                  every row the persona needs in one action, so a clickable role would be
+                  offering a choice the tool has already made — and the client read that
+                  choice as "the Head of Unit might not get delete", which is exactly what
+                  it must not imply. Still shows ✓ per role so a partial add is visible. */}
               {chosenPersona.roles.map((r) => {
                 const done = rolesMappedAtTier.has(r);
                 return (
                   <div key={r} style={s.personaRow}>
                     <span style={{ width: 16, color: done ? "#107c10" : "#a19f9d" }}>{done ? "✓" : "○"}</span>
-                    <button
-                      disabled={busy}
-                      style={{ ...s.roleBtn, ...(role === r ? s.roleActive : {}), minWidth: 72 }}
-                      onClick={() => pickRole(r)}
-                    >
-                      {r}
-                    </button>
                     <span style={{ color: "#605e5c" }}>{ROLE_HINT[r]}</span>
-                    {/* "already mapped here" read as jargon — an admin could not tell
-                        whether it meant "done, skip it" or "you have a duplicate". It
-                        means the first, so it now says so in those words. */}
-                    {done && <span style={{ color: "#107c10" }}>✓ done — no need to add again</span>}
+                    {done && <span style={{ color: "#107c10" }}>already in place</span>}
                   </div>
                 );
               })}
