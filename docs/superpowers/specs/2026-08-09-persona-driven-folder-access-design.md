@@ -164,6 +164,30 @@ Verified 2026-08-09 — `↳↓ … (inherited from a parent-tier mapping)` on e
 under GHO, **and no such line anywhere under MHO or NBPOLHO, or anywhere in the approval library.**
 Those two absences are the test; the grants are just the feature.
 
+## 5.2 All six personas, verified end to end (2026-08-09)
+
+Read the right-hand column first. For every persona the interesting result is what it did **not**
+get — a grant that appears is a feature working, a grant that fails to appear where it must not is
+the model holding.
+
+| Persona | Granted | Correctly absent |
+|---|---|---|
+| PIC (`UPL`) | `CRS Upload` on its unit; `Read` on the same unit in Documents | cannot edit or delete in Documents; peer PICs' pending files invisible |
+| SDG Employee (`MEMBER`) | `Read` on its unit in Documents | nothing at all in the approval library |
+| Head of Unit (`APR`+`DELS`) | `CRS Approve` + `CRS Delete` on its unit; `Read` in Documents | no `CRS Delete` in **Documents** — approved documents stay with HoD |
+| Head of Department (`DEL`) | `CRS Delete` on its department, fanned to all nine units under GF | **no line under GHR, GIGA, GLRC, GS, PO or GCA**; nothing in the approval library |
+| C-Level segment (`SEGVIEW`) | `Read` across every department and unit of GHO | **no line under MHO or NBPOLHO**; nothing in the approval library |
+| C-Level global (`GLOBAL`) | `Read` across GHO, MHO **and** NBPOLHO | nothing in the approval library |
+
+The last column of the bottom three rows is the whole security model: a viewer role reaching the
+approval library would read other people's unapproved drafts, and for the two C-Level rows it would
+be an entire segment's — or the whole company's — worth.
+
+**Group naming lags the model.** `GHO_GF_CORU_SEGVIEW` and `GHO_GF_CORU_GLOBAL` are named for a unit
+they have nothing to do with; both are segment- or tenant-wide. A name that misdescribes a grant is
+how the next admin gets it wrong, so rename them (`GHO_SEGVIEW`, `CRS_GLOBAL`) — the integer id
+survives a rename, so every grant follows.
+
 `SELECTABLE_ROLES` survives as the canonical set of name-derivable roles — the group-name round-trip
 tests iterate it — but no longer feeds a picker. Its doc comment must say so, or "selectable" will
 read as "offered in the UI" to the next person.
