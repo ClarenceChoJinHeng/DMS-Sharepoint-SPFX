@@ -64,14 +64,22 @@ type ExistingRow = GroupMapWriteRow & { itemId: number };
 // grants delete over the wrong set of documents.
 const ROLE_HINT: Record<string, string> = {
   MEMBER: "Read approved documents",
-  UPL:    "Upload to Staging (cannot delete)",
-  APR:    "Approve pending items",
+  // UPL and APR gained Documents READ on 2026-08-09, which is the whole point of the
+  // one-group-per-person change — so the hints have to say it. "Upload to Staging" alone
+  // now understates the role, and an admin reading it would still add the base group.
+  UPL:    "Upload to the approval library, and read the unit's approved documents",
+  APR:    "Approve pending items, and read the unit's approved documents",
   DEL:    "Delete approved documents — Documents library",
   DELS:   "Delete pending files — Staging library",
   // C-level. Reads wide, writes nothing, and Documents only — the hint says "Documents"
   // out loud because "view everything" would imply Staging too, and a C-level reading
   // other people's unapproved drafts is the one thing this role must not do.
   GLOBAL:  "C-level view — every segment, Documents only, read only",
+  // Was MISSING until 2026-08-09, so the C-Level (segment) persona rendered a blank line
+  // where its one capability should have been. A persona that describes itself as nothing
+  // is worse than one with a terse label: the admin cannot tell whether it does nothing or
+  // whether the page is broken.
+  SEGVIEW: "C-level view — one business segment, Documents only, read only",
 };
 // Resolved, not hardcoded — the client renames both to CRS at import (confirmed on their site
 // 2026-08-05). Read from the cache primed in the mount effect, which runs before any write.
@@ -685,7 +693,10 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   if (!role) createErrors.push("Select a role.");
   if (role && role !== "GLOBAL") {
     if (!mode) createErrors.push("Select a segment.");
-    if (!tierGuid) createErrors.push("Select a tier.");
+    // A segment-scope persona has no tier control — pickMode sets tierGuid to the term-set
+    // GUID for it. Telling the admin to "select a tier" would name a dropdown that is not
+    // on the screen, which reads as the page being broken rather than as a missing step.
+    if (!tierGuid && personaByKey(persona)?.scope !== "segment") createErrors.push("Select a tier.");
   }
 
   // One-shot create: make the site group AND write its mapping row in a single
