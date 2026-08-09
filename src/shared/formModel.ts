@@ -14,6 +14,23 @@ export interface Level {
   // just the right internal names in config.
   labelCol?: string;
   tidCol?: string;
+  // Term-set GUID for a tier that draws its own flat option list instead of
+  // cascading from the previous tier inside the mode's segment tree.
+  // Presence is the discriminator — no separate `source` flag is needed:
+  //   termSet present -> flat options from that set (Year, Document Type, Function)
+  //   termSet absent  -> cascade from the previous selection (Department, Unit)
+  termSet?: string;
+  // false = below the permissioned boundary: ensure-created on demand at upload
+  // time, INHERITING the Unit's ACL. true (or absent) = reconciliation territory,
+  // gets its own folder with broken inheritance.
+  //
+  // ABSENT MEANS TRUE, deliberately. The three live mode rows carry [Department,
+  // Unit] with no flag and both are permissioned, so they keep working untouched.
+  // The default also fails in the safe direction: a forgotten flag leaves a tier
+  // in the permissioned prefix, which is loud and visible, whereas the opposite
+  // default would silently move a tier that needs an ACL into the inheriting
+  // suffix. See 2026-08-06-configurable-folder-structure-chain-design.md.
+  permissioned?: boolean;
 }
 
 /** A configured upload mode (one term set + its level chain). */
@@ -76,6 +93,11 @@ export function parseLevels(json: string): Level[] {
       const lvl: Level = { label: e.label, column: e.column };
       if (typeof e.labelCol === "string") lvl.labelCol = e.labelCol;
       if (typeof e.tidCol === "string") lvl.tidCol = e.tidCol;
+      if (typeof e.termSet === "string") lvl.termSet = e.termSet;
+      // Only a literal `false` demotes a tier. Anything else — absent, null, the
+      // STRING "false" that a hand-authored row can easily contain — leaves it
+      // permissioned, which is the loud direction (see the interface comment).
+      if (e.permissioned === false) lvl.permissioned = false;
       return lvl;
     });
 }
