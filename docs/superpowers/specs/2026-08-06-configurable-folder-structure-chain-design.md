@@ -1,8 +1,15 @@
 # Configurable Folder Structure Chain
 
 **Date:** 2026-08-06
-**Status:** Design agreed, not implemented
+**Revised:** 2026-08-09 — re-verified against the code. One central claim was wrong; see
+"The reconciliation hazard". Line references replaced with symbol names, which do not drift.
+**Status:** Design agreed, implementing
 **Scope:** Piece 1 of 3 — the data model. Not a client-facing deliverable on its own.
+
+> ⚠ **Piece 1 alone gives the client nothing.** The chain lives in `Levels` JSON on a `DMS Config`
+> mode row, and the client cannot edit JSON — that is the whole reason this feature exists. Piece 1
+> is testable by hand-authoring a row; it is not handover-ready until piece 2 (Structure Manager UI)
+> exists. Do not demo it as a finished capability.
 
 ---
 
@@ -12,12 +19,13 @@ Adding a business segment, or changing the folder shape below Unit, currently re
 Two separate causes:
 
 1. **Segment onboarding** needs hand-authored `Levels` JSON on a `DMS Config` mode row.
-2. **Below-Unit structure is hardcoded.** `Form.tsx` ensure-creates exactly `Year` then
-   `Document Type` ([Form.tsx:1120](../../../src/webparts/form/components/Form.tsx#L1120)), each with
-   its own React state, its own required-field check, and its own JSX
-   ([Form.tsx:1650](../../../src/webparts/form/components/Form.tsx#L1650),
-   [1656](../../../src/webparts/form/components/Form.tsx#L1656)). `BulkUpload.tsx` holds a
-   near-duplicate copy.
+2. **Below-Unit structure is hardcoded.** [Form.tsx](../../../src/webparts/form/components/Form.tsx)
+   resolves the Unit folder by UniqueId and then makes exactly two `ensureFolder` calls, `Year` then
+   `Document Type`, from `yearPeriod` / `documentType` — each with its own React state, its own entry
+   in the required-field check inside `handleUpload`, and its own JSX select beneath the chain
+   `.map`. [BulkUpload.tsx](../../../src/webparts/bulkUpload/components/BulkUpload.tsx) — note
+   `src/webparts/bulkUpload/`, not under `form/` — holds a near-duplicate copy, including its own
+   `LEVEL_COLUMNS`, its own `LevelSelection` type and its own two `ensureFolder` calls.
 
 The client's actual ask, confirmed 2026-08-06: add a new folder tier below Unit — e.g. `Function`
 containing `Human Resource` — and place it **anywhere** in the path (before Year, between Year and
@@ -60,8 +68,28 @@ Below-Unit tiers are entries carrying `permissioned: false`.
 ```
 
 Reordering a tier is moving an entry. Inserting one is adding an entry. The form's existing `.map`
-over the chain ([Form.tsx:1632](../../../src/webparts/form/components/Form.tsx#L1632)) renders every
-entry; the upload path is built by walking the chain in order.
+over `activeMode()?.levels` renders every entry; the upload path is built by walking the chain in
+order.
+
+> ⚠ **`parseLevels` must be extended before any of this works.** It lives in
+> [`src/shared/formModel.ts`](../../../src/shared/formModel.ts) and copies exactly `label`, `column`,
+> `labelCol`, `tidCol` — every other key is dropped without comment. `termSet` and `permissioned`
+> authored on a live row today would be discarded at parse, leaving an all-permissioned chain with no
+> term sets, which the compatibility bridge below would then mask by falling back to today's
+> behaviour. The feature would appear to be built and would do nothing. Extend the `Level` interface
+> and the parser first.
+
+Today's `Level` interface, for reference — `termSet` and `permissioned` are the two additions, and
+`termSet` currently lives on the **mode** (`ModeV2.termSetGuid`), never on a level:
+
+```ts
+export interface Level {
+  label: string;
+  column: string;
+  labelCol?: string;
+  tidCol?: string;
+}
+```
 
 This supersedes the fixed `{Year}/{Document Type}` model specified in
 [2026-07-15-multi-segment-form-flow-design.md](2026-07-15-multi-segment-form-flow-design.md), lines
@@ -106,24 +134,65 @@ label is more useful to someone browsing.
 
 ## The reconciliation hazard, and the guard
 
-`FolderManager.tsx` reconciliation walks `Levels` and, for every entry, creates a folder per term
-**and breaks inheritance on it**. If reconciliation sees the new non-permissioned entries
-unfiltered, it will create a permissioned folder for every Year term and every Document Type term
-under every unit — thousands of folders with unique ACLs. Unpicking that by hand is days of work,
-and it directly contradicts the client's instruction that nothing below Unit breaks inheritance.
+> ❌ **CORRECTED 2026-08-09.** The original text claimed reconciliation "walks `Levels` and, for
+> every entry, creates a folder per term and breaks inheritance on it", and that unfiltered
+> non-permissioned entries would mint thousands of ACL'd folders. **That is not what the code does**,
+> and building the guard as specified would have protected against nothing while leaving the real
+> hazard in place. Kept visible rather than deleted, because the mistaken model is the intuitive one.
 
-**Guard:** reconciliation filters the chain to `permissioned === true` before walking it, and **a
-missing `permissioned` key is treated as `true`.**
+**What reconciliation actually walks is the term store, not `Levels`.** `walk()` in
+`FolderManager.tsx` recurses the *segment term set's own hierarchy* — a term's children are the next
+folder tier, to whatever depth the term tree happens to have. `Levels` contributes only **display
+names** for those tiers, via `loadReconLevelNames()` (with `FALLBACK_LEVEL_NAMES` behind it), used
+when reporting a term that has no abbreviation.
 
-Two reasons for that default:
+So a `permissioned: false` entry bound to its **own** term set — Function, Year, Document Type — is
+not part of the segment tree at all, and reconciliation would never create a folder for it however
+the flag is set. The catastrophic outcome the original text feared cannot occur.
+
+Three real hazards remain, and they are what the guard must actually address:
+
+1. **Level names misalign with depth.** `loadReconLevelNames()` returns the labels in chain order and
+   they are indexed by tree depth. Add `Function` to the chain and every below-Unit label shifts, so
+   a missing-abbreviation report names the wrong tier. Cosmetic, but it is a report an admin acts on.
+   **Guard: filter to `permissioned === true` before deriving names.**
+
+2. **The Year × Document Type grid is hardcoded, and it is the one place that WOULD build a wrong
+   shape.** When `recon_gridMode` is on, reconciliation pre-creates `Unit / Year / Document Type`
+   from `gridSets.year` and `gridSets.docType` — two fixed loops, no reference to the chain. Insert
+   `Function` and the form starts writing `Unit / Function / Year / Document Type` while
+   reconciliation keeps pre-creating the old shape: **two trees per unit, both populated, neither
+   complete.** `recon_gridMode` is currently **off**, which is the only reason this is latent.
+   **Guard: the grid loop walks the non-permissioned suffix in chain order.** It must be fixed in the
+   same change even though it is off, precisely because turning it on later would look unrelated.
+
+3. **`parseLevels` silently discards unknown keys.** It copies `label`, `column`, `labelCol`,
+   `tidCol` and nothing else, so `termSet` and `permissioned` authored today vanish on parse — the
+   chain would read as all-permissioned with no term sets, and the compatibility bridge below would
+   quietly hide it by falling back to `Year → Document Type`. **`parseLevels` must be extended
+   first**, or every other change in this spec appears to work and does nothing.
+
+**A missing `permissioned` key is still treated as `true`**, for the reason that survives the
+correction:
 
 1. **Backwards compatibility.** The three live mode rows (`mode_gho`, `mode_minamas_ho`,
    `mode_nbpol_ho`) carry `[Department, Unit]` with no flag, and both tiers are permissioned. They
    behave identically with zero edits.
-2. **Fail-safe direction.** A forgotten flag over-builds permissioned folders — visible, noisy, and
-   caught by the existing pre-flight checks. The opposite default would silently drop ACLs from
-   folders that need them, a permissions failure nobody sees. Same principle as gotchas #9 and #12
-   in CLAUDE.md: prefer the loud failure.
+2. **Fail-safe direction.** A forgotten flag leaves a tier in the permissioned prefix, where it is
+   visible and noisy. The opposite default would move a tier that needs an ACL into the on-demand
+   suffix, which inherits — a silent permissions widening. Same principle as gotchas #9 and #12 in
+   CLAUDE.md: prefer the loud failure.
+
+### The permissioned prefix must be contiguous
+
+Every position the client asked for — before Year, between Year and Document Type, after Document
+Type — is **below** Unit, so every new tier is non-permissioned. A permissioned entry appearing
+*after* a non-permissioned one would mean an ACL'd folder inside an inheriting one, which
+reconciliation cannot build (it never reaches there) and which the client explicitly declined.
+
+`folderChain.ts` therefore **rejects such a chain outright** rather than sorting it into shape.
+Silently reordering would move a tier the author meant to be permissioned into the inheriting
+suffix — the exact silent widening the default above exists to avoid.
 
 ---
 
@@ -139,6 +208,16 @@ fallback is removed once every site is migrated.
 ---
 
 ## Components
+
+### `src/shared/formModel.ts` (extend first)
+
+`Level` gains `termSet?: string` and `permissioned?: boolean`, and `parseLevels` copies them. Nothing
+else in this spec functions until this lands — see the warning under "Model". `parseLevels` keeps
+dropping entries without a string `label` + `column`; that behaviour is unchanged and still correct.
+
+`LEVEL_COLUMNS` is currently **duplicated** — one copy in `Form.tsx`, an identical one in
+`BulkUpload.tsx`. Move it here in the same change. Two copies of a table that maps logical tier keys
+to real SharePoint internal names is exactly the shape of bug this spec exists to remove.
 
 ### `src/shared/folderChain.ts` (new)
 
@@ -163,7 +242,42 @@ Responsibilities:
 
 ### `FolderManager.tsx`
 
-- Apply the `permissioned` filter before walking the chain, in both reconciliation and `RECON_MODES`.
+- Filter to `permissioned === true` before deriving tier **names** in `loadReconLevelNames()`, so
+  missing-abbreviation reports name the right tier (hazard 1).
+- **Rewrite the Year × Document Type grid loop to walk the non-permissioned suffix in chain order**
+  (hazard 2). Two hardcoded loops become one walk. Do this even though `recon_gridMode` is off.
+- No change to `walk()` or to the create/break-inheritance pass — those follow the term tree and were
+  never driven by `Levels`.
+
+---
+
+## What changed between 2026-08-06 and 2026-08-09
+
+Facts established after this spec was written that bear on it. None invalidate the design; two remove
+work it would otherwise have needed.
+
+**Below-Unit folders are already created, approved and verified in production shape.** The upload
+form ensure-creates them **as the uploader**, so in the moderated approval library they arrive
+Pending and are invisible to peer PICs. `CRS — Approve new folders in Approval Document` approves
+them, guarded by `@equals(triggerOutputs()?['body/{IsFolder}'], true)`. A new tier is just another
+on-demand folder on that path, so **no flow change is required** — the guard is on "is it a folder",
+not on which tier it is. See
+[2026-08-08-auto-route-flow-and-draft-isolation.md](2026-08-08-auto-route-flow-and-draft-isolation.md).
+
+**The library is `Approval Document` at `/ApprovalDocument`.** Title and URL differ. The Auto-route
+flow splits destination paths on `ApprovalDocument/`. Nothing in the chain walker may hardcode
+either half — resolve via `libraryTitle()` / `libraryUrlSegment()` (CLAUDE.md gotcha #12).
+
+**Every new tier makes every path one level deeper**, and depth has bitten this codebase before.
+CLAUDE.md gotcha #9: an inline quoted path in `GetFolderByServerRelativeUrl` returns **HTTP 400** —
+not 404 — at roughly 330 characters and 6 nesting levels, well under SharePoint's 400-character
+item-path limit. The current below-Unit path already uses the parameter-alias form throughout
+(`ensureFolder` → `AddUsingPath(DecodedUrl=@u)`, `resolveFolderByPath` → `…(@f)?@f='…'`), so this
+path is safe **today** — but any new request added by the chain walker must use the alias form too,
+and inserting a tier moves every site closer to SharePoint's own limit. Worth stating to the client
+when they choose an insertion position, alongside the migration-cost table below.
+
+---
 
 ---
 
