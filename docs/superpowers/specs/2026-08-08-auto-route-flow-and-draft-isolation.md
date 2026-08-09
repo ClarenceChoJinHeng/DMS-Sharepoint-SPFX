@@ -9,6 +9,48 @@ and reverses the "out of scope" half of memory `dms-per-uploader-isolation-rejec
 > of it. If a flow is rebuilt on another tenant, rebuild it from §4 exactly — several of the
 > settings here look cosmetic and are not.
 
+> 🔑 **STEP ZERO — sign in as the service account BEFORE you create either flow.** See §0. Doing
+> this in the wrong order is not a mistake you can spot afterwards: the flows will work perfectly,
+> owned by whoever built them.
+
+---
+
+## 0. Build both flows signed in as the service account
+
+A flow runs under the **connection**, not the owner. The connection is created implicitly the first
+time you add an action — so whoever is signed in at that moment is who the flow authenticates as,
+for its whole life. Build it as yourself and every run uses your account.
+
+That is a handover failure with no error message. When the builder's password changes or their
+account is disabled, folder approval and Auto-route stop **silently** — no failed run, no email, no
+entry anywhere anyone is watching. It surfaces weeks later as a PIC reporting that a colleague's
+folder does not exist, which reads as a permissions bug and is not one.
+
+**So, before creating anything:**
+
+1. Sign in to `make.powerautomate.com` as the service account (`dms-noreply@…` on the test tenant —
+   SDG's equivalent at migration).
+2. Confirm it holds a **Power Automate licence**. Without one, adding the first action fails at the
+   connection step. That failure looks like a SharePoint permissions problem and is not.
+3. Confirm it holds enough rights **on the site**: create folders and copy files in `Documents`,
+   approve items in `Approval Document`. Simplest is membership of the owners/admin group. If the
+   connection creates cleanly but runs fail with 403, this is why.
+4. Build §3 and §4 in that session.
+5. Add the human administrator as **co-owner** afterwards, so the flow can be edited without sharing
+   the service account's credentials. Co-ownership does not change which account runs it.
+
+**Add users as co-owners, never a SharePoint list.** The Owners page offers a `SharePoint` tab that
+takes a list or library. Pointing it at `Approval Document` makes every PIC and Head of Unit a
+co-owner of the flow — able to edit or delete the thing that enforces approval routing.
+
+**Fixing this after the fact** (what the test site needed): add the service account as co-owner,
+then sign in **as the service account in a private/incognito window** — Power Automate allows one
+account per browser session, and keeping your own session open in the normal window is what lets you
+put things back if the swap fails halfway. In that window: open each flow → Edit → each action →
+**⋯** → **Add new connection**. Then verify on the flow's Owners page that **Connections in use**
+names the service account and not a person. Auto-route has two connections (SharePoint and the
+shared mailbox); both must move.
+
 ---
 
 ## 1. What was asked for, and what is actually deliverable
@@ -361,12 +403,16 @@ and nothing in the run history flags it.
 
 ## 6. Migration checklist for a new site
 
+0. **Sign in as the service account first — §0.** Everything below assumes it. Building the flows as
+   yourself and moving the connections afterwards works, but costs an incognito session and a full
+   re-test, and is invisible if you forget.
 1. Read the new library's **GUID** and confirm `BaseTemplate = 101`.
 2. **Approval Document**: content approval **on**, Draft Item Security = **approver + author**.
 3. **Documents**: content approval **off** — verify, do not assume (§5.7). If the view bar shows
    `Approve/reject Items`, it is on and every routed file will be invisible.
-4. Recreate both flows from §3 and §4. Use a **service account** for both connections — with a
-   personal account, a password change stops folder approval and routing silently.
+4. Recreate both flows from §3 and §4, in the service account's session (§0). Verify afterwards that
+   each flow's **Connections in use** names the service account — that panel, not the owner list, is
+   what tells you which account actually runs it.
 5. Header keys with **no colons**; `Accept: application/json;odata=nometadata` on every HTTP action.
 6. Run `approve-folders.js` once to clear any pending-folder backlog.
 7. Test as a **non-admin**: upload as a PIC, approve as an approver, then verify
@@ -386,8 +432,11 @@ and nothing in the run history flags it.
   a comment typed in.
 - Some SharePoint groups still carry the `DMS_` prefix (e.g. `DMS_GHO_GF_CORU_UPL`) — re-run
   `rename-crs-groups.js` in preview mode to enumerate what the first pass missed.
-- Both flow connections still run as a personal account; move them to the service account before
-  handover — a password change stops folder approval and routing **silently**.
+- Both flow connections still run as a personal account (`clarence@…`). **Deliberately deferred
+  2026-08-09** — the test-site flows do not outlive the migration, and the account is the builder's
+  own, so the silent-stop risk is bounded. The service account was added as co-owner on the
+  folder-approval flow; the connection swap was not done. This is NOT a licence to defer it on the
+  SDG tenant, where §0 applies from the first action.
 - ~~Reconciliation logs a moderation-approve failure as `ok: true`~~ — **fixed 2026-08-09.** The
   property write and the approve now have their own `try/catch`: a failed `Full Name` stays
   `ok: true` (cosmetic — the ACLs are still correct), a failed approve is `ok: false` and says the

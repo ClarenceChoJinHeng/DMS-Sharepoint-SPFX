@@ -248,6 +248,11 @@ library."
 > `docs/superpowers/specs/2026-08-08-auto-route-flow-and-draft-isolation.md`.**
 > Power Automate config is NOT in source control — that spec is the only record of it. Rebuild
 > from it verbatim; several settings look cosmetic and are not.
+> **Sign in as the SERVICE ACCOUNT before creating either flow (§0).** A flow runs under its
+> connection, and the connection is created implicitly by the first action — so the builder's
+> account is baked in for life. Built as a person, both flows stop **silently** when that password
+> changes, and present as "my colleague's folder doesn't exist". On the test site this is knowingly
+> unfixed; on SDG's tenant it must be right from the first action.
 
 Working as of 2026-08-08, verified with a guest uploader and an admin approver:
 - Path split is on **`ApprovalDocument/`** (the URL segment, no space) — was `Staging/`.
