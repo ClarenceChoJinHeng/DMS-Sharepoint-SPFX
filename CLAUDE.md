@@ -79,9 +79,30 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   2026-07-29 (spec `2026-07-29-leaf-only-upload-authorization-design.md`) after it refused a
   correctly provisioned uploader with "your account isn't fully provisioned to upload".
   See memory `dms-group-model-per-role-per-library`.
-- **Folder routing:** the deepest (leaf) level = the permissioned **Unit** folder, resolved by
-  UniqueId via DMS Folder Map. `Year` + `Document Type` subfolders are **ensure-created on demand**
-  under the Unit folder and inherit its ACL.
+- **Folder routing:** the deepest **permissioned** level = the **Unit** folder, resolved by
+  UniqueId via DMS Folder Map. Everything below it is **ensure-created on demand** and inherits the
+  Unit's ACL — nothing below Unit breaks inheritance (client decision, 2026-08-06).
+- **Below-Unit structure is CONFIGURABLE since 2026-08-09** (spec
+  `2026-08-06-configurable-folder-structure-chain-design.md`; built, **not yet site-tested**).
+  A `Levels` entry with `"permissioned": false` is a below-Unit tier: add one and both upload web
+  parts render a dropdown and create a folder level, in chain position, with no redeploy.
+  - **`permissioned` ABSENT MEANS TRUE**, and only a literal `false` demotes a tier — the string
+    `"false"` does not. The default fails loudly (an extra ACL'd folder) rather than silently (a
+    tier that needed an ACL inheriting instead).
+  - **Permissioned tiers must be a contiguous prefix.** `validateChain` REJECTS a chain with a
+    permissioned tier below a non-permissioned one and never sorts it into shape — sorting would
+    demote a tier the author meant to protect. A rejected chain BLOCKS upload; it must never route
+    to a partial path, which lands one tier shallow in a folder that looks correct.
+  - **`UploadMode.levels` is the permissioned prefix only**; the full chain is `UploadMode.chain`.
+    `levelValues`/`levelChoices` are indexed against `levels` and the cascade only walks the segment
+    term tree, so a below-Unit entry in that array shifts every index.
+  - **Reconciliation does NOT walk `Levels`** — it walks the segment TERM TREE. `Levels` supplies
+    tier names for reports and, via the chain, the below-Unit grid shape when `recon_gridMode` is on.
+    The spec claimed otherwise until it was corrected 2026-08-09.
+  - Below-Unit folder names come from the **sanitized term label** (`2026`, `Human Resource`), never
+    an abbreviation. No abbreviation row, no Folder Map row, no group needed.
+  - **The client cannot use this yet** — the chain is `Levels` JSON and they cannot edit JSON. That
+    is piece 2 (Structure Manager UI), unwritten. Do not demo it as finished.
 - **Folder NAMES come from `DMS Term Abbreviation`** (keyed by term GUID), NOT from term labels —
   `GHO/GCA/GMB_STRATCOMMS`. Segment codes come from `StagingFolder` on the DMS Config `mode` row.
   Term labels stay full and drive the upload dropdowns; the full label is written to the

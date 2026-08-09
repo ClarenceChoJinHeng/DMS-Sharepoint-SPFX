@@ -3,7 +3,7 @@
 **Date:** 2026-08-06
 **Revised:** 2026-08-09 — re-verified against the code. One central claim was wrong; see
 "The reconciliation hazard". Line references replaced with symbol names, which do not drift.
-**Status:** Design agreed, implementing
+**Status:** Piece 1 IMPLEMENTED 2026-08-09 — built and unit tested, **not yet tested on a live site**
 **Scope:** Piece 1 of 3 — the data model. Not a client-facing deliverable on its own.
 
 > ⚠ **Piece 1 alone gives the client nothing.** The chain lives in `Levels` JSON on a `DMS Config`
@@ -310,12 +310,27 @@ sees it.
 
 ## Testing
 
-- Unit tests on `folderChain.ts`: ordering, the permissioned/non-permissioned split, missing-flag
-  defaulting to `true`, malformed-chain rejection.
-- A regression test asserting a chain with no non-permissioned entries produces exactly today's
-  `Year → Document Type` path.
-- Manual: insert a tier before Year, between Year and Document Type, and after Document Type;
-  confirm the path, the metadata columns, and that reconciliation creates nothing below Unit.
+**Automated — done.** 30 tests in `folderChain.test.ts`, 306 across the suite, build clean with no
+new lint warnings. Covers ordering, the permissioned split, `absent means true` (including the
+string `"false"`, which a hand-authored row can easily contain), malformed-chain rejection,
+`gridPlan` arithmetic at two and three tiers, and the regression that an unconfigured chain produces
+exactly today's `Year → Document Type` path and column names.
+
+**Manual — NOT YET RUN.** Nothing below has been exercised against a real site. Do this before
+telling the client anything is available:
+
+| Check | Why it is the one that matters |
+|---|---|
+| Upload with **no** chain configured | Proves the migration is invisible. Path, metadata and folder names must be byte-identical to before. Do this FIRST — it is the regression that affects every existing user |
+| Insert a tier **before** Year | The cheap position, and the one the client will most likely want |
+| Insert one **between** Year and Document Type, and **after** Document Type | Ordering is the whole feature; a chain that silently sorts itself would pass the first test and fail these |
+| Run reconciliation with `recon_gridMode` **on** | The two-trees-per-unit bug. Confirm one tree, matching what the form writes |
+| Run reconciliation with a chain configured and `recon_gridMode` **off** | Confirm nothing below Unit is created and nothing below Unit breaks inheritance |
+| Author a deliberately malformed chain | Upload must be BLOCKED and name the config row — never routed to a partial path |
+| Bulk upload with the same chain | Both web parts must agree on the shape; disagreement is the failure this feature exists to prevent |
+
+**A tier added below Unit needs its term set to exist and its terms to be tagged**, and — unlike
+permissioned tiers — needs **no** abbreviation row, no Folder Map row and no group.
 
 ---
 
