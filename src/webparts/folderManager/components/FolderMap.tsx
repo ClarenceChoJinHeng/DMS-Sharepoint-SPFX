@@ -361,7 +361,11 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
                   placeholder="Exact folder name in SharePoint"
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && canAdd) void addEntry(); }}
+                  // `.catch`, not `void`: addEntry WRITES a Folder Map row, and `void` discarded
+                  // the promise including its rejection — a failed write from the Enter key was
+                  // silent while the same write from the button reported. Same path, same
+                  // handling.
+                  onKeyDown={(e) => { if (e.key === "Enter" && canAdd) addEntry().catch(() => undefined); }}
                   style={s.input}
                 />
                 <button

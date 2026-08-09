@@ -198,7 +198,11 @@ No data migration. Group Map rows are unchanged: a folder-scope row's ROLE decid
 it reaches, and that table is code.
 
 1. Deploy.
-2. **Re-run Folder Reconciliation.** Existing `_UPL` and `_APR` rows gain their Documents Read grant
+2. **Check the Group Map list has `Scope` and `Target` columns.** Without them every row reads as a
+   *folder* row, so site/library/page mappings silently become folder rows with no term — and the
+   failure surfaces later as a term-store complaint. Folder Access now shows a red banner when they
+   are absent (added 2026-08-09; the detection had always run but its result was never rendered).
+3. **Re-run Folder Reconciliation.** Existing `_UPL` and `_APR` rows gain their Documents Read grant
    on that run; nothing needs re-authoring.
 3. Optionally remove now-redundant base-group memberships for PICs and Heads of Unit. Leaving them
    costs nothing — a second Read grant on the same path is idempotent — so this is tidying, not a fix.

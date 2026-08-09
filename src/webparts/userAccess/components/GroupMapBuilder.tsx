@@ -145,10 +145,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // nothing could ever be selected.
   const [personaOpen, setPersonaOpen] = useState(false);
   const personaRef = useRef<HTMLDivElement>(null);
-  // Set when the Scope/Target columns are absent from DMS Group Map. Surfaced rather than
-  // silently degraded: without them every row can only ever be a Folder row, so an admin
-  // who picks Site or Library would write a mapping that reconciliation reads as a folder
-  // row with no term — and blames the term store for it.
+  // Set when the Scope/Target columns are absent from the Group Map list. Without them every
+  // row can only ever be a Folder row, so an admin who picks Site or Library writes a mapping
+  // that reconciliation reads as a folder row with no term — and blames the term store for it.
+  //
+  // The detection has always run (loadExisting falls back to the six-field $select when the
+  // eight-field one is rejected) but the result was never rendered, so the "surfaced rather
+  // than silently degraded" promise in this comment was not kept. Rendered from 2026-08-09;
+  // the unused-variable warning was the only sign that half the safeguard was missing.
   const [scopeColumnsMissing, setScopeColumnsMissing] = useState(false);
 
   // Close on a click outside the dropdown, or on Escape. Bound only while open, so the
@@ -1693,6 +1697,19 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </div>
       )}
 
+      {/* The half of the safeguard that was missing until 2026-08-09 — the detection ran, the
+          result went nowhere. Named as a PROVISIONING problem, not a page problem: everything
+          here still works, and the damage is done later and elsewhere, by reconciliation. */}
+      {scopeColumnsMissing && (
+        <div style={{ ...s.card, borderColor: "#d13438", background: "#fdf3f4" }}>
+          <strong>This site&rsquo;s Group Map list is missing the Scope and Target columns.</strong>{" "}
+          Every mapping is therefore read as a <em>folder</em> mapping. Site, library and page
+          access cannot be granted, and a row written for one of those is treated as a folder row
+          with no term — which surfaces later as a term-store complaint rather than a missing
+          column. Add both columns to the list, then re-run Folder Reconciliation.
+        </div>
+      )}
+
       <div style={s.card}>
         {/* Library toggle — decides which personas are on offer. Above the group field
             because it frames everything below it: an admin picks the library they are
@@ -2018,7 +2035,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
             <th style={s.th}>Segment</th>
             <th style={s.th}>Tier</th>
             <th style={s.th}>Role</th>
-            <th style={s.th}></th>
+            <th style={s.th} />
           </tr>
         </thead>
         <tbody>

@@ -636,7 +636,6 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       { headers: { Accept: "application/json" } },
     ), reconWaitNote);
     if (!res.ok) {
-      // eslint-disable-next-line no-console
       console.warn(`getLibraryRoot('${lib}') failed: HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
       return null;
     }
@@ -767,6 +766,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // Limited Access is NOT removed by this and must not be: SharePoint maintains it on
   // parent folders so a user can reach a child they are granted on. Stripping it would
   // break access to the unit folder itself, which is the opposite of the intent.
+  // UNREACHABLE ON PURPOSE, and kept. `revokeAncestorRead` is hard-coded false in both
+  // ReconSettings defaults — the config row is deliberately ignored, because revoking
+  // ancestor Read fights the browse corridor that lets a user click down to their own
+  // folder (CLAUDE.md, RBAC section). Retained rather than deleted so the capability and
+  // the reasoning above survive if the client ever asks for it; deleting it would mean
+  // rediscovering the Limited Access caveat from scratch.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const removeRoleAssignment = async (path: string, principalId: number): Promise<void> => {
     const res = await withThrottleRetry(() => context.spHttpClient.post(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/removeroleassignment(principalid=${principalId})?@f='${encodeServerRelativePath(path)}'`,
@@ -848,7 +854,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       );
       if (!res.ok) return;
       const data = await res.json();
-      if (data.Id != null) setOwnerGroupId(data.Id as number);
+      // Spelled out rather than `!= null`: the loose form meant "neither null nor undefined",
+      // which is right, but "fixing" it to `!== null` would pass undefined into a number.
+      if (data.Id !== null && data.Id !== undefined) setOwnerGroupId(data.Id as number);
     };
     // Names first, then everything else. Every list read in this component resolves through the
     // cache, and an unprimed cache falls back to the legacy DMS titles — which 404 on a

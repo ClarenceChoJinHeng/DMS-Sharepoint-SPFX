@@ -758,7 +758,10 @@ export default function BulkUpload({
       if (!res.ok) return [];
       const d = await res.json();
       return ((d.value ?? []) as Array<{ Id?: number }>)
-        .map((g) => (g.Id != null ? String(g.Id) : ""))
+        // Both branches spelled out. `!= null` meant "neither null nor undefined" — correct,
+        // but invisible, and "fixing" it to `!== null` would let undefined through and turn a
+        // missing id into the string "undefined".
+        .map((g) => (g.Id !== null && g.Id !== undefined ? String(g.Id) : ""))
         .filter(Boolean);
     } catch {
       return [];

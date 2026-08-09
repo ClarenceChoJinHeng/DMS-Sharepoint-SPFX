@@ -198,7 +198,9 @@ export default function Onboarding({ context }: IOnboardingProps): React.ReactEl
     );
     if (!res.ok) return;
     const data = await res.json();
-    if (data.Id != null) setOwnerGroupId(data.Id as number);
+    // Spelled out rather than `!= null`: the loose form meant "neither null nor undefined",
+    // which is right, but "fixing" it to `!== null` would pass undefined into a number.
+    if (data.Id !== null && data.Id !== undefined) setOwnerGroupId(data.Id as number);
   };
 
   useEffect(() => {
