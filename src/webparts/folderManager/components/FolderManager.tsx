@@ -19,7 +19,8 @@ import {
   ensureFolder,
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
-import { sanitizeFolderSegment, parseLevels, parseReconModes, RawModeRow } from "../../../shared/formModel";
+import { sanitizeFolderSegment, parseLevels, parseReconModes, RawModeRow, Level } from "../../../shared/formModel";
+import { gridPlan, isPermissioned, splitChain, validateChain } from "../../../shared/folderChain";
 import {
   abbrevListTitle,
   AbbrevCollision,
@@ -139,7 +140,10 @@ const DEFAULT_GRID_MODE: GridMode = "off";
 // first. It exists for departmental fan-out: a Group Map row on a non-leaf term
 // grants its role on every folder beneath it, so each folder needs to know which
 // terms could be reaching down onto it. Empty for the top tier.
-type ProvTarget = { termGuid: string | null; assignTerm: string; ancestorTerms: string[]; relPath: string; label: string; fullName: string; section: string; isLeaf: boolean };
+// termSetGuid identifies which MODE this target belongs to, so the below-Unit grid
+// can follow that segment's own configured chain. Without it every segment would
+// share one hardcoded Year → Document Type shape, which is the bug this replaces.
+type ProvTarget = { termGuid: string | null; assignTerm: string; ancestorTerms: string[]; relPath: string; label: string; fullName: string; section: string; isLeaf: boolean; termSetGuid: string };
 
 // DMS Group Map role → SharePoint permission level. GLOBAL is a privileged
 // uploader bypass (not folder-scoped) and is never assigned to a folder.
@@ -1565,6 +1569,40 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
    */
   const FALLBACK_LEVEL_NAMES = ["Department", "Unit"];
 
+  /**
+   * Term set GUID → the mode's below-Unit tiers, in path order.
+   *
+   * Empty for every site that has not configured one, which is all of them today —
+   * `needsLegacyBelowUnit` then keeps the hardcoded Year → Document Type grid.
+   */
+  const loadReconOnDemandTiers = async (): Promise<Map<string, Level[]>> => {
+    const out = new Map<string, Level[]>();
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=TermSetGuid,Levels&$filter=ConfigType eq 'mode'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out;
+      const data = await res.json();
+      ((data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>).forEach((r) => {
+        const guid = (r.TermSetGuid ?? "").trim().toLowerCase();
+        if (!guid) return;
+        const levels = parseLevels(r.Levels ?? "");
+        // A malformed chain must not half-build a tree. Reconciliation reports it and
+        // falls back to the legacy shape rather than creating folders in an order the
+        // upload form will not agree with.
+        if (validateChain(levels)) return;
+        const { onDemand } = splitChain(levels);
+        if (onDemand.length > 0) out.set(guid, onDemand);
+      });
+    } catch {
+      // Same posture as the level names below: a config hiccup costs the configured
+      // shape, not the run, and the legacy grid is correct for every live site.
+    }
+    return out;
+  };
+
   const loadReconLevelNames = async (): Promise<Map<string, string[]>> => {
     const out = new Map<string, string[]>();
     try {
@@ -1578,7 +1616,11 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       ((data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>).forEach((r) => {
         const guid = (r.TermSetGuid ?? "").trim().toLowerCase();
         if (!guid) return;
-        const names = parseLevels(r.Levels ?? "").map((l) => l.label);
+        // PERMISSIONED TIERS ONLY. These names are indexed by depth in the term tree,
+        // which reconciliation walks — and that tree contains only permissioned tiers.
+        // Leave the below-Unit entries in and every name shifts, so a missing
+        // abbreviation gets reported against the wrong tier.
+        const names = parseLevels(r.Levels ?? "").filter(isPermissioned).map((l) => l.label);
         if (names.length > 0) out.set(guid, names);
       });
     } catch {
@@ -1769,7 +1811,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // business segment. The fanned loop therefore accepts a segment-tier inheritance for
       // **SEGVIEW only** (see segmentTermSets there). Withholding the term entirely was the
       // blunter version of the same rule and made the intended role unusable.
-      out.push({ termGuid: null, assignTerm: mode.termSetGuid, ancestorTerms: [], relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, fullName: segmentFullName, section: mode.stagingFolder, isLeaf: false });
+      out.push({ termGuid: null, assignTerm: mode.termSetGuid, ancestorTerms: [], relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, fullName: segmentFullName, section: mode.stagingFolder, isLeaf: false, termSetGuid: mode.termSetGuid });
       // A failure anywhere in this segment's tree marks the WHOLE segment incomplete.
       // Targets gathered before the failure are kept (creating a subset of folders is
       // harmless and idempotent) — but prune must not run against a partial picture.
@@ -1819,7 +1861,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         // ancestorTerms leads with the SEGMENT (the term-set GUID) since 2026-08-09, so a
         // segment-tier row reaches this department and everything under it. Restricted to
         // SEGVIEW in the fanned loop — see segmentTermSets there.
-        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, ancestorTerms: [mode.termSetGuid], relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false };
+        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, ancestorTerms: [mode.termSetGuid], relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false, termSetGuid: mode.termSetGuid };
         out.push(topTarget);
         // Recurse; returns whether the term had children. A term with no children
         // is a leaf (the upload target) and gets the Year × Document Type grid.
@@ -1853,6 +1895,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               fullName: child.label,
               section: mode.stagingFolder,
               isLeaf: false,
+              termSetGuid: mode.termSetGuid,
             };
             out.push(childTarget);
             childTarget.isLeaf = !(await walk(child.id, chain, pathChain, termChain));
@@ -2402,6 +2445,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       });
       let yearLabels: string[] = [];
       let docTypeLabels: string[] = [];
+      // Term set GUID → the folder names of each below-Unit tier, in path order.
+      // One entry per SEGMENT, because each mode configures its own chain.
+      const gridTiersBySet = new Map<string, string[][]>();
+      const onDemandTiers = await loadReconOnDemandTiers();
       if (gridSets.gridMode === "off") {
         // Nothing to pre-create. Year/Document Type folders are made on demand by the
         // upload form, and in Documents by the Auto-route flow as approved files land.
@@ -2420,13 +2467,73 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           msg: `Year × Document Type grid: ${gridSets.gridMode} — ${yearLabels.length} year(s) × ${docTypeLabels.length} document type(s) per unit`,
           ok: true,
         });
+
+        // Per-segment below-Unit chains. A mode with none configured keeps the two
+        // legacy arrays above, so a site migrates one mode row at a time instead of
+        // all at once — and a half-configured site still builds a complete path.
+        const tierLabelCache = new Map<string, string[]>();
+        const labelsForSet = async (setGuid: string): Promise<string[]> => {
+          const key = (setGuid ?? "").trim().toLowerCase();
+          if (!key) return [];
+          const hit = tierLabelCache.get(key);
+          if (hit) return hit;
+          const tops: TermLite[] = await loadReconTops(setGuid).catch(() => [] as TermLite[]);
+          const labels = tops.map((tl: TermLite) => sanitizeFolderSegment(tl.label)).filter(Boolean);
+          tierLabelCache.set(key, labels);
+          return labels;
+        };
+        // forEach into an array first: the SPFx tsconfig does not target ES2015, so
+        // `for…of` over a Map is a compile error (same family as gotcha #3 in CLAUDE.md).
+        const onDemandEntries: Array<{ setGuid: string; tiers: Level[] }> = [];
+        onDemandTiers.forEach((tiers, setGuid) => onDemandEntries.push({ setGuid, tiers }));
+        for (const { setGuid, tiers } of onDemandEntries) {
+          const resolved: string[][] = [];
+          for (const tier of tiers) {
+            let labels = await labelsForSet(tier.termSet ?? "");
+            // currentYear is a property of the YEAR set, not of a fixed position in
+            // the chain — so it follows the term set wherever the admin puts the tier.
+            if (
+              gridSets.gridMode === "currentYear" &&
+              (tier.termSet ?? "").trim().toLowerCase() === (gridSets.year ?? "").trim().toLowerCase() &&
+              labels.length > 0
+            ) {
+              const thisYear = String(new Date().getFullYear());
+              const match = labels.filter((y) => y === thisYear);
+              labels = match.length > 0 ? match : labels.slice(-1);
+            }
+            resolved.push(labels);
+          }
+          const plan = gridPlan(resolved);
+          gridTiersBySet.set(setGuid, plan.tiers);
+          entries.push({
+            msg:
+              `Below-Unit structure for this segment: ${tiers.map((t) => t.label).join(" → ")} ` +
+              `— ${plan.total} folder(s) per unit` +
+              (plan.tiers.length < tiers.length
+                ? `; "${tiers[plan.tiers.length].label}" has no terms, so nothing below it is pre-created`
+                : ""),
+            ok: true,
+          });
+        }
       }
+
+      /**
+       * The below-Unit tiers for a target's own segment, falling back to the legacy
+       * Year → Document Type pair. Resolved per target, never once per run: two
+       * segments may configure different shapes.
+       */
+      const gridTiersFor = (t: ProvTarget): string[][] =>
+        gridTiersBySet.get((t.termSetGuid ?? "").trim().toLowerCase()) ??
+        gridPlan([yearLabels, docTypeLabels]).tiers;
       // Estimate the workload up front: count every throttled op (each incurs the
       // inter-write delay). Structural folder (1) + Year×DocType grid per leaf +
       // applicable group grants per lib. Ancestor browse grants aren't throttled, so
       // they're excluded — the live rate absorbs their real time. Worst case (assumes
       // nothing exists yet); re-runs finish faster as existing folders skip.
-      const gridPerLeaf = yearLabels.length > 0 ? yearLabels.length * (1 + docTypeLabels.length) : 0;
+      // Per SEGMENT, not per run — each mode may configure a different chain, and the
+      // estimate divides elapsed time by ops completed, so counting a different set
+      // here than the build loop attempts is what makes the "time left" figure lie.
+      const gridPerLeafFor = (t: ProvTarget): number => gridPlan(gridTiersFor(t)).total;
       // Resolved once per library, before the estimate, because whether the column
       // exists changes the op count. Absent on a library = that library gets no full
       // names and is told so once, rather than once per folder.
@@ -2484,7 +2591,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         for (const t of targets) {
           plannedOps += 1;
           if (fullNameFields.has(lib)) plannedOps += 1;
-          if (t.isLeaf) plannedOps += gridPerLeaf;
+          if (t.isLeaf) plannedOps += gridPerLeafFor(t);
           // Count exactly what the assignment loop will attempt: this folder's own
           // rows PLUS any fanned down from a parent tier, de-duplicated on
           // group + role the same way. The estimate divides elapsed time by ops
@@ -3039,8 +3146,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // never a $filter on FSObjType — the grid puts these libraries over the 5,000-item
             // list-view threshold). Not built: the only requirement that wanted approver-only
             // was per-uploader isolation, which is out of scope.
-            if (t.isLeaf && yearLabels.length > 0) {
-              const gridTotal = yearLabels.length * (1 + docTypeLabels.length);
+            const tierNames = t.isLeaf ? gridTiersFor(t) : [];
+            const plan = gridPlan(tierNames);
+            if (t.isLeaf && plan.total > 0) {
+              const gridTotal = plan.total;
               let grid = 0;
               // FAST PATH. The grid is built in order, so if the LAST year's LAST
               // document-type folder is there, the whole grid is there. One probe
@@ -3051,12 +3160,10 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
               // is not restored here — the upload form ensure-creates it on demand.
               // probeFolderByPath retries 429s, so a throttle cannot fake "incomplete"
               // and trigger a needless full rebuild.
-              const lastYear = yearLabels[yearLabels.length - 1];
-              const lastDt = docTypeLabels.length > 0 ? docTypeLabels[docTypeLabels.length - 1] : undefined;
               const gridProbe = await probeFolderByPath(
                 context.spHttpClient,
                 siteUrl,
-                lastDt ? `${full}/${lastYear}/${lastDt}` : `${full}/${lastYear}`,
+                `${full}/${plan.lastPath.join("/")}`,
               );
               if (gridProbe.folder) {
                 entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`, ok: true });
@@ -3066,25 +3173,24 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
                 step(gridTotal);
               } else {
               pushFolder(lib, `${t.label} grid: 0 / ${gridTotal}`, "run");
-              for (const yr of yearLabels) {
-                const yearFolder = await ensureFolder(context.spHttpClient, siteUrl, full, yr);
-                step();
-                if (yearFolder) { grid++; bumpFolders(); }
-                setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal}`, "run");
-                // Only pace REAL writes. Charging the throttle delay to a folder that
-                // already existed is what made a no-op re-run as slow as a first run.
-                if (yearFolder?.created) await tick();
-                if (!yearFolder) continue;
-                // Sequential (NOT parallel) — the old parallel burst was what tripped the
-                // 429 throttle. One folder at a time + the inter-write delay keeps it safe.
-                for (const dt of docTypeLabels) {
-                  const made = await ensureFolder(context.spHttpClient, siteUrl, yearFolder.serverRelativeUrl, dt);
+              // One walk down the configured chain, replacing the old fixed
+              // Year-then-Document-Type pair. Depth-first and SEQUENTIAL (never
+              // parallel) — a parallel burst is what tripped the 429 throttle.
+              const buildTier = async (parent: string, depth: number): Promise<void> => {
+                if (depth >= plan.tiers.length) return;
+                for (const name of plan.tiers[depth]) {
+                  const made = await ensureFolder(context.spHttpClient, siteUrl, parent, name);
                   step();
                   if (made) { grid++; bumpFolders(); }
                   setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal}`, "run");
+                  // Only pace REAL writes. Charging the throttle delay to a folder that
+                  // already existed is what made a no-op re-run as slow as a first run.
                   if (made?.created) await tick();
+                  if (!made) continue;
+                  await buildTier(made.serverRelativeUrl, depth + 1);
                 }
-              }
+              };
+              await buildTier(full, 0);
               }
               entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
               setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal} ✓`, "ok");

@@ -124,6 +124,51 @@ export function needsLegacyBelowUnit(levels: Level[]): boolean {
   return splitChain(levels).onDemand.length === 0;
 }
 
+/** What reconciliation needs to know before pre-creating a grid of below-Unit folders. */
+export interface GridPlan {
+  /** Total folders across every tier — what the progress estimate counts. */
+  total: number;
+  /**
+   * The deepest path of "last label at each tier". The grid is built in order, so
+   * if this one folder exists the whole grid exists — one probe instead of a
+   * round-trip per folder per leaf per library.
+   */
+  lastPath: string[];
+  /** The tiers actually buildable, truncated at the first one with no terms. */
+  tiers: string[][];
+}
+
+/**
+ * Size a Year × Document Type × … grid of any depth.
+ *
+ * `total` is the sum of the prefix products, not the product: 3 years × 20 doc
+ * types is 3 year folders PLUS 60 document-type folders = 63, because every tier
+ * above the deepest is itself a folder. Getting this wrong does not break the
+ * build — it makes the progress estimate lie, which is how a long run comes to
+ * look like a hang.
+ *
+ * A tier with no terms truncates everything below it. There is nothing to nest
+ * inside a folder that cannot be created, and the tiers above it are still worth
+ * building — the upload form ensure-creates the rest on demand.
+ */
+export function gridPlan(tiers: string[][]): GridPlan {
+  const usable: string[][] = [];
+  for (const tier of tiers ?? []) {
+    const names = (tier ?? []).filter(Boolean);
+    if (names.length === 0) break;
+    usable.push(names);
+  }
+
+  let total = 0;
+  let running = 1;
+  for (const tier of usable) {
+    running *= tier.length;
+    total += running;
+  }
+
+  return { total, tiers: usable, lastPath: usable.map((t) => t[t.length - 1]) };
+}
+
 /** One tier's chosen term, as the UI holds it. */
 export interface TierSelection {
   /** Term GUID. Written to the tier's `tidCol`. */

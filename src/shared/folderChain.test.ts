@@ -1,6 +1,7 @@
 import { Level, parseLevels } from "./formModel";
 import {
   buildOnDemandSegments,
+  gridPlan,
   isPermissioned,
   needsLegacyBelowUnit,
   splitChain,
@@ -115,6 +116,40 @@ describe("needsLegacyBelowUnit — the compatibility bridge", () => {
 
   it("is false once any below-Unit tier is configured", () => {
     expect(needsLegacyBelowUnit([dept, unit, year, docType])).toBe(false);
+  });
+});
+
+describe("gridPlan", () => {
+  // Matches the shipped two-tier arithmetic exactly: years + years*docTypes.
+  // 3 + 60, not 60 — every tier above the deepest is itself a folder.
+  it("counts every tier, not just the leaves", () => {
+    const p = gridPlan([["2024", "2025", "2026"], Array.from({ length: 20 }, (_, i) => `dt${i}`)]);
+    expect(p.total).toBe(63);
+  });
+
+  it("sizes a three-tier grid", () => {
+    // 2 functions + (2*2) years + (2*2*2) doc types = 2 + 4 + 8
+    const p = gridPlan([["HR", "Finance"], ["2025", "2026"], ["Invoice", "Receipt"]]);
+    expect(p.total).toBe(14);
+  });
+
+  it("gives the last-of-each path for the fast-path probe", () => {
+    const p = gridPlan([["2025", "2026"], ["Invoice", "Receipt"]]);
+    expect(p.lastPath).toEqual(["2026", "Receipt"]);
+  });
+
+  // Today's behaviour when the Document Type set is empty: build the year folders
+  // and stop. Nothing can nest inside a folder that cannot be created.
+  it("truncates at the first tier with no terms", () => {
+    const p = gridPlan([["2025", "2026"], [], ["Invoice"]]);
+    expect(p.total).toBe(2);
+    expect(p.tiers).toEqual([["2025", "2026"]]);
+    expect(p.lastPath).toEqual(["2026"]);
+  });
+
+  it("plans nothing for an empty chain", () => {
+    expect(gridPlan([]).total).toBe(0);
+    expect(gridPlan([[]]).total).toBe(0);
   });
 });
 
