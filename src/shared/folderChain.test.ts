@@ -1,6 +1,7 @@
 import { Level, parseLevels } from "./formModel";
 import {
   buildOnDemandSegments,
+  effectiveOnDemandTiers,
   gridPlan,
   isPermissioned,
   needsLegacyBelowUnit,
@@ -116,6 +117,37 @@ describe("needsLegacyBelowUnit — the compatibility bridge", () => {
 
   it("is false once any below-Unit tier is configured", () => {
     expect(needsLegacyBelowUnit([dept, unit, year, docType])).toBe(false);
+  });
+});
+
+describe("effectiveOnDemandTiers — one walk for migrated and unmigrated sites", () => {
+  // The regression the spec asks for: every live mode row is [Department, Unit],
+  // and those sites must keep producing exactly Year -> Document Type, with the
+  // same column internal names they have always written.
+  it("synthesises the legacy pair for an unmigrated chain", () => {
+    const tiers = effectiveOnDemandTiers([dept, unit], YEAR_SET, DOCTYPE_SET);
+    expect(tiers.map((t) => t.label)).toEqual(["Year", "Document Type"]);
+    expect(tiers.map((t) => t.labelCol)).toEqual(["Year", "Document_x0020_Type"]);
+    expect(tiers.map((t) => t.termSet)).toEqual([YEAR_SET, DOCTYPE_SET]);
+  });
+
+  it("produces the same path as the configured equivalent", () => {
+    const legacy = buildOnDemandSegments(effectiveOnDemandTiers([dept, unit], YEAR_SET, DOCTYPE_SET), {
+      Year: { id: "y", label: "2026" }, DocumentType: { id: "d", label: "Invoice" },
+    });
+    expect(legacy.segments).toEqual(["2026", "Invoice"]);
+  });
+
+  it("uses the configured chain once one exists", () => {
+    const tiers = effectiveOnDemandTiers([dept, unit, fn, year, docType], YEAR_SET, DOCTYPE_SET);
+    expect(tiers.map((t) => t.label)).toEqual(["Function", "Year", "Document Type"]);
+  });
+
+  // A configured chain wins even when it omits Year entirely — otherwise the
+  // legacy pair would reappear underneath and silently deepen every path.
+  it("does not append the legacy pair to a configured chain", () => {
+    const tiers = effectiveOnDemandTiers([dept, unit, fn], YEAR_SET, DOCTYPE_SET);
+    expect(tiers.map((t) => t.label)).toEqual(["Function"]);
   });
 });
 

@@ -124,6 +124,38 @@ export function needsLegacyBelowUnit(levels: Level[]): boolean {
   return splitChain(levels).onDemand.length === 0;
 }
 
+/**
+ * The below-Unit tiers a site behaves as if it had configured.
+ *
+ * Every live mode row is [Department, Unit] with nothing below it, so without this
+ * the upload form would need two code paths — one walking a configured chain, one
+ * running the old hardcoded Year -> Document Type pair. Two paths is exactly the
+ * duplication that let the form and reconciliation drift into building different
+ * shapes. Synthesising the legacy pair as a chain gives one walk for both.
+ *
+ * The synthetic tiers carry the same `column` keys and internal names the form has
+ * always written (`Year`, `Document_x0020_Type`), so nothing about an unmigrated
+ * site's metadata or folder path changes.
+ *
+ * Delete this once every site's mode rows carry an explicit chain; the caller then
+ * just uses `splitChain(levels).onDemand`.
+ */
+export function effectiveOnDemandTiers(
+  levels: Level[],
+  legacyYearTermSet: string,
+  legacyDocTypeTermSet: string,
+): Level[] {
+  const { onDemand } = splitChain(levels ?? []);
+  if (onDemand.length > 0) return onDemand;
+  return [
+    { label: "Year", column: "Year", labelCol: "Year", termSet: legacyYearTermSet, permissioned: false },
+    {
+      label: "Document Type", column: "DocumentType", labelCol: "Document_x0020_Type",
+      termSet: legacyDocTypeTermSet, permissioned: false,
+    },
+  ];
+}
+
 /** What reconciliation needs to know before pre-creating a grid of below-Unit folders. */
 export interface GridPlan {
   /** Total folders across every tier — what the progress estimate counts. */
