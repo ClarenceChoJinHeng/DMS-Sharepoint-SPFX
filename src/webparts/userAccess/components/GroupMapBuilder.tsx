@@ -207,6 +207,34 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
    */
   const [libraryTab, setLibraryTab] = useState<"Documents" | "Staging">("Documents");
 
+  /**
+   * Is `recon_departmentFanOut` on? THREE states, and the third is the point.
+   *
+   * `undefined` = not read yet, or the read failed. Only an explicit `false` warns, so a
+   * slow or broken config read stays silent rather than telling the admin their department
+   * mapping is broken when it is not.
+   */
+  const [fanOutOn, setFanOutOn] = useState<boolean | undefined>(undefined);
+
+  useEffect(() => {
+    const read = async (): Promise<void> => {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG_LIST())}')/items`
+          + `?$select=Title,SettingValue&$filter=Title eq 'recon_departmentFanOut'&$top=1`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return;
+      const rows = (await res.json()).value as Array<{ SettingValue?: string }>;
+      // No row at all reads as ON, matching reconciliation's own default. A missing row is
+      // the normal state on a site that never customised it, not an opt-out.
+      if (rows.length === 0) { setFanOutOn(true); return; }
+      const v = (rows[0].SettingValue ?? "").trim().toLowerCase();
+      setFanOutOn(!(v === "off" || v === "false" || v === "0" || v === "no"));
+    };
+    read().catch(() => undefined);
+  }, []);
+
   // Group search box
   const [query, setQuery]         = useState("");
   const [results, setResults]     = useState<GroupPick[]>([]);
@@ -1147,6 +1175,17 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setPersona(p.key);
     setPersonaOpen(false);
     if (!p.unavailable && p.roles.length > 0) pickRole(p.roles[0]);
+    // A department mapping is INERT unless fan-out is on, and the failure is silent: the
+    // department folder gets the grant, no unit does. Raised only when it is actually off —
+    // as standing panel text it warned about a setting that is on, every single time.
+    // `false` specifically, not falsy: undefined means the config read failed, and guessing
+    // "off" there would cry wolf on every site where the read is merely slow.
+    if (p.scope === "department" && fanOutOn === false) {
+      showToast(
+        "recon_departmentFanOut is OFF in Config, so this mapping will stop at the department folder and reach no units. Switch it on, then run Folder Reconciliation.",
+        true,
+      );
+    }
   };
 
   const chosenPersona = personaByKey(persona);
@@ -1304,15 +1343,11 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                   </div>
                 );
               })}
-              {chosenPersona.scope === "department" && (
-                // A department mapping is inert unless fan-out is switched on, and
-                // the failure is silent: the folder gets the grant, no unit does.
-                <div style={{ marginTop: 8, color: "#8a6d00" }}>
-                  Reaching the units beneath the department needs{" "}
-                  <strong>recon_departmentFanOut = on</strong> in DMS Config, then a Folder
-                  Reconciliation run. Without it this mapping stops at the department folder.
-                </div>
-              )}
+              {/* The recon_departmentFanOut caveat used to live here as permanent text.
+                  Removed 2026-08-09: the client will not touch that config, so a standing
+                  warning about a setting that is ON described a problem nobody had and
+                  trained admins to read past the panel. It is now a TOAST, raised only
+                  when the setting is actually off — see choosePersona. */}
             </>
           )}
         </div>
