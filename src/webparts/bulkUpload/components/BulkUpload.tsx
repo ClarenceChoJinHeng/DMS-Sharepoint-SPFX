@@ -13,13 +13,19 @@ import {
   parseLevels,
   collectMembership,
   isLeafChainValid,
-  sanitizeFolderSegment,
   buildLevelFormValues,
   Level,
   GroupMapRow,
   Membership,
   ColumnPair,
 } from "../../../shared/formModel";
+import {
+  buildOnDemandSegments,
+  effectiveOnDemandTiers,
+  splitChain,
+  TierSelection,
+  validateChain,
+} from "../../../shared/folderChain";
 import {
   AllowedFileTypes,
   FALLBACK_FILE_TYPES,
@@ -111,7 +117,14 @@ type UploadMode = {
   side: "BusinessSegment" | "Project";
   termSetGuid: string;
   stagingFolder: string;
+  /**
+   * PERMISSIONED tiers only — indexed against levelValues/levelChoices, which the
+   * segment-tree cascade fills. Below-Unit entries here would shift every index.
+   * Same contract as Form.tsx.
+   */
   levels: Level[];
+  /** The full authored chain. Absent on the code fallbacks — see Form.tsx. */
+  chain?: Level[];
   sortOrder: number;
 };
 
@@ -477,8 +490,11 @@ export default function BulkUpload({
   const [uploadMode, setUploadMode] = useState<string>("");
   const [picked, setPicked] = useState<PickedFile[]>([]);
   const [dragOver, setDragOver] = useState<boolean>(false);
-  const [documentType, setDocumentType] = useState<string>("");
-  const [yearPeriod, setYearPeriod] = useState<string>("");
+  // Below-Unit tier selections keyed by the tier's `column`, mirroring Form.tsx.
+  // Replaces the dedicated documentType/yearPeriod state, which WAS the hardcoded
+  // shape — a chain that varies in length cannot have one useState per tier.
+  const [tierValues, setTierValues] = useState<Record<string, string>>({});
+  const [termCache, setTermCache] = useState<Record<string, TermOption[]>>({});
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
@@ -525,6 +541,27 @@ export default function BulkUpload({
   const activeMode = (): UploadMode | undefined =>
     modes.find((m) => m.key === uploadMode);
 
+  /* ---------- Below-Unit tiers (mirrors Form.tsx) -------------------------- */
+
+  const belowUnitTiers = (): Level[] =>
+    effectiveOnDemandTiers(
+      activeMode()?.chain ?? activeMode()?.levels ?? [],
+      settings.termSets.yearPeriod,
+      settings.termSets.documentType,
+    );
+
+  const tierOptions = (t: Level): TermOption[] =>
+    termCache[(t.termSet ?? "").trim().toLowerCase()] ?? [];
+
+  const tierSelections = (): Record<string, TierSelection | undefined> => {
+    const out: Record<string, TierSelection | undefined> = {};
+    belowUnitTiers().forEach((t) => {
+      const opt = tierOptions(t).find((o) => o.id === (tierValues[t.column] ?? ""));
+      if (opt) out[t.column] = { id: opt.id, label: opt.label };
+    });
+    return out;
+  };
+
   /* ---------- Term Store helpers ------------------------------------------ */
 
   const loadTermSet = async (termSetId: string): Promise<TermOption[]> => {
@@ -542,6 +579,32 @@ export default function BulkUpload({
       }),
     );
   };
+
+  // Fetch the term sets a configured chain adds. No-op on an unmigrated site, where
+  // both are cached from mount. Per-set try/catch because Promise.allSettled is
+  // unavailable on this tsconfig (CLAUDE.md gotcha #3). Declared after loadTermSet
+  // deliberately — a const arrow is not hoisted.
+  useEffect(() => {
+    let cancelled = false;
+    const missing = belowUnitTiers()
+      .map((t) => (t.termSet ?? "").trim())
+      .filter((g) => g && !termCache[g.toLowerCase()]);
+    if (missing.length === 0) return;
+    (async () => {
+      const loaded: Record<string, TermOption[]> = {};
+      for (const guid of missing) {
+        try {
+          loaded[guid.toLowerCase()] = await loadTermSet(guid);
+        } catch {
+          loaded[guid.toLowerCase()] = [];
+        }
+      }
+      if (!cancelled) setTermCache((prev) => ({ ...prev, ...loaded }));
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [uploadMode, modes, settings.termSets.yearPeriod, settings.termSets.documentType]);
 
   const loadTermChildren = async (
     termSetId: string,
@@ -621,7 +684,8 @@ export default function BulkUpload({
           | "Project",
         termSetGuid: item.TermSetGuid,
         stagingFolder: item.StagingFolder,
-        levels: parseLevels(item.Levels),
+        levels: splitChain(parseLevels(item.Levels)).permissioned,
+        chain: parseLevels(item.Levels),
         sortOrder: item.SortOrder,
       }),
     );
@@ -931,6 +995,12 @@ export default function BulkUpload({
           () => [] as TermOption[],
         ),
       ]);
+      // Seed the by-term-set cache with the two sets every site has, so an
+      // unmigrated site makes no extra requests for its below-Unit tiers.
+      setTermCache({
+        [loadedSettings.termSets.documentType.trim().toLowerCase()]: docTypes,
+        [loadedSettings.termSets.yearPeriod.trim().toLowerCase()]: years,
+      });
       setOptions({
         documentType: docTypes,
         yearPeriod: years,
@@ -997,8 +1067,7 @@ export default function BulkUpload({
 
   const resetForm = (): void => {
     setPicked([]);
-    setDocumentType("");
-    setYearPeriod("");
+    setTierValues({});
     setDocumentDate("");
     setConfidentiality("");
     setLegallyPrivileged(false);
@@ -1183,8 +1252,9 @@ export default function BulkUpload({
     (m?.levels ?? []).forEach((lvl, i) => {
       if (!levelValues[i]) missing.push(lvl.label);
     });
-    if (!yearPeriod) missing.push("Year");
-    if (!documentType) missing.push("Document Type");
+    // Derived from the chain, not hardcoded. Every tier is required — an optional
+    // one left blank files documents at inconsistent depths inside a single unit.
+    missing.push(...buildOnDemandSegments(belowUnitTiers(), tierSelections()).missing);
     if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidential Level");
     return missing;
@@ -1201,8 +1271,10 @@ export default function BulkUpload({
     labels: {
       modeLabel: string;
       termSetGuid: string;
-      docTypeLabel: string;
-      yearLabel: string;
+      /** Below-Unit folder names in path order. Replaces the fixed year/docType pair. */
+      tierSegments: string[];
+      /** Metadata for those same tiers, already in validateUpdateListItem shape. */
+      tierFormValues: Array<{ FieldName: string; FieldValue: string }>;
       confLabel: string;
       vendorLabel: string;
     },
@@ -1294,35 +1366,26 @@ export default function BulkUpload({
     }
     const docsUnitFolder = docsProbe.folder;
 
-    const yearLabel = sanitizeFolderSegment(labels.yearLabel);
-    const docTypeLabel = sanitizeFolderSegment(labels.docTypeLabel);
-    if (!yearLabel || !docTypeLabel) {
-      return { runError: "Year and Document Type are required.", results: [] };
+    if (labels.tierSegments.length === 0) {
+      return { runError: "No destination folder could be resolved for this upload.", results: [] };
     }
 
     setStatus("Preparing destination folders…");
-    // Year / Document Type subfolders are safe to create — they inherit the unit
-    // folder's ACL, exactly as they do in Staging.
-    const yearFolder = await ensureFolder(
-      context.spHttpClient,
-      siteUrl,
-      docsUnitFolder.serverRelativeUrl,
-      yearLabel,
-    );
-    if (!yearFolder) {
-      return { runError: `Could not create the "${yearLabel}" folder.`, results: [] };
+    // Walk the configured below-Unit chain. Every folder here inherits the unit
+    // folder's ACL, exactly as Year / Document Type always did — nothing below Unit
+    // breaks inheritance (client decision, 2026-08-06).
+    let parentSru = docsUnitFolder.serverRelativeUrl;
+    let destFolder: Awaited<ReturnType<typeof ensureFolder>> | undefined;
+    for (const name of labels.tierSegments) {
+      const made = await ensureFolder(context.spHttpClient, siteUrl, parentSru, name);
+      if (!made) {
+        return { runError: `Could not create the "${name}" folder.`, results: [] };
+      }
+      parentSru = made.serverRelativeUrl;
+      destFolder = made;
     }
-    const destFolder = await ensureFolder(
-      context.spHttpClient,
-      siteUrl,
-      yearFolder.serverRelativeUrl,
-      docTypeLabel,
-    );
     if (!destFolder) {
-      return {
-        runError: `Could not create the "${docTypeLabel}" folder.`,
-        results: [],
-      };
+      return { runError: "No destination folder could be resolved for this upload.", results: [] };
     }
     const folderId = destFolder.uniqueId;
 
@@ -1353,14 +1416,8 @@ export default function BulkUpload({
       settings.legallyPrivilegedFor !== "" &&
       confidentiality === settings.legallyPrivilegedFor;
     const formValues: Array<{ FieldName: string; FieldValue: string }> = [
-      {
-        FieldName: settings.columns.documentType,
-        FieldValue: taxVal(labels.docTypeLabel, documentType),
-      },
-      {
-        FieldName: settings.columns.yearPeriod,
-        FieldValue: taxVal(labels.yearLabel, yearPeriod),
-      },
+      // One entry per below-Unit tier, in chain order, resolved by the caller.
+      ...labels.tierFormValues,
       {
         FieldName: settings.columns.confidentiality,
         FieldValue: taxVal(labels.confLabel, confidentiality),
@@ -1559,6 +1616,18 @@ export default function BulkUpload({
       showToast("No upload mode configured.", "error");
       return;
     }
+    // A malformed chain must never route files to a partial path — they would land
+    // one tier shallower than everything else in the unit, in a folder that exists
+    // and looks right. Block and name the config row instead.
+    const chainError = validateChain(mode.chain ?? mode.levels);
+    if (chainError) {
+      showToast(
+        `The folder structure for this segment is not set up correctly: ${chainError.message} ` +
+          `Ask an administrator to check the DMS Config mode row.`,
+        "error",
+      );
+      return;
+    }
 
     const selections: LevelSelection[] = mode.levels.map((lvl, i) => {
       const opt = (levelChoices[i] ?? []).find((o) => o.id === levelValues[i]);
@@ -1575,9 +1644,29 @@ export default function BulkUpload({
     const labels = {
       modeLabel: mode.label,
       termSetGuid: mode.termSetGuid,
-      docTypeLabel:
-        options.documentType.find((o) => o.id === documentType)?.label ?? "",
-      yearLabel: options.yearPeriod.find((o) => o.id === yearPeriod)?.label ?? "",
+      // The below-Unit path and its metadata, resolved once here and carried to the
+      // runner. Passing the ordered segments rather than two named labels is what
+      // lets the runner stay agnostic about how deep the chain is.
+      tierSegments: buildOnDemandSegments(belowUnitTiers(), tierSelections()).segments,
+      tierFormValues: belowUnitTiers().reduce(
+        (acc: Array<{ FieldName: string; FieldValue: string }>, t) => {
+          const opts = tierOptions(t);
+          const opt = opts.find((o) => o.id === (tierValues[t.column] ?? ""));
+          const col = t.labelCol ?? t.column;
+          if (!col || !opt) return acc;
+          // Derived, not flagged — a tier with a tidCol writes a text label+GUID
+          // pair like the permissioned levels; one without writes a single
+          // managed-metadata column. Keeps Year/Document Type byte-identical.
+          if (t.tidCol) {
+            acc.push({ FieldName: col, FieldValue: opt.label });
+            acc.push({ FieldName: t.tidCol, FieldValue: opt.id });
+          } else {
+            acc.push({ FieldName: col, FieldValue: taxVal(opt.label, opt.id) });
+          }
+          return acc;
+        },
+        [],
+      ),
       confLabel:
         options.confidentiality.find((o) => o.id === confidentiality)?.label ?? "",
       vendorLabel: options.vendor.find((o) => o.id === vendor)?.label ?? "",
@@ -2029,22 +2118,18 @@ export default function BulkUpload({
             ),
           )}
 
-          {renderSelect(
-            "Year",
-            true,
-            yearPeriod,
-            setYearPeriod,
-            options.yearPeriod,
-            busy,
-          )}
-
-          {renderSelect(
-            "Document Type",
-            true,
-            documentType,
-            setDocumentType,
-            options.documentType,
-            busy,
+          {/* The below-Unit chain, in path order — third-width, so tiers flow onto
+              the row the deepest permissioned level starts. Unchanged on a site
+              that has configured none. */}
+          {belowUnitTiers().map((t) =>
+            renderSelect(
+              t.label,
+              true,
+              tierValues[t.column] ?? "",
+              (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
+              tierOptions(t),
+              busy,
+            ),
           )}
 
           {/* Graceful empty-state: a segment whose term set has no child terms yet
