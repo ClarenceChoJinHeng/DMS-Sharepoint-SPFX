@@ -15,13 +15,19 @@ import {
   parseLevels,
   collectMembership,
   isLeafChainValid,
-  sanitizeFolderSegment,
   buildLevelFormValues,
   Level,
   GroupMapRow,
   Membership,
   ColumnPair,
 } from "../../../shared/formModel";
+import {
+  buildOnDemandSegments,
+  effectiveOnDemandTiers,
+  splitChain,
+  TierSelection,
+  validateChain,
+} from "../../../shared/folderChain";
 import {
   AllowedFileTypes,
   CONFIG_UNREADABLE_MESSAGE,
@@ -138,7 +144,21 @@ type UploadMode = {
   side: "BusinessSegment" | "Project";
   termSetGuid: string;
   stagingFolder: string;
+  /**
+   * PERMISSIONED tiers only — the cascade down the segment term tree, ending at the
+   * Unit folder. Deliberately not the whole chain: every use of this array indexes
+   * it against `levelValues` / `levelChoices`, which the cascade fills, and the
+   * cascade only ever walks permissioned tiers. Putting below-Unit entries in here
+   * would shift every index by one and mis-label the whole form.
+   */
   levels: Level[];
+  /**
+   * The full authored chain, permissioned prefix and below-Unit suffix together.
+   * Optional because the DEFAULT_MODES fallbacks carry no below-Unit tiers — they
+   * only surface when DMS Config is unreadable, and a site in that state gets the
+   * legacy Year -> Document Type pair. Absent means "same as `levels`".
+   */
+  chain?: Level[];
   sortOrder: number;
 };
 
@@ -356,8 +376,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [file, setFile] = useState<File | undefined>(undefined);
   // One SEGMENT of the final file name, not the whole name — see composeUploadBase.
   const [docName, setDocName] = useState<string>("");
-  const [documentType, setDocumentType] = useState<string>("");
-  const [yearPeriod, setYearPeriod] = useState<string>("");
+  // Below-Unit tier selections, keyed by the tier's `column`. Replaces the old
+  // dedicated documentType/yearPeriod state: those two WERE the hardcoded shape,
+  // and a chain that varies in length cannot have one useState per tier.
+  const [tierValues, setTierValues] = useState<Record<string, string>>({});
+  // Term options keyed by TERM SET GUID, so two tiers bound to the same set cost
+  // one fetch and switching modes reuses whatever is already loaded.
+  const [termCache, setTermCache] = useState<Record<string, TermOption[]>>({});
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
@@ -406,6 +431,35 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const activeMode = (): UploadMode | undefined =>
     modes.find((m) => m.key === uploadMode);
 
+  /* ---------- Below-Unit tiers -------------------------------------------- */
+
+  /**
+   * The folders created beneath the Unit folder, in path order, for the active mode.
+   *
+   * A mode with no configured chain gets the synthetic [Year, Document Type] pair,
+   * so an unmigrated site behaves exactly as before and there is ONE walk rather
+   * than a legacy branch and a configured branch.
+   */
+  const belowUnitTiers = (): Level[] =>
+    effectiveOnDemandTiers(
+      activeMode()?.chain ?? activeMode()?.levels ?? [],
+      settings.termSets.yearPeriod,
+      settings.termSets.documentType,
+    );
+
+  const tierOptions = (t: Level): TermOption[] =>
+    termCache[(t.termSet ?? "").trim().toLowerCase()] ?? [];
+
+  const tierSelections = (): Record<string, TierSelection | undefined> => {
+    const out: Record<string, TierSelection | undefined> = {};
+    belowUnitTiers().forEach((t) => {
+      const id = tierValues[t.column] ?? "";
+      const opt = tierOptions(t).find((o) => o.id === id);
+      if (opt) out[t.column] = { id: opt.id, label: opt.label };
+    });
+    return out;
+  };
+
   /* ---------- Term Store helpers ------------------------------------------ */
 
   const loadTermSet = async (termSetId: string): Promise<TermOption[]> => {
@@ -424,6 +478,35 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }),
     );
   };
+
+  // Fetch the term sets a configured chain adds. Runs on every mode change but does
+  // nothing on an unmigrated site, where both sets are already cached from mount.
+  // Failures are swallowed per set: one unreachable tier must not blank the others,
+  // and the empty-state below names whichever tier came back with no options.
+  // Declared after loadTermSet deliberately — a const arrow is not hoisted.
+  useEffect(() => {
+    let cancelled = false;
+    const missing = belowUnitTiers()
+      .map((t) => (t.termSet ?? "").trim())
+      .filter((g) => g && !termCache[g.toLowerCase()]);
+    if (missing.length === 0) return;
+    (async () => {
+      const loaded: Record<string, TermOption[]> = {};
+      for (const guid of missing) {
+        // Sequential, and Promise.allSettled is unavailable on this tsconfig
+        // (CLAUDE.md gotcha #3) — a per-set try/catch is the supported shape.
+        try {
+          loaded[guid.toLowerCase()] = await loadTermSet(guid);
+        } catch {
+          loaded[guid.toLowerCase()] = [];
+        }
+      }
+      if (!cancelled) setTermCache((prev) => ({ ...prev, ...loaded }));
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [uploadMode, modes, settings.termSets.yearPeriod, settings.termSets.documentType]);
 
   const loadTermChildren = async (
     termSetId: string,
@@ -507,7 +590,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           | "Project",
         termSetGuid: item.TermSetGuid,
         stagingFolder: item.StagingFolder,
-        levels: parseLevels(item.Levels),
+        // `levels` is the permissioned prefix only — see the UploadMode comment.
+        levels: splitChain(parseLevels(item.Levels)).permissioned,
+        chain: parseLevels(item.Levels),
         sortOrder: item.SortOrder,
       }),
     );
@@ -887,6 +972,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         yearPeriod: years,
         confidentiality: confs,
       });
+      // Seed the by-term-set cache with the two sets every site has. A configured
+      // chain's extra tiers are fetched by the effect below, which skips anything
+      // already here — so an unmigrated site makes no additional requests at all.
+      setTermCache({
+        [loadedSettings.termSets.documentType.trim().toLowerCase()]: docTypes,
+        [loadedSettings.termSets.yearPeriod.trim().toLowerCase()]: years,
+      });
 
       if (isPrivileged) {
         // Full manual cascade over the whole term set; default to first BS mode.
@@ -997,7 +1089,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const resetForm = (): void => {
     setFile(undefined);
     setDocName("");
-    setDocumentType("");
+    setTierValues({});
     // Rebuild the cascade rather than blanking it. A restricted uploader's
     // Department/Unit are DERIVED from their group memberships and locked, so
     // clearing them to [] left the two fields empty with no way to re-select —
@@ -1014,7 +1106,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     } else {
       applyRestrictedMode(validPaths, m, []);
     }
-    setYearPeriod("");
     setDocumentDate("");
     setConfidentiality("");
     setVendor("");
@@ -1029,14 +1120,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const handleUpload = async (): Promise<void> => {
     const missing: string[] = [];
     if (!file) missing.push("File");
-    if (!documentType) missing.push("Document Type");
     const m = activeMode();
+    // Permissioned tiers first, then the below-Unit chain — the order the fields
+    // appear on screen, so the "please choose" list reads top to bottom.
     (m?.levels ?? []).forEach((lvl, i) => {
       if (!levelValues[i]) missing.push(lvl.label);
     });
+    // Derived from the chain, not from hardcoded strings. Every tier is required:
+    // an optional one left blank would file documents at inconsistent depths inside
+    // a single unit, which is the whole reason the tier exists.
+    missing.push(...buildOnDemandSegments(belowUnitTiers(), tierSelections()).missing);
     // These strings are shown to the user, so they must match the on-screen
-    // field labels — renamed to "Year" / "Confidential Level" in the relayout.
-    if (!yearPeriod) missing.push("Year");
+    // field labels — renamed to "Confidential Level" in the relayout.
     if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidential Level");
     // The three name parts are required so every saved file carries the full
@@ -1127,40 +1222,48 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       setBusy(false);
       return;
     }
-    const yearLabel = sanitizeFolderSegment(
-      options.yearPeriod.find((o) => o.id === yearPeriod)?.label ?? "",
-    );
-    const docTypeLabel = sanitizeFolderSegment(
-      options.documentType.find((o) => o.id === documentType)?.label ?? "",
-    );
-    if (!yearLabel || !docTypeLabel) {
-      showToast("Year and Document Type are required.", "error");
+    const tiers = belowUnitTiers();
+    // A malformed chain must never route a file to a partial path. It would land
+    // in a folder that exists and looks right, one tier shallower than everything
+    // else in the unit — silent misfiling, discovered only when someone cannot
+    // find the document. Block the upload and name the config row instead.
+    const chainError = validateChain(activeMode()?.chain ?? activeMode()?.levels ?? []);
+    if (chainError) {
+      showToast(
+        `The folder structure for this segment is not set up correctly: ${chainError.message} ` +
+          `Ask an administrator to check the DMS Config mode row.`,
+        "error",
+      );
+      setStatus("");
+      setBusy(false);
+      return;
+    }
+    const { segments, missing: missingTiers } = buildOnDemandSegments(tiers, tierSelections());
+    if (missingTiers.length > 0) {
+      showToast(`${missingTiers.join(" and ")} ${missingTiers.length > 1 ? "are" : "is"} required.`, "error");
       setStatus("");
       setBusy(false);
       return;
     }
 
     setStatus("Preparing destination folders…");
-    const yearFolder = await ensureFolder(
-      context.spHttpClient,
-      siteUrl,
-      unitSru,
-      yearLabel,
-    );
-    if (!yearFolder) {
-      showToast(`Could not create the "${yearLabel}" folder.`, "error");
-      setStatus("");
-      setBusy(false);
-      return;
+    // Walk the chain in order. Each folder inherits the Unit's ACL — nothing below
+    // Unit breaks inheritance, which the client confirmed on 2026-08-06.
+    let parentSru = unitSru;
+    let destFolder: Awaited<ReturnType<typeof ensureFolder>> | undefined;
+    for (const name of segments) {
+      const made = await ensureFolder(context.spHttpClient, siteUrl, parentSru, name);
+      if (!made) {
+        showToast(`Could not create the "${name}" folder.`, "error");
+        setStatus("");
+        setBusy(false);
+        return;
+      }
+      parentSru = made.serverRelativeUrl;
+      destFolder = made;
     }
-    const destFolder = await ensureFolder(
-      context.spHttpClient,
-      siteUrl,
-      yearFolder.serverRelativeUrl,
-      docTypeLabel,
-    );
     if (!destFolder) {
-      showToast(`Could not create the "${docTypeLabel}" folder.`, "error");
+      showToast("No destination folder could be resolved for this upload.", "error");
       setStatus("");
       setBusy(false);
       return;
@@ -1282,15 +1385,28 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           tid: settings.columns.businessSegmentTid,
         },
       };
+      // One entry per below-Unit tier, in chain order. How a tier writes is DERIVED,
+      // not flagged: a tier with a `tidCol` writes a plain label + GUID text pair
+      // exactly as the permissioned levels do, while a tier without one writes a
+      // single managed-metadata column as "Label|GUID". That keeps Year and Document
+      // Type byte-identical to what this form has always sent, and lets a new tier
+      // use either column shape without a migration.
+      const tierFormValues: Array<{ FieldName: string; FieldValue: string }> = [];
+      belowUnitTiers().forEach((t) => {
+        const id = tierValues[t.column] ?? "";
+        const opts = tierOptions(t);
+        const opt = opts.find((o) => o.id === id);
+        const col = t.labelCol ?? t.column;
+        if (!col || !opt) return;
+        if (t.tidCol) {
+          tierFormValues.push({ FieldName: col, FieldValue: opt.label });
+          tierFormValues.push({ FieldName: t.tidCol, FieldValue: opt.id });
+        } else {
+          tierFormValues.push({ FieldName: col, FieldValue: toTaxValue(opts, id) });
+        }
+      });
       const formValues: Array<{ FieldName: string; FieldValue: string }> = [
-        {
-          FieldName: settings.columns.documentType,
-          FieldValue: toTaxValue(options.documentType, documentType),
-        },
-        {
-          FieldName: settings.columns.yearPeriod,
-          FieldValue: toTaxValue(options.yearPeriod, yearPeriod),
-        },
+        ...tierFormValues,
         {
           FieldName: settings.columns.confidentiality,
           FieldValue: toTaxValue(options.confidentiality, confidentiality),
@@ -1671,18 +1787,19 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             ),
           )}
 
-          {renderSelect("Year", true, yearPeriod, setYearPeriod, options.yearPeriod)}
-
-          {/* Document Type completes the path: the deepest level is the permissioned
-              Unit folder, and Year / Document Type are ensure-created beneath it on
-              first use. It sits with Unit and Year because all three decide WHERE the
-              file lands, unlike the fields below, which describe the file itself. */}
-          {renderSelect(
-            "Document Type",
-            true,
-            documentType,
-            setDocumentType,
-            options.documentType,
+          {/* The below-Unit chain, in path order. Each tier is a third-width select,
+              so it flows onto the row the deepest permissioned level started —
+              [Unit][Year][Document Type] today, [Unit][Function][Year] then
+              [Document Type] once a tier is added. Nothing changes on a site that
+              has not configured one. */}
+          {belowUnitTiers().map((t) =>
+            renderSelect(
+              t.label,
+              true,
+              tierValues[t.column] ?? "",
+              (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
+              tierOptions(t),
+            ),
           )}
 
           {/* Graceful empty-state: a segment whose term set has no child terms yet
