@@ -2078,13 +2078,29 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                   <span style={s.staleBadge} title="This mapping points at a term set/term that no longer exists (likely recreated with a new GUID). Delete it and recreate the mapping, then re-run Folder Reconciliation.">stale</span>
                 )}
               </td>
-              <td style={s.td}>{r.Segment ? segmentLabelFor(r.Segment) : "—"}</td>
+              {/* A blank Segment/Tier is never a MISSING value, so it must not read like one.
+                  Two things arrive here termless and they mean opposite extremes:
+                    GLOBAL      — no term because it reaches EVERY segment. The widest grant in
+                                  the table; "not assigned" would read as broken.
+                    non-Folder  — Site/Library/Page rows have no folder to carry a term. Shown
+                                  as the target instead, which is the fact the row was missing. */}
               <td style={s.td}>
-                {!r.UnitTermGuid
-                  ? "—"
-                  : r.UnitTermGuid === r.Segment
-                    ? "(segment level)"
-                    : tierLabels[r.UnitTermGuid] ?? <span style={s.mono}>{r.UnitTermGuid}</span>}
+                {r.Segment
+                  ? segmentLabelFor(r.Segment)
+                  : r.Role === "GLOBAL"
+                    ? <span title="A C-Level global row carries no term: it reaches every segment.">All segments</span>
+                    : <span style={{ color: "#605e5c" }}>Not applicable</span>}
+              </td>
+              <td style={s.td}>
+                {r.UnitTermGuid
+                  ? (r.UnitTermGuid === r.Segment
+                      ? "(segment level)"
+                      : tierLabels[r.UnitTermGuid] ?? <span style={s.mono}>{r.UnitTermGuid}</span>)
+                  : r.Role === "GLOBAL"
+                    ? <span title="Reaches every folder in every segment, at Read, in Documents only.">Every folder</span>
+                    : r.Target
+                      ? <span style={s.mono} title="This row grants entry to a library or page, not a folder.">{r.Target}</span>
+                      : <span style={{ color: "#605e5c" }}>Not applicable</span>}
               </td>
               {/* The label, not the code. "DELS" told an administrator nothing, and being one
                   letter from "DEL" — a DIFFERENT role, in the other library — made it worse than
