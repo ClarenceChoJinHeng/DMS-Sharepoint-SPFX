@@ -17,6 +17,7 @@ import {
   PERSONA_FAMILIES,
   personaByKey,
   personaTouchesStaging,
+  roleLabel,
   Persona,
   normalizeRoleValue,
 } from "../../../shared/groupMapModel";
@@ -1122,6 +1123,25 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   const allSelected = existing.length > 0 && selected.size === existing.length;
 
+  /**
+   * The mappings table, ordered so a persona's rows sit together.
+   *
+   * A COPY — `existing` keeps its load order, which the selection and delete paths key on by
+   * itemId; sorting in place would be fine today and a trap the first time something assumes
+   * index order.
+   *
+   * Group first, then tier, then role. One person's mappings then read as a block instead of
+   * being scattered by whatever order the list returned, which is how "Head of Unit needs two
+   * rows" becomes visible rather than something you have to already know.
+   */
+  const existingForDisplay = existing.slice().sort((a, b) => {
+    const g = (a.GroupName || a.GroupId).localeCompare(b.GroupName || b.GroupId);
+    if (g !== 0) return g;
+    const t = (a.UnitTermGuid ?? "").localeCompare(b.UnitTermGuid ?? "");
+    if (t !== 0) return t;
+    return (a.Role ?? "").localeCompare(b.Role ?? "");
+  });
+
   const toggleAll = (): void => {
     setSelected(allSelected ? new Set() : new Set(existing.map((r) => r.itemId)));
   };
@@ -2042,7 +2062,12 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           {existing.length === 0 && (
             <tr><td style={s.td} colSpan={6}>No mappings yet.</td></tr>
           )}
-          {existing.map((r) => (
+          {/* Sorted for READING, not stored order. A persona is several rows against one group
+              (Head of Unit is Approver + Delete pending files), and scattered through the list
+              they look unrelated — while adjacent with identical Group/Segment/Tier they looked
+              like a duplicate, and an admin nearly deleted one. Adjacent AND with the role
+              spelled out, the difference is the thing you actually see. */}
+          {existingForDisplay.map((r) => (
             <tr key={r.itemId}>
               <td style={s.td}>
                 <input type="checkbox" checked={selected.has(r.itemId)} disabled={busy} onChange={() => toggleSel(r.itemId)} />
@@ -2061,7 +2086,10 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                     ? "(segment level)"
                     : tierLabels[r.UnitTermGuid] ?? <span style={s.mono}>{r.UnitTermGuid}</span>}
               </td>
-              <td style={s.td}>{r.Role}</td>
+              {/* The label, not the code. "DELS" told an administrator nothing, and being one
+                  letter from "DEL" — a DIFFERENT role, in the other library — made it worse than
+                  uninformative. The code is still what is stored and what reconciliation reads. */}
+              <td style={s.td}>{roleLabel(r.Role)}</td>
               <td style={s.td}>
                 {/* Confirmation moved OUT of the row and into a modal (below). Since
                     2026-08-04 deleting the last row for a group also deletes the

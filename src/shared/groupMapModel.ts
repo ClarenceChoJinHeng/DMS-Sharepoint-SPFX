@@ -109,6 +109,38 @@ export const LIBRARY_ENTRY_ROLE: GroupMapRole = "ENTRY";
 export const STAGING_FACING_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS"];
 
 /**
+ * What to SHOW instead of the role code. Display only — the stored `Role` value stays the short
+ * code, because reconciliation keys on it and every existing row already carries it.
+ *
+ * Added 2026-08-09 after an admin nearly deleted a live mapping: two rows read
+ * `GHO_GF_CORU_HOU … APR` and `… DELS`, and "DELS" meant nothing to them. Codes are fine in a
+ * table their author reads daily, and wrong in one an administrator meets twice a year.
+ *
+ * **`DEL` and `DELS` are named by LIBRARY, and never abbreviated toward each other.** The first
+ * instinct was to rename `DELS` to `DEL`, which would have left two roles both shown as "DEL" —
+ * and they are not variations of one capability: `DEL` removes an APPROVED document from
+ * Documents, `DELS` removes a PENDING file from the approval library. Telling those apart is the
+ * entire reason LIBRARY_ROLES exists, so the labels have to do it too. One letter of difference
+ * is what made this confusing in the first place.
+ */
+export const ROLE_LABEL: Record<string, string> = {
+  MEMBER:  "View only",
+  UPL:     "Uploader",
+  APR:     "Approver",
+  DEL:     "Delete approved documents",
+  DELS:    "Delete pending files",
+  GLOBAL:  "C-Level — all segments",
+  SEGVIEW: "C-Level — one segment",
+  ENTRY:   "Library / page entry",
+};
+
+/** The label for a role code, falling back to the code so an unknown value stays visible. */
+export function roleLabel(role: string): string {
+  const r = (role ?? "").trim().toUpperCase();
+  return ROLE_LABEL[r] ?? r;
+}
+
+/**
  * The canonical set of roles that can be DERIVED FROM A GROUP NAME — not, since 2026-08-09, a
  * list of anything the UI offers.
  *
