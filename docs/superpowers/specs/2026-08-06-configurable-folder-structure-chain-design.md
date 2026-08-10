@@ -251,6 +251,63 @@ Responsibilities:
 
 ---
 
+## SubUnit — a CASCADING below-Unit tier (client, 2026-08-10)
+
+The client added `SubUnit` between Unit and Year. Two answers given when asked directly:
+
+- **It inherits the Unit's ACL** — not permissioned, not a security boundary. Two SubUnits under one
+  Unit see each other's documents completely.
+- **Each Unit has its OWN SubUnits** (Option A) — `CORU` has `Compliance` and `Operational Risk`;
+  `Treasury` has `Payments` and `Cash Management`. Not one shared list.
+
+Together those make SubUnit the **first tier that is below the permissioned boundary yet still part
+of the segment term tree**. Every below-Unit tier built so far — Year, Document Type, Function — has
+its own flat term set, and that is what the 2026-08-09 implementation assumed everywhere.
+
+Structure becomes `Business Segment → Department → Unit → SubUnit → Year → Document Type`, with the
+first **four** fixed and only the first **three** permissioned.
+
+### Why this is not free, despite inheriting
+
+**1. Reconciliation would build subunits as ACL'd folders.** `walk()` in `FolderManager.tsx` recurses
+until a term has no children — it has never needed to know where the permissioned tiers stop, because
+nothing was nested below Unit. Nest subunits there and reconciliation creates each with broken
+inheritance and only the owners group on it: invisible to precisely the people who should see it.
+
+It also breaks something quieter. `isLeaf` means "this term produced no child folders", so a Unit
+with subunit terms stops being a leaf and the Year × Document Type grid attaches to **subunits**
+instead of units.
+
+**Fix:** `walk()` stops at the permissioned depth taken from `Levels` —
+`splitChain(levels).permissioned.length` — rather than at the bottom of the term tree. This is the
+right shape regardless of SubUnit: the term tree and the chain currently agree only by coincidence,
+which is exactly what the corrected "reconciliation hazard" section above says.
+
+**2. The form cannot populate a cascading below-Unit tier.** The model's rule is *"`termSet` present
+→ flat options from that set; `termSet` absent → cascade from the previous selection."* The
+2026-08-09 build implemented only the first half below Unit: `tierOptions()` reads a cache keyed by
+term-set GUID, so a tier with no `termSet` renders an **empty dropdown**. Every tier is required, so
+an empty dropdown blocks upload for that segment entirely.
+
+**Fix:** when a below-Unit tier has no `termSet`, load its options as the children of the previously
+selected term inside the mode's own segment term set — the same call the permissioned cascade already
+makes. Needed in `Form.tsx` and `BulkUpload.tsx`.
+
+### What SubUnit still does NOT need
+
+No security groups, no Group Map rows, **no abbreviation rows**. With `walk()` capped, reconciliation
+never sees subunit terms, so they cannot trigger a "term has no abbreviation" report — and their
+folder names come from the sanitized term label, like every other below-Unit tier.
+
+### Ordering constraint
+
+SubUnit sits **above Year**, so adding it to a unit that already holds documents is the two-tree
+migration. The client has not supplied subunit data yet, which leaves a clean window: add it before
+the units are populated and there is nothing to move. Worth putting to them as a timing decision
+rather than letting it be discovered afterwards.
+
+---
+
 ## What changed between 2026-08-06 and 2026-08-09
 
 Facts established after this spec was written that bear on it. None invalidate the design; two remove
