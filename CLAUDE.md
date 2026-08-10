@@ -165,6 +165,21 @@ NBPOL Head Office:             77c3993b-0c3c-4a18-89d9-d69209886322
 > (`94ce322b-…`, lookupStyle "parentMatch") are **retired** by the multi-segment model.
 > WARN: Handover PDF lists e1163337-93bb-4b6e-847e-346f51cc6806 for Project Name — this GUID does NOT exist in the tenant. Do not use it.
 
+> ⚠ **`Documents` MUST carry the same columns under the same internal names.** It was missing
+> `Remark`, `LegallyPrivileged`, `ProjectName` and `Vendor/CustomerName` on ClarenceDMSTesting until
+> 2026-08-10 — for months, with nothing reporting it. Two silent failures came from that one gap,
+> and neither presents as a column problem:
+> 1. **Bulk upload tags NOTHING.** It writes `Remark` + `LegallyPrivileged` unconditionally, and one
+>    unknown field name fails the WHOLE `validateUpdateListItem` call — every column lost, not just
+>    the missing ones. Shows only as a "No tags" badge per file.
+> 2. **Auto-route drops metadata on every approved document.** SharePoint's copy carries over only
+>    columns that EXIST at the destination; the rest vanish with no error and a green run. Approved
+>    files were arriving with no Remark, no ProjectName and no `LegallyPrivileged` — a legal marker,
+>    absent from the library where the documents actually live.
+>
+> Diff `/fields?$select=Title,InternalName` on BOTH libraries when provisioning a site. A matching
+> display name over a DIFFERENT internal name fails exactly like an absent column, and looks right.
+
 ## Approval Document Library — Column Internal Names
 > Re-verified 2026-08-06 against the recreated library (`/fields`). All 15 present and correct.
 > Recreating is what makes this section load-bearing: internal names are derived from the title a

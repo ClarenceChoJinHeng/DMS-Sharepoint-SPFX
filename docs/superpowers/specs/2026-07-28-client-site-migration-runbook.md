@@ -194,6 +194,26 @@ arrival at the client site.
    (browser-console script — preferred over `scripts/Add-DocumentsMetadataColumns.ps1`, since
    PowerShell reliably fails in this environment).
 3. Add the Documents metadata-parity columns (`2026-07-24-documents-metadata-parity-design.md`).
+3a. **VERIFY parity by diffing the two libraries — do not assume step 3 covered it.** On
+   ClarenceDMSTesting, `Documents` was missing `Remark`, `LegallyPrivileged`, `ProjectName` and
+   `Vendor/CustomerName` for months (found 2026-08-10) and **nothing reported it**. Two separate
+   failures came from that one gap:
+   - **Bulk upload tagged nothing.** It writes `Remark` and `LegallyPrivileged` unconditionally, and
+     one unknown field name fails the whole `validateUpdateListItem` call — so EVERY column was lost,
+     not just the missing ones. Surfaces only as a "No tags" badge per file.
+   - **Auto-route silently dropped metadata on every approved document.** SharePoint's copy carries
+     over only columns that EXIST at the destination; the rest vanish with no error and a green run.
+     Approved files had been arriving in `Documents` with no Remark, no ProjectName and no
+     **`LegallyPrivileged`** — a legal marker, absent from the library where documents actually live.
+
+   Diff them:
+   ```
+   GET ‹site›/_api/web/lists/getbytitle('Approval Document')/fields?$select=Title,InternalName&$top=500
+   GET ‹site›/_api/web/lists/getbytitle('Documents')/fields?$select=Title,InternalName&$top=500
+   ```
+   Every column the upload web parts write must exist in **both**, under the **same internal name**.
+   A matching display name over a different internal name fails exactly like an absent column, and
+   looks correct in the UI.
 4. **Read the internal names back** — they are frozen at creation and unpredictable:
    `GET ‹site›/_api/web/lists/getbytitle('Staging')/fields?$select=Title,InternalName&$top=500`.
    Avoid `/` and `&` in display names at creation time (they force `_x002f_` / `_x0026_`).
