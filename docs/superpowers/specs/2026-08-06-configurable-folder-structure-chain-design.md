@@ -411,12 +411,27 @@ re-approval pass, no per-file work, no admin process to re-stamp status. This wa
 that decided whether the migration was cheap or expensive, and it came back cheap — the
 "new uploads only, two shapes side by side" fallback is no longer needed.
 
-**The move re-fires Auto-route — observed in the same test.** A move *modifies* the item, the
-trigger is `When an item is created or modified`, and the condition tests only approval status, so
-the flow copies the file again to the NEW path in `Documents` while the old copy stays at the old
-path. No longer a prediction: it is why a migration run **must disable the flow for its duration and
-move both libraries in one pass**. Nothing about the move itself is at fault, and no flow change
-would fix it — Power Automate offers no "when approval status changes" trigger for SharePoint.
+**The move re-fires Auto-route, and the re-fire FAILS — observed 2026-08-10.** A move *modifies* the
+item, the trigger is `When an item is created or modified`, and the condition tests only approval
+status. The run then failed at `Copy_file` with **"File not found"**: the trigger captured the
+pre-move path, and by the time the action ran the file was elsewhere.
+
+This is better than the outcome predicted here on 2026-08-07, which was a duplicate copy at the new
+path. **No orphan was created** — the flow failed before copying rather than succeeding against the
+wrong path. Recorded precisely because the prediction was wrong: the earlier text asserted the
+orphan as fact, and it was reasoning, not evidence.
+
+Do not read "it fails safely" as "it is safe to leave the flow on during a migration":
+
+- The observed outcome is a **race**. The trigger fires on the old path; whether the copy then finds
+  nothing (fail) or finds a file (orphan) depends on timing that nothing in this system controls.
+  One observation of the benign branch does not establish the other cannot happen.
+- Even the benign branch produces **one failed run per moved file**. A migration across a real
+  library would bury the run history in failures, which is where a genuine problem would then hide.
+
+So the conclusion is unchanged: a migration run **must disable the flow for its duration and move
+both libraries in one pass**. No flow change would fix this — Power Automate offers no "when
+approval status changes" trigger for SharePoint (§4).
 
 ---
 
