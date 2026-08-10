@@ -397,19 +397,26 @@ pending file, then create `TESTUNIT/Human Resource/` and **Move to** the `2026` 
 
 | Check | Expectation | Result |
 |---|---|---|
-| Approval status on the approved file | Still Approved — same list item, path only changed | |
-| Approval status on the pending file | Still Pending | |
-| List item `ID` of both | Unchanged | |
-| Metadata columns (`Unit`, `UnitTid`, `Year`, `Document_x0020_Type`) | Unchanged — stored values, not derived from path | |
-| Version history | Preserved (Move keeps it; Copy would not) | |
-| Documents library copy | Still at the OLD path — the move does not touch Documents | |
-| Permissions on moved files | Unchanged — still inheriting from TESTUNIT | |
-| Read the flow's branch condition | Confirms or clears the duplicate-email question above | |
+| Approval status on the approved file | Still Approved — same list item, path only changed | **CONFIRMED 2026-08-10** — moved `CORU/2024` under `CORU/TESTMOVE/`; file still `Approved` |
+| Metadata columns (`Business Segment`, `Department`, `Unit`) | Unchanged — stored values, not derived from path | **CONFIRMED 2026-08-10** — intact after the move |
+| Approval status on the pending file | Still Pending | not yet run |
+| List item `ID` of both | Unchanged | not yet run |
+| Version history | Preserved (Move keeps it; Copy would not) | not yet run |
+| Documents library copy | Still at the OLD path — the move does not touch Documents | superseded — the flow re-fires, see below |
+| Permissions on moved files | Unchanged — still inheriting from the unit folder | not yet run |
+| Read the flow's branch condition | Confirms or clears the duplicate-email question above | not yet run |
 
-**If approval status does NOT survive the move**, migration becomes materially more expensive —
-every moved file needs re-approving or its status re-stamped by an admin process. That is the point
-at which "new uploads only, two shapes side by side" should be reconsidered, despite the client
-having rejected it.
+**Approval status survives a folder move, so piece 3 is folder moves and nothing else.** No
+re-approval pass, no per-file work, no admin process to re-stamp status. This was the single finding
+that decided whether the migration was cheap or expensive, and it came back cheap — the
+"new uploads only, two shapes side by side" fallback is no longer needed.
+
+**The move re-fires Auto-route — observed in the same test.** A move *modifies* the item, the
+trigger is `When an item is created or modified`, and the condition tests only approval status, so
+the flow copies the file again to the NEW path in `Documents` while the old copy stays at the old
+path. No longer a prediction: it is why a migration run **must disable the flow for its duration and
+move both libraries in one pass**. Nothing about the move itself is at fault, and no flow change
+would fix it — Power Automate offers no "when approval status changes" trigger for SharePoint.
 
 ---
 
