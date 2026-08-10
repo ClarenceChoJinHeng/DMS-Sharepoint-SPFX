@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, sanitizeFolderSegment } from "../../../shared/formModel";
-import { splitChain, validateChain } from "../../../shared/folderChain";
+import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
 import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 
@@ -91,6 +91,9 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
   const [result, setResult] = useState<{ text: string; ok: boolean } | undefined>(undefined);
   const [confirmSave, setConfirmSave] = useState(false);
   const [confirmText, setConfirmText] = useState("");
+  // The Year / Document Type term sets, so a segment still running on the built-in pair can
+  // be shown the levels it is EFFECTIVELY using rather than an empty list.
+  const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
 
   const editingSegment = (): SegmentRow | undefined => segments.filter((x) => x.key === editing)[0];
 
@@ -124,6 +127,25 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
       return row;
     });
     return rows.sort((a, b) => a.label.localeCompare(b.label));
+  };
+
+  /**
+   * The Year / Document Type term-set GUIDs from the `setting` rows the upload form reads.
+   * Needed only to seed the built-in pair when a segment has no below-Unit levels yet.
+   */
+  const loadLegacyTermSets = async (): Promise<{ year: string; docType: string }> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+        `/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'&$top=200`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) return { year: "", docType: "" };
+    const data = await res.json();
+    const rows = (data.value ?? []) as Array<{ Title?: string; SettingValue?: string }>;
+    const get = (key: string): string =>
+      (rows.filter((r) => (r.Title ?? "").trim() === key)[0]?.SettingValue ?? "").trim();
+    return { year: get("termSet_yearPeriod"), docType: get("termSet_documentType") };
   };
 
   /**
@@ -178,6 +200,11 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     // as "the config could not be read" rather than "the list is called something else".
     primeNames(context.spHttpClient, siteUrl)
       .catch(() => undefined)
+      .then(() => loadLegacyTermSets())
+      .then((sets) => {
+        if (!cancelled) setLegacySets(sets);
+      })
+      .catch(() => undefined)
       .then(() => loadSegments())
       .then(async (rows) => {
         if (cancelled) return;
@@ -218,9 +245,25 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
 
   /* ---------- Editing --------------------------------------------------- */
 
+  /**
+   * Open the editor on the levels the segment is EFFECTIVELY using, not just the ones
+   * written down.
+   *
+   * A segment with nothing below Unit runs on the built-in Year → Document Type pair, and
+   * showing an empty list would be a lie with teeth: adding one level would silently
+   * replace that pair, dropping Year and Document Type from every future path. Seeding
+   * the draft with them makes adding a level an insertion into a list the admin can see,
+   * and saving writes all of it explicitly.
+   *
+   * The seeded pair comes from `effectiveOnDemandTiers`, so it carries the same column
+   * names the form has always written and — importantly — NO `tidCol`, because Year and
+   * Document Type are managed-metadata columns that neither have nor want a companion.
+   */
   const startEdit = (seg: SegmentRow): void => {
+    const { permissioned } = splitChain(seg.chain);
+    const below = effectiveOnDemandTiers(seg.chain, legacySets.year, legacySets.docType);
     setEditing(seg.key);
-    setDraft(seg.chain.map((l) => ({ ...l })));
+    setDraft([...permissioned, ...below].map((l) => ({ ...l })));
     setAdding(undefined);
     setResult(undefined);
   };
@@ -366,6 +409,10 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
       const created: string[] = [];
       for (const tier of splitChain(draft).onDemand) {
         const cols: Array<[string, string]> = [];
+        // ensureTextColumn skips a column that already exists, whatever its type — so the
+        // seeded Year / Document Type pair touches nothing, and only genuinely new levels
+        // get columns created. A tier with no tidCol (managed metadata) never gets one
+        // invented for it here.
         if (tier.labelCol) cols.push([tier.labelCol, tier.label]);
         if (tier.tidCol) cols.push([tier.tidCol, `${tier.label} ID`]);
         for (const [internal, display] of cols) {
@@ -469,9 +516,7 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
         <p style={s.label}>Folders below Unit — these inherit the unit&rsquo;s permissions</p>
         {onDemand.length === 0 && (
           <p style={{ fontSize: 12, color: "#8a8886", margin: "0 0 8px", lineHeight: 1.5 }}>
-            None configured, so uploads use the built-in <strong>Year</strong> then{" "}
-            <strong>Document Type</strong> folders. Adding a level here replaces that with the list
-            you build — so include Year and Document Type unless you mean to drop them.
+            None — uploads would stop at the Unit folder. Add at least one level.
           </p>
         )}
         {onDemand.map((l, k) => {
