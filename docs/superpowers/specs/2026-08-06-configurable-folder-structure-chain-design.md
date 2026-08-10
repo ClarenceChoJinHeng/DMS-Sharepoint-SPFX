@@ -300,6 +300,37 @@ No security groups, no Group Map rows, **no abbreviation rows**. With `walk()` c
 never sees subunit terms, so they cannot trigger a "term has no abbreviation" report — and their
 folder names come from the sanitized term label, like every other below-Unit tier.
 
+### Verified on a live site, 2026-08-10
+
+Both fixes built and tested on `/sites/ClarenceDMSTesting` with `Compliance` and `Operational Risk`
+nested under the CORU unit term.
+
+| Check | Result |
+|---|---|
+| SubUnit dropdown cascades from the chosen Unit | **PASS** — showed only CORU's two subunits |
+| Upload lands at the right path | **PASS** — `GF / CORU / Compliance / 2024 / Term Sheet` |
+| **Reconciliation creates NO subunit folders** | **PASS** — no `Compliance`/`Operational Risk` folder in either library, in a full run over all three segments |
+| **Reconciliation reports no missing abbreviations for subunit terms** | **PASS** — they never enter the walk, so they cannot be reported |
+| Unit still treated as the leaf | **PASS** — CORU handled exactly as before |
+
+The two reconciliation rows are the ones that matter: they are the difference between a subunit folder
+that inherits and one carrying only the owners group, invisible to its own unit.
+
+### The guard caught a real authoring mistake
+
+While testing, the `SubUnit` entry was placed **above** `Unit` in the JSON. `validateChain` blocked
+the upload naming both tiers, and nothing was written.
+
+Worth recording *why it was invisible on screen*: the form splits the chain into permissioned and
+below-Unit groups and renders each in order, so `Department → Unit → SubUnit → Year → Document Type`
+displayed perfectly correctly, and the cascade worked, because SubUnit's parent resolves to whatever
+the deepest permissioned selection is. **The form looked right while the config was wrong.** Only
+validation could tell.
+
+Two conclusions. The guard earns its place — this was an accident, not a contrived test. And piece 2
+must make tier position **explicit and editable as a position**, never leave the client authoring an
+order the screen cannot show them; they will make this exact mistake.
+
 ### Ordering constraint
 
 SubUnit sits **above Year**, so adding it to a unit that already holds documents is the two-tree
