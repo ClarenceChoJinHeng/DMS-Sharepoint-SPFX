@@ -47,6 +47,92 @@ interface DraftTier {
   position: number;    // index within the below-Unit list
 }
 
+/**
+ * What we know about the term set ID the admin typed.
+ *
+ * A wrong ID here is the worst failure this screen can produce, because nothing reports
+ * it: the tier saves, reconciliation ignores below-Unit tiers entirely, and the only
+ * symptom is an upload form with one permanently empty dropdown that blocks the upload.
+ * The admin who typed it is not the person who hits it. So resolve the ID against the
+ * term store while they are still looking at the field.
+ *
+ * `unknown` is deliberately NOT treated as bad. A 500 or a dropped connection says
+ * nothing about the ID, and refusing to save on it would block a correct one.
+ */
+type SetCheck =
+  | { state: "blank" }
+  | { state: "malformed" }
+  | { state: "checking" }
+  | { state: "found"; name: string; count: number }
+  | { state: "notfound" }
+  | { state: "unknown"; status: number };
+
+/** Accepts the braced/whitespaced forms people paste out of SharePoint UI and URLs. */
+function normalizeGuid(raw: string): string {
+  return raw.trim().replace(/^[{(]|[)}]$/g, "").trim().toLowerCase();
+}
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Derive the column internal name from the level name — never typed by the admin.
+ *
+ * A SharePoint column's internal name is fixed at creation, permanently, from the title
+ * it is created with. Letting an untrained admin type it offers a decision that cannot
+ * be undone and whose consequence is invisible until a metadata write silently fails.
+ * So strip everything SharePoint would encode, create under that, then set the display
+ * title to what they typed.
+ */
+function columnNameFor(label: string): string {
+  return sanitizeFolderSegment(label).replace(/[^A-Za-z0-9]/g, "");
+}
+
+/** The verdict, in the admin's language. Never shows the GUID back — they can see it. */
+function setCheckMessage(c: SetCheck): string {
+  switch (c.state) {
+    case "checking":
+      return "Checking…";
+    case "malformed":
+      return "That is not a term set ID. Copy the ID from the term store — it looks like " +
+        "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf.";
+    case "notfound":
+      return "No term set with that ID exists on this site. If you copied it from another " +
+        "site, or copied a term instead of the term set, it will not work here.";
+    case "unknown":
+      return `Could not check that ID right now${c.status ? ` (HTTP ${c.status})` : ""}. ` +
+        "You can still add the level, but confirm the ID is right — a wrong one leaves the " +
+        "dropdown empty and blocks uploads.";
+    case "found":
+      return c.count === 0
+        ? `Found "${c.name}", but it has no terms yet. Add the terms before anyone uploads, ` +
+          "or the dropdown will be empty and block them."
+        : `Found "${c.name}" — ${c.count} ${c.count === 1 ? "value" : "values"}.`;
+    default:
+      return "";
+  }
+}
+
+function setCheckStyle(c: SetCheck): React.CSSProperties {
+  if (c.state === "notfound" || c.state === "malformed") return { color: "#a4262c" };
+  if (c.state === "unknown" || (c.state === "found" && c.count === 0)) return { color: "#7a4f00" };
+  if (c.state === "found") return { color: "#0f6c3f" };
+  return {};
+}
+
+/**
+ * Block Add only where the ID is KNOWN to be wrong.
+ *
+ * A `found` set with no terms is allowed through: authoring the tier before the terms is a
+ * legitimate order of work, and the warning says what is still owed. `unknown` is allowed
+ * for the reason on `SetCheck`. `checking` blocks for the few hundred ms it lasts, so a
+ * fast click cannot outrun the verdict.
+ */
+function canAddTier(adding: DraftTier, check: SetCheck): boolean {
+  const label = adding.label.trim();
+  if (!label || !columnNameFor(label)) return false;
+  return check.state !== "malformed" && check.state !== "notfound" && check.state !== "checking";
+}
+
 const s: Record<string, React.CSSProperties> = {
   msg:       { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err:       { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
@@ -94,6 +180,7 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
   // The Year / Document Type term sets, so a segment still running on the built-in pair can
   // be shown the levels it is EFFECTIVELY using rather than an empty list.
   const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
+  const [setCheck, setSetCheck] = useState<SetCheck>({ state: "blank" });
 
   const editingSegment = (): SegmentRow | undefined => segments.filter((x) => x.key === editing)[0];
 
@@ -146,6 +233,46 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     const get = (key: string): string =>
       (rows.filter((r) => (r.Title ?? "").trim() === key)[0]?.SettingValue ?? "").trim();
     return { year: get("termSet_yearPeriod"), docType: get("termSet_documentType") };
+  };
+
+  /**
+   * Resolve a typed term set ID against the term store: does it exist, what is it called,
+   * and how many top-level terms does it hold.
+   *
+   * The name is the part that actually catches mistakes. A GUID either resolving or not
+   * only rules out typos; showing "Year / Period" back when they meant SubUnit catches the
+   * commonest error by far — pasting the ID of the wrong set, or of a TERM instead of a
+   * set. A term's GUID is well-formed and 404s here, which is exactly the outcome we want.
+   *
+   * The count is read separately because a set can exist and be empty, and an empty set
+   * produces the same permanently-blank dropdown as a wrong ID.
+   */
+  const checkTermSet = async (guid: string): Promise<SetCheck> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/v2.1/termStore/sets/${guid}?$select=id,localizedNames`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    // 404 is the answer, not an error: no set with that ID is readable from this site.
+    // Term sets are per-site here, so one copied from another site's config lands here too.
+    if (res.status === 404) return { state: "notfound" };
+    if (!res.ok) return { state: "unknown", status: res.status };
+
+    const set = (await res.json()) as { localizedNames?: Array<{ name?: string }> };
+    const name = (set.localizedNames ?? [])[0]?.name ?? "";
+
+    let count = 0;
+    try {
+      const kids: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/v2.1/termStore/sets/${guid}/children?$select=id`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (kids.ok) count = (((await kids.json()).value ?? []) as unknown[]).length;
+    } catch {
+      count = 0; // reported as "0 terms" below, which is a warning and not a block
+    }
+    return { state: "found", name, count };
   };
 
   /**
@@ -235,6 +362,37 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     };
   }, []);
 
+  // Check the term set ID as it is typed. Debounced, and `stale` discards a slow reply
+  // that lands after the field has moved on — otherwise a verdict about an earlier,
+  // half-typed GUID would sit under the field looking like a verdict about this one.
+  const typedSet = adding === undefined ? "" : adding.termSetGuid;
+  useEffect(() => {
+    const guid = normalizeGuid(typedSet);
+    if (!guid) {
+      setSetCheck({ state: "blank" });
+      return undefined;
+    }
+    if (!GUID_RE.test(guid)) {
+      setSetCheck({ state: "malformed" });
+      return undefined;
+    }
+    setSetCheck({ state: "checking" });
+    let stale = false;
+    const timer = setTimeout(() => {
+      checkTermSet(guid)
+        .then((r) => {
+          if (!stale) setSetCheck(r);
+        })
+        .catch(() => {
+          if (!stale) setSetCheck({ state: "unknown", status: 0 });
+        });
+    }, 400);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [typedSet]);
+
   /**
    * The folder path a chain produces, with level names in brackets where a real value
    * goes. The only representation of the change an admin can reason about — which is why
@@ -292,18 +450,6 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
 
   const removeTier = (index: number): void => setDraft(draft.filter((_l, i) => i !== index));
 
-  /**
-   * Derive the column internal name from the level name — never typed by the admin.
-   *
-   * A SharePoint column's internal name is fixed at creation, permanently, from the title
-   * it is created with. Letting an untrained admin type it offers a decision that cannot
-   * be undone and whose consequence is invisible until a metadata write silently fails.
-   * So strip everything SharePoint would encode, create under that, then set the display
-   * title to what they typed.
-   */
-  const columnNameFor = (label: string): string =>
-    sanitizeFolderSegment(label).replace(/[^A-Za-z0-9]/g, "");
-
   const addTier = (): void => {
     if (!adding) return;
     const label = adding.label.trim();
@@ -318,7 +464,9 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     };
     // Blank term set = values come from the level above (how each Unit gets its own
     // SubUnits). Presence of termSet is the discriminator; there is no extra flag.
-    const set = adding.termSetGuid.trim();
+    // Store the normalized GUID, never the raw paste: braces and stray whitespace survive
+    // into the URL and 404 the term-store call at upload time, long after this screen.
+    const set = normalizeGuid(adding.termSetGuid);
     if (set) tier.termSet = set;
     const next = draft.slice();
     next.splice(permissionedCount(draft) + adding.position, 0, tier);
@@ -583,6 +731,11 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
               unit then offers its own. Paste a <strong>term set ID</strong> if all units pick from
               one shared list.
             </p>
+            {setCheck.state !== "blank" && (
+              <p style={{ ...s.hint, marginTop: 6, fontSize: 12, ...setCheckStyle(setCheck) }}>
+                {setCheckMessage(setCheck)}
+              </p>
+            )}
 
             <label style={s.label} htmlFor="sm-pos">Position</label>
             <select
@@ -610,8 +763,8 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
 
             <div style={{ marginTop: 14 }}>
               <button
-                style={adding.label.trim() && columnNameFor(adding.label) ? s.btn : s.off}
-                disabled={!adding.label.trim() || !columnNameFor(adding.label)}
+                style={canAddTier(adding, setCheck) ? s.btn : s.off}
+                disabled={!canAddTier(adding, setCheck)}
                 onClick={addTier}
               >
                 Add

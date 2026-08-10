@@ -257,7 +257,11 @@ consequence cannot be undone from the tool.
 
 | Condition | Behaviour |
 |---|---|
-| Term set GUID malformed, or returns no terms | Reject on the form, before any write — an empty tier reads as a broken system |
+| Term set ID malformed | Reject on the form. Add stays disabled |
+| Term set ID does not resolve on this site (404) | Reject on the form. Covers the two commonest mistakes: an ID copied from another site (term sets are per-site here) and a TERM's ID pasted instead of the set's — well-formed, and 404s |
+| Term set resolves | Show its **name** and top-level term count back. The name is what actually catches a wrong-but-valid ID; resolution alone only rules out typos |
+| Term set resolves but holds no terms | **Warn, allow.** Authoring the tier before its terms is a legitimate order of work, and the warning states what is still owed. Distinct from the not-found case, which cannot be resolved by adding terms |
+| Term store unreachable / HTTP 5xx | **Warn, allow.** Says nothing about the ID; refusing here would block a correct one |
 | Column exists in one library only | Create the missing one; report both |
 | Column exists with a different type | Refuse; do not attempt conversion. Name the column and the library |
 | Chain fails `validateChain` | Refuse, quoting the rule that failed. Never write a partial chain |
@@ -272,7 +276,11 @@ consequence cannot be undone from the tool.
 - Adding a tier to a **populated** segment: warning shows the correct count; cancel leaves everything
   untouched; confirm writes.
 - Re-saving an unchanged structure: no duplicate columns, no rewritten JSON.
-- A tier whose term set has no terms: refused at the form.
+- Term set ID checks: a wrong-length string is refused; a well-formed but unknown GUID is refused;
+  a TERM's GUID is refused (it 404s); a real set shows its **name** back, which is the check an
+  admin can actually act on; an empty set warns but is allowed.
+- The typed ID is stored **normalized** — a paste with braces or trailing whitespace must not reach
+  `Levels`, where it would 404 at upload time on a site nobody is watching.
 - Permissioned tiers cannot be renamed, reordered or removed through the UI at all.
 - After a new segment: reconciliation provisions it, and a term with no abbreviation is reported and
   skipped rather than guessed.
