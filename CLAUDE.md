@@ -101,8 +101,23 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     The spec claimed otherwise until it was corrected 2026-08-09.
   - Below-Unit folder names come from the **sanitized term label** (`2026`, `Human Resource`), never
     an abbreviation. No abbreviation row, no Folder Map row, no group needed.
-  - **The client cannot use this yet** — the chain is `Levels` JSON and they cannot edit JSON. That
-    is piece 2 (Structure Manager UI), unwritten. Do not demo it as finished.
+  - **Piece 2, the Structure Manager UI, is BUILT and site-verified (2026-08-11)** — spec
+    `2026-08-10-structure-manager-ui-design.md`. Its own web part (`Folder Structure`, GUID
+    `ba145053-…`); the client edits a list of levels and never sees the JSON. Verified on NBPOL:
+    added a level above Year, columns created in BOTH libraries, `Levels` rewritten, upload landed at
+    `NBPOLHO/CDS/UPSUPPORT/testig/2024/Tax Return`.
+    - It **seeds the editor with `effectiveOnDemandTiers`**, not the raw chain. A segment with
+      nothing below Unit is silently running on the built-in `Year → Document Type` pair, so an empty
+      list would make the first added level REPLACE that pair — dropping Year and Document Type from
+      every future path, with no error. The seeded pair carries no `tidCol` on purpose: those two are
+      managed metadata, and a derived `YearTid` would start writing a bare label into a taxonomy field.
+    - The term set ID is **resolved as it is typed** and the set's NAME shown back. Malformed / 404
+      block Add; a resolvable-but-empty set and an unreachable term store warn only. A wrong ID here
+      is this screen's worst failure — reconciliation ignores below-Unit tiers, so it saves clean and
+      surfaces later as one permanently empty dropdown that blocks upload, for someone else.
+    - Columns are created `Options: 8`, so they are **not added to any view** — the client switches
+      them on per view. Deliberate: `12` would reshape every view they arranged, once per level.
+    - Still OUT of scope: adding a whole new segment (slice B) and moving existing subtrees (piece 3).
 - **`SubUnit` (client, 2026-08-10) is a FIXED below-Unit tier that INHERITS — not a new permissioned
   tier.** Structure becomes `Business Segment → Department → Unit → SubUnit → Year → Document Type`,
   and the client may not reorder or remove any of the first four. But SubUnit is authored
@@ -114,9 +129,11 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     Confirmed by the client 2026-08-10 when asked directly. Everything in
     `docs/client/document-visibility-within-a-unit.md` stands unchanged, and "put them in different
     subunits" is NOT a way to separate two people.
-  - **"Fixed" and "permissioned" are now different things**, which matters for piece 2: the UI must
-    lock the first FOUR tiers, but only the first three carry ACLs. Lockedness can no longer be
-    derived from `permissioned`.
+  - **"Fixed" and "permissioned" are now different things.** The Structure Manager currently locks
+    only the PERMISSIONED prefix (Segment/Department/Unit), so SubUnit renders as an editable
+    below-Unit level and the client could reorder or remove it. Acceptable while SubUnit is unbuilt
+    client data; if they are told SubUnit is fixed, lockedness must stop being derived from
+    `permissioned`.
 - **Folder NAMES come from `DMS Term Abbreviation`** (keyed by term GUID), NOT from term labels —
   `GHO/GCA/GMB_STRATCOMMS`. Segment codes come from `StagingFolder` on the DMS Config `mode` row.
   Term labels stay full and drive the upload dropdowns; the full label is written to the

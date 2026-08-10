@@ -601,7 +601,15 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
           (created.length > 0 ? ` Created ${created.length} column(s): ${created.join(", ")}.` : "") +
           ` Uploads use the new shape as soon as people reload the form — no reconciliation run` +
           ` is needed, because folders below Unit are created on demand and inherit the unit's` +
-          ` permissions.`,
+          ` permissions.` +
+          // New columns are created on the items but NOT added to any view, because adding them
+          // there would reshape every view the client arranged — for every level anyone ever adds.
+          // Invisible columns look exactly like the save having failed, so say it here instead.
+          (created.length > 0
+            ? ` The new columns are not shown in any library view yet — that is deliberate, so` +
+              ` existing views keep the layout you set. Add them where you want them using the` +
+              ` view's "Show or hide columns".`
+            : ""),
       });
       cancelEdit();
     } catch (e) {

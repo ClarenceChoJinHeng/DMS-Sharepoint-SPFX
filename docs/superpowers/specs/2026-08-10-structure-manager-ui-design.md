@@ -195,6 +195,16 @@ these states to notice.
 Resolve both library names through `libraryTitle()` / `libraryUrlSegment()`; never hardcode either
 half (gotcha #12).
 
+New columns are created with `Options: 8` (AddToAllContentTypes) and are therefore **not added to
+any view** — deliberately, and **not** `12`, which also adds each one to the default view and would
+reshape every view the client arranged, once per level anyone ever adds. Verified on
+ClarenceDMSTesting 2026-08-11: `Testing` / `TestingTid` were created in both libraries, written
+correctly on upload, and had to be switched on per view via *Show or hide columns*.
+
+The cost is that a freshly created column is invisible where the client looks for it, which is
+indistinguishable from the save having failed — so the success banner states it explicitly. Do not
+"fix" this by switching to `12`.
+
 ### 5.1 A new segment is NOT finished when this form is submitted
 
 The mode row is one of six things a segment needs. The form must end on an explicit checklist, not a
@@ -279,6 +289,10 @@ consequence cannot be undone from the tool.
 - Term set ID checks: a wrong-length string is refused; a well-formed but unknown GUID is refused;
   a TERM's GUID is refused (it 404s); a real set shows its **name** back, which is the check an
   admin can actually act on; an empty set warns but is allowed.
+- **Verified end to end on ClarenceDMSTesting, 2026-08-11.** `Testing` added to NBPOL (own term set
+  `Function2`, one term `testig`), positioned above Year: columns created in both libraries, `Levels`
+  rewritten, and an upload landed at `NBPOLHO / CDS / UPSUPPORT / testig / 2024 / Tax Return` with
+  Year and Document Type intact below the new level — the case the seeding fix exists for.
 - The typed ID is stored **normalized** — a paste with braces or trailing whitespace must not reach
   `Levels`, where it would 404 at upload time on a site nobody is watching.
 - Permissioned tiers cannot be renamed, reordered or removed through the UI at all.
