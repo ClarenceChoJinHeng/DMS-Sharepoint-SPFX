@@ -495,6 +495,8 @@ export default function BulkUpload({
   // shape — a chain that varies in length cannot have one useState per tier.
   const [tierValues, setTierValues] = useState<Record<string, string>>({});
   const [termCache, setTermCache] = useState<Record<string, TermOption[]>>({});
+  // Children keyed by PARENT term GUID — feeds cascading below-Unit tiers (SubUnit).
+  const [childCache, setChildCache] = useState<Record<string, TermOption[]>>({});
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
@@ -550,13 +552,30 @@ export default function BulkUpload({
       settings.termSets.documentType,
     );
 
-  const tierOptions = (t: Level): TermOption[] =>
-    termCache[(t.termSet ?? "").trim().toLowerCase()] ?? [];
+  /** Parent term for a cascading below-Unit tier. Mirrors Form.tsx. */
+  const tierParentTermId = (i: number): string => {
+    if (i > 0) {
+      const tiers = belowUnitTiers();
+      return tierValues[tiers[i - 1].column] ?? "";
+    }
+    const perm = activeMode()?.levels ?? [];
+    return perm.length > 0 ? levelValues[perm.length - 1] ?? "" : "";
+  };
 
+  /** `termSet` present → flat options from that set. Absent → children of the tier above. */
+  const tierOptions = (t: Level, i: number): TermOption[] => {
+    const set = (t.termSet ?? "").trim().toLowerCase();
+    if (set) return termCache[set] ?? [];
+    const parent = tierParentTermId(i).trim().toLowerCase();
+    return parent ? childCache[parent] ?? [] : [];
+  };
+
+  // Drops any selection no longer present in its tier's current options — a stale
+  // SubUnit from a different Unit is reported missing rather than filed under.
   const tierSelections = (): Record<string, TierSelection | undefined> => {
     const out: Record<string, TierSelection | undefined> = {};
-    belowUnitTiers().forEach((t) => {
-      const opt = tierOptions(t).find((o) => o.id === (tierValues[t.column] ?? ""));
+    belowUnitTiers().forEach((t, i) => {
+      const opt = tierOptions(t, i).find((o) => o.id === (tierValues[t.column] ?? ""));
       if (opt) out[t.column] = { id: opt.id, label: opt.label };
     });
     return out;
@@ -606,6 +625,42 @@ export default function BulkUpload({
     };
   }, [uploadMode, modes, settings.termSets.yearPeriod, settings.termSets.documentType]);
 
+  const loadTermChildrenRef = useRef<
+    ((termSetId: string, termId: string) => Promise<TermOption[]>) | undefined
+  >(undefined);
+
+  // Children for cascading below-Unit tiers, keyed on the selections above them, so
+  // choosing a different Unit fetches that unit's own SubUnits. No-op when nothing
+  // cascades, which is every site today. Mirrors Form.tsx.
+  useEffect(() => {
+    const md = activeMode();
+    const load = loadTermChildrenRef.current;
+    if (!md || !load) return;
+    const needed: string[] = [];
+    belowUnitTiers().forEach((t, i) => {
+      if ((t.termSet ?? "").trim()) return;
+      const parent = tierParentTermId(i).trim();
+      if (parent && !childCache[parent.toLowerCase()]) needed.push(parent);
+    });
+    if (needed.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const loaded: Record<string, TermOption[]> = {};
+      for (const parent of needed) {
+        // Per-parent try/catch — Promise.allSettled is unavailable here (gotcha #3).
+        try {
+          loaded[parent.toLowerCase()] = await load(md.termSetGuid, parent);
+        } catch {
+          loaded[parent.toLowerCase()] = [];
+        }
+      }
+      if (!cancelled) setChildCache((prev) => ({ ...prev, ...loaded }));
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [uploadMode, modes, levelValues, tierValues, childCache]);
+
   const loadTermChildren = async (
     termSetId: string,
     termId: string,
@@ -625,6 +680,9 @@ export default function BulkUpload({
       }),
     );
   };
+
+  // Hand the loader to the cascading-tier effect above — a const arrow is not hoisted.
+  loadTermChildrenRef.current = loadTermChildren;
 
   // Resolve the full ancestor chain [top ... leaf] for a unit term, as {label,id}.
   const loadTermPath = async (
@@ -1649,8 +1707,8 @@ export default function BulkUpload({
       // lets the runner stay agnostic about how deep the chain is.
       tierSegments: buildOnDemandSegments(belowUnitTiers(), tierSelections()).segments,
       tierFormValues: belowUnitTiers().reduce(
-        (acc: Array<{ FieldName: string; FieldValue: string }>, t) => {
-          const opts = tierOptions(t);
+        (acc: Array<{ FieldName: string; FieldValue: string }>, t, i) => {
+          const opts = tierOptions(t, i);
           const opt = opts.find((o) => o.id === (tierValues[t.column] ?? ""));
           const col = t.labelCol ?? t.column;
           if (!col || !opt) return acc;
@@ -2121,14 +2179,16 @@ export default function BulkUpload({
           {/* The below-Unit chain, in path order — third-width, so tiers flow onto
               the row the deepest permissioned level starts. Unchanged on a site
               that has configured none. */}
-          {belowUnitTiers().map((t) =>
+          {belowUnitTiers().map((t, i) =>
             renderSelect(
               t.label,
               true,
               tierValues[t.column] ?? "",
               (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
-              tierOptions(t),
-              busy,
+              tierOptions(t, i),
+              // A cascading tier stays disabled until the tier above it is chosen,
+              // so SubUnit greys out rather than offering an empty list.
+              busy || (!(t.termSet ?? "").trim() && !tierParentTermId(i)),
             ),
           )}
 

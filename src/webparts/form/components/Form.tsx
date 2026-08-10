@@ -383,6 +383,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   // Term options keyed by TERM SET GUID, so two tiers bound to the same set cost
   // one fetch and switching modes reuses whatever is already loaded.
   const [termCache, setTermCache] = useState<Record<string, TermOption[]>>({});
+  // Children of a term, keyed by PARENT term GUID — feeds cascading below-Unit tiers
+  // (SubUnit), whose options depend on the Unit chosen rather than on a term set.
+  const [childCache, setChildCache] = useState<Record<string, TermOption[]>>({});
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
@@ -447,14 +450,49 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       settings.termSets.documentType,
     );
 
-  const tierOptions = (t: Level): TermOption[] =>
-    termCache[(t.termSet ?? "").trim().toLowerCase()] ?? [];
+  /**
+   * The term whose CHILDREN feed a cascading below-Unit tier (one with no `termSet`).
+   * For the first such tier that is the deepest permissioned selection — the Unit;
+   * for a later one, the tier immediately above it.
+   *
+   * This is what makes the client's SubUnit work: each Unit has its own SubUnits, so
+   * those terms live inside the segment tree rather than in a flat set of their own.
+   */
+  const tierParentTermId = (i: number): string => {
+    if (i > 0) {
+      const tiers = belowUnitTiers();
+      return tierValues[tiers[i - 1].column] ?? "";
+    }
+    const perm = activeMode()?.levels ?? [];
+    return perm.length > 0 ? levelValues[perm.length - 1] ?? "" : "";
+  };
 
+  /**
+   * Options for one below-Unit tier. `termSet` present → that set's top terms, flat.
+   * Absent → the children of the term above, cascading. Presence of `termSet` is the
+   * discriminator; there is no separate flag (see the `termSet` comment on `Level`).
+   */
+  const tierOptions = (t: Level, i: number): TermOption[] => {
+    const set = (t.termSet ?? "").trim().toLowerCase();
+    if (set) return termCache[set] ?? [];
+    const parent = tierParentTermId(i).trim().toLowerCase();
+    return parent ? childCache[parent] ?? [] : [];
+  };
+
+  /**
+   * Only selections that still exist in their tier's CURRENT options are returned.
+   *
+   * Deliberate, and the safety net for a stale cascade: change the Unit and a
+   * previously chosen SubUnit belongs to a different unit entirely. Rather than filing
+   * under it, the selection drops out here, `buildOnDemandSegments` reports that tier
+   * as missing, and the upload is blocked naming it. The loud failure — never a file
+   * written into another unit's subunit folder.
+   */
   const tierSelections = (): Record<string, TierSelection | undefined> => {
     const out: Record<string, TierSelection | undefined> = {};
-    belowUnitTiers().forEach((t) => {
+    belowUnitTiers().forEach((t, i) => {
       const id = tierValues[t.column] ?? "";
-      const opt = tierOptions(t).find((o) => o.id === id);
+      const opt = tierOptions(t, i).find((o) => o.id === id);
       if (opt) out[t.column] = { id: opt.id, label: opt.label };
     });
     return out;
@@ -508,6 +546,43 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     };
   }, [uploadMode, modes, settings.termSets.yearPeriod, settings.termSets.documentType]);
 
+  const loadTermChildrenRef = useRef<
+    ((termSetId: string, termId: string) => Promise<TermOption[]>) | undefined
+  >(undefined);
+
+  // Load the children a cascading below-Unit tier needs. Keyed on the selections
+  // above it, so choosing a different Unit fetches that unit's own SubUnits.
+  // Does nothing at all when no tier cascades, which is every site today.
+  useEffect(() => {
+    const md = activeMode();
+    const load = loadTermChildrenRef.current;
+    if (!md || !load) return;
+    const needed: string[] = [];
+    belowUnitTiers().forEach((t, i) => {
+      if ((t.termSet ?? "").trim()) return;
+      const parent = tierParentTermId(i).trim();
+      if (parent && !childCache[parent.toLowerCase()]) needed.push(parent);
+    });
+    if (needed.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      const loaded: Record<string, TermOption[]> = {};
+      for (const parent of needed) {
+        // Per-parent try/catch: Promise.allSettled is unavailable on this tsconfig
+        // (gotcha #3), and one unreachable tier must not blank the others.
+        try {
+          loaded[parent.toLowerCase()] = await load(md.termSetGuid, parent);
+        } catch {
+          loaded[parent.toLowerCase()] = [];
+        }
+      }
+      if (!cancelled) setChildCache((prev) => ({ ...prev, ...loaded }));
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [uploadMode, modes, levelValues, tierValues, childCache]);
+
   const loadTermChildren = async (
     termSetId: string,
     termId: string,
@@ -527,6 +602,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }),
     );
   };
+
+  // Hand the loader to the cascading-tier effect above. A const arrow is not hoisted,
+  // so the effect cannot call it directly without a use-before-define error, and
+  // moving the effect below every loader would separate it from the other tier state.
+  loadTermChildrenRef.current = loadTermChildren;
 
   // Resolve the full ancestor chain [top ... leaf] for a unit term, as {label,id}.
   const loadTermPath = async (
@@ -1392,9 +1472,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // Type byte-identical to what this form has always sent, and lets a new tier
       // use either column shape without a migration.
       const tierFormValues: Array<{ FieldName: string; FieldValue: string }> = [];
-      belowUnitTiers().forEach((t) => {
+      belowUnitTiers().forEach((t, i) => {
         const id = tierValues[t.column] ?? "";
-        const opts = tierOptions(t);
+        const opts = tierOptions(t, i);
         const opt = opts.find((o) => o.id === id);
         const col = t.labelCol ?? t.column;
         if (!col || !opt) return;
@@ -1792,13 +1872,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               [Unit][Year][Document Type] today, [Unit][Function][Year] then
               [Document Type] once a tier is added. Nothing changes on a site that
               has not configured one. */}
-          {belowUnitTiers().map((t) =>
+          {belowUnitTiers().map((t, i) =>
             renderSelect(
               t.label,
               true,
               tierValues[t.column] ?? "",
               (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
-              tierOptions(t),
+              tierOptions(t, i),
+              // A cascading tier is dead until the tier above it is chosen — same
+              // rule the permissioned cascade uses, so SubUnit greys out until Unit
+              // is picked instead of offering an empty list.
+              !(t.termSet ?? "").trim() && !tierParentTermId(i),
             ),
           )}
 

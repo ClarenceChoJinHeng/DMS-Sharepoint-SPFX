@@ -1843,6 +1843,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         const levelNames =
           levelNamesBySet.get((mode.termSetGuid ?? "").trim().toLowerCase()) ??
           FALLBACK_LEVEL_NAMES;
+        // How deep the PERMISSIONED tiers go — `levelNames` is already filtered to
+        // them (see loadReconLevelNames). Caps the walk below.
+        //
+        // Until 2026-08-10 the walk recursed until a term had no children, which was
+        // correct only because nothing was ever nested below Unit. The client's
+        // SubUnit tier nests INSIDE the segment term set but INHERITS the unit's ACL,
+        // so an uncapped walk would create an ACL'd folder per subunit carrying only
+        // the owners group — invisible to the people who need it — and would stop
+        // Units being leaves, moving the Year × Document Type grid onto subunits.
+        // The term tree and the Levels chain now agree deliberately, not by accident.
+        const permissionedDepth = Math.max(1, levelNames.length);
         const seg = (termGuid: string, label: string, depth: number): string | undefined => {
           const abbrev = lookupAbbrev(abbrevIndex, termGuid);
           if (abbrev === undefined) {
@@ -1876,6 +1887,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
           pathAncestors: string[],
           termAncestors: string[],
         ): Promise<boolean> => {
+          // STOP at the permissioned boundary. `ancestors` excludes top, so a direct
+          // child of top is depth 2. Returning false (rather than skipping inside the
+          // loop) is what makes the caller mark this term a LEAF — the deepest
+          // permissioned folder, which is the upload target and where the grid hangs.
+          // Anything deeper in the term tree is a below-Unit tier: created on demand
+          // by the upload form, inheriting this folder's ACL, never provisioned here.
+          if (ancestors.length + 2 > permissionedDepth) return false;
           const children = await loadReconChildren(mode.termSetGuid, parentId);
           for (const child of children) {
             // ancestors excludes `top`, so a direct child of top has depth 2.

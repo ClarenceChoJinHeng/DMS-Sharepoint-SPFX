@@ -120,6 +120,38 @@ describe("needsLegacyBelowUnit — the compatibility bridge", () => {
   });
 });
 
+describe("permissioned depth — what caps reconciliation's term-tree walk", () => {
+  const subUnit: Level = {
+    label: "SubUnit", column: "SubUnit", labelCol: "SubUnit", tidCol: "SubUnitTid",
+    permissioned: false, // cascades: no termSet, terms live under each Unit
+  };
+
+  // FolderManager derives its walk depth from the permissioned tiers. If SubUnit ever
+  // counted here, reconciliation would create an ACL'd folder per subunit carrying only
+  // the owners group — invisible to the people who need it — and Units would stop being
+  // leaves, moving the Year x Document Type grid onto subunits.
+  it("counts Department and Unit but not SubUnit", () => {
+    expect(splitChain([dept, unit, subUnit, year, docType]).permissioned).toHaveLength(2);
+  });
+
+  it("is unchanged by adding below-Unit tiers", () => {
+    const before = splitChain([dept, unit]).permissioned.length;
+    const after = splitChain([dept, unit, subUnit, year, docType]).permissioned.length;
+    expect(after).toBe(before);
+  });
+
+  // A cascading tier is legal: termSet absent means "children of the tier above",
+  // which is exactly how each Unit gets its own SubUnits.
+  it("accepts a below-Unit tier with no termSet", () => {
+    expect(validateChain([dept, unit, subUnit, year, docType])).toBeUndefined();
+    expect(subUnit.termSet).toBeUndefined();
+  });
+
+  it("still rejects a permissioned tier below SubUnit", () => {
+    expect(validateChain([dept, subUnit, unit])?.code).toBe("prefix-not-contiguous");
+  });
+});
+
 describe("effectiveOnDemandTiers — one walk for migrated and unmigrated sites", () => {
   // The regression the spec asks for: every live mode row is [Department, Unit],
   // and those sites must keep producing exactly Year -> Document Type, with the
