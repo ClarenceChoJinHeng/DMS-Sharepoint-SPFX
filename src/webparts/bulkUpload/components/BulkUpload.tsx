@@ -576,12 +576,9 @@ export default function BulkUpload({
         parents.push("");
         continue;
       }
-      if (!parent) {
-        tiers.push(t);
-        parents.push("");
-        unresolved.push(t.label);
-        continue;
-      }
+      // Hidden, not disabled, until the tier above is chosen — whether it applies is not
+      // yet knowable. The tier above is blank and already required, so nothing is lost.
+      if (!parent) continue;
       const entry = childCache[parent.trim().toLowerCase()];
       const decision = decideTier(t, entry !== undefined && entry.ok ? entry.terms.length : undefined);
       if (decision === "skip") continue;

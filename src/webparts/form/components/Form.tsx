@@ -494,14 +494,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         parents.push("");
         continue;
       }
-      // Until the tier above is chosen there is nothing to look up. Keep the tier on
-      // screen, disabled — hiding it and then revealing it as they pick would be worse.
-      if (!parent) {
-        tiers.push(t);
-        parents.push("");
-        unresolved.push(t.label);
-        continue;
-      }
+      // Until the tier above is chosen, whether this tier even APPLIES is unknown — so it
+      // is hidden rather than shown disabled. Showing it would assert "this unit has
+      // subunits" before anything says so, and on a unit that turns out to have none it
+      // would then disappear, which reads as the form losing a field.
+      //
+      // Safe to leave out of `unresolved`: with no parent selected the tier above is itself
+      // blank and already required, so the upload is blocked by that instead.
+      if (!parent) continue;
       const entry = childCache[parent.trim().toLowerCase()];
       const decision = decideTier(t, entry !== undefined && entry.ok ? entry.terms.length : undefined);
       if (decision === "skip") continue;
