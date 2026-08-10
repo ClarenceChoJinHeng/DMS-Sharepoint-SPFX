@@ -67,6 +67,10 @@
         {
           "entrypoint": "./lib/webparts/userAccess/PageAccessWebPart.js",
           "manifest": "./src/webparts/userAccess/PageAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/FolderStructureWebPart.js",
+          "manifest": "./src/webparts/userAccess/FolderStructureWebPart.manifest.json"
         }
       ]
     }
