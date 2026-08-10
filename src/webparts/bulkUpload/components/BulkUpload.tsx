@@ -21,6 +21,7 @@ import {
 } from "../../../shared/formModel";
 import {
   buildOnDemandSegments,
+  decideTier,
   effectiveOnDemandTiers,
   splitChain,
   TierSelection,
@@ -496,7 +497,9 @@ export default function BulkUpload({
   const [tierValues, setTierValues] = useState<Record<string, string>>({});
   const [termCache, setTermCache] = useState<Record<string, TermOption[]>>({});
   // Children keyed by PARENT term GUID — feeds cascading below-Unit tiers (SubUnit).
-  const [childCache, setChildCache] = useState<Record<string, TermOption[]>>({});
+  // `ok` separates "this term has no children" (a real answer that SKIPS the tier) from
+  // "the call failed" (unknown, must block). Mirrors Form.tsx.
+  const [childCache, setChildCache] = useState<Record<string, { terms: TermOption[]; ok: boolean }>>({});
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
@@ -552,30 +555,59 @@ export default function BulkUpload({
       settings.termSets.documentType,
     );
 
-  /** Parent term for a cascading below-Unit tier. Mirrors Form.tsx. */
-  const tierParentTermId = (i: number): string => {
-    if (i > 0) {
-      const tiers = belowUnitTiers();
-      return tierValues[tiers[i - 1].column] ?? "";
-    }
+  const permissionedLeafTerm = (): string => {
     const perm = activeMode()?.levels ?? [];
     return perm.length > 0 ? levelValues[perm.length - 1] ?? "" : "";
   };
 
-  /** `termSet` present → flat options from that set. Absent → children of the tier above. */
-  const tierOptions = (t: Level, i: number): TermOption[] => {
-    const set = (t.termSet ?? "").trim().toLowerCase();
-    if (set) return termCache[set] ?? [];
-    const parent = tierParentTermId(i).trim().toLowerCase();
-    return parent ? childCache[parent] ?? [] : [];
+  /**
+   * Which below-Unit tiers apply to this path, and each one's parent term. A cascading
+   * tier applies only where the term above HAS children — not every Unit has SubUnits.
+   * `unresolved` means "not known yet or lookup failed", and must block. Mirrors Form.tsx.
+   */
+  const tierPlan = (): { tiers: Level[]; parents: string[]; unresolved: string[] } => {
+    const tiers: Level[] = [];
+    const parents: string[] = [];
+    const unresolved: string[] = [];
+    let parent = permissionedLeafTerm();
+    for (const t of belowUnitTiers()) {
+      if ((t.termSet ?? "").trim()) {
+        tiers.push(t);
+        parents.push("");
+        continue;
+      }
+      if (!parent) {
+        tiers.push(t);
+        parents.push("");
+        unresolved.push(t.label);
+        continue;
+      }
+      const entry = childCache[parent.trim().toLowerCase()];
+      const decision = decideTier(t, entry !== undefined && entry.ok ? entry.terms.length : undefined);
+      if (decision === "skip") continue;
+      tiers.push(t);
+      parents.push(parent);
+      if (decision === "unresolved") unresolved.push(t.label);
+      parent = tierValues[t.column] ?? "";
+    }
+    return { tiers, parents, unresolved };
   };
 
-  // Drops any selection no longer present in its tier's current options — a stale
-  // SubUnit from a different Unit is reported missing rather than filed under.
+  /** `termSet` present → flat options from that set. Absent → children of the tier above. */
+  const tierOptions = (t: Level, parent: string): TermOption[] => {
+    const set = (t.termSet ?? "").trim().toLowerCase();
+    if (set) return termCache[set] ?? [];
+    const key = parent.trim().toLowerCase();
+    return key ? childCache[key]?.terms ?? [] : [];
+  };
+
+  // Drops any selection no longer present in its tier's current options — a stale SubUnit
+  // from a different Unit is reported missing rather than filed under.
   const tierSelections = (): Record<string, TierSelection | undefined> => {
     const out: Record<string, TierSelection | undefined> = {};
-    belowUnitTiers().forEach((t, i) => {
-      const opt = tierOptions(t, i).find((o) => o.id === (tierValues[t.column] ?? ""));
+    const plan = tierPlan();
+    plan.tiers.forEach((t, i) => {
+      const opt = tierOptions(t, plan.parents[i]).find((o) => o.id === (tierValues[t.column] ?? ""));
       if (opt) out[t.column] = { id: opt.id, label: opt.label };
     });
     return out;
@@ -637,21 +669,25 @@ export default function BulkUpload({
     const load = loadTermChildrenRef.current;
     if (!md || !load) return;
     const needed: string[] = [];
-    belowUnitTiers().forEach((t, i) => {
+    const plan = tierPlan();
+    plan.tiers.forEach((t, i) => {
       if ((t.termSet ?? "").trim()) return;
-      const parent = tierParentTermId(i).trim();
+      const parent = plan.parents[i].trim();
       if (parent && !childCache[parent.toLowerCase()]) needed.push(parent);
     });
     if (needed.length === 0) return;
     let cancelled = false;
     (async () => {
-      const loaded: Record<string, TermOption[]> = {};
+      const loaded: Record<string, { terms: TermOption[]; ok: boolean }> = {};
       for (const parent of needed) {
         // Per-parent try/catch — Promise.allSettled is unavailable here (gotcha #3).
+        //
+        // ok:false on failure, NOT an empty list. Empty is a real answer that skips the
+        // tier, so recording a failure as empty would silently shorten the path.
         try {
-          loaded[parent.toLowerCase()] = await load(md.termSetGuid, parent);
+          loaded[parent.toLowerCase()] = { terms: await load(md.termSetGuid, parent), ok: true };
         } catch {
-          loaded[parent.toLowerCase()] = [];
+          loaded[parent.toLowerCase()] = { terms: [], ok: false };
         }
       }
       if (!cancelled) setChildCache((prev) => ({ ...prev, ...loaded }));
@@ -1312,7 +1348,7 @@ export default function BulkUpload({
     });
     // Derived from the chain, not hardcoded. Every tier is required — an optional
     // one left blank files documents at inconsistent depths inside a single unit.
-    missing.push(...buildOnDemandSegments(belowUnitTiers(), tierSelections()).missing);
+    missing.push(...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing);
     if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidential Level");
     return missing;
@@ -1705,10 +1741,12 @@ export default function BulkUpload({
       // The below-Unit path and its metadata, resolved once here and carried to the
       // runner. Passing the ordered segments rather than two named labels is what
       // lets the runner stay agnostic about how deep the chain is.
-      tierSegments: buildOnDemandSegments(belowUnitTiers(), tierSelections()).segments,
-      tierFormValues: belowUnitTiers().reduce(
+      tierSegments: buildOnDemandSegments(tierPlan().tiers, tierSelections()).segments,
+      // Only APPLICABLE tiers write metadata: a unit with no subunits leaves SubUnit and
+      // SubUnitTid empty rather than storing a value from another unit's list.
+      tierFormValues: tierPlan().tiers.reduce(
         (acc: Array<{ FieldName: string; FieldValue: string }>, t, i) => {
-          const opts = tierOptions(t, i);
+          const opts = tierOptions(t, tierPlan().parents[i]);
           const opt = opts.find((o) => o.id === (tierValues[t.column] ?? ""));
           const col = t.labelCol ?? t.column;
           if (!col || !opt) return acc;
@@ -2179,18 +2217,20 @@ export default function BulkUpload({
           {/* The below-Unit chain, in path order — third-width, so tiers flow onto
               the row the deepest permissioned level starts. Unchanged on a site
               that has configured none. */}
-          {belowUnitTiers().map((t, i) =>
-            renderSelect(
+          {/* Only the tiers that apply here — a unit with no subunits shows no SubUnit
+              dropdown at all rather than an empty required one. */}
+          {tierPlan().tiers.map((t, i) => {
+            const parent = tierPlan().parents[i];
+            return renderSelect(
               t.label,
               true,
               tierValues[t.column] ?? "",
               (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
-              tierOptions(t, i),
-              // A cascading tier stays disabled until the tier above it is chosen,
-              // so SubUnit greys out rather than offering an empty list.
-              busy || (!(t.termSet ?? "").trim() && !tierParentTermId(i)),
-            ),
-          )}
+              tierOptions(t, parent),
+              // A cascading tier stays disabled until the tier above it is chosen.
+              busy || (!(t.termSet ?? "").trim() && !parent),
+            );
+          })}
 
           {/* Graceful empty-state: a segment whose term set has no child terms yet
               (the non-GHO Head Offices before their Department/Unit trees are

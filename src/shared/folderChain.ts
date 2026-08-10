@@ -156,6 +156,36 @@ export function effectiveOnDemandTiers(
   ];
 }
 
+/** Whether a below-Unit tier applies to the path currently being built. */
+export type TierDecision = "keep" | "skip" | "unresolved";
+
+/**
+ * Decide whether a below-Unit tier applies, given how many options it actually has.
+ *
+ * Exists because the client confirmed on 2026-08-10 that **not every Unit has SubUnits**.
+ * A tier that cascades from the term above therefore applies only where that term has
+ * children: `CORU` has subunits and must use one; `GTAX` has none, and its files sit
+ * directly under the unit.
+ *
+ * This keeps the original "every tier is required" rule intact where it mattered. That
+ * rule existed so files could not scatter across different depths *within one unit* — and
+ * under this decision each unit stays internally consistent, because the answer comes from
+ * the unit's own terms rather than from an uploader's judgement.
+ *
+ * `optionCount === undefined` means NOT KNOWN — not loaded yet, or the term-store call
+ * failed. That returns `unresolved`, and callers MUST block the upload rather than treat
+ * it as "no subunits". Conflating the two would file a document one tier too shallow, into
+ * a folder that exists and looks correct, on nothing worse than a transient network error.
+ *
+ * A tier with its own `termSet` is always kept: an empty flat set is a configuration fault
+ * to surface, not a signal that the tier does not apply here.
+ */
+export function decideTier(level: Level, optionCount: number | undefined): TierDecision {
+  if ((level.termSet ?? "").trim()) return "keep";
+  if (optionCount === undefined) return "unresolved";
+  return optionCount === 0 ? "skip" : "keep";
+}
+
 /** What reconciliation needs to know before pre-creating a grid of below-Unit folders. */
 export interface GridPlan {
   /** Total folders across every tier — what the progress estimate counts. */

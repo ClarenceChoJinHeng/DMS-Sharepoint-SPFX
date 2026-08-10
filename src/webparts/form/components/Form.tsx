@@ -23,6 +23,7 @@ import {
 } from "../../../shared/formModel";
 import {
   buildOnDemandSegments,
+  decideTier,
   effectiveOnDemandTiers,
   splitChain,
   TierSelection,
@@ -385,7 +386,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [termCache, setTermCache] = useState<Record<string, TermOption[]>>({});
   // Children of a term, keyed by PARENT term GUID — feeds cascading below-Unit tiers
   // (SubUnit), whose options depend on the Unit chosen rather than on a term set.
-  const [childCache, setChildCache] = useState<Record<string, TermOption[]>>({});
+  //
+  // `ok` separates "this term genuinely has no children" from "the call failed". Not every
+  // Unit has SubUnits, so an empty list is a real answer that SKIPS the tier — and if a
+  // failure produced that same empty list, a transient error would file a document one tier
+  // too shallow, into a folder that exists and looks right. Failures stay unresolved and
+  // block the upload instead.
+  const [childCache, setChildCache] = useState<Record<string, { terms: TermOption[]; ok: boolean }>>({});
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
@@ -458,25 +465,64 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * This is what makes the client's SubUnit work: each Unit has its own SubUnits, so
    * those terms live inside the segment tree rather than in a flat set of their own.
    */
-  const tierParentTermId = (i: number): string => {
-    if (i > 0) {
-      const tiers = belowUnitTiers();
-      return tierValues[tiers[i - 1].column] ?? "";
-    }
+  /** The deepest permissioned selection — the Unit, in every configured segment so far. */
+  const permissionedLeafTerm = (): string => {
     const perm = activeMode()?.levels ?? [];
     return perm.length > 0 ? levelValues[perm.length - 1] ?? "" : "";
   };
 
   /**
-   * Options for one below-Unit tier. `termSet` present → that set's top terms, flat.
+   * Walk the below-Unit chain, dropping tiers that do not apply here.
+   *
+   * A cascading tier applies only where the term above it HAS children — not every Unit
+   * has SubUnits (client, 2026-08-10). Each tier's parent is the previous *applicable*
+   * tier's selection, so a skipped tier does not orphan the one beneath it.
+   *
+   * `unresolved` collects tiers whose options are not known yet, or whose lookup failed.
+   * Those must block the upload: treating "unknown" as "does not apply" would quietly
+   * file the document a level too shallow.
+   */
+  const tierPlan = (): { tiers: Level[]; parents: string[]; unresolved: string[] } => {
+    const tiers: Level[] = [];
+    const parents: string[] = [];
+    const unresolved: string[] = [];
+    let parent = permissionedLeafTerm();
+    for (const t of belowUnitTiers()) {
+      const flat = (t.termSet ?? "").trim();
+      if (flat) {
+        tiers.push(t);
+        parents.push("");
+        continue;
+      }
+      // Until the tier above is chosen there is nothing to look up. Keep the tier on
+      // screen, disabled — hiding it and then revealing it as they pick would be worse.
+      if (!parent) {
+        tiers.push(t);
+        parents.push("");
+        unresolved.push(t.label);
+        continue;
+      }
+      const entry = childCache[parent.trim().toLowerCase()];
+      const decision = decideTier(t, entry !== undefined && entry.ok ? entry.terms.length : undefined);
+      if (decision === "skip") continue;
+      tiers.push(t);
+      parents.push(parent);
+      if (decision === "unresolved") unresolved.push(t.label);
+      parent = tierValues[t.column] ?? "";
+    }
+    return { tiers, parents, unresolved };
+  };
+
+  /**
+   * Options for one applicable tier. `termSet` present → that set's top terms, flat.
    * Absent → the children of the term above, cascading. Presence of `termSet` is the
    * discriminator; there is no separate flag (see the `termSet` comment on `Level`).
    */
-  const tierOptions = (t: Level, i: number): TermOption[] => {
+  const tierOptions = (t: Level, parent: string): TermOption[] => {
     const set = (t.termSet ?? "").trim().toLowerCase();
     if (set) return termCache[set] ?? [];
-    const parent = tierParentTermId(i).trim().toLowerCase();
-    return parent ? childCache[parent] ?? [] : [];
+    const key = parent.trim().toLowerCase();
+    return key ? childCache[key]?.terms ?? [] : [];
   };
 
   /**
@@ -490,9 +536,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    */
   const tierSelections = (): Record<string, TierSelection | undefined> => {
     const out: Record<string, TierSelection | undefined> = {};
-    belowUnitTiers().forEach((t, i) => {
+    const plan = tierPlan();
+    plan.tiers.forEach((t, i) => {
       const id = tierValues[t.column] ?? "";
-      const opt = tierOptions(t, i).find((o) => o.id === id);
+      const opt = tierOptions(t, plan.parents[i]).find((o) => o.id === id);
       if (opt) out[t.column] = { id: opt.id, label: opt.label };
     });
     return out;
@@ -558,22 +605,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const load = loadTermChildrenRef.current;
     if (!md || !load) return;
     const needed: string[] = [];
-    belowUnitTiers().forEach((t, i) => {
+    const plan = tierPlan();
+    plan.tiers.forEach((t, i) => {
       if ((t.termSet ?? "").trim()) return;
-      const parent = tierParentTermId(i).trim();
+      const parent = plan.parents[i].trim();
       if (parent && !childCache[parent.toLowerCase()]) needed.push(parent);
     });
     if (needed.length === 0) return;
     let cancelled = false;
     (async () => {
-      const loaded: Record<string, TermOption[]> = {};
+      const loaded: Record<string, { terms: TermOption[]; ok: boolean }> = {};
       for (const parent of needed) {
         // Per-parent try/catch: Promise.allSettled is unavailable on this tsconfig
         // (gotcha #3), and one unreachable tier must not blank the others.
+        //
+        // ok:false on failure, NOT an empty list. An empty list is a real answer that
+        // skips the tier, so a failure recorded as empty would silently shorten the path.
         try {
-          loaded[parent.toLowerCase()] = await load(md.termSetGuid, parent);
+          loaded[parent.toLowerCase()] = { terms: await load(md.termSetGuid, parent), ok: true };
         } catch {
-          loaded[parent.toLowerCase()] = [];
+          loaded[parent.toLowerCase()] = { terms: [], ok: false };
         }
       }
       if (!cancelled) setChildCache((prev) => ({ ...prev, ...loaded }));
@@ -1209,7 +1260,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     // Derived from the chain, not from hardcoded strings. Every tier is required:
     // an optional one left blank would file documents at inconsistent depths inside
     // a single unit, which is the whole reason the tier exists.
-    missing.push(...buildOnDemandSegments(belowUnitTiers(), tierSelections()).missing);
+    missing.push(...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing);
     // These strings are shown to the user, so they must match the on-screen
     // field labels — renamed to "Confidential Level" in the relayout.
     if (!documentDate) missing.push("Document Date");
@@ -1302,7 +1353,22 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       setBusy(false);
       return;
     }
-    const tiers = belowUnitTiers();
+    const plan = tierPlan();
+    const tiers = plan.tiers;
+    // Never guess at a tier whose options are not known. "Not loaded" and "this unit has
+    // no subunits" would produce the same shortened path, and the shorter one lands in a
+    // folder that exists and looks correct — the document is simply filed in the wrong
+    // place. Wait, or fail, but do not assume.
+    if (plan.unresolved.length > 0) {
+      showToast(
+        `Still checking ${plan.unresolved.join(" and ")} for this unit. ` +
+          `If this does not clear, reload the page before uploading.`,
+        "error",
+      );
+      setStatus("");
+      setBusy(false);
+      return;
+    }
     // A malformed chain must never route a file to a partial path. It would land
     // in a folder that exists and looks right, one tier shallower than everything
     // else in the unit — silent misfiling, discovered only when someone cannot
@@ -1472,9 +1538,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // Type byte-identical to what this form has always sent, and lets a new tier
       // use either column shape without a migration.
       const tierFormValues: Array<{ FieldName: string; FieldValue: string }> = [];
-      belowUnitTiers().forEach((t, i) => {
+      // Only APPLICABLE tiers write metadata. A unit with no subunits leaves SubUnit and
+      // SubUnitTid empty rather than storing a value from some other unit's list.
+      const metaPlan = tierPlan();
+      metaPlan.tiers.forEach((t, i) => {
         const id = tierValues[t.column] ?? "";
-        const opts = tierOptions(t, i);
+        const opts = tierOptions(t, metaPlan.parents[i]);
         const opt = opts.find((o) => o.id === id);
         const col = t.labelCol ?? t.column;
         if (!col || !opt) return;
@@ -1872,19 +1941,22 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               [Unit][Year][Document Type] today, [Unit][Function][Year] then
               [Document Type] once a tier is added. Nothing changes on a site that
               has not configured one. */}
-          {belowUnitTiers().map((t, i) =>
-            renderSelect(
+          {/* Only the tiers that apply to the chosen path. A unit with no subunits shows
+              no SubUnit dropdown at all, rather than an empty required one it can never
+              satisfy — which is what "not every unit has subunits" means on screen. */}
+          {tierPlan().tiers.map((t, i) => {
+            const parent = tierPlan().parents[i];
+            return renderSelect(
               t.label,
               true,
               tierValues[t.column] ?? "",
               (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
-              tierOptions(t, i),
-              // A cascading tier is dead until the tier above it is chosen — same
-              // rule the permissioned cascade uses, so SubUnit greys out until Unit
-              // is picked instead of offering an empty list.
-              !(t.termSet ?? "").trim() && !tierParentTermId(i),
-            ),
-          )}
+              tierOptions(t, parent),
+              // A cascading tier is dead until the tier above it is chosen — the same rule
+              // the permissioned cascade uses, so it greys out rather than offering nothing.
+              !(t.termSet ?? "").trim() && !parent,
+            );
+          })}
 
           {/* Graceful empty-state: a segment whose term set has no child terms yet
               (e.g. the non-GHO Head Offices before their Department/Unit trees are

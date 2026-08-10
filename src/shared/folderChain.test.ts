@@ -1,6 +1,7 @@
 import { Level, parseLevels } from "./formModel";
 import {
   buildOnDemandSegments,
+  decideTier,
   effectiveOnDemandTiers,
   gridPlan,
   isPermissioned,
@@ -180,6 +181,35 @@ describe("effectiveOnDemandTiers — one walk for migrated and unmigrated sites"
   it("does not append the legacy pair to a configured chain", () => {
     const tiers = effectiveOnDemandTiers([dept, unit, fn], YEAR_SET, DOCTYPE_SET);
     expect(tiers.map((t) => t.label)).toEqual(["Function"]);
+  });
+});
+
+describe("decideTier — not every Unit has SubUnits", () => {
+  const subUnit: Level = {
+    label: "SubUnit", column: "SubUnit", labelCol: "SubUnit", tidCol: "SubUnitTid",
+    permissioned: false,
+  };
+
+  it("skips a cascading tier when the term above has no children", () => {
+    expect(decideTier(subUnit, 0)).toBe("skip");
+  });
+
+  it("keeps a cascading tier when the term above has children", () => {
+    expect(decideTier(subUnit, 2)).toBe("keep");
+  });
+
+  // THE important case. "Not loaded" and "no subunits" both produce an empty list, and the
+  // shorter path lands in a folder that exists and looks correct — so a transient failure
+  // must never be read as "this tier does not apply".
+  it("reports unresolved when the option count is unknown", () => {
+    expect(decideTier(subUnit, undefined)).toBe("unresolved");
+  });
+
+  // A flat set that came back empty is a config fault to surface, not a signal that the
+  // tier is inapplicable here — Year and Document Type apply to every unit.
+  it("always keeps a tier with its own term set, even with no options", () => {
+    expect(decideTier(year, 0)).toBe("keep");
+    expect(decideTier(docType, undefined)).toBe("keep");
   });
 });
 
