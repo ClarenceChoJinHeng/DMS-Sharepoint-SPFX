@@ -103,6 +103,20 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     an abbreviation. No abbreviation row, no Folder Map row, no group needed.
   - **The client cannot use this yet** — the chain is `Levels` JSON and they cannot edit JSON. That
     is piece 2 (Structure Manager UI), unwritten. Do not demo it as finished.
+- **`SubUnit` (client, 2026-08-10) is a FIXED below-Unit tier that INHERITS — not a new permissioned
+  tier.** Structure becomes `Business Segment → Department → Unit → SubUnit → Year → Document Type`,
+  and the client may not reorder or remove any of the first four. But SubUnit is authored
+  `"permissioned": false`, so it needs **no groups, no Group Map rows, no abbreviation rows and no
+  code change** — just a term set, `SubUnit`/`SubUnitTid` columns in BOTH libraries, and one
+  `Levels` entry before `Year`. Subunit data not yet supplied by the client.
+  - **THE UNIT IS STILL THE SMALLEST CONFIDENTIALITY BOUNDARY.** Two SubUnits under one Unit see
+    each other's documents completely — the ACL is on the Unit folder and SubUnit inherits it.
+    Confirmed by the client 2026-08-10 when asked directly. Everything in
+    `docs/client/document-visibility-within-a-unit.md` stands unchanged, and "put them in different
+    subunits" is NOT a way to separate two people.
+  - **"Fixed" and "permissioned" are now different things**, which matters for piece 2: the UI must
+    lock the first FOUR tiers, but only the first three carry ACLs. Lockedness can no longer be
+    derived from `permissioned`.
 - **Folder NAMES come from `DMS Term Abbreviation`** (keyed by term GUID), NOT from term labels —
   `GHO/GCA/GMB_STRATCOMMS`. Segment codes come from `StagingFolder` on the DMS Config `mode` row.
   Term labels stay full and drive the upload dropdowns; the full label is written to the

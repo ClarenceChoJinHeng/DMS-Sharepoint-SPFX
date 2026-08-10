@@ -60,6 +60,27 @@ below Unit over time, and blocking it would put the one thing they asked for beh
 no longer engaged. The two-tree consequence is real (§6) and is stated in the confirmation, in plain
 language, with the document count.
 
+**"Locked" is NOT the same as "permissioned"** — added 2026-08-10, when the client introduced
+`SubUnit`. SubUnit is a **fixed** tier the client may not reorder or remove, but it **inherits** the
+Unit's ACL, so it is authored `"permissioned": false`. The fixed prefix is now four tiers deep while
+the permissioned prefix is still three.
+
+The editor therefore cannot derive lockedness from `permissioned`, which was the original plan. It
+needs its own signal — `locked: true` on the level entry, with permissioned tiers implicitly locked.
+Deriving it would let the client drag `SubUnit` around, and since SubUnit sits above Year, moving it
+is a migration of every document in the segment.
+
+The two locks mean different things and must not read alike on screen:
+
+- **Permissioned tiers** — "has folder permissions, cannot be changed"
+- **SubUnit** — "part of the standard structure, cannot be changed", and explicitly **not** a
+  security boundary: everyone in the Unit sees every SubUnit under it
+
+That second caption matters. A tier named SubUnit sitting directly under Unit in a list of locked
+tiers looks exactly like a permission boundary, and the client confirmed on 2026-08-10 that it is
+not one. Leaving it to be inferred is how someone eventually files something sensitive in a SubUnit
+believing it is separated.
+
 **The permissioned prefix is immutable once created.** Segment / Tier 1 / Tier 2 are *set* when a
 segment is created and never edited afterwards. This is what Clarence is telling the client, and the
 UI must enforce it rather than rely on them remembering. Renaming a permissioned tier renames live

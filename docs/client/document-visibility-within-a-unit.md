@@ -64,6 +64,11 @@ belong to the **individual**.
 Then they belong in **different units**. That is fully supported and costs very little — one new
 unit in the term list, one abbreviation, and its access groups. The system is designed for it.
 
+> **A note on SubUnits.** SubUnit folders organise a unit's filing; they do **not** separate access.
+> Anyone who can see a Unit can see every SubUnit inside it, and every document in them. So if two
+> people must not see each other's documents, putting them in different **SubUnits** will not achieve
+> it — it has to be different **Units**.
+
 This is usually the right answer, because "these two must not see each other's documents" almost
 always means they are doing genuinely separate work.
 
