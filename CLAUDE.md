@@ -117,7 +117,26 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       surfaces later as one permanently empty dropdown that blocks upload, for someone else.
     - Columns are created `Options: 8`, so they are **not added to any view** — the client switches
       them on per view. Deliberate: `12` would reshape every view they arranged, once per level.
-    - Still OUT of scope: adding a whole new segment (slice B) and moving existing subtrees (piece 3).
+    - Still OUT of scope: adding a whole new segment (**slice B**, not built).
+  - **Piece 3, subtree migration, is BUILT (2026-08-11) but NOT site-tested** — spec
+    `2026-08-11-subtree-migration-design.md`, tab 2 of the same web part, logic in
+    `shared/subtreeMigration.ts` (32 tests). It moves below-Unit folders that a structure change
+    left at the wrong depth, then fixes their metadata.
+    - **It DERIVES what is misplaced from the term data; it never asks "which level is new?"** A
+      folder is compared against each tier's valid names: valid at tier 0 → correct; valid at tier
+      `k` → adrift by `k`; valid nowhere → **stray, reported, never moved**. Ambiguity resolves to
+      "already correct" — moving a correctly filed folder needs evidence.
+    - **A tier with no values for a unit does not apply to that unit** (optional SubUnit), so its
+      files legitimately sit shallower and nothing moves. But options that could not be READ make
+      every folder look misplaced — so unreadable skips the whole unit. Empty ≠ unknown, again.
+    - **Moves are safe because of three facts verified 2026-08-10:** the subtree travels with the
+      folder, approval status survives, and UniqueId survives — so Folder Map needs no repair and
+      nothing needs re-approving. **Turn Auto-route and the folder-approval flow OFF first.**
+    - **Destination folders it creates must be stamped Approved** where the library moderates, or
+      every document moved into them is invisible to the whole unit.
+    - **Metadata is stamped from the PATH, after the moves, re-read fresh.** That is what makes a
+      half-finished run safe to repeat: no progress is recorded anywhere, so a second run
+      re-derives what is left. It also repairs files a hand-edited chain mis-tagged.
 - **`SubUnit` (client, 2026-08-10) is a FIXED below-Unit tier that INHERITS — not a new permissioned
   tier.** Structure becomes `Business Segment → Department → Unit → SubUnit → Year → Document Type`,
   and the client may not reorder or remove any of the first four. But SubUnit is authored

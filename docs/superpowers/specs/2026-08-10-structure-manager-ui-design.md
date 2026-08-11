@@ -252,6 +252,11 @@ wording matters more than the mechanism — this is the client's only chance to 
 The typed confirmation is not friction for its own sake: this is the only action in the tool whose
 consequence cannot be undone from the tool.
 
+> **Moving documents already filed is now BUILT** — see
+> [2026-08-11-subtree-migration-design.md](2026-08-11-subtree-migration-design.md), tab 2 of this
+> same web part. The warning below still stands: this screen changes new uploads only, and the
+> migration is a separate, deliberate step.
+
 ## 7. Out of scope
 
 - **Moving existing documents** under a newly inserted tier — piece 3, still unspecified. Cost scales

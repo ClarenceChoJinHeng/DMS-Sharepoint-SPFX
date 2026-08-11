@@ -431,7 +431,34 @@ export async function renameFolder(
     0,
     currentServerRelativeUrl.lastIndexOf("/"),
   );
-  const target = `${parent}/${newName}`;
+  return moveFolderTo(spHttpClient, siteUrl, currentServerRelativeUrl, `${parent}/${newName}`);
+}
+
+/**
+ * Move a folder to a different parent, keeping its UniqueId, contents and ACL.
+ *
+ * The same `MoveTo` call as a rename — a rename IS a move whose destination shares the
+ * source's parent — which is why `renameFolder` delegates here instead of the two keeping
+ * separate copies of the request.
+ *
+ * Used by subtree migration (spec `2026-08-11-subtree-migration-design.md`) to relocate
+ * below-Unit folders after a structure change. Three properties make that safe, and all
+ * three belong to this call rather than to the caller:
+ *   - the whole subtree travels with the folder, in one request;
+ *   - approval status survives (verified live 2026-08-10), so nothing needs re-approving;
+ *   - UniqueId survives, so Folder Map rows keyed on it stay valid.
+ *
+ * A name collision at the destination is REPORTED, never forced. Merging two folders would
+ * merge two sets of documents behind one ACL, and afterwards nothing records which files
+ * came from where.
+ */
+export async function moveFolderTo(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  currentServerRelativeUrl: string,
+  targetServerRelativeUrl: string,
+): Promise<RenameResult> {
+  const target = targetServerRelativeUrl;
   const res: SPHttpClientResponse = await spHttpClient.post(
     `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/MoveTo(newUrl=@d)` +
       `?@f='${encodeServerRelativePath(currentServerRelativeUrl)}'` +
