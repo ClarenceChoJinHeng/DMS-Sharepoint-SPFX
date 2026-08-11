@@ -1,8 +1,21 @@
 # Subtree Migration — moving documents that are already filed into a new folder shape
 
 **Date:** 2026-08-11
-**Status:** built, NOT yet site-tested. `SubtreeMigrator.tsx` (tab 2 of the Folder Structure web
-part) + `shared/subtreeMigration.ts` (32 unit tests).
+**Status:** built. **REORDER verified live 2026-08-11**; add and remove built and unit-tested, not yet
+site-tested. `SubtreeMigrator.tsx` (tab 2 of the Folder Structure web part) +
+`shared/subtreeMigration.ts` (59 unit tests).
+
+> **Verified on ClarenceDMSTesting, 2026-08-11 — reorder.** `Testing` and `Year` swapped on NBPOL
+> while 3 documents were filed. `Credit2/testig/2024/Tax Return` → `Credit2/2024/testig/Tax Return`
+> in both libraries: 3 documents moved, 6 empty folders tidied (3 per library), 3 re-tagged, and the
+> staged structure activated only after the re-scan came back clean.
+>
+> Two facts confirmed by that run, both previously assumed:
+> - **A FILE move preserves approval status.** Both approval-library documents were still "Waiting
+>   for Approval" afterwards. Folder moves were verified on 2026-08-10; this is the file case, and
+>   the whole file-by-file approach depends on it.
+> - **Emptied-folder cleanup removes exactly the husks and nothing else** — the count matched the
+>   three tiers per library that the reorder vacated.
 **Piece 3** of the configurable folder chain. Piece 1 made the below-Unit chain data-driven;
 piece 2 ([2026-08-10-structure-manager-ui-design.md](2026-08-10-structure-manager-ui-design.md))
 gave the client an editor for it. Both apply to **new uploads only**, which is what this closes.

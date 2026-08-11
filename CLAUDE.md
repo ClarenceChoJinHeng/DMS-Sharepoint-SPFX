@@ -118,14 +118,31 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     - Columns are created `Options: 8`, so they are **not added to any view** — the client switches
       them on per view. Deliberate: `12` would reshape every view they arranged, once per level.
     - Still OUT of scope: adding a whole new segment (**slice B**, not built).
-  - **Piece 3, subtree migration, is BUILT (2026-08-11) but NOT site-tested** — spec
-    `2026-08-11-subtree-migration-design.md`, tab 2 of the same web part, logic in
-    `shared/subtreeMigration.ts` (32 tests). It moves below-Unit folders that a structure change
-    left at the wrong depth, then fixes their metadata.
-    - **It DERIVES what is misplaced from the term data; it never asks "which level is new?"** A
-      folder is compared against each tier's valid names: valid at tier 0 → correct; valid at tier
-      `k` → adrift by `k`; valid nowhere → **stray, reported, never moved**. Ambiguity resolves to
-      "already correct" — moving a correctly filed folder needs evidence.
+  - **Piece 3, subtree migration, is BUILT (2026-08-11). REORDER verified live; add and remove not
+    yet site-tested** — spec `2026-08-11-subtree-migration-design.md`, tab 2 of the same web part,
+    logic in `shared/subtreeMigration.ts` (59 tests).
+    - **ADD, REORDER and REMOVE are ONE operation**, and treating them separately is what produced a
+      tool that could only do the first: work out which TIER each path segment belongs to, then
+      rebuild the path in tier order. A tier with no segment is a gap the admin fills (add);
+      segments out of order come back sorted (reorder); a segment whose tier is gone is absent from
+      the result (remove — and therefore a COLLAPSE). Combinations work, which is what a client
+      editing a live structure actually produces.
+    - **The scan walks every LEAF folder, not just children of the Unit.** The shallow version
+      reported "nothing to move" for a reorder — `Credit2` was still a valid first tier — then
+      activated the new structure against folders still in the old order. Silent wrong success.
+    - **FILES move; folders are ensure-created.** Collapse forces it: two `2024` folders cannot both
+      move into one place, a resolved collision renames a file, and a destination already holding
+      documents is a merge rather than a move. One request per file beats two code paths where the
+      rarely-tested one handles the dangerous case.
+    - **A filename collision gets a rename FORM, not a refusal** (client, 2026-08-11). Files already
+      at the destination count as claimants — not migrating, but they own the name, and that is the
+      case that silently overwrites. Suggested names carry the removed tier's value
+      (`a (testig).pdf`), never a number: the value is *why* the files differed.
+    - **A verified fact the design rests on: a FILE move preserves approval status** (2026-08-11,
+      alongside the folder-move check of 2026-08-10).
+    - **A STRAY does not block activation.** The tool cannot resolve one, and letting it hold a
+      structure change hostage forever leaves the client stuck; it is counted in the result instead.
+    - Ambiguity resolves to "already correct" — moving a correctly filed folder needs evidence.
     - **A tier with no values for a unit does not apply to that unit** (optional SubUnit), so its
       files legitimately sit shallower and nothing moves. But options that could not be READ make
       every folder look misplaced — so unreadable skips the whole unit. Empty ≠ unknown, again.
