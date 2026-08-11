@@ -118,13 +118,22 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     - Columns are created `Options: 8`, so they are **not added to any view** — the client switches
       them on per view. Deliberate: `12` would reshape every view they arranged, once per level.
     - Still OUT of scope: adding a whole new segment (**slice B**, not built).
-  - **Piece 3, subtree migration, is BUILT and VERIFIED LIVE — all four cases** (add, reorder,
-    remove-clean, remove-with-collision), 2026-08-11/12 — spec
+  - **A DOCUMENT ALWAYS LANDS AT THE END OF THE CHAIN** (client rule, 2026-08-12). Every tier is
+    built, and a tier with no value in a folder's path is a gap the admin fills — wherever it sits.
+    Before this, `planLeaf` capped at the leaf's own depth, which made **adding a level at the BOTTOM
+    a silent no-op**: nothing looked misplaced, the change activated, and old documents sat a level
+    shallower than new ones. Exceptions: a tier that does not apply to a unit never enters the
+    calculation (optional SubUnit), and a folder with nothing recognisable left is reported rather
+    than placed. Cost, accepted: a genuinely shallow folder now asks for its deeper values too.
+  - **Piece 3, subtree migration, is BUILT and VERIFIED LIVE — all five positions** (add mid-chain,
+    reorder, remove-clean, remove-with-collision, **add at the bottom**), 2026-08-11/12 — spec
     `2026-08-11-subtree-migration-design.md`, tab 2 of the same web part, logic in
-    `shared/subtreeMigration.ts` (67 tests). Two results worth keeping: a REORDER re-stamped **0**
-    documents (it changes no tier's value, so anything else would be a bug), and the collision run
-    ended with the **document count unchanged** — both files side by side under different names,
-    neither overwritten.
+    `shared/subtreeMigration.ts` (71 tests). Three results worth keeping: a REORDER re-stamped **0**
+    documents (it changes no tier's value, so anything else would be a bug); the collision run ended
+    with the **document count unchanged** — both files side by side under different names, neither
+    overwritten; and the bottom-add tidied **0** folders, because documents moving *down* vacate
+    nothing. Note the bug in the bottom-add case survived four passing tests, all of which happened
+    to use full-depth folders — the untested position was the broken one.
     - **ADD, REORDER and REMOVE are ONE operation**, and treating them separately is what produced a
       tool that could only do the first: work out which TIER each path segment belongs to, then
       rebuild the path in tier order. A tier with no segment is a gap the admin fills (add);

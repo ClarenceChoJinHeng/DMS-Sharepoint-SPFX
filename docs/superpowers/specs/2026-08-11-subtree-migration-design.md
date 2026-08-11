@@ -15,14 +15,20 @@ web part) + `shared/subtreeMigration.ts` (67 unit tests).
 > | 2 | REORDER `Year` above `Testing` | **no picker**; 3 moved, 8 tidied, **0 tagged** |
 > | 3 | REMOVE `Testing` (no collision) | 3 moved, 6 tidied, 0 tagged |
 > | 4 | REMOVE `Credit_Card` (collision) | 1 clash surfaced, renamed, 3 moved, 8 tidied — **count held at 3** |
+> | 5 | ADD `Stage` **at the bottom**, below Document Type | 3 moved, **0 tidied**, 3 tagged |
 >
 > Test 2's **0 tagged** matters: a reorder changes no tier's value, so nothing should be re-stamped.
 > Test 4's **count held at 3** matters more: both documents landed side by side under different
 > names, neither overwritten. That is the only failure in this feature that loses a document rather
 > than misplacing it.
 >
+> Test 5's **0 tidied** matters for the opposite reason to the others: nothing is vacated when
+> documents move *down*, so the old leaves simply become parents. Any deletion there would be wrong.
+> That test is also the one that found the depth-cap bug — four passing tests had all used
+> full-depth folders, so the only untested position was the one that was broken.
+>
 > Also confirmed by these runs: **a file move preserves approval status** (every document stayed
-> "Waiting for Approval" across four migrations), and the emptied-folder cleanup removed exactly the
+> "Waiting for Approval" across five migrations), and the emptied-folder cleanup removed exactly the
 > husks each change vacated and nothing else.
 
 > **Verified on ClarenceDMSTesting, 2026-08-11 — reorder.** `Testing` and `Year` swapped on NBPOL
