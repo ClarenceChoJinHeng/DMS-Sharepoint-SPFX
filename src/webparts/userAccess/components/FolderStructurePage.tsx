@@ -25,6 +25,24 @@ const tab = (active: boolean): React.CSSProperties => ({
 
 export default function FolderStructurePage({ context }: IAccessProps): React.ReactElement {
   const [view, setView] = useState<"structure" | "migrate">("structure");
+  /** True while the structure editor holds unsaved changes — see the tab guard below. */
+  const [dirty, setDirty] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+
+  /**
+   * Switching tabs unmounts the editor, which silently discards whatever was being edited. So
+   * while it is dirty the switch is REFUSED rather than confirmed: the Save button is a few
+   * pixels away, and offering "discard" here would put losing the work one click behind
+   * something that looks like ordinary navigation.
+   */
+  const go = (next: "structure" | "migrate"): void => {
+    if (next !== view && dirty) {
+      setBlocked(true);
+      return;
+    }
+    setBlocked(false);
+    setView(next);
+  };
 
   return (
     <AccessShell
@@ -42,16 +60,42 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
       }
     >
       <div style={{ borderBottom: "1px solid #edebe9", marginBottom: 20 }}>
-        <button style={tab(view === "structure")} onClick={() => setView("structure")}>
+        <button style={tab(view === "structure")} onClick={() => go("structure")}>
           Folder levels
         </button>
-        <button style={tab(view === "migrate")} onClick={() => setView("migrate")}>
+        <button style={tab(view === "migrate")} onClick={() => go("migrate")}>
           Move existing folders
         </button>
       </div>
 
+      {blocked && (
+        <div
+          style={{
+            fontSize: 13,
+            padding: "10px 12px",
+            borderRadius: 6,
+            marginBottom: 16,
+            lineHeight: 1.5,
+            background: "#fff4e5",
+            border: "1px solid #f0d9b5",
+            color: "#7a4f00",
+          }}
+        >
+          Save or discard your folder level changes first — leaving this tab would lose them.
+        </div>
+      )}
+
       {view === "structure" ? (
-        <StructureManager context={context} siteUrl={context.pageContext.web.absoluteUrl} />
+        <StructureManager
+          context={context}
+          siteUrl={context.pageContext.web.absoluteUrl}
+          onDirtyChange={(d) => {
+            setDirty(d);
+            // Clear the refusal as soon as the reason for it is gone, so a saved edit does not
+            // leave a warning sitting above the page telling them to do what they just did.
+            if (!d) setBlocked(false);
+          }}
+        />
       ) : (
         <SubtreeMigrator context={context} siteUrl={context.pageContext.web.absoluteUrl} />
       )}

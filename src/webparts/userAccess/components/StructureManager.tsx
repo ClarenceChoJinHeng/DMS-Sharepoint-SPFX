@@ -170,14 +170,34 @@ const s: Record<string, React.CSSProperties> = {
 export interface StructureManagerProps {
   context: WebPartContext;
   siteUrl: string;
+  /**
+   * Fired whenever the editor gains or loses unsaved changes, so the page can stop a tab
+   * switch from discarding them. Optional — the component guards the browser-level exits by
+   * itself, and a caller that does not care still gets those.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export default function StructureManager({ context, siteUrl }: StructureManagerProps): React.ReactElement {
+export default function StructureManager({
+  context,
+  siteUrl,
+  onDirtyChange,
+}: StructureManagerProps): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [segments, setSegments] = useState<SegmentRow[]>([]);
   const [editing, setEditing] = useState<string | undefined>(undefined);
   const [draft, setDraft] = useState<Level[]>([]);
+  /**
+   * The chain the editor was opened with, for comparison against `draft`.
+   *
+   * Held rather than re-derived because `startEdit` seeds from `effectiveOnDemandTiers`, so
+   * "what was on screen when they started" is not simply the mode row's chain — comparing
+   * against the row would report a segment on the built-in Year/Document Type pair as dirty
+   * the instant it was opened, and an always-on warning is one nobody reads.
+   */
+  const [baseline, setBaseline] = useState<string>("");
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [adding, setAdding] = useState<DraftTier | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ text: string; ok: boolean } | undefined>(undefined);
@@ -463,17 +483,60 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     const base = seg.pending ?? seg.chain;
     const { permissioned } = splitChain(base);
     const below = effectiveOnDemandTiers(base, legacySets.year, legacySets.docType);
+    const seeded = [...permissioned, ...below].map((l) => ({ ...l }));
     setEditing(seg.key);
-    setDraft([...permissioned, ...below].map((l) => ({ ...l })));
+    setDraft(seeded);
+    setBaseline(JSON.stringify(seeded));
     setAdding(undefined);
     setResult(undefined);
   };
 
+  /**
+   * Whether the editor holds changes that have not been saved.
+   *
+   * Compared as JSON against what was seeded, so reordering a level and putting it back reads
+   * as clean — a warning that fires on a no-op change is one people learn to dismiss.
+   *
+   * Exists because a level added and then navigated away from is lost SILENTLY: the list looks
+   * finished while it is being edited, so there is nothing on screen afterwards to say the work
+   * did not land. Reported 2026-08-11 after it happened.
+   */
+  const dirty = editing !== undefined && JSON.stringify(draft) !== baseline;
+
   const cancelEdit = (): void => {
     setEditing(undefined);
     setDraft([]);
+    setBaseline("");
     setAdding(undefined);
+    setConfirmDiscard(false);
   };
+
+  /** Cancel asks first when there is something to lose, and only then. */
+  const onCancelClicked = (): void => {
+    if (dirty) setConfirmDiscard(true);
+    else cancelEdit();
+  };
+
+  // The browser's own leave-the-page prompt. It is the only thing that can interrupt a closed
+  // tab or a typed URL, which is exactly how the change was lost. Deliberately not attached
+  // when clean: an unconditional prompt is noise, and noise gets clicked through.
+  useEffect(() => {
+    if (!dirty) return undefined;
+    const warn = (e: BeforeUnloadEvent): string => {
+      e.preventDefault();
+      // Browsers ignore custom text and show their own wording; returnValue is still required
+      // for the prompt to appear at all.
+      e.returnValue = "You have unsaved folder structure changes.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  // Let the page block a tab switch while an edit is in flight.
+  useEffect(() => {
+    if (onDirtyChange) onDirtyChange(dirty);
+  }, [dirty]);
 
   const permissionedCount = (chain: Level[]): number => splitChain(chain).permissioned.length;
 
@@ -904,9 +967,37 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
           <button style={busy ? s.off : s.btn} disabled={busy} onClick={onSaveClicked}>
             {busy ? "Saving…" : "Save structure"}
           </button>{" "}
-          <button style={s.ghost} disabled={busy} onClick={cancelEdit}>Cancel</button>
+          <button style={s.ghost} disabled={busy} onClick={onCancelClicked}>Cancel</button>
+          {dirty && (
+            // Sits beside the button that fixes it. A banner at the top of a long editor is
+            // scrolled off exactly when someone is about to leave.
+            <span style={{ ...s.hint, marginLeft: 12, color: "#7a4f00", fontWeight: 600 }}>
+              Not saved yet — these changes are lost if you leave this page.
+            </span>
+          )}
         </div>
 
+        {confirmDiscard && (
+          <div style={s.modalBg} role="dialog" aria-modal="true">
+            <div style={s.modal}>
+              <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>Discard your changes?</h3>
+              <p style={{ fontSize: 13, lineHeight: 1.6 }}>
+                The folder levels you edited have not been saved. Leaving now loses them.
+              </p>
+              <div style={{ marginTop: 16, textAlign: "right" }}>
+                <button style={s.ghost} onClick={() => setConfirmDiscard(false)}>
+                  Keep editing
+                </button>{" "}
+                <button style={s.btn} onClick={() => saveStructure().catch(() => undefined)}>
+                  Save them
+                </button>{" "}
+                <button style={s.danger} onClick={cancelEdit}>
+                  Discard
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </>
     );
   }

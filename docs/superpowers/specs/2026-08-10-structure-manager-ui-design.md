@@ -283,6 +283,33 @@ consequence cannot be undone from the tool.
 | Mode row write fails after columns created | Report the orphan columns explicitly — harmless, but must not be silent |
 | Duplicate tier name within a segment | Refuse — two tiers writing one column overwrite each other |
 
+### 8.1 Unsaved changes are guarded at all three exits
+
+Added 2026-08-11 after it happened during testing: a level was added, the page was left, and the
+work was gone with **nothing on screen afterwards to say so**. That is the failure worth designing
+against — the list looks finished while it is being edited, so an abandoned edit is
+indistinguishable from one that was never started.
+
+Three exits, three guards, each as strong as what it can actually protect:
+
+| Exit | Guard | Why this one |
+|---|---|---|
+| **Cancel** button | modal offering *Keep editing / Save them / Discard* | They asked to leave, so discarding must be available — just not as the default |
+| **Tab switch** | **refused**, with a message | The Save button is a few pixels away; offering "discard" here would put losing the work one click behind something that reads as ordinary navigation |
+| **Closing the tab / typing a URL** | `beforeunload` | The only exit the page cannot mediate |
+
+Dirtiness is a JSON comparison against **what was seeded into the editor**, not against the mode
+row — `startEdit` seeds from `effectiveOnDemandTiers`, so comparing against the row would mark a
+segment running on the built-in Year/Document Type pair as dirty the moment it opened, and an
+always-on warning is one nobody reads. Reordering a level and putting it back reads as clean for
+the same reason.
+
+`beforeunload` is attached **only while dirty**. An unconditional handler prompts on every exit,
+and a prompt that always fires gets clicked through — including the once it mattered.
+
+The inline warning sits **beside the Save button**, not at the top of the editor: a banner above a
+long form is scrolled out of view at exactly the moment someone is about to leave.
+
 ## 9. Testing
 
 - A new segment end to end: form → columns exist in both libraries → mode row correct → upload lands
