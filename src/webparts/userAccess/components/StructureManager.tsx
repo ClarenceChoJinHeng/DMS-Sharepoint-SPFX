@@ -2,7 +2,7 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
-import { Level, parseLevels, sanitizeFolderSegment } from "../../../shared/formModel";
+import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
 import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
 import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
@@ -34,6 +34,12 @@ interface SegmentRow {
   label: string;         // ModeLabel, e.g. "Group Head Office"
   stagingFolder: string; // top folder name, e.g. "GHO"
   chain: Level[];
+  /**
+   * A structure change authored but not yet applied. Present only on a segment that already
+   * holds documents; applying it is the last step of the folder migration. See
+   * PENDING_LEVELS_FIELD.
+   */
+  pending?: Level[];
   /** Parsed-chain problem, if any — shown instead of letting them edit a broken row. */
   chainError?: string;
   /** Whether documents are already filed under this segment. Drives the warning. */
@@ -175,8 +181,6 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
   const [adding, setAdding] = useState<DraftTier | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ text: string; ok: boolean } | undefined>(undefined);
-  const [confirmSave, setConfirmSave] = useState(false);
-  const [confirmText, setConfirmText] = useState("");
   // The Year / Document Type term sets, so a segment still running on the built-in pair can
   // be shown the levels it is EFFECTIVELY using rather than an empty list.
   const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
@@ -186,9 +190,41 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
 
   /* ---------- Load ------------------------------------------------------- */
 
+  /**
+   * Staged chains by config item id. Read in its own request so a site without the column
+   * still loads: a `$select` naming a nonexistent field returns HTTP 400 for the whole query,
+   * so folding this into the main read would break every site that has never staged a change.
+   */
+  const loadPendingChains = async (): Promise<Record<number, Level[]>> => {
+    const out: Record<number, Level[]> = {};
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+          `/items?$select=Id,${PENDING_LEVELS_FIELD}&$filter=ConfigType eq 'mode'&$top=200`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out; // column absent on this site: nothing is staged, by definition
+      for (const r of ((await res.json()).value ?? []) as Array<Record<string, unknown>>) {
+        const raw = r[PENDING_LEVELS_FIELD];
+        if (typeof raw !== "string" || raw.trim() === "") continue;
+        const parsed = parseLevels(raw);
+        if (parsed.length > 0) out[Number(r.Id)] = parsed;
+      }
+    } catch {
+      // Same reading: unreadable means nothing is staged. The migrator makes the same call and
+      // reports its own failure, so a stale badge here cannot cause a wrong migration.
+    }
+    return out;
+  };
+
   const loadSegments = async (): Promise<SegmentRow[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+        // PendingLevels may not exist yet on a site that has never staged a change, and one
+        // unknown name in $select fails the WHOLE request with 400 rather than returning null
+        // (gotcha #11) — which would read as "the configuration list is unreadable". So it is
+        // requested separately, below, where a 400 costs nothing.
         `/items?$select=Id,Title,ModeLabel,StagingFolder,Levels` +
         `&$filter=ConfigType eq 'mode'&$top=200`,
       SPHttpClient.configurations.v1,
@@ -196,6 +232,7 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     );
     if (!res.ok) throw new Error(`the configuration list returned HTTP ${res.status}`);
     const data = await res.json();
+    const pending = await loadPendingChains();
     const rows = ((data.value ?? []) as Array<{
       Id: number; Title?: string; ModeLabel?: string; StagingFolder?: string; Levels?: string;
     }>).map((r) => {
@@ -208,6 +245,8 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
         stagingFolder: (r.StagingFolder ?? "").trim(),
         chain,
       };
+      const staged = pending[r.Id];
+      if (staged && staged.length > 0) row.pending = staged;
       // A row whose chain does not validate is shown but NOT editable: saving would
       // rewrite a structure nobody has seen, and the fix may lie outside this screen.
       if (err) row.chainError = err.message;
@@ -418,8 +457,12 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
    * Document Type are managed-metadata columns that neither have nor want a companion.
    */
   const startEdit = (seg: SegmentRow): void => {
-    const { permissioned } = splitChain(seg.chain);
-    const below = effectiveOnDemandTiers(seg.chain, legacySets.year, legacySets.docType);
+    // Edit the STAGED chain when there is one, not the live one. Otherwise a second edit
+    // before the migration silently discards the first, and the migration would then apply a
+    // shape nobody had reviewed.
+    const base = seg.pending ?? seg.chain;
+    const { permissioned } = splitChain(base);
+    const below = effectiveOnDemandTiers(base, legacySets.year, legacySets.docType);
     setEditing(seg.key);
     setDraft([...permissioned, ...below].map((l) => ({ ...l })));
     setAdding(undefined);
@@ -430,8 +473,6 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     setEditing(undefined);
     setDraft([]);
     setAdding(undefined);
-    setConfirmSave(false);
-    setConfirmText("");
   };
 
   const permissionedCount = (chain: Level[]): number => splitChain(chain).permissioned.length;
@@ -539,6 +580,50 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
     return true;
   };
 
+  /**
+   * Create the `PendingLevels` column on DMS Config if it is absent.
+   *
+   * A Note field, not Text: a chain of five levels with internal names and term-set GUIDs
+   * passes 255 characters easily, and a silently TRUNCATED chain is the worst possible
+   * outcome here — it would parse as valid JSON only by luck, and if it did parse it would
+   * describe a shorter structure than the admin authored.
+   *
+   * Created here rather than documented as a provisioning step because a missing column would
+   * fail the save on a site that is otherwise correctly set up, and the person hitting it
+   * would have no way to know why.
+   */
+  const ensurePendingColumn = async (): Promise<void> => {
+    const listTitle = cachedListTitle(LIST_SUFFIX.config);
+    const check: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/fields?$select=InternalName&$top=500`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!check.ok) throw new Error(`${listTitle}: could not read its columns (HTTP ${check.status})`);
+    const exists = (((await check.json()).value ?? []) as Array<{ InternalName?: string }>)
+      .filter((f) => (f.InternalName ?? "").toLowerCase() === PENDING_LEVELS_FIELD.toLowerCase())
+      .length > 0;
+    if (exists) return;
+    const xml =
+      `<Field Type="Note" DisplayName="${PENDING_LEVELS_FIELD}" Name="${PENDING_LEVELS_FIELD}" ` +
+      `StaticName="${PENDING_LEVELS_FIELD}" NumLines="6" RichText="FALSE" />`;
+    const create: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/fields/CreateFieldAsXml`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" },
+        body: JSON.stringify({ parameters: { SchemaXml: xml, Options: 8 } }),
+      },
+    );
+    if (!create.ok) {
+      const b = await create.text().catch(() => "");
+      throw new Error(
+        `Could not create the "${PENDING_LEVELS_FIELD}" column on ${listTitle} ` +
+          `(HTTP ${create.status}). ${b.slice(0, 180)}`,
+      );
+    }
+  };
+
   const saveStructure = async (): Promise<void> => {
     const seg = editingSegment();
     if (!seg) return;
@@ -570,7 +655,25 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
         }
       }
 
-      // 3. Write the chain.
+      // 3. Write the chain — to `Levels` on an EMPTY segment, to `PendingLevels` on one that
+      //    already holds documents.
+      //
+      //    A segment in use must not adopt a new shape the moment it is authored: its existing
+      //    folders are still a tier above, so uploads would start landing in the new shape
+      //    beside old folders in the old one. The people who meet that state first are
+      //    uploaders nobody told, and it reads as a broken system rather than an unfinished
+      //    admin task. So the change is STAGED, and the Move-existing-folders tab applies it
+      //    as the last step of the migration.
+      //
+      //    An empty segment skips all of that: there is nothing to move, and making someone
+      //    run a migration over zero folders teaches them to click through it.
+      const staged = seg.hasDocuments === true;
+      if (staged) await ensurePendingColumn();
+      const body: Record<string, string> = staged
+        ? { [PENDING_LEVELS_FIELD]: JSON.stringify(draft) }
+        // Clearing pending on an empty segment matters: one could have been staged and then
+        // emptied, and a stale pending chain would offer to apply a change already applied.
+        : { Levels: JSON.stringify(draft), [PENDING_LEVELS_FIELD]: "" };
       const write: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items(${seg.id})`,
         SPHttpClient.configurations.v1,
@@ -581,7 +684,7 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
             "X-HTTP-Method": "MERGE",
             "IF-MATCH": "*",
           },
-          body: JSON.stringify({ Levels: JSON.stringify(draft) }),
+          body: JSON.stringify(body),
         },
       );
       if (!write.ok) {
@@ -592,16 +695,27 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
       }
 
       setSegments((prev) =>
-        prev.map((p) => (p.key === seg.key ? { ...p, chain: draft.map((l) => ({ ...l })) } : p)),
+        prev.map((p) =>
+          p.key === seg.key
+            ? staged
+              ? { ...p, pending: draft.map((l) => ({ ...l })) }
+              : { ...p, chain: draft.map((l) => ({ ...l })), pending: undefined }
+            : p,
+        ),
       );
       setResult({
         ok: true,
         text:
           `Structure saved for ${seg.label}.` +
           (created.length > 0 ? ` Created ${created.length} column(s): ${created.join(", ")}.` : "") +
-          ` Uploads use the new shape as soon as people reload the form — no reconciliation run` +
-          ` is needed, because folders below Unit are created on demand and inherit the unit's` +
-          ` permissions.` +
+          (staged
+            ? ` It is NOT live yet — this segment already has documents filed, so uploads carry on` +
+              ` exactly as before. Open "Move existing folders" to move the existing folders into` +
+              ` the new shape; the new structure goes live at the end of that, so nobody ever sees` +
+              ` a half-changed library.`
+            : ` Uploads use the new shape as soon as people reload the form — no reconciliation run` +
+              ` is needed, because folders below Unit are created on demand and inherit the unit's` +
+              ` permissions.`) +
           // New columns are created on the items but NOT added to any view, because adding them
           // there would reshape every view the client arranged — for every level anyone ever adds.
           // Invisible columns look exactly like the save having failed, so say it here instead.
@@ -616,18 +730,22 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
       setResult({ ok: false, text: (e as Error).message });
     } finally {
       setBusy(false);
-      setConfirmSave(false);
-      setConfirmText("");
     }
   };
 
+  /**
+   * No confirmation gate here any more.
+   *
+   * Saving used to go live immediately, so a segment in use got a typed-CHANGE modal warning
+   * about two folder shapes side by side. Staging removed the thing it was warning about:
+   * nothing moves, uploads carry on unchanged, and the chain can be edited again before it is
+   * applied. The gate that matters is now the typed MOVE on the migration, which is the step
+   * that actually relocates documents — and a scary modal on an inert action is exactly what
+   * teaches someone to click through the one that counts.
+   */
   const onSaveClicked = (): void => {
-    const seg = editingSegment();
-    if (!seg) return;
-    // Warn only where it matters. On an empty segment this is a free change, and a modal
-    // there would train them to click through the one that counts.
-    if (seg.hasDocuments) setConfirmSave(true);
-    else saveStructure().catch(() => undefined);
+    if (!editingSegment()) return;
+    saveStructure().catch(() => undefined);
   };
 
   /* ---------- Render ---------------------------------------------------- */
@@ -789,52 +907,6 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
           <button style={s.ghost} disabled={busy} onClick={cancelEdit}>Cancel</button>
         </div>
 
-        {confirmSave && (
-          <div style={s.modalBg} role="dialog" aria-modal="true">
-            <div style={s.modal}>
-              <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>This changes where new documents are filed</h3>
-              <p style={{ fontSize: 13, lineHeight: 1.6 }}>
-                <strong>{seg.label}</strong> already has documents filed.
-              </p>
-              <p style={{ fontSize: 13, lineHeight: 1.6 }}>
-                Those documents stay exactly where they are. New uploads will use the new shape, so
-                both folder layouts will exist side by side — and nothing moves the older documents
-                automatically.
-              </p>
-              <p style={{ fontSize: 13, lineHeight: 1.6 }}>
-                This is safe on a segment nobody is using yet. On one already in use, plan it
-                deliberately: moving existing documents is a separate job.
-              </p>
-              <label style={s.label} htmlFor="sm-confirm">Type CHANGE to confirm</label>
-              <input
-                id="sm-confirm"
-                style={s.input}
-                value={confirmText}
-                onChange={(e) => setConfirmText(e.target.value)}
-              />
-              <div style={{ marginTop: 16, textAlign: "right" }}>
-                <button
-                  style={s.ghost}
-                  onClick={() => {
-                    setConfirmSave(false);
-                    setConfirmText("");
-                  }}
-                >
-                  Cancel
-                </button>{" "}
-                <button
-                  style={confirmText.trim().toUpperCase() === "CHANGE" ? s.btn : s.off}
-                  disabled={confirmText.trim().toUpperCase() !== "CHANGE"}
-                  onClick={() => {
-                    saveStructure().catch(() => undefined);
-                  }}
-                >
-                  Confirm
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </>
     );
   }
@@ -854,6 +926,14 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
             <div style={{ flex: "1 1 300px" }}>
               <div style={s.segName}>{row.label}</div>
               <div style={s.path}>{pathPreview(row, row.chain)}</div>
+              {row.pending !== undefined && (
+                // Show the live shape AND the staged one. A single line could only show one,
+                // and either choice misleads: the live path hides that a change is waiting,
+                // the staged path claims a shape uploads are not using.
+                <div style={{ ...s.path, color: "#7a4f00" }}>
+                  waiting to be applied: {pathPreview(row, row.pending)}
+                </div>
+              )}
             </div>
             <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 10 }}>
               <span
@@ -864,6 +944,9 @@ export default function StructureManager({ context, siteUrl }: StructureManagerP
               >
                 {row.hasDocuments === undefined ? "checking…" : row.hasDocuments ? "in use" : "empty"}
               </span>
+              {row.pending !== undefined && (
+                <span style={{ ...s.badge, ...s.badgeUsed }}>change pending</span>
+              )}
               <button
                 style={row.chainError === undefined ? s.ghost : s.off}
                 disabled={row.chainError !== undefined}

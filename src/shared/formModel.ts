@@ -72,6 +72,21 @@ export interface Membership {
 
 const normGuid = (g: string): string => (g ?? "").trim().toLowerCase();
 
+/**
+ * The DMS Config column holding a structure change that has been AUTHORED BUT NOT APPLIED.
+ *
+ * Only the Structure Manager and the Subtree Migrator read it. The upload form and
+ * reconciliation read `Levels` and know nothing about it, which is the point: a segment that
+ * already holds documents keeps filing them exactly as before until the folders already
+ * there have been moved.
+ *
+ * Without it, saving a new level took effect on the next form reload while the existing
+ * folders stayed a tier above — so a unit had two shapes at once, and the people who met that
+ * state first were uploaders nobody had told. Applying the change is now the last step of the
+ * migration rather than a side effect of authoring it.
+ */
+export const PENDING_LEVELS_FIELD = "PendingLevels";
+
 /** Safely parse a DMS Config `Levels` JSON string into Level[]. Never throws. */
 export function parseLevels(json: string): Level[] {
   if (!json || typeof json !== "string") return [];

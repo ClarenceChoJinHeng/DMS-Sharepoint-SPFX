@@ -147,6 +147,57 @@ repairs files uploaded during the window between saving a structure and migratin
 Part B derives the expected value from the **path**, and trusts the path over the column. The path is
 where the document actually is; the column is a description of it.
 
+### 5.2 A structure change is STAGED, and applying it is the last step of the migration
+
+Added 2026-08-11 at the client's request, before any of this reached a user. The original build
+applied a structure change immediately and left the migration as a later, optional job — so
+between the two a segment genuinely has two shapes, and **the people who meet that state first are
+uploaders nobody told.** It reads as a broken system rather than an unfinished admin task, and it
+generates complaints that cannot be answered honestly.
+
+So on a segment that already holds documents, the Structure Manager writes the new chain to
+`PendingLevels`, NOT `Levels`:
+
+| Column | Read by | Meaning |
+|---|---|---|
+| `Levels` | upload form, reconciliation | what uploads are doing **right now** |
+| `PendingLevels` | Structure Manager, this screen | authored and reviewed, **not yet applied** |
+
+The sequence becomes author → migrate → **apply, automatically, as the final step of the run**.
+Uploaders meet the new dropdown at the moment the folders are already correct.
+
+Four rules hold it together:
+
+1. **Applying is never a separate button.** Between "folders moved" and "structure applied",
+   uploads would land in the old shape again and re-create the drift just cleaned up. The two must
+   not be separable in the UI.
+2. **It applies only when a FRESH scan finds nothing left in the old shape** — not a tally of what
+   the run attempted, because a move that reported success but landed somewhere unexpected can
+   only be caught by looking. A partially migrated segment stays pending and says how many units
+   remain.
+3. **An empty segment activates immediately.** Nothing to move, and making someone run a migration
+   over zero folders teaches them to click through it. A staged-then-emptied segment has its
+   pending chain cleared on save, or it would offer to apply a change already applied.
+4. **A staged change with nothing to move must still be applyable**, or it could never go live —
+   which happens whenever the new level only affects units holding no documents. The no-drift
+   result therefore carries an explicit *Apply the new structure* button.
+
+`PendingLevels` is a **Note** column, created on demand. Note rather than Text because a five-level
+chain with internal names and term-set GUIDs passes 255 characters easily, and a silently truncated
+chain would either fail to parse or — far worse — parse as a shorter structure than was authored.
+Created on demand rather than documented as a provisioning step because a missing column would fail
+the save on an otherwise correct site, and the person hitting it would have no way to know why.
+
+The Structure Manager's typed-`CHANGE` gate was **removed** with this change. It warned about two
+folder shapes side by side; staging removed the thing it warned about, and saving is now inert —
+nothing moves, uploads are unchanged, and the chain can still be edited. The gate that matters is
+the typed `MOVE` on the migration, the step that actually relocates documents. A scary modal on a
+harmless action is how someone learns to click through the one that counts.
+
+Editing a segment that already has a pending change edits **the pending chain**, not the live one.
+Otherwise a second edit silently discards the first, and the migration would apply a shape nobody
+reviewed.
+
 ## 6. A dry run is the default and cannot be skipped
 
 The plan is always computed and displayed first: every move as `from → to`, grouped by unit, with

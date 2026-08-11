@@ -137,6 +137,23 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     - **Metadata is stamped from the PATH, after the moves, re-read fresh.** That is what makes a
       half-finished run safe to repeat: no progress is recorded anywhere, so a second run
       re-derives what is left. It also repairs files a hand-edited chain mis-tagged.
+- **A STRUCTURE CHANGE ON A SEGMENT IN USE IS STAGED, NOT LIVE (2026-08-11, client's request).**
+  The Structure Manager writes to a **`PendingLevels`** Note column on the mode row; `Levels` — the
+  only one the upload form and reconciliation read — is untouched until the migration finishes and
+  **applies it as its own last step**. Before this, saving went live immediately while existing
+  folders stayed a tier above, so a unit had two shapes at once and the people who met that state
+  first were uploaders nobody had told: it reads as a broken system, not an unfinished admin task.
+  - **Applying is never a separate button.** Between "moved" and "applied", every upload lands in
+    the old shape again and re-creates the drift just cleaned up.
+  - **It applies only when a FRESH scan finds no drift left** — never a tally of what the run
+    attempted. A partially migrated segment stays pending and reports how many units remain.
+  - **Empty segments activate immediately**, and a staged-then-emptied one has its pending chain
+    cleared on save. A staged change with nothing to move still gets an explicit Apply button, or
+    it could never go live.
+  - Editing a segment that already has a pending change edits **the pending chain**. Otherwise a
+    second edit silently discards the first and the migration applies a shape nobody reviewed.
+  - The typed-`CHANGE` gate on save is **gone**: it warned about the side-by-side state that no
+    longer happens, and saving is now inert. The gate that matters is the typed `MOVE`.
 - **`SubUnit` (client, 2026-08-10) is a FIXED below-Unit tier that INHERITS — not a new permissioned
   tier.** Structure becomes `Business Segment → Department → Unit → SubUnit → Year → Document Type`,
   and the client may not reorder or remove any of the first four. But SubUnit is authored

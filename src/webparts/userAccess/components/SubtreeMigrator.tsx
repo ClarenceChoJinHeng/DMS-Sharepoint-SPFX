@@ -2,7 +2,7 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
-import { Level, parseLevels } from "../../../shared/formModel";
+import { Level, parseLevels, PENDING_LEVELS_FIELD } from "../../../shared/formModel";
 import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
 import {
   backfillNeeds,
@@ -64,10 +64,17 @@ const s: Record<string, React.CSSProperties> = {
 
 /** A DMS Config `mode` row, reduced to what this screen needs. */
 interface SegmentRow {
+  id: number;
   key: string;
   label: string;
   stagingFolder: string;
+  /** The LIVE chain — what uploads are using right now. */
   chain: Level[];
+  /**
+   * A chain authored in the Folder levels tab but not yet applied. When present it is the
+   * TARGET shape this screen migrates towards, and applying it is the last step of the run.
+   */
+  pending?: Level[];
   chainError?: string;
 }
 
@@ -126,27 +133,64 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
 
   /* ---------- Load ------------------------------------------------------- */
 
+  /**
+   * Staged chains by config item id, read separately from the main query.
+   *
+   * `PendingLevels` does not exist on a site that has never staged a change, and one unknown
+   * name in `$select` fails the WHOLE request with HTTP 400 rather than returning null
+   * (gotcha #11) — so folding it in would make this screen unusable on exactly those sites.
+   */
+  const loadPendingChains = async (): Promise<Record<number, Level[]>> => {
+    const out: Record<number, Level[]> = {};
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+          `/items?$select=Id,${PENDING_LEVELS_FIELD}&$filter=ConfigType eq 'mode'&$top=200`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out; // no column means nothing is staged, by definition
+      for (const r of ((await res.json()).value ?? []) as Array<Record<string, unknown>>) {
+        const raw = r[PENDING_LEVELS_FIELD];
+        if (typeof raw !== "string" || raw.trim() === "") continue;
+        const parsed = parseLevels(raw);
+        if (parsed.length > 0) out[Number(r.Id)] = parsed;
+      }
+    } catch {
+      // Treated as "nothing staged". The consequence is a migration towards the LIVE shape,
+      // which finds no drift and moves nothing — the safe direction to fail in.
+    }
+    return out;
+  };
+
   const loadSegments = async (): Promise<SegmentRow[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
-        `/items?$select=Title,ModeLabel,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200`,
+        `/items?$select=Id,Title,ModeLabel,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
     if (!res.ok) throw new Error(`the configuration list returned HTTP ${res.status}`);
     const data = await res.json();
+    const pending = await loadPendingChains();
     return ((data.value ?? []) as Array<{
-      Title?: string; ModeLabel?: string; StagingFolder?: string; Levels?: string;
+      Id: number; Title?: string; ModeLabel?: string; StagingFolder?: string; Levels?: string;
     }>)
       .map((r) => {
         const chain = parseLevels(r.Levels ?? "");
-        const err = validateChain(chain);
         const row: SegmentRow = {
+          id: r.Id,
           key: (r.Title ?? "").trim(),
           label: (r.ModeLabel ?? r.Title ?? "").trim(),
           stagingFolder: (r.StagingFolder ?? "").trim(),
           chain,
         };
+        const staged = pending[r.Id];
+        if (staged && staged.length > 0) row.pending = staged;
+        // Validate the chain being migrated TOWARDS, not the live one. A malformed staged
+        // chain must be refused here — it has no correct destination, and applying it at the
+        // end of the run would then break every upload in the segment.
+        const err = validateChain(row.pending ?? chain);
         if (err) row.chainError = err.message;
         return row;
       })
@@ -305,8 +349,45 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
 
   /* ---------- Scan ------------------------------------------------------- */
 
+  /** The chain being migrated TOWARDS: the staged one when there is one, else the live one. */
+  const targetChain = (seg: SegmentRow): Level[] => seg.pending ?? seg.chain;
+
   const belowUnit = (seg: SegmentRow): Level[] =>
-    effectiveOnDemandTiers(seg.chain, legacySets.year, legacySets.docType);
+    effectiveOnDemandTiers(targetChain(seg), legacySets.year, legacySets.docType);
+
+  /**
+   * Make the staged chain live, and clear it.
+   *
+   * This is the LAST step of the run, never a separate button. Between "folders moved" and
+   * "structure applied" every upload would land in the old shape again and re-create exactly
+   * the drift just cleaned up — so the two must not be separable in the UI.
+   */
+  const activatePending = async (seg: SegmentRow): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items(${seg.id})`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json",
+          "X-HTTP-Method": "MERGE",
+          "IF-MATCH": "*",
+        },
+        body: JSON.stringify({
+          Levels: JSON.stringify(seg.pending ?? seg.chain),
+          [PENDING_LEVELS_FIELD]: "",
+        }),
+      },
+    );
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 160);
+      throw new Error(
+        `The folders were moved, but the new structure could not be switched on ` +
+          `(HTTP ${res.status}). ${detail} Uploads are still using the old shape — open ` +
+          `"Move existing folders" again and it will finish the job.`,
+      );
+    }
+  };
 
   /**
    * Options for every below-Unit tier of one unit, for CLASSIFICATION.
@@ -359,18 +440,16 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     return { options: out };
   };
 
-  const scan = async (): Promise<void> => {
-    const seg = segments.filter((x) => x.key === chosen)[0];
-    if (!seg) return;
-    setScanning(true);
-    setScanError(undefined);
-    setScans(undefined);
-    setDest({});
-    setLog([]);
-    setDone(undefined);
-    try {
-      if (seg.chainError) throw new Error(seg.chainError);
-      const { permissioned } = splitChain(seg.chain);
+  /**
+   * Find every unit and how its folders sit against the TARGET chain.
+   *
+   * Separate from `scan` so the run can call it again afterwards: whether the staged structure
+   * gets switched on depends on whether any drift is LEFT, and the only trustworthy answer to
+   * that is a fresh look at the folders rather than bookkeeping over what was attempted.
+   */
+  const collectScans = async (seg: SegmentRow): Promise<UnitScan[]> => {
+    if (seg.chainError) throw new Error(seg.chainError);
+      const { permissioned } = splitChain(targetChain(seg));
       const tiers = belowUnit(seg);
       if (tiers.length === 0) {
         throw new Error("this segment has no folder levels below Unit, so there is nothing to migrate into.");
@@ -449,7 +528,20 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
           found.push(row);
         }
       }
-      setScans(found);
+      return found;
+  };
+
+  const scan = async (): Promise<void> => {
+    const seg = segments.filter((x) => x.key === chosen)[0];
+    if (!seg) return;
+    setScanning(true);
+    setScanError(undefined);
+    setScans(undefined);
+    setDest({});
+    setLog([]);
+    setDone(undefined);
+    try {
+      setScans(await collectScans(seg));
     } catch (e) {
       setScanError((e as Error).message);
     } finally {
@@ -569,6 +661,52 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     if (bad.length > 0) {
       throw new Error(bad.map((b) => `${b.FieldName}: ${b.ErrorMessage ?? "rejected"}`).join("; "));
     }
+  };
+
+  /**
+   * Switch the staged structure on, but ONLY once nothing is left in the old shape.
+   *
+   * Applying it while some units are still adrift would be the worst of both worlds: those units
+   * would start receiving uploads in the new shape while their existing folders sat a tier above
+   * — the exact side-by-side state staging exists to prevent, now with no pending change left
+   * to tell anyone it is unfinished.
+   *
+   * So the check is a FRESH scan, not a tally of what this run attempted. A move that reported
+   * success but landed somewhere unexpected can only be caught by looking.
+   */
+  const finishPending = async (seg: SegmentRow): Promise<string> => {
+    if (!seg.pending) return " Turn the two flows back on.";
+    let remaining = 0;
+    try {
+      for (const row of await collectScans(seg)) {
+        // With empty destinations, `neededTiers` is "what would still need choosing" — which is
+        // precisely the definition of a unit still sitting in the old shape.
+        if (planUnit(row.unitPath, row.children, row.tiers, []).neededTiers.length > 0) remaining++;
+      }
+    } catch (e) {
+      return (
+        ` The new structure was NOT switched on, because the folders could not be re-checked ` +
+        `afterwards (${(e as Error).message}). Uploads are still using the old shape — run this ` +
+        `again once that is resolved.`
+      );
+    }
+    if (remaining > 0) {
+      return (
+        ` The new structure is still waiting: ${remaining} unit(s) have folders in the old shape. ` +
+        `Uploads carry on unchanged until every one of them is done, so nobody sees a ` +
+        `half-changed library.`
+      );
+    }
+    await activatePending(seg);
+    setSegments((prev) =>
+      prev.map((p) =>
+        p.key === seg.key ? { ...p, chain: seg.pending as Level[], pending: undefined } : p,
+      ),
+    );
+    return (
+      ` Every folder is in the new shape, so the new structure is now LIVE — uploaders will see it ` +
+      `on their next page load. Turn the two flows back on.`
+    );
   };
 
   const run = async (): Promise<void> => {
@@ -696,7 +834,8 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
         `Moved ${moved} folder(s) and tagged ${stamped} file(s).` +
           (failed > 0
             ? ` ${failed} problem(s) listed above — nothing was deleted, so running this again is safe and will retry them.`
-            : " Turn the two flows back on."),
+            : "") +
+          (await finishPending(seg)),
       );
       // The tree has changed underneath the plan, so a fresh scan is required before another run.
       setScans(undefined);
@@ -745,8 +884,26 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
       </select>
       {seg && (
         <p style={s.hint}>
-          Documents should be filed as{" "}
-          {[seg.stagingFolder || seg.label, ...seg.chain.map((l) => `[${l.label}]`)].join(" / ")}
+          {seg.pending === undefined ? (
+            <>
+              Documents should be filed as{" "}
+              {[seg.stagingFolder || seg.label, ...seg.chain.map((l) => `[${l.label}]`)].join(" / ")}
+            </>
+          ) : (
+            // Name both shapes. "Should be filed as" alone would be ambiguous here — one of
+            // these is what uploads are doing, the other is what they will do afterwards.
+            <>
+              Uploads currently use{" "}
+              <strong>
+                {[seg.stagingFolder || seg.label, ...seg.chain.map((l) => `[${l.label}]`)].join(" / ")}
+              </strong>
+              . Waiting to be applied:{" "}
+              <strong>
+                {[seg.stagingFolder || seg.label, ...(seg.pending ?? []).map((l) => `[${l.label}]`)].join(" / ")}
+              </strong>
+              . The new shape goes live when every folder has been moved.
+            </>
+          )}
         </p>
       )}
 
@@ -765,6 +922,44 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
       {scans && groups.length === 0 && !scanError && (
         <div style={{ ...s.msg, ...s.ok, marginTop: 16 }}>
           Nothing to move — every folder in this segment already sits at the right level.
+        </div>
+      )}
+
+      {/* A staged change with no folders to move still has to be applyable, or it could never
+          go live. Happens whenever the new level only affects units that hold no documents. */}
+      {scans && groups.length === 0 && !scanError && seg?.pending !== undefined && (
+        <div style={{ ...s.card, marginTop: 4 }}>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: "0 0 12px" }}>
+            <strong>{seg.label}</strong> has a structure change waiting, and nothing needs moving.
+            Applying it makes uploaders start using{" "}
+            <span style={{ fontFamily: "Consolas, monospace" }}>
+              {[seg.stagingFolder || seg.label, ...(seg.pending ?? []).map((l) => `[${l.label}]`)].join(" / ")}
+            </span>
+            .
+          </p>
+          <button
+            style={running ? s.off : s.btn}
+            disabled={running}
+            onClick={() => {
+              setRunning(true);
+              setLog([]);
+              activatePending(seg)
+                .then(() => {
+                  setSegments((prev) =>
+                    prev.map((p) =>
+                      p.key === seg.key ? { ...p, chain: seg.pending as Level[], pending: undefined } : p,
+                    ),
+                  );
+                  setDone("The new structure is now live — uploaders will see it on their next page load.");
+                  setScans(undefined);
+                })
+                .catch((e: Error) => setDone(e.message))
+                .then(() => setRunning(false))
+                .catch(() => undefined);
+            }}
+          >
+            {running ? "Applying…" : "Apply the new structure"}
+          </button>
         </div>
       )}
 
