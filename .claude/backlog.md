@@ -88,6 +88,28 @@ Folder hierarchy is a **nested chain** (Sub-1 contains Sub-2 contains Sub-3, etc
 - [ ] Native SP approve/reject buttons: set up a separate PA flow "SDG - Remove from Documents on Rejection" to delete from Documents when approver uses the native library UI (not the web part)
 - [ ] Test full pipeline end to end: upload > approve via web part > auto-route fires > file in dept library
 
+### Term store safety (deferred 2026-08-11)
+- [ ] **Respect `isAvailableForTagging`, and warn before a term is retired.** Nothing in the code
+      reads that flag (grepped 2026-08-11), so a deprecated term still appears in the upload
+      dropdown — which means the client's ONLY way to retire a value is deleting it, the one action
+      that breaks things. The fix is asymmetric and the asymmetry is the point: the **upload form
+      must hide** unavailable terms while the **migrator must keep recognising them**, or every
+      folder already filed under a retired value becomes a stray.
+- [ ] **Guard/explain term deletion.** Reproduced live 2026-08-11: a term deleted from the term
+      store left a `Test11` folder matching no term (a permanent stray to the migrator) and a
+      `TestingTid` column holding a dead GUID. The rules differ per tier and neither is obvious —
+      renaming is safe for Segment/Department/Unit (reconciliation renames the folders; the lists key
+      on GUID) but NOT for below-Unit tiers, whose folder names were written from the label at upload
+      time and are never rewritten. Client rule: **add terms, never remove or rename ones in use;
+      change structure from the Folder Structure page instead.**
+- [ ] **DECIDED AGAINST: deleting term sets from the Folder Structure page.** `Year` and
+      `Document Type` are shared by every segment, so removing a level from one segment would destroy
+      values for the others from a screen that never mentions them — unrecoverable, and any "is it
+      used elsewhere?" check silently rots the moment a set is reused. The term set must also SURVIVE
+      a removal, because it is what lets the migrator tell "value of a removed tier" from "unknown
+      folder". The acceptable version is offering to switch off *available for tagging* after a clean
+      migration: reversible, and per-term rather than per-set.
+
 ### RBAC Groups
 - [ ] **Folder Access should grant the ACL on save, like its three sibling pages do.** Deferred
       2026-08-11, from a real incident that day: a new group was created and mapped, reconciliation
