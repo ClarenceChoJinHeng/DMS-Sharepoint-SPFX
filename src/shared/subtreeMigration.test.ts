@@ -340,19 +340,18 @@ describe("assignSegments", () => {
 });
 
 describe("planLeaf — reorder", () => {
-  it("re-nests a swapped pair without inventing tiers below it", () => {
-    const plan = planLeaf(UNIT, leaf(["Credit2", "testig", "2024"], ["a.pdf"]), CHAIN, {});
-    expect(plan.to).toBe(`${UNIT}/Credit2/testig/2024`);
+  it("re-nests a swapped pair", () => {
+    const plan = planLeaf(UNIT, leaf(["Credit2", "2024", "testig", "Tax Return"], ["a.pdf"]), CHAIN, {});
+    expect(plan.to).toBe(`${UNIT}/Credit2/testig/2024/Tax Return`);
     expect(plan.missingTiers).toEqual([]);
   });
 
-  it("moves the folder that is out of order, not the whole subtree above it", () => {
-    // Path has Year above Testing; the chain wants the reverse.
-    const plan = planLeaf(UNIT, leaf(["Credit2", "2024", "testig"], ["a.pdf"]), CHAIN, {});
-    expect(plan.to).toBe(`${UNIT}/Credit2/testig/2024`);
+  it("names every ancestor of the rebuilt path", () => {
+    const plan = planLeaf(UNIT, leaf(["Credit2", "2024", "testig", "Tax Return"], ["a.pdf"]), CHAIN, {});
     expect(plan.ancestors.map((a) => a.path)).toEqual([
       `${UNIT}/Credit2`,
       `${UNIT}/Credit2/testig`,
+      `${UNIT}/Credit2/testig/2024`,
     ]);
   });
 
@@ -364,32 +363,65 @@ describe("planLeaf — reorder", () => {
 
 describe("planLeaf — add", () => {
   it("asks for the missing tier rather than guessing one", () => {
-    const plan = planLeaf(UNIT, leaf(["testig", "2024"], ["a.pdf"]), CHAIN, {});
+    const plan = planLeaf(UNIT, leaf(["testig", "2024", "Tax Return"], ["a.pdf"]), CHAIN, {});
     expect(plan.missingTiers).toEqual([0]);
     expect(plan.to).toBeUndefined();
   });
 
   it("fills the gap from the chosen destination", () => {
-    const plan = planLeaf(UNIT, leaf(["testig", "2024"], ["a.pdf"]), CHAIN, {
+    const plan = planLeaf(UNIT, leaf(["testig", "2024", "Tax Return"], ["a.pdf"]), CHAIN, {
       0: { label: "Credit1", id: "c-1" },
     });
-    expect(plan.to).toBe(`${UNIT}/Credit1/testig/2024`);
+    expect(plan.to).toBe(`${UNIT}/Credit1/testig/2024/Tax Return`);
   });
 
-  it("does not extend a shallow leaf to the full chain depth", () => {
-    // A leaf that stops at Testing must not acquire Year and Document Type folders it never had.
+  it("extends a shallow leaf DOWN to the full chain depth", () => {
+    // Client rule 2026-08-12: a document always lands at the end of the chain. The previous cap at
+    // the leaf's own depth is what made a level added at the BOTTOM a silent no-op.
     const plan = planLeaf(UNIT, leaf(["Credit2", "testig"], ["a.pdf"]), CHAIN, {});
-    expect(plan.to).toBe(`${UNIT}/Credit2/testig`);
+    expect(plan.missingTiers).toEqual([2, 3]);
+    expect(plan.to).toBeUndefined();
+  });
+
+  it("places a shallow leaf once the deeper values are chosen", () => {
+    const plan = planLeaf(UNIT, leaf(["Credit2", "testig"], ["a.pdf"]), CHAIN, {
+      2: { label: "2025", id: "y-2" },
+      3: { label: "Invoice", id: "d-2" },
+    });
+    expect(plan.to).toBe(`${UNIT}/Credit2/testig/2025/Invoice`);
   });
 
   it("treats an unusable chosen name as no choice at all", () => {
-    // Would build `unit//2024`, which SharePoint collapses — a move that does nothing and
-    // reports success.
-    const plan = planLeaf(UNIT, leaf(["testig", "2024"], ["a.pdf"]), CHAIN, {
+    // Would build `unit//2024`, which SharePoint collapses — a move that does nothing and reports
+    // success.
+    const plan = planLeaf(UNIT, leaf(["testig", "2024", "Tax Return"], ["a.pdf"]), CHAIN, {
       0: { label: '###"', id: "x" },
     });
     expect(plan.missingTiers).toEqual([0]);
     expect(plan.to).toBeUndefined();
+  });
+});
+
+describe("planLeaf — a level appended at the BOTTOM", () => {
+  /** CHAIN plus a fifth tier below Document Type. */
+  const withStage: EffectiveTier[] = CHAIN.concat([{ chainIndex: 4, options: ["S1", "S2"] }]);
+  const full = ["Credit2", "testig", "2024", "Tax Return"];
+
+  it("asks for the new deepest value instead of reporting nothing to do", () => {
+    // The bug this rule fixes: the new tier sat below every leaf, so nothing looked misplaced, the
+    // structure activated anyway, and old documents stayed a level shallower than new ones.
+    const plan = planLeaf(UNIT, leaf(full, ["a.pdf"]), withStage, {});
+    expect(plan.missingTiers).toEqual([4]);
+    expect(plan.to).toBeUndefined();
+  });
+
+  it("moves the documents down into the chosen value", () => {
+    const plan = planLeaf(UNIT, leaf(full, ["a.pdf"]), withStage, { 4: { label: "S1", id: "s-1" } });
+    expect(plan.to).toBe(`${UNIT}/Credit2/testig/2024/Tax Return/S1`);
+    // The old leaf becomes an ancestor rather than the bottom.
+    expect(plan.ancestors.map((a) => a.path).slice(-1)).toEqual([
+      `${UNIT}/Credit2/testig/2024/Tax Return`,
+    ]);
   });
 });
 
@@ -398,17 +430,26 @@ describe("planLeaf — remove", () => {
   const removed = [["testig", "live"]];
 
   it("drops the removed tier from the path so siblings collapse together", () => {
-    const a = planLeaf(UNIT, leaf(["Credit2", "testig", "2024"], ["a.pdf"]), withoutTesting, {}, removed);
-    const b = planLeaf(UNIT, leaf(["Credit2", "live", "2024"], ["a.pdf"]), withoutTesting, {}, removed);
-    expect(a.to).toBe(`${UNIT}/Credit2/2024`);
-    expect(b.to).toBe(`${UNIT}/Credit2/2024`);
+    const a = planLeaf(UNIT, leaf(["Credit2", "testig", "2024", "Tax Return"], ["a.pdf"]), withoutTesting, {}, removed);
+    const b = planLeaf(UNIT, leaf(["Credit2", "live", "2024", "Tax Return"], ["a.pdf"]), withoutTesting, {}, removed);
+    expect(a.to).toBe(`${UNIT}/Credit2/2024/Tax Return`);
+    expect(b.to).toBe(`${UNIT}/Credit2/2024/Tax Return`);
     expect(a.dropped).toEqual(["testig"]);
   });
 
   it("refuses to move a folder holding an unrecognised segment", () => {
-    const plan = planLeaf(UNIT, leaf(["Credit2", "mystery", "2024"], ["a.pdf"]), withoutTesting, {}, removed);
+    const plan = planLeaf(UNIT, leaf(["Credit2", "mystery", "2024", "Tax Return"], ["a.pdf"]), withoutTesting, {}, removed);
     expect(plan.to).toBeUndefined();
     expect(plan.strays).toEqual(["mystery"]);
+  });
+
+  it("leaves a folder alone when every segment belonged to the removed tier", () => {
+    // Nothing recognisable is left, so the only destination would be the unit root — which
+    // contradicts "documents land at the end of the chain". Reported, never moved.
+    const plan = planLeaf(UNIT, leaf(["testig"], ["a.pdf"]), withoutTesting, {}, removed);
+    expect(plan.to).toBeUndefined();
+    expect(plan.dropped).toEqual(["testig"]);
+    expect(plan.strays).toEqual([]);
   });
 });
 
@@ -416,17 +457,17 @@ describe("findCollisions", () => {
   const withoutTesting = CHAIN.filter((t) => t.chainIndex !== 1);
   const removed = [["testig", "live"]];
   const collapse = (files: string[][]): LeafPlan[] => [
-    planLeaf(UNIT, leaf(["Credit2", "testig", "2024"], files[0]), withoutTesting, {}, removed),
-    planLeaf(UNIT, leaf(["Credit2", "live", "2024"], files[1]), withoutTesting, {}, removed),
+    planLeaf(UNIT, leaf(["Credit2", "testig", "2024", "Tax Return"], files[0]), withoutTesting, {}, removed),
+    planLeaf(UNIT, leaf(["Credit2", "live", "2024", "Tax Return"], files[1]), withoutTesting, {}, removed),
   ];
 
   it("reports two files of the same name landing in one folder", () => {
     const found = findCollisions(collapse([["a.pdf"], ["a.pdf"]]), {});
     expect(found.length).toBe(1);
-    expect(found[0].folder).toBe(`${UNIT}/Credit2/2024`);
+    expect(found[0].folder).toBe(`${UNIT}/Credit2/2024/Tax Return`);
     expect(found[0].claimants.map((c) => c.path)).toEqual([
-      `${UNIT}/Credit2/live/2024/a.pdf`,
-      `${UNIT}/Credit2/testig/2024/a.pdf`,
+      `${UNIT}/Credit2/live/2024/Tax Return/a.pdf`,
+      `${UNIT}/Credit2/testig/2024/Tax Return/a.pdf`,
     ]);
   });
 
@@ -438,11 +479,11 @@ describe("findCollisions", () => {
     // The most destructive case and the easiest to miss: the occupant is not migrating, so it
     // appears nowhere in the plan, yet it owns the name and would be overwritten.
     const found = findCollisions(collapse([["a.pdf"], ["b.pdf"]]), {
-      [`${UNIT}/Credit2/2024`]: ["a.pdf"],
+      [`${UNIT}/Credit2/2024/Tax Return`]: ["a.pdf"],
     });
     expect(found.length).toBe(1);
     expect(found[0].claimants.filter((c) => c.existing).map((c) => c.path)).toEqual([
-      `${UNIT}/Credit2/2024/a.pdf`,
+      `${UNIT}/Credit2/2024/Tax Return/a.pdf`,
     ]);
   });
 
@@ -462,11 +503,12 @@ describe("findCollisions", () => {
   });
 
   it("does not double-count a moving file that shares its destination folder", () => {
-    // The leaf moves INTO a folder that already lists the same file — itself, mid-plan. Counting
-    // it twice would invent a collision between a file and itself.
-    const l = leaf(["Credit2", "2024"], ["a.pdf"]);
+    // The leaf's destination IS its current folder, which therefore already lists the same file —
+    // itself. Counting it twice would invent a collision between a file and itself.
+    const l = leaf(["Credit2", "2024", "Tax Return"], ["a.pdf"]);
     const plan = planLeaf(UNIT, l, withoutTesting, {}, removed);
-    expect(findCollisions([plan], { [`${UNIT}/Credit2/2024`]: ["a.pdf"] })).toEqual([]);
+    expect(plan.to).toBe(l.path);
+    expect(findCollisions([plan], { [l.path]: ["a.pdf"] })).toEqual([]);
   });
 });
 

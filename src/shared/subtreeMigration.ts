@@ -217,18 +217,28 @@ export function planLeaf(
   const plan: LeafPlan = { leaf, ancestors: [], missingTiers: [], strays, dropped };
   if (strays.length > 0) return plan;
 
-  // The deepest tier this folder reaches. Tiers below it are not its business: a leaf that stops
-  // at Year must not acquire a Document Type folder it never had.
-  let deepest = -1;
-  for (const a of assigned) deepest = Math.max(deepest, a.chainIndex);
-  if (deepest < 0) return plan;
+  // A leaf with nothing recognisable cannot be placed at all. Happens when every segment belonged
+  // to a removed tier: the only destination would be the unit root, which contradicts the rule
+  // below, so it is reported and left alone rather than having a whole path invented for it.
+  if (assigned.length === 0) return plan;
 
   const byTier: Record<number, string> = {};
   for (const a of assigned) byTier[a.chainIndex] = a.name;
 
+  // EVERY tier is built, including ones below the leaf's current depth.
+  //
+  // Client rule, 2026-08-12: "the file should always land at the end of the folder" — documents
+  // live at the full depth of the chain, wherever a new level is inserted. This replaced a cap at
+  // the leaf's deepest existing tier, which made adding a level at the BOTTOM a silent no-op: the
+  // new tier sat below every leaf, so nothing looked misplaced, the change activated anyway, and
+  // old documents stayed a level shallower than new ones in the same folder. "Add a level" now
+  // behaves the same wherever it is added, which is what anyone using the page already assumes.
+  //
+  // A tier that does not apply to this unit never reaches here — `effectiveTiers` drops one whose
+  // options are empty — so the optional-SubUnit case is unaffected. A genuinely shallow folder now
+  // asks for a value, and "leave this unit alone" remains the way to decline.
   const wanted: Array<{ chainIndex: number; name: string }> = [];
   for (const tier of tiers ?? []) {
-    if (tier.chainIndex > deepest) break;
     const existing = byTier[tier.chainIndex];
     if (existing !== undefined) {
       wanted.push({ chainIndex: tier.chainIndex, name: existing });

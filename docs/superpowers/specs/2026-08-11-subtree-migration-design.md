@@ -139,6 +139,28 @@ operation**, and treating them separately is what produced a tool that could onl
 One computation covers all three, including combinations — a reorder *and* an insert in the same
 edit, which is what a client will actually do.
 
+**A DOCUMENT ALWAYS LANDS AT THE END OF THE CHAIN** (client rule, 2026-08-12). Every tier is built,
+including ones below a folder's current depth, and any tier with no value in the path is a gap the
+admin fills — exactly like a tier inserted in the middle.
+
+This replaced a cap at the leaf's own deepest tier, and the cap made **adding a level at the bottom a
+silent no-op**: the new tier sat below every leaf, so nothing looked misplaced, the pending change
+activated anyway, and old documents stayed a level shallower than new ones in the same folder. Found
+live 2026-08-12 by testing the one position the earlier four tests had not covered. "Add a level" now
+behaves the same wherever it is added, which is what anyone using the page already assumes.
+
+Two exceptions survive, and both are deliberate:
+
+- **A tier that does not apply to a unit never reaches the calculation.** `effectiveTiers` drops a
+  cascading tier with no values for that unit, so the optional-SubUnit case is untouched.
+- **A folder with nothing recognisable left is reported, not placed.** When every segment belonged to
+  a removed tier, the only destination would be the unit root — which contradicts this very rule —
+  so it is left alone rather than having a whole path invented for it.
+
+The cost, stated honestly: a genuinely shallow folder — a document filed at Year with no Document
+Type — now asks for the deeper values too. That is the same rule applied consistently, and *Leave
+this unit alone* remains the way to decline.
+
 **Segment → tier assignment.** A segment's tier is the one whose option list contains its name. Where
 a name is valid at more than one tier, the tier it is CURRENTLY at wins — the same
 "already-correct beats speculative" rule as §3, applied per segment rather than per folder. A segment
