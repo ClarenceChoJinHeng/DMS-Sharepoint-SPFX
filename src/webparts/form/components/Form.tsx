@@ -4,10 +4,16 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFormProps } from "./IFormProps";
 import {
   lookupFolderMapping,
+  loadFolderMapRows,
   resolveMappedFolder,
   ensureFolder,
   encodeServerRelativePath,
+  FolderMapRow,
 } from "../../../shared/dmsFolderMap";
+import {
+  filterProvisionedPaths,
+  mappedTermGuidSet,
+} from "../../../shared/segmentReadiness";
 import { formatFileSize } from "../../../shared/fileSize";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
@@ -368,8 +374,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   // Generic N-level cascade state: one option list + one selected term id per level.
   const [levelChoices, setLevelChoices] = useState<TermOption[][]>([]);
   const [levelValues, setLevelValues] = useState<string[]>([]);
-  // Restricted users: their fully-authorised upload paths (segment→…→leaf).
+  // Restricted users: their fully-authorised upload paths (segment→…→leaf), filtered
+  // down to the ones whose leaf folder actually EXISTS. A path the user is authorised
+  // for but which has no folder yet is withheld, not offered — spec
+  // 2026-08-12-provisioned-segment-visibility-design.md.
   const [validPaths, setValidPaths] = useState<ValidPath[]>([]);
+  // True when the user IS authorised somewhere but every one of those paths was
+  // withheld for want of a folder. It is the only way to tell "you have no groups"
+  // (a membership problem) from "your folders were never created" (an admin task) —
+  // and they send the administrator to two completely different places.
+  const [awaitingFolders, setAwaitingFolders] = useState<boolean>(false);
 
   const [modes, setModes] = useState<UploadMode[]>([]);
   const [uploadMode, setUploadMode] = useState<string>("");
@@ -1078,8 +1092,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   useEffect(() => {
     const init = async (): Promise<void> => {
-      const [loadedSettings, rawModes, groupMap, userGroupIds, admin] =
-        await Promise.all([
+      const [
+        loadedSettings,
+        rawModes,
+        groupMap,
+        userGroupIds,
+        admin,
+        folderMapRows,
+      ] = await Promise.all([
           // Log the real failure. A silent fallback here is indistinguishable from
           // success and cost four rounds of diagnosis on 2026-07-30. Gotcha #9.
           loadSettings().catch((err) => {
@@ -1105,6 +1125,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           }),
           loadUserGroupIds(),
           loadIsAdmin(),
+          // Which folders EXIST. `null` on failure means "unknown", and unknown must
+          // offer everything — an unreadable list proves nothing, and silently
+          // emptying every dropdown takes the form down for the whole site. Same rule
+          // as the stale-chain guard and AllowedFileTypes: empty is not unknown.
+          loadFolderMapRows(context.spHttpClient, siteUrl).catch((err) => {
+            console.error(
+              "DMS Folder Map read failed — cannot tell which folders exist, so every authorised path will be offered.",
+              err,
+            );
+            return null as FolderMapRow[] | null;
+          }),
         ]);
       setSettings(loadedSettings);
       // Ignore config rows that predate the Side/Levels schema (empty Levels) —
@@ -1169,8 +1200,30 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         }
       } else {
         // Restricted: resolve the user's authorised paths and lock the cascade.
-        const paths = await resolveValidPaths(loadedModes, membership);
+        const authorised = await resolveValidPaths(loadedModes, membership);
+
+        // Withhold any path whose leaf folder does not exist yet. Authorisation says
+        // where the user MAY file; the Folder Map says where they CAN. Offering the
+        // difference is what let a brand-new segment appear before it had folders, and
+        // what let a newly grouped user pick a unit before reconciliation had run —
+        // both ending in a failure at upload time that the uploader cannot act on.
+        //
+        // The gate is at the LEAF only. The tiers above it are derived from the
+        // surviving paths, so a segment with nothing provisioned empties itself and
+        // disappears from the picker with no per-segment rule.
+        const provisioned = filterProvisionedPaths(
+          authorised,
+          mappedTermGuidSet(folderMapRows),
+        );
+        const paths = provisioned.paths;
         setValidPaths(paths);
+        // Only claim folders are missing when we actually KNOW they are: on an
+        // unreadable Folder Map nothing was withheld, and saying otherwise would send
+        // an admin to reconcile an intact tree.
+        setAwaitingFolders(
+          provisioned.known && paths.length === 0 && authorised.length > 0,
+        );
+
         const offerable = new Set(paths.map((p) => p.modeKey));
         const defaultMode =
           loadedModes.find(
@@ -1906,9 +1959,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           <p className="dms-dept-loading">Loading your access&hellip;</p>
         ) : !privileged && validPaths.length === 0 ? (
           <div className="dms-dept-error">
-            Your account isn&apos;t fully provisioned to upload — you need
-            membership at every level plus the unit uploader role. Contact your
-            administrator.
+            {awaitingFolders ? (
+              /* The user's access IS correct — their folders were never created. The
+                 membership message below would send their administrator to check
+                 groups that are already right, so these two states must not share
+                 wording. Both fixes are named in the order they must happen: a unit
+                 with no abbreviation row is skipped by every reconciliation run, so
+                 "re-run reconciliation" on its own is wrong half the time. */
+              <>
+                Your unit&apos;s folders haven&apos;t been created yet. Your DMS
+                administrator needs to give every unit an abbreviation in the DMS
+                Term Abbreviation list, then run folder reconciliation.
+              </>
+            ) : (
+              <>
+                Your account isn&apos;t fully provisioned to upload — you need
+                membership at every level plus the unit uploader role. Contact
+                your administrator.
+              </>
+            )}
           </div>
         ) : null}
 

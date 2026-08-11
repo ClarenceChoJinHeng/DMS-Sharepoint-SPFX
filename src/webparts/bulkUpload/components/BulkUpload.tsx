@@ -4,11 +4,17 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IBulkUploadProps } from "./IBulkUploadProps";
 import {
   lookupFolderMapping,
+  loadFolderMapRows,
   resolveMappedFolder,
   probeFolderByPath,
   ensureFolder,
   encodeServerRelativePath,
+  FolderMapRow,
 } from "../../../shared/dmsFolderMap";
+import {
+  filterProvisionedPaths,
+  mappedTermGuidSet,
+} from "../../../shared/segmentReadiness";
 import {
   parseLevels,
   collectMembership,
@@ -482,7 +488,13 @@ export default function BulkUpload({
   // Generic N-level cascade state: one option list + one selected term id per level.
   const [levelChoices, setLevelChoices] = useState<TermOption[][]>([]);
   const [levelValues, setLevelValues] = useState<string[]>([]);
+  // Authorised paths, minus any whose leaf folder does not exist yet — spec
+  // 2026-08-12-provisioned-segment-visibility-design.md.
   const [validPaths, setValidPaths] = useState<ValidPath[]>([]);
+  // Authorised somewhere, but every path withheld for want of a folder. Distinguishes
+  // an admin task (run reconciliation) from a membership problem, which send the
+  // administrator to two different places.
+  const [awaitingFolders, setAwaitingFolders] = useState<boolean>(false);
 
   const [modes, setModes] = useState<UploadMode[]>([]);
   const [settings, setSettings] = useState<DmsSettings>(DEFAULT_SETTINGS);
@@ -1098,14 +1110,30 @@ export default function BulkUpload({
 
   useEffect(() => {
     const init = async (): Promise<void> => {
-      const [loadedSettings, rawModes, groupMap, userGroupIds, admin] =
-        await Promise.all([
-          loadSettings().catch(() => DEFAULT_SETTINGS),
-          loadModes().catch(() => DEFAULT_MODES),
-          loadGroupMap().catch(() => [] as GroupMapRow[]),
-          loadUserGroupIds(),
-          loadIsAdmin(),
-        ]);
+      const [
+        loadedSettings,
+        rawModes,
+        groupMap,
+        userGroupIds,
+        admin,
+        folderMapRows,
+      ] = await Promise.all([
+        loadSettings().catch(() => DEFAULT_SETTINGS),
+        loadModes().catch(() => DEFAULT_MODES),
+        loadGroupMap().catch(() => [] as GroupMapRow[]),
+        loadUserGroupIds(),
+        loadIsAdmin(),
+        // Which folders EXIST. `null` = unknown, and unknown offers everything: an
+        // unreadable list proves nothing, and emptying every dropdown over a transient
+        // error takes the form down for the whole site. Empty is not unknown.
+        loadFolderMapRows(context.spHttpClient, siteUrl).catch((err) => {
+          console.error(
+            "DMS Folder Map read failed — cannot tell which folders exist, so every authorised path will be offered.",
+            err,
+          );
+          return null as FolderMapRow[] | null;
+        }),
+      ]);
       setSettings(loadedSettings);
       const usable = rawModes.filter(
         (m: UploadMode) => m.levels.length > 0 && !!m.termSetGuid,
@@ -1149,8 +1177,21 @@ export default function BulkUpload({
 
       let paths: ValidPath[] = [];
       if (!isPrivileged) {
-        paths = await resolveValidPaths(loadedModes, membership);
+        const authorised = await resolveValidPaths(loadedModes, membership);
+        // Authorisation says where the user MAY file; the Folder Map says where they
+        // CAN. Offering the difference is what let a newly grouped user pick a unit
+        // before reconciliation had run, and a new segment appear before it had any
+        // folders. Gating the LEAF empties the tiers above it, so an unprovisioned
+        // segment disappears with no per-segment rule.
+        const provisioned = filterProvisionedPaths(
+          authorised,
+          mappedTermGuidSet(folderMapRows),
+        );
+        paths = provisioned.paths;
         setValidPaths(paths);
+        setAwaitingFolders(
+          provisioned.known && paths.length === 0 && authorised.length > 0,
+        );
       }
 
       // Open on a destination the user can actually reach, so both cards are
@@ -2170,9 +2211,24 @@ export default function BulkUpload({
           <p className="dms-dept-loading">Loading your access&hellip;</p>
         ) : !privileged && validPaths.length === 0 ? (
           <div className="dms-dept-error">
-            Your account isn&apos;t fully provisioned to upload — you need
-            membership at every level plus the unit uploader role. Contact your
-            administrator.
+            {awaitingFolders ? (
+              /* Access is correct; the folders were never created. The membership
+                 wording below would send the administrator to check groups that are
+                 already right. Both fixes are named in order — a unit with no
+                 abbreviation row is skipped by every reconciliation run, so
+                 "re-run reconciliation" alone is wrong half the time. */
+              <>
+                Your unit&apos;s folders haven&apos;t been created yet. Your DMS
+                administrator needs to give every unit an abbreviation in the DMS
+                Term Abbreviation list, then run folder reconciliation.
+              </>
+            ) : (
+              <>
+                Your account isn&apos;t fully provisioned to upload — you need
+                membership at every level plus the unit uploader role. Contact
+                your administrator.
+              </>
+            )}
           </div>
         ) : null}
 

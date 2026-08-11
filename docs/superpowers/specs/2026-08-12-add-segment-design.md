@@ -111,11 +111,22 @@ The abbreviation line is the one that silently does nothing: reconciliation skip
 abbreviation rather than guessing, so a fully configured segment with none provisions an empty tree
 and reports success. It belongs on the screen, not only in a document.
 
-The new segment is **immediately visible in the upload form** — it is a mode row, and the form reads
-those live. So it will be offered to uploaders before its folders exist. That is acceptable only
-because an upload into it fails loudly (no Folder Map row → *"has no folder yet… needs an abbreviation
-then reconciliation"*), and because the checklist says so. **Do not** add a "draft" state to hide it:
-that would be a second staging mechanism, and the one we have exists for a different problem.
+The new segment is **NOT visible to uploaders until its folders exist** — client instruction,
+2026-08-12, see
+[2026-08-12-provisioned-segment-visibility-design.md](2026-08-12-provisioned-segment-visibility-design.md).
+The upload form offers a path only when a `DMS Folder Map` row exists for its leaf term, so a segment
+with no reconciled folders has no offerable paths and disappears on its own. No flag and no "draft"
+state: the gate is derived from the same row the uploader's write already looks for, which is also why
+it cannot be ticked prematurely.
+
+Site admins still see it (they have the full cascade and must be able to test), so **this checklist is
+what tells the person building the segment that it is not yet live** — the uploader will not tell them
+by complaining.
+
+An earlier draft of this spec argued the opposite — that immediate visibility was acceptable because
+the upload fails loudly. The loud failure remains as a backstop, but it is the wrong primary
+behaviour: it puts a confusing error in front of an uploader who did nothing wrong and cannot act on
+it, to save an admin an inconvenience.
 
 ## 6. Out of scope, deliberately
 
