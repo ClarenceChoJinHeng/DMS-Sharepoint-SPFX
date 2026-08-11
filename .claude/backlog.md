@@ -89,6 +89,19 @@ Folder hierarchy is a **nested chain** (Sub-1 contains Sub-2 contains Sub-3, etc
 - [ ] Test full pipeline end to end: upload > approve via web part > auto-route fires > file in dept library
 
 ### RBAC Groups
+- [ ] **Folder Access should grant the ACL on save, like its three sibling pages do.** Deferred
+      2026-08-11, from a real incident that day: a new group was created and mapped, reconciliation
+      was not run, and the uploader got HTTP 403 on the unit folder. The dropdowns work in that
+      state — they come from the Group Map plus the term store, not the ACL — so the system looks
+      correct right up to the upload. Only an administrator can fix it, because granting folder
+      access needs Manage Permissions and a PIC must never be able to grant themselves. Site,
+      Library and Page Access all call `addroleassignment` at save time; **Folder Access alone
+      defers to a run someone has to remember**, which is the actual defect. Fix: grant immediately
+      for UNIT-scoped personas (PIC, Head of Unit) — the unit folder in both libraries at the
+      per-library level from `permissionForRole`, NEVER the flat table, plus the ancestor-Read
+      grants or the group reaches a folder it cannot navigate to. Department- and segment-wide
+      personas fan out across every unit below them, so those stay reconciliation's job and must
+      SAY so rather than appear to have worked.
 - [ ] Create Uploader SP group (Contribute permission on Staging library)
 - [ ] Create Reader SP group (Read permission on department destination libraries only)
 - [ ] Break permission inheritance on department libraries so Readers see only their department
