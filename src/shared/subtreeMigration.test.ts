@@ -248,6 +248,23 @@ describe("backfillNeeds", () => {
     expect(needs[0].fields.map((f) => f.chainIndex)).toEqual([1, 2]);
   });
 
+  it("stamps only the tiers the caller is willing to write", () => {
+    // The real incident, 2026-08-11: Year and Document Type are MANAGED METADATA, and the
+    // caller signals that by returning undefined for them (they carry no tidCol). Writing a bare
+    // label to a taxonomy field fails with "the data returned from the tagging UI was not
+    // formatted correctly" — and since one bad field fails the whole validateUpdateListItem
+    // call, it took a perfectly valid write down with it. Reading such a field back as a string
+    // also yields "" (the value is an object), so every file looked like it needed a stamp it
+    // did not need.
+    const needs = backfillNeeds(
+      UNIT,
+      [{ path: `${UNIT}/testig/2024/Tax Return/a.pdf`, values: {} }],
+      TIERS,
+      (i) => (i === 0 ? "Testing" : undefined),
+    );
+    expect(needs[0].fields.map((f) => f.chainIndex)).toEqual([0]);
+  });
+
   it("maps positions to the effective tiers, not the chain, when a tier does not apply", () => {
     // This unit has no SubUnits, so its first folder is Year. Indexing against the full
     // chain instead would read "2024" as a SubUnit and stamp the wrong column.

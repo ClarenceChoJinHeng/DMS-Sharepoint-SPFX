@@ -147,6 +147,25 @@ repairs files uploaded during the window between saving a structure and migratin
 Part B derives the expected value from the **path**, and trusts the path over the column. The path is
 where the document actually is; the column is a description of it.
 
+**A tier with no `tidCol` is MANAGED METADATA and must be left alone** — found live 2026-08-11, on
+the first real run. Two independent reasons, either sufficient:
+
+1. A taxonomy field needs `Label|GUID` (gotcha #5). The bare label fails with *"The data returned
+   from the tagging UI was not formatted correctly"* — and because one bad field fails the WHOLE
+   `validateUpdateListItem` call (gotcha #4), it took the perfectly valid `CreditCard` write down
+   with it. The same failure that once made bulk upload tag nothing at all.
+2. Nothing needed writing anyway. A migration INSERTS an ancestor tier; the `2024` and `Tax Return`
+   folders keep their names and their values, so those columns were already correct. Reading a
+   taxonomy field back as a plain string yields `""` — the value is an object — so **every file
+   looked like it needed a stamp it did not need.**
+
+The `tidCol` test is exact rather than a proxy: the plain-text label+GUID pair is what the
+multi-segment model writes, and the only tiers without one are the built-in Year / Document Type
+pair synthesised by `effectiveOnDemandTiers`, which omits it deliberately.
+
+Stamps are also **grouped per tier and retried individually** when the combined call fails, so one
+unwritable column cannot cost the others — and the report names the tier, not just the file.
+
 ### 5.2 A structure change is STAGED, and applying it is the last step of the migration
 
 Added 2026-08-11 at the client's request, before any of this reached a user. The original build
