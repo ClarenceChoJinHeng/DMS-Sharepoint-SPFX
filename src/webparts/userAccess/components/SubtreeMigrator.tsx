@@ -709,6 +709,153 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     );
   };
 
+  /**
+   * Part B: make every file's tier columns agree with where the file actually sits.
+   *
+   * Separate from `run` because it must be reachable WITHOUT a move. The first live run proved
+   * why: the folders moved, the tagging failed, and the second attempt found nothing to move —
+   * so the only path to part B was closed and the metadata could never be repaired. A repair
+   * step reachable only via the thing that broke it is not a repair step.
+   *
+   * Safe to run at any time and as often as wanted: it derives its work from the paths, writes
+   * only what disagrees, and touches no folder.
+   */
+  const backfillMetadata = async (
+    seg: SegmentRow,
+    rows: UnitScan[],
+  ): Promise<{ stamped: number; failed: number }> => {
+    const tiers = belowUnit(seg);
+    let stamped = 0;
+    let failed = 0;
+
+    /**
+     * The column to compare and stamp for a tier — or `undefined` for one this tool must not
+     * touch.
+     *
+     * **A tier with no `tidCol` is MANAGED METADATA**, and the migration leaves it alone. Two
+     * independent reasons, either sufficient:
+     *
+     *   1. A taxonomy field needs `Label|GUID` (gotcha #5). The bare label fails with "The data
+     *      returned from the tagging UI was not formatted correctly" — seen live 2026-08-11 on
+     *      `Year` and `Document_x0020_Type` — and it took the valid `CreditCard` write down with
+     *      it, because one bad field fails the whole call.
+     *   2. Nothing needed writing. A migration INSERTS an ancestor tier; the `2024` and `Tax
+     *      Return` folders keep their names and values, so those columns were already right.
+     *      Reading one back as a plain string yields "" — the value is an object — so every file
+     *      looked like it needed a stamp it did not need.
+     *
+     * The `tidCol` test is exact, not a proxy: the plain-text label+GUID pair is what the
+     * multi-segment model writes, and the only tiers without one are the built-in Year /
+     * Document Type pair that `effectiveOnDemandTiers` omits it for.
+     */
+    const colFor = (i: number): string | undefined => {
+      const lvl = tiers[i];
+      if (!lvl || !lvl.tidCol) return undefined;
+      return lvl.labelCol ?? lvl.column;
+    };
+    const allCols: string[] = [];
+    for (let i = 0; i < tiers.length; i++) {
+      const col = colFor(i);
+      if (col && allCols.indexOf(col) < 0) allCols.push(col);
+    }
+    if (allCols.length === 0) return { stamped, failed };
+
+    // One read per library, not per unit.
+    const filesByLib: Record<string, LibFile[]> = {};
+    for (const lib of rows.map((r) => r.lib)) {
+      if (filesByLib[lib.key]) continue;
+      try {
+        filesByLib[lib.key] = await readLibraryFiles(lib, allCols);
+      } catch (e) {
+        failed++;
+        say(`${lib.title}: ${(e as Error).message}`, false);
+        filesByLib[lib.key] = [];
+      }
+    }
+
+    for (const row of rows) {
+      if (row.unresolved) continue;
+      const label = `${row.lib.key} · ${row.tail}`;
+      try {
+        const prefix = `${row.unitPath}/`;
+        const files = (filesByLib[row.lib.key] ?? []).filter((f) => f.path.indexOf(prefix) === 0);
+        const idByPath: Record<string, number> = {};
+        for (const f of files) idByPath[f.path] = f.id;
+        for (const need of backfillNeeds(row.unitPath, files, row.tiers, colFor)) {
+          // Grouped per tier, not flattened, so one rejected tier can be retried alone. ONE bad
+          // field name fails the WHOLE validateUpdateListItem call (gotcha #4) — how a single
+          // unwritable column took every other column with it, the same failure that once made
+          // bulk upload tag nothing at all.
+          const groups: Array<{ label: string; values: Array<{ FieldName: string; FieldValue: string }> }> = [];
+          for (const field of need.fields) {
+            const lvl = tiers[field.chainIndex];
+            if (!lvl) continue;
+            const labelCol = lvl.labelCol ?? lvl.column;
+            if (!labelCol) continue;
+            const values = [{ FieldName: labelCol, FieldValue: field.label }];
+            const at = row.tiers.map((t) => t.chainIndex).indexOf(field.chainIndex);
+            const term = (row.options[at] ?? []).filter(
+              (o) => o.label.trim().toLowerCase() === field.label.trim().toLowerCase(),
+            )[0];
+            // No matching term means no GUID: the label is still written and the id left alone,
+            // rather than filled with a guess that would outlive the run.
+            if (term) values.push({ FieldName: lvl.tidCol as string, FieldValue: term.id });
+            groups.push({ label: lvl.label, values });
+          }
+          const all: Array<{ FieldName: string; FieldValue: string }> = [];
+          for (const g of groups) for (const v of g.values) all.push(v);
+          if (all.length === 0) continue;
+          try {
+            await stampFile(row.lib, idByPath[need.path], all);
+            stamped++;
+          } catch {
+            // Retry tier by tier to salvage the ones that are fine and to name the one that is
+            // not. "Could not tag this file", when four of five columns would have written, is
+            // how a narrow problem becomes an opaque one.
+            let wrote = 0;
+            for (const g of groups) {
+              try {
+                await stampFile(row.lib, idByPath[need.path], g.values);
+                wrote++;
+              } catch (e2) {
+                failed++;
+                say(
+                  `${label}: could NOT tag ${g.label} on ${need.path.split("/").pop()} — ${(e2 as Error).message}`,
+                  false,
+                );
+              }
+            }
+            if (wrote > 0) stamped++;
+          }
+        }
+      } catch (e) {
+        failed++;
+        say(`${label}: ${(e as Error).message}`, false);
+      }
+    }
+    return { stamped, failed };
+  };
+
+  /** Part B on its own, from the no-folders-to-move state. */
+  const runTagsOnly = async (): Promise<void> => {
+    const seg = segments.filter((x) => x.key === chosen)[0];
+    if (!seg || !scans) return;
+    setRunning(true);
+    setLog([]);
+    setDone(undefined);
+    try {
+      const tags = await backfillMetadata(seg, scans);
+      setDone(
+        tags.stamped === 0 && tags.failed === 0
+          ? "Every document's folder columns already match where it sits — nothing to change."
+          : `Tagged ${tags.stamped} document(s).` +
+            (tags.failed > 0 ? ` ${tags.failed} problem(s) listed above; running this again is safe.` : ""),
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const run = async (): Promise<void> => {
     const seg = segments.filter((x) => x.key === chosen)[0];
     if (!seg || !scans) return;
@@ -717,7 +864,6 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     setConfirmText("");
     setLog([]);
     setDone(undefined);
-    const tiers = belowUnit(seg);
     let moved = 0;
     let stamped = 0;
     let failed = 0;
@@ -769,112 +915,9 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
 
       // Metadata second, read fresh: the paths have just changed, and re-reading rather than
       // remembering is what makes a half-finished run safe to repeat. Spec §5.1.
-      /**
-       * The column to compare and stamp for a tier — or `undefined` for a tier this tool must
-       * not touch.
-       *
-       * **A tier with no `tidCol` is MANAGED METADATA**, and this migration must leave it
-       * alone. Two independent reasons, either of which is sufficient:
-       *
-       *   1. A taxonomy field needs `Label|GUID` (gotcha #5). Writing the bare label fails with
-       *      "The data returned from the tagging UI was not formatted correctly" — observed
-       *      live 2026-08-11 on `Year` and `Document_x0020_Type`, and it took the perfectly
-       *      valid `CreditCard` write down with it, because one bad field fails the whole call.
-       *   2. Nothing needs writing anyway. A migration INSERTS an ancestor tier; the `2024` and
-       *      `Tax Return` folders keep their names and their values, so those columns were
-       *      already correct. Reading them back as a plain string yields "" — a taxonomy field
-       *      is an object — so every file looked like it needed a stamp it did not need.
-       *
-       * The `tidCol` test is exactly right for this, and not a proxy: the plain-text
-       * label+GUID pair is what the multi-segment model writes, and the only tiers without a
-       * `tidCol` are the built-in Year / Document Type pair synthesised by
-       * `effectiveOnDemandTiers`, which deliberately omits it for this reason.
-       */
-      const colFor = (i: number): string | undefined => {
-        const lvl = tiers[i];
-        if (!lvl || !lvl.tidCol) return undefined;
-        return lvl.labelCol ?? lvl.column;
-      };
-      const allCols: string[] = [];
-      for (let i = 0; i < tiers.length; i++) {
-        const col = colFor(i);
-        if (col && allCols.indexOf(col) < 0) allCols.push(col);
-      }
-      // One read per library, not per unit.
-      const filesByLib: Record<string, LibFile[]> = {};
-      for (const lib of scans.map((r) => r.lib)) {
-        if (filesByLib[lib.key] || allCols.length === 0) continue;
-        try {
-          filesByLib[lib.key] = await readLibraryFiles(lib, allCols);
-        } catch (e) {
-          failed++;
-          say(`${lib.title}: ${(e as Error).message}`, false);
-          filesByLib[lib.key] = [];
-        }
-      }
-
-      for (const row of scans) {
-        if (row.unresolved) continue;
-        const label = `${row.lib.key} · ${row.tail}`;
-        if (allCols.length === 0) continue;
-        try {
-          const prefix = `${row.unitPath}/`;
-          const files = (filesByLib[row.lib.key] ?? []).filter((f) => f.path.indexOf(prefix) === 0);
-          const idByPath: Record<string, number> = {};
-          for (const f of files) idByPath[f.path] = f.id;
-          const needs = backfillNeeds(row.unitPath, files, row.tiers, colFor);
-          for (const need of needs) {
-            // Grouped per tier, not flattened, so one rejected tier can be retried on its own.
-            // ONE bad field name fails the WHOLE validateUpdateListItem call (gotcha #4), which
-            // is how a single unwritable column took every other column down with it — the same
-            // failure that made bulk upload tag nothing at all.
-            const groups: Array<{ label: string; values: Array<{ FieldName: string; FieldValue: string }> }> = [];
-            for (const field of need.fields) {
-              const lvl = tiers[field.chainIndex];
-              if (!lvl) continue;
-              const labelCol = lvl.labelCol ?? lvl.column;
-              if (!labelCol) continue;
-              const values = [{ FieldName: labelCol, FieldValue: field.label }];
-              const at = row.tiers.map((t) => t.chainIndex).indexOf(field.chainIndex);
-              const term = (row.options[at] ?? []).filter(
-                (o) => o.label.trim().toLowerCase() === field.label.trim().toLowerCase(),
-              )[0];
-              // No matching term means no GUID: the label is still written and the id left
-              // alone, rather than filled with a guess that would outlive the run.
-              if (term) values.push({ FieldName: lvl.tidCol as string, FieldValue: term.id });
-              groups.push({ label: lvl.label, values });
-            }
-            const all: Array<{ FieldName: string; FieldValue: string }> = [];
-            for (const g of groups) for (const v of g.values) all.push(v);
-            if (all.length === 0) continue;
-            try {
-              await stampFile(row.lib, idByPath[need.path], all);
-              stamped++;
-            } catch {
-              // Retry tier by tier to salvage the ones that are fine, and to name the one that
-              // is not. Reporting "could not tag this file" when four of five columns would
-              // have written is what turns a narrow problem into an opaque one.
-              let wrote = 0;
-              for (const g of groups) {
-                try {
-                  await stampFile(row.lib, idByPath[need.path], g.values);
-                  wrote++;
-                } catch (e2) {
-                  failed++;
-                  say(
-                    `${label}: could NOT tag ${g.label} on ${need.path.split("/").pop()} — ${(e2 as Error).message}`,
-                    false,
-                  );
-                }
-              }
-              if (wrote > 0) stamped++;
-            }
-          }
-        } catch (e) {
-          failed++;
-          say(`${label}: ${(e as Error).message}`, false);
-        }
-      }
+      const tags = await backfillMetadata(seg, scans);
+      stamped += tags.stamped;
+      failed += tags.failed;
 
       setDone(
         `Moved ${moved} folder(s) and tagged ${stamped} file(s).` +
@@ -968,6 +1011,21 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
       {scans && groups.length === 0 && !scanError && (
         <div style={{ ...s.msg, ...s.ok, marginTop: 16 }}>
           Nothing to move — every folder in this segment already sits at the right level.
+        </div>
+      )}
+
+      {/* Tagging must be reachable WITHOUT a move. Proved by the first live run: the folders
+          moved, the tagging failed, and the retry found nothing to move — so the only route to
+          the repair was closed, and the metadata could never be fixed. */}
+      {scans && groups.length === 0 && !scanError && (
+        <div style={{ ...s.card, marginTop: 4 }}>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: "0 0 12px" }}>
+            The folder columns on each document should say which folder it is in. Checking is
+            harmless and changes only what disagrees.
+          </p>
+          <button style={running ? s.off : s.ghost} disabled={running} onClick={runTagsOnly}>
+            {running ? "Checking…" : "Check document tags"}
+          </button>
         </div>
       )}
 

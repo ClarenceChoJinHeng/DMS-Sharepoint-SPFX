@@ -166,6 +166,13 @@ pair synthesised by `effectiveOnDemandTiers`, which omits it deliberately.
 Stamps are also **grouped per tier and retried individually** when the combined call fails, so one
 unwritable column cannot cost the others — and the report names the tier, not just the file.
 
+**Part B must be reachable WITHOUT a move**, through its own *Check document tags* button. The first
+live run proved why: the folders moved, the tagging failed, and the retry then found nothing to move
+— so the only route to the repair was closed and the metadata could never be fixed. **A repair step
+reachable only through the thing that broke it is not a repair step.** Running it is safe at any
+time and as often as wanted: it derives its work from the paths, writes only what disagrees, and
+touches no folder.
+
 ### 5.2 A structure change is STAGED, and applying it is the last step of the migration
 
 Added 2026-08-11 at the client's request, before any of this reached a user. The original build
