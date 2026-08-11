@@ -89,3 +89,42 @@ export function filterProvisionedPaths<P extends LeafPath>(
   }
   return { paths: kept, withheld: paths.length - kept.length, known: true };
 }
+
+/**
+ * What an upload-access probe concluded about one folder. Mirrors `UploadAccess` in
+ * dmsFolderMap so this module needs no SharePoint imports and stays testable alone.
+ */
+export type AccessVerdict = "granted" | "denied" | "missing" | "unknown";
+
+/**
+ * Keep only the paths this user can actually upload into.
+ *
+ * The existence gate above is not enough, and finding that out cost a live test on
+ * 2026-08-12: reconciliation creates folders from the TERM TREE but assigns group ACLs
+ * in a separate pass, so creating a group creates no folder and removes none. Two new
+ * groups whose units already had folders sailed straight through an existence check and
+ * were offered to an uploader with no access to either — the same HTTP 403 the gate was
+ * built to prevent, arriving by a route existence cannot see. Existence is a property of
+ * the folder; being able to upload is a property of the folder AND the user.
+ *
+ * `verdicts` is positional — `verdicts[i]` belongs to `paths[i]`. A missing entry counts
+ * as `unknown`, so a short array fails OPEN rather than silently hiding the tail.
+ *
+ * `unknown` is KEPT. A probe that could not reach the server is not evidence of denial,
+ * and blocking on it would let a throttle empty the form (§5 of the spec). It also clears
+ * `known`, because once any verdict is uncertain the caller can no longer honestly tell
+ * the user their folders are missing.
+ */
+export function filterReachablePaths<P>(
+  paths: P[],
+  verdicts: AccessVerdict[],
+): ProvisionedPaths<P> {
+  const kept: P[] = [];
+  let certain = true;
+  paths.forEach((p, i) => {
+    const verdict = verdicts[i] ?? "unknown";
+    if (verdict === "unknown") certain = false;
+    if (verdict === "granted" || verdict === "unknown") kept.push(p);
+  });
+  return { paths: kept, withheld: paths.length - kept.length, known: certain };
+}

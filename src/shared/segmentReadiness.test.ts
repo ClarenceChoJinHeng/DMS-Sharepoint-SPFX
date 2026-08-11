@@ -1,5 +1,7 @@
 import {
+  AccessVerdict,
   filterProvisionedPaths,
+  filterReachablePaths,
   mappedTermGuidSet,
   normalizeTermGuid,
 } from "./segmentReadiness";
@@ -116,6 +118,58 @@ describe("filterProvisionedPaths", () => {
 
   it("leaves an empty input empty without claiming anything was withheld", () => {
     const out = filterProvisionedPaths([] as Path[], new Set([CORU]));
+    expect(out.paths).toEqual([]);
+    expect(out.withheld).toBe(0);
+    expect(out.known).toBe(true);
+  });
+});
+
+describe("filterReachablePaths", () => {
+  const two = [path("mode_nbpol", CORU), path("mode_nbpol", GMB)];
+
+  it("keeps a granted path and withholds a denied one", () => {
+    const out = filterReachablePaths(two, ["granted", "denied"]);
+    expect(out.paths.map((p) => p.chain[1].id)).toEqual([CORU]);
+    expect(out.withheld).toBe(1);
+    expect(out.known).toBe(true);
+  });
+
+  it("withholds a unit whose folder EXISTS but was never granted to the user", () => {
+    // The live failure of 2026-08-12: two new groups whose unit folders already existed
+    // from an earlier reconciliation run. Existence said yes; the ACL did not exist.
+    const out = filterReachablePaths(two, ["denied", "denied"]);
+    expect(out.paths).toEqual([]);
+    expect(out.withheld).toBe(2);
+    expect(out.known).toBe(true);
+  });
+
+  it("treats a missing folder exactly like a denied one — same fix, same message", () => {
+    const out = filterReachablePaths(two, ["missing", "granted"]);
+    expect(out.paths.map((p) => p.chain[1].id)).toEqual([GMB]);
+    expect(out.withheld).toBe(1);
+  });
+
+  it("KEEPS an unknown verdict — a throttle is not evidence of denial", () => {
+    const out = filterReachablePaths(two, ["unknown", "granted"]);
+    expect(out.paths).toHaveLength(2);
+    expect(out.withheld).toBe(0);
+  });
+
+  it("clears `known` when any verdict is uncertain, so nothing is claimed about folders", () => {
+    const out = filterReachablePaths(two, ["unknown", "denied"]);
+    expect(out.paths.map((p) => p.chain[1].id)).toEqual([CORU]);
+    expect(out.withheld).toBe(1);
+    expect(out.known).toBe(false);
+  });
+
+  it("fails OPEN on a short verdict array rather than hiding the tail", () => {
+    const out = filterReachablePaths(two, ["granted"] as AccessVerdict[]);
+    expect(out.paths).toHaveLength(2);
+    expect(out.known).toBe(false);
+  });
+
+  it("handles an empty input without claiming uncertainty", () => {
+    const out = filterReachablePaths([] as Path[], []);
     expect(out.paths).toEqual([]);
     expect(out.withheld).toBe(0);
     expect(out.known).toBe(true);

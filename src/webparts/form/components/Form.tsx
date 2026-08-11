@@ -8,11 +8,15 @@ import {
   resolveMappedFolder,
   ensureFolder,
   encodeServerRelativePath,
+  probeFolderUploadAccess,
   FolderMapRow,
 } from "../../../shared/dmsFolderMap";
 import {
+  AccessVerdict,
   filterProvisionedPaths,
+  filterReachablePaths,
   mappedTermGuidSet,
+  normalizeTermGuid,
 } from "../../../shared/segmentReadiness";
 import { formatFileSize } from "../../../shared/fileSize";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
@@ -1215,13 +1219,45 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           authorised,
           mappedTermGuidSet(folderMapRows),
         );
-        const paths = provisioned.paths;
+
+        // Existence is not enough. Reconciliation creates folders from the term tree and
+        // grants group ACLs in a SEPARATE pass, so a brand-new group's unit folder
+        // usually already exists — it is the ACL that is missing. An existence check
+        // waves those through (verified live 2026-08-12) and the uploader meets the 403
+        // anyway. So ask the folder what THIS user may do with it.
+        //
+        // One request per surviving path, in parallel. A PIC has one or two; the
+        // department fan-out that produces many belongs to Documents-side viewers, who
+        // are not uploaders. Probes that cannot reach the server come back "unknown" and
+        // are KEPT — a throttle must never empty the form.
+        const reachable = filterReachablePaths(
+          provisioned.paths,
+          await Promise.all(
+            provisioned.paths.map(async (p): Promise<AccessVerdict> => {
+              const leaf = p.chain[p.chain.length - 1];
+              const row = (folderMapRows ?? []).find(
+                (r) => normalizeTermGuid(r.termGuid) === normalizeTermGuid(leaf?.id),
+              );
+              if (!row?.folderUniqueId) return "missing";
+              return probeFolderUploadAccess(
+                context.spHttpClient,
+                siteUrl,
+                row.folderUniqueId,
+              ).catch(() => "unknown" as AccessVerdict);
+            }),
+          ),
+        );
+
+        const paths = reachable.paths;
         setValidPaths(paths);
-        // Only claim folders are missing when we actually KNOW they are: on an
-        // unreadable Folder Map nothing was withheld, and saying otherwise would send
-        // an admin to reconcile an intact tree.
+        // Only claim the folders are not ready when we actually KNOW it: an unreadable
+        // Folder Map or an inconclusive probe withholds nothing, and saying otherwise
+        // would send an admin to reconcile an intact, correctly permissioned tree.
         setAwaitingFolders(
-          provisioned.known && paths.length === 0 && authorised.length > 0,
+          provisioned.known &&
+            reachable.known &&
+            paths.length === 0 &&
+            authorised.length > 0,
         );
 
         const offerable = new Set(paths.map((p) => p.modeKey));
@@ -1960,16 +1996,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         ) : !privileged && validPaths.length === 0 ? (
           <div className="dms-dept-error">
             {awaitingFolders ? (
-              /* The user's access IS correct — their folders were never created. The
-                 membership message below would send their administrator to check
-                 groups that are already right, so these two states must not share
-                 wording. Both fixes are named in the order they must happen: a unit
-                 with no abbreviation row is skipped by every reconciliation run, so
-                 "re-run reconciliation" on its own is wrong half the time. */
+              /* The user's GROUPS are correct — the folder side is not. Two different
+                 causes with one fix: either the folder does not exist, or it exists and
+                 this user's group was never granted access to it (the far more common
+                 case, since creating a group grants nothing until reconciliation runs).
+                 Reconciliation leads because it is what fixes both; the abbreviation is
+                 named second because a unit lacking one is skipped by every run, so
+                 reconciliation alone would silently change nothing for it.
+                 The membership message below must not be shown here — it would send the
+                 administrator to check groups that are already right. */
               <>
-                Your unit&apos;s folders haven&apos;t been created yet. Your DMS
-                administrator needs to give every unit an abbreviation in the DMS
-                Term Abbreviation list, then run folder reconciliation.
+                Your unit isn&apos;t ready to receive uploads yet. Your DMS
+                administrator needs to run folder reconciliation — and if the unit
+                has no folder at all, give it an abbreviation in the DMS Term
+                Abbreviation list first.
               </>
             ) : (
               <>

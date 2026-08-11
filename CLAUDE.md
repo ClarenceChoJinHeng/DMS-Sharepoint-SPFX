@@ -82,30 +82,46 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
 - **Folder routing:** the deepest **permissioned** level = the **Unit** folder, resolved by
   UniqueId via DMS Folder Map. Everything below it is **ensure-created on demand** and inherits the
   Unit's ACL — nothing below Unit breaks inheritance (client decision, 2026-08-06).
-- **A PATH IS OFFERED ONLY IF ITS LEAF FOLDER EXISTS (2026-08-12, client's instruction** — *"I do not
-  want the half built segment to show… once the Segment and structure and group is properly assigned
-  only then the uploader should be able to upload"*). Spec
-  `2026-08-12-provisioned-segment-visibility-design.md`. Both upload web parts now read **DMS Folder
-  Map** at mount and drop every authorised path whose **leaf** term has no row
-  (`filterProvisionedPaths` in `shared/segmentReadiness.ts`).
-  - This fixed **two symptoms with one cause**: a new segment appeared before it had folders, and a
+- **A PATH IS OFFERED ONLY IF THIS USER CAN ACTUALLY UPLOAD INTO IT (2026-08-12, client's
+  instruction** — *"I do not want the half built segment to show… once the Segment and structure and
+  group is properly assigned only then the uploader should be able to upload"*). Spec
+  `2026-08-12-provisioned-segment-visibility-design.md`. `Form.tsx` reads **DMS Folder Map** at mount,
+  drops any authorised path whose **leaf** term has no row, then **probes the survivors' folders for
+  `AddListItems`** (`filterProvisionedPaths` + `filterReachablePaths` in `shared/segmentReadiness.ts`,
+  `probeFolderUploadAccess` in `dmsFolderMap.ts`).
+  - This closed **two symptoms with one cause**: a new segment appeared before it had folders, and a
     user added to a unit group could pick that unit before reconciliation had run (the origin of the
-    upload form's HTTP 403). The form decided what to offer from Group Map + the term tree and only
-    asked whether the folder was real at *write* time — it offered intent, not reality.
-  - The gate is **DERIVED, never a `Ready` flag.** A flag can be ticked before it is true; this reads
-    the very row the upload will look for, so it cannot disagree with reality. It also needs no
-    migration, and a segment-level flag could not express "three units provisioned, one not".
+    upload form's HTTP 403). The form offered intent, and only asked whether the destination was
+    usable at *write* time.
+  - **EXISTENCE IS NOT THE QUESTION — the first build got this wrong and a live test caught it.**
+    Reconciliation creates folders from the **term tree** (keyed on abbreviations) and grants group
+    ACLs in a **SEPARATE pass** (keyed on Group Map). So creating a group creates no folder: two new
+    NBPOL groups whose units already had folders passed an existence check and were offered to an
+    uploader with no access to either. **Existence is a property of the folder; being able to upload
+    is a property of the folder AND the user**, and no amount of Folder Map reading answers the second.
+  - **The probe tests UPLOAD, not read.** A PIC also in their unit's base group holds Read on the
+    folder while their `*_UPL` group is still ungranted (2026-08-08 §5.8) — a visibility probe would
+    call that ready and deliver the same 403. Read `Low` **arithmetically, never with `&`**: JS
+    bitwise coerces to a SIGNED 32-bit int and Full Control returns `Low = "4294967295"`.
+  - **`BulkUpload.tsx` is existence-gated only, deliberately.** It writes into **Documents**, where
+    `UPL` is Read-only by design (2026-08-09), so an `AddListItems` probe there would empty that form
+    for every PIC — accurate, but a client decision, not a side effect of fixing the upload form.
+  - The gate is **DERIVED, never a `Ready` flag.** A flag can be ticked before it is true; this asks
+    the same question the upload will. It needs no migration, and a segment-level flag could not
+    express "three units reachable, one not".
   - **Gating the LEAF is the whole mechanism** — the tiers above are derived from surviving paths, so
-    an unprovisioned segment empties itself and vanishes with no per-segment rule.
-  - **An unreadable Folder Map must offer EVERYTHING** (`null` = unknown ≠ empty, as with gotcha 11
-    and 10b). A transient error that empties every dropdown takes the form down site-wide; the
-    upload-time check at `Form.tsx` stays as the backstop that makes the degraded path safe.
-  - **Site admins are unaffected** — `privileged` users get the full cascade and no `validPaths`, so
-    they can still see and test a segment they are building. The Structure Manager checklist is what
-    tells them it is not live yet; the uploader will no longer tell them by complaining.
-  - The empty state now **names the right fix**: "folders haven't been created yet… abbreviation then
-    reconciliation" when the user IS authorised, vs the membership message when they are not. The old
-    single message sent admins to check groups that were already correct.
+    an unreachable segment empties itself and vanishes with no per-segment rule.
+  - **An unreadable Folder Map or an inconclusive probe must offer EVERYTHING** (`unknown` ≠ empty, as
+    with gotcha 11 and 10b; a short verdict array fails OPEN too). A transient error that empties every
+    dropdown takes the form down site-wide; the upload-time checks stay as the backstop that makes the
+    degraded path safe.
+  - **Site admins are unaffected** and issue **no probes** — `privileged` users get the full cascade
+    and no `validPaths`, so they can still see and test a segment they are building. The Structure
+    Manager checklist is what tells them it is not live yet; the uploader no longer will.
+  - The empty state **names the right fix**: "isn't ready to receive uploads yet… run folder
+    reconciliation — and if the unit has no folder at all, give it an abbreviation first" when the user
+    IS authorised, vs the membership message when they are not. Reconciliation leads because the common
+    case is an ungranted ACL. Shown only when BOTH filters report `known`.
 - **Below-Unit structure is CONFIGURABLE since 2026-08-09** (spec
   `2026-08-06-configurable-folder-structure-chain-design.md`; built, **not yet site-tested**).
   A `Levels` entry with `"permissioned": false` is a below-Unit tier: add one and both upload web

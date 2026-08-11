@@ -310,6 +310,95 @@ export async function probeFolderById(
   };
 }
 
+/**
+ * Can the CURRENT user actually file a document into this folder?
+ *
+ * Spec: docs/superpowers/specs/2026-08-12-provisioned-segment-visibility-design.md §2.1
+ *
+ * "Does the folder exist?" cannot answer this, because existence is not per-user.
+ * Reconciliation creates folders by walking the term tree (keyed on abbreviations) and
+ * assigns group ACLs in a SEPARATE pass (keyed on Group Map) — so a folder can exist
+ * for months while a newly created group has no access to it at all. That gap is what
+ * produced the HTTP 403 in the upload form on 2026-08-11: the form offered a unit whose
+ * folder was real and whose ACL had never been granted.
+ *
+ * So this asks the folder what THIS user may do with it, and tests AddListItems —
+ * upload, not read. Read is not enough, and is genuinely reachable without upload: a PIC
+ * who is also in their unit's base group holds Read on the unit folder through that
+ * group while their `*_UPL` group is still ungranted (spec 2026-08-08 §5.8). Probing for
+ * mere visibility would call that ready and hand them the same 403.
+ *
+ * Never collapses an uncertain answer into "denied" — see `UploadAccess`.
+ */
+export type UploadAccess = "granted" | "denied" | "missing" | "unknown";
+
+/**
+ * Bit position of AddListItems in SharePoint's `PermissionKind` enum, whose members are
+ * bit POSITIONS rather than masks: viewListItems = 1, addListItems = 2, editListItems =
+ * 3. The mask is therefore `1 << (kind - 1)`, which puts AddListItems at bit index 1.
+ */
+const ADD_LIST_ITEMS_BIT = 1;
+
+/**
+ * Test one bit of the low 32 bits of an EffectiveBasePermissions mask.
+ *
+ * Deliberately arithmetic, not `&`. JavaScript's bitwise operators coerce to a SIGNED
+ * 32-bit int, and Full Control returns `Low = "4294967295"` — so `low & mask` reasons
+ * about a negative number. It happens to give the right answer for a single-bit test,
+ * but it is the kind of correct-by-accident that breaks the moment someone extends this
+ * to a two-bit check. Division cannot misread the sign.
+ */
+function hasPermissionBit(low: number, bitIndex: number): boolean {
+  if (!isFinite(low) || low < 0) return false;
+  return Math.floor(low / Math.pow(2, bitIndex)) % 2 === 1;
+}
+
+export async function probeFolderUploadAccess(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  uniqueId: string,
+): Promise<UploadAccess> {
+  const url =
+    `${siteUrl}/_api/web/GetFolderById(guid'${encodeURIComponent(uniqueId)}')` +
+    `/ListItemAllFields/EffectiveBasePermissions`;
+  const get = async (): Promise<SPHttpClientResponse> =>
+    spHttpClient.get(url, SPHttpClient.configurations.v1, {
+      headers: { Accept: "application/json;odata=nometadata" },
+    });
+
+  // Fewer retries and a shorter ceiling than probeFolderById: this runs on the upload
+  // form's mount path, once per authorised unit. A throttled site must not hold the
+  // form on a spinner for half a minute — "unknown" already fails open.
+  let res: SPHttpClientResponse = await get();
+  for (
+    let attempt = 0;
+    (res.status === 429 || res.status === 503) && attempt < 3;
+    attempt++
+  ) {
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(8000, 500 * 2 ** attempt);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    res = await get();
+  }
+
+  if (res.status === 401 || res.status === 403) return "denied";
+  // Security trimming answers 404 for some folders the user cannot see, so 404 is NOT
+  // proof of deletion here. It does not matter: both mean this user cannot upload, and
+  // both carry the same fix. Distinguished only so the console line is truthful.
+  if (res.status === 404) return "missing";
+  if (!res.ok) {
+    console.warn(
+      `Upload-access probe was inconclusive (HTTP ${res.status}) for folder ${uniqueId} — treating as reachable.`,
+    );
+    return "unknown";
+  }
+  const d = await res.json().catch(() => null);
+  if (!d || d.Low === undefined) return "unknown";
+  return hasPermissionBit(Number(d.Low), ADD_LIST_ITEMS_BIT)
+    ? "granted"
+    : "denied";
+}
+
 /** Repoint an existing mapping row at a different folder. */
 export async function updateFolderMapping(
   spHttpClient: SPHttpClient,

@@ -11,6 +11,12 @@ import {
   encodeServerRelativePath,
   FolderMapRow,
 } from "../../../shared/dmsFolderMap";
+// Existence-gated only, deliberately — NOT the per-user upload-access probe the upload
+// form uses. This web part writes into DOCUMENTS (see toDocumentsPath), so the probe
+// would have to test AddListItems on the Documents folder, where PICs hold Read only by
+// design since 2026-08-09. That would correctly but silently empty this form for every
+// PIC — a client decision, not a side effect of fixing the upload form. Spec
+// 2026-08-12-provisioned-segment-visibility-design.md §2.2.
 import {
   filterProvisionedPaths,
   mappedTermGuidSet,
