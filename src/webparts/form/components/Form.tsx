@@ -695,6 +695,52 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     return encodeURIComponent(cachedListTitle(suffix));
   };
 
+  /**
+   * A comparable fingerprint of a folder chain — order, names and columns.
+   *
+   * Compared rather than deep-equalled so a re-saved row with identical content does not block an
+   * upload, while anything that would move a folder or write a different column does.
+   */
+  const chainSignature = (levels: Level[]): string =>
+    (levels ?? [])
+      .map((l) =>
+        [
+          l.label,
+          l.column,
+          l.labelCol ?? "",
+          l.tidCol ?? "",
+          l.termSet ?? "",
+          l.permissioned === false ? "0" : "1",
+        ].join("|"),
+      )
+      .join(">");
+
+  /**
+   * Re-read this mode's chain from DMS Config, for the staleness guard in the upload handler.
+   *
+   * `undefined` means "could not tell" — a failed read, or a row that has gone. The caller must NOT
+   * block on that: refusing an upload because a config read failed takes the form down over a
+   * transient error, and the wrong-shape risk it guards against is far rarer.
+   */
+  const freshChainFor = async (key: string): Promise<Level[] | undefined> => {
+    try {
+      const config = await listName(LIST_SUFFIX.config);
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${config}')/items?$select=Levels` +
+          `&$filter=ConfigType eq 'mode' and Title eq '${encodeURIComponent(key)}'&$top=1`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return undefined;
+      const rows = ((await res.json()).value ?? []) as Array<{ Levels?: string }>;
+      if (rows.length === 0) return undefined;
+      const parsed = parseLevels(rows[0].Levels ?? "");
+      return parsed.length > 0 ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const loadModes = async (): Promise<UploadMode[]> => {
     const config = await listName(LIST_SUFFIX.config);
     const res: SPHttpClientResponse = await context.spHttpClient.get(
@@ -1381,6 +1427,30 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     // in a folder that exists and looks right, one tier shallower than everything
     // else in the unit — silent misfiling, discovered only when someone cannot
     // find the document. Block the upload and name the config row instead.
+    // A page open since before a structure change keeps filing into the OLD shape, because the
+    // config is read once at mount (gotcha #10). Every such upload re-creates the two-shapes state
+    // a migration just cleaned up — and it is invisible: the upload succeeds and lands in a folder
+    // that looks perfectly reasonable. Seen live 2026-08-11, a file filed without the Credit_Card
+    // level hours after that level went live.
+    //
+    // So re-read the chain and refuse if it moved. `undefined` means the read failed, which proves
+    // nothing and must not block: the cure would be worse than the disease.
+    const loadedMode = activeMode();
+    if (loadedMode) {
+      const fresh = await freshChainFor(loadedMode.key);
+      const inUse = loadedMode.chain ?? loadedMode.levels ?? [];
+      if (fresh && chainSignature(fresh) !== chainSignature(inUse)) {
+        showToast(
+          "The folder structure changed while this page was open, so this upload would be filed in " +
+            "the wrong place. Please reload the page and upload again — nothing has been saved.",
+          "error",
+        );
+        setStatus("");
+        setBusy(false);
+        return;
+      }
+    }
+
     const chainError = validateChain(activeMode()?.chain ?? activeMode()?.levels ?? []);
     if (chainError) {
       showToast(

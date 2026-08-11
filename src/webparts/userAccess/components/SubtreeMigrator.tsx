@@ -1237,24 +1237,33 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
       {scans && groups.length > 0 && (
         <div style={{ marginTop: 20 }}>
           <h3 style={{ fontSize: 15, margin: "0 0 4px" }}>
-            {totalMoves} folder(s) to rebuild across {groups.length} unit(s)
+            {/* "0 folder(s) to rebuild" is true but useless: it reads as "nothing to do" when the
+                real state is "waiting for you". Lead with what is being asked for. */}
+            {totalMoves > 0
+              ? `${totalMoves} folder(s) to rebuild across ${groups.length} unit(s)`
+              : `${groups.length} unit(s) need a value chosen before anything can move`}
           </h3>
           <p style={s.hint}>
             Documents move into the shape the structure describes. Approved documents stay approved,
             and the only folders deleted are ones left completely empty.
-            {needingChoice > 0 && " Some folders need a value chosen for a new level first."}
+            {needingChoice > 0 && ` ${needingChoice} folder(s) are waiting on a value for a new level.`}
           </p>
 
           {groups.map((group) => {
             const first = group.rows[0];
             const chosenDest = dest[group.tail] ?? {};
-            const needed: number[] = [];
+            // Counted, not just collected: a picker labelled only "Credit_Card for this unit" looks
+            // like it is about to overwrite the folders that already have one. Saying how many
+            // folders are actually missing it makes clear it only fills the gaps.
+            const missingCount: Record<number, number> = {};
             for (const row of group.rows) {
               for (const p of plansFor(row)) {
-                for (const t of p.missingTiers) if (needed.indexOf(t) < 0) needed.push(t);
+                for (const t of p.missingTiers) missingCount[t] = (missingCount[t] ?? 0) + 1;
               }
             }
-            needed.sort((a, b) => a - b);
+            const needed = Object.keys(missingCount)
+              .map((k) => Number(k))
+              .sort((a, b) => a - b);
             return (
               <div key={group.tail} style={s.card}>
                 <div style={s.unitName}>{group.tail}</div>
@@ -1265,7 +1274,8 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
                   return (
                     <div key={chainIndex}>
                       <label style={s.label} htmlFor={`mig-d-${group.tail}-${chainIndex}`}>
-                        {level ? level.label : `Level ${chainIndex + 1}`} for this unit
+                        {level ? level.label : `Level ${chainIndex + 1}`} — for the{" "}
+                        {missingCount[chainIndex]} folder(s) below that have no value for it
                       </label>
                       <select
                         id={`mig-d-${group.tail}-${chainIndex}`}

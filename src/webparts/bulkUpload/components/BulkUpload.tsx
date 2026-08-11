@@ -749,6 +749,50 @@ export default function BulkUpload({
     return encodeURIComponent(cachedListTitle(suffix));
   };
 
+  /**
+   * A comparable fingerprint of a folder chain — order, names and columns. Same contract as
+   * Form.tsx: a re-saved row with identical content must not block an upload, but anything that
+   * would move a folder or write a different column must.
+   */
+  const chainSignature = (levels: Level[]): string =>
+    (levels ?? [])
+      .map((l) =>
+        [
+          l.label,
+          l.column,
+          l.labelCol ?? "",
+          l.tidCol ?? "",
+          l.termSet ?? "",
+          l.permissioned === false ? "0" : "1",
+        ].join("|"),
+      )
+      .join(">");
+
+  /**
+   * Re-read this mode's chain from DMS Config, for the staleness guard in `handleUpload`.
+   *
+   * `undefined` means "could not tell" — a failed read, or a row that has gone — and the caller
+   * must not block on it.
+   */
+  const freshChainFor = async (key: string): Promise<Level[] | undefined> => {
+    try {
+      const config = await listName(LIST_SUFFIX.config);
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${config}')/items?$select=Levels` +
+          `&$filter=ConfigType eq 'mode' and Title eq '${encodeURIComponent(key)}'&$top=1`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return undefined;
+      const rows = ((await res.json()).value ?? []) as Array<{ Levels?: string }>;
+      if (rows.length === 0) return undefined;
+      const parsed = parseLevels(rows[0].Levels ?? "");
+      return parsed.length > 0 ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const loadModes = async (): Promise<UploadMode[]> => {
     const config = await listName(LIST_SUFFIX.config);
     const res: SPHttpClientResponse = await context.spHttpClient.get(
@@ -1714,6 +1758,23 @@ export default function BulkUpload({
       showToast("No upload mode configured.", "error");
       return;
     }
+    // A page open since before a structure change keeps filing into the OLD shape, because the
+    // config is read once at mount (gotcha #10). Every such upload re-creates the two-shapes state
+    // a migration just cleaned up, and it is invisible — the upload succeeds and lands in a folder
+    // that looks perfectly reasonable. Seen live 2026-08-11 on the single-file form.
+    //
+    // `undefined` means the read failed, which proves nothing and must not block: refusing to
+    // upload because a config read failed is worse than the risk it guards against.
+    const freshChain = await freshChainFor(mode.key);
+    if (freshChain && chainSignature(freshChain) !== chainSignature(mode.chain ?? mode.levels)) {
+      showToast(
+        "The folder structure changed while this page was open, so these files would be filed in " +
+          "the wrong place. Please reload the page and try again — nothing has been uploaded.",
+        "error",
+      );
+      return;
+    }
+
     // A malformed chain must never route files to a partial path — they would land
     // one tier shallower than everything else in the unit, in a folder that exists
     // and looks right. Block and name the config row instead.

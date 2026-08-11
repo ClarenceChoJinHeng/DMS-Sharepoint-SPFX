@@ -334,6 +334,18 @@ Unit                  / UnitTid
     stale page: settings are read once in a mount-time `useEffect`, so **every config
     change needs a hard refresh** before it can be tested.
 
+10b. **A STALE UPLOAD PAGE FILES INTO THE OLD FOLDER SHAPE, and nothing about it looks wrong.**
+    Settings and modes are read once in a mount-time `useEffect` (see #10), so a tab left open
+    across a structure change keeps building the OLD path — and every upload from it re-creates the
+    two-shapes state a migration just cleaned up. Found live 2026-08-11: a file filed with no
+    `Credit_Card` level hours after that level went live, noticed only because the migrator listed
+    the folder. The upload succeeds, the file lands somewhere plausible, and no error exists
+    anywhere. **Both upload web parts now re-read the mode row's `Levels` immediately before writing
+    and refuse with "reload the page" if the chain moved** (`chainSignature` + `freshChainFor` in
+    Form.tsx and BulkUpload.tsx). A read FAILURE must never block — it proves nothing, and taking
+    the form down over a transient error is worse than the risk it guards against. This closes the
+    last route by which folder drift can reappear on its own after a migration.
+
 11. **An emptied multi-value Choice field returns `null`, not `[]`.** Untick every choice on a
     multi-select Choice column and SharePoint returns
     `{"Title":"allowedExtensions","AllowedFileTypes":null}` — verified live 2026-07-30. So the
