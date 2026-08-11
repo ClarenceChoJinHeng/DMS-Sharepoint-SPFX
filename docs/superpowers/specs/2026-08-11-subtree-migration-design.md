@@ -83,6 +83,76 @@ the `k` new tiers, and the destination is `unit / t1 / t2 / … / oldFolder`.
 Deriving `k` from the term data rather than from a question means the tool is also correct when
 someone edits the structure twice before migrating, and it cannot be told a wrong answer.
 
+### 3.0 SUPERSEDED 2026-08-11 — one algorithm, not three
+
+Everything above describes the FIRST build, which looked only at folders **directly under the Unit**.
+That detects an inserted tier and nothing else, and it failed on the first reorder: the client moved
+`Year` above `Testing`, `Credit2` was still a valid first-tier value so the scan reported "nothing to
+move", and the pending structure was activated against folders still in the old order. A silent wrong
+success — the worst outcome this tool can produce.
+
+The correction is not a special case for reordering. **Add, reorder and remove are the same
+operation**, and treating them separately is what produced a tool that could only do one:
+
+> For every folder below a Unit, work out which TIER each of its path segments belongs to, then
+> rebuild the path in tier order.
+
+| What the admin did | What that means here |
+|---|---|
+| **Added** a tier | Some tier has no segment in the existing path → a gap the admin fills with one chosen value |
+| **Reordered** tiers | The segments map to tiers in the wrong order → the same segments, re-nested |
+| **Removed** a tier | A segment belongs to no tier in the new chain → it is dropped, so sibling subtrees **collapse together** |
+
+One computation covers all three, including combinations — a reorder *and* an insert in the same
+edit, which is what a client will actually do.
+
+**Segment → tier assignment.** A segment's tier is the one whose option list contains its name. Where
+a name is valid at more than one tier, the tier it is CURRENTLY at wins — the same
+"already-correct beats speculative" rule as §3, applied per segment rather than per folder. A segment
+matching no tier at any depth makes the whole folder a **stray**: reported, never moved. That is what
+keeps the algorithm safe on a hand-made folder or a deleted term.
+
+**Leaf folders are what gets planned; FILES are what actually move.**
+
+A leaf folder — one with no subfolders — is where documents live in this system, because the upload
+form always creates the whole chain before writing the file. So the plan is computed per leaf. But the
+move itself is performed **file by file**, and the destination folders are ensure-created rather than
+relocated. That is not the obvious choice, and the first draft had it the other way round; collapse is
+what settles it:
+
+- Removing a tier sends `Credit2/testig/2024` **and** `Credit2/live/2024` to `Credit2/2024`. As folder
+  moves, the first succeeds and the second fails with "already exists" — the two cannot merge.
+- A resolved collision **renames a file**, which a folder move cannot express at all.
+- A destination folder may already exist and hold documents, so relocating a folder onto it is not a
+  move but a merge, which SharePoint does not offer.
+
+Moving files costs one request each instead of one per folder. Worth it: the alternative is two code
+paths — folder moves for a reorder, file moves for a collapse — and the folder path would be the one
+nobody tests, because collapse is the rarer operation.
+
+A file sitting loose in an intermediate folder is still **reported, not moved**: its path does not say
+which tier values it belongs to, so there is no destination to derive.
+
+Source folders emptied by the run are deleted only when they hold **neither files nor folders**, and
+only when this run emptied them. Anything else is left in place and reported — an unexpected leftover
+is a fact worth showing, and deleting a folder is the one operation here with no cheap undo.
+
+Every file move uses the **non-overwriting** form. If a collision somehow reaches the move stage, it
+must fail loudly rather than silently replace a document — the collision detection is the safety net,
+and this is the second one under it.
+
+**Collapse is where the danger is.** Removing a tier maps two or more distinct paths onto one:
+
+```
+Credit2 / testig / 2024 / Tax Return / a.pdf   ┐
+Credit2 / live   / 2024 / Tax Return / a.pdf   ┘ → Credit2 / 2024 / Tax Return / a.pdf
+```
+
+Folders merging is harmless. **Two files with the same name are not**, and SharePoint's instinct is to
+overwrite — which reports success while destroying a document. So a collapse is planned in full before
+anything moves, and every filename collision, including against files ALREADY at the destination, is
+surfaced for a human decision (§4.1). Nothing moves until every collision has a resolution.
+
 ### 3.1 Valid option names
 
 A tier with a `termSet` has one flat option list, shared by every unit. A **cascading** tier (no
@@ -107,6 +177,46 @@ either fail per unit or invent a term.
 
 A unit with no destination chosen is **skipped**, not defaulted. There is no safe default: picking
 the first option files a unit's entire history under a value nobody chose.
+
+### 4.1 Filename collisions are resolved by a human, in a form
+
+The client's request, 2026-08-11: rather than refusing a collapse, *show which files conflict and let
+them rename each one*. Better than either refusing or auto-renaming, because the person deciding is
+the only one who knows whether two files with one name are two documents or a duplicate.
+
+**Detection precedes everything.** The full collapse is planned first: every file's destination
+computed, grouped by destination folder + filename. A group of two or more is a collision, and files
+**already at the destination** count as members — a collapse into an occupied folder is the case most
+likely to be missed, and the one where an overwrite destroys a document nobody was even migrating.
+
+**One file per group keeps its name.** The rest need new ones. There is no correct rule for which
+keeps it, so the first in path order does, and every row is editable — including that one.
+
+**Suggested names carry the information the removal is about to destroy:**
+
+```
+Credit2 / 2024 / Tax Return / a.pdf   ← 2 documents want this name
+
+  from testig    a.pdf  →  [ a (testig).pdf ]
+  from live      a.pdf  →  [ a.pdf          ]   keeps its name
+```
+
+`a (testig).pdf`, not `a (2).pdf`. The removed tier's value is *why* these two files were distinct;
+`(2)` throws that away and leaves two documents looking like versions of one. A **Use suggestions for
+all** control makes 200 collisions one decision instead of 200.
+
+**Validation matches the upload form's rename** — illegal characters stripped, **extension preserved
+automatically**, blank rejected — so there is one renaming behaviour in the product, not two. Plus
+uniqueness within the destination, re-checked as they type, against both the other movers and what is
+already there.
+
+**Renaming happens as part of the move**, not before it. A file move can set the new name in the same
+call, so no intermediate state exists in which two files compete for one path.
+
+**Lead with the count, not the list.** A collapse producing 1,240 collisions is telling you the tier
+being removed carries real meaning; the screen should say so before it renders a form nobody can
+work through. The escape hatch stays available: remove that tier's values one at a time, or keep the
+tier.
 
 ## 5. What the run does, in order
 

@@ -89,6 +89,260 @@ export interface Destination {
   id: string;
 }
 
+/* ===================================================================================
+ * The unified model — spec §3.0.
+ *
+ * Add, reorder and remove are ONE operation: work out which tier each path segment
+ * belongs to, then rebuild the path in tier order. The shallow `classifyChild` model
+ * above only ever detected an insertion, and it reported "nothing to move" for a
+ * reorder — activating a new structure against folders still in the old shape.
+ * =================================================================================== */
+
+/** One path segment, resolved to the tier it belongs to. */
+export interface TierAssignment {
+  /** Position of this segment in the EXISTING path, below the unit. */
+  at: number;
+  /** Chain index of the tier whose options contain it. */
+  chainIndex: number;
+  /** The folder name as it appears on disk. */
+  name: string;
+}
+
+/** What `assignSegments` could and could not resolve. */
+export interface SegmentAssignment {
+  assigned: TierAssignment[];
+  /**
+   * Segments matching no tier at any depth. Non-empty means the folder is a STRAY and must never
+   * be moved — a hand-made folder or a deleted term, where a confident guess does damage.
+   */
+  strays: string[];
+  /**
+   * Segments belonging to a tier NO LONGER in the chain — a removed tier. Dropped from the
+   * destination path, which is what makes sibling subtrees collapse together.
+   */
+  dropped: string[];
+}
+
+/**
+ * Work out which tier each segment of an existing path belongs to.
+ *
+ * `tiers` are the target chain's tiers for this unit; `removedOptions` are the option lists of
+ * tiers that USED to exist and no longer do, so a segment belonging to one can be told apart from
+ * a segment belonging to nothing. That distinction is the entire difference between a deliberate
+ * removal (drop the segment, collapse) and an unrecognised folder (refuse to touch it) — and
+ * getting it wrong either strands a removal or silently relocates somebody's documents.
+ *
+ * Where a name is valid at more than one tier, **the tier it is currently at wins**. Same
+ * "already-correct beats speculative" rule as `classifyChild`, applied per segment: `2026` could
+ * be a Year and a SubUnit, and the reading that requires no movement is the safe one.
+ */
+export function assignSegments(
+  segments: string[],
+  tiers: EffectiveTier[],
+  removedOptions?: string[][],
+): SegmentAssignment {
+  const out: SegmentAssignment = { assigned: [], strays: [], dropped: [] };
+  const list = tiers ?? [];
+  (segments ?? []).forEach((name, at) => {
+    const matches: number[] = [];
+    for (let i = 0; i < list.length; i++) {
+      if (list[i].options.filter((o) => sameName(sanitizeFolderSegment(o), name)).length > 0) {
+        matches.push(i);
+      }
+    }
+    if (matches.length > 0) {
+      // Identity first: a segment already sitting at a tier that accepts it belongs there. Only
+      // then fall back to the shallowest tier that does.
+      const identity = matches.filter((i) => i === at)[0];
+      const chosen = identity === undefined ? matches[0] : identity;
+      out.assigned.push({ at, chainIndex: list[chosen].chainIndex, name });
+      return;
+    }
+    const removed =
+      (removedOptions ?? []).filter(
+        (opts) => (opts ?? []).filter((o) => sameName(sanitizeFolderSegment(o), name)).length > 0,
+      ).length > 0;
+    if (removed) out.dropped.push(name);
+    else out.strays.push(name);
+  });
+  return out;
+}
+
+/** One leaf folder on disk, with the files it holds. */
+export interface LeafFolder {
+  /** Server-relative path. */
+  path: string;
+  /** Path segments below the unit, in order. */
+  segments: string[];
+  /** File names directly inside it. */
+  files: string[];
+}
+
+/** What should happen to one leaf folder. */
+export interface LeafPlan {
+  leaf: LeafFolder;
+  /** Destination path when one could be resolved. Equal to `leaf.path` means leave it alone. */
+  to?: string;
+  /** Ancestor folders to ensure, outermost first, with the tier each represents. */
+  ancestors: Array<{ path: string; chainIndex: number; name: string }>;
+  /** Chain indexes with no value in the existing path — the admin must choose one for each. */
+  missingTiers: number[];
+  /** Segments matching no tier. Non-empty means this folder is reported and never moved. */
+  strays: string[];
+  /** Segments whose tier was removed. Non-empty means this folder collapses into another. */
+  dropped: string[];
+}
+
+/**
+ * Rebuild one leaf folder's path in tier order.
+ *
+ * This single function is the add, the reorder AND the remove:
+ *   - a tier with no segment yields `missingTiers`, filled from `chosen` (an ADD);
+ *   - segments out of tier order come back sorted (a REORDER);
+ *   - a segment whose tier is gone is simply absent from the result (a REMOVE, and therefore a
+ *     collapse — two leaves can then share one destination, which is where filename collisions
+ *     come from).
+ *
+ * A stray blocks the folder entirely: with one segment unexplained, any destination is a guess
+ * about where somebody's documents live.
+ */
+export function planLeaf(
+  unitPath: string,
+  leaf: LeafFolder,
+  tiers: EffectiveTier[],
+  chosen: Record<number, Destination | undefined>,
+  removedOptions?: string[][],
+): LeafPlan {
+  const { assigned, strays, dropped } = assignSegments(leaf.segments, tiers, removedOptions);
+  const plan: LeafPlan = { leaf, ancestors: [], missingTiers: [], strays, dropped };
+  if (strays.length > 0) return plan;
+
+  // The deepest tier this folder reaches. Tiers below it are not its business: a leaf that stops
+  // at Year must not acquire a Document Type folder it never had.
+  let deepest = -1;
+  for (const a of assigned) deepest = Math.max(deepest, a.chainIndex);
+  if (deepest < 0) return plan;
+
+  const byTier: Record<number, string> = {};
+  for (const a of assigned) byTier[a.chainIndex] = a.name;
+
+  const wanted: Array<{ chainIndex: number; name: string }> = [];
+  for (const tier of tiers ?? []) {
+    if (tier.chainIndex > deepest) break;
+    const existing = byTier[tier.chainIndex];
+    if (existing !== undefined) {
+      wanted.push({ chainIndex: tier.chainIndex, name: existing });
+      continue;
+    }
+    const pick = chosen[tier.chainIndex];
+    const segment = pick ? sanitizeFolderSegment(pick.label) : "";
+    // An unusable name would build `unit//2024`, which SharePoint collapses to `unit/2024` — a
+    // move that does nothing and reports success. Treated as "not chosen".
+    if (!segment) {
+      plan.missingTiers.push(tier.chainIndex);
+      continue;
+    }
+    wanted.push({ chainIndex: tier.chainIndex, name: segment });
+  }
+  if (plan.missingTiers.length > 0) return plan;
+
+  let path = unitPath;
+  for (let i = 0; i < wanted.length; i++) {
+    path = `${path}/${wanted[i].name}`;
+    // Every level except the last is an ancestor to ensure; the last IS the folder being moved.
+    if (i < wanted.length - 1) {
+      plan.ancestors.push({ path, chainIndex: wanted[i].chainIndex, name: wanted[i].name });
+    }
+  }
+  plan.to = path;
+  return plan;
+}
+
+/** Two or more files competing for one path after a collapse. */
+export interface Collision {
+  /** Destination folder path. */
+  folder: string;
+  /** The contested file name. */
+  name: string;
+  /**
+   * Every claimant, in path order. `existing` marks a file ALREADY at the destination — it is not
+   * moving, but it owns the name, and missing it is how a collapse overwrites a document nobody
+   * was migrating.
+   */
+  claimants: Array<{ path: string; existing: boolean }>;
+}
+
+/**
+ * Find every filename collision a set of leaf plans would produce.
+ *
+ * Counts files already at each destination as claimants. A collapse into an OCCUPIED folder is
+ * both the case most easily missed and the most destructive: SharePoint's instinct on a name
+ * clash is to overwrite, which reports success while destroying a document.
+ *
+ * `filesAt` answers "what is already in this destination folder", keyed by folder path; a folder
+ * that does not exist yet simply has no entry.
+ */
+export function findCollisions(plans: LeafPlan[], filesAt: Record<string, string[]>): Collision[] {
+  const claims: Record<string, Array<{ path: string; existing: boolean }>> = {};
+  // Tab as the separator: legal in neither a SharePoint folder path nor a file name, so it cannot
+  // appear inside either half and split the key in the wrong place.
+  const key = (folder: string, name: string): string => `${folder}\t${name.toLowerCase()}`;
+
+  for (const plan of plans ?? []) {
+    if (!plan.to) continue;
+    for (const file of plan.leaf.files) {
+      const k = key(plan.to, file);
+      if (!claims[k]) claims[k] = [];
+      claims[k].push({ path: `${plan.leaf.path}/${file}`, existing: false });
+    }
+  }
+  // Existing occupants, added only where something is actually arriving.
+  for (const k of Object.keys(claims)) {
+    const cut = k.indexOf("\t");
+    const folder = k.slice(0, cut);
+    const lower = k.slice(cut + 1);
+    for (const there of filesAt[folder] ?? []) {
+      if (there.toLowerCase() !== lower) continue;
+      // A file whose own leaf is being moved is already a claimant; do not count it twice.
+      const alreadyClaimed = claims[k].filter((c) => c.path === `${folder}/${there}`).length > 0;
+      if (!alreadyClaimed) claims[k].push({ path: `${folder}/${there}`, existing: true });
+    }
+  }
+
+  const out: Collision[] = [];
+  for (const k of Object.keys(claims)) {
+    if (claims[k].length < 2) continue;
+    const cut = k.indexOf("\t");
+    const folder = k.slice(0, cut);
+    const sorted = claims[k].slice().sort((a, b) => a.path.localeCompare(b.path));
+    out.push({
+      folder,
+      name: sorted[0].path.slice(sorted[0].path.lastIndexOf("/") + 1),
+      claimants: sorted,
+    });
+  }
+  return out.sort((a, b) => `${a.folder}/${a.name}`.localeCompare(`${b.folder}/${b.name}`));
+}
+
+/**
+ * Suggest a unique name for a file losing a collision, carrying the value that made it distinct.
+ *
+ * `a (testig).pdf`, never `a (2).pdf`. The removed tier's value is precisely WHY these two files
+ * were different; a numeric suffix throws that away and leaves two unrelated documents looking
+ * like versions of one another.
+ *
+ * The extension is preserved from the original, as the upload form's rename does — one renaming
+ * behaviour in the product, not two.
+ */
+export function suggestRename(fileName: string, distinguisher: string): string {
+  const dot = fileName.lastIndexOf(".");
+  const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+  const ext = dot > 0 ? fileName.slice(dot) : "";
+  const tag = sanitizeFolderSegment(distinguisher);
+  if (!tag) return fileName;
+  return `${stem} (${tag})${ext}`;
+}
+
 /** One folder to relocate, fully resolved. Nothing here needs deciding at run time. */
 export interface MoveOp {
   /** Current server-relative path of the folder. */

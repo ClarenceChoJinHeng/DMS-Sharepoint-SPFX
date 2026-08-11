@@ -503,6 +503,116 @@ export async function renameFolder(
 }
 
 /**
+ * Move a FILE, optionally renaming it in the same call.
+ *
+ * `flags=0` means "fail if something is already there". Deliberately not `1` (overwrite): a name
+ * clash during subtree migration means two documents want one path, and overwriting reports
+ * success while destroying one of them. Collision detection is the primary guard (spec §4.1);
+ * this flag is the second one beneath it, for the case detection missed.
+ *
+ * The destination carries the file NAME, so a resolved collision is applied as part of the move
+ * rather than as a separate rename — there is then no moment at which two files compete for one
+ * path.
+ *
+ * The item survives the move, so approval status, version history and Created By travel with it.
+ * That is what makes migrating an approval library safe; a copy-then-delete resets all three,
+ * which is precisely why the Auto-route flow has to restamp them.
+ */
+export async function moveFileTo(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  currentServerRelativeUrl: string,
+  targetServerRelativeUrl: string,
+): Promise<RenameResult> {
+  const res: SPHttpClientResponse = await spHttpClient.post(
+    `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/MoveTo(newUrl=@d,flags=0)` +
+      `?@f='${encodeServerRelativePath(currentServerRelativeUrl)}'` +
+      `&@d='${encodeServerRelativePath(targetServerRelativeUrl)}'`,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  if (res.ok) {
+    return {
+      ok: true,
+      serverRelativeUrl: targetServerRelativeUrl,
+      conflict: false,
+      status: res.status,
+    };
+  }
+  const detail = await res.text().catch(() => "");
+  return {
+    ok: false,
+    conflict: /already exists|destination file/i.test(detail),
+    status: res.status,
+    detail: detail.slice(0, 300),
+  };
+}
+
+/** Why a folder was not deleted. `deleted: false` with no reason means it was already gone. */
+export interface DeleteFolderResult {
+  deleted: boolean;
+  /** Present when the folder still holds something — the caller reports it rather than forcing. */
+  reason?: string;
+  status: number;
+}
+
+/**
+ * Delete a folder ONLY if it holds neither files nor folders.
+ *
+ * Subtree migration empties source folders as it moves files out, and an empty husk left in the old
+ * shape would be reported as drift by every future scan. But the check happens HERE, immediately
+ * before the delete, rather than being inferred from what the run moved: a file uploaded during the
+ * run lands in a folder the plan believes it emptied, and deleting that folder would destroy a
+ * document that was never part of the migration.
+ *
+ * Anything still inside means the folder is REPORTED, never forced. Deleting a folder is the one
+ * operation in this migration with no cheap undo — and DELETE sends it to the recycle bin, which is
+ * the only reason this is acceptable at all.
+ */
+export async function deleteFolderIfEmpty(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  serverRelativeUrl: string,
+): Promise<DeleteFolderResult> {
+  const check: SPHttpClientResponse = await spHttpClient.get(
+    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?$select=Folders,Files&$expand=Folders,Files` +
+      `&@f='${encodeServerRelativePath(serverRelativeUrl)}'`,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  if (check.status === 404) return { deleted: false, status: 404 };
+  if (!check.ok) {
+    return { deleted: false, reason: `could not be read (HTTP ${check.status})`, status: check.status };
+  }
+  const data = (await check.json()) as { Folders?: unknown[]; Files?: unknown[] };
+  const folders = (data.Folders ?? []).length;
+  const files = (data.Files ?? []).length;
+  if (folders > 0 || files > 0) {
+    return {
+      deleted: false,
+      reason: `still holds ${files} file(s) and ${folders} folder(s)`,
+      status: check.status,
+    };
+  }
+  const del: SPHttpClientResponse = await spHttpClient.post(
+    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeServerRelativePath(serverRelativeUrl)}'`,
+    SPHttpClient.configurations.v1,
+    {
+      headers: {
+        Accept: "application/json;odata=nometadata",
+        "X-HTTP-Method": "DELETE",
+        "IF-MATCH": "*",
+      },
+    },
+  );
+  if (!del.ok) {
+    const detail = (await del.text().catch(() => "")).slice(0, 200);
+    return { deleted: false, reason: `HTTP ${del.status} ${detail}`, status: del.status };
+  }
+  return { deleted: true, status: del.status };
+}
+
+/**
  * Move a folder to a different parent, keeping its UniqueId, contents and ACL.
  *
  * The same `MoveTo` call as a rename — a rename IS a move whose destination shares the
