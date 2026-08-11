@@ -9,6 +9,7 @@ import {
   planTotals,
   planUnit,
   suggestRename,
+  validateRename,
   EffectiveTier,
 } from "./subtreeMigration";
 
@@ -492,6 +493,44 @@ describe("suggestRename", () => {
 
   it("strips characters SharePoint would reject from the distinguisher", () => {
     expect(suggestRename("a.pdf", "R&D: Core")).toBe("a (R&D Core).pdf");
+  });
+});
+
+describe("validateRename", () => {
+  it("accepts a normal rename", () => {
+    expect(validateRename("a.pdf", "a (Credit2).pdf")).toBeUndefined();
+  });
+
+  it("rejects a blank name", () => {
+    expect(validateRename("a.pdf", "   ")).toBe("cannot be blank");
+  });
+
+  it("rejects characters SharePoint will not accept", () => {
+    expect(validateRename("a.pdf", "a/b.pdf")).toMatch(/cannot contain/);
+    expect(validateRename("a.pdf", "a#b.pdf")).toMatch(/cannot contain/);
+  });
+
+  it("insists the extension survives", () => {
+    // The invisible mistake: one keystroke in a renaming form leaves a file that opens as
+    // nothing, and nothing on screen would have said so.
+    expect(validateRename("a.pdf", "a")).toBe("must still end in .pdf");
+    expect(validateRename("a.pdf", "a.pd")).toBe("must still end in .pdf");
+  });
+
+  it("accepts a differently-cased extension", () => {
+    expect(validateRename("a.pdf", "b.PDF")).toBeUndefined();
+  });
+
+  it("rejects a name that is only the extension", () => {
+    expect(validateRename("a.pdf", ".pdf")).toBe("needs a name before the extension");
+  });
+
+  it("imposes no extension rule when the original had none", () => {
+    expect(validateRename("README", "README (Credit2)")).toBeUndefined();
+  });
+
+  it("treats a leading-dot original as having no extension", () => {
+    expect(validateRename(".hidden", "renamed")).toBeUndefined();
   });
 });
 

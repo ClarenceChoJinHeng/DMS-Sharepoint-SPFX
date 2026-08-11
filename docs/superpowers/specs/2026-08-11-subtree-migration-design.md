@@ -226,6 +226,20 @@ already there.
 **Renaming happens as part of the move**, not before it. A file move can set the new name in the same
 call, so no intermediate state exists in which two files compete for one path.
 
+**The rows are rendered from the ORIGINAL names and stay put once shown.** The first build rendered
+the *unresolved* list, so the instant a typed name settled a clash its row vanished — taking with it
+any way to see or correct what had just been typed. Found live 2026-08-11 on the first real
+collision. A mistyped extension would have applied silently, from a form whose entire purpose is
+renaming. Two computations now, with two jobs: the original names drive what is DISPLAYED, the
+renamed ones decide whether the run MAY PROCEED. Each group is marked *settled* or *needs a different
+name*, so progress is visible rather than rows disappearing.
+
+**Every typed name is validated, not silently corrected** (`validateRename`): blank, illegal
+characters, and — the one that earns its place — **the extension must survive**. A rename that drops
+`.pdf` leaves a file that opens as nothing, and one keystroke does it. Correcting quietly would be
+worse than refusing, because the admin carries on believing they chose the name. A name can be unique
+and still unusable, so validation gates the run independently of collision detection.
+
 **Lead with the count, not the list.** A collapse producing 1,240 collisions is telling you the tier
 being removed carries real meaning; the screen should say so before it renders a form nobody can
 work through. The escape hatch stays available: remove that tier's values one at a time, or keep the

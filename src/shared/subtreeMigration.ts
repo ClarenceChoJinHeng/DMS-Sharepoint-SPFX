@@ -334,6 +334,34 @@ export function findCollisions(plans: LeafPlan[], filesAt: Record<string, string
  * The extension is preserved from the original, as the upload form's rename does — one renaming
  * behaviour in the product, not two.
  */
+/** Characters SharePoint rejects in a file name — the same set the upload form's rename strips. */
+const ILLEGAL_FILE_CHARS = /[\\/:*?"<>|#%]/;
+
+/**
+ * Check a name an administrator typed to settle a collision.
+ *
+ * Returns an admin-facing message, or `undefined` when the name is usable. Validated rather than
+ * silently corrected: a name quietly rewritten under someone's fingers is worse than one refused,
+ * because they carry on believing they chose it.
+ *
+ * The extension rule is the one that earns its place. Losing `.pdf` while renaming leaves a file
+ * that opens as nothing, and the mistake is invisible in a form whose entire job is renaming — one
+ * keystroke in the wrong place does it. So the extension must survive, exactly as the upload form's
+ * rename preserves it.
+ */
+export function validateRename(originalName: string, proposed: string): string | undefined {
+  const name = (proposed ?? "").trim();
+  if (!name) return "cannot be blank";
+  if (ILLEGAL_FILE_CHARS.test(name)) return 'cannot contain \\ / : * ? " < > | # %';
+  const dot = (originalName ?? "").lastIndexOf(".");
+  if (dot > 0) {
+    const ext = originalName.slice(dot).toLowerCase();
+    if (name.toLowerCase().slice(-ext.length) !== ext) return `must still end in ${ext}`;
+    if (name.length === ext.length) return "needs a name before the extension";
+  }
+  return undefined;
+}
+
 export function suggestRename(fileName: string, distinguisher: string): string {
   const dot = fileName.lastIndexOf(".");
   const stem = dot > 0 ? fileName.slice(0, dot) : fileName;

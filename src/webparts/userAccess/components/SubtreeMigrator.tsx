@@ -15,6 +15,7 @@ import {
   LeafPlan,
   planLeaf,
   suggestRename,
+  validateRename,
 } from "../../../shared/subtreeMigration";
 import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
@@ -670,13 +671,32 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     plansFor(row).filter((p) => p.to !== undefined && p.to !== p.leaf.path);
 
   /**
-   * Apply the admin's renames, then look for collisions again.
+   * Collisions as they stand BEFORE any rename — the stable list the form renders.
    *
-   * Re-running the same tested detector over the RESOLVED names — rather than checking each form row
-   * against its siblings — means "is it settled yet?" and "what collides?" cannot drift apart. They
-   * are one computation.
+   * Rendering the *unresolved* list instead was a real bug: the moment a typed name settled a
+   * clash its row vanished, taking with it any way to see or correct what had been typed. A
+   * mistyped extension would then apply silently, from a form whose only job is renaming.
+   *
+   * So the rows are driven by the original names and stay put, while `unresolvedFor` decides
+   * whether the run may proceed. Two computations, two different jobs.
    */
   const collisionsFor = (lib: string): Collision[] => {
+    const plans: LeafPlan[] = [];
+    for (const row of scans ?? []) {
+      if (row.lib.key !== lib) continue;
+      for (const p of movesOf(row)) plans.push(p);
+    }
+    return findCollisions(plans, (fileIndex[lib] ?? { byFolder: {} }).byFolder);
+  };
+
+  /**
+   * Collisions that REMAIN once the admin's renames are applied — the gate on the run.
+   *
+   * Re-running the same tested detector over the resolved names, rather than checking each form row
+   * against its siblings, means "is it settled?" and "what collides?" cannot drift apart. It also
+   * catches a rename that settles one clash by creating another somewhere else.
+   */
+  const unresolvedFor = (lib: string): Collision[] => {
     const plans: LeafPlan[] = [];
     for (const row of scans ?? []) {
       if (row.lib.key !== lib) continue;
@@ -686,6 +706,17 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
       }
     }
     return findCollisions(plans, (fileIndex[lib] ?? { byFolder: {} }).byFolder);
+  };
+
+  /** The name a file will actually be moved under. */
+  const effectiveName = (path: string): string =>
+    renames[path] ?? path.slice(path.lastIndexOf("/") + 1);
+
+  /** A typed name's problem, if any. Blocks the run — see `validateRename`. */
+  const renameProblem = (path: string): string | undefined => {
+    const typed = renames[path];
+    if (typed === undefined) return undefined;
+    return validateRename(path.slice(path.lastIndexOf("/") + 1), typed);
   };
 
   /** The value that made a file distinct — what the suggested name should carry. */
@@ -1094,8 +1125,16 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     return plansFor(r).filter((p) => p.strays.length > 0 || p.to === undefined).length > 0;
   });
   const conflicts: Array<{ lib: string; collision: Collision }> = [];
+  let unresolvedCount = 0;
   for (const lib of ["Staging", "Documents"]) {
     for (const c of collisionsFor(lib)) conflicts.push({ lib, collision: c });
+    unresolvedCount += unresolvedFor(lib).length;
+  }
+  // Every typed name is checked, not only the ones still colliding: a name can be unique and still
+  // unusable — ".pdf" dropped, an illegal character — and that must block just as firmly.
+  let badNames = 0;
+  for (const { collision } of conflicts) {
+    for (const c of collision.claimants) if (renameProblem(c.path)) badNames++;
   }
   let totalMoves = 0;
   let needingChoice = 0;
@@ -1103,7 +1142,7 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     totalMoves += movesOf(r).length;
     needingChoice += plansFor(r).filter((p) => p.missingTiers.length > 0).length;
   }
-  const canRun = totalMoves > 0 && conflicts.length === 0;
+  const canRun = totalMoves > 0 && unresolvedCount === 0 && badNames === 0;
 
   /** Units grouped by tail, so one set of pickers serves both libraries. */
   const groups: Array<{ tail: string; rows: UnitScan[] }> = [];
@@ -1342,8 +1381,17 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
 
           {conflicts.length > 0 && (
             <div style={{ marginTop: 20 }}>
-              <h3 style={{ fontSize: 15, margin: "0 0 4px", color: "#a4262c" }}>
-                {conflicts.length} filename clash(es) to settle first
+              <h3
+                style={{
+                  fontSize: 15,
+                  margin: "0 0 4px",
+                  color: unresolvedCount + badNames > 0 ? "#a4262c" : "#0f6c3f",
+                }}
+              >
+                {conflicts.length} filename clash(es)
+                {unresolvedCount + badNames > 0
+                  ? ` — ${unresolvedCount + badNames} still to settle`
+                  : " — all settled"}
               </h3>
               <p style={s.hint}>
                 Removing a level puts documents that were in separate folders into the same one.
@@ -1377,34 +1425,71 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
                   Use suggested names for all
                 </button>
               </div>
-              {conflicts.slice(0, CONFLICT_LIMIT).map(({ lib, collision }) => (
-                <div key={`${lib}${collision.folder}${collision.name}`} style={{ ...s.conflict, marginTop: 10 }}>
-                  <div style={{ fontSize: 12, fontFamily: "Consolas, monospace", color: "#605e5c" }}>
-                    {lib} · {collision.folder}/<strong>{collision.name}</strong>
+              {conflicts.slice(0, CONFLICT_LIMIT).map(({ lib, collision }) => {
+                // Settled when every claimant's EFFECTIVE name is unique within the destination
+                // and each typed name is usable. Shown per group so the admin can see progress
+                // rather than watching rows disappear.
+                const names = collision.claimants.map((c) => effectiveName(c.path).trim().toLowerCase());
+                const duplicated = names.filter((n, i) => names.indexOf(n) !== i).length > 0;
+                const invalid = collision.claimants.filter((c) => renameProblem(c.path)).length > 0;
+                const settled = !duplicated && !invalid;
+                return (
+                  <div
+                    key={`${lib}${collision.folder}${collision.name}`}
+                    style={{
+                      ...s.conflict,
+                      marginTop: 10,
+                      ...(settled ? { borderColor: "#c6e3d1", background: "#f7fbf8" } : {}),
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontFamily: "Consolas, monospace", color: "#605e5c" }}>
+                      {lib} · {collision.folder}/<strong>{collision.name}</strong>
+                      <span
+                        style={{
+                          ...s.badge,
+                          background: settled ? "#f1f8f4" : "#fdf3f3",
+                          color: settled ? "#0f6c3f" : "#a4262c",
+                        }}
+                      >
+                        {settled ? "settled" : "needs a different name"}
+                      </span>
+                    </div>
+                    {collision.claimants.map((c) => {
+                      const name = c.path.slice(c.path.lastIndexOf("/") + 1);
+                      const problem = renameProblem(c.path);
+                      return (
+                        <div key={c.path}>
+                          <div style={s.row}>
+                            <span style={{ ...s.move, flex: "1 1 260px" }}>
+                              {c.existing ? "already there: " : "from "}
+                              {c.path}
+                            </span>
+                            {c.existing ? (
+                              <span style={{ ...s.hint, flex: "0 0 240px" }}>keeps its name</span>
+                            ) : (
+                              <input
+                                style={{
+                                  ...s.small,
+                                  flex: "0 0 240px",
+                                  ...(problem ? { borderColor: "#a4262c" } : {}),
+                                }}
+                                disabled={running}
+                                value={renames[c.path] ?? name}
+                                onChange={(e) => setRenames((prev) => ({ ...prev, [c.path]: e.target.value }))}
+                              />
+                            )}
+                          </div>
+                          {problem && (
+                            <div style={{ ...s.hint, color: "#a4262c", marginLeft: 4 }}>
+                              The name {problem}.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                  {collision.claimants.map((c) => {
-                    const name = c.path.slice(c.path.lastIndexOf("/") + 1);
-                    return (
-                      <div key={c.path} style={s.row}>
-                        <span style={{ ...s.move, flex: "1 1 260px" }}>
-                          {c.existing ? "already there: " : "from "}
-                          {c.path}
-                        </span>
-                        {c.existing ? (
-                          <span style={{ ...s.hint, flex: "0 0 240px" }}>keeps its name</span>
-                        ) : (
-                          <input
-                            style={{ ...s.small, flex: "0 0 240px" }}
-                            disabled={running}
-                            value={renames[c.path] ?? name}
-                            onChange={(e) => setRenames((prev) => ({ ...prev, [c.path]: e.target.value }))}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ))}
+                );
+              })}
               {conflicts.length > CONFLICT_LIMIT && (
                 <p style={{ ...s.hint, color: "#a4262c" }}>
                   Showing the first {CONFLICT_LIMIT}. {conflicts.length} clashes is a sign the level
@@ -1423,9 +1508,11 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
             >
               {running ? "Working…" : `Rebuild ${totalMoves} folder(s)`}
             </button>
-            {conflicts.length > 0 && (
+            {unresolvedCount + badNames > 0 && (
               <span style={{ ...s.hint, marginLeft: 10, color: "#a4262c" }}>
-                Settle the filename clashes first.
+                {badNames > 0
+                  ? "Fix the names marked in red first."
+                  : "Settle the filename clashes first."}
               </span>
             )}
             {conflicts.length === 0 && totalMoves === 0 && (
