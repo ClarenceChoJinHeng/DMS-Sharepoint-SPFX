@@ -368,6 +368,74 @@ export async function deleteFolderMapRow(
   }
 }
 
+/** Outcome of resolving a mapped folder — see `resolveMappedFolder`. */
+export interface MappedFolderResolution {
+  /** The folder's current path, when it could be resolved at all. */
+  serverRelativeUrl?: string;
+  /** True ONLY when SharePoint positively said the folder is not there (404). */
+  confirmedMissing: boolean;
+  /** Last status seen on the by-id lookup, for the message and the console. */
+  status: number;
+  /** True when the by-id lookup failed but the stored path worked. */
+  usedStoredPath: boolean;
+}
+
+/**
+ * Resolve a mapped folder, distinguishing "deleted" from "this user cannot look it up".
+ *
+ * `resolveFolderServerUrl` collapses every failure to null, and both upload web parts then
+ * told the user *"The mapped unit folder no longer exists — ask an administrator to re-run
+ * reconciliation."* That sentence is a CONCLUSION, and a 403, a throttle or a moderation
+ * trim produces it just as readily as a deletion. It sends an administrator to re-run
+ * reconciliation over a tree that is perfectly intact, and it blocks an uploader whose
+ * folder is right there.
+ *
+ * Same failure shape as `probeFolderByPath` (a bulk upload during reconciliation reporting a
+ * folder as absent) and as gotcha #9 — a request that could not be answered is not evidence
+ * of missing data.
+ *
+ * So: try the UniqueId, which is rename-proof and the right primary key. If that returns
+ * anything OTHER than a clean 404, fall back to the path stored on the map row. That path is
+ * the STAGING path — reconciliation writes the row only on the Staging pass — which is
+ * exactly what both callers expect, so the fallback cannot route a file into the wrong
+ * library. It can be stale after a rename, which is why it is the fallback and never the
+ * primary, and it is verified before being returned.
+ */
+export async function resolveMappedFolder(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  uniqueId: string,
+  storedUrl?: string,
+): Promise<MappedFolderResolution> {
+  const byId = await probeFolderById(spHttpClient, siteUrl, uniqueId);
+  if (byId.folder) {
+    return {
+      serverRelativeUrl: byId.folder.serverRelativeUrl,
+      confirmedMissing: false,
+      status: byId.status,
+      usedStoredPath: false,
+    };
+  }
+  if (byId.confirmedMissing) {
+    return { confirmedMissing: true, status: 404, usedStoredPath: false };
+  }
+  if (storedUrl) {
+    const byPath = await probeFolderByPath(spHttpClient, siteUrl, storedUrl);
+    if (byPath.folder) {
+      console.warn(
+        `Folder ${uniqueId} could not be resolved by id (HTTP ${byId.status}); using the stored path instead.`,
+      );
+      return {
+        serverRelativeUrl: byPath.folder.serverRelativeUrl,
+        confirmedMissing: false,
+        status: byId.status,
+        usedStoredPath: true,
+      };
+    }
+  }
+  return { confirmedMissing: false, status: byId.status, usedStoredPath: false };
+}
+
 /** Get a folder's CURRENT server-relative URL from its stable UniqueId. */
 export async function resolveFolderServerUrl(
   spHttpClient: SPHttpClient,

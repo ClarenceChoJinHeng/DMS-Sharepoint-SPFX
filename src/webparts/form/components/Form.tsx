@@ -4,7 +4,7 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFormProps } from "./IFormProps";
 import {
   lookupFolderMapping,
-  resolveFolderServerUrl,
+  resolveMappedFolder,
   ensureFolder,
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
@@ -1339,14 +1339,22 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
     // Rename-proof: resolve the Unit folder's CURRENT path from its UniqueId, then
     // ensure-create the Year and Document Type subfolders under it (they inherit its ACL).
-    const unitSru = await resolveFolderServerUrl(
+    const unitFolder = await resolveMappedFolder(
       context.spHttpClient,
       siteUrl,
       mapping.folderUniqueId,
+      mapping.folderUrl,
     );
+    const unitSru = unitFolder.serverRelativeUrl;
     if (!unitSru) {
       showToast(
-        "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation.",
+        // Two different problems with two different fixes, and only one of them is
+        // reconciliation. Saying "no longer exists" on a 403 or a throttle sends an admin to
+        // re-provision an intact tree while the uploader stays blocked.
+        unitFolder.confirmedMissing
+          ? "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation."
+          : `Your folder could not be opened (HTTP ${unitFolder.status}). That is usually a permissions ` +
+            `problem rather than a missing folder — ask an administrator to check your access to this unit.`,
         "error",
       );
       setStatus("");

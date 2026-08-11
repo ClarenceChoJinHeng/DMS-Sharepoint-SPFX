@@ -4,7 +4,7 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IBulkUploadProps } from "./IBulkUploadProps";
 import {
   lookupFolderMapping,
-  resolveFolderServerUrl,
+  resolveMappedFolder,
   probeFolderByPath,
   ensureFolder,
   encodeServerRelativePath,
@@ -1398,15 +1398,22 @@ export default function BulkUpload({
 
     // Resolve the Staging unit folder's CURRENT path (rename-proof), then swap
     // the library segment to reach the mirrored Documents unit folder.
-    const stagingSru = await resolveFolderServerUrl(
+    const unitFolder = await resolveMappedFolder(
       context.spHttpClient,
       siteUrl,
       mapping.folderUniqueId,
+      mapping.folderUrl,
     );
+    const stagingSru = unitFolder.serverRelativeUrl;
     if (!stagingSru) {
       return {
-        runError:
-          "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation.",
+        // Only a confirmed 404 means the folder is gone. Anything else — a 403, a throttle —
+        // is a lookup that could not be answered, and sending an admin to re-run
+        // reconciliation over an intact tree fixes nothing while the uploader stays blocked.
+        runError: unitFolder.confirmedMissing
+          ? "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation."
+          : `Your folder could not be opened (HTTP ${unitFolder.status}). That is usually a permissions ` +
+            `problem rather than a missing folder — ask an administrator to check your access to this unit.`,
         results: [],
       };
     }
