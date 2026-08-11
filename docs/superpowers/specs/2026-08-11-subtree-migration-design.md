@@ -1,9 +1,29 @@
 # Subtree Migration — moving documents that are already filed into a new folder shape
 
 **Date:** 2026-08-11
-**Status:** built. **REORDER verified live 2026-08-11**; add and remove built and unit-tested, not yet
-site-tested. `SubtreeMigrator.tsx` (tab 2 of the Folder Structure web part) +
-`shared/subtreeMigration.ts` (59 unit tests).
+**Status:** built and **VERIFIED LIVE — all four cases** (add, reorder, remove-clean, remove-with-
+collision) on ClarenceDMSTesting, 2026-08-11/12. `SubtreeMigrator.tsx` (tab 2 of the Folder Structure
+web part) + `shared/subtreeMigration.ts` (67 unit tests).
+
+> **The four runs, each matching its predicted counts exactly.** Baseline
+> `Credit_Card / Year / Document Type` with three documents: A and B sharing a filename under
+> different Credit_Card values, C distinct.
+>
+> | Test | Change | Result |
+> |---|---|---|
+> | 1 | ADD `Testing` between Credit_Card and Year | one picker; 3 moved, 6 tidied, 3 tagged |
+> | 2 | REORDER `Year` above `Testing` | **no picker**; 3 moved, 8 tidied, **0 tagged** |
+> | 3 | REMOVE `Testing` (no collision) | 3 moved, 6 tidied, 0 tagged |
+> | 4 | REMOVE `Credit_Card` (collision) | 1 clash surfaced, renamed, 3 moved, 8 tidied — **count held at 3** |
+>
+> Test 2's **0 tagged** matters: a reorder changes no tier's value, so nothing should be re-stamped.
+> Test 4's **count held at 3** matters more: both documents landed side by side under different
+> names, neither overwritten. That is the only failure in this feature that loses a document rather
+> than misplacing it.
+>
+> Also confirmed by these runs: **a file move preserves approval status** (every document stayed
+> "Waiting for Approval" across four migrations), and the emptied-folder cleanup removed exactly the
+> husks each change vacated and nothing else.
 
 > **Verified on ClarenceDMSTesting, 2026-08-11 — reorder.** `Testing` and `Year` swapped on NBPOL
 > while 3 documents were filed. `Credit2/testig/2024/Tax Return` → `Credit2/2024/testig/Tax Return`

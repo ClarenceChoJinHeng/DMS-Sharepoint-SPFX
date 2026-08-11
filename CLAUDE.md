@@ -118,9 +118,13 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     - Columns are created `Options: 8`, so they are **not added to any view** — the client switches
       them on per view. Deliberate: `12` would reshape every view they arranged, once per level.
     - Still OUT of scope: adding a whole new segment (**slice B**, not built).
-  - **Piece 3, subtree migration, is BUILT (2026-08-11). REORDER verified live; add and remove not
-    yet site-tested** — spec `2026-08-11-subtree-migration-design.md`, tab 2 of the same web part,
-    logic in `shared/subtreeMigration.ts` (59 tests).
+  - **Piece 3, subtree migration, is BUILT and VERIFIED LIVE — all four cases** (add, reorder,
+    remove-clean, remove-with-collision), 2026-08-11/12 — spec
+    `2026-08-11-subtree-migration-design.md`, tab 2 of the same web part, logic in
+    `shared/subtreeMigration.ts` (67 tests). Two results worth keeping: a REORDER re-stamped **0**
+    documents (it changes no tier's value, so anything else would be a bug), and the collision run
+    ended with the **document count unchanged** — both files side by side under different names,
+    neither overwritten.
     - **ADD, REORDER and REMOVE are ONE operation**, and treating them separately is what produced a
       tool that could only do the first: work out which TIER each path segment belongs to, then
       rebuild the path in tier order. A tier with no segment is a gap the admin fills (add);
