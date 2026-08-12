@@ -42,6 +42,14 @@
         }
       ]
     },
+    "crs-configuration-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/crsConfiguration/CrsConfigurationWebPart.js",
+          "manifest": "./src/webparts/crsConfiguration/CrsConfigurationWebPart.manifest.json"
+        }
+      ]
+    },
     "onboarding-web-part": {
       "components": [
         {

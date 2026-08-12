@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "c7a41f6b-5d92-4e08-9a37-6b1f2c8d4e05",
+  "alias": "CrsConfigurationWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "CRS Configuration" },
+    "description": { "default": "Admin tool — control which file types can be uploaded to the repository" },
+    "officeFabricIconFontName": "Settings",
+    "properties": {}
+  }]
+}
