@@ -6,6 +6,7 @@ import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from 
 import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
 import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { ensureColumn } from "../../../shared/spColumns";
 
 /**
  * Folder Structure — add, reorder and remove the folder levels BENEATH Unit.
@@ -581,67 +582,18 @@ export default function StructureManager({
   /* ---------- Save ------------------------------------------------------ */
 
   /** Create a text column if absent. Idempotent; returns whether it created one. */
+  /**
+   * Delegates to the shared `ensureColumn`, which slice B (SegmentCreator) also uses.
+   *
+   * The internal-name trick and the `Options: 8` choice are both load-bearing and both invisible
+   * when wrong, so they live in one place rather than in two copies that drift.
+   */
   const ensureTextColumn = async (
     listTitle: string,
     internalName: string,
     displayName: string,
-  ): Promise<boolean> => {
-    const check: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/fields?$select=InternalName&$top=500`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (!check.ok) throw new Error(`${listTitle}: could not read its columns (HTTP ${check.status})`);
-    const data = await check.json();
-    const exists = ((data.value ?? []) as Array<{ InternalName?: string }>)
-      .filter((f) => (f.InternalName ?? "").toLowerCase() === internalName.toLowerCase()).length > 0;
-    if (exists) return false;
-
-    // CreateFieldAsXml, not the /fields collection: it is the only form that sets the
-    // internal name (Name/StaticName) independently of the display name, which is what
-    // keeps the internal name free of _x0020_ encoding.
-    //
-    // Options 8 = AddToAllContentTypes. Deliberately NOT 12: that also adds the column
-    // to the default VIEW, silently reshaping every library view the client arranged.
-    const xml =
-      `<Field Type="Text" DisplayName="${internalName}" Name="${internalName}" ` +
-      `StaticName="${internalName}" MaxLength="255" />`;
-    const create: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/fields/CreateFieldAsXml`,
-      SPHttpClient.configurations.v1,
-      {
-        headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" },
-        body: JSON.stringify({ parameters: { SchemaXml: xml, Options: 8 } }),
-      },
-    );
-    if (!create.ok) {
-      const body = await create.text().catch(() => "");
-      throw new Error(
-        `${listTitle}: could not create the "${internalName}" column (HTTP ${create.status}). ${body.slice(0, 180)}`,
-      );
-    }
-    // Rename to the human title afterwards. The internal name is already frozen by the
-    // create above, so this only changes what is displayed.
-    if (displayName !== internalName) {
-      await context.spHttpClient
-        .post(
-          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')` +
-            `/fields/getbyinternalnameortitle('${encodeURIComponent(internalName)}')`,
-          SPHttpClient.configurations.v1,
-          {
-            headers: {
-              Accept: "application/json;odata=nometadata",
-              "Content-Type": "application/json",
-              "X-HTTP-Method": "MERGE",
-              "IF-MATCH": "*",
-            },
-            body: JSON.stringify({ Title: displayName }),
-          },
-        )
-        .catch(() => undefined); // cosmetic — never fail a save over a display name
-    }
-    return true;
-  };
+  ): Promise<boolean> =>
+    ensureColumn(context.spHttpClient, siteUrl, listTitle, internalName, displayName);
 
   /**
    * Create the `PendingLevels` column on DMS Config if it is absent.
@@ -656,35 +608,14 @@ export default function StructureManager({
    * would have no way to know why.
    */
   const ensurePendingColumn = async (): Promise<void> => {
-    const listTitle = cachedListTitle(LIST_SUFFIX.config);
-    const check: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/fields?$select=InternalName&$top=500`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
+    await ensureColumn(
+      context.spHttpClient,
+      siteUrl,
+      cachedListTitle(LIST_SUFFIX.config),
+      PENDING_LEVELS_FIELD,
+      PENDING_LEVELS_FIELD,
+      "Note",
     );
-    if (!check.ok) throw new Error(`${listTitle}: could not read its columns (HTTP ${check.status})`);
-    const exists = (((await check.json()).value ?? []) as Array<{ InternalName?: string }>)
-      .filter((f) => (f.InternalName ?? "").toLowerCase() === PENDING_LEVELS_FIELD.toLowerCase())
-      .length > 0;
-    if (exists) return;
-    const xml =
-      `<Field Type="Note" DisplayName="${PENDING_LEVELS_FIELD}" Name="${PENDING_LEVELS_FIELD}" ` +
-      `StaticName="${PENDING_LEVELS_FIELD}" NumLines="6" RichText="FALSE" />`;
-    const create: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/fields/CreateFieldAsXml`,
-      SPHttpClient.configurations.v1,
-      {
-        headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" },
-        body: JSON.stringify({ parameters: { SchemaXml: xml, Options: 8 } }),
-      },
-    );
-    if (!create.ok) {
-      const b = await create.text().catch(() => "");
-      throw new Error(
-        `Could not create the "${PENDING_LEVELS_FIELD}" column on ${listTitle} ` +
-          `(HTTP ${create.status}). ${b.slice(0, 180)}`,
-      );
-    }
   };
 
   const saveStructure = async (): Promise<void> => {

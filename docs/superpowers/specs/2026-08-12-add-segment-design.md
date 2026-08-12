@@ -1,7 +1,23 @@
 # Add a Business Segment — slice B of the Structure Manager
 
 **Date:** 2026-08-12
-**Status:** designed, not built
+**Status:** **BUILT 2026-08-12, not yet site-tested.** `shared/newSegment.ts` (pure, 33 tests) +
+`userAccess/components/SegmentCreator.tsx` (tab 3 of the Folder Structure web part).
+`ensureColumn` was extracted to `shared/spColumns.ts` so this and slice A share one copy of the
+internal-name trick. §5's visibility rule is delivered by
+[2026-08-12-provisioned-segment-visibility-design.md](2026-08-12-provisioned-segment-visibility-design.md).
+
+Two implementation notes worth carrying forward:
+
+- **The depth walk is bounded** — 400 term-store requests, 8 at a time, stopping one level past the
+  named tier count because "deeper than you named" is settled at that point. GHO needs ~115. If the
+  cap or a failed request ends the walk, depth is **unknown**, which WARNS and allows rather than
+  refusing: not knowing is not the same as being wrong. One unreadable branch makes the whole depth
+  unknown, deliberately — counting it as "no children" would report a shallower set than exists, and
+  too-deep is the direction that mis-provisions silently.
+- **`sanitizeFolderSegment` REMOVES illegal characters rather than substituting a separator**, so
+  `Estate/Mill` yields the column `EstateMill` and the key `mode_estatemill`, not `Estate_Mill`.
+  Pinned by test, because it decides derived column and key names.
 **Slice B** of [2026-08-10-structure-manager-ui-design.md](2026-08-10-structure-manager-ui-design.md),
 which built slice A (editing the levels of an existing segment) and deferred this.
 

@@ -157,7 +157,33 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       surfaces later as one permanently empty dropdown that blocks upload, for someone else.
     - Columns are created `Options: 8`, so they are **not added to any view** — the client switches
       them on per view. Deliberate: `12` would reshape every view they arranged, once per level.
-    - Still OUT of scope: adding a whole new segment (**slice B**, not built).
+    - **Slice B — adding a whole new segment — is BUILT 2026-08-12, NOT yet site-tested.** Spec
+      `2026-08-12-add-segment-design.md`; rules in `shared/newSegment.ts` (pure, 33 tests), UI in
+      `userAccess/components/SegmentCreator.tsx` as **tab 3** of the same web part. It writes the
+      `mode` row (`ConfigType`, `Title`, `ModeLabel`, `Category`, `TermSetGuid`, `StagingFolder`,
+      `SortOrder`, `Levels`) and the tier columns in BOTH libraries — and **nothing else**.
+      - **The admin NAMES the permissioned tiers.** A fixed `Department/Unit` prefix cannot onboard
+        the eight remaining segments: Upstream Ops needs `Region → Estate/Mill`, I&T needs a SINGLE
+        tier. So the form creates whatever columns those names imply.
+      - **TERM-SET DEPTH MUST EQUAL THE PERMISSIONED TIER COUNT, and the form refuses on mismatch.**
+        Reconciliation walks the TERM TREE and caps at that count, so 2 tiers against a 3-deep set
+        ACLs **Regions** while the Group Map points at **Estates** — every unit grant on the wrong
+        folder, no error, surfacing weeks later as "this person can see too much". The walk is
+        bounded (400 requests, 8 at a time, stops one level past the tier count; GHO needs ~115).
+        Cap or failure ⇒ depth **unknown** ⇒ **warn and allow**, never refuse. One unreadable branch
+        makes the whole depth unknown on purpose: counting it as "no children" would report a
+        SHALLOWER set than exists, and too-deep is the silent direction.
+      - **`Title` and `SortOrder` are DERIVED** (`mode_<slug>`, max+1) — they are keys, and free text
+        invites a typo whose only symptom is a segment that never appears.
+      - **It ends on a CHECKLIST, not a success message** — abbreviations, groups, reconciliation,
+        then verify. The abbreviation step is the one that silently creates nothing when missed.
+      - `ensureColumn` now lives in `shared/spColumns.ts`, shared with slice A: the internal-name
+        trick and `Options: 8` are load-bearing and invisible when wrong, so there is ONE copy.
+      - **`sanitizeFolderSegment` REMOVES illegal characters rather than substituting a separator**,
+        so `Estate/Mill` yields the column `EstateMill` and the key `mode_estatemill`. Pinned by
+        test, because it decides derived column and key names.
+      - Still OUT of scope, deliberately: creating the term set or its terms, abbreviation rows,
+        groups/Group Map rows, deleting a segment, reordering segments.
   - **A DOCUMENT ALWAYS LANDS AT THE END OF THE CHAIN** (client rule, 2026-08-12). Every tier is
     built, and a tier with no value in a folder's path is a gap the admin fills — wherever it sits.
     Before this, `planLeaf` capped at the leaf's own depth, which made **adding a level at the BOTTOM

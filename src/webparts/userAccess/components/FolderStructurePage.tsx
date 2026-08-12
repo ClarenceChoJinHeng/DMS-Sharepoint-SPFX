@@ -3,13 +3,18 @@ import { useState } from "react";
 import AccessShell from "./AccessShell";
 import StructureManager from "./StructureManager";
 import SubtreeMigrator from "./SubtreeMigrator";
+import SegmentCreator from "./SegmentCreator";
 import { IAccessProps } from "./IAccessProps";
 
 /**
- * Two tabs, deliberately on ONE page: changing the structure and migrating what is already
+ * Three tabs, deliberately on ONE page: changing the structure and migrating what is already
  * filed are two halves of one job. Separate web parts would let an admin finish the first, see
  * a success message, and never learn the second exists — which is the state that leaves a unit
  * with two folder shapes indefinitely.
+ *
+ * "New segment" joins them rather than taking its own page for the same reason: what it creates is
+ * the same `Levels` chain the first tab edits, and the levels it names are the ones the second tab
+ * would have to move. One page keeps the whole of a segment's shape in one place.
  */
 const tab = (active: boolean): React.CSSProperties => ({
   background: "none",
@@ -24,7 +29,8 @@ const tab = (active: boolean): React.CSSProperties => ({
 });
 
 export default function FolderStructurePage({ context }: IAccessProps): React.ReactElement {
-  const [view, setView] = useState<"structure" | "migrate">("structure");
+  type View = "structure" | "migrate" | "new";
+  const [view, setView] = useState<View>("structure");
   /** True while the structure editor holds unsaved changes — see the tab guard below. */
   const [dirty, setDirty] = useState(false);
   const [blocked, setBlocked] = useState(false);
@@ -35,7 +41,7 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
    * pixels away, and offering "discard" here would put losing the work one click behind
    * something that looks like ordinary navigation.
    */
-  const go = (next: "structure" | "migrate"): void => {
+  const go = (next: View): void => {
     if (next !== view && dirty) {
       setBlocked(true);
       return;
@@ -47,7 +53,7 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
   return (
     <AccessShell
       title="Folder Structure"
-      subtitle="Add or reorder the folder levels beneath Unit, and move documents already filed into the new shape."
+      subtitle="Add a business segment, change the folder levels beneath Unit, and move documents already filed into the new shape."
       /* The note names the one consequence an admin cannot undo from the first tab, and points
          at the second tab, which is where it gets resolved. */
       note={
@@ -66,6 +72,9 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
         <button style={tab(view === "migrate")} onClick={() => go("migrate")}>
           Move existing folders
         </button>
+        <button style={tab(view === "new")} onClick={() => go("new")}>
+          New segment
+        </button>
       </div>
 
       {blocked && (
@@ -81,11 +90,11 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
             color: "#7a4f00",
           }}
         >
-          Save or discard your folder level changes first — leaving this tab would lose them.
+          Finish or clear what you are editing first — leaving this tab would lose it.
         </div>
       )}
 
-      {view === "structure" ? (
+      {view === "structure" && (
         <StructureManager
           context={context}
           siteUrl={context.pageContext.web.absoluteUrl}
@@ -96,8 +105,21 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
             if (!d) setBlocked(false);
           }}
         />
-      ) : (
+      )}
+      {view === "migrate" && (
         <SubtreeMigrator context={context} siteUrl={context.pageContext.web.absoluteUrl} />
+      )}
+      {view === "new" && (
+        // Shares the same dirty guard: a half-typed segment costs more to retype than a level
+        // edit, and losing it to a tab click would be the same silent discard.
+        <SegmentCreator
+          context={context}
+          siteUrl={context.pageContext.web.absoluteUrl}
+          onDirtyChange={(d) => {
+            setDirty(d);
+            if (!d) setBlocked(false);
+          }}
+        />
       )}
     </AccessShell>
   );
