@@ -1,7 +1,7 @@
 # Term Abbreviation page, and one home for folder administration
 
 **Date:** 2026-08-12
-**Status:** designed, building
+**Status:** BUILT 2026-08-12 — not yet site-tested
 
 Builds the admin UI for the data specced in
 [2026-07-30-folder-abbreviation-naming-design.md](2026-07-30-folder-abbreviation-naming-design.md),
@@ -104,16 +104,25 @@ the code.
 
 Folder administration is currently spread over two web parts and a list. It becomes one tab bar:
 
-| Tab | Source |
-|---|---|
-| Folder Reconciliation | stays |
-| Term Abbreviations | new (this spec) |
-| Folder levels | Folder Structure web part |
-| Move existing folders | Folder Structure web part |
-| New segment | Folder Structure web part |
+| # | Tab | Source |
+|---|---|---|
+| 1 | Term Abbreviations | new (this spec) |
+| 2 | Folder levels | Folder Structure web part |
+| 3 | Move existing folders | Folder Structure web part |
+| 4 | Folder Reconciliation | stays |
+| 5 | New segment | Folder Structure web part |
 
 The order is the order the work happens in: name the terms, shape the levels, move what is already
 filed, reconcile. A new segment sits last because it is the rarest.
+
+**Term Abbreviations opens first**, which changes the landing tab from the old `Staging` folder tree.
+Reconciliation is the tab an admin visits most, but it is the one that *fails* when the first tab has
+not been filled in — a term with no code gets no folder — so it is not the place to start.
+
+The three moved tabs are **MOUNTED from `userAccess/components`, not copied**. `StructureManager`
+rewrites `Levels` and creates columns in both libraries; `SegmentCreator` writes a `mode` row. A second
+copy of either would drift, and the symptom of drift in those two is a wrong column name or a
+half-written segment, both of which surface weeks later.
 
 **`Staging` and `Documents` are removed** (client, 2026-08-12: *"I am honestly not using it"*). They
 were a manual folder tree — rename, create and assign permissions per folder in one commit — which
@@ -124,6 +133,22 @@ since a hand-made folder is one reconciliation does not know about.
 **The `Folder Structure` web part stays registered** even though its tabs now appear here. It may
 already be on a page, and an unregistered web part leaves a broken zone. Deleting it is a one-line
 change once no page uses it.
+
+The web part is **retitled `Folder Administration`** (manifest title, property-pane label and the
+page heading). The component **id is unchanged**, so any page already hosting it keeps working — only
+the name in the web part picker moves. "Folder Manager" described the folder tree that is now gone.
+
+**The retired folder tree's CODE stays, unreachable.** Its render branch, its Refresh/Update bar and
+their helpers still compile; deleting ~500 lines belongs in its own reviewable change, not buried in a
+tab restructure. Two consequences were handled explicitly:
+
+- The tree's controls were gated on `tab !== "Reconciliation"`, which after this change also means
+  Abbreviations, Levels, Migrate and New segment — it would have rendered a second Refresh/Update pair
+  over every mounted screen, each of which has its own Save. The test is now `treeTab`, named for what
+  it actually asks.
+- The mount-time tree crawl is **gated off**. It was dozens of requests down every branch of a library
+  on every page load, for a view nobody can open, and its failure toast told the admin to check
+  permissions on a tab that no longer exists.
 
 ## 7. Testing
 
@@ -137,7 +162,11 @@ change once no page uses it.
   documents still present, permissions unchanged, no re-approval needed.
 - Save, then check the folder tree: **nothing changed** until reconciliation runs.
 - Below-Unit tiers are visible and not editable.
-- Folder Manager: five tabs, Staging and Documents gone, each moved tab behaving as it did.
+- Folder Administration: five tabs, Staging and Documents gone, each moved tab behaving as it did.
+- Type into a tab, then click another tab: the switch is refused, not confirmed. Save, and the refusal
+  message clears itself.
+- The page no longer crawls the library on load — the retired folder tree's read is gated off, so an
+  admin with no library-root rights sees no "check your permissions" toast on arrival.
 
 ## 8. Related
 

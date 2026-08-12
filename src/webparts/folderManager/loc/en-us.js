@@ -1,5 +1,5 @@
 define([], function() {
   return {
-    "PropertyPaneDescription": "Folder Manager"
+    "PropertyPaneDescription": "Folder Administration"
   }
 });

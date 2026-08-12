@@ -34,6 +34,14 @@ import {
   planOrphanRepairs,
 } from "../../../shared/folderAbbreviation";
 import { FULL_NAME_COLUMN_TITLE, pickFullNameField, SpFieldLite } from "../../../shared/folderFullName";
+import AbbreviationManager from "./AbbreviationManager";
+// The three Folder Structure screens are MOUNTED here, not copied: they keep living in the
+// userAccess web part so the `Folder Structure` page stays working for any site that already has it
+// on a page (spec `2026-08-12-term-abbreviation-page-design.md` §6). Two copies of a screen that
+// rewrites `Levels` and creates columns in both libraries is exactly the drift this import avoids.
+import StructureManager from "../../userAccess/components/StructureManager";
+import SubtreeMigrator from "../../userAccess/components/SubtreeMigrator";
+import SegmentCreator from "../../userAccess/components/SegmentCreator";
 
 // A "mode" is a top-level container folder under the library root. These used to
 // be hardcoded (Departments / Projects); they are now discovered dynamically so
@@ -78,7 +86,14 @@ let resolvedFolderCtName: string | undefined;
 // their own "User Access" page — spec `2026-08-07-access-webpart-split-design.md`. They were
 // sub-tabs here, which buried the most frequent task (a person joins or moves) one level below
 // the least frequent ones. What remains is structure and provisioning only.
-type Tab       = LibTarget | "Reconciliation";
+/**
+ * `Staging` and `Documents` are no longer offered in the tab bar (client, 2026-08-12: "I am honestly
+ * not using it") — reconciliation and the Folder Access page cover what that manual folder tree did.
+ * They stay in the union because the tree's render branch and its helpers are still here; deleting
+ * that code is a separate cleanup, and keeping the branch type-reachable leaves the file compiling
+ * and lint-clean in the meantime.
+ */
+type Tab       = LibTarget | "Reconciliation" | "Abbreviations" | "Levels" | "Migrate" | "NewSegment";
 
 // Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
 // Each maps a term set to the segment container folder its terms live under.
@@ -510,10 +525,22 @@ const GroupSearch: React.FC<{
 export default function FolderManager({ context }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
-  // Active tab. The two library tabs keep libTarget in sync (drives the folder
-  // tree); the Reconciliation tab shows the provisioner instead.
-  const [tab,          setTab]          = useState<Tab>("Staging");
-  const [libTarget,    setLibTarget]    = useState<LibTarget>("Staging");
+  // Active tab. `Staging`/`Documents` are no longer OFFERED (see the Tab type) — the folder tree
+  // they drove is retired, and `libTarget` now only ever holds its initial value, which keeps the
+  // tree's helpers compiling until that code is deleted.
+  // Opens on Term Abbreviations because that is where the work starts: a term with no code gets no
+  // folder, so reconciliation has nothing to build until this tab is filled in.
+  const [tab,          setTab]          = useState<Tab>("Abbreviations");
+  const [libTarget]                     = useState<LibTarget>("Staging");
+  /**
+   * True while a mounted structure screen holds unsaved changes. Switching tabs UNMOUNTS it, which
+   * discards the edit silently, so the switch is REFUSED rather than confirmed — the Save button is
+   * a few pixels away, and a "discard?" prompt would put losing the work one click behind something
+   * that looks like ordinary navigation. Copied in behaviour from FolderStructurePage, whose three
+   * tabs now live here.
+   */
+  const [dirty,        setDirty]        = useState(false);
+  const [tabBlocked,   setTabBlocked]   = useState(false);
   // Top-level container folders discovered under the library root, in display order.
   const [sections,     setSections]     = useState<Mode[]>([]);
   const [tree,         setTree]         = useState<Record<Mode, FolderNode[]>>({});
@@ -918,8 +945,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // loads as soon as the titles are known rather than needing a manual Refresh.
   useEffect(() => {
     if (!namesReady) return;
+    // The manual folder tree is no longer reachable from the tab bar, so this crawl — dozens of
+    // requests down every branch of a library — would run on every page load for a view nobody can
+    // open, and its failure toast would accuse the admin of a permissions problem on a tab that is
+    // not there. Reconciliation reads its own state and does not depend on this.
+    if (tab !== "Staging" && tab !== "Documents") return;
     loadTree().catch(() => { setLoading(false); showToast("Could not load folders. Check your permissions.", true); });
-  }, [libTarget, namesReady]);
+  }, [libTarget, namesReady, tab]);
 
   /* ── Generic tree mutation helpers (recursive, keyed by node id) ───────────────── */
 
@@ -3711,33 +3743,94 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
   /* ── Render ──────────────────────────────────────────────────────────────────── */
 
+  /**
+   * The retired manual folder tree. Always false now that the tab bar cannot reach `Staging` or
+   * `Documents` — kept as a named test so the tree's own controls stay attached to the tree rather
+   * than to "not Reconciliation", which since this restructure also means Abbreviations, Levels,
+   * Migrate and New segment. That inverted read would have rendered a Refresh/Update pair over
+   * every one of the mounted screens, each with its own Save.
+   */
+  const treeTab = tab === "Staging" || tab === "Documents";
+
   return (
     <section style={s.wrap}>
       <style>{`.fm-in:focus { outline: none; box-shadow: 0 0 0 2px rgba(15,108,63,.18); }`}</style>
 
-      <h2 style={s.h2}>Folder Manager</h2>
-      <p style={s.subtitle}>Rename, create, and assign permissions to folders at any depth — then apply it all at once.</p>
+      <h2 style={s.h2}>Folder Administration</h2>
+      <p style={s.subtitle}>
+        Name the folders a segment&rsquo;s terms produce, shape the levels beneath Unit, move what is
+        already filed, then build the tree. Who can see a folder is set on the{" "}
+        <strong>Folder Access</strong> page.
+      </p>
 
-      {/* Tab bar: two library views + the term-store reconciliation provisioner.
-          Access lives on its own page now — see the User Access web part. */}
+      {/*
+        One home for folder administration — spec `2026-08-12-term-abbreviation-page-design.md` §6.
+        The order is the order the work happens in: name the terms, shape the levels, move what is
+        already filed, reconcile. New segment sits last because it is the rarest.
+
+        `Staging` and `Documents` are gone (client, 2026-08-12: "I am honestly not using it"). They
+        were a manual folder tree — reconciliation and the Folder Access page now cover it from data.
+      */}
       <div style={s.toggleWrap}>
         <div style={s.seg}>
-          {(["Staging", "Documents", "Reconciliation"] as Tab[]).map((t, i, arr) => (
+          {([
+            ["Abbreviations",  "Term Abbreviations"],
+            ["Levels",         "Folder levels"],
+            ["Migrate",        "Move existing folders"],
+            ["Reconciliation", "Folder Reconciliation"],
+            ["NewSegment",     "New segment"],
+          ] as Array<[Tab, string]>).map(([t, label], i, arr) => (
             <button key={t}
               onClick={() => {
+                if (t === tab) return;
+                // An unsaved edit refuses the switch rather than losing it — see `dirty`.
+                if (dirty) { setTabBlocked(true); return; }
+                setTabBlocked(false);
                 setTab(t);
                 setReconConfirm(false);
-                if (t !== "Reconciliation") { setLibTarget(t as LibTarget); setExpandedIds({}); }
               }}
               style={{ ...s.segBtn, ...(i === arr.length - 1 ? { borderRight: "none" } : {}), ...(tab === t ? s.segActive : {}) }}
             >
-              {t === "Reconciliation" ? "Folder Reconciliation" : t}
+              {label}
             </button>
           ))}
         </div>
       </div>
 
-      {tab === "Reconciliation" ? (
+      {tabBlocked && (
+        <div style={{ fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5, background: "#fff4e5", border: "1px solid #f0d9b5", color: "#7a4f00" }}>
+          Finish or clear what you are editing first — leaving this tab would lose it.
+        </div>
+      )}
+
+      {tab === "Abbreviations" ? (
+        <AbbreviationManager
+          context={context}
+          siteUrl={siteUrl}
+          onDirtyChange={(d) => {
+            setDirty(d);
+            // Clear the refusal as soon as its reason is gone, so a saved edit does not leave a
+            // warning telling them to do what they just did.
+            if (!d) setTabBlocked(false);
+          }}
+        />
+      ) : tab === "Levels" ? (
+        <StructureManager
+          context={context}
+          siteUrl={siteUrl}
+          onDirtyChange={(d) => { setDirty(d); if (!d) setTabBlocked(false); }}
+        />
+      ) : tab === "Migrate" ? (
+        <SubtreeMigrator context={context} siteUrl={siteUrl} />
+      ) : tab === "NewSegment" ? (
+        // Same dirty guard: a half-typed segment costs more to retype than a level edit, and
+        // losing it to a tab click would be the same silent discard.
+        <SegmentCreator
+          context={context}
+          siteUrl={siteUrl}
+          onDirtyChange={(d) => { setDirty(d); if (!d) setTabBlocked(false); }}
+        />
+      ) : tab === "Reconciliation" ? (
         <div>
           <p style={{ fontSize: 13, color: "#444", lineHeight: 1.5, margin: "0 0 16px" }}>
             Build the folder tree from the <strong>term store</strong> in both{" "}
@@ -3873,6 +3966,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       ) : loading ? (
         <p style={{ fontSize: 13, color: "#666" }}>Loading folders…</p>
       ) : (
+        /* UNREACHABLE from the tab bar: the manual folder tree below served the retired
+           `Staging`/`Documents` tabs. Kept compiling so its removal is a separate, reviewable
+           change rather than a 200-line deletion buried in a tab restructure. */
         <>
           {sections.length === 0 && (tree[NEW_TOP_LEVEL] ?? []).length === 0 && (
             <p style={{ fontSize: 13, color: "#999" }}>
@@ -3928,7 +4024,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         </>
       )}
 
-      {tab !== "Reconciliation" && (
+      {treeTab && (
         <div style={s.actions}>
           <button onClick={() => loadTree().catch(() => undefined)} disabled={busy || loading}
             style={{ ...s.btn, marginRight: "auto", background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>
@@ -3942,7 +4038,9 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         </div>
       )}
 
-      {log.length > 0 && (() => {
+      {/* The log belongs to the run that produced it. Ungated it would sit under the mounted
+          structure screens too, where a stale reconciliation report reads as that screen's output. */}
+      {(tab === "Reconciliation" || treeTab) && log.length > 0 && (() => {
         /* The log is split by WHERE and by SEVERITY, because those answer different
            questions: "what happened in Documents" and "what do I have to fix".
            Warnings and Errors are filtered VIEWS, so an entry appears both in its

@@ -14,8 +14,8 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "Folder Manager" },
-    "description": { "default": "Admin tool — browse and rename folders in the approval and Documents libraries, and provision the whole tree from the term store" },
+    "title": { "default": "Folder Administration" },
+    "description": { "default": "Admin tool — name the folders each segment's terms produce, shape the levels beneath Unit, move documents already filed, add a segment, and provision the whole tree from the term store" },
     "officeFabricIconFontName": "FolderOpen",
     "properties": {}
   }]

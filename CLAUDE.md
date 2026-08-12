@@ -282,6 +282,50 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   anything); changing one **renames a live folder** on the next run. Spec
   `2026-07-30-folder-abbreviation-naming-design.md`, client guide
   `docs/client/folder-abbreviations-guide.md`.
+  - **The list now has an EDITOR — BUILT 2026-08-12, not yet site-tested.** Spec
+    `2026-08-12-term-abbreviation-page-design.md`; rules in `shared/abbreviationDraft.ts` (pure, with
+    tests), UI in `folderManager/components/AbbreviationManager.tsx` as **tab 1** of the Folder
+    Administration web part. The client will not touch a list view or paste a console script after
+    handover, and this is the worst data to hand-edit: keyed by **term GUID**, obtainable only from a
+    term-store properties panel one term at a time.
+    - **THE PAGE NEVER SHOWS A GUID.** An admin picks a segment; the tree is walked and the keys
+      resolved behind it. Showing the whole tree at once is also what makes the sibling check free.
+    - **The sibling-collision check runs at TYPING time and BLOCKS save**, reusing `findCollisions`
+      rather than copying the rule — the page must never save what reconciliation would refuse. Both
+      rows are flagged (which one is wrong is not knowable), each message names the other term and
+      their shared parent, and the comparison is case-insensitive and post-sanitize because that is
+      what the folder will be called.
+    - **No exemption flag, no guessed initials.** A per-level exemption would give reconciliation a
+      second way to name a folder, invisible in the list — so the list would stop telling you what a
+      folder is called. The client's own better idea, a **"Same as term name"** button (per row and per
+      tier), stores the literal folder name, so skip-not-guess, sibling uniqueness and rename-on-change
+      all keep applying to it for free. A guessed `GMB_PMB2C` looks authoritative and is wrong.
+    - **Save writes rows ONLY** — inert and repeatable. Folders change only when someone runs Folder
+      Reconciliation, so the order is always: fill in → save → reconcile. An existing row is MERGEd by
+      item id; a duplicate row for one term GUID would leave reconciliation choosing between two codes.
+    - Below-Unit tiers are **listed but read-only** (they name folders from the term label), so nobody
+      goes hunting for Year.
+- **FOLDER ADMINISTRATION IS ONE TAB BAR (2026-08-12)** — same spec §6, same web part as before
+  (`Folder Manager`, GUID `02007994-…`, **retitled** `Folder Administration`; the id is unchanged so
+  pages already hosting it keep working). Five tabs, in the order the work happens: **Term
+  Abbreviations → Folder levels → Move existing folders → Folder Reconciliation → New segment**. It
+  opens on Term Abbreviations, not on Reconciliation, because reconciliation is what *fails* when the
+  codes are missing.
+  - The three `Folder Structure` tabs are **MOUNTED from `userAccess/components`, never copied** —
+    `StructureManager` rewrites `Levels` and creates columns in both libraries, `SegmentCreator` writes
+    a `mode` row, and drift in either surfaces weeks later as a wrong column or a half-built segment.
+    **The `Folder Structure` web part stays registered** — it may already be on a page.
+  - **`Staging` and `Documents` are GONE** (client: *"I am honestly not using it"*). Their manual
+    folder tree — hand-create, rename, assign per-folder permissions — is covered by reconciliation and
+    the Folder Access page. Lost with them: browsing a folder to see who actually holds access, and
+    hand-creating a folder (arguably worth losing — reconciliation does not know about a hand-made one).
+  - **The tree's CODE stays, unreachable**, so its deletion is its own reviewable change. Two traps
+    came with that: its controls were gated on `tab !== "Reconciliation"`, which now also matches all
+    four new tabs (it would have drawn a second Refresh/Update bar over screens that each have their
+    own Save — now `treeTab`); and its mount-time crawl is **gated off**, since it was dozens of
+    requests per page load for a view nobody can open, ending in a permissions toast about a missing tab.
+  - A tab switch with unsaved changes is **REFUSED, not confirmed** — Save is a few pixels away, and a
+    "discard?" prompt puts losing the work one click behind ordinary-looking navigation.
 - **Deleting a term orphans three lists at once** (Abbreviation, Folder Map, Group Map) — a
   re-created term gets a NEW GUID and nothing joins them. Tell the client to **rename terms, never
   delete and re-add**. Reconciliation repairs an orphan only on a **1:1 match of level + label**

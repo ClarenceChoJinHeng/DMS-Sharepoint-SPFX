@@ -16,7 +16,8 @@ export default function FolderAccessPage({ context }: IAccessProps): React.React
         <>
           Adding or removing <strong>members</strong> of a group takes effect immediately.
           Creating or deleting a <strong>mapping</strong> only changes folder permissions after
-          a <strong>Folder Reconciliation</strong> run on the Folder Manager page.
+          a <strong>Folder Reconciliation</strong> run — the fourth tab of the{" "}
+          <strong>Folder Administration</strong> web part.
         </>
       }
     >
