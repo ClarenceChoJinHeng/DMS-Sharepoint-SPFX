@@ -216,6 +216,57 @@ only line of defence, and it is what makes the degraded path safe.
 - A provisioned unit in one segment and an unprovisioned one in another: only the first segment is
   offered, and the toggle hides the emptied side.
 
+## 9. The admin's side of the same gate — "not fully set up yet" (2026-08-12, client's request)
+
+The gate above deliberately exempts site admins: they get every segment, so they can build and test
+one. The cost showed up the moment a real segment was half-built. An admin opened the upload form, saw
+**Upstream Operations Malaysia** sitting in the dropdown exactly like the three live segments, picked
+it, and got a working cascade — with no folders, no abbreviations and no groups behind it. Nothing on
+the form said so. The client asked for it to be marked, *"good for superadmin."*
+
+**The option is LABELLED, not disabled.** `Upstream Operations Malaysia — not fully set up yet`, still
+selectable. Greying it out is the obvious reading of the request, and it removes the only reason admins
+are exempted in the first place: that same admin had just used the unready segment to verify the
+Region → Estate/Mill cascade *before* anything existed to build folders. A disabled option would have
+made that check impossible, and the next admin would reconcile blind and find out afterwards. So: say
+it plainly, block nothing.
+
+Selecting one shows a banner naming what is missing and the next step — abbreviations, then Folder
+Reconciliation — and states that **uploaders cannot see this segment yet**. That last line is what
+stops an admin "fixing" a visibility complaint that is really an unfinished setup.
+
+**Readiness is read from the Folder Map rows already loaded at mount.** A row's `Section` holds the
+segment's top folder (`GHO`, `NBPOLHO`, `UPOPSMY`), written from `mode.stagingFolder` by reconciliation
+— so "does this segment have any folders" is one pass over data the form already holds. No term walk,
+no extra request, nothing new to keep in sync.
+
+**Three states, and only one of them speaks:**
+
+| Folder Map | Verdict | Shown |
+|---|---|---|
+| Unreadable (`null`) | `unknown` | **nothing** |
+| Readable, no row for this top folder | `unprovisioned` | the label and the banner |
+| Readable, ≥1 row | `provisioned` | nothing |
+
+`unknown` stays silent for the same reason §5 makes an unreadable Folder Map offer everything: a
+transient error would otherwise mark **every** segment "not fully set up yet" — including three live ones —
+and send an admin to reconcile an intact tree. Empty is not unknown, again.
+
+A blank `StagingFolder` on a mode row is also `unknown`, not `unprovisioned`: with nothing to match on,
+absence of rows proves nothing.
+
+**Comparison is case-insensitive**, because SharePoint folder names are — `upopsmy` and `UPOPSMY` are
+one folder, and a hand-typed `StagingFolder` differing only in case must not read as unprovisioned.
+
+**Privileged users only.** Non-admins never see an unprovisioned segment at all, so the label is
+unreachable for them by construction — but it is gated on `privileged` anyway rather than left to that
+invariant, so a later change to the filters cannot leak "not fully set up yet" into an uploader's dropdown.
+
+**It says nothing about abbreviations directly**, though a missing abbreviation is the usual cause. The
+form does not read the abbreviation list, and adding that read to sharpen the message would cost a
+request on every upload-form load for a state only admins see. The banner names abbreviations as the
+first thing to check instead.
+
 ## 8. Related
 
 - [2026-08-12-add-segment-design.md](2026-08-12-add-segment-design.md) — slice B, whose §5 this changes

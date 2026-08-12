@@ -118,6 +118,21 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   - **Site admins are unaffected** and issue **no probes** — `privileged` users get the full cascade
     and no `validPaths`, so they can still see and test a segment they are building. The Structure
     Manager checklist is what tells them it is not live yet; the uploader no longer will.
+  - **…but the admin's dropdown now SAYS so (2026-08-12, client's request, spec §9).** That exemption
+    meant a half-built segment sat in an admin's picker looking identical to a live one — found live the
+    hour Upstream Ops was created. The option reads `<label> — not fully set up yet`, and selecting it
+    shows an amber banner naming the fix order (abbreviation → Folder Access rows → reconciliation) and
+    that **uploaders cannot see it at all**.
+    - **LABELLED, never disabled.** Greying it out is the obvious reading of the request and destroys
+      the only reason for the exemption: the same admin had just used the unready segment to verify the
+      Region → Estate/Mill cascade before any folder existed. Say it plainly, block nothing.
+    - Readiness comes from `segmentProvisionState()` in `shared/segmentReadiness.ts` over the Folder Map
+      rows **already loaded at mount** — a row's `Section` holds the segment's top folder, so it costs no
+      request. `unknown` (unreadable list, or a blank `StagingFolder`) shows **nothing**: one transient
+      error would otherwise brand every segment, live ones included. Empty ≠ unknown, again. Compared
+      case-insensitively, because SharePoint folder names are.
+    - Gated on `privileged` even though non-admins can never reach the state, so a later change to the
+      filters cannot leak the label into an uploader's dropdown.
   - The empty state **names the right fix**: "isn't ready to receive uploads yet… run folder
     reconciliation — and if the unit has no folder at all, give it an abbreviation first" when the user
     IS authorised, vs the membership message when they are not. Reconciliation leads because the common
@@ -157,7 +172,14 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       surfaces later as one permanently empty dropdown that blocks upload, for someone else.
     - Columns are created `Options: 8`, so they are **not added to any view** — the client switches
       them on per view. Deliberate: `12` would reshape every view they arranged, once per level.
-    - **Slice B — adding a whole new segment — is BUILT 2026-08-12, NOT yet site-tested.** Spec
+    - **Slice B — adding a whole new segment — is BUILT and SITE-VERIFIED 2026-08-12.** Onboarded
+      **Upstream Operations Malaysia** (`UPOPSMY`, `Region → Estate/Mill`, 15 terms) end to end: the
+      depth check REFUSED 3 named tiers against the 2-deep set and wrote nothing; the real run derived
+      `mode_upstream_operations_malaysia` and `SortOrder` **5** (max+1 of 1, 3, 4 — not count+1),
+      created **8 columns across BOTH libraries** (`Region`/`RegionTid`, `EstateMill`/`EstateMillTid`),
+      kept the label `Estate/Mill` while sanitizing the column to `EstateMill`, and ended on the
+      checklist. Reconciliation then built the whole tree, and the upload form's cascade rendered
+      `Region → Estate/Mill` with no code change. Spec
       `2026-08-12-add-segment-design.md`; rules in `shared/newSegment.ts` (pure, 33 tests), UI in
       `userAccess/components/SegmentCreator.tsx` as **tab 3** of the same web part. It writes the
       `mode` row (`ConfigType`, `Title`, `ModeLabel`, `Category`, `TermSetGuid`, `StagingFolder`,
@@ -282,7 +304,7 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   anything); changing one **renames a live folder** on the next run. Spec
   `2026-07-30-folder-abbreviation-naming-design.md`, client guide
   `docs/client/folder-abbreviations-guide.md`.
-  - **The list now has an EDITOR — BUILT 2026-08-12, not yet site-tested.** Spec
+  - **The list now has an EDITOR — BUILT and SITE-VERIFIED 2026-08-12.** Spec
     `2026-08-12-term-abbreviation-page-design.md`; rules in `shared/abbreviationDraft.ts` (pure, with
     tests), UI in `folderManager/components/AbbreviationManager.tsx` as **tab 1** of the Folder
     Administration web part. The client will not touch a list view or paste a console script after
@@ -305,6 +327,11 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       item id; a duplicate row for one term GUID would leave reconciliation choosing between two codes.
     - Below-Unit tiers are **listed but read-only** (they name folders from the term label), so nobody
       goes hunting for Year.
+    - **Blanking a code after its folder exists, then setting a new one, shows NO rename warning** —
+      the warning compares against the STORED code (now empty), so it reads as a first-time fill, while
+      the Folder Map row still points at the old folder and the next run renames it. Seen live
+      2026-08-12 (`BE` → blank → `BNG` → `✎ renamed BE → BNG` in both libraries). The outcome is
+      right; only the warning is silent.
 - **FOLDER ADMINISTRATION IS ONE TAB BAR (2026-08-12)** — same spec §6, same web part as before
   (`Folder Manager`, GUID `02007994-…`, **retitled** `Folder Administration`; the id is unchanged so
   pages already hosting it keep working). Five tabs, in the order the work happens: **Term

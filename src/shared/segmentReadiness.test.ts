@@ -4,6 +4,7 @@ import {
   filterReachablePaths,
   mappedTermGuidSet,
   normalizeTermGuid,
+  segmentProvisionState,
 } from "./segmentReadiness";
 
 const CORU = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
@@ -18,6 +19,51 @@ const path = (modeKey: string, ...leafIds: string[]): Path => ({
     { id: DEPT, label: "Group Finance" },
     ...leafIds.map((id) => ({ id, label: id.slice(0, 4) })),
   ],
+});
+
+describe("segmentProvisionState", () => {
+  const rows = [{ section: "GHO" }, { section: "GHO" }, { section: "NBPOLHO" }];
+
+  it("reports provisioned when any row carries the segment's top folder", () => {
+    expect(segmentProvisionState("NBPOLHO", rows)).toBe("provisioned");
+  });
+
+  it("reports unprovisioned for a segment with no rows of its own", () => {
+    expect(segmentProvisionState("UPOPSMY", rows)).toBe("unprovisioned");
+  });
+
+  // An unreadable Folder Map must never claim a segment is unbuilt: it would mark every
+  // segment on the site, live ones included, and send an admin to reconcile an intact tree.
+  it("reports unknown when the Folder Map could not be read", () => {
+    expect(segmentProvisionState("UPOPSMY", null)).toBe("unknown");
+    expect(segmentProvisionState("UPOPSMY", undefined)).toBe("unknown");
+  });
+
+  // Empty IS known: the list read fine and holds no folders for anyone.
+  it("reports unprovisioned against an empty but readable Folder Map", () => {
+    expect(segmentProvisionState("UPOPSMY", [])).toBe("unprovisioned");
+  });
+
+  // Nothing to match on, so an absence of rows proves nothing.
+  it("reports unknown when the mode row has no StagingFolder", () => {
+    expect(segmentProvisionState("", rows)).toBe("unknown");
+    expect(segmentProvisionState("   ", rows)).toBe("unknown");
+    expect(segmentProvisionState(undefined, rows)).toBe("unknown");
+  });
+
+  // SharePoint folder names are case-insensitive, so these are one folder.
+  it("matches case-insensitively and ignores surrounding whitespace", () => {
+    expect(segmentProvisionState(" nbpolho ", rows)).toBe("provisioned");
+    expect(segmentProvisionState("NBPOLHO", [{ section: " nbpolho " }])).toBe(
+      "provisioned",
+    );
+  });
+
+  it("ignores rows with no section rather than counting them as a match", () => {
+    expect(segmentProvisionState("UPOPSMY", [{}, { section: "" }])).toBe(
+      "unprovisioned",
+    );
+  });
 });
 
 describe("normalizeTermGuid", () => {

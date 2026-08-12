@@ -6,6 +6,7 @@ import { Level, parseLevels } from "../../../shared/formModel";
 import { splitChain } from "../../../shared/folderChain";
 import { abbrevListTitle } from "../../../shared/folderAbbreviation";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 import {
   AbbrevRowDraft,
   changedRows,
@@ -117,6 +118,14 @@ export default function AbbreviationManager({
 
   useEffect(() => {
     const load = async (): Promise<void> => {
+      // NAMES FIRST. Every read on this page goes through cachedListTitle/abbrevListTitle, and an
+      // unprimed cache resolves to the LEGACY `DMS …` titles — which 404 on a renamed site and
+      // surface as "the configuration list returned HTTP 404", i.e. as a MISSING list rather than a
+      // list called something else. Mounted inside Folder Administration this raced the parent's own
+      // priming and won only when an earlier read had already warmed the cache, so the failure came
+      // and went with page-load timing. Priming is idempotent and cached; a FAILURE must not stop the
+      // read, because the legacy title is still correct on a site that was never renamed.
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${configList()}')/items` +
           `?$select=Title,ModeLabel,TermSetGuid,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200`,
@@ -433,12 +442,15 @@ export default function AbbreviationManager({
 
       {treeLoading ? (
         <p style={{ fontSize: 13, color: "#605e5c" }}>Reading the term store&hellip;</p>
-      ) : rows.length === 0 ? (
+      ) : // NO SEGMENT is tested BEFORE no terms. Reversed, a page that could not read the segment
+      // list at all blamed the term store — "this segment's term set has no terms yet" under an
+      // empty dropdown, sending an admin to fix a term set that was never the problem.
+      !seg ? null : rows.length === 0 ? (
         <div style={{ ...s.msg, ...s.warn }}>
           This segment&apos;s term set has no terms yet. Add its structure to the term store first —
           reconciliation builds one folder level per term level, so there is nothing to name.
         </div>
-      ) : !seg ? null : (
+      ) : (
         <>
           {missing > 0 && (
             <div style={{ ...s.msg, ...s.warn }}>

@@ -52,6 +52,43 @@ export function mappedTermGuidSet(
   return set;
 }
 
+/**
+ * Whether a SEGMENT has any folders at all — the admin-facing counterpart of the path
+ * filters below. Spec §9.
+ *
+ * Admins are exempt from the gate so they can build and test a segment, which means a
+ * half-built one sits in their dropdown looking exactly like a live one. This is what
+ * lets the picker say "not fully set up yet" beside it.
+ *
+ * Read from the Folder Map rows the form ALREADY loads: a row's `section` holds the
+ * segment's top folder, written from `mode.stagingFolder` by reconciliation. So this
+ * costs no request and adds nothing new to keep in sync.
+ *
+ * `unknown` is not `unprovisioned`, and that difference is the whole point. An unreadable
+ * Folder Map would otherwise mark EVERY segment — including live ones — as not set up, and
+ * send an admin to reconcile an intact tree. Same rule as `filterProvisionedPaths`: empty
+ * is not unknown. A blank `stagingFolder` is unknown too: with nothing to match on, an
+ * absence of rows proves nothing.
+ *
+ * Compared case-insensitively because SharePoint folder names are — `upopsmy` and
+ * `UPOPSMY` are one folder, and a hand-typed StagingFolder differing only in case must not
+ * read as unprovisioned.
+ */
+export type SegmentProvisionState = "provisioned" | "unprovisioned" | "unknown";
+
+export function segmentProvisionState(
+  stagingFolder: string | undefined | null,
+  rows: { section?: string }[] | null | undefined,
+): SegmentProvisionState {
+  if (!rows) return "unknown";
+  const want = (stagingFolder ?? "").trim().toLowerCase();
+  if (!want) return "unknown";
+  for (const r of rows) {
+    if ((r.section ?? "").trim().toLowerCase() === want) return "provisioned";
+  }
+  return "unprovisioned";
+}
+
 export interface ProvisionedPaths<P> {
   /** The paths to offer. */
   paths: P[];

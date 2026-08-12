@@ -17,6 +17,7 @@ import {
   filterReachablePaths,
   mappedTermGuidSet,
   normalizeTermGuid,
+  segmentProvisionState,
 } from "../../../shared/segmentReadiness";
 import { formatFileSize } from "../../../shared/fileSize";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
@@ -388,6 +389,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   // (a membership problem) from "your folders were never created" (an admin task) —
   // and they send the administrator to two completely different places.
   const [awaitingFolders, setAwaitingFolders] = useState<boolean>(false);
+  /**
+   * Folder Map sections (each row's segment top folder), kept for the ADMIN-ONLY "not set
+   * up yet" marker on the segment picker — spec §9. `null` means the list could not be
+   * read, and that must stay silent: marking every segment unbuilt over a transient error
+   * would send an admin to reconcile an intact tree.
+   *
+   * Only the sections are held, not the rows — it is the one thing the picker needs, and
+   * keeping up to 5,000 mapping rows alive for the life of the form to answer it is waste.
+   */
+  const [mapSections, setMapSections] = useState<{ section?: string }[] | null>(
+    null,
+  );
 
   const [modes, setModes] = useState<UploadMode[]>([]);
   const [uploadMode, setUploadMode] = useState<string>("");
@@ -1149,6 +1162,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       );
       const loadedModes = usable.length > 0 ? usable : DEFAULT_MODES;
       setModes(loadedModes);
+
+      // Kept for the admin-only "not fully set up yet" marker (spec §9). Set for EVERY user,
+      // including the privileged branch below which resolves no paths — that branch is
+      // exactly the one the marker exists for.
+      setMapSections(
+        folderMapRows ? folderMapRows.map((r) => ({ section: r.section })) : null,
+      );
 
       const membership = collectMembership(groupMap, userGroupIds);
       // Upload-anywhere is a site-admin privilege only. GLOBAL is a read-only role
@@ -1935,6 +1955,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-dept-badge .dept-name { font-weight: 700; color: #0f6c3f; }
         .dms-dept-loading { font-size: 13px; color: #666; margin-bottom: 20px; }
         .dms-dept-error { font-size: 13px; color: #d13438; background: #fdf3f3; border: 1px solid #f1c0c0; border-radius: 4px; padding: 10px 14px; margin-bottom: 20px; }
+        /* AMBER, not the red above: an unfinished segment is an admin task in progress,
+           not a failure, and it is only ever shown to the administrator doing it. */
+        .dms-setup-warn { font-size: 13px; line-height: 1.55; color: #7a4f00; background: #fff4e5; border: 1px solid #f0d9b5; border-radius: 4px; padding: 10px 14px; margin-bottom: 20px; }
         .dms-admin-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
         .dms-admin-badge { display: inline-flex; align-items: center; background: #fff4e5; border: 1px solid #f0c070; border-radius: 20px; padding: 5px 14px; font-size: 13px; font-weight: 700; color: #7a4f00; white-space: nowrap; }
         .dms-admin-row select { padding: 6px 10px; border: 1px solid #c8c8c8; border-radius: 4px; font: inherit; font-size: 13px; }
@@ -2073,12 +2096,38 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 {offerable.map((m) => (
                   <option key={m.key} value={m.key}>
                     {m.label}
+                    {/* Admins see every segment, including half-built ones, so that they
+                        CAN test one — which means an unbuilt segment otherwise looks
+                        identical to a live one here. Labelled, never disabled: disabling
+                        it would remove the only reason for the exemption. Spec §9. */}
+                    {privileged &&
+                    segmentProvisionState(m.stagingFolder, mapSections) ===
+                      "unprovisioned"
+                      ? " — not fully set up yet"
+                      : ""}
                   </option>
                 ))}
               </select>
             </label>
           );
         })()}
+
+        {/* What "not fully set up yet" means, and what to do about it. Admin-only, and shown only
+            when we actually KNOW the segment has no folders — `unknown` says nothing. */}
+        {privileged &&
+          segmentProvisionState(activeMode()?.stagingFolder, mapSections) ===
+            "unprovisioned" && (
+            <div className="dms-setup-warn">
+              <strong>This segment isn&apos;t ready to receive uploads.</strong> No folders
+              exist for it yet, so filing here will not work — and{" "}
+              <strong>uploaders cannot see it at all</strong> until it is finished. On the
+              Folder Administration page: give every term an{" "}
+              <strong>abbreviation</strong> (a term without one is skipped, and gets no
+              folder), add the groups and their Folder Access rows, then run{" "}
+              <strong>Folder Reconciliation</strong>. You are seeing it because you are an
+              administrator.
+            </div>
+          )}
 
         {/* Restricted users: read-only breadcrumb of the resolved location. */}
         {!privileged && activeMode() && (

@@ -1,7 +1,19 @@
 # Term Abbreviation page, and one home for folder administration
 
 **Date:** 2026-08-12
-**Status:** BUILT 2026-08-12 — not yet site-tested
+**Status:** BUILT and SITE-VERIFIED 2026-08-12 on `/sites/ClarenceDMSTesting`
+
+Verified against a real segment (Upstream Operations Malaysia, 15 terms) in one sitting: same-case and
+mixed-case sibling collisions both flagged with Save blocked (`ure` against `URE` — the rule that
+matters, since SharePoint would make those one folder and one ACL); a blank code reported per row and
+skipped by reconciliation; "Same as term name" filling `Binuang Estate`; the tab guard refusing a switch
+while dirty; save writing rows only; and a changed code renaming the live folder in **both** libraries
+(`✎ renamed BE → BNG`), with `Full Name` intact.
+
+One edge case found by doing it: blanking a code **after** its folder exists, then setting a new one, is
+treated as a **first-time fill** — so no rename warning appears, yet the Folder Map row still points at
+the old folder and the next run renames it. Harmless here (the rename is what you want), but worth
+knowing the warning is keyed on the STORED code, not on what is on disk.
 
 Builds the admin UI for the data specced in
 [2026-07-30-folder-abbreviation-naming-design.md](2026-07-30-folder-abbreviation-naming-design.md),
