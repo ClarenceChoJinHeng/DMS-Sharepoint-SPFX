@@ -546,6 +546,14 @@ Working as of 2026-08-08, verified with a guest uploader and an admin approver:
   never resolves, because the trigger is a *list* trigger pointed at a library.
 - **The delete is load-bearing for security, not housekeeping:** an approved file left behind is
   visible to every PIC in the unit, which defeats the draft isolation below.
+- **Auto-route MUST carry the trigger condition `@equals(triggerOutputs()?['body/{IsFolder}'], false)`**
+  (added 2026-08-13). Without it every folder the upload form ensure-creates is approved by the
+  folder-approval flow, fires Auto-route, and fails `Copy file` with `NotFound` — and one such run had
+  already copied a file into `Documents` while it was still **Waiting for Approval**. Approval was
+  being bypassed whenever the flow won the race against the upload. **The polarity is the whole
+  thing:** `false` here (files only), `true` on the folder-approval flow. Set `true` here and no file
+  is ever routed, silently, because a flow that never fires leaves no run history. Both mistakes have
+  now been made — see spec `2026-08-08-auto-route-flow-and-draft-isolation.md` §4.
 
 > ⚠ **Power Automate header keys must NOT include the colon.** The key box wants `Accept`, not
 > `Accept:`. With the colon the header does not exist, and the symptoms look unrelated to each
