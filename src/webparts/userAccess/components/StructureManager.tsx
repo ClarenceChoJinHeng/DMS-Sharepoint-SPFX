@@ -4,8 +4,10 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
 import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
+import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
 
 /**
@@ -719,6 +721,35 @@ export default function StructureManager({
               ` view's "Show or hide columns".`
             : ""),
       });
+
+      // STAGED vs LIVE is the load-bearing part of this record. A row saying only "structure
+      // changed" would imply uploads had moved to the new shape when, for a segment in use, they
+      // deliberately have not — and that misreading is the very thing the staging exists to prevent.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.structureChanged,
+        source: "StructureManager",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        segment: seg.label,
+        summary: staged
+          ? `Folder structure STAGED for ${seg.label} — not live yet`
+          : `Folder structure changed for ${seg.label} — live now`,
+        details: [
+          staged
+            ? "Written to PendingLevels. Levels is untouched, so uploads carry on in the old shape."
+            : "Written to Levels. Uploads use the new shape as soon as people reload the form.",
+          `Old chain: ${(seg.pending ?? seg.chain).map((l) => l.label).join(" → ")}`,
+          `New chain: ${draft.map((l) => l.label).join(" → ")}`,
+          created.length > 0
+            ? `Columns created: ${created.join(", ")}`
+            : "No columns created — every one it needs already existed.",
+          staged
+            ? "Goes live at the end of the folder migration, not before."
+            : "The segment held no documents, so there was nothing to migrate.",
+        ],
+      }).catch(() => undefined);
+
       cancelEdit();
     } catch (e) {
       setResult({ ok: false, text: (e as Error).message });

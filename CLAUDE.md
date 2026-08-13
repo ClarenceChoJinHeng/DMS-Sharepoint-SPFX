@@ -722,10 +722,26 @@ writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Aud
   events as the service account and admins write admin events, so no uploader or approver needs
   access. Tamper-resistant by construction rather than by policy. **No auto-delete, ever**; version
   history on.
-- Wired so far: `PolicyChanged`, `AbbreviationChanged`, `ReconciliationRun`, plus a **`Refused`** row
-  when someone tries to allow an executable. Still to wire: access grant/revoke, structure change,
-  migration, segment created, Group Map, upload-refused, and the **3 flows + 1 added Auto-route
-  action** (spec §8).
+- **Every code-side writer is wired** (10 event types, 14 call sites): `PolicyChanged`,
+  `AbbreviationChanged`, `ReconciliationRun`, `AccessGranted`/`AccessRevoked` (library entry ×3, site
+  entry ×4), `UploadRefused`, `SegmentCreated`, `StructureChanged`, `MigrationRun`, `GroupMapChanged`
+  (add + delete). **Only the flows remain** — 3 new ones plus the added Auto-route action (spec §8),
+  which are what supply `Uploaded`/`Approved`/`Rejected`/`Routed`/`Deleted`. Until they exist the log
+  records ADMIN activity only and the file lifecycle is absent, so do not read an empty file history
+  as "nothing happened to that file".
+- **A HALF-DONE permission change is recorded as half-done, never flattened.** Three places where the
+  distinction IS the value of the row: a Group Map row can exist while the live grant failed
+  (reconciliation fixes it); a revoke can remove the mapping while the access REMAINS (nothing on
+  screen then shows who holds it — `Outcome: "Failed"`, naming them); and deleting one of several
+  Group Map rows keeps the group, so that folder grant survives. A row reading only "access revoked"
+  would stop someone looking.
+- **A staged structure change SAYS staged.** `StructureChanged` distinguishes `PendingLevels` from
+  `Levels`, because for a segment in use uploads deliberately have not moved yet — precisely the
+  misreading the staging exists to prevent.
+- **Site-access removal carries its caveat into the record**, not just the toast: folder ACLs are
+  untouched, so it is a lock-out and not a de-provisioning.
+- `SubtreeMigrator` mirrors its run log into a **`useRef`**, not state, for the same stale-closure
+  reason as the reconciliation counts.
 - **Supersedes the never-built `<P> Deletion Log`** — two append-only trails would leave a permanent
   question about which is authoritative. `LIST_SUFFIX.deletionLog` still exists; nothing new reads it.
 

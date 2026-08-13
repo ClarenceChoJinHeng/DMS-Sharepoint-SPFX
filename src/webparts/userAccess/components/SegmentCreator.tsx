@@ -4,8 +4,10 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, sanitizeFolderSegment } from "../../../shared/formModel";
 import { effectiveOnDemandTiers } from "../../../shared/folderChain";
+import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, libraryTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
 import {
   buildSegmentLevels,
@@ -438,6 +440,30 @@ export default function SegmentCreator({
               ` you set — add them with the view's "Show or hide columns".`
             : " Every column it needs already existed, so none were created."),
       });
+      // Recorded before the form is cleared, while the values are still in hand. What matters most
+      // here is the DERIVED pair — key and sort order — because nobody types either, so if the
+      // segment later fails to appear this row is the only place that says what they came out as.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.segmentCreated,
+        source: "SegmentCreator",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        segment: d.label.trim(),
+        summary: `Segment created — ${d.label.trim()} (${folder})`,
+        details: [
+          `Key: ${key}`,
+          `Top folder: ${folder}`,
+          `Sort order: ${sortOrder}`,
+          `Permissioned tiers: ${tiers.join(" → ")}`,
+          `Term set: ${termSetGuid.trim()}`,
+          created.length > 0
+            ? `Columns created in both libraries: ${created.join(", ")}`
+            : "No columns created — every one it needs already existed.",
+          "Not yet done: abbreviations, groups and Group Map rows, then reconciliation.",
+        ],
+      }).catch(() => undefined);
+
       setLabel("");
       setTermSetGuid("");
       setStagingFolder("");

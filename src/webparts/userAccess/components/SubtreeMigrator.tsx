@@ -17,8 +17,10 @@ import {
   suggestRename,
   validateRename,
 } from "../../../shared/subtreeMigration";
+import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 import {
   deleteFolderIfEmpty,
   encodeServerRelativePath,
@@ -162,7 +164,19 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
   const [confirmText, setConfirmText] = useState("");
 
   const webPath = new URL(siteUrl).pathname.replace(/\/$/, "");
-  const say = (text: string, ok: boolean): void => setLog((prev) => prev.concat([{ text, ok }]));
+  /**
+   * The run log, mirrored outside React state so the audit row can carry it.
+   *
+   * A ref, not `log`: reading state from inside the run would give the render-time value — an empty
+   * array — which is the same stale-closure trap that would otherwise have made reconciliation
+   * record zero counts.
+   */
+  const logBuffer = React.useRef<string[]>([]);
+
+  const say = (text: string, ok: boolean): void => {
+    logBuffer.current.push(`${ok ? "✓" : "✗"} ${text}`);
+    setLog((prev) => prev.concat([{ text, ok }]));
+  };
 
   /* ---------- Load ------------------------------------------------------- */
 
@@ -644,6 +658,8 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     setDest({});
     setRenames({});
     setLog([]);
+    // Cleared alongside the state, or a second run's audit row would carry the first run's lines.
+    logBuffer.current = [];
     setDone(undefined);
     try {
       const { rows, files } = await collectScans(seg);
@@ -971,6 +987,8 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     setConfirm(false);
     setConfirmText("");
     setLog([]);
+    // Cleared alongside the state, or a second run's audit row would carry the first run's lines.
+    logBuffer.current = [];
     setDone(undefined);
     let movedFiles = 0;
     let failed = 0;
@@ -1086,6 +1104,33 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
             : "") +
           (await finishPending(seg)),
       );
+
+      // ONE row for the run, carrying the whole log — this is the only durable record of which
+      // documents moved where, and the on-screen log is gone as soon as anyone navigates away.
+      // Counts come from the loop LOCALS, never from React state set during the run.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.migrationRun,
+        outcome: failed > 0 ? "Failed" : "Success",
+        source: "SubtreeMigrator",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        segment: seg.label,
+        library: "Approval Document + Documents",
+        summary:
+          `Folder migration — ${movedFiles} document(s) moved, ${removedFolders} folder(s) tidied, ` +
+          `${tags.stamped} tagged` + (failed > 0 ? `, ${failed} problem(s)` : ""),
+        details: [
+          `Segment: ${seg.label}`,
+          `Documents moved: ${movedFiles}`,
+          `Empty folders tidied: ${removedFolders}`,
+          `Documents re-tagged from their path: ${tags.stamped}`,
+          `Problems: ${failed}`,
+          "Nothing holding a document is ever deleted, so re-running this is safe.",
+          "—",
+        ].concat(logBuffer.current),
+      }).catch(() => undefined);
+
       setScans(undefined);
     } finally {
       setRunning(false);
@@ -1098,6 +1143,8 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     if (!seg || !scans) return;
     setRunning(true);
     setLog([]);
+    // Cleared alongside the state, or a second run's audit row would carry the first run's lines.
+    logBuffer.current = [];
     setDone(undefined);
     try {
       const tags = await backfillMetadata(seg, scans);

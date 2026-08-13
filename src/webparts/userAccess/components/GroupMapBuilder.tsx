@@ -41,8 +41,10 @@ import {
   GroupExportRow,
   NO_MEMBERS,
 } from "../../../shared/groupExportCsv";
+import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames, permissionLevelNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 
 type Props = { context: WebPartContext; siteUrl: string };
 type GroupPick = { id: string; displayName: string };
@@ -804,6 +806,12 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       }
       const staged = stagedMembers.length;
       const createdName = newGroup.displayName;
+      // Captured BEFORE the reset below, for the same reason createdName and staged are: the audit
+      // row describes what was mapped, and every one of these is about to be cleared.
+      const auditPersona = persona;
+      const auditRole = String(role);
+      const auditSegment = mode?.label ?? "";
+      const auditUnitPath = chosen.map((t) => t.label).join("/");
       // Reset the whole form back to the default (empty search) state so the admin can
       // immediately create another group — no leftover group/role/segment selections.
       clearGroup();
@@ -820,6 +828,29 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           ? ` with ${addedMembers} member(s) — run Folder Reconciliation.`
           : ` — ${addedMembers} member(s) added, ${failedMembers} failed. Run Folder Reconciliation.`;
       showToast(`Group "${createdName}" created & mapped${memberNote}`, failedMembers > 0);
+      // The reconciliation note is part of the RECORD, not just the toast: the row on its own grants
+      // nothing, and a log entry reading "access granted" would have someone believe it was live.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.groupMapChanged,
+        outcome: failedMembers > 0 ? "Failed" : "Success",
+        source: "FolderAccess",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        segment: auditSegment,
+        unitPath: auditUnitPath,
+        summary: `Group Map row added — ${createdName}${auditPersona ? ` (${auditPersona})` : ""}`,
+        details: [
+          `Group created and mapped: ${createdName}`,
+          auditPersona ? `Persona: ${auditPersona}` : "Persona: (none chosen)",
+          `Role: ${auditRole || "(none)"}`,
+          auditUnitPath ? `Path: ${auditSegment}/${auditUnitPath}` : `Segment: ${auditSegment}`,
+          staged === 0
+            ? "No members added yet."
+            : `${addedMembers} member(s) added, ${failedMembers} failed.`,
+          "The row alone grants nothing — folder access applies at the next Folder Reconciliation.",
+        ],
+      }).catch(() => undefined);
     } catch (e) {
       const msg = (e as Error).message;
       if (msg === DUPLICATE_GROUP) {
@@ -1106,6 +1137,27 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       } else {
         showToast(`Row deleted. "${row?.GroupName}" still has ${siblings.length} other mapping(s), so the group is kept — it also keeps the folder grant from this row until it is removed by hand.`, false);
       }
+      // WHICH of the three outcomes happened is the whole value of this row. Two of them leave the
+      // access in place — the group survives because it holds other mappings, or its deletion failed
+      // — and a record reading only "row deleted" would have someone believe the access was gone.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.groupMapChanged,
+        outcome: lastRowForGroup && !groupDeleted ? "Failed" : "Success",
+        source: "FolderAccess",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        segment: row?.Segment ?? "",
+        summary: `Group Map row deleted — ${row?.GroupName ?? `item ${itemId}`}${row?.Role ? ` (${row.Role})` : ""}`,
+        details: [
+          `Row: ${row?.GroupName ?? `item ${itemId}`}, role ${row?.Role ?? "(unknown)"}, scope ${row?.Scope ?? "(unknown)"}, target ${row?.Target ?? "(unknown)"}`,
+          groupDeleted
+            ? "That was the group's last mapping, so the SharePoint group was deleted with it — its folder access is gone."
+            : lastRowForGroup
+              ? "It was the last mapping, but the SharePoint group could NOT be deleted — it keeps its folder access until removed by hand."
+              : `The group is kept: ${siblings.length} other mapping(s) remain. It ALSO keeps the folder grant from this row until that is removed by hand.`,
+        ],
+      }).catch(() => undefined);
     } catch (e) {
       showToast(`Delete failed: ${(e as Error).message}`, true);
     } finally {
