@@ -133,6 +133,7 @@ export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<voi
     LIST_SUFFIX.folderMap,
     LIST_SUFFIX.abbreviation,
     LIST_SUFFIX.deletionLog,
+    LIST_SUFFIX.auditLog,
   ]) {
     try {
       await resolveListTitle(suffix, probe);

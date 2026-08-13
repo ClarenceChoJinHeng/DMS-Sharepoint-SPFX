@@ -28,7 +28,7 @@ export async function ensureColumn(
   listTitle: string,
   internalName: string,
   displayName: string,
-  kind: "Text" | "Note" = "Text",
+  kind: "Text" | "Note" | "DateTime" = "Text",
 ): Promise<boolean> {
   const listBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')`;
 
@@ -47,12 +47,18 @@ export async function ensureColumn(
     ).length > 0;
   if (exists) return false;
 
+  // `Format="DateTime"` keeps the TIME component. The default for a DateTime field is date-only,
+  // which would collapse every event in a day to the same instant and destroy the ordering an
+  // audit feed exists to show — while still looking like a working date column.
   const xml =
     kind === "Note"
       ? `<Field Type="Note" DisplayName="${internalName}" Name="${internalName}" ` +
         `StaticName="${internalName}" NumLines="6" RichText="FALSE" />`
-      : `<Field Type="Text" DisplayName="${internalName}" Name="${internalName}" ` +
-        `StaticName="${internalName}" MaxLength="255" />`;
+      : kind === "DateTime"
+        ? `<Field Type="DateTime" DisplayName="${internalName}" Name="${internalName}" ` +
+          `StaticName="${internalName}" Format="DateTime" />`
+        : `<Field Type="Text" DisplayName="${internalName}" Name="${internalName}" ` +
+          `StaticName="${internalName}" MaxLength="255" />`;
 
   const create: SPHttpClientResponse = await spHttpClient.post(
     `${listBase}/fields/CreateFieldAsXml`,

@@ -50,6 +50,14 @@
         }
       ]
     },
+    "audit-log-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/auditLog/AuditLogWebPart.js",
+          "manifest": "./src/webparts/auditLog/AuditLogWebPart.manifest.json"
+        }
+      ]
+    },
     "onboarding-web-part": {
       "components": [
         {

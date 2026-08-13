@@ -34,6 +34,7 @@ export const LIST_SUFFIX = {
   folderMap: "Folder Map",
   abbreviation: "Term Abbreviation",
   deletionLog: "Deletion Log",
+  auditLog: "Audit Log",
 };
 
 /** Returns true if a list with this exact title exists. Supplied by the caller. */

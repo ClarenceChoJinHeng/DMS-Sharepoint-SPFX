@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "9e2c4d17-8b3a-4f60-a5d1-7c0e6b28f394",
+  "alias": "AuditLogWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "CRS Audit Log" },
+    "description": { "default": "Admin tool — what happened in the document management system, and who did it" },
+    "officeFabricIconFontName": "ComplianceAudit",
+    "properties": {}
+  }]
+}
