@@ -703,6 +703,16 @@ writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Aud
   `EventTime`, `EventType`, `ActorEmail`, `ItemUniqueId` indexed. **Provisioning does NOT set the
   permissions** (breaking inheritance must name the service account, and a wrong guess locks the flows
   out of the list they write to) — the screen states it as a manual step.
+- **WRITES ARE JSON LIGHT WITH NO `__metadata`, and both header halves must say
+  `odata=nometadata`.** Two failures on 2026-08-13 before this landed: `Accept: verbose` with
+  `Content-Type: application/json` → *"The property '__metadata' does not exist on type 'SP.List'"*
+  (the body was parsed as non-verbose); then BOTH headers verbose → *"Parsing JSON Light feeds or
+  entries in requests without entity set is not supported"*, because SPFx's `SPHttpClient` attaches
+  its own OData version header that the OData 3 verbose dialect does not agree with. JSON light needs
+  no envelope and **no entity type**, so `ListItemEntityTypeFullName` is not read for this list at all
+  — do not "restore" it per gotcha #12, which applies to the verbose call sites in `FolderMap.tsx`.
+  The list create failed loudly; the row write carried the same bug and would have failed SILENTLY on
+  every event.
 - **`EventType` is TEXT, never Choice.** Writing a value absent from a Choice column's `Choices`
   FAILS the whole write, so the day someone adds a type in code, every row of that type is lost
   silently.

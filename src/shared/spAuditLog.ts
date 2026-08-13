@@ -88,61 +88,25 @@ const JSON_HEADERS = {
 };
 
 /**
- * For the two requests that send `__metadata`.
+ * Headers for the two POSTs that CREATE something — the list, and a row.
  *
- * BOTH halves must say verbose. Setting only `Accept` and leaving `Content-Type: application/json`
- * makes SharePoint parse the BODY as non-verbose and reject the property outright — HTTP 400, "The
- * property '__metadata' does not exist on type 'SP.List'". Found live 2026-08-13: the list create
- * failed loudly, and the row write carried the same mistake and would have failed on every event.
+ * JSON light, and NO `__metadata` envelope. Two failed attempts on 2026-08-13 are why:
+ *
+ *  1. `Accept: verbose` with `Content-Type: application/json` — SharePoint parsed the body as
+ *     non-verbose and rejected the envelope: *"The property '__metadata' does not exist on type
+ *     'SP.List'"*.
+ *  2. Both headers `verbose` — *"Parsing JSON Light feeds or entries in requests without entity set
+ *     is not supported"*. SPFx's `SPHttpClient` attaches its own OData version header, which does not
+ *     agree with the OData 3 verbose dialect, and the two cannot be reconciled from here.
+ *
+ * JSON light needs no envelope and no entity type, so both problems disappear together — along with
+ * the per-session `ListItemEntityTypeFullName` lookup this used to need, and its failure mode of
+ * "entity type unreadable, therefore nothing can ever be logged".
  */
-const VERBOSE_HEADERS = {
-  Accept: "application/json;odata=verbose",
-  "Content-Type": "application/json;odata=verbose",
+const WRITE_HEADERS = {
+  Accept: "application/json;odata=nometadata",
+  "Content-Type": "application/json;odata=nometadata",
 };
-
-/**
- * The list's item entity type, read from the list itself and cached for the session.
- *
- * Never derived from the title: RECREATING a list changes `ListItemEntityTypeFullName` while
- * renaming does not, so a derived value stays right until the day someone rebuilds the list, and
- * then every write breaks (gotcha #12). Same approach as FolderMap.tsx.
- */
-let entityLookup: Promise<string | undefined> | undefined;
-
-async function itemEntityType(sp: SPHttpClient, siteUrl: string): Promise<string | undefined> {
-  // The in-flight PROMISE is cached, not the resolved value. Caching the value means a
-  // check-then-await-then-assign, which is both a lint error and a real race: several writers can
-  // fire at once on an admin screen, and each would issue its own lookup. This way the first caller
-  // starts one request and every other awaits it.
-  //
-  // A failed lookup is cleared by the CALLER (writeAudit), not here: clearing it after the await
-  // would be a post-await assignment to a module variable, the very thing the promise cache exists
-  // to avoid. Either way a transient failure must not pin "unwritable" for the page's whole life.
-  if (entityLookup === undefined) {
-    entityLookup = (async () => {
-      try {
-        const res: SPHttpClientResponse = await sp.get(
-          `${listBase(siteUrl, auditListTitle())}?$select=ListItemEntityTypeFullName`,
-          SPHttpClient.configurations.v1,
-          { headers: { Accept: "application/json;odata=nometadata" } },
-        );
-        if (!res.ok) return undefined;
-        const data = await res.json();
-        const t = data?.ListItemEntityTypeFullName;
-        return typeof t === "string" && t.length > 0 ? t : undefined;
-      } catch {
-        // Absent list, or a transient failure. The caller decides; this is not the place to guess.
-        return undefined;
-      }
-    })();
-  }
-  return entityLookup;
-}
-
-/** Test seam, and the escape hatch after the list is recreated mid-session. */
-export function clearAuditCache(): void {
-  entityLookup = undefined;
-}
 
 /* -- State ----------------------------------------------------------------- */
 
@@ -226,9 +190,8 @@ export async function provisionAuditList(
       `${siteUrl}/_api/web/lists`,
       SPHttpClient.configurations.v1,
       {
-        headers: VERBOSE_HEADERS,
+        headers: WRITE_HEADERS,
         body: JSON.stringify({
-          __metadata: { type: "SP.List" },
           Title: title,
           BaseTemplate: 100,
           Description:
@@ -244,7 +207,6 @@ export async function provisionAuditList(
       return report;
     }
     report.createdList = true;
-    clearAuditCache();
   }
 
   for (const col of AUDIT_COLUMNS) {
@@ -341,21 +303,15 @@ export async function writeAudit(
   try {
     const row: AuditRow = buildAuditRow(event);
     title = row.Title;
-    const type = await itemEntityType(sp, siteUrl);
-    if (type === undefined) {
-      // The list is absent, or the read failed. Drop the cached lookup so the NEXT write retries:
-      // a transient failure must not disable logging for the rest of the page's life.
-      clearAuditCache();
-      console.warn(`[audit] not written — the audit log list could not be reached: ${title}`);
-      return false;
-    }
 
+    // Straight to the POST. There is no entity type to look up under JSON light, so an absent list
+    // simply 404s here — one request instead of two, and no state that can go stale.
     const res: SPHttpClientResponse = await sp.post(
       `${listBase(siteUrl, auditListTitle())}/items`,
       SPHttpClient.configurations.v1,
       {
-        headers: VERBOSE_HEADERS,
-        body: JSON.stringify({ __metadata: { type }, ...row }),
+        headers: WRITE_HEADERS,
+        body: JSON.stringify(row),
       },
     );
     if (!res.ok) {
