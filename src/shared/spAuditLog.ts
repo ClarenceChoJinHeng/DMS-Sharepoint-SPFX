@@ -3,7 +3,6 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { AuditEvent, AuditRow, buildAuditRow } from "./auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "./naming";
 import { ensureColumn } from "./spColumns";
-import { writePrefix } from "./spNaming";
 
 /**
  * Audit log — provisioning, the write, and the viewer's read.
@@ -63,6 +62,22 @@ export function auditListTitle(): string {
   return cachedListTitle(LIST_SUFFIX.auditLog);
 }
 
+/**
+ * The title the list WOULD be created under — which is not `auditListTitle()` while it is absent.
+ *
+ * `auditListTitle()` falls back to the legacy `DMS …` name when no probe matched, so on a renamed
+ * site the set-up screen offered to create "DMS Audit Log" while the create correctly derived "CRS
+ * Audit Log" from the prefix in force. Seen live 2026-08-13. Exported so the screen and the create
+ * share ONE derivation and cannot drift apart again.
+ *
+ * Costs no request: the config list's title is already primed by `primeNames`, and the prefix is its
+ * first word.
+ */
+export function plannedAuditListTitle(): string {
+  const prefix = cachedListTitle(LIST_SUFFIX.config).split(" ")[0];
+  return prefix.length > 0 ? `${prefix} ${LIST_SUFFIX.auditLog}` : auditListTitle();
+}
+
 function listBase(siteUrl: string, title: string): string {
   return `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(title)}')`;
 }
@@ -70,6 +85,19 @@ function listBase(siteUrl: string, title: string): string {
 const JSON_HEADERS = {
   Accept: "application/json;odata=nometadata",
   "Content-Type": "application/json",
+};
+
+/**
+ * For the two requests that send `__metadata`.
+ *
+ * BOTH halves must say verbose. Setting only `Accept` and leaving `Content-Type: application/json`
+ * makes SharePoint parse the BODY as non-verbose and reject the property outright — HTTP 400, "The
+ * property '__metadata' does not exist on type 'SP.List'". Found live 2026-08-13: the list create
+ * failed loudly, and the row write carried the same mistake and would have failed on every event.
+ */
+const VERBOSE_HEADERS = {
+  Accept: "application/json;odata=verbose",
+  "Content-Type": "application/json;odata=verbose",
 };
 
 /**
@@ -192,14 +220,13 @@ export async function provisionAuditList(
   // creating that on a CRS site would leave behind a list nobody expects.
   let title = auditListTitle();
   if (state === "absent") {
-    const prefix = await writePrefix(sp, siteUrl).catch(() => "");
-    if (prefix.length > 0) title = `${prefix} ${LIST_SUFFIX.auditLog}`;
+    title = plannedAuditListTitle();
 
     const create: SPHttpClientResponse = await sp.post(
       `${siteUrl}/_api/web/lists`,
       SPHttpClient.configurations.v1,
       {
-        headers: { ...JSON_HEADERS, Accept: "application/json;odata=verbose" },
+        headers: VERBOSE_HEADERS,
         body: JSON.stringify({
           __metadata: { type: "SP.List" },
           Title: title,
@@ -327,7 +354,7 @@ export async function writeAudit(
       `${listBase(siteUrl, auditListTitle())}/items`,
       SPHttpClient.configurations.v1,
       {
-        headers: { ...JSON_HEADERS, Accept: "application/json;odata=verbose" },
+        headers: VERBOSE_HEADERS,
         body: JSON.stringify({ __metadata: { type }, ...row }),
       },
     );

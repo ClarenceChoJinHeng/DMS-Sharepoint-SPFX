@@ -10,6 +10,7 @@ import {
   auditListState,
   auditListTitle,
   AuditRecord,
+  plannedAuditListTitle,
   provisionAuditList,
   ProvisionReport,
   readAudit,
@@ -341,8 +342,11 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
           <div style={s.card}>
             <p style={s.cardTitle}>Set up</p>
             <p style={{ fontSize: 13, color: "#323130", lineHeight: 1.6, margin: "0 0 12px" }}>
-              This creates the <strong>{auditListTitle()}</strong> list, its columns and its indexes,
-              and turns on version history. It changes nothing else, and is safe to run again.
+              {/* plannedAuditListTitle, NOT auditListTitle: while the list is absent the latter has
+                  fallen back to the legacy `DMS …` name, so this panel offered to create a list that
+                  the button would not create. Both now come from one derivation. */}
+              This creates the <strong>{plannedAuditListTitle()}</strong> list, its columns and its
+              indexes, and turns on version history. It changes nothing else, and is safe to run again.
             </p>
             <p style={{ ...s.msg, ...s.warn, marginBottom: 12 }}>
               <strong>One step is left to you afterwards.</strong> In the new list&apos;s permission
