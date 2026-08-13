@@ -107,6 +107,12 @@ const JSON_HEADERS = {
 const WRITE_HEADERS = {
   Accept: "application/json;odata=nometadata",
   "Content-Type": "application/json;odata=nometadata",
+  // The load-bearing one. SPFx's SPHttpClient injects `odata-version: 4.0` on every request, and
+  // SharePoint cannot infer the entity set for a JSON-light ENTRY payload under OData 4 — so a row
+  // POST returns 400 with the body rejected, while `/_api/web/lists` tolerates the same headers and
+  // creates the list quite happily. That asymmetry is what made this look like three unrelated bugs
+  // across 2026-08-13. An empty value removes the header.
+  "odata-version": "",
 };
 
 /* -- State ----------------------------------------------------------------- */
