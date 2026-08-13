@@ -29,8 +29,10 @@ import {
   normalizeRoleValue,
 } from "../../../shared/groupMapModel";
 import { fetchAllSiteGroups, SpGroup } from "../../../shared/spGroups";
+import { AuditOutcome, EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 
 type Props = { context: WebPartContext; siteUrl: string; library: string };
 
@@ -203,6 +205,32 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
   useEffect(() => { reload(true).catch(() => undefined); }, [library]);
 
+  /**
+   * Record an access change. Fire-and-forget by design.
+   *
+   * No caller handles the result: the grant or revoke has already happened, and refusing to report a
+   * completed permission change because the log was unreachable would be worse than the gap. The
+   * console line in writeAudit is the trail when this fails.
+   */
+  const logAccess = (
+    event: string,
+    summary: string,
+    details: string[],
+    outcome: AuditOutcome,
+  ): void => {
+    writeAudit(context.spHttpClient, siteUrl, {
+      event,
+      outcome,
+      source: "ApprovalLibraryAccess",
+      at: new Date(),
+      actorName: context.pageContext.user.displayName,
+      actorEmail: context.pageContext.user.email,
+      library,
+      summary,
+      details,
+    }).catch(() => undefined);
+  };
+
   /** Grant Read on the list immediately, so the tab reflects reality without a recon run. */
   const grantLive = async (principalId: number): Promise<void> => {
     const defs: SPHttpClientResponse = await context.spHttpClient.get(
@@ -301,6 +329,22 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
           : `${g.title} mapped, but the permission could not be applied now — run Folder Reconciliation.`,
         !granted,
       );
+      // A half-success is recorded AS a half-success: the row exists, the permission does not. That
+      // is exactly the state that later reads as "why can't they open it", so it is not flattened
+      // into a plain grant.
+      logAccess(
+        EVENT.accessGranted,
+        granted
+          ? `Library access granted — ${g.title} can open ${library}`
+          : `Library access mapped but NOT applied — ${g.title}`,
+        granted
+          ? [`Granted Read on ${library} to: ${g.title}`, "Group Map row written (Library scope)."]
+          : [
+              `Group Map row written for ${g.title}, but the live permission could not be applied.`,
+              "The next Folder Reconciliation will apply it.",
+            ],
+        granted ? "Success" : "Failed",
+      );
     } catch (e) {
       showToast(`Could not add ${g.title}: ${(e as Error).message}`, true);
     } finally {
@@ -341,6 +385,21 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
         ? `${ok} group(s) can now open ${library}.`
         : `${ok} granted, ${failed.length} failed: ${failed.join(", ")}`,
       failed.length > 0,
+    );
+    // ONE row for the run, not one per group — the same rule reconciliation follows. A twelve-group
+    // grant would otherwise push everything else in the log off the first page.
+    logAccess(
+      EVENT.accessGranted,
+      `Library access granted — ${ok} group(s) can open ${library}` +
+        (failed.length > 0 ? `, ${failed.length} not applied` : ""),
+      [
+        `Granted Read on ${library} to ${ok} group(s).`,
+        `Groups: ${targets.map((t) => t.title).join(", ")}`,
+        failed.length > 0
+          ? `Could not fully apply: ${failed.join(", ")} — a Group Map row exists, so reconciliation will apply it.`
+          : "All permissions applied live.",
+      ],
+      failed.length > 0 ? "Failed" : "Success",
     );
   };
 
@@ -399,6 +458,21 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
         true,
       );
     }
+    // A PARTIAL revoke is the dangerous one — the mapping is gone while the access remains, so
+    // nothing on screen shows who still holds it. Recorded as Failed, naming them.
+    logAccess(
+      EVENT.accessRevoked,
+      `Library access revoked — ${ok} group(s) can no longer open ${library}` +
+        (failed.length > 0 ? `, ${failed.length} NOT fully revoked` : ""),
+      [
+        `Removed the Group Map row and the live Read grant for ${ok} group(s).`,
+        `Groups: ${targets.map((t) => t.groupName || t.groupId).join(", ")}`,
+        failed.length > 0
+          ? `NOT fully revoked: ${failed.join(", ")} — the mapping is gone but the permission may remain. Check the library's permissions.`
+          : "All live permissions removed.",
+      ],
+      failed.length > 0 ? "Failed" : "Success",
+    );
   };
 
   // ── Derived view ───────────────────────────────────────────────────────────

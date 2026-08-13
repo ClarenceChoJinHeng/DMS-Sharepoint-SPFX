@@ -30,8 +30,10 @@ import {
   SpGroupMember,
   PersonPick,
 } from "../../../shared/spGroups";
+import { AuditOutcome, EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 
 type Props = { context: WebPartContext; siteUrl: string };
 
@@ -198,6 +200,23 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
   }, [query]);
 
   /**
+   * Record a site-entry change. Fire-and-forget: the access change has already happened, and no
+   * caller should be able to fail because the log was unreachable.
+   */
+  const logSite = (event: string, summary: string, details: string[], outcome: AuditOutcome): void => {
+    writeAudit(context.spHttpClient, siteUrl, {
+      event,
+      outcome,
+      source: "SiteAccess",
+      at: new Date(),
+      actorName: context.pageContext.user.displayName,
+      actorEmail: context.pageContext.user.email,
+      summary,
+      details,
+    }).catch(() => undefined);
+  };
+
+  /**
    * Create the site-entry group if absent and give it Read on the web.
    *
    * Both halves, because either alone is useless: a group with no role grants nothing, and there
@@ -226,6 +245,15 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
       if (!grant.ok) throw new Error(`addroleassignment HTTP ${grant.status}`);
       await reload();
       showToast(`${siteEntryGroupTitle()} is set up and can open the site.`, false);
+      logSite(
+        EVENT.accessGranted,
+        `Site entry set up — ${siteEntryGroupTitle()} can open the site`,
+        [
+          `Group: ${siteEntryGroupTitle()}${entry ? " (already existed)" : " (created)"}`,
+          "Granted Read on the site itself. This grants nothing inside either library.",
+        ],
+        "Success",
+      );
     } catch (e) {
       showToast(`Set-up failed: ${(e as Error).message}`, true);
     } finally {
@@ -242,6 +270,15 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
       await addGroupMember(context.spHttpClient, siteUrl, entry.id, p.loginName);
       await reload();
       showToast(`${p.displayName} can now open the site.`, false);
+      logSite(
+        EVENT.accessGranted,
+        `Site access granted — ${p.displayName} can open the site`,
+        [
+          `Added ${p.displayName} to ${siteEntryGroupTitle()}.`,
+          "This grants site entry only — it confers nothing inside either library.",
+        ],
+        "Success",
+      );
     } catch (e) {
       showToast(`Could not add ${p.displayName}: ${(e as Error).message}`, true);
     } finally {
@@ -258,6 +295,18 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
       // Stated rather than implied: their folder permissions are untouched, so this is a site
       // lock-out, not a de-provisioning. An admin who expects the latter would stop here.
       showToast(`${m.title} can no longer open the site. Their folder permissions are unchanged.`, false);
+      // The folder note is carried into the RECORD as well as the toast. A row reading only
+      // "site access revoked" would later be mistaken for a de-provisioning, and someone would
+      // stop looking while every folder ACL was still in place.
+      logSite(
+        EVENT.accessRevoked,
+        `Site access revoked — ${m.title} can no longer open the site`,
+        [
+          `Removed ${m.title} from ${siteEntryGroupTitle()}.`,
+          "Their folder permissions are UNCHANGED — this is a site lock-out, not a de-provisioning.",
+        ],
+        "Success",
+      );
     } catch (e) {
       showToast(`Could not remove ${m.title}: ${(e as Error).message}`, true);
     } finally {
@@ -289,6 +338,18 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
         ? `${ok} user(s) can now open the site.`
         : `${ok} added, ${failed.length} failed: ${failed.join(", ")}`,
       failed.length > 0,
+    );
+    // One row for the run, not one per user — a fix-missing over a whole segment would otherwise
+    // fill the log's first page by itself.
+    logSite(
+      EVENT.accessGranted,
+      `Site access granted — ${ok} user(s) can now open the site` +
+        (failed.length > 0 ? `, ${failed.length} failed` : ""),
+      [
+        `Added ${ok} user(s) to ${siteEntryGroupTitle()} who held a mapped group but had no site entry.`,
+        failed.length > 0 ? `Failed: ${failed.join(", ")}` : "No failures.",
+      ],
+      failed.length > 0 ? "Failed" : "Success",
     );
   };
 

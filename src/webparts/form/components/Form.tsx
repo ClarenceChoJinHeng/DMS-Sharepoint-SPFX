@@ -20,8 +20,10 @@ import {
   segmentProvisionState,
 } from "../../../shared/segmentReadiness";
 import { formatFileSize } from "../../../shared/fileSize";
+import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 import {
   parseLevels,
   collectMembership,
@@ -1364,6 +1366,28 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         : settings.allowedFileTypes.types;
     if (!types.some((ext) => picked.name.toLowerCase().endsWith(ext))) {
       showToast(`File type not allowed. Allowed: ${types.join(", ")}`, "error");
+      // Recorded — and this is the ONE event class Purview cannot see either: the file never reaches
+      // SharePoint, so no server-side audit of it exists anywhere. Someone repeatedly offering an
+      // .exe is exactly what an audit log should surface.
+      //
+      // No banner if this write fails, deliberately: an uploader can neither fix nor act on a logging
+      // problem, and the refusal itself has already been reported to them.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.uploadRefused,
+        outcome: "Refused",
+        source: "UploadForm",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        library: libraryTitle(),
+        itemName: picked.name,
+        summary: `Upload refused — ${picked.name}`,
+        details: [
+          `Extension offered: ${getExtension(picked.name) || "(none)"}`,
+          `Allowed at the time: ${types.length > 0 ? types.join(", ") : "(none — every upload is blocked)"}`,
+          "The file was never uploaded.",
+        ],
+      }).catch(() => undefined);
       setFile(undefined);
       if (fileRef.current) fileRef.current.value = "";
       return;
