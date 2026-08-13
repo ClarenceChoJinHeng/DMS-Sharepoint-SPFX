@@ -3,6 +3,7 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { AuditEvent, AuditRow, buildAuditRow } from "./auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "./naming";
 import { ensureColumn } from "./spColumns";
+import { listTitle } from "./spNaming";
 
 /**
  * Audit log — provisioning, the write, and the viewer's read.
@@ -121,6 +122,15 @@ const WRITE_HEADERS = {
 export type AuditListState = "ready" | "absent" | "unknown";
 
 export async function auditListState(sp: SPHttpClient, siteUrl: string): Promise<AuditListState> {
+  // RE-RESOLVE the title first. `primeNames` probed for this list at mount, when it may genuinely
+  // not have existed — and a failed probe is deliberately NOT cached (naming.ts), so
+  // `cachedListTitle` is still the legacy `DMS …` name. Checking that name reports a freshly created
+  // `CRS Audit Log` as absent, for ever.
+  //
+  // Seen live 2026-08-13: the create succeeded, the page went on offering to set the log up, and the
+  // second attempt came back "a list with the specified title already exists". This also fixes the
+  // writes, which resolve through the same cache.
+  await listTitle(sp, siteUrl, LIST_SUFFIX.auditLog).catch(() => undefined);
   try {
     const res: SPHttpClientResponse = await sp.get(
       `${listBase(siteUrl, auditListTitle())}?$select=Id`,
@@ -201,12 +211,25 @@ export async function provisionAuditList(
     );
     if (!create.ok) {
       const body = await create.text().catch(() => "");
-      report.problems.push(
-        `Could not create the "${title}" list (HTTP ${create.status}). ${body.slice(0, 200)}`,
-      );
-      return report;
+      // "Already exists" is not a failure — the list is there, and the columns and indexes below are
+      // the part that still needs doing. Returning early here is what turned a name-resolution
+      // problem into a dead end an admin could not click past (2026-08-13). `createdList` stays
+      // false, which is the truth: this run did not create it.
+      const exists =
+        body.indexOf("-2130575342") !== -1 || body.toLowerCase().indexOf("already exists") !== -1;
+      if (!exists) {
+        report.problems.push(
+          `Could not create the "${title}" list (HTTP ${create.status}). ${body.slice(0, 200)}`,
+        );
+        return report;
+      }
+    } else {
+      report.createdList = true;
     }
-    report.createdList = true;
+    // Resolve the new title into the shared cache immediately. Everything downstream — the column
+    // creation below, and every later write — goes through `cachedListTitle`, which is still holding
+    // the legacy fallback from the probe that ran before this list existed.
+    await listTitle(sp, siteUrl, LIST_SUFFIX.auditLog).catch(() => undefined);
   }
 
   for (const col of AUDIT_COLUMNS) {
