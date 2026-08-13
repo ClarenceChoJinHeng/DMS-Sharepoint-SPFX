@@ -144,20 +144,21 @@ function clean(v: string | undefined): string {
 }
 
 /**
- * `M/D/YYYY h:mm tt` — the format the site locale accepts on write (gotcha #1).
+ * ISO 8601 — what a plain `/items` POST requires for a DateTime column.
  *
- * Built by hand rather than with `toLocaleString`, whose output depends on the BROWSER's locale: an
- * admin with a UK locale would produce `13/08/2026`, which SharePoint either rejects or — far worse
- * — reads as day 8 of month 13 and silently shifts the event. Display formatting is a separate
- * concern and belongs in the viewer.
+ * NOT `M/D/YYYY h:mm tt`. Gotcha #1's locale format belongs to `validateUpdateListItem`, which parses
+ * dates in the SITE's locale; a direct REST item write goes through the OData layer instead and
+ * answers a locale string with *"Cannot convert a primitive value to the expected type
+ * 'Edm.DateTime'"* — a 400 naming the type but not the field. Applying one endpoint's rule to the
+ * other cost a deploy cycle on 2026-08-13.
+ *
+ * A happy consequence: `$filter` already needed ISO, so writes and filters use ONE format for this
+ * list and cannot be mismatched. `toISOString` is UTC and locale-independent by definition, which
+ * also removes the browser-locale hazard the hand-rolled version existed to avoid. Display is a
+ * separate concern and belongs in the viewer.
  */
 export function formatEventTime(d: Date): string {
-  const h24 = d.getHours();
-  const suffix = h24 < 12 ? "AM" : "PM";
-  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
-  const mins = d.getMinutes();
-  const mm = mins < 10 ? `0${mins}` : `${mins}`;
-  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()} ${h12}:${mm} ${suffix}`;
+  return d.toISOString();
 }
 
 /** Cut to a length, marking that it was cut. A silently clipped value reads as complete. */

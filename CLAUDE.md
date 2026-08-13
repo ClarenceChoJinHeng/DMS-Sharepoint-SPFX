@@ -716,10 +716,14 @@ writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Aud
 - **`EventType` is TEXT, never Choice.** Writing a value absent from a Choice column's `Choices`
   FAILS the whole write, so the day someone adds a type in code, every row of that type is lost
   silently.
-- **Two date formats, deliberately:** rows are written `M/D/YYYY h:mm tt` (gotcha #1), `$filter` takes
-  ISO `datetime'…'`, display is `DD/MMM/YYYY HH:mm`. Using the write format in a filter returns an
-  EMPTY RESULT rather than an error — which reads as "nothing happened", the one thing this page must
-  never say by accident.
+- **`EventTime` is written ISO, NOT `M/D/YYYY` — gotcha #1 does NOT apply to this endpoint.** That
+  locale format belongs to `validateUpdateListItem`, which parses in the site's locale; a plain
+  `/items` POST goes through the OData layer and answers a locale string with *"Cannot convert a
+  primitive value to the expected type 'Edm.DateTime'"* — a 400 that names the type but not the field.
+  `$filter` needs ISO too, so writes and filters share ONE format and cannot be mismatched. Display is
+  `DD/MMM/YYYY HH:mm`, in the viewer only. **Also send `odata-version: ""`**: SPFx's `SPHttpClient`
+  injects `4.0`, under which SharePoint cannot infer the entity set for a JSON-light entry payload, so
+  a row POST 400s while `/_api/web/lists` tolerates the identical headers.
 - **`writeAudit` never throws and never blocks** the action it logs, but is never silent either: it
   returns false, admin screens raise a non-blocking warning, and the console carries the status. An
   audit gap someone knows about is worth far more than one nobody does.

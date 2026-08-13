@@ -23,22 +23,28 @@ function ev(over: Partial<AuditEvent> = {}): AuditEvent {
 }
 
 describe("formatEventTime", () => {
-  // The write format the site locale accepts (gotcha #1). Hand-built precisely so a browser locale
-  // cannot change it — a UK locale producing 13/08/2026 is the failure being prevented.
-  it("writes M/D/YYYY h:mm tt with no padding on the date parts", () => {
-    expect(formatEventTime(new Date(2026, 7, 13, 9, 41))).toBe("8/13/2026 9:41 AM");
+  // ISO, not the site-locale format. A plain /items POST goes through the OData layer, which answers
+  // a locale string with "Cannot convert a primitive value to the expected type 'Edm.DateTime'".
+  // Gotcha #1's M/D/YYYY rule belongs to validateUpdateListItem; applying it here cost a deploy.
+  it("writes ISO 8601 in UTC", () => {
+    expect(formatEventTime(new Date(Date.UTC(2026, 7, 13, 9, 41)))).toBe("2026-08-13T09:41:00.000Z");
   });
 
-  it("pads minutes but not the hour", () => {
-    expect(formatEventTime(new Date(2026, 0, 5, 14, 5))).toBe("1/5/2026 2:05 PM");
+  it("ends in Z, so the value carries its own zone", () => {
+    expect(formatEventTime(new Date(2026, 0, 5, 14, 5)).slice(-1)).toBe("Z");
   });
 
-  it("renders midnight as 12 AM, not 0 AM", () => {
-    expect(formatEventTime(new Date(2026, 0, 5, 0, 5))).toBe("1/5/2026 12:05 AM");
+  // Asserted as a round trip rather than a literal: the input here is LOCAL time, so a literal
+  // expectation would pass in one timezone and fail in another.
+  it("round-trips to the same instant", () => {
+    const d = new Date(2026, 0, 5, 14, 5, 33);
+    expect(new Date(formatEventTime(d)).getTime()).toBe(d.getTime());
   });
 
-  it("renders noon as 12 PM, not 0 PM", () => {
-    expect(formatEventTime(new Date(2026, 0, 5, 12, 0))).toBe("1/5/2026 12:00 PM");
+  it("is the same shape $filter uses, so writes and filters cannot disagree", () => {
+    expect(formatEventTime(new Date(Date.UTC(2026, 0, 1, 0, 0)))).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+    );
   });
 });
 
@@ -161,8 +167,9 @@ describe("buildAuditRow", () => {
     expect(row.UnitPath).toBe("GHO/GF/CORU");
   });
 
-  it("writes the event time in the format SharePoint accepts", () => {
-    expect(buildAuditRow(ev()).EventTime).toBe("8/13/2026 9:41 AM");
+  it("writes the event time as ISO, which is what a plain /items POST accepts", () => {
+    const at = new Date(Date.UTC(2026, 7, 13, 9, 41));
+    expect(buildAuditRow(ev({ at })).EventTime).toBe("2026-08-13T09:41:00.000Z");
   });
 });
 

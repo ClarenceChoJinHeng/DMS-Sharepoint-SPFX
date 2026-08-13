@@ -125,7 +125,18 @@ internal name, then retitled, using the existing `ensureColumn` in `shared/spCol
 
 **`EventTime` is separate from the built-in `Created`** and is the column everything sorts and filters
 on. A flow writes minutes after the fact, and on a busy morning `Created` order is not event order.
-It is written `M/D/YYYY h:mm tt` per the site locale (gotcha #1) and displayed `DD/MMM/YYYY`.
+
+It is written **ISO 8601** and displayed `DD/MMM/YYYY HH:mm`. **Not** `M/D/YYYY h:mm tt` — gotcha #1's
+locale format belongs to `validateUpdateListItem`, which parses in the site's locale, whereas a plain
+`/items` POST goes through the OData layer and rejects a locale string with *"Cannot convert a
+primitive value to the expected type 'Edm.DateTime'"*. `$filter` needs ISO as well, so writes and
+filters share one format and cannot drift apart. Corrected 2026-08-13, after this spec's original claim
+caused exactly that 400.
+
+**The write also needs `odata-version: ""`.** SPFx's `SPHttpClient` injects `odata-version: 4.0`, under
+which SharePoint cannot infer the entity set for a JSON-light entry payload — so a row POST returns 400
+while `POST /_api/web/lists` accepts the identical headers and creates the list quite happily. That
+asymmetry made one header conflict look like three separate bugs.
 
 **`EventType` is Text, not Choice — deliberately.** Writing a value absent from a Choice column's
 `Choices` **fails**, so the day someone adds an event type in code, every row of that type is silently
