@@ -39,7 +39,10 @@ const CONFIG_ROW_TITLE = "allowedExtensions";
 const COLUMN_INTERNAL_NAME = "AllowedFileTypes";
 
 const s: Record<string, React.CSSProperties> = {
-  wrap: { fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b", maxWidth: 900 },
+  // Capped and CENTRED, like every other admin screen (AccessShell, FolderManager). The cap keeps the
+  // Description column readable on a wide monitor; without `margin auto` it pinned hard left inside a
+  // full-width section, which reads as a rendering fault rather than a deliberate measure.
+  wrap: { fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "0 auto" },
   h2: { fontSize: 20, fontWeight: 600, margin: "0 0 4px" },
   subtitle: { fontSize: 13, color: "#605e5c", margin: "0 0 20px", lineHeight: 1.5 },
   card: { border: "1px solid #e1dfdd", borderRadius: 8, padding: "16px 18px", marginBottom: 16 },

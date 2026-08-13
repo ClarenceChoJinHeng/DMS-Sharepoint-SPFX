@@ -190,6 +190,12 @@ worth the encoding guesswork:
 and would overwrite `Editor` — the same trap that forced Staging's "Uploader" column to be `Author`
 (memory `dms-uploader-column-is-author`).
 
+> ⚠ **SUPERSEDED 2026-08-13 — do NOT build this list.** The audit log
+> (`2026-08-13-audit-log-design.md`) covers deletion as a `Deleted` event type, and two overlapping
+> append-only trails would leave a permanent question about which one is authoritative. When this
+> feature is built it writes a `Deleted` row to the **audit log**, carrying the request reason and the
+> approver in `Details`. The rest of this section is kept only to record what the columns were for.
+
 New list **`DMS Deletion Log`** — `Title` (file name), `Unit`, `RequestedBy`, `ApprovedBy`,
 `Reason`, `DeletedOn`. `DeletedOn` is written `M/D/YYYY` per the site locale and displayed
 `DD/MMM/YYYY` like every other date. The list is append-only; nobody but Owners gets more than
