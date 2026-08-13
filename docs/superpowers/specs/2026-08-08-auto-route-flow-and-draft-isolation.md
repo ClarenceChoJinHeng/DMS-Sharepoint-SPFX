@@ -199,9 +199,30 @@ Condition   ?{ModerationStatus} is equal to  Approved
 └─ False → 1 action (no-op)
 ```
 
-**No trigger condition on this flow.** One was added by mistake on 2026-08-08
-(`{IsFolder}` — it belongs on the folder-approval flow) and it silently stopped every file from
-being routed, because the flow then only fired for folders.
+**Trigger condition — `{IsFolder}` is `false`** (added 2026-08-13, verified live):
+
+```
+@equals(triggerOutputs()?['body/{IsFolder}'], false)
+```
+
+**THE POLARITY IS THE WHOLE THING, and both mistakes have now been made on this flow.**
+
+- **`false` — correct, and required.** Fire only for FILES. Without it, every folder the upload form
+  ensure-creates (`T1`, `2024`, `Working File`) gets approved by the folder-approval flow, which fires
+  THIS flow, which tries to `Copy file` a folder and fails `NotFound`. Two failed runs per upload on
+  2026-08-13 — and worse, one such folder-triggered run had already copied a file into `Documents`
+  while it was still *Waiting for Approval*. Approval was being bypassed intermittently, whenever the
+  flow won the race against the upload.
+- **`true` — the 2026-08-08 mistake. Do not restore it here.** It belongs on the *folder-approval*
+  flow. Set on this one it fires only for folders, so no file is ever routed, and it fails SILENTLY:
+  a flow that never triggers leaves no run history to look at.
+
+Until 2026-08-13 this section read *"No trigger condition on this flow"*, which is how the folder
+noise survived so long — the failed runs looked like the known cosmetic ones in §9 rather than a
+guard that had never been added at all.
+
+> The flow's NAME says "folders" while it routes FILES. It is recorded here as deployed, but it is
+> worth renaming: that name is exactly how folder logic ends up in the wrong flow.
 
 ### 4.1 Path split — `Compose 1`
 
