@@ -2,8 +2,10 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
+import { AuditOutcome, EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 import {
   FALLBACK_FILE_TYPES,
   normalizeFileTypes,
@@ -158,8 +160,36 @@ export default function FileTypeSettings({
   const [confirmLast, setConfirmLast] = useState<string | undefined>(undefined);
   const [suggest, setSuggest] = useState<{ typed: string; better: string } | undefined>(undefined);
   const [highlight, setHighlight] = useState<string | undefined>(undefined);
+  /** Set when a change was applied but not recorded. Never blocks — see logPolicy. */
+  const [auditWarn, setAuditWarn] = useState(false);
 
   const configList = (): string => encodeURIComponent(cachedListTitle(LIST_SUFFIX.config));
+
+  /**
+   * Record a policy change in the audit log.
+   *
+   * Always AFTER the change has been made, and never able to fail it: the write itself never throws,
+   * and a false return only raises a non-blocking banner. Refusing a legitimate policy change because
+   * the log was unreachable would be worse than an incomplete log — but an admin is still told,
+   * because an audit gap somebody knows about is worth far more than one nobody does.
+   */
+  const logPolicy = async (
+    summary: string,
+    details: string[],
+    outcome: AuditOutcome = "Success",
+  ): Promise<void> => {
+    const ok = await writeAudit(context.spHttpClient, siteUrl, {
+      event: EVENT.policyChanged,
+      outcome,
+      source: "CrsConfiguration",
+      at: new Date(),
+      actorName: context.pageContext.user.displayName,
+      actorEmail: context.pageContext.user.email,
+      summary,
+      details,
+    });
+    if (!ok) setAuditWarn(true);
+  };
 
   /* ── Load ──────────────────────────────────────────────────────────────────── */
 
@@ -322,6 +352,16 @@ export default function FileTypeSettings({
           ? `${ext} is now allowed. Anyone with the upload form open will need to refresh.`
           : `${ext} is now blocked for new uploads. Files already uploaded are untouched.`,
       });
+      // The resulting SET is recorded, not just the delta: a reader months later needs to know what
+      // the policy became, and reconstructing it from a chain of deltas is exactly the work an audit
+      // log should have already done.
+      await logPolicy(
+        on ? `File type ${ext} allowed` : `File type ${ext} blocked`,
+        [
+          on ? `Allowed ${ext}.` : `Blocked ${ext} for new uploads.`,
+          `Allowed after this change: ${next.slice().sort().join(", ") || "(none — all uploads blocked)"}`,
+        ],
+      );
     } catch (err) {
       setTicked(before);
       setNote({ tone: "err", text: `Could not save ${ext} — ${(err as Error).message}` });
@@ -361,6 +401,10 @@ export default function FileTypeSettings({
           tone: "ok",
           text: `${ext} added and allowed. Anyone with the upload form open will need to refresh.`,
         });
+        await logPolicy(`File type ${ext} added and allowed`, [
+          `Added ${ext} to the list of choices.`,
+          `Allowed after this change: ${nextTicked.slice().sort().join(", ")}`,
+        ]);
       } catch (err) {
         setNote({
           tone: "warn",
@@ -392,6 +436,17 @@ export default function FileTypeSettings({
           `${verdict.ext} cannot be allowed — it is a program or script, not a document. Allowing it ` +
           `would turn the repository into a place to share executables.`,
       });
+      // Recorded even though nothing changed. An attempt to allow executables is exactly what an
+      // audit log should surface, and it is one of the two events Purview cannot see either —
+      // nothing ever reached SharePoint.
+      logPolicy(
+        `Refused to allow ${verdict.ext}`,
+        [
+          `Someone tried to allow ${verdict.ext}, a program or script type.`,
+          "The policy was not changed.",
+        ],
+        "Refused",
+      ).catch(() => undefined);
       return;
     }
     if (verdict.kind === "exists-enabled") {
@@ -463,6 +518,16 @@ export default function FileTypeSettings({
 
       {loadError && <div style={{ ...s.msg, ...s.err }}>{loadError}</div>}
       {note && <div style={{ ...s.msg, ...toneStyle(note.tone) }}>{note.text}</div>}
+
+      {/* An audit gap an admin KNOWS about is worth far more than one nobody does — so this is said
+          plainly, while never having blocked the change itself. */}
+      {auditWarn && (
+        <div style={{ ...s.msg, ...toneStyle("warn") }}>
+          Your change was applied, but could not be recorded in the audit log. The audit log may not be
+          set up yet, or may not be writable by you — worth checking, because the change itself went
+          through.
+        </div>
+      )}
 
       {/* A blocked type that is somehow ALLOWED cannot be produced on this page, so it arrived from a
           hand edit or a migration. Said loudly, with the fix one click away. */}

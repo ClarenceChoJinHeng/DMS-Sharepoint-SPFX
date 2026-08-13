@@ -5,8 +5,10 @@ import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels } from "../../../shared/formModel";
 import { splitChain } from "../../../shared/folderChain";
 import { abbrevListTitle } from "../../../shared/folderAbbreviation";
+import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 import {
   AbbrevRowDraft,
   changedRows,
@@ -367,6 +369,36 @@ export default function AbbreviationManager({
       }
 
       const renamed = renames.length;
+
+      // Recorded BEFORE re-baselining, because `original` is about to be overwritten and the
+      // old → new pair is the whole value of the record: it is the only place that says which folder
+      // the next reconciliation will rename, and why.
+      const auditOk = await writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.abbreviationChanged,
+        source: "AbbreviationManager",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        segment: seg.label,
+        summary:
+          `Abbreviations saved for ${seg.label} — ${written} changed` +
+          (renamed > 0 ? `, ${renamed} rename${renamed === 1 ? "" : "s"}` : ""),
+        details: pending
+          .map(
+            (r) =>
+              // `original` is optional on the draft, and an absent one reads the same as an empty
+              // one here — both mean "there was no stored code", which is what a reader needs.
+              `${r.level} "${r.label}": ` +
+              `${(r.original ?? "").trim() === "" ? "(blank)" : (r.original ?? "").trim()} → ` +
+              `${r.abbreviation.trim() === "" ? "(blank)" : r.abbreviation.trim()}`,
+          )
+          .concat([
+            renamed > 0
+              ? "No folder has changed yet. The next reconciliation will RENAME the folders whose code changed."
+              : "No folder has changed yet. Reconciliation creates the folders.",
+          ]),
+      });
+
       // Re-baseline in place. A reload would repeat the tree walk for no gain, and this keeps the
       // rows on screen exactly as saved.
       setRows(rows.map((r) => ({ ...r, original: r.abbreviation.trim() })));
@@ -379,7 +411,10 @@ export default function AbbreviationManager({
             ? ` ${renamed} of these replaced an existing code, so reconciliation will RENAME ${
                 renamed === 1 ? "that folder" : "those folders"
               } in both libraries. Documents, permissions and approval status are kept.`
-            : ""),
+            : "") +
+          // Said on the panel already being read, rather than as a second banner. The save itself
+          // succeeded and must not be made to look otherwise.
+          (auditOk ? "" : " (This change could not be recorded in the audit log.)"),
       });
     } catch (e) {
       setResult({ ok: false, text: (e as Error).message });

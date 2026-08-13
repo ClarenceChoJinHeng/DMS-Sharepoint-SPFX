@@ -687,6 +687,48 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
 > that usually decides it is that "all of CORU's 2026 Tax Returns" stops being a folder you open and
 > becomes a search.
 
+## Audit Log (2026-08-13, spec `2026-08-13-audit-log-design.md`)
+Client asked to "track every single thing". **BUILT: the list, the writer, the viewer and four
+writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Audit Log`**
+(`9e2c4d17-…`), its own page, admin-only.
+- **PURVIEW IS UNREACHABLE — do not re-propose it.** Three independent blockers: the only web-part
+  route is Graph's audit-log query API needing **tenant-wide** `AuditLogsQuery.Read.All`; API
+  permission requests are processed from the **TENANT** app catalog while this package ships to the
+  **site collection** one, so it cannot even ask; and the API is an async job, not a query. It also
+  would not answer the event the client named — an approval appears there as a generic item
+  modification, with no from/to status. **Reads and downloads are therefore unrecordable by us**, and
+  that is the one gap that matters; it is stated on the page, not buried in a doc.
+- **`<P> Audit Log`** (`LIST_SUFFIX.auditLog`), self-provisioned by the page — the client cannot run
+  PowerShell, so a scripted step would not happen. 14 columns, internal names space-free;
+  `EventTime`, `EventType`, `ActorEmail`, `ItemUniqueId` indexed. **Provisioning does NOT set the
+  permissions** (breaking inheritance must name the service account, and a wrong guess locks the flows
+  out of the list they write to) — the screen states it as a manual step.
+- **`EventType` is TEXT, never Choice.** Writing a value absent from a Choice column's `Choices`
+  FAILS the whole write, so the day someone adds a type in code, every row of that type is lost
+  silently.
+- **Two date formats, deliberately:** rows are written `M/D/YYYY h:mm tt` (gotcha #1), `$filter` takes
+  ISO `datetime'…'`, display is `DD/MMM/YYYY HH:mm`. Using the write format in a filter returns an
+  EMPTY RESULT rather than an error — which reads as "nothing happened", the one thing this page must
+  never say by accident.
+- **`writeAudit` never throws and never blocks** the action it logs, but is never silent either: it
+  returns false, admin screens raise a non-blocking warning, and the console carries the status. An
+  audit gap someone knows about is worth far more than one nobody does.
+- **ONE ROW PER RUN** for reconciliation and migration, with the log in `Details` — one row per folder
+  would bury every other event the first time somebody reconciles. Counts must come from LOCALS, not
+  from React state set during the run (a closure reads its render-time value and records zero).
+- **"Could not read" and "nothing matched" are separate states everywhere.** Three distinct empty
+  states in the viewer, for the same reason `unknown` ≠ empty elsewhere in this codebase.
+- **Nobody but Owners and the service account can write**, and that costs nothing: flows write file
+  events as the service account and admins write admin events, so no uploader or approver needs
+  access. Tamper-resistant by construction rather than by policy. **No auto-delete, ever**; version
+  history on.
+- Wired so far: `PolicyChanged`, `AbbreviationChanged`, `ReconciliationRun`, plus a **`Refused`** row
+  when someone tries to allow an executable. Still to wire: access grant/revoke, structure change,
+  migration, segment created, Group Map, upload-refused, and the **3 flows + 1 added Auto-route
+  action** (spec §8).
+- **Supersedes the never-built `<P> Deletion Log`** — two append-only trails would leave a permanent
+  question about which is authoritative. `LIST_SUFFIX.deletionLog` still exists; nothing new reads it.
+
 ## Allowed File Types
 Driven by the **`AllowedFileTypes`** multi-select Choice column on `DMS Config`
 (row `allowedExtensions`) — the **single source of truth** since 2026-07-30.

@@ -3,8 +3,10 @@ import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember, createSiteGroup } from "../../../shared/spGroups";
 import { siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
+import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { writeAudit } from "../../../shared/spAuditLog";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import {
   loadFolderMapRows,
@@ -3557,6 +3559,28 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
 
       setLog(entries);
       const failed = entries.filter(e => !e.ok).length;
+
+      // ONE row per run, carrying the whole log. Two reasons that is worth more than it looks: the
+      // on-screen log is lost the moment anyone navigates away, and one row per FOLDER would bury
+      // every other event in the audit log the first time somebody reconciles.
+      //
+      // Counts come from LOCALS, never from `reconCounts`: that is React state set during the run,
+      // so this closure still sees its render-time value — reading it here would faithfully record
+      // zero.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.reconciliationRun,
+        outcome: failed > 0 ? "Failed" : "Success",
+        source: "FolderManager",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        library: "Approval Document + Documents",
+        summary:
+          `Reconciliation — ${targets.length} folder(s) reconciled` +
+          (failed > 0 ? `, ${failed} error(s)` : ", no errors"),
+        details: entries.map(e => `${e.ok ? "✓" : "✗"} ${e.msg}`),
+      }).catch(() => undefined);
+
       showToast(
         failed > 0
           ? `Reconciled with ${failed} error(s) — see log.`
