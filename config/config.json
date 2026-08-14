@@ -42,6 +42,14 @@
         }
       ]
     },
+    "crs-settings-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/crsSettings/CrsSettingsWebPart.js",
+          "manifest": "./src/webparts/crsSettings/CrsSettingsWebPart.manifest.json"
+        }
+      ]
+    },
     "crs-configuration-web-part": {
       "components": [
         {

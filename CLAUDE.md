@@ -821,6 +821,49 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
 > that usually decides it is that "all of CORU's 2026 Tax Returns" stops being a folder you open and
 > becomes a search.
 
+## CRS Settings — the admin landing page (2026-08-14, spec `2026-08-14-crs-settings-landing-page-design.md`)
+Client: they *"do not know what to do or how to operate"*. There were **14 web parts and no menu**.
+Web part **`CRS Settings`** (`4d8b7e21-…`, own bundle), built to the client's mockup; rules in
+`shared/adminPages.ts` (pure, 33 tests), icons in `crsSettings/components/icons.tsx`, design sources in
+`docs/design-assets/`. BUILT, not yet site-tested.
+- **It is a DIRECTORY and nothing more, by the client's decision** (*"don't worry about how to operate
+  it, I got an idea"*). A "Common tasks" band carrying the real workflows was offered and declined.
+  Worth restating: a grid answers *where*, and the failure that bites is *order* — miss the abbreviation
+  step and reconciliation creates nothing, silently. **If their operating idea does not land, the order
+  belongs on this page.**
+- **Three cards the mockup lacked were added**, and one matters: **Group Management leads the access
+  card**, because Folder Access maps an EXISTING group, so an admin starting there has nothing to pick.
+  Also **CRS Audit Log** (on no menu at all before — nobody would find it) and **Bulk Upload**
+  (`adminOnly` per `pageAccessPolicy`). **CRS Mapping is dropped**; abbreviations live under Folder
+  Management, where the Folder Administration tab bar already had them.
+- **LINKS ARE RESOLVED FROM SITE PAGES AT RUNTIME, NEVER HARDCODED.** The client renames everything at
+  import (memory `dms-to-crs-rename-pending`), and a hardcoded `Folder-Administration.aspx` fails as a
+  **dead link** — no error, no clue — on the one page whose job is saying where to go. Uses `FileRef`,
+  not a path built from the library name (gotcha #12).
+- **The patterns are load-bearing and pinned by test.** A bare `/folder/i` claims **Folder-Access.aspx**,
+  so "Folder Reconciliations" would open a permissions screen; a bare `/approv/i` claims
+  **ApprovalDocument.aspx**, the approver's queue. Hence `folder.?admin|folder.?manage|folder.?structure`
+  and `approval.?library|library.?access`.
+- **Three link states.** `resolved`; `ambiguous` → navigates to the SHORTEST file name (a duplicate is
+  the longer one) and names the others, because silently picking is how a half-renamed page sends people
+  somewhere nobody meant; `missing` → the row is **disabled and names the page to create**, never a dead
+  arrow. **An unreadable Site Pages list is NOT "no pages exist"** — it says so, or it would tell the
+  admin to create ten pages that already exist.
+- **The "create a page called…" advice names the SHARED page** for a row that is only a tab of one
+  (`pageName`). Deriving it from the label would say `Folder-Reconciliations.aspx` — a page the pattern
+  can never match, leaving the row dead after the admin did exactly as told. A test asserting every
+  suggestion resolves caught this on its first run.
+- **Folder Management's three rows deep-link with `#tab=<slug>`**, read by `FolderManager` on mount —
+  they are TABS of one five-tab page, so without it two of three look broken. `tabFromHash` has ONE
+  implementation, shared by the writer and the reader. **A slug is a public name once shipped** (an admin
+  may bookmark it), so `DEEP_LINK_TABS` maps slug → `Tab` explicitly; renaming a `Tab` must not break a
+  bookmark. An unrecognised hash falls back to the default tab, never a blank screen.
+- Property pane carries **one optional address per link** (`link_<key>`, flat, not nested). An override
+  **wins outright, unchecked** — the only fix without a redeploy on a site whose names cannot be guessed.
+  Placeholders name what auto-detection looks for, so the pane answers "why is this row grey".
+- **No access-policy change needed:** a page called `CRS Settings` already matches the `setting` keyword
+  in `pageAccessPolicy.ts` → `adminOnly`. Verified, not assumed.
+
 ## Audit Log (2026-08-13, spec `2026-08-13-audit-log-design.md`)
 Client asked to "track every single thing". **BUILT: the list, the writer, the viewer and four
 writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Audit Log`**

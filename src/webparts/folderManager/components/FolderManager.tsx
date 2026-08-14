@@ -6,6 +6,9 @@ import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
 import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX, libApiTitle } from "../../../shared/naming";
+// One parser for the `#tab=` deep link, shared with the CRS Settings page that writes it — the two
+// halves of one contract, so they cannot drift.
+import { tabFromHash } from "../../../shared/adminPages";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { IFolderManagerProps } from "./IFolderManagerProps";
@@ -94,6 +97,30 @@ let resolvedFolderCtName: string | undefined;
  * and lint-clean in the meantime.
  */
 type Tab       = LibTarget | "Reconciliation" | "Abbreviations" | "Levels" | "Migrate" | "NewSegment";
+
+/**
+ * Tabs the CRS Settings landing page may deep-link to, by slug.
+ *
+ * Only the three it actually links are listed. A slug is a PUBLIC name once shipped — the landing page
+ * writes it into a URL an admin may bookmark — so this map is the contract, and renaming a Tab value
+ * must not silently break it. Anything unrecognised falls through to the default tab, never to a blank
+ * screen.
+ */
+const DEEP_LINK_TABS: Record<string, Tab> = {
+  abbreviations: "Abbreviations",
+  structure: "Levels",
+  reconciliation: "Reconciliation",
+  migrate: "Migrate",
+  newsegment: "NewSegment",
+};
+
+/** The tab named by the URL hash, or Term Abbreviations. */
+function tabFromDeepLink(): Tab {
+  // `window` is always present in a web part, but a guard costs nothing and keeps this callable from
+  // a test later.
+  const hash = typeof window === "undefined" ? "" : window.location.hash;
+  return DEEP_LINK_TABS[tabFromHash(hash)] ?? "Abbreviations";
+}
 
 // Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
 // Each maps a term set to the segment container folder its terms live under.
@@ -530,7 +557,12 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // tree's helpers compiling until that code is deleted.
   // Opens on Term Abbreviations because that is where the work starts: a term with no code gets no
   // folder, so reconciliation has nothing to build until this tab is filled in.
-  const [tab,          setTab]          = useState<Tab>("Abbreviations");
+  //
+  // …unless the URL names one. The CRS Settings landing page has three separate rows — Term
+  // Abbreviations, Folder Structure Management, Folder Reconciliations — which are all TABS of this
+  // single page, so without the deep link they would all land here and two of the three would look
+  // broken. An absent or unrecognised hash falls back to the default rather than showing nothing.
+  const [tab,          setTab]          = useState<Tab>(() => tabFromDeepLink());
   const [libTarget]                     = useState<LibTarget>("Staging");
   /**
    * True while a mounted structure screen holds unsaved changes. Switching tabs UNMOUNTS it, which
