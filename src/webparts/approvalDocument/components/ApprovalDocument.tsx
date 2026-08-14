@@ -140,6 +140,12 @@ const s = {
   // Shared frame for the non-iframe previews, so an image and a "no preview" message occupy the
   // same space an iframe would and the three-column layout does not shift between documents.
   previewBox:  { display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "calc(100vh - 240px)", minHeight: 600, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "hidden", padding: 12, boxSizing: "border-box" as const } as React.CSSProperties,
+  // The same frame, for IMAGES only, fitting to WIDTH and scrolling.
+  //
+  // `alignItems: flex-start` so a tall image starts at its TOP rather than being centred with its
+  // head out of view, and `overflow: auto` so everything below the fold is reachable. Together with
+  // the <img> rule below this is the whole fix for a screenshot rendering as a sliver.
+  imageBox:    { display: "flex", alignItems: "flex-start", justifyContent: "center", width: "100%", height: "calc(100vh - 240px)", minHeight: 600, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "auto", padding: 12, boxSizing: "border-box" as const } as React.CSSProperties,
   previewLink: { fontSize: 13, color: "#0f6cbd" } as React.CSSProperties,
 };
 
@@ -807,14 +813,32 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             <div style={s.sectionTitle}>Preview</div>
           )}
           {preview.kind === "image" ? (
-            // An <img>, not an iframe: it honours object-fit, so a portrait scan and a wide
-            // spreadsheet screenshot both fit the pane instead of being cropped or scrollbarred.
-            <div style={s.previewBox}>
-              <img
-                src={preview.url}
-                alt={item.FileLeafRef}
-                style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }}
-              />
+            // An <img>, not an iframe, so the image can be sized directly.
+            //
+            // Fit to WIDTH and scroll — the same thing #view=FitH already does for PDFs, and for the
+            // same reason. The first version fitted BOTH dimensions (`maxHeight: 100%` +
+            // `objectFit: contain`), which is correct for a landscape photo and useless for the
+            // common case: a full-page screenshot is far taller than it is wide, so fitting its
+            // HEIGHT into the pane shrank its width to a sliver and the approver could read nothing.
+            //
+            // `maxWidth: 100%` with an auto height also never UPSCALES — a small image keeps its
+            // natural size rather than being blown up blurry to fill the pane.
+            <div>
+              <div style={s.imageBox}>
+                <img
+                  src={preview.url}
+                  alt={item.FileLeafRef}
+                  style={{ maxWidth: "100%", height: "auto", display: "block" }}
+                />
+              </div>
+              {/* Offered here too, not just on the iframe branch. Fit-to-width answers the common
+                  case; a very large scan still needs the browser's own zoom, and that lives in a
+                  tab of its own. */}
+              <div style={{ marginTop: 6, textAlign: "right" }}>
+                <a href={preview.fileUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
+                  Open in a new tab
+                </a>
+              </div>
             </div>
           ) : preview.kind === "none" ? (
             // Say so, and offer the file. A blank pane reads as a broken page, and an approver
