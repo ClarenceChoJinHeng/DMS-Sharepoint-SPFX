@@ -746,6 +746,20 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
     stops someone looking.
   - PageAccess's read-only members modal is **gone, not kept alongside** — two lists of the same
     people drift after a write. Adding people stays on Group Management; these screens only remove.
+- **NEVER BUILD A URL FROM `libApiTitle()`/`libraryTitle()` IN A RENDER-TIME `const` (2026-08-14).**
+  They read a module cache primed by `primeNames`, which has NOT run on the first render — where they
+  still answer with the legacy `Staging`. StagingAccess's `listBase` was such a const, so the value
+  the FIRST render captured was the one the mount effect's `loadLive` used: a 404. Later renders
+  computed the right URL but nothing re-read the ACL (the effect keys on `[library]`, which never
+  changes), so `Access now` read `unknown` forever, and Allow/Remove could not apply a live
+  permission. **The tell was that the banner named "Approval Document" correctly while the request
+  had asked for "Staging"** — the displayed value came from a later render than the closure did.
+  `listBase` is a FUNCTION now; do not turn it back. Corollary: a name resolved at render time is
+  fine for DISPLAY and never for a request.
+- **A failed ACL read now REPORTS ITS STATUS**, in the banner and the console. It had said only
+  "could not read": `404` (wrong library title) and `403` (no Enumerate Permissions — reading a
+  library's permissions needs Full Control on it) are the same sentence with opposite fixes, and the
+  banner now names which one happened. Gotcha #9's rule, learned in a second place.
 - **`libApiTitle` NOW LIVES IN `shared/naming.ts` (2026-08-14), and StagingAccess was broken without
   it.** It builds URLs from the logical `LibTarget` key, and `getbytitle('Staging')` 404s on a site
   whose library is titled `Approval Document` — so **every "Access now" cell read `unknown` and

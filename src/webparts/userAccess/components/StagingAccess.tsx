@@ -113,6 +113,9 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
   // pressed rather than on both.
   const [pendingAction, setPendingAction] = useState<"allow" | "remove" | undefined>(undefined);
   const [scopeMissing, setScopeMissing] = useState(false);
+  // Why the ACL read failed, if it did. Kept so the banner can name a status rather than only saying
+  // "could not read" — see loadLive.
+  const [liveError, setLiveError] = useState<string | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [toast, setToast]     = useState<{ message: string; error: boolean } | undefined>(undefined);
   // A LIST, so the single-row Remove and the bulk Remove share one confirm dialog. Two
@@ -157,15 +160,28 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
   const GET = { Accept: "application/json;odata=nometadata" };
   /**
+   * The library's API URL. **A FUNCTION, deliberately — never a render-time const.**
+   *
    * `library` is the LOGICAL key ("Staging"), which is what Group Map rows store and what this
    * component filters and writes. A URL needs the live TITLE, and on this site that is
-   * "Approval Document" — so every ACL read here was a 404 until 2026-08-14, which showed up only
-   * as "Access now: unknown" on every row and an Allow that could never apply a permission.
-   * Translate at the boundary, never in stored data (gotcha #12).
+   * "Approval Document", so it must go through `libApiTitle` (gotcha #12: translate at the API
+   * boundary, never in stored data).
+   *
+   * But `libApiTitle` reads a module-level cache primed by `primeNames`, and that has NOT happened on
+   * the first render — where it still answers with the legacy `Staging`. As a const, the value
+   * captured by that first render was the one `loadLive` used from the mount effect, so the read
+   * 404'd; later renders computed the right URL but nothing re-read the ACL, because the effect only
+   * re-runs on `[library]` and that never changes. The visible result was the giveaway (found
+   * 2026-08-14, second site test): the warning banner named "Approval Document" correctly while the
+   * request had asked for "Staging".
+   *
+   * Called at request time it always sees the primed cache. Do not turn this back into a const.
    */
-  const listBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(library))}')`;
-  // What the client is told the library is called. `library` is an internal key and must not
-  // surface in a sentence — the page heading already resolves the live title for the same reason.
+  const listBase = (): string =>
+    `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(library))}')`;
+  // What the client is told the library is called. `library` is an internal key and must not surface
+  // in a sentence — the page heading already resolves the live title for the same reason. Safe as a
+  // render value: it is only read after a state change has re-rendered with the primed cache.
   const libLabel = libApiTitle(library);
 
   /**
@@ -210,13 +226,24 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
    * only its own rows would report access that does not exist, or hide access that does.
    */
   const loadLive = async (): Promise<LiveGrant[] | undefined> => {
+    const url =
+      `${listBase()}/roleassignments?$expand=Member,RoleDefinitionBindings` +
+      `&$select=PrincipalId,Member/Title,RoleDefinitionBindings/Name`;
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${listBase}/roleassignments?$expand=Member,RoleDefinitionBindings` +
-        `&$select=PrincipalId,Member/Title,RoleDefinitionBindings/Name`,
+      url,
       SPHttpClient.configurations.v1,
       { headers: GET },
     );
-    if (!res.ok) return undefined;
+    if (!res.ok) {
+      // RECORD THE STATUS. This failed silently for weeks behind a banner saying only "could not
+      // read", and a 404 (wrong library title) and a 403 (no Enumerate Permissions) are the same
+      // sentence with completely different fixes. Gotcha #9 states the rule and this is the second
+      // place to have learned it: log the actual status before assuming a naming or data problem.
+      setLiveError(`HTTP ${res.status}`);
+      console.warn(`[ApprovalLibraryAccess] could not read the library ACL: HTTP ${res.status} — ${url}`);
+      return undefined;
+    }
+    setLiveError(undefined);
     const data = await res.json();
     return ((data.value ?? []) as Array<{ PrincipalId?: number; Member?: { Title?: string }; RoleDefinitionBindings?: Array<{ Name?: string }> }>)
       .map((ra) => ({
@@ -295,7 +322,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
       .find((d) => d.Name === "Read")?.Id;
     if (readId === undefined) throw new Error('no "Read" permission level on this site');
     const res = await context.spHttpClient.post(
-      `${listBase}/roleassignments/addroleassignment(principalid=${principalId},roledefid=${readId})`,
+      `${listBase()}/roleassignments/addroleassignment(principalid=${principalId},roledefid=${readId})`,
       SPHttpClient.configurations.v1,
       { headers: GET },
     );
@@ -311,7 +338,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
    */
   const revokeLive = async (principalId: number): Promise<void> => {
     const res = await context.spHttpClient.post(
-      `${listBase}/roleassignments/removeroleassignment(principalid=${principalId})`,
+      `${listBase()}/roleassignments/removeroleassignment(principalid=${principalId})`,
       SPHttpClient.configurations.v1,
       { headers: GET },
     );
@@ -692,9 +719,24 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
       {live === undefined && !loading && (
         <div style={s.warnBox}>
-          Could not read the current permissions of <strong>{libLabel}</strong>, so the
-          &ldquo;Access now&rdquo; column below is unknown. The mappings themselves are still
-          accurate.
+          Could not read the current permissions of <strong>{libLabel}</strong>
+          {liveError ? ` (${liveError})` : ""}, so the &ldquo;Access now&rdquo; column below is
+          unknown. The mappings themselves are still accurate.
+          {/* The two likely causes need opposite fixes, and the status tells them apart — so name
+              both rather than leaving an admin to guess which one they have. */}
+          {liveError === "HTTP 404" && (
+            <div style={{ marginTop: 6 }}>
+              A <strong>404</strong> means no library by that name — check the library is still
+              titled <strong>{libLabel}</strong>.
+            </div>
+          )}
+          {(liveError === "HTTP 403" || liveError === "HTTP 401") && (
+            <div style={{ marginTop: 6 }}>
+              A <strong>{liveError === "HTTP 403" ? "403" : "401"}</strong> means your account cannot
+              read this library&rsquo;s permissions. Reading them needs Full Control on the library —
+              everything else on this page still works.
+            </div>
+          )}
         </div>
       )}
 

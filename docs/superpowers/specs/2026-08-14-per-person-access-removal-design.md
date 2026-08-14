@@ -1,7 +1,7 @@
 # Per-person access removal — Approval Library Access and Page Access
 
 **Date:** 2026-08-14
-**Status:** Built, not yet site-tested
+**Status:** Site-tested 2026-08-14 — per-person removal verified; see §9 for a follow-up fix
 **Screens:** `Approval Document Access` (`StagingAccess.tsx`), `Page Access` (`PageAccess.tsx`)
 **Shared rules:** `src/shared/accessMembers.ts` (pure, 28 tests)
 **Shared UI:** `src/webparts/userAccess/components/accessMemberUi.tsx`
@@ -192,3 +192,43 @@ Site test, on the Approval Document Access screen first:
    must warn that removal changes nothing about who can open it.
 7. Audit log: one `MembersChanged` row per removal, `Outcome` matching the verdict, details naming
    the folder-permission consequence.
+
+---
+
+## 9. Addendum, second site test (2026-08-14): §6 was fixed in the wrong place
+
+Per-person removal worked on the first try — a member in three other allowed groups was correctly
+reported as `also in GHO_GF_CORU_UPL, GHO_GHR_HRHO_UPL, NBPOL_COOO_COOO_UPL`, the dialog said access
+**survives** and named all three, and the group's count dropped 3 → 2 after the removal.
+
+But the amber banner still read **"Could not read the current permissions of Approval Document"**, and
+`Access now` was still `unknown` on all 17 rows. The §6 fix was correct about the cause and wrong about
+the timing.
+
+`listBase` was a render-time `const`:
+
+```ts
+const listBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(library))}')`;
+```
+
+`libApiTitle` reads the module cache that `primeNames` fills, and on the **first** render that has not
+happened — so it still answers with the legacy `Staging`. The mount effect calls `primeNames` and then
+`loadLive`, but `loadLive` closes over the first render's `listBase`, so the request went to
+`getbytitle('Staging')` and 404'd. Later renders computed the right URL, and nothing re-read the ACL
+because the effect keys on `[library]`, which never changes.
+
+**The symptom named the bug precisely:** the banner said "Approval Document" while the request had said
+"Staging", because the display value came from a later render than the closure did.
+
+`listBase` is now a function, evaluated at request time. The general rule, added to CLAUDE.md: a name
+resolved at render time is fine for **display** and never for a **request**.
+
+Two things this also fixed, neither visible before: `grantLive` and `revokeLive` build from the same
+base, so Allow and Remove had never been able to apply a live permission on a first page load — every
+grant was silently deferred to the next reconciliation, which is the "Group Map row written but the
+permission could not be applied" half-success path.
+
+And the read now **reports its status**. It had said only "could not read" for weeks, while `404`
+(wrong title) and `403` (no Enumerate Permissions — which needs Full Control on the library) are the
+same sentence with opposite fixes. The banner names the status and, for those two, the fix. Gotcha #9's
+rule — log the status before assuming a naming problem — learned in a second place.
