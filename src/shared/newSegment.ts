@@ -41,6 +41,16 @@ export interface ExistingSegment {
   label: string;
   stagingFolder: string;
   sortOrder?: number;
+  /**
+   * The Config list item id. Optional because creation never needs it — only deletion does, and
+   * only a reader that asked for `Id` will have it.
+   */
+  itemId?: number;
+  /**
+   * The segment's term set. Optional for the same reason: deletion matches Group Map rows on it
+   * (a folder row's `Segment` holds the term-set GUID), and nothing in the creation path reads it.
+   */
+  termSetGuid?: string;
 }
 
 /**

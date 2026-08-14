@@ -205,7 +205,34 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
         so `Estate/Mill` yields the column `EstateMill` and the key `mode_estatemill`. Pinned by
         test, because it decides derived column and key names.
       - Still OUT of scope, deliberately: creating the term set or its terms, abbreviation rows,
-        groups/Group Map rows, deleting a segment, reordering segments.
+        groups/Group Map rows, reordering segments.
+    - **DELETING a segment is BUILT (2026-08-14)**, on the same tab — now retitled **Segments** —
+      spec `2026-08-14-delete-segment-design.md`, rules in `shared/segmentDeletion.ts` (pure, 23
+      tests). The 2026-08-12 spec excluded it as having "no safe meaning"; this answers that rather
+      than overruling it, because **Delete RETIRES**: it removes the `mode` row and the segment's
+      Group Map rows, and touches **no document and no column**.
+      - **Deleting the folders is a separate opt-in**, off by default, behind a typed confirmation
+        of the segment's own label — added on the client's reasoning that once the files have been
+        moved out with the migrator, removing the empty shell should be easy. It **recycles** rather
+        than purges, so it is restorable for 93 days, and the dialog says so: that is what makes the
+        option acceptable at all.
+      - **An UNCOUNTABLE segment is not offered the folder delete.** Everywhere else in this
+        codebase a failed read fails OPEN (gotchas 10b/11, the provisioned-segment filters), because
+        the cost is a form that takes itself out of service. Here the cost is deleting an archive
+        nobody could confirm was empty, so `canOfferFolderDelete` fails **CLOSED** — and the dialog
+        names the failed read, because an unexplained missing checkbox reads as a broken page.
+      - **Retire runs BEFORE the folders**, and a failed `mode`-row delete STOPS the run. The other
+        order can leave a live segment with no folders, where every upload fails or silently
+        re-creates a shell.
+      - **Abbreviation rows are never deleted** — authored data with no other copy, and re-creating
+        the segment without them renames every folder. **Columns are never deleted** either: the
+        documents may have been MOVED elsewhere, which is exactly this workflow, and a deleted
+        column takes its data with it and does NOT go to the recycle bin.
+      - Group Map rows go WITH the segment: a row under a segment that no longer exists is a grant
+        nobody can see or manage while reconciliation keeps re-applying it. Folder Map rows go only
+        when the folders do — they are derivable, and rows without folders point at dead UniqueIds.
+      - Reversible by design: re-creating the row with the same `Title`, `TermSetGuid`,
+        `StagingFolder` and `Levels` restores the segment over folders that never moved.
   - **A DOCUMENT ALWAYS LANDS AT THE END OF THE CHAIN** (client rule, 2026-08-12). Every tier is
     built, and a tier with no value in a folder's path is a gap the admin fills — wherever it sits.
     Before this, `planLeaf` capped at the leaf's own depth, which made **adding a level at the BOTTOM

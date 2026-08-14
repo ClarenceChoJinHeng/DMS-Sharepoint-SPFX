@@ -12,9 +12,14 @@ import { IAccessProps } from "./IAccessProps";
  * a success message, and never learn the second exists — which is the state that leaves a unit
  * with two folder shapes indefinitely.
  *
- * "New segment" joins them rather than taking its own page for the same reason: what it creates is
+ * "Segments" joins them rather than taking its own page for the same reason: what it creates is
  * the same `Levels` chain the first tab edits, and the levels it names are the ones the second tab
  * would have to move. One page keeps the whole of a segment's shape in one place.
+ *
+ * That tab was "New segment" until 2026-08-14, when it gained the ability to DELETE one (spec
+ * `2026-08-14-delete-segment-design.md`). Deletion belongs beside creation rather than on "Folder
+ * levels", where a Delete button under a list of levels reads as "delete this level" — the most
+ * expensive misreading available on that screen, since removing a level triggers a migration.
  */
 const tab = (active: boolean): React.CSSProperties => ({
   background: "none",
@@ -73,7 +78,7 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
           Move existing folders
         </button>
         <button style={tab(view === "new")} onClick={() => go("new")}>
-          New segment
+          Segments
         </button>
       </div>
 

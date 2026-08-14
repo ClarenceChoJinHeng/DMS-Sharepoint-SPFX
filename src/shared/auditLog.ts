@@ -32,6 +32,7 @@ export const EVENT = {
   structureChanged: "StructureChanged",
   migrationRun: "MigrationRun",
   segmentCreated: "SegmentCreated",
+  segmentDeleted: "SegmentDeleted",
   abbreviationChanged: "AbbreviationChanged",
   policyChanged: "PolicyChanged",
   groupMapChanged: "GroupMapChanged",
@@ -60,6 +61,7 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.structureChanged]: "Folder structure changed",
   [EVENT.migrationRun]: "Folder migration run",
   [EVENT.segmentCreated]: "Segment created",
+  [EVENT.segmentDeleted]: "Segment deleted",
   [EVENT.abbreviationChanged]: "Abbreviation changed",
   [EVENT.policyChanged]: "File type policy changed",
   [EVENT.groupMapChanged]: "Group Map changed",
@@ -73,7 +75,7 @@ export const ALL_EVENT_TYPES: string[] = [
   EVENT.uploaded, EVENT.approved, EVENT.rejected, EVENT.routed, EVENT.deleted,
   EVENT.uploadRefused, EVENT.accessGranted, EVENT.accessRevoked,
   EVENT.reconciliationRun, EVENT.structureChanged, EVENT.migrationRun,
-  EVENT.segmentCreated, EVENT.abbreviationChanged, EVENT.policyChanged,
+  EVENT.segmentCreated, EVENT.segmentDeleted, EVENT.abbreviationChanged, EVENT.policyChanged,
   EVENT.groupMapChanged, EVENT.groupCreated, EVENT.groupDeleted, EVENT.membersChanged,
 ];
 

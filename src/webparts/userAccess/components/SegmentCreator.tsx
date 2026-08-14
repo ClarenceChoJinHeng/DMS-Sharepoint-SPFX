@@ -5,10 +5,21 @@ import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, sanitizeFolderSegment } from "../../../shared/formModel";
 import { effectiveOnDemandTiers } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, libraryTitle, LIST_SUFFIX } from "../../../shared/naming";
+// libraryUrlSegment, NOT libraryTitle, for anything that builds a PATH: the two differ
+// ("Approval Document" vs "/ApprovalDocument") and the title fails silently in a URL — gotcha #12.
+import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
+import {
+  SegmentCounts,
+  canOfferFolderDelete,
+  confirmationMatches,
+  deletionSummary,
+  needsTypedConfirmation,
+  survivorLines,
+  unknownCounts,
+} from "../../../shared/segmentDeletion";
 import {
   buildSegmentLevels,
   columnNameFor,
@@ -126,6 +137,14 @@ export default function SegmentCreator({
   const [below, setBelow] = useState<Level[]>([]);
   const [newTier, setNewTier] = useState("");
 
+  // Deletion. `delCounts === undefined` means "still counting" — distinct from a count that
+  // finished and came back unknown, which is a state the dialog has to render differently.
+  const [deleting, setDeleting] = useState<ExistingSegment | undefined>(undefined);
+  const [delCounts, setDelCounts] = useState<SegmentCounts | undefined>(undefined);
+  const [delFolders, setDelFolders] = useState(false);
+  const [delTyped, setDelTyped] = useState("");
+  const [delLog, setDelLog] = useState<string[]>([]);
+
   const [check, setCheck] = useState<SetCheck>({ state: "blank" });
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState("");
@@ -149,18 +168,23 @@ export default function SegmentCreator({
       await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
       const config = encodeURIComponent(cachedListTitle(LIST_SUFFIX.config));
 
+      // Id and TermSetGuid are for DELETION: the item id to remove the row, the term-set GUID to
+      // find the segment's Group Map rows (a folder row's Segment holds it). Creation needs
+      // neither — see ExistingSegment.
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${config}')/items` +
-          `?$select=Title,ModeLabel,StagingFolder,SortOrder&$filter=ConfigType eq 'mode'&$top=200`,
+          `?$select=Id,Title,ModeLabel,StagingFolder,SortOrder,TermSetGuid&$filter=ConfigType eq 'mode'&$top=200`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (!res.ok) throw new Error(`the configuration list returned HTTP ${res.status}`);
       const rows = ((await res.json()).value ?? []) as Array<{
+        Id?: number;
         Title?: string;
         ModeLabel?: string;
         StagingFolder?: string;
         SortOrder?: number;
+        TermSetGuid?: string;
       }>;
       setExisting(
         rows.map((r) => ({
@@ -168,6 +192,8 @@ export default function SegmentCreator({
           label: (r.ModeLabel ?? r.Title ?? "").trim(),
           stagingFolder: (r.StagingFolder ?? "").trim(),
           sortOrder: r.SortOrder,
+          itemId: r.Id,
+          termSetGuid: (r.TermSetGuid ?? "").trim(),
         })),
       );
 
@@ -477,6 +503,307 @@ export default function SegmentCreator({
     }
   };
 
+  /**
+   * Re-read the mode rows only.
+   *
+   * The mount effect also seeds the below-Unit tiers from the settings rows, which must NOT be
+   * re-run here: it would overwrite whatever the admin has typed into the create form while the
+   * delete dialog was open.
+   */
+  const reload = async (): Promise<void> => {
+    const config = encodeURIComponent(cachedListTitle(LIST_SUFFIX.config));
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${config}')/items` +
+        `?$select=Id,Title,ModeLabel,StagingFolder,SortOrder,TermSetGuid&$filter=ConfigType eq 'mode'&$top=200`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) return;
+    const rows = ((await res.json()).value ?? []) as Array<{
+      Id?: number;
+      Title?: string;
+      ModeLabel?: string;
+      StagingFolder?: string;
+      SortOrder?: number;
+      TermSetGuid?: string;
+    }>;
+    setExisting(
+      rows.map((r) => ({
+        key: (r.Title ?? "").trim(),
+        label: (r.ModeLabel ?? r.Title ?? "").trim(),
+        stagingFolder: (r.StagingFolder ?? "").trim(),
+        sortOrder: r.SortOrder,
+        itemId: r.Id,
+        termSetGuid: (r.TermSetGuid ?? "").trim(),
+      })),
+    );
+  };
+
+  /* ── Delete a segment ──────────────────────────────────────────────────────────
+     Spec: docs/superpowers/specs/2026-08-14-delete-segment-design.md
+
+     Delete RETIRES a segment: the mode row plus its Group Map rows. It touches no document and
+     no column. Deleting the folders is a separate opt-in, off by default, because that is the
+     only irreversible half — and even that goes to the recycle bin.
+
+     The rules that decide what may be offered live in shared/segmentDeletion.ts, tested, because
+     the failure here is not a wrong number on screen: it is an archive nobody could confirm was
+     empty being deleted. */
+
+  /** Every subfolder path beneath `root`, depth-first. Throws — the caller reports `unknown`. */
+  const walkFolders = async (lib: string, root: string): Promise<string[]> => {
+    const found: string[] = [];
+    const queue = [`${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`];
+    while (queue.length > 0 && found.length < 5000) {
+      const here = queue.shift() as string;
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Folders?@f='${encodeURIComponent(here)}'&$select=ServerRelativeUrl,Name`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      // 404 = this branch does not exist in this library, which is not an error: a segment can
+      // have folders in one library and not the other.
+      if (res.status === 404) continue;
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const kids = ((await res.json()).value ?? []) as Array<{ ServerRelativeUrl?: string; Name?: string }>;
+      for (const k of kids) {
+        const url = (k.ServerRelativeUrl ?? "").trim();
+        // Forms is SharePoint's own; it is not part of anyone's segment.
+        if (!url || (k.Name ?? "") === "Forms") continue;
+        found.push(url);
+        queue.push(url);
+      }
+    }
+    return found;
+  };
+
+  /** Files directly in one folder. Throws — the caller reports `unknown`. */
+  const countFiles = async (folderUrl: string): Promise<number> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Files/$count?@f='${encodeURIComponent(folderUrl)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (res.status === 404) return 0;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return Number(await res.text()) || 0;
+  };
+
+  /**
+   * The Group Map rows carrying this segment.
+   *
+   * Matched on the term-set GUID, which is what a folder-scope row stores in `Segment`.
+   */
+  const loadSegmentGroupMapRows = async (seg: ExistingSegment): Promise<number[]> => {
+    const guid = (seg.termSetGuid ?? "").trim();
+    if (!guid) return [];
+    const list = encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap));
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${list}')/items?$select=Id,Segment&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = ((await res.json()).value ?? []) as Array<{ Id: number; Segment?: string }>;
+    return rows
+      .filter((r) => (r.Segment ?? "").trim().toLowerCase() === guid.toLowerCase())
+      .map((r) => r.Id);
+  };
+
+  /**
+   * Count what a segment holds, across BOTH libraries, plus its Group Map rows.
+   *
+   * Any failure makes the whole count `unknown` rather than a partial number. A partial count is
+   * worse than none here: it would read as authoritative and could show "0 documents" for a
+   * segment whose second library simply did not answer.
+   */
+  const countSegment = async (seg: ExistingSegment): Promise<SegmentCounts> => {
+    const root = (seg.stagingFolder ?? "").trim();
+    if (!root) {
+      return unknownCounts("this segment has no top folder recorded, so its folders cannot be found");
+    }
+    let folders = 0;
+    let documents = 0;
+    try {
+      for (const lib of [libraryUrlSegment(), DOCUMENTS_LIST_TITLE]) {
+        const rootUrl = `${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`;
+        documents += await countFiles(rootUrl);
+        const subs = await walkFolders(lib, root);
+        folders += subs.length;
+        for (const f of subs) documents += await countFiles(f);
+      }
+    } catch (e) {
+      return unknownCounts(`the folders could not be read (${(e as Error).message})`);
+    }
+
+    // The Group Map read is separate and NOT fatal to the count: a segment can have unreadable
+    // folders and readable rows, or the reverse. An unreadable Group Map is reported as unknown
+    // too, because deleting rows we could not see is the same class of blind act.
+    let groupMapRows = 0;
+    try {
+      const rows = await loadSegmentGroupMapRows(seg);
+      groupMapRows = rows.length;
+    } catch (e) {
+      return unknownCounts(`the ${cachedListTitle(LIST_SUFFIX.groupMap)} list could not be read (${(e as Error).message})`);
+    }
+    return { state: "counted", folders, documents, groupMapRows };
+  };
+
+  const deleteItem = async (listTitle: string, itemId: number): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "IF-MATCH": "*",
+          "X-HTTP-Method": "DELETE",
+        },
+      },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  };
+
+  /** Recycle (not purge) a folder, so it is restorable for 93 days — see the dialog's promise. */
+  const recycleFolder = async (lib: string, root: string): Promise<boolean> => {
+    const url = `${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`;
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Recycle()?@f='${encodeURIComponent(url)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (res.status === 404) return false;
+    if (!res.ok) throw new Error(`${lib}: HTTP ${res.status}`);
+    return true;
+  };
+
+  const openDelete = (seg: ExistingSegment): void => {
+    setDeleting(seg);
+    setDelCounts(undefined);
+    setDelFolders(false);
+    setDelTyped("");
+    setDelLog([]);
+    countSegment(seg)
+      .then(setDelCounts)
+      .catch((e) => setDelCounts(unknownCounts((e as Error).message)));
+  };
+
+  const onDelete = async (): Promise<void> => {
+    if (!deleting || !delCounts) return;
+    const seg = deleting;
+    const alsoFolders = delFolders && canOfferFolderDelete(delCounts);
+    setBusy(true);
+    const lines: string[] = [];
+    let ok = true;
+    try {
+      // 1. Group Map rows. A row under a segment that no longer exists is a grant nobody can see
+      //    or manage, while reconciliation keeps re-applying it.
+      let rowsRemoved = 0;
+      let rowIds: number[] = [];
+      try {
+        rowIds = await loadSegmentGroupMapRows(seg);
+      } catch (e) {
+        lines.push(`Could not read the folder-access mappings (${(e as Error).message}) — none were removed.`);
+        ok = false;
+      }
+      for (const id of rowIds) {
+        try {
+          await deleteItem(cachedListTitle(LIST_SUFFIX.groupMap), id);
+          rowsRemoved++;
+        } catch {
+          ok = false;
+        }
+      }
+      if (rowIds.length > 0) {
+        lines.push(`Folder-access mappings removed: ${rowsRemoved} of ${rowIds.length}.`);
+      }
+
+      // 2. The mode row. If THIS fails, stop: a run that removed the grants but left the segment
+      //    live is a segment whose uploaders have quietly lost their access.
+      if (seg.itemId === undefined) throw new Error("this segment's configuration row has no id, so it cannot be deleted");
+      await deleteItem(cachedListTitle(LIST_SUFFIX.config), seg.itemId);
+      lines.push("The segment is no longer offered in the upload form, and reconciliation will not walk it.");
+
+      // 3. Folders, only if asked. After the row, never before — see the spec's D6.
+      if (alsoFolders) {
+        const root = (seg.stagingFolder ?? "").trim();
+        for (const lib of [libraryUrlSegment(), DOCUMENTS_LIST_TITLE]) {
+          try {
+            const went = await recycleFolder(lib, root);
+            lines.push(went ? `${lib}/${root} moved to the recycle bin.` : `${lib}/${root} did not exist.`);
+          } catch (e) {
+            lines.push(`Could not delete ${lib}/${root} — ${(e as Error).message}`);
+            ok = false;
+          }
+        }
+        // Folder Map rows are derivable, so they go exactly when the folders do — otherwise they
+        // point at UniqueIds that no longer resolve.
+        try {
+          const list = encodeURIComponent(cachedListTitle(LIST_SUFFIX.folderMap));
+          const res: SPHttpClientResponse = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${list}')/items?$select=Id,Section&$top=5000`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (res.ok) {
+            const rows = ((await res.json()).value ?? []) as Array<{ Id: number; Section?: string }>;
+            const mine = rows.filter(
+              (r) => (r.Section ?? "").trim().toLowerCase() === root.toLowerCase(),
+            );
+            let gone = 0;
+            for (const r of mine) {
+              try { await deleteItem(cachedListTitle(LIST_SUFFIX.folderMap), r.Id); gone++; } catch { ok = false; }
+            }
+            if (mine.length > 0) lines.push(`Folder Map rows removed: ${gone} of ${mine.length}.`);
+          }
+        } catch {
+          lines.push("The Folder Map rows could not be tidied up; reconciliation will report them.");
+          ok = false;
+        }
+      }
+
+      lines.push(...survivorLines(alsoFolders));
+      if (rowsRemoved > 0) {
+        lines.push("Folder permissions stay in place until Folder Reconciliation runs.");
+      }
+      setDelLog(lines);
+      setResult({
+        ok,
+        text: ok
+          ? `"${seg.label}" deleted. ${deletionSummary(delCounts, alsoFolders)}`
+          : `"${seg.label}" was deleted, but not everything succeeded — see below.`,
+      });
+
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.segmentDeleted,
+        outcome: ok ? "Success" : "Failed",
+        source: "SegmentCreator",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        segment: seg.label,
+        summary: `Segment deleted — ${seg.label} (${seg.stagingFolder})`,
+        details: [
+          `Key: ${seg.key}`,
+          `Top folder: ${seg.stagingFolder}`,
+          `Folders deleted: ${alsoFolders ? "YES — moved to the recycle bin" : "no"}`,
+          delCounts.state === "counted"
+            ? `Counted before deleting: ${delCounts.folders} folder(s), ${delCounts.documents} document(s), ${delCounts.groupMapRows} mapping(s)`
+            : `Counts were UNKNOWN before deleting (${delCounts.reason ?? "unreadable"})`,
+          ...lines,
+        ],
+      }).catch(() => undefined);
+
+      setDeleting(undefined);
+      await reload();
+    } catch (e) {
+      setDelLog([...lines, `Stopped: ${(e as Error).message}`]);
+      setResult({ ok: false, text: `"${seg.label}" was NOT deleted — ${(e as Error).message}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   /* ── Render ────────────────────────────────────────────────────────────────── */
 
   const key = modeKeyFor(label);
@@ -487,12 +814,164 @@ export default function SegmentCreator({
 
   if (!loaded) return <p style={{ fontSize: 13, color: "#605e5c" }}>Loading&hellip;</p>;
 
+  const typedOk =
+    delCounts !== undefined &&
+    deleting !== undefined &&
+    (!needsTypedConfirmation(delCounts, delFolders) || confirmationMatches(delTyped, deleting.label));
+
   return (
     <div>
       {loadError && (
         <div style={{ ...s.msg, ...s.err }}>
           Could not read the existing segments — {loadError}. Adding one now risks a duplicate name
           or a shared top folder, so fix that first.
+        </div>
+      )}
+
+      {/* ── The segments that exist, each removable ─────────────────────────────
+          Spec: 2026-08-14-delete-segment-design.md. Delete RETIRES the segment; it deletes no
+          document and no column unless the folder option is ticked in the dialog. */}
+      {existing.length > 0 && (
+        <div style={s.card}>
+          <p style={s.h}>Segments on this site ({existing.length})</p>
+          {existing.map((seg) => (
+            <div key={seg.key} style={{ ...s.tierRow, background: "#fff", border: "1px solid #f0f0f0" }}>
+              <span style={s.tierName}>{seg.label || seg.key}</span>
+              <span style={s.tierMeta}>
+                top folder <strong>{seg.stagingFolder || "—"}</strong>
+              </span>
+              <button
+                style={s.danger}
+                disabled={busy || seg.itemId === undefined}
+                title={
+                  seg.itemId === undefined
+                    ? "This row has no id, so it cannot be deleted from here."
+                    : "Remove this segment"
+                }
+                onClick={() => openDelete(seg)}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+          <p style={s.hint}>
+            Deleting a segment stops it being offered and removes its folder-access mappings. It
+            does not delete any document, and never deletes a column.
+          </p>
+        </div>
+      )}
+
+      {delLog.length > 0 && (
+        <div style={{ ...s.msg, ...s.ok }}>
+          {delLog.map((line, i) => (
+            <div key={i} style={{ marginBottom: 3 }}>{line}</div>
+          ))}
+        </div>
+      )}
+
+      {deleting !== undefined && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setDeleting(undefined)}
+        >
+          <div
+            style={{ background: "#fff", borderRadius: 8, padding: 20, width: "min(600px, 92vw)", maxHeight: "86vh", overflowY: "auto" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p style={{ ...s.h, fontSize: 15 }}>Delete &quot;{deleting.label}&quot;?</p>
+
+            {delCounts === undefined && (
+              <p style={{ fontSize: 13, color: "#605e5c" }}>Counting what this segment holds&hellip;</p>
+            )}
+
+            {delCounts !== undefined && (
+              <>
+                <p style={{ fontSize: 13, margin: "0 0 10px" }}>
+                  The segment stops being offered in the upload form, and Folder Reconciliation
+                  stops walking it.
+                </p>
+
+                {delCounts.state === "counted" ? (
+                  <p style={{ fontSize: 13, margin: "0 0 10px" }}>
+                    It currently holds <strong>{delCounts.folders}</strong> folder
+                    {delCounts.folders === 1 ? "" : "s"} and{" "}
+                    <strong>{delCounts.documents}</strong> document
+                    {delCounts.documents === 1 ? "" : "s"} across both libraries, and{" "}
+                    <strong>{delCounts.groupMapRows}</strong> folder-access mapping
+                    {delCounts.groupMapRows === 1 ? "" : "s"}.
+                  </p>
+                ) : (
+                  /* Withholding the folder option is not enough on its own — an unexplained
+                     missing checkbox reads as a broken page. Say which read failed. */
+                  <div style={{ ...s.msg, ...s.warn, marginBottom: 10 }}>
+                    Could not count what this segment holds — {delCounts.reason}. You can still
+                    remove the segment, but <strong>deleting its folders is not offered</strong>,
+                    because nothing here can confirm they are empty. Delete them by hand in
+                    SharePoint if you need to.
+                  </div>
+                )}
+
+                {canOfferFolderDelete(delCounts) && (
+                  <label style={{ display: "block", fontSize: 13, margin: "0 0 10px", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={delFolders}
+                      disabled={busy}
+                      onChange={(e) => setDelFolders(e.target.checked)}
+                      style={{ marginRight: 8 }}
+                    />
+                    Also delete the folders{delCounts.documents > 0
+                      ? ` — including ${delCounts.documents} document${delCounts.documents === 1 ? "" : "s"}`
+                      : " (they are empty)"}
+                  </label>
+                )}
+
+                <div style={{ ...s.msg, ...s.ok, marginBottom: 10 }}>
+                  <strong>What survives</strong>
+                  {survivorLines(delFolders && canOfferFolderDelete(delCounts)).map((line, i) => (
+                    <div key={i} style={{ marginTop: 4 }}>{line}</div>
+                  ))}
+                </div>
+
+                {delCounts.groupMapRows > 0 && (
+                  <div style={{ ...s.msg, ...s.warn, marginBottom: 10 }}>
+                    Removing the mappings is not removing the access.{" "}
+                    <strong>
+                      The folder permissions they granted stay in place until Folder Reconciliation
+                      runs.
+                    </strong>
+                  </div>
+                )}
+
+                {needsTypedConfirmation(delCounts, delFolders) && (
+                  <>
+                    <label style={s.label}>
+                      Type <strong>{deleting.label}</strong> to confirm
+                    </label>
+                    <input
+                      style={s.input}
+                      value={delTyped}
+                      disabled={busy}
+                      onChange={(e) => setDelTyped(e.target.value)}
+                    />
+                  </>
+                )}
+
+                <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+                  <button
+                    style={typedOk && !busy ? s.danger : s.off}
+                    disabled={!typedOk || busy}
+                    onClick={() => { onDelete().catch(() => undefined); }}
+                  >
+                    {busy ? "Deleting…" : "Delete segment"}
+                  </button>
+                  <button style={s.ghost} disabled={busy} onClick={() => setDeleting(undefined)}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 

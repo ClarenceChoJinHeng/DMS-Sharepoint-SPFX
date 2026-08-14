@@ -3784,7 +3784,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       {/*
         One home for folder administration — spec `2026-08-12-term-abbreviation-page-design.md` §6.
         The order is the order the work happens in: name the terms, shape the levels, move what is
-        already filed, reconcile. New segment sits last because it is the rarest.
+        already filed, reconcile. Segments sits last because it is the rarest — it both creates a
+        segment and, since 2026-08-14, deletes one.
 
         `Staging` and `Documents` are gone (client, 2026-08-12: "I am honestly not using it"). They
         were a manual folder tree — reconciliation and the Folder Access page now cover it from data.
@@ -3796,7 +3797,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             ["Levels",         "Folder levels"],
             ["Migrate",        "Move existing folders"],
             ["Reconciliation", "Folder Reconciliation"],
-            ["NewSegment",     "New segment"],
+            ["NewSegment",     "Segments"],
           ] as Array<[Tab, string]>).map(([t, label], i, arr) => (
             <button key={t}
               onClick={() => {
