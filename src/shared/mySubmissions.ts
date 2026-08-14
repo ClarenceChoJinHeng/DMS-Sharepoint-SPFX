@@ -30,9 +30,55 @@ export interface Submission {
   status: SubmissionStatus;
   /** When it was uploaded. Auto-route preserves `Created`, so this survives the move. */
   created?: Date;
-  documentType: string;
   /** The approver's rejection comment; "" when there is none or it could not be read. */
   comment: string;
+  // NOTE: no metadata here, deliberately. The full field set is only readable through
+  // FieldValuesAsText, which is a PER-ITEM endpoint — one request per row would mean hundreds on
+  // a list this long, and the raw $select returns a lookup id (a bare `15` reached the screen on
+  // 2026-08-14). Metadata belongs to the detail view, which reads one item at a time.
+}
+
+/**
+ * Coerce whatever SharePoint returned into text.
+ *
+ * NOT a nicety — this is the fix for a live crash on 2026-08-14. `Document Type` is a managed
+ * metadata (taxonomy) column: values are WRITTEN as `"Label|GUID"` (gotcha #5) and read back under
+ * `odata=nometadata` as an OBJECT, `{ Label, TermGuid, WssId }`. So `(value ?? "").trim()` called
+ * `.trim` on an object and took the whole page down with *"(intermediate value).trim is not a
+ * function"* — an error naming no field at all. The typed `string` in the row interface was actively
+ * misleading here: TypeScript was satisfied and the runtime was not.
+ *
+ * Handles every shape a SharePoint field can arrive in, not just the one that broke, so the next
+ * taxonomy column added to this page cannot repeat it. Anything unrecognised becomes "" — a blank
+ * cell, never a crash.
+ */
+export function textOf(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number" || typeof v === "boolean") return `${v}`;
+  // Taxonomy single-value is { Label, TermGuid, WssId }; multi-value is an array of them.
+  if (Array.isArray(v)) return v.map((x) => textOf(x)).filter((x) => x.length > 0).join("; ");
+  const label = (v as { Label?: unknown }).Label;
+  if (typeof label === "string") return label.trim();
+  return "";
+}
+
+/**
+ * Read a field that may arrive under a double-encoded key.
+ *
+ * SharePoint's OData layer double-encodes underscores in property names, so a column whose internal
+ * name already contains an encoded character comes back renamed: `Document_x0020_Type` (where
+ * `_x0020_` is a space) arrives as `Document_x005f_x0020_x005f_Type`. Reading only the name you
+ * wrote yields `undefined` — a permanently blank column, with no error anywhere to explain it.
+ *
+ * The same shape as `pick` in ApprovalDocument.tsx, which met this first.
+ */
+export function pickField(row: Record<string, unknown>, ...keys: string[]): string {
+  for (const k of keys) {
+    const hit = textOf((row ?? {})[k]);
+    if (hit.length > 0) return hit;
+  }
+  return "";
 }
 
 /**

@@ -4,9 +4,11 @@ import {
   filterByTab,
   folderTrail,
   formatSubmittedOn,
+  pickField,
   sortNewestFirst,
   statusToDecision,
   submissionKey,
+  textOf,
   trailText,
 } from "./mySubmissions";
 
@@ -19,11 +21,72 @@ function sub(over: Partial<Submission> = {}): Submission {
     name: "q1.pdf",
     fileRef: "/sites/Example/ApprovalDocument/NBPOLHO/CDS/UPSUPPORT/2024/Tax Return/q1.pdf",
     status: "Pending",
-    documentType: "Tax Return",
     comment: "",
     ...over,
   };
 }
+
+// The live crash of 2026-08-14: "(intermediate value).trim is not a function", which took the whole
+// page down and named no field. Document Type is managed metadata, so it arrives as an OBJECT.
+describe("textOf — the fix for a page that would not load", () => {
+  it("reads a TAXONOMY object, which is what broke it", () => {
+    expect(textOf({ Label: "Working File", TermGuid: "abc", WssId: 12 })).toBe("Working File");
+  });
+
+  it("does not throw on the object shape that used to crash", () => {
+    // The old code was (value ?? "").trim() — .trim on an object.
+    expect(() => textOf({ Label: "x" })).not.toThrow();
+    expect(() => textOf({})).not.toThrow();
+  });
+
+  it("still reads a plain string, trimmed", () => {
+    expect(textOf("  Tax Return  ")).toBe("Tax Return");
+  });
+
+  it("treats null and undefined as blank rather than as text", () => {
+    expect(textOf(undefined)).toBe("");
+    expect(textOf(null)).toBe("");
+    // Never the strings "null"/"undefined" in a cell.
+    expect(textOf(null)).not.toBe("null");
+  });
+
+  it("handles numbers, so a numeric column is shown rather than blanked", () => {
+    expect(textOf(0)).toBe("0");
+    expect(textOf(42)).toBe("42");
+  });
+
+  it("joins a MULTI-value taxonomy field", () => {
+    expect(textOf([{ Label: "A" }, { Label: "B" }])).toBe("A; B");
+  });
+
+  it("returns blank for a shape it does not recognise — a blank cell, never a crash", () => {
+    expect(textOf({ Nope: 1 })).toBe("");
+    expect(textOf({ Label: 7 })).toBe("");
+  });
+});
+
+describe("pickField — the double-encoded key", () => {
+  it("finds the plain key", () => {
+    expect(pickField({ Document_x0020_Type: "Tax Return" }, "Document_x0020_Type")).toBe("Tax Return");
+  });
+
+  it("finds the DOUBLE-ENCODED key SharePoint may return instead", () => {
+    // The OData layer re-encodes the underscore in an already-encoded internal name. Reading only
+    // the name we wrote yields undefined — a permanently blank column with no error to explain it.
+    const row = { Document_x005f_x0020_x005f_Type: { Label: "Working File" } };
+    expect(pickField(row, "Document_x0020_Type", "Document_x005f_x0020_x005f_Type")).toBe("Working File");
+  });
+
+  it("prefers the first key that actually has a value", () => {
+    const row = { A: "", B: "second" };
+    expect(pickField(row, "A", "B")).toBe("second");
+  });
+
+  it("returns blank when no key matches, and survives a missing row", () => {
+    expect(pickField({}, "A", "B")).toBe("");
+    expect(pickField(undefined as unknown as Record<string, unknown>, "A")).toBe("");
+  });
+});
 
 describe("status mapping is NOT redefined here", () => {
   it("re-exports the approver's own mapping", () => {

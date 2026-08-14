@@ -863,6 +863,29 @@ Client, for the uploaders: it is difficult to track what you uploaded. Web part 
   states, as everywhere else in this codebase.
 - Row keys are `library#itemId`: item ids repeat ACROSS libraries, and keying on the id alone drops a
   row silently.
+- **FOUR bugs found on the first site test (2026-08-14), all worth remembering:**
+  1. **`Document Type` is MANAGED METADATA, so `$select` returns an OBJECT** (`{Label, TermGuid,
+     WssId}`) or a bare lookup id. `(v ?? "").trim()` on it threw *"(intermediate value).trim is not
+     a function"* and killed the whole page with an error naming no field. Every SharePoint field now
+     goes through `textOf()`. **The row interface typed `string` was the real culprit:** it made
+     TypeScript vouch for what SharePoint does not guarantee, so the build was green and the runtime
+     was not. `RawRow` is an index signature now, deliberately.
+  2. **`FSObjType eq 0` was missing, so FOLDERS were listed as submissions** — 443 rows on the test
+     site, and clicking one "opened the document library" because a folder's link IS a library link.
+     That was the reported symptom; the folder bug was the cause. Note `FSObjType`, not
+     `FileSystemObjectType` — the REST name is rejected in a `$filter`.
+  3. **`Documents` has the URL segment `Shared Documents`**, so a hardcoded `"Documents"` left
+     "Shared Documents" at the head of every approved file's folder trail. Gotcha #12 again; the
+     segment is now read off `RootFolder/ServerRelativeUrl`, falling back to the title.
+  4. **`FieldValuesAsText` is a PER-ITEM endpoint** (as ApprovalDocument already knew), so the list
+     cannot show metadata at all without one request per row. Metadata therefore lives ONLY in the
+     detail view — which is also what turns a taxonomy value into a readable LABEL instead of `15`.
+- **Clicking a file opens an IN-PAGE detail view** (2026-08-14, client: *"client wants the file to be
+  open inside the page… like the current approvaldocument.aspx"*): preview on the left, metadata on
+  the right, Back at the top, rejection reason called out. The preview reuses `previewTarget` from
+  `shared/filePreview.ts` rather than re-guessing — the case that bites is invisible until it does,
+  since SharePoint serves an Office file as a DOWNLOAD and a raw URL in an iframe renders nothing.
+  Images fit to WIDTH and scroll, the same fix the approval page needed.
 - **Provisioning:** index **`Created By`** on `Documents`. Past 5,000 items the `AuthorId` filter
   starts failing; the symptom is the error state rather than silence, but it is still a five-minute
   fix that has to be remembered.

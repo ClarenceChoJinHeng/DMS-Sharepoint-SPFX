@@ -25,13 +25,20 @@ import {
   filterByTab,
   folderTrail,
   formatSubmittedOn,
+  pickField,
   sortNewestFirst,
   statusToDecision,
   submissionKey,
+  textOf,
   trailText,
 } from "../../../shared/mySubmissions";
 import { libraryTitle, libraryUrlSegment } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+// The preview strategy is ALREADY built and tested for the approval page: PDF, Office Online,
+// image, text, and an honest refusal. Reusing it rather than re-guessing, because the case that
+// matters is invisible until it bites — SharePoint serves an Office file as a DOWNLOAD, so a raw
+// URL in an iframe renders nothing at all.
+import { previewTarget } from "../../../shared/filePreview";
 
 const DOCUMENTS = "Documents";
 const TABS = ["All", "Pending", "Approved", "Rejected"];
@@ -58,6 +65,21 @@ const s: Record<string, React.CSSProperties> = {
   empty:    { fontSize: 13, color: "#605e5c", padding: "28px 4px", lineHeight: 1.6 },
   errBox:   { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #f1c9c9", background: "#fdf3f3", color: "#a4262c", lineHeight: 1.55, marginBottom: 16 },
   note:     { fontSize: 12, color: "#605e5c", marginTop: 24, paddingTop: 12, borderTop: "1px solid #f0f0f0", lineHeight: 1.55 },
+  // A button styled as a link: it opens the in-page detail view, so it must not look or behave
+  // like navigation away from the page.
+  nameBtn:  { background: "none", border: "none", padding: 0, font: "inherit", fontWeight: 600, fontSize: 13, color: "#0f6cbd", cursor: "pointer", textAlign: "left" },
+  // ── Detail view ──
+  backBand: { background: "rgba(15, 108, 63, 0.08)", borderRadius: 4, padding: "10px 16px", marginBottom: 20 },
+  backLink: { background: "none", border: "none", padding: 0, font: "inherit", fontSize: 14, fontWeight: 600, color: "#0f6c3f", cursor: "pointer" },
+  // minmax(0, 1fr) on the preview column: a bare 1fr floors at the iframe's min-content width, so
+  // the preview could never give ground. Learned on the approval page.
+  detailGrid:  { display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 20, alignItems: "start" },
+  sectionTitle:{ fontSize: 14, fontWeight: 600, color: "#201f1e", marginBottom: 10 },
+  detailRow:   { marginBottom: 12 },
+  detailLabel: { fontSize: 11, fontWeight: 600, color: "#605e5c", textTransform: "uppercase", letterSpacing: 0.3 },
+  detailValue: { fontSize: 13, color: "#201f1e", marginTop: 2, overflowWrap: "break-word" },
+  imageBox:    { display: "flex", alignItems: "flex-start", justifyContent: "center", width: "100%", height: "calc(100vh - 320px)", minHeight: 520, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "auto", padding: 12, boxSizing: "border-box" },
+  rejectBox:   { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #f1b0b3", background: "#fde7e9", color: "#a4262c", lineHeight: 1.55, marginBottom: 16 },
 };
 
 function badgeFor(status: string): React.CSSProperties {
@@ -66,23 +88,43 @@ function badgeFor(status: string): React.CSSProperties {
   return { ...s.badge, ...s.bPending };
 }
 
-/** A row as the reads return it. Field names are internal names, exactly. */
-interface RawRow {
-  Id: number;
-  FileLeafRef?: string;
-  FileRef?: string;
-  Created?: string;
-  OData__ModerationStatus?: number;
-  OData__ModerationComments?: string;
-  Document_x0020_Type?: string;
-}
+/**
+ * A row as the reads return it.
+ *
+ * An INDEX SIGNATURE, not a typed shape. Two reasons, both learned the hard way on 2026-08-14:
+ *
+ * 1. SharePoint's OData layer double-encodes underscores, so `Document_x0020_Type` can arrive as
+ *    `Document_x005f_x0020_x005f_Type` — a key a fixed interface cannot even name.
+ * 2. Declaring these fields `string` made TypeScript vouch for something SharePoint does not
+ *    guarantee. `Document Type` is managed metadata and arrives as an OBJECT, so `.trim()` on it
+ *    crashed the page while the build stayed green. A lie in a type is worse than no type.
+ *
+ * Everything is therefore read through `textOf` / `pickField`, which coerce what actually arrives.
+ */
+type RawRow = Record<string, unknown>;
 
 export default function MySubmissions({ context }: IMySubmissionsProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
+  // Origin with no /sites/… — a server-relative path already carries the site, so previewTarget
+  // needs the bare host to build an absolute file URL.
+  const tenantRoot = siteUrl.replace(/^(https?:\/\/[^/]+).*$/, "$1");
   const [tab, setTab] = useState("All");
   const [rows, setRows] = useState<Submission[] | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [commentsMissing, setCommentsMissing] = useState(false);
+  /**
+   * The Documents library's real URL SEGMENT, resolved rather than assumed.
+   *
+   * Its title is `Documents` and its URL is `/Shared Documents/` — the two differ, exactly as they
+   * do for the approval library (gotcha #12). Hardcoding one string for both put "Shared Documents"
+   * at the front of every approved file's folder trail. Defaults to the title so a failed read
+   * degrades to the old behaviour rather than to nothing.
+   */
+  const [docsSegment, setDocsSegment] = useState(DOCUMENTS);
+  /** The row being examined. `undefined` = the list. */
+  const [open, setOpen] = useState<Submission | undefined>(undefined);
+  /** Per-item metadata labels for the open row. `undefined` while in flight. */
+  const [fieldText, setFieldText] = useState<Record<string, string> | undefined>(undefined);
 
   const currentUserId = async (): Promise<number> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
@@ -113,11 +155,19 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     userId: number,
   ): Promise<Submission[]> => {
     const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items`;
-    const common = "Id,FileLeafRef,FileRef,Created,Document_x0020_Type";
+    const common = "Id,FileLeafRef,FileRef,Created";
     const withStatus = approvalLibrary ? `${common},OData__ModerationStatus` : common;
+    // FSObjType eq 0 = FILES ONLY. Without it every folder the uploader ever caused to be
+    // created comes back as a "submission": 443 rows on the test site, and clicking one opened
+    // the library rather than a document, because a folder's link IS a library link. The uploader
+    // asked what happened to their FILES.
+    //
+    // FSObjType, not FileSystemObjectType: this is a $filter, and the REST name is rejected there
+    // the same way the CAML name is rejected in a $select (memory sp-caml-internal-vs-rest-field-names).
     const get = (select: string): Promise<SPHttpClientResponse> =>
       context.spHttpClient.get(
-        `${base}?$select=${select}&$filter=AuthorId eq ${userId}&$top=2000&$orderby=Created desc`,
+        `${base}?$select=${select}&$filter=AuthorId eq ${userId} and FSObjType eq 0` +
+          "&$top=2000&$orderby=Created desc",
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
@@ -137,28 +187,88 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     }
 
     const data = await res.json();
-    return ((data.value ?? []) as RawRow[]).map((r) => ({
-      itemId: r.Id,
-      library: urlSegment,
-      name: (r.FileLeafRef ?? "").trim(),
-      fileRef: (r.FileRef ?? "").trim(),
-      // Documents rows carry no status: they are there because they were approved.
-      status: approvalLibrary ? statusToDecision(Number(r.OData__ModerationStatus)) : "Approved",
-      created: r.Created ? new Date(r.Created) : undefined,
-      documentType: (r.Document_x0020_Type ?? "").trim(),
-      comment: (r.OData__ModerationComments ?? "").trim(),
-    }));
+    return ((data.value ?? []) as RawRow[]).map((r) => {
+      const createdRaw = textOf(r.Created);
+      return {
+        itemId: Number(r.Id),
+        library: urlSegment,
+        name: pickField(r, "FileLeafRef"),
+        fileRef: pickField(r, "FileRef"),
+        // Documents rows carry no status: they are there because they were approved.
+        status: approvalLibrary ? statusToDecision(Number(r.OData__ModerationStatus)) : "Approved",
+        created: createdRaw.length > 0 ? new Date(createdRaw) : undefined,
+        comment: pickField(r, "OData__ModerationComments", "OData__x005f_ModerationComments"),
+      };
+    });
+  };
+
+  /**
+   * The URL segment of a library, read off its own root folder.
+   *
+   * The only reliable source: a list's title and its URL are independent, and SharePoint never
+   * moves the URL on rename. Falls back to the title, which is what the code did before and is
+   * right on a site where they happen to match.
+   */
+  const resolveSegment = async (listTitle: string): Promise<string> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/RootFolder?$select=ServerRelativeUrl`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return listTitle;
+      const url = textOf((await res.json()).ServerRelativeUrl);
+      const last = url.split("/").filter((p) => p.length > 0).pop();
+      return last && last.length > 0 ? last : listTitle;
+    } catch {
+      return listTitle;
+    }
+  };
+
+  /**
+   * Metadata labels for one item, from FieldValuesAsText.
+   *
+   * PER-ITEM by nature, which is why the list does not show metadata at all: one request per row
+   * would be hundreds. Here it is one request for the one file being looked at.
+   *
+   * It also returns LABELS, not raw values — which is what makes a taxonomy field readable. The
+   * plain `$select` gives a lookup id, and a bare `15` reached the screen on 2026-08-14.
+   */
+  const loadFieldText = async (row: Submission): Promise<void> => {
+    setFieldText(undefined);
+    const listTitle = row.library === docsSegment ? DOCUMENTS : libraryTitle();
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${row.itemId})/FieldValuesAsText`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      // {} rather than undefined on failure: the detail view still shows the file and its status,
+      // and says the details could not be read. Labels are never worth blocking the preview for.
+      setFieldText(res.ok ? ((await res.json()) as Record<string, string>) : {});
+    } catch {
+      setFieldText({});
+    }
+  };
+
+  const openRow = (row: Submission): void => {
+    setOpen(row);
+    loadFieldText(row).catch(() => setFieldText({}));
   };
 
   useEffect(() => {
     const load = async (): Promise<void> => {
       await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      const segment = await resolveSegment(DOCUMENTS);
+      setDocsSegment(segment);
       const userId = await currentUserId();
       // Sequential, not Promise.all: per-call try/catch is required anyway because
       // Promise.allSettled is unavailable on this tsconfig target (CLAUDE.md #3), and either
       // library failing must produce the "could not read" state rather than a half list.
       const staging = await readLibrary(libraryTitle(), libraryUrlSegment(), true, userId);
-      const documents = await readLibrary(DOCUMENTS, DOCUMENTS, false, userId);
+      // The resolved segment, not the title — otherwise "Shared Documents" stays in every
+      // approved file's folder trail.
+      const documents = await readLibrary(DOCUMENTS, segment, false, userId);
       setRows(sortNewestFirst([...staging, ...documents]));
       setLoadError(undefined);
     };
@@ -172,7 +282,114 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
 
   const counts = countByStatus(rows ?? []);
   const shown = filterByTab(rows ?? [], tab);
-  const libs = [libraryUrlSegment(), DOCUMENTS];
+  const libs = [libraryUrlSegment(), docsSegment, DOCUMENTS];
+
+  /* ── The detail view ──────────────────────────────────────────────────────────
+     An INNER view, not a link out. The client's point: clicking a file used to leave the page for
+     the document library, which is the thing this page exists to save them from.
+
+     The preview strategy comes from shared/filePreview.ts — already built and tested for the
+     approval page, and already handling the case that matters: SharePoint serves an Office file as
+     a DOWNLOAD, so a raw URL in an iframe renders nothing at all. PDF, Office, image, text and an
+     honest refusal are each handled there rather than re-guessed here. */
+  if (open !== undefined) {
+    const preview = previewTarget(open.name, open.fileRef, tenantRoot, siteUrl);
+    // FieldValuesAsText keys arrive double-encoded, so each row asks for both spellings — the same
+    // reason pickField exists. Blank values are dropped rather than shown as empty rows.
+    const details: Array<[string, string]> = [
+      ["Document Type", pickField(fieldText ?? {}, "Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
+      ["Year", pickField(fieldText ?? {}, "Year", "Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
+      ["Document Date", pickField(fieldText ?? {}, "DocumentDate")],
+      ["Business Segment", pickField(fieldText ?? {}, "Business_x005f_x0020_x005f_Segment", "Business_x0020_Segment")],
+      ["Department", pickField(fieldText ?? {}, "Department")],
+      ["Unit", pickField(fieldText ?? {}, "Unit")],
+      ["Confidentiality", pickField(fieldText ?? {}, "Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
+      ["Legally Privileged", pickField(fieldText ?? {}, "LegallyPrivileged")],
+      ["Project Name", pickField(fieldText ?? {}, "ProjectName", "Project_x005f_x0020_x005f_Name")],
+      ["Vendor / Customer", pickField(fieldText ?? {}, "Vendor_x005f_x002f_x005f_CustomerName", "Vendor_x002f_CustomerName")],
+      ["Remark", pickField(fieldText ?? {}, "Remark")],
+    ].filter(([, v]) => v.length > 0) as Array<[string, string]>;
+
+    return (
+      <section style={s.wrap}>
+        <div style={s.backBand}>
+          <button style={s.backLink} onClick={() => { setOpen(undefined); setFieldText(undefined); }}>
+            ‹ Back to my submissions
+          </button>
+        </div>
+
+        <h2 style={s.h2}>{open.name}</h2>
+        <p style={s.sub}>
+          <span style={badgeFor(open.status)}>{open.status}</span>{" "}
+          &nbsp;Uploaded {formatSubmittedOn(open.created)} &nbsp;·&nbsp;{" "}
+          {trailText(folderTrail(open.fileRef, libs)) || "—"}
+        </p>
+
+        {open.status === "Rejected" && (
+          <div style={s.rejectBox}>
+            <strong>This file was rejected.</strong>{" "}
+            {open.comment
+              ? open.comment
+              : "No reason was recorded. Ask your approver what needs changing."}
+          </div>
+        )}
+
+        <div style={s.detailGrid}>
+          <div>
+            <div style={s.sectionTitle}>Preview</div>
+            {preview.kind === "image" ? (
+              // Fit to WIDTH and scroll, the same fix the approval page needed: fitting BOTH
+              // dimensions shrinks a tall screenshot to an unreadable sliver.
+              <div style={s.imageBox}>
+                <img src={preview.url} alt={open.name} style={{ maxWidth: "100%", height: "auto", display: "block" }} />
+              </div>
+            ) : preview.kind === "none" ? (
+              <div style={{ ...s.imageBox, alignItems: "center", justifyContent: "center", color: "#605e5c" }}>
+                <div style={{ textAlign: "center" }}>
+                  No preview is available for this file type.
+                  <div style={{ marginTop: 8 }}>
+                    <a style={s.link} href={preview.fileUrl} target="_blank" rel="noopener noreferrer">
+                      Open it in a new tab
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <iframe
+                src={preview.url}
+                style={{ width: "100%", height: "calc(100vh - 320px)", minHeight: 520, border: "1px solid #edebe9", borderRadius: 4, display: "block" }}
+                title={`Preview of ${open.name}`}
+                allowFullScreen
+              />
+            )}
+            <div style={{ marginTop: 6, textAlign: "right" }}>
+              <a style={s.link} href={preview.fileUrl} target="_blank" rel="noopener noreferrer">
+                Open in a new tab
+              </a>
+            </div>
+          </div>
+
+          <div>
+            <div style={s.sectionTitle}>Details</div>
+            {fieldText === undefined && <p style={s.empty}>Loading details&hellip;</p>}
+            {fieldText !== undefined && details.length === 0 && (
+              // Empty and unreadable look the same from here, so say the honest thing: the file and
+              // its status are still correct above, which is what the page is for.
+              <p style={{ fontSize: 12, color: "#605e5c", lineHeight: 1.5 }}>
+                No details were recorded for this file, or they could not be read.
+              </p>
+            )}
+            {details.map(([label, value]) => (
+              <div key={label} style={s.detailRow}>
+                <div style={s.detailLabel}>{label}</div>
+                <div style={s.detailValue}>{value}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section style={s.wrap}>
@@ -225,19 +442,18 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
               <th style={s.th}>File</th>
               <th style={s.th}>Status</th>
               <th style={s.th}>Uploaded</th>
-              <th style={s.th}>Type</th>
             </tr>
           </thead>
           <tbody>
             {shown.map((r) => (
               <tr key={submissionKey(r)}>
                 <td style={s.td}>
-                  {/* FileRef is already server-relative, so it is the href as it stands. A pending
-                      file is the uploader's OWN, so they can always open it — that is the author
-                      exception in Draft Item Security. */}
-                  <a style={s.link} href={r.fileRef} target="_blank" rel="noopener noreferrer">
+                  {/* A button, not a link. It opens the detail view INSIDE this page — the client's
+                      request, and the fix for a click that used to land the uploader in the
+                      document library. The file itself is still one click further, from there. */}
+                  <button style={s.nameBtn} onClick={() => openRow(r)}>
                     {r.name}
-                  </a>
+                  </button>
                   <div style={s.trail}>{trailText(folderTrail(r.fileRef, libs)) || "—"}</div>
                   {r.status === "Rejected" && (
                     <div style={s.comment}>
@@ -251,7 +467,6 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                   <span style={badgeFor(r.status)}>{r.status}</span>
                 </td>
                 <td style={s.td}>{formatSubmittedOn(r.created)}</td>
-                <td style={s.td}>{r.documentType || "—"}</td>
               </tr>
             ))}
           </tbody>
