@@ -7,7 +7,6 @@ import {
   isDuplicateRow,
   validateDraft,
   roleFromGroupName,
-  suggestGroupName,
   GroupMapRole,
   GroupMapDraft,
   GroupMapWriteRow,
@@ -20,18 +19,10 @@ import {
   Persona,
   normalizeRoleValue,
 } from "../../../shared/groupMapModel";
-import { addMemberWithSiteEntry } from "../../../shared/siteEntryGroup";
 import {
   searchSiteGroups,
-  createSiteGroup,
-  deleteSiteGroup,
   getGroupMembers,
-  addGroupMember,
-  removeGroupMember,
-  searchTenantPeople,
-  DUPLICATE_GROUP,
   SpGroupMember,
-  PersonPick,
 } from "../../../shared/spGroups";
 import {
   toCsv,
@@ -98,10 +89,6 @@ const s: Record<string, React.CSSProperties> = {
   ddwrap:     { position: "relative" },
   dd:         { position: "absolute", top: "100%", left: 0, right: 0, zIndex: 20, background: "#fff", border: "1px solid #c7c7c7", borderRadius: 4, maxHeight: 220, overflowY: "auto", boxShadow: "0 4px 12px rgba(0,0,0,.12)" },
   ddItem:     { padding: "7px 10px", cursor: "pointer", borderBottom: "1px solid #f0f0f0" },
-  ddCreate:   { color: "#0f6c3f", fontWeight: 600, borderBottom: "none", borderTop: "1px solid #e1e1e1", background: "#f6fbf8" },
-  createPanel:{ border: "1px solid #b7dcc4", borderRadius: 6, padding: 14, background: "#f3faf5" },
-  createHead: { fontWeight: 600, fontSize: 13, marginBottom: 2, color: "#0f6c3f" },
-  hint:       { fontSize: 11, color: "#666", marginTop: 8, lineHeight: 1.45 },
   roleRow:    { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 },
   roleBtn:    { padding: "5px 12px", fontSize: 12, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
   roleActive: { background: "#0f6c3f", color: "#fff", borderColor: "#0f6c3f" },
@@ -116,7 +103,6 @@ const s: Record<string, React.CSSProperties> = {
   addBtn:     { marginTop: 12, padding: "7px 18px", fontSize: 13, background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer" },
   addBtnOff:  { marginTop: 12, padding: "7px 18px", fontSize: 13, background: "#c7c7c7", color: "#fff", border: "none", borderRadius: 4, cursor: "not-allowed" },
   // Same footprint as addBtn (padding + fontSize) so the two buttons match; ghost colours.
-  secondaryBtn:{ marginTop: 12, padding: "7px 18px", fontSize: 13, background: "#fff", color: "#242424", border: "1px solid #c7c7c7", borderRadius: 4, cursor: "pointer" },
   req:        { color: "#a4262c", marginLeft: 2 },
   missing:    { marginTop: 8, fontSize: 12, color: "#a4262c" },
   dangerBox:  { marginTop: 8, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 4, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
@@ -124,7 +110,6 @@ const s: Record<string, React.CSSProperties> = {
   modalBox:   { background: "#fff", borderRadius: 8, width: "100%", maxWidth: 480, maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "0 8px 30px rgba(0,0,0,.25)" },
   modalHead:  { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid #eee", fontWeight: 600, fontSize: 14 },
   modalBody:  { padding: "12px 16px", overflowY: "auto" },
-  modalFoot:  { padding: "10px 16px", borderTop: "1px solid #eee", display: "flex", justifyContent: "flex-end" },
   table:      { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 },
   th:         { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:         { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "top" },
@@ -176,7 +161,11 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     };
   }, [personaOpen]);
   const [toast, setToast]       = useState<{ message: string; error: boolean } | undefined>(undefined);
-  const [canManage, setCanManage] = useState<boolean | undefined>(undefined); // undefined = still checking
+  // NOTE: the Full Control check that used to live here went with group creation and member
+  // editing (2026-08-14). What is left — writing and deleting Group Map rows — is governed by
+  // permissions on that LIST, not by site ownership, so a "you need Full Control" banner here
+  // would warn the wrong people and reassure the wrong people. The list write reports its own
+  // failure. Group Management keeps the check, because creating a group genuinely needs it.
   // The three custom permission levels, named for THIS site. Hardcoding "DMS Upload" here while
   // reconciliation grants "CRS Upload" tells an admin to create a level nothing will ever use.
   const [levels, setLevels] = useState<{ upload: string; approve: string; del: string }>({
@@ -246,50 +235,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const [results, setResults]     = useState<GroupPick[]>([]);
   const [searching, setSearching] = useState(false);
 
-  // Inline group create
-  const [creating, setCreating]   = useState(false);
-  const [newName, setNewName]     = useState("");
-
-  // Delete-group confirmation (destructive — two-step).
-  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState(false);
-
-  // People staged to be added as members during a one-shot create (added after the
-  // group is created). Kept separate from the existing-group member editor.
-  const [stagedMembers, setStagedMembers] = useState<PersonPick[]>([]);
-
   // Cache of tier term GUID -> label, so the Existing mappings table shows the unit
   // name instead of a raw GUID. Populated lazily as rows load.
   const [tierLabels, setTierLabels] = useState<Record<string, string>>({});
 
-  // Which of the two views is showing: the mapping table, or people-by-group.
-  const [accessView, setAccessView] = useState<"mappings" | "people">("mappings");
-  // Members per group id for the People view. Loaded lazily — one request per group,
-  // and a site can carry a hundred groups, so fetching them all on tab open would
-  // stall the view before the client had chosen anything to look at.
-  const [peopleByGroup, setPeopleByGroup] = useState<Record<string, SpGroupMember[]>>({});
-  const [peopleLoading, setPeopleLoading] = useState<Set<string>>(new Set());
-  const [peopleOpen, setPeopleOpen] = useState<Set<string>>(new Set());
-  const [peopleFilter, setPeopleFilter] = useState("");
-  const [loadingAllPeople, setLoadingAllPeople] = useState<{ done: number; total: number } | undefined>(undefined);
-
-  // Member-management modal (opened from an existing-mapping row). Self-contained so
-  // it never touches the add-mapping form's segment/tier/role state.
-  const [memberModal, setMemberModal]       = useState<GroupPick | null>(null);
-  const [mmMembers, setMmMembers]           = useState<SpGroupMember[] | undefined>(undefined);
-  const [mmBusy, setMmBusy]                 = useState(false);
-  const [mmQuery, setMmQuery]               = useState("");
-  const [mmResults, setMmResults]           = useState<PersonPick[]>([]);
-  const [mmSearching, setMmSearching]       = useState(false);
-  const [mmConfirmRemove, setMmConfirmRemove] = useState<number | undefined>(undefined);
-
-  // Member editor
-  const [membersOpen, setMembersOpen]         = useState(false);
-  const [members, setMembers]                 = useState<SpGroupMember[] | undefined>(undefined);
-  const [memberBusy, setMemberBusy]           = useState(false);
-  const [peopleQuery, setPeopleQuery]         = useState("");
-  const [peopleResults, setPeopleResults]     = useState<PersonPick[]>([]);
-  const [peopleSearching, setPeopleSearching] = useState(false);
-  const [confirmRemove, setConfirmRemove]     = useState<number | undefined>(undefined);
+  // NOTE (2026-08-14): creating a group, editing its members and deleting it all left this
+  // screen for the Group Management web part — spec
+  // 2026-08-14-group-management-separation-design.md. This page now does ONE thing: map an
+  // EXISTING group to a segment, tier and role. See §5 of that spec for what was removed.
 
   const [confirmDel, setConfirmDel]   = useState<number | undefined>(undefined);
   const [selected, setSelected]       = useState<Set<number>>(new Set());
@@ -405,27 +358,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     }
   };
 
-  // Create/add/remove need Full Control. Detect up front so the controls are
-  // disabled with an explanation instead of failing with a 403 on click.
-  const loadCanManage = async (): Promise<boolean> => {
-    const meRes = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/currentuser?$select=Id,IsSiteAdmin`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (!meRes.ok) return false;
-    const me = await meRes.json();
-    if (me.IsSiteAdmin === true) return true;
-    const ownRes = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/AssociatedOwnerGroup/Users?$filter=Id eq ${me.Id}&$select=Id`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (!ownRes.ok) return false;
-    const own = await ownRes.json();
-    return ((own.value ?? []) as unknown[]).length > 0;
-  };
-
   // Resolve tier term GUIDs to labels for the Existing mappings table (raw GUIDs are
   // meaningless to the client). One read per distinct unit term; cached.
   const loadTierLabels = async (rows: ExistingRow[]): Promise<void> => {
@@ -478,7 +410,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           })
           .catch(() => { setModes([]); setModesUnreadable(true); });
         loadExisting().then(setExisting).catch(() => setExisting([]));
-        loadCanManage().then(setCanManage).catch(() => setCanManage(false));
       })
       .catch(() => undefined);
   }, []);
@@ -505,57 +436,15 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     return () => { cancelled = true; clearTimeout(t); };
   }, [query, group]);
 
-  /* ── People search for the member editor (debounced) ───────────────────── */
-
-  useEffect(() => {
-    const q = peopleQuery.trim();
-    // Runs for BOTH the existing-group member editor (membersOpen) and the create
-    // panel's "add members" box (creating) — the two are never open at once.
-    if ((!membersOpen && !creating) || q.length < 2) { setPeopleResults([]); setPeopleSearching(false); return; }
-    let cancelled = false;
-    setPeopleSearching(true);
-    const t = setTimeout(() => {
-      searchTenantPeople(context.spHttpClient, siteUrl, q)
-        .then((r) => { if (!cancelled) { setPeopleResults(r); setPeopleSearching(false); } })
-        .catch(() => { if (!cancelled) { setPeopleResults([]); setPeopleSearching(false); } });
-    }, 350);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [peopleQuery, membersOpen, creating]);
-
-  // People search for the member modal (debounced).
-  useEffect(() => {
-    const q = mmQuery.trim();
-    if (!memberModal || q.length < 2) { setMmResults([]); setMmSearching(false); return; }
-    let cancelled = false;
-    setMmSearching(true);
-    const t = setTimeout(() => {
-      searchTenantPeople(context.spHttpClient, siteUrl, q)
-        .then((r) => { if (!cancelled) { setMmResults(r); setMmSearching(false); } })
-        .catch(() => { if (!cancelled) { setMmResults([]); setMmSearching(false); } });
-    }, 350);
-    return () => { cancelled = true; clearTimeout(t); };
-  }, [mmQuery, memberModal]);
-
   /* ── Selection handlers ────────────────────────────────────────────────── */
-
-  // Wipe the member-editor state so a freshly picked/cleared group never shows
-  // the previous group's members.
-  const resetMemberState = (): void => {
-    setMembersOpen(false);
-    setMembers(undefined);
-    setPeopleQuery("");
-    setPeopleResults([]);
-    setConfirmRemove(undefined);
-  };
 
   const pickGroup = (g: GroupPick): void => {
     setGroup(g);
     setQuery(g.displayName);
     setResults([]);
-    setCreating(false);
-    setConfirmDeleteGroup(false);
-    resetMemberState();
     // Pre-select the role implied by the name suffix (_UPL/_APR); admin can override.
+    // This is the one thing that still depends on the naming convention, which is why the
+    // Group Management page keeps offering the name builder that produces it.
     setRole(roleFromGroupName(g.displayName));
   };
 
@@ -563,157 +452,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     setGroup(undefined);
     setQuery("");
     setResults([]);
-    setCreating(false);
-    setConfirmDeleteGroup(false);
-    resetMemberState();
   };
 
-  // Delete the whole SharePoint group. Also removes any DMS Group Map rows that
-  // reference it, so no orphan mappings are left behind. Destructive — gated behind
-  // a two-step confirm in the UI.
-  const onDeleteGroup = async (): Promise<void> => {
-    if (!group) return;
-    setBusy(true);
-    try {
-      const gid = Number(group.id);
-      const name = group.displayName;
-      const rows = existing.filter((r) => Number(r.GroupId) === gid);
-      for (const r of rows) await deleteRow(r.itemId);
-      await deleteSiteGroup(context.spHttpClient, siteUrl, gid);
-      clearGroup();
-      setExisting(await loadExisting());
-      showToast(
-        `Group "${name}" deleted${rows.length ? ` (+${rows.length} mapping row(s))` : ""} — re-run Folder Reconciliation to refresh folder permissions.`,
-        false,
-      );
-    } catch (e) {
-      showToast(`Delete group failed: ${(e as Error).message}`, true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Member management modal — fully separate from the add-mapping form, so editing a
-  // group's members never disturbs the segment/tier/role selections below.
-  const openMemberModal = (r: ExistingRow): void => {
-    const g = { id: r.GroupId, displayName: r.GroupName || r.GroupId };
-    setMemberModal(g);
-    setMmMembers(undefined);
-    setMmQuery("");
-    setMmResults([]);
-    setMmConfirmRemove(undefined);
-    getGroupMembers(context.spHttpClient, siteUrl, Number(g.id))
-      .then(setMmMembers)
-      .catch(() => { setMmMembers([]); showToast("Could not load members.", true); });
-  };
-  const closeMemberModal = (): void => {
-    setMemberModal(null);
-    setMmMembers(undefined);
-    setMmQuery("");
-    setMmResults([]);
-    setMmConfirmRemove(undefined);
-  };
-  const reloadMm = async (): Promise<void> => {
-    if (memberModal) setMmMembers(await getGroupMembers(context.spHttpClient, siteUrl, Number(memberModal.id)));
-  };
-  const mmAdd = async (p: PersonPick): Promise<void> => {
-    if (!memberModal) return;
-    setMmBusy(true);
-    try {
-      // Adds to the target group AND to the site-entry group: folder-group Limited Access alone
-      // cannot open the site, so a member left out of it reaches nothing by navigating. That rule
-      // now lives once, in shared/siteEntryGroup.ts — it used to be written out here, in
-      // SiteAccess and inside reconciliation.
-      const res = await addMemberWithSiteEntry(
-        context.spHttpClient,
-        siteUrl,
-        { id: Number(memberModal.id), title: memberModal.displayName },
-        p.loginName,
-      );
-      await reloadMm();
-      setMmQuery("");
-      setMmResults([]);
-      // The note is never dropped: it means they ARE in the group but may not be able to open the
-      // site, which nobody would discover until they tried.
-      showToast(
-        `${p.displayName} added — access is immediate.${res.note ? ` ${res.note}` : ""}`,
-        !!res.note,
-      );
-    } catch (e) {
-      showToast(`Add member failed: ${(e as Error).message}`, true);
-    } finally {
-      setMmBusy(false);
-    }
-  };
-  const mmRemove = async (userId: number): Promise<void> => {
-    if (!memberModal) return;
-    setMmBusy(true);
-    try {
-      await removeGroupMember(context.spHttpClient, siteUrl, Number(memberModal.id), userId);
-      await reloadMm();
-      setMmConfirmRemove(undefined);
-      showToast("Member removed — access revoked immediately.", false);
-    } catch (e) {
-      showToast(`Remove failed: ${(e as Error).message}`, true);
-    } finally {
-      setMmBusy(false);
-    }
-  };
-
-  /* ── Inline group create ───────────────────────────────────────────────── */
-
-  const startCreate = (): void => {
-    setCreating(true);
-    setStagedMembers([]);
-    setPeopleQuery("");
-    setPeopleResults([]);
-    setNewName(
-      query.trim() ||
-        suggestGroupName(mode?.label ?? "", chosen.map((t) => t.label), (role || "") as GroupMapRole | ""),
-    );
-  };
-
-  const cancelCreate = (): void => {
-    setCreating(false);
-    setNewName("");
-    setStagedMembers([]);
-    setPeopleQuery("");
-    setPeopleResults([]);
-  };
-
-  // Stage / unstage a person to be added as a member when the group is created.
-  const stageMember = (p: PersonPick): void => {
-    setStagedMembers((prev) => prev.some((m) => m.loginName === p.loginName) ? prev : [...prev, p]);
-    setPeopleQuery("");
-    setPeopleResults([]);
-  };
-  const unstageMember = (loginName: string): void => {
-    setStagedMembers((prev) => prev.filter((m) => m.loginName !== loginName));
-  };
-
-  // Warn (never block) when the typed name's suffix disagrees with the selected Role.
-  const nameRoleMismatch = (): boolean => {
-    if (!newName.trim() || !role || role === "GLOBAL") return false;
-    return roleFromGroupName(newName) !== role;
-  };
-
-  // What the create panel still needs before its bottom button lights up. Mirrors
-  // validateDraft, but keyed on the typed name (the group doesn't exist yet).
-  const createErrors: string[] = [];
-  if (!newName.trim()) createErrors.push("Enter a group name.");
-  if (!role) createErrors.push("Select a role.");
-  if (role && role !== "GLOBAL") {
-    if (!mode) createErrors.push("Select a segment.");
-    // A segment-scope persona has no tier control — pickMode sets tierGuid to the term-set
-    // GUID for it. Telling the admin to "select a tier" would name a dropdown that is not
-    // on the screen, which reads as the page being broken rather than as a missing step.
-    if (!tierGuid && personaByKey(persona)?.scope !== "segment") createErrors.push("Select a tier.");
-  }
-
-  // One-shot create: make the site group AND write its mapping row in a single
-  // action. Called from the create panel's bottom button, which is only enabled
-  // once the name + role + segment + tier are all chosen. On success we land on
-  // the freshly created group so the admin can add its members next.
   /**
    * Every row the current draft should produce — one per role of the chosen persona.
    *
@@ -728,7 +468,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
    * the caller names how many landed and which role failed, so the screen still tells the
    * truth after a partial failure.
    *
-   * Declared above both call sites deliberately — onCreateAndMap is the first.
    */
   const draftRows = (d: GroupMapDraft): GroupMapWriteRow[] => {
     const p = personaByKey(persona);
@@ -737,157 +476,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     return roles.map((r) => buildGroupMapRow({ ...d, role: r }));
   };
 
-  const onCreateAndMap = async (): Promise<void> => {
-    const title = newName.trim();
-    if (!title || createErrors.length > 0) return;
-    setBusy(true);
-    try {
-      const created = await createSiteGroup(context.spHttpClient, siteUrl, title);
-      const newGroup = { id: String(created.id), displayName: created.title };
-      // The group now exists. If writing the mapping fails, roll it back so a failed
-      // "one shot" never leaves an orphan group behind (which would then collide with
-      // a retry as "already exists"). Keeps the action atomic.
-      try {
-        // EVERY row the persona needs, not just the first. A Head of Unit is APR + DELS,
-        // and the admin never sees those names — see draftRows. If any row fails the whole
-        // create is rolled back below, which is the right trade here and not in onAdd: the
-        // group did not exist a moment ago, so removing it restores the exact prior state
-        // rather than destroying something.
-        for (const row of draftRows({
-          groupId: newGroup.id,
-          groupName: newGroup.displayName,
-          role: role as GroupMapRole,
-          segmentGuid: mode?.termSetGuid,
-          tierGuid,
-        })) {
-          await postRow(row);
-        }
-      } catch (mapErr) {
-        await deleteSiteGroup(context.spHttpClient, siteUrl, Number(newGroup.id)).catch(() => undefined);
-        throw mapErr;
-      }
-      setExisting(await loadExisting());
-      // Add any staged members now that the group exists. Failures are counted, not fatal.
-      // Each member is also added to the site-entry group so they can open the site
-      // (site-entry-access-layer spec). A new DMS group is never the entry group itself.
-      let addedMembers = 0;
-      let failedMembers = 0;
-      for (const p of stagedMembers) {
-        try {
-          await addMemberWithSiteEntry(
-            context.spHttpClient,
-            siteUrl,
-            { id: Number(newGroup.id), title: newGroup.displayName },
-            p.loginName,
-          );
-          addedMembers++;
-        } catch { failedMembers++; }
-      }
-      const staged = stagedMembers.length;
-      const createdName = newGroup.displayName;
-      // Captured BEFORE the reset below, for the same reason createdName and staged are: the audit
-      // row describes what was mapped, and every one of these is about to be cleared.
-      const auditPersona = persona;
-      const auditRole = String(role);
-      const auditSegment = mode?.label ?? "";
-      const auditUnitPath = chosen.map((t) => t.label).join("/");
-      // Reset the whole form back to the default (empty search) state so the admin can
-      // immediately create another group — no leftover group/role/segment selections.
-      clearGroup();
-      setNewName("");
-      setStagedMembers([]);
-      // Persona resets with the rest. Leaving it selected was worse than untidy: the
-      // panel kept showing "needs N mappings at the <tier> tier" with its ✓/○ list,
-      // now describing a group that is no longer selected — so the next group created
-      // would be checked off against the previous group's progress.
-      setRole(""); setMode(undefined); setCascade([]); setChosen([]); setTierGuid(""); setPersona("");
-      const memberNote = staged === 0
-        ? " — edit members from its row, then run Folder Reconciliation."
-        : failedMembers === 0
-          ? ` with ${addedMembers} member(s) — run Folder Reconciliation.`
-          : ` — ${addedMembers} member(s) added, ${failedMembers} failed. Run Folder Reconciliation.`;
-      showToast(`Group "${createdName}" created & mapped${memberNote}`, failedMembers > 0);
-      // The reconciliation note is part of the RECORD, not just the toast: the row on its own grants
-      // nothing, and a log entry reading "access granted" would have someone believe it was live.
-      writeAudit(context.spHttpClient, siteUrl, {
-        event: EVENT.groupMapChanged,
-        outcome: failedMembers > 0 ? "Failed" : "Success",
-        source: "FolderAccess",
-        at: new Date(),
-        actorName: context.pageContext.user.displayName,
-        actorEmail: context.pageContext.user.email,
-        segment: auditSegment,
-        unitPath: auditUnitPath,
-        summary: `Group Map row added — ${createdName}${auditPersona ? ` (${auditPersona})` : ""}`,
-        details: [
-          `Group created and mapped: ${createdName}`,
-          auditPersona ? `Persona: ${auditPersona}` : "Persona: (none chosen)",
-          `Role: ${auditRole || "(none)"}`,
-          auditUnitPath ? `Path: ${auditSegment}/${auditUnitPath}` : `Segment: ${auditSegment}`,
-          staged === 0
-            ? "No members added yet."
-            : `${addedMembers} member(s) added, ${failedMembers} failed.`,
-          "The row alone grants nothing — folder access applies at the next Folder Reconciliation.",
-        ],
-      }).catch(() => undefined);
-    } catch (e) {
-      const msg = (e as Error).message;
-      if (msg === DUPLICATE_GROUP) {
-        showToast("A group with that name already exists — use Back to search and select it instead.", true);
-      } else if (msg.indexOf("does not exist") !== -1) {
-        showToast(`Couldn't write the mapping: the '${GROUP_MAP_LIST()}' list is missing. No group was created — create/rename that list, then try again.`, true);
-      } else {
-        showToast(`Create failed: ${msg} — no group was left behind.`, true);
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /* ── Member editor ─────────────────────────────────────────────────────── */
-
-  const groupIdNum = (): number => Number(group?.id ?? 0);
-
-  const reloadMembers = async (): Promise<void> => {
-    setMembers(await getGroupMembers(context.spHttpClient, siteUrl, groupIdNum()));
-  };
-
-  const toggleMembers = (): void => {
-    const opening = !membersOpen;
-    setMembersOpen(opening);
-    if (opening && members === undefined) {
-      reloadMembers().catch(() => { setMembers([]); showToast("Could not load members.", true); });
-    }
-  };
-
-  const onAddMember = async (p: PersonPick): Promise<void> => {
-    setMemberBusy(true);
-    try {
-      await addGroupMember(context.spHttpClient, siteUrl, groupIdNum(), p.loginName);
-      await reloadMembers();
-      setPeopleQuery("");
-      setPeopleResults([]);
-      showToast(`${p.displayName} added — access is immediate.`, false);
-    } catch (e) {
-      showToast(`Add member failed: ${(e as Error).message}`, true);
-    } finally {
-      setMemberBusy(false);
-    }
-  };
-
-  const onRemoveMember = async (userId: number): Promise<void> => {
-    setMemberBusy(true);
-    try {
-      await removeGroupMember(context.spHttpClient, siteUrl, groupIdNum(), userId);
-      await reloadMembers();
-      setConfirmRemove(undefined);
-      showToast("Member removed — access revoked immediately.", false);
-    } catch (e) {
-      showToast(`Remove failed: ${(e as Error).message}`, true);
-    } finally {
-      setMemberBusy(false);
-    }
-  };
 
   const pickRole = (r: GroupMapRole): void => {
     setRole(r);
@@ -1069,72 +657,50 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   };
 
   /**
-   * Delete a mapping row — and, when it was that group's LAST row, the SharePoint group
-   * with it.
+   * Delete a mapping row. THE ROW ONLY.
    *
-   * Why the group goes too: nothing in this system revokes a role assignment, so a group
-   * left behind with no mappings keeps every grant it already holds on every folder. The
-   * Group Map then says the group has no access while SharePoint says it has all of it,
-   * and the question that arrives later is "why can this person still see it". Deleting
-   * the group is what actually removes the access, because the principal ceases to exist.
+   * Until 2026-08-14 this also deleted the SharePoint group when it was that group's last
+   * row, on the reasoning that nothing here revokes a role assignment, so a group with no
+   * mappings keeps every grant it already holds. That reasoning was sound and the rule still
+   * had to go: with group creation moved to its own page, "created but not yet assigned" is a
+   * legitimate state, and the rule would silently destroy a group an admin made minutes
+   * earlier. Groups are deleted deliberately, on the Group Management page, which states the
+   * same caveat before it does so.
    *
-   * Why only on the LAST row: a group is normally several rows — a Head of Unit 4 group is
-   * five. Removing the DELS row because that one capability is no longer wanted must not
-   * take the group and its members with it.
-   *
-   * The residual case, which this cannot fix and does not pretend to: deleting ONE of
-   * several rows leaves that specific grant on the folders, because the group survives.
-   * The toast says so rather than implying the change has taken effect.
+   * The residual case is unchanged and still stated rather than hidden: deleting a row leaves
+   * that grant on the folders until Folder Reconciliation runs. The toast says so rather than
+   * implying the change has already taken effect.
    */
   const onDelete = async (itemId: number): Promise<void> => {
     const row = existing.find((r) => r.itemId === itemId);
     const gid = Number(row?.GroupId ?? NaN);
     const siblings = existing.filter((r) => Number(r.GroupId) === gid && r.itemId !== itemId);
-    const lastRowForGroup = !!row && !isNaN(gid) && gid > 0 && siblings.length === 0;
     setBusy(true);
     try {
       await deleteRow(itemId);
-      let groupDeleted = false;
-      if (lastRowForGroup) {
-        try {
-          await deleteSiteGroup(context.spHttpClient, siteUrl, gid);
-          groupDeleted = true;
-        } catch (e) {
-          // The row is already gone. Report the group failure plainly instead of
-          // rolling back — re-creating the row would leave a mapping the admin just
-          // deleted, and silence here is what produces the leftover-access complaint.
-          showToast(`Row deleted, but the group "${row?.GroupName}" could not be removed: ${(e as Error).message} — delete it from Site permissions, or it keeps its folder access.`, true);
-        }
-      }
       setExisting(await loadExisting());
       setSelected((prev) => { const n = new Set(prev); n.delete(itemId); return n; });
       setConfirmDel(undefined);
-      if (groupDeleted) {
-        showToast(`Row deleted, and group "${row?.GroupName}" removed with it — that was its last mapping, so its folder access is gone.`, false);
-      } else if (lastRowForGroup) {
-        // Toast already shown by the catch above.
-      } else {
-        showToast(`Row deleted. "${row?.GroupName}" still has ${siblings.length} other mapping(s), so the group is kept — it also keeps the folder grant from this row until it is removed by hand.`, false);
-      }
-      // WHICH of the three outcomes happened is the whole value of this row. Two of them leave the
-      // access in place — the group survives because it holds other mappings, or its deletion failed
-      // — and a record reading only "row deleted" would have someone believe the access was gone.
+      showToast(
+        `Row deleted. The group "${row?.GroupName}" is kept` +
+        (siblings.length > 0 ? ` and still has ${siblings.length} other mapping(s).` : " with no mappings left.") +
+        " Run Folder Reconciliation to take the folder permission away.",
+        false,
+      );
+      // The reconciliation caveat is part of the RECORD, not just the toast: the grant outlives
+      // the row, and an entry reading only "row deleted" would have someone believe otherwise.
       writeAudit(context.spHttpClient, siteUrl, {
         event: EVENT.groupMapChanged,
-        outcome: lastRowForGroup && !groupDeleted ? "Failed" : "Success",
+        outcome: "Success",
         source: "FolderAccess",
         at: new Date(),
         actorName: context.pageContext.user.displayName,
         actorEmail: context.pageContext.user.email,
-        segment: row?.Segment ?? "",
         summary: `Group Map row deleted — ${row?.GroupName ?? `item ${itemId}`}${row?.Role ? ` (${row.Role})` : ""}`,
         details: [
           `Row: ${row?.GroupName ?? `item ${itemId}`}, role ${row?.Role ?? "(unknown)"}, scope ${row?.Scope ?? "(unknown)"}, target ${row?.Target ?? "(unknown)"}`,
-          groupDeleted
-            ? "That was the group's last mapping, so the SharePoint group was deleted with it — its folder access is gone."
-            : lastRowForGroup
-              ? "It was the last mapping, but the SharePoint group could NOT be deleted — it keeps its folder access until removed by hand."
-              : `The group is kept: ${siblings.length} other mapping(s) remain. It ALSO keeps the folder grant from this row until that is removed by hand.`,
+          `The SharePoint group is KEPT. ${siblings.length} other mapping(s) remain.`,
+          "The folder grant from this row stays in place until Folder Reconciliation runs.",
         ],
       }).catch(() => undefined);
     } catch (e) {
@@ -1214,8 +780,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   /* ── Render ────────────────────────────────────────────────────────────── */
 
-  // Role + Segment + Tier selectors. Shared by both flows: rendered INSIDE the
-  // create panel (one-shot create) and below an already-picked group (add mapping).
   // Which roles the chosen tier already has a mapping for. Drives the persona
   // checklist. Keyed on the TIER, not the group: a persona is "this person, on
   // this unit", and it is satisfied by whichever groups carry those roles there.
@@ -1471,227 +1035,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     </>
   );
 
-  /* ── People view ──────────────────────────────────────────────────────────────
-     One entry per GROUP, not per mapping row: a group commonly carries several
-     mappings (one per tier it covers), and listing the same people once per row is
-     what makes "who can reach this" hard to read in the table. */
-  type GroupEntry = {
-    groupId: string;
-    groupName: string;
-    /** Every mapping this group appears in, shown as chips on the header row. */
-    grants: Array<{ segment: string; tier: string; role: string }>;
-  };
-  const distinctGroups: GroupEntry[] = (() => {
-    const byId = new Map<string, GroupEntry>();
-    existing.forEach((r) => {
-      if (!r.GroupId) return;
-      const entry = byId.get(r.GroupId) ?? {
-        groupId: r.GroupId,
-        groupName: r.GroupName || r.GroupId,
-        grants: [],
-      };
-      entry.grants.push({
-        segment: r.Segment ? segmentLabelFor(r.Segment) : "",
-        tier: tierLabelFor(r),
-        role: normalizeRoleValue(r.Role ?? ""),
-      });
-      byId.set(r.GroupId, entry);
-    });
-    const out: GroupEntry[] = [];
-    byId.forEach((v) => out.push(v));
-    return out.sort((a, b) => a.groupName.localeCompare(b.groupName));
-  })();
-
-  const fetchGroupPeople = async (groupId: string): Promise<void> => {
-    if (peopleByGroup[groupId]) return; // cached
-    setPeopleLoading((prev) => { const n = new Set(prev); n.add(groupId); return n; });
-    try {
-      const m = await getGroupMembers(context.spHttpClient, siteUrl, Number(groupId));
-      setPeopleByGroup((prev) => ({ ...prev, [groupId]: m }));
-    } catch {
-      // Cached as empty so a failed group does not re-request on every repaint.
-      setPeopleByGroup((prev) => ({ ...prev, [groupId]: [] }));
-      showToast("Could not load members for that group.", true);
-    } finally {
-      setPeopleLoading((prev) => { const n = new Set(prev); n.delete(groupId); return n; });
-    }
-  };
-
-  const toggleGroupOpen = (groupId: string): void => {
-    setPeopleOpen((prev) => {
-      const n = new Set(prev);
-      if (n.has(groupId)) n.delete(groupId);
-      else { n.add(groupId); fetchGroupPeople(groupId).catch(() => undefined); }
-      return n;
-    });
-  };
-
-  /** Sequential, not parallel — a burst of member reads is what trips the 429 throttle. */
-  const loadAllPeople = async (): Promise<void> => {
-    const need = distinctGroups.filter((g) => !peopleByGroup[g.groupId]);
-    setLoadingAllPeople({ done: 0, total: need.length });
-    for (let i = 0; i < need.length; i++) {
-      await fetchGroupPeople(need[i].groupId);
-      setLoadingAllPeople({ done: i + 1, total: need.length });
-    }
-    setLoadingAllPeople(undefined);
-    setPeopleOpen(new Set(distinctGroups.map((g) => g.groupId)));
-  };
-
-  /** Case-insensitive substring match, with the hit wrapped so the eye can find it. */
-  const highlight = (text: string, q: string): React.ReactNode => {
-    if (q.length === 0) return text;
-    const at = text.toLowerCase().indexOf(q);
-    if (at === -1) return text;
-    return (
-      <>
-        {text.slice(0, at)}
-        <mark style={{ background: "#fff3bf", color: "inherit", padding: "0 1px" }}>
-          {text.slice(at, at + q.length)}
-        </mark>
-        {text.slice(at + q.length)}
-      </>
-    );
-  };
-
-  const renderPeopleView = (): React.ReactElement => {
-    const q = peopleFilter.trim().toLowerCase();
-    const personMatches = (p: SpGroupMember): boolean =>
-      (p.title ?? "").toLowerCase().indexOf(q) !== -1 ||
-      (p.email ?? "").toLowerCase().indexOf(q) !== -1;
-    // A person filter can only see groups already read, so it says so rather than
-    // silently reporting "no match" for groups it never looked inside.
-    const unloaded = distinctGroups.filter((g) => !peopleByGroup[g.groupId]).length;
-    const shown = q.length === 0
-      ? distinctGroups
-      : distinctGroups.filter((g) => {
-          if (g.groupName.toLowerCase().indexOf(q) !== -1) return true;
-          const m = peopleByGroup[g.groupId];
-          return !!m && m.some(personMatches);
-        });
-    // How many people the query found overall — searching a name and being told
-    // "3 groups" answers a question nobody asked. The count is what confirms the
-    // search ran at all.
-    const matchedPeople = q.length === 0
-      ? 0
-      : shown.reduce((n, g) => n + (peopleByGroup[g.groupId] ?? []).filter(personMatches).length, 0);
-    return (
-      <div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
-          <input
-            style={{ ...s.input, maxWidth: 320 }}
-            placeholder="Filter by person or group name…"
-            value={peopleFilter}
-            onChange={(e) => setPeopleFilter(e.target.value)}
-          />
-          <button
-            style={s.ghost}
-            disabled={busy || loadingAllPeople !== undefined || unloaded === 0}
-            title="Read the members of every mapped group, one at a time"
-            onClick={() => { loadAllPeople().catch(() => setLoadingAllPeople(undefined)); }}
-          >
-            {loadingAllPeople
-              ? `Loading… ${loadingAllPeople.done}/${loadingAllPeople.total}`
-              : unloaded === 0 ? "All members loaded" : `Load all members (${unloaded})`}
-          </button>
-          {q.length > 0 && unloaded > 0 && (
-            <span style={{ fontSize: 12, color: "#b45309" }}>
-              {unloaded} group(s) not read yet — load all to search inside them.
-            </span>
-          )}
-        </div>
-        {q.length > 0 && shown.length > 0 && (
-          <p style={{ fontSize: 12, color: "#0f6c3f", margin: "0 0 10px", fontWeight: 600 }}>
-            {matchedPeople > 0
-              ? `${matchedPeople} person match${matchedPeople === 1 ? "" : "es"} across ${shown.length} group${shown.length === 1 ? "" : "s"}`
-              : `${shown.length} group${shown.length === 1 ? "" : "s"} match by name`}
-          </p>
-        )}
-        {distinctGroups.length === 0 ? (
-          <p style={{ fontSize: 13, color: "#999" }}>No groups are mapped yet.</p>
-        ) : shown.length === 0 ? (
-          <p style={{ fontSize: 13, color: "#999" }}>No group or person matches &ldquo;{peopleFilter}&rdquo;.</p>
-        ) : (
-          shown.map((g) => {
-            const loading = peopleLoading.has(g.groupId);
-            const members = peopleByGroup[g.groupId];
-            const nameHit = q.length > 0 && g.groupName.toLowerCase().indexOf(q) !== -1;
-            // A collapsed group that matched on a PERSON showed a header and nothing
-            // else — the search looked broken because the thing it found was hidden.
-            const open = q.length > 0 || peopleOpen.has(g.groupId);
-            // Searching a person and being handed the whole roster to scan is the
-            // other half of that. When the query matched people rather than the group
-            // NAME, show the people it matched and count the rest.
-            const hits = members && q.length > 0 && !nameHit
-              ? members.filter(personMatches)
-              : undefined;
-            const listed = hits ?? members ?? [];
-            const hidden = hits && members ? members.length - hits.length : 0;
-            return (
-              <div key={g.groupId} style={{ border: "1px solid #e5e5e5", borderRadius: 6, marginBottom: 8, overflow: "hidden" }}>
-                <div
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => toggleGroupOpen(g.groupId)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleGroupOpen(g.groupId); } }}
-                  style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", cursor: "pointer", background: open ? "#f4f8f5" : "#fff" }}
-                >
-                  <span style={{ color: "#0f6c3f", fontSize: 11 }}>{open ? "▾" : "▸"}</span>
-                  <span style={{ fontWeight: 600, fontSize: 13 }}>{highlight(g.groupName, q)}</span>
-                  <span style={{ fontSize: 11, color: "#666" }}>
-                    {!members
-                      ? "—"
-                      : hits
-                        ? `${hits.length} of ${members.length} match`
-                        : `${members.length} member${members.length === 1 ? "" : "s"}`}
-                  </span>
-                  <span style={{ marginLeft: "auto", display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    {g.grants.map((gr, i) => (
-                      <span key={i} style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".04em", color: "#0f6c3f", background: "#e8f5ee", border: "1px solid #b3d9c4", borderRadius: 10, padding: "2px 8px" }}>
-                        {gr.role}{gr.tier ? ` · ${gr.tier}` : ""}
-                      </span>
-                    ))}
-                  </span>
-                </div>
-                {open && (
-                  <div style={{ borderTop: "1px solid #eee", padding: "6px 12px 10px 30px" }}>
-                    {loading ? (
-                      <div style={{ fontSize: 12, color: "#666", padding: "4px 0" }}>Loading members&hellip;</div>
-                    ) : !members || members.length === 0 ? (
-                      <div style={{ fontSize: 12, color: "#b45309", padding: "4px 0" }}>
-                        No members — anyone relying on this group has no access.
-                      </div>
-                    ) : (
-                      <>
-                        {listed.map((p) => (
-                          <div key={p.id} style={{ display: "flex", gap: 10, alignItems: "baseline", fontSize: 12, padding: "3px 0" }}>
-                            <span style={{ fontWeight: 600 }}>{highlight(p.title ?? "", q)}</span>
-                            <span style={{ color: "#666" }}>{highlight(p.email ?? "", q)}</span>
-                          </div>
-                        ))}
-                        {hidden > 0 && (
-                          <div style={{ fontSize: 11, color: "#999", padding: "4px 0 0" }}>
-                            + {hidden} other member{hidden === 1 ? "" : "s"} in this group
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
-      </div>
-    );
-  };
 
   return (
     <div style={s.wrap}>
       <p style={s.intro}>
-        Map a <strong>native SharePoint site group</strong> to a segment, tier, and role — or create
-        the group right here and add its members. This writes a clean row into the{" "}
-        <strong>{GROUP_MAP_LIST()}</strong> list.
+        Map an <strong>existing SharePoint site group</strong> to a segment, tier and role. This
+        writes a clean row into the <strong>{GROUP_MAP_LIST()}</strong> list. Groups themselves —
+        creating them, changing who is in them, deleting them — live on the{" "}
+        <strong>Group Management</strong> page.
       </p>
 
       {/* Collapsed by default. Everything below is reference an admin needs ONCE (when the
@@ -1756,13 +1107,6 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </>
       )}
 
-      {canManage === false && (
-        <div style={{ ...s.card, borderColor: "#f0c000", background: "#fff8e1" }}>
-          Read-only: creating groups and editing members needs <strong>Full Control (site owner)</strong>{" "}
-          on this site. You can still view mappings.
-        </div>
-      )}
-
       {/* The half of the safeguard that was missing until 2026-08-09 — the detection ran, the
           result went nowhere. Named as a PROVISIONING problem, not a page problem: everything
           here still works, and the damage is done later and elsewhere, by reconciliation. */}
@@ -1814,170 +1158,15 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         {/* Group */}
         <label style={s.label}>Group</label>
         {group ? (
-          <>
-            <span style={s.pickedChip}>
-              {group.displayName}
-              <button style={s.chipX} disabled={busy} title="Change" onClick={clearGroup}>✕</button>
-            </span>
-            <button style={{ ...s.seglvl, marginLeft: 14 }} disabled={busy} onClick={toggleMembers}>
-              {members === undefined ? "members" : `${members.length} member(s)`} {membersOpen ? "▴" : "▾"}
-            </button>
-            {canManage === true && (
-              confirmDeleteGroup ? (
-                <div style={s.dangerBox}>
-                  <span>
-                    ⚠ Permanently delete the SharePoint group <strong>{group.displayName}</strong>? This
-                    removes the group and any of its DMS Group Map rows and folder permissions across the
-                    site. Its <em>members</em> (the users) are not deleted. This cannot be undone.
-                  </span>
-                  <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
-                    <button style={s.delBtn} disabled={busy} onClick={() => { onDeleteGroup().catch(() => undefined); }}>Yes, delete group</button>
-                    <button style={s.ghost} disabled={busy} onClick={() => setConfirmDeleteGroup(false)}>Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <button style={{ ...s.seglvl, marginLeft: 14, color: "#a4262c", textDecoration: "underline" }} disabled={busy} onClick={() => setConfirmDeleteGroup(true)}>
-                  delete group
-                </button>
-              )
-            )}
-            {membersOpen && (
-              <div style={{ ...s.preview, borderStyle: "solid", marginTop: 8 }}>
-                {members === undefined && <div>Loading members…</div>}
-                {members !== undefined && members.length === 0 && <div>No members yet.</div>}
-                {(members ?? []).map((m) => (
-                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 0" }}>
-                    <span style={{ flex: 1 }}>{m.title}</span>
-                    <span style={s.mono}>{m.email}</span>
-                    {canManage === true && (confirmRemove === m.id ? (
-                      <span style={{ display: "inline-flex", gap: 6 }}>
-                        <button style={s.delBtn} disabled={memberBusy} onClick={() => { onRemoveMember(m.id).catch(() => undefined); }}>Remove</button>
-                        <button style={s.ghost} disabled={memberBusy} onClick={() => setConfirmRemove(undefined)}>Cancel</button>
-                      </span>
-                    ) : (
-                      <button style={s.chipX} disabled={memberBusy} title="Remove from group" onClick={() => setConfirmRemove(m.id)}>✕</button>
-                    ))}
-                  </div>
-                ))}
-                {canManage === true && (
-                  <div style={{ ...s.ddwrap, marginTop: 8 }}>
-                    <input
-                      style={s.input}
-                      placeholder="Search people in the tenant to add…"
-                      value={peopleQuery}
-                      disabled={memberBusy}
-                      onChange={(e) => setPeopleQuery(e.target.value)}
-                    />
-                    {peopleQuery.trim().length >= 2 && (
-                      <div style={s.dd}>
-                        {peopleSearching && <div style={s.ddItem}>Searching…</div>}
-                        {!peopleSearching && peopleResults.map((p) => (
-                          <div key={p.loginName} style={s.ddItem} onClick={() => { onAddMember(p).catch(() => undefined); }}>
-                            {p.displayName} <span style={s.mono}>{p.email}</span>
-                          </div>
-                        ))}
-                        {!peopleSearching && peopleResults.length === 0 && (
-                          <div style={{ ...s.ddItem, color: "#666" }}>No matching people.</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        ) : creating ? (
-          /* Create mode — one shot. Name + role + segment + tier all live in this
-             panel, with a single button at the bottom that creates the group AND
-             writes its mapping. Search box/dropdown are not rendered, so there is
-             never a duplicate name field. */
-          <div style={s.createPanel}>
-            <div style={s.createHead}>Create a new group</div>
-            <label style={s.label}>New group name</label>
-            <input
-              style={s.input}
-              value={newName}
-              disabled={busy}
-              autoFocus
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="e.g. GHO_GF_CORU_UPLOADER"
-            />
-            {nameRoleMismatch() && (
-              <div style={{ fontSize: 12, color: "#a4262c", marginTop: 4 }}>
-                Warning: the name suffix doesn&rsquo;t match the selected role ({role}). You can still create it.
-              </div>
-            )}
-
-            {/* Role + Segment + Tier — chosen here, above the button. */}
-            {selectionFields}
-
-            {/* Members (optional) — staged now, added when the group is created. */}
-            <label style={s.label}>Members (optional)</label>
-            {stagedMembers.length > 0 && (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
-                {stagedMembers.map((p) => (
-                  <span key={p.loginName} style={s.pickedChip}>
-                    {p.displayName}
-                    <button style={s.chipX} disabled={busy} title="Remove" onClick={() => unstageMember(p.loginName)}>✕</button>
-                  </span>
-                ))}
-              </div>
-            )}
-            <div style={s.ddwrap}>
-              <input
-                style={s.input}
-                placeholder="Search people in the tenant to add…"
-                value={peopleQuery}
-                disabled={busy}
-                onChange={(e) => setPeopleQuery(e.target.value)}
-              />
-              {peopleQuery.trim().length >= 2 && (
-                <div style={s.dd}>
-                  {peopleSearching && <div style={s.ddItem}>Searching…</div>}
-                  {!peopleSearching && peopleResults.map((p) => (
-                    <div key={p.loginName} style={s.ddItem} onClick={() => stageMember(p)}>
-                      {p.displayName} <span style={s.mono}>{p.email}</span>
-                    </div>
-                  ))}
-                  {!peopleSearching && peopleResults.length === 0 && (
-                    <div style={{ ...s.ddItem, color: "#666" }}>No matching people.</div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {createErrors.length > 0 && (
-              <div style={s.missing}>Before creating: {createErrors.join(" ")}</div>
-            )}
-            {/* The reason, restated beside the button. The scope warning already appears up
-                in the persona panel, but that is far enough away that a disabled button
-                reads as "the tool is broken" rather than "you picked the wrong tier" —
-                which is exactly how it got reported. */}
-            {scopeMismatch && (
-              <div style={s.missing}>Before creating: {scopeMismatch}</div>
-            )}
-            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-              <button
-                // The disabled STYLE must track the disabled STATE. Styling on createErrors
-                // alone left this looking clickable while scopeMismatch silently blocked it,
-                // and a button that appears to do nothing is worse than the mis-scoped
-                // mapping it was added to prevent.
-                style={createErrors.length === 0 && !busy && !scopeMismatch ? s.addBtn : s.addBtnOff}
-                disabled={createErrors.length > 0 || busy || !!scopeMismatch}
-                onClick={() => { onCreateAndMap().catch(() => undefined); }}
-              >
-                Create group &amp; add mapping
-              </button>
-              <button style={s.secondaryBtn} disabled={busy} onClick={cancelCreate}>Back to search</button>
-            </div>
-            <div style={s.hint}>
-              Creates the native SharePoint group, its mapping, and any members above — all in
-              one step. It gets no permissions until you run Folder Reconciliation.
-            </div>
-          </div>
+          <span style={s.pickedChip}>
+            {group.displayName}
+            <button style={s.chipX} disabled={busy} title="Change" onClick={clearGroup}>✕</button>
+          </span>
         ) : (
-          /* Search mode — search box + results dropdown. "Create a new group" is
-             an action inside the dropdown that switches to create mode. */
+          /* Search ONLY. Creating a group moved to the Group Management page on 2026-08-14 —
+             spec §4.4. The dropdown's old "Create a new group" row is replaced by a SIGNPOST:
+             with five separate access pages, nothing else on screen would tell an admin that
+             groups are made somewhere else first. A dead end became a direction. */
           <div style={s.ddwrap}>
             <input
               style={s.input}
@@ -1993,11 +1182,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                   <div key={g.id} style={s.ddItem} onClick={() => pickGroup(g)}>{g.displayName}</div>
                 ))}
                 {!searching && results.length === 0 && query.trim() && (
-                  <div style={{ ...s.ddItem, color: "#666" }}>No matching group.</div>
-                )}
-                {!searching && canManage === true && (
-                  <div style={{ ...s.ddItem, ...s.ddCreate }} onClick={startCreate}>
-                    ➕ Create a new group{query.trim() ? ` “${query.trim()}”` : ""}…
+                  <div style={{ ...s.ddItem, color: "#666" }}>
+                    No group by that name. Groups are created on the{" "}
+                    <strong>Group Management</strong> page.
                   </div>
                 )}
               </div>
@@ -2005,37 +1192,27 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           </div>
         )}
 
-        {/* Existing-group flow: for a group picked via search, choose role/segment/
-            tier and Add mapping. Hidden during create — the panel above owns that. */}
-        {!creating && (
-          <>
-            {selectionFields}
+        {/* Pick a group, pick a persona, pick where. That is the whole page now. */}
+        {selectionFields}
 
-            {group && role && draftErrors.length > 0 && (
-              <div style={s.missing}>Before adding: {draftErrors.join(" ")}</div>
-            )}
-
-            {/* Scope mismatch BLOCKS, it does not merely warn. A Head of Department
-                mapped at the unit tier is the worst kind of wrong: the row is valid,
-                reconciliation grants it happily, and the head silently ends up seeing
-                one unit instead of the whole department. Nothing downstream can detect
-                that — the row looks exactly like a legitimate unit mapping — so this
-                is the only place it can be caught. */}
-            <button
-              style={canAdd && !scopeMismatch ? s.addBtn : s.addBtnOff}
-              disabled={!canAdd || !!scopeMismatch}
-              onClick={() => { onAdd().catch(() => undefined); }}
-            >
-              Add mapping
-            </button>
-          </>
+        {group && role && draftErrors.length > 0 && (
+          <div style={s.missing}>Before adding: {draftErrors.join(" ")}</div>
         )}
+
+        {/* Scope mismatch BLOCKS, it does not merely warn. A Head of Department mapped at
+            the unit tier is the worst kind of wrong: the row is valid, reconciliation
+            grants it happily, and the head silently ends up seeing one unit instead of the
+            whole department. Nothing downstream can detect that — the row looks exactly
+            like a legitimate unit mapping — so this is the only place it can be caught. */}
+        <button
+          style={canAdd && !scopeMismatch ? s.addBtn : s.addBtnOff}
+          disabled={!canAdd || !!scopeMismatch}
+          onClick={() => { onAdd().catch(() => undefined); }}
+        >
+          Add mapping
+        </button>
       </div>
 
-      {/* Two views of the same data. "Mappings" answers "which group is on which
-          folder"; "People" answers "who is in those groups", which is the question
-          the client actually asks and could previously only reach one group at a
-          time through the Members modal. */}
       {modesUnreadable && (
         <div style={{ fontSize: 12, color: "#b45309", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, padding: "8px 12px", marginBottom: 12 }}>
           Could not read any <strong>mode</strong> rows from <strong>{CONFIG_LIST()}</strong>, so the
@@ -2044,31 +1221,14 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 6, marginBottom: 12, borderBottom: "1px solid #e1e1e1" }}>
-        {([
-          // Counts what is shown. A tally including library and page rows would not match the
-          // list beneath it, and a count you cannot reconcile with the rows is worse than none.
-          { key: "mappings" as const, label: `Folder mappings (${existingForDisplay.length})` },
-          { key: "people" as const, label: `People (${distinctGroups.length} groups)` },
-        ]).map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setAccessView(t.key)}
-            style={{
-              padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer",
-              fontFamily: "inherit", background: "none", border: "none",
-              borderBottom: `2px solid ${accessView === t.key ? "#0f6c3f" : "transparent"}`,
-              color: accessView === t.key ? "#0f6c3f" : "#666",
-              marginBottom: -1,
-            }}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* One view now. "Who is in these groups" is answered on the Group Management page,
+          which is where membership is changed — the People tab here could only show it.
+          Counts what is SHOWN: a tally including library and page rows would not match the
+          list beneath it, and a count you cannot reconcile with the rows is worse than none. */}
+      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f6c3f", margin: "0 0 12px", paddingBottom: 8, borderBottom: "2px solid #0f6c3f", display: "inline-block" }}>
+        Folder mappings ({existingForDisplay.length})
       </div>
 
-      {accessView === "people" ? renderPeopleView() : (
-      <>
       {/* Existing rows */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "0 0 6px" }}>
         <button
@@ -2168,153 +1328,63 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                   uninformative. The code is still what is stored and what reconciliation reads. */}
               <td style={s.td}>{roleLabel(r.Role)}</td>
               <td style={s.td}>
-                {/* Confirmation moved OUT of the row and into a modal (below). Since
-                    2026-08-04 deleting the last row for a group also deletes the
-                    SharePoint group and its membership, and site groups are NOT
-                    recoverable from the recycle bin. A two-button inline confirm in a
-                    table cell gave that no more weight than removing a mapping. */}
-                <span style={{ display: "inline-flex", gap: 6 }}>
-                  {canManage === true && (
-                    <button style={s.ghost} disabled={busy} onClick={() => openMemberModal(r)} title="Add or remove members of this group">Members</button>
-                  )}
-                  <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
-                </span>
+                {/* Deleting a row now deletes A ROW. Until 2026-08-14 removing a group's last
+                    mapping also destroyed the SharePoint group — see the modal below. */}
+                <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-      </>
-      )}
 
       {/* Delete-mapping confirmation — a modal, not an inline Yes/Cancel in the table cell.
-          Since 2026-08-04 removing a group's LAST mapping also deletes the SharePoint group
-          and its membership, and a deleted site group is NOT recoverable from the recycle
-          bin. The wording therefore has to differ between the two cases: an admin who
-          thinks they are tidying a mapping must not silently destroy a group and everyone's
-          access with it, and an admin who IS clearing out a group should be told the access
-          goes too — that is the whole reason the behaviour exists. */}
+          Between 2026-08-04 and 2026-08-14 removing a group's LAST mapping also deleted the
+          SharePoint group, so this modal had a second, far more alarming form. That rule is
+          GONE (spec §2 D4): "created but not yet assigned" is now a legitimate state, and the
+          old behaviour would have destroyed a group an admin made minutes earlier. Deleting a
+          row deletes a row. Groups are deleted on the Group Management page. */}
       {confirmDel !== undefined && (() => {
         const row = existing.find((r) => r.itemId === confirmDel);
         const gid = Number(row?.GroupId ?? NaN);
         const others = existing.filter((r) => Number(r.GroupId) === gid && r.itemId !== confirmDel);
-        const lastRow = !!row && !isNaN(gid) && gid > 0 && others.length === 0;
         return (
           <div style={s.modalOverlay} onClick={() => setConfirmDel(undefined)}>
             <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
               <div style={s.modalHead}>
-                <span>{lastRow ? "Delete mapping and group?" : "Delete mapping?"}</span>
+                <span>Delete mapping?</span>
                 <button style={s.chipX} onClick={() => setConfirmDel(undefined)} title="Close">✕</button>
               </div>
               <div style={s.modalBody}>
-                {lastRow ? (
-                  <div style={s.dangerBox}>
-                    <p style={{ margin: "0 0 8px" }}>
-                      ⚠ This is the <strong>last mapping</strong> for{" "}
-                      <strong>{row?.GroupName}</strong>, so the SharePoint group will be
-                      deleted along with it.
-                    </p>
-                    <ul style={{ margin: "0 0 8px 18px", padding: 0 }}>
-                      <li>The group&apos;s <strong>folder access is removed</strong> — that is the point: a group left behind keeps every permission it already holds.</li>
-                      <li>Its <strong>membership list is lost</strong>. The user accounts are not touched, but who was in the group is not recoverable.</li>
-                      <li>A deleted SharePoint group is <strong>not in the recycle bin</strong>. This cannot be undone.</li>
-                    </ul>
-                    <p style={{ margin: 0 }}>
-                      Keep the group? Add another mapping for it first, then delete this row.
-                    </p>
-                  </div>
-                ) : (
-                  <div>
-                    <p style={{ margin: "0 0 8px" }}>
-                      Remove the <strong>{row?.Role}</strong> mapping for{" "}
-                      <strong>{row?.GroupName}</strong>?
-                    </p>
-                    <p style={{ margin: "0 0 8px" }}>
-                      The group is <strong>kept</strong> — it still has {others.length} other
-                      mapping{others.length === 1 ? "" : "s"}.
-                    </p>
-                    {/* Stated because it is the one thing that surprises people: removing a
-                        row does not remove the permission it created. Nothing in this tool
-                        revokes a role assignment, so the group keeps this grant on the
-                        folder until someone strips it by hand — and the list will no longer
-                        show that it exists. */}
-                    <p style={{ margin: 0, color: "#8a6d00" }}>
-                      Note: the folder permission this row created stays in place until it is
-                      removed by hand in SharePoint. Deleting the row stops it being
-                      re-applied; it does not take the access away.
-                    </p>
-                  </div>
-                )}
+                <p style={{ margin: "0 0 8px" }}>
+                  Remove the <strong>{roleLabel(row?.Role as GroupMapRole)}</strong> mapping for{" "}
+                  <strong>{row?.GroupName}</strong>?
+                </p>
+                <p style={{ margin: "0 0 8px" }}>
+                  The group itself is <strong>kept</strong>
+                  {others.length > 0
+                    ? ` — it still has ${others.length} other mapping${others.length === 1 ? "" : "s"}.`
+                    : ", with no mappings left. Delete it on the Group Management page if it is no longer needed."}
+                </p>
+                {/* Stated because it is the one thing that surprises people: removing a row does
+                    not remove the permission it created. Nothing in this tool revokes a role
+                    assignment, so the group keeps this grant on the folder until reconciliation
+                    strips it — and the list will no longer show that it exists. */}
+                <p style={{ margin: 0, color: "#8a6d00" }}>
+                  Note: the folder permission this row created stays in place until Folder
+                  Reconciliation runs. Deleting the row stops it being re-applied; it does not
+                  take the access away.
+                </p>
               </div>
               <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", padding: 12 }}>
                 <button style={s.ghost} disabled={busy} onClick={() => setConfirmDel(undefined)}>Cancel</button>
                 <button style={s.delBtn} disabled={busy} onClick={() => { onDelete(confirmDel).catch(() => undefined); }}>
-                  {lastRow ? "Delete mapping and group" : "Delete mapping"}
+                  Delete mapping
                 </button>
               </div>
             </div>
           </div>
         );
       })()}
-
-      {/* Member-management modal — separate from the add-mapping form. */}
-      {memberModal && (
-        <div style={s.modalOverlay} onClick={closeMemberModal}>
-          <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
-            <div style={s.modalHead}>
-              <span>Members — {memberModal.displayName}</span>
-              <button style={s.chipX} onClick={closeMemberModal} title="Close">✕</button>
-            </div>
-            <div style={s.modalBody}>
-              {mmMembers === undefined && <div style={{ fontSize: 12, color: "#666" }}>Loading members…</div>}
-              {mmMembers !== undefined && mmMembers.length === 0 && (
-                <div style={{ fontSize: 12, color: "#888", fontStyle: "italic" }}>No members yet.</div>
-              )}
-              {(mmMembers ?? []).map((m) => (
-                <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", borderBottom: "1px solid #f4f4f4" }}>
-                  <span style={{ flex: 1 }}>{m.title}</span>
-                  <span style={s.mono}>{m.email}</span>
-                  {canManage === true && (mmConfirmRemove === m.id ? (
-                    <span style={{ display: "inline-flex", gap: 6 }}>
-                      <button style={s.delBtn} disabled={mmBusy} onClick={() => { mmRemove(m.id).catch(() => undefined); }}>Remove</button>
-                      <button style={s.ghost} disabled={mmBusy} onClick={() => setMmConfirmRemove(undefined)}>Cancel</button>
-                    </span>
-                  ) : (
-                    <button style={s.chipX} disabled={mmBusy} title="Remove from group" onClick={() => setMmConfirmRemove(m.id)}>✕</button>
-                  ))}
-                </div>
-              ))}
-              {canManage === true && (
-                <div style={{ ...s.ddwrap, marginTop: 12 }}>
-                  <input
-                    style={s.input}
-                    placeholder="Search people in the tenant to add…"
-                    value={mmQuery}
-                    disabled={mmBusy}
-                    onChange={(e) => setMmQuery(e.target.value)}
-                  />
-                  {mmQuery.trim().length >= 2 && (
-                    <div style={s.dd}>
-                      {mmSearching && <div style={s.ddItem}>Searching…</div>}
-                      {!mmSearching && mmResults.map((p) => (
-                        <div key={p.loginName} style={s.ddItem} onClick={() => { mmAdd(p).catch(() => undefined); }}>
-                          {p.displayName} <span style={s.mono}>{p.email}</span>
-                        </div>
-                      ))}
-                      {!mmSearching && mmResults.length === 0 && (
-                        <div style={{ ...s.ddItem, color: "#666" }}>No matching people.</div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-            <div style={s.modalFoot}>
-              <button style={s.secondaryBtn} onClick={closeMemberModal}>Done</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {toast && (
         <div style={{ ...s.toast, background: toast.error ? "#a4262c" : "#0f6c3f" }}>{toast.message}</div>

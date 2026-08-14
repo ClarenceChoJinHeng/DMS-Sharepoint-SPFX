@@ -650,6 +650,43 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   Employee) vs Approval Document (HoU, PIC). That grouping is **derived** via
   `personaTouchesStaging()`, never hand-listed: filing C-Level under the approval library would
   present the widest accidental grant in the system as normal.
+- **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
+  folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.
+  New web part **`Group Management`** (`3f81c6d2-…`, inside the `user-access-web-parts` bundle) owns
+  creating a group, its members and deleting it. Folder Access now does ONE thing: map an
+  **existing** group to a segment, tier and role.
+  - The confusion was a **MISSING STATE**, not a layout problem. Creating a group was reachable only
+    as half of "Create group & add mapping" — one indivisible action that rolled the group back if
+    any mapping row failed — and its mirror deleted the SP group when its **last** mapping row went.
+    So "this group exists but is not assigned yet" could not be expressed.
+  - **THE AUTO-DELETE-ON-LAST-ROW RULE IS GONE, and removing it was required, not incidental.** Once
+    "created but not yet assigned" is legitimate, that rule silently destroys a group an admin made
+    minutes earlier. `onDelete` now deletes A ROW. Deleting a group is deliberate, on the new page,
+    and **says that folder permissions survive until reconciliation runs** — removing the mapping is
+    not removing the access, and an admin who believes otherwise stops looking.
+  - **The naming convention survives as a NAME BUILDER that writes nothing.** `suggestGroupName`
+    derives `GHO_GF_CORU_UPLOADER` from segment + tier + role, and Folder Access still reads that
+    suffix back via `roleFromGroupName` to pre-select a role. The new page offers the same cascade
+    purely to fill the name box, and asks before overwriting a hand-typed name.
+  - **Folder Access's "➕ Create a new group" row became a SIGNPOST** ("Groups are created on the
+    Group Management page"). With five separate access pages nothing else tells an admin the order;
+    that one line is the whole mitigation for not merging them into a tab bar.
+  - **The Full Control check left with the features that needed it.** What remains here is a Group
+    Map LIST write, governed by list permissions — a "you need Full Control" banner would warn the
+    wrong people and reassure the wrong people. `Group Management` keeps the check.
+  - Gone from Folder Access with it: the per-row **Members** modal, the inline member editor and the
+    **People** tab. The file dropped 2325 → ~1390 lines, back under the lint ceiling.
+  - **No list schema change and no migration** — same Group Map rows, same groups.
+  - Audit gained `GroupCreated` / `GroupDeleted` / `MembersChanged`, safe because `EventType` is a
+    **Text** column. `GroupMapChanged` stays, and stays on Folder Access: it describes a MAPPING.
+- **The site-entry rule has ONE implementation: `shared/siteEntryGroup.ts`** (2026-08-14). It was
+  written out three times (GroupMapBuilder, SiteAccess, reconciliation) and this change would have
+  made a fourth. `ensureSiteEntryGroup` **throws rather than creating when the group list cannot be
+  read**: SiteAccess used to create whenever its `entry` state was empty, which is also what a
+  FAILED read looks like — producing a second entry group, both looking correct, with everyone's
+  real access sitting in the original. `addMemberWithSiteEntry` adds to the target group and the
+  entry group and returns a `note` (it never throws) that every caller must surface. **Absent ≠
+  unreadable** here as everywhere: one is a setup step the admin can take, the other is not.
 - **`SEGVIEW`/`GLOBAL` must NEVER appear in `LIBRARY_ROLES.Staging`** — a segment-wide viewer
   there reads every unapproved draft in the segment.
 
