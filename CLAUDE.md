@@ -911,7 +911,8 @@ Client, for the uploaders: it is difficult to track what you uploaded. Web part 
   states, as everywhere else in this codebase.
 - Row keys are `library#itemId`: item ids repeat ACROSS libraries, and keying on the id alone drops a
   row silently.
-- **FOUR bugs found on the first site test (2026-08-14), all worth remembering:**
+- **FIVE bugs found on site test (2026-08-14) — 1-4 on the first pass, 5 on the second, all worth
+  remembering:**
   1. **`Document Type` is MANAGED METADATA, so `$select` returns an OBJECT** (`{Label, TermGuid,
      WssId}`) or a bare lookup id. `(v ?? "").trim()` on it threw *"(intermediate value).trim is not
      a function"* and killed the whole page with an error naming no field. Every SharePoint field now
@@ -925,6 +926,37 @@ Client, for the uploaders: it is difficult to track what you uploaded. Web part 
   3. **`Documents` has the URL segment `Shared Documents`**, so a hardcoded `"Documents"` left
      "Shared Documents" at the head of every approved file's folder trail. Gotcha #12 again; the
      segment is now read off `RootFolder/ServerRelativeUrl`, falling back to the title.
+  5. **THE DETAIL PANEL'S FIELD LIST WAS HARDCODED, so a segment's tiers VANISHED from it** (found
+     2026-08-14, spec `2026-08-14-document-details-panel-design.md`; rules in
+     `shared/documentDetails.ts`, pure, 40 tests). It named `Department` and `Unit` literally, so on
+     **Upstream Operations Malaysia** — tiers `Region` and `Estate/Mill` — both rows read blank,
+     blank rows are dropped, and the two values that decide where the file lives were simply absent.
+     Not segment-specific: the admin NAMES the tiers at onboarding, so a list of field names could
+     only ever be right for the segments it was written for, and **every future onboarding would
+     silently lose its own tiers**.
+     - **THE TIER ROWS ARE NOW DERIVED, with no extra request.** Every tier column has a
+       `<Base>Tid` sibling (that is how `ensureColumn` makes them) and `FieldValuesAsText` returns
+       EVERY field including the Tid ones — so **a field is a tier field iff its Tid twin is
+       present**. `Year`/`Document Type` are managed metadata with **no** Tid column, which is
+       exactly why they stay in the fixed list; that absence is load-bearing, not an oversight. Tid
+       columns are never displayed — they hold the GUIDs the term store exists to hide.
+     - **The double-encoded key is DERIVED too:** `name.replace(/_/g, "_x005f_")`. Both detail views
+       listed the two spellings per field BY HAND — a silently blank row per typo, and why a stale
+       `Year_x002f_Period` fallback was still being carried after that column was renamed.
+     - Order comes from response order (= field creation order = chain order); **Business Segment is
+       pinned first** because that position is the only semantically load-bearing one. Labels decode
+       `_xNNNN_` to a space, recovering the real name; a name sanitized at creation cannot be
+       (`Estate/Mill` → column `EstateMill` → label `Estate Mill`) and the separator is NOT guessed
+       back. Exact titles would need a `/fields` read — declined for one character.
+     - Also added: **Location**, **Details** (`_ExtendedDescription`), **File size** (`File/Length`
+       is a STRING of bytes — raw, it reaches the screen as `1483776`) and **Last updated**
+       (`Modified`; the gap from `Created` is when the APPROVER acted). `File/Length` needs
+       `$expand=File`, so the read gained a **last-resort retry that drops both new fields** — a
+       decorative panel row must never be why an uploader is told they have no files.
+     - **`ApprovalDocument.tsx:704-705` HAS THE SAME BUG and is NOT yet fixed.** It matters more
+       there: the approver is deciding whether to publish into that unit, and its own comment says
+       the full labels exist because the folder path is abbreviated. `buildDetailRows` serves both;
+       note its `pick` returns `"—"` where the shared module drops the row.
   4. **`FieldValuesAsText` is a PER-ITEM endpoint** (as ApprovalDocument already knew), so the list
      cannot show metadata at all without one request per row. Metadata therefore lives ONLY in the
      detail view — which is also what turns a taxonomy value into a readable LABEL instead of `15`.

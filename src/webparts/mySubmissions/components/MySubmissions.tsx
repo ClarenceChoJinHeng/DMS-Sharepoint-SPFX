@@ -32,6 +32,9 @@ import {
   textOf,
   trailText,
 } from "../../../shared/mySubmissions";
+// The metadata panel's rows. It DERIVES the tier rows from the item's own fields rather than naming
+// them, which is what makes Region/Estate·Mill appear on a segment nobody wrote code for.
+import { buildDetailRows, formatBytes } from "../../../shared/documentDetails";
 import { libraryTitle, libraryUrlSegment } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 // The preview strategy is ALREADY built and tested for the approval page: PDF, Office Online,
@@ -155,7 +158,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     userId: number,
   ): Promise<Submission[]> => {
     const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items`;
-    const common = "Id,FileLeafRef,FileRef,Created";
+    // `File/Length` needs the $expand — a bare `File/Length` in a $select is rejected. Modified is
+    // read alongside Created because on this page the gap between them is the story: created is when
+    // the uploader sent it, modified is when the approver acted.
+    const common = "Id,FileLeafRef,FileRef,Created,Modified,File/Length";
     const withStatus = approvalLibrary ? `${common},OData__ModerationStatus` : common;
     // FSObjType eq 0 = FILES ONLY. Without it every folder the uploader ever caused to be
     // created comes back as a "submission": 443 rows on the test site, and clicking one opened
@@ -166,7 +172,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     // the same way the CAML name is rejected in a $select (memory sp-caml-internal-vs-rest-field-names).
     const get = (select: string): Promise<SPHttpClientResponse> =>
       context.spHttpClient.get(
-        `${base}?$select=${select}&$filter=AuthorId eq ${userId} and FSObjType eq 0` +
+        `${base}?$select=${select}&$expand=File&$filter=AuthorId eq ${userId} and FSObjType eq 0` +
           "&$top=2000&$orderby=Created desc",
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
@@ -176,10 +182,25 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       ? await get(`${withStatus},OData__ModerationComments`)
       : await get(withStatus);
     if (!res.ok && approvalLibrary) {
-      // The comment is the only optional field, so a failure earns one retry without it before
-      // giving up on the whole library.
+      // The comment is optional, so a failure earns a retry without it before giving up.
       setCommentsMissing(true);
       res = await get(withStatus);
+    }
+    if (!res.ok) {
+      // LAST RESORT: drop the two decorative fields — file size and Modified — and read the set the
+      // page cannot do without. They were added on 2026-08-14 for a richer detail panel, and a
+      // panel row must never be the reason an uploader is told they have no files. `File/Length`
+      // in particular needs the $expand, and a $select naming anything unavailable fails the WHOLE
+      // request with a 400 rather than omitting a key (gotcha #11).
+      const minimal = approvalLibrary
+        ? "Id,FileLeafRef,FileRef,Created,OData__ModerationStatus"
+        : "Id,FileLeafRef,FileRef,Created";
+      res = await context.spHttpClient.get(
+        `${base}?$select=${minimal}&$filter=AuthorId eq ${userId} and FSObjType eq 0` +
+          "&$top=2000&$orderby=Created desc",
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
     }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -189,6 +210,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     const data = await res.json();
     return ((data.value ?? []) as RawRow[]).map((r) => {
       const createdRaw = textOf(r.Created);
+      const modifiedRaw = textOf(r.Modified);
+      // The expanded File, when the $expand survived. `textOf` handles every shape SharePoint can
+      // return for a field, but Length sits one level down, so it is reached explicitly.
+      const file = r.File as { Length?: unknown } | undefined;
       return {
         itemId: Number(r.Id),
         library: urlSegment,
@@ -198,6 +223,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         status: approvalLibrary ? statusToDecision(Number(r.OData__ModerationStatus)) : "Approved",
         created: createdRaw.length > 0 ? new Date(createdRaw) : undefined,
         comment: pickField(r, "OData__ModerationComments", "OData__x005f_ModerationComments"),
+        size: textOf(file?.Length) || undefined,
+        modified: modifiedRaw.length > 0 ? new Date(modifiedRaw) : undefined,
       };
     });
   };
@@ -296,19 +323,29 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     const preview = previewTarget(open.name, open.fileRef, tenantRoot, siteUrl);
     // FieldValuesAsText keys arrive double-encoded, so each row asks for both spellings — the same
     // reason pickField exists. Blank values are dropped rather than shown as empty rows.
-    const details: Array<[string, string]> = [
-      ["Document Type", pickField(fieldText ?? {}, "Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
-      ["Year", pickField(fieldText ?? {}, "Year", "Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
-      ["Document Date", pickField(fieldText ?? {}, "DocumentDate")],
-      ["Business Segment", pickField(fieldText ?? {}, "Business_x005f_x0020_x005f_Segment", "Business_x0020_Segment")],
-      ["Department", pickField(fieldText ?? {}, "Department")],
-      ["Unit", pickField(fieldText ?? {}, "Unit")],
-      ["Confidentiality", pickField(fieldText ?? {}, "Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
-      ["Legally Privileged", pickField(fieldText ?? {}, "LegallyPrivileged")],
-      ["Project Name", pickField(fieldText ?? {}, "ProjectName", "Project_x005f_x0020_x005f_Name")],
-      ["Vendor / Customer", pickField(fieldText ?? {}, "Vendor_x005f_x002f_x005f_CustomerName", "Vendor_x002f_CustomerName")],
-      ["Remark", pickField(fieldText ?? {}, "Remark")],
-    ].filter(([, v]) => v.length > 0) as Array<[string, string]>;
+    /* The metadata rows come from shared/documentDetails.ts, which DERIVES the tier rows instead of
+       naming them.
+
+       This list used to name `Department` and `Unit` literally, so on Upstream Operations Malaysia —
+       whose tiers are Region and Estate/Mill — both read blank, blank rows were dropped, and the two
+       values that decide where the file lives were missing from the panel. Reported 2026-08-14 on a
+       file at `UPOPSMY › JHR › BKB › 2024 › Working File`, which showed the segment and nothing under
+       it. Every segment onboarded from here has different tier names, so no list could stay right.
+
+       `leading`/`trailing` are the rows only this screen knows. They are passed through blank-or-not,
+       which is why each says "unknown" rather than being omitted: an absent row reads as a file with
+       no location, and this screen can tell the difference. */
+    const trail = trailText(folderTrail(open.fileRef, libs));
+    const details = buildDetailRows({
+      fieldText: fieldText ?? {},
+      leading: [{ label: "Location", value: trail || "the library root" }],
+      trailing: [
+        // Both come from the list query, not FieldValuesAsText — one round trip already spent.
+        { label: "File size", value: formatBytes(open.size) || "unknown" },
+        // Uploaded is in the header line; Last updated is what changed when the approver acted.
+        { label: "Last updated", value: formatSubmittedOn(open.modified) },
+      ],
+    });
 
     return (
       <section style={s.wrap}>
@@ -372,14 +409,16 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           <div>
             <div style={s.sectionTitle}>Details</div>
             {fieldText === undefined && <p style={s.empty}>Loading details&hellip;</p>}
-            {fieldText !== undefined && details.length === 0 && (
+            {/* The metadata is the part that can be missing — Location and the file facts always
+                have a value, so `details` is never empty and cannot carry this state itself. */}
+            {fieldText !== undefined && Object.keys(fieldText).length === 0 && (
               // Empty and unreadable look the same from here, so say the honest thing: the file and
               // its status are still correct above, which is what the page is for.
               <p style={{ fontSize: 12, color: "#605e5c", lineHeight: 1.5 }}>
                 No details were recorded for this file, or they could not be read.
               </p>
             )}
-            {details.map(([label, value]) => (
+            {details.map(({ label, value }) => (
               <div key={label} style={s.detailRow}>
                 <div style={s.detailLabel}>{label}</div>
                 <div style={s.detailValue}>{value}</div>

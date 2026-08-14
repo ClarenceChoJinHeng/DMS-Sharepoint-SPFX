@@ -32,6 +32,16 @@ export interface Submission {
   created?: Date;
   /** The approver's rejection comment; "" when there is none or it could not be read. */
   comment: string;
+  /**
+   * File size in BYTES, as text — `File/Length` is a string, and a raw one reaches the screen as
+   * `1483776`. Formatted by `formatBytes` at render. Undefined when it could not be read.
+   */
+  size?: string;
+  /**
+   * Last modified. Distinct from `created`, and that difference is the useful part on this page:
+   * `created` is when the uploader sent it, `modified` is when the approver acted on it.
+   */
+  modified?: Date;
   // NOTE: no metadata here, deliberately. The full field set is only readable through
   // FieldValuesAsText, which is a PER-ITEM endpoint — one request per row would mean hundreds on
   // a list this long, and the raw $select returns a lookup id (a bare `15` reached the screen on
