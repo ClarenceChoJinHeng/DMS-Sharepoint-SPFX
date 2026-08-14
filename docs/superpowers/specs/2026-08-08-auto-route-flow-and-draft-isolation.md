@@ -358,6 +358,35 @@ Title is **`Documents`**, URL is **`/Shared Documents`**. Same trap as
 approval. All but one correctly take the False branch. A run whose True branch is **skipped** is
 not a failure. Consider a trigger condition on moderation status if the noise becomes a problem.
 
+**A subtree migration is that problem, and it is the reason to add the condition** (2026-08-14, from the
+guided-flows work — spec `2026-08-14-folder-management-guided-flows-design.md` §4c). The migrator moves
+files inside this library, so every moved file fires a run. Those runs are **harmless** — the `Condition`
+reads the status and a pending or rejected file takes the False branch, touching nothing — so a migration
+does **not** require the flows to be turned off. But a run touching several hundred files spends several
+hundred flow actions doing nothing, and if that exhausts the day's quota **the next genuine approval is
+not routed, silently**, because a flow that never fires leaves no run history (the same blindness as the
+polarity trap in §4).
+
+Recommended condition, which makes migrations free:
+
+```
+@equals(triggerOutputs()?['body/OData__ModerationStatus'], 0)
+```
+
+**Combine it with the `{IsFolder}` guard, do not replace it** — the two answer different questions, and
+dropping the folder guard is what caused a file to be copied while still *Waiting for Approval* on
+2026-08-13. Verify the name against a real run's raw outputs first: it is `OData__ModerationStatus` on the
+list, but connector versions expose moderation state inconsistently in trigger outputs. **Until it is
+verified, leave the `Condition` action in place** — that action is what actually protects an unapproved
+file, and a trigger condition which silently never matches would stop all routing with no run history to
+show why.
+
+One residual effect a migration keeps either way: **a stale approved file still sitting in this library
+will be routed mid-run**, and its destination path is derived from the SOURCE path, so it can land in
+`Documents` under the pre-migration shape. Rare, because this flow deletes on success — one only lingers
+if the flow was off or failed when it was approved. Recoverable by re-running the migration, which records
+no progress and re-derives what is left.
+
 ### 5.7 Content approval on `Documents` hides everything the flow routes
 
 Verified 2026-08-08. If `Documents` has **content approval on**, every item the flow creates there —
