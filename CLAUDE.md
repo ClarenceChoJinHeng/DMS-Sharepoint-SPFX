@@ -706,6 +706,54 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   - **No list schema change and no migration** — same Group Map rows, same groups.
   - Audit gained `GroupCreated` / `GroupDeleted` / `MembersChanged`, safe because `EventType` is a
     **Text** column. `GroupMapChanged` stays, and stays on Folder Access: it describes a MAPPING.
+- **REMOVING ONE PERSON'S ACCESS IS BUILT ON BOTH ACCESS SCREENS (2026-08-14, client: the two
+  screens *"doesn't make sense in terms of user experience"* — removing someone should remove the
+  USER, not their whole group).** Spec `2026-08-14-per-person-access-removal-design.md`; rules in
+  `shared/accessMembers.ts` (pure, 28 tests), UI in `userAccess/components/accessMemberUi.tsx`,
+  mounted by BOTH `StagingAccess.tsx` and `PageAccess.tsx`. Expand **People** on any granted group
+  to list its members and remove one.
+  - **IT IS A GROUP-MEMBERSHIP CHANGE, and can only be.** Library and page grants are held by
+    GROUPS, so the only per-person lever is taking them out of the group — which is the SAME
+    `*_UPL`/`*_APR` group reconciliation maps at folder scope. So this is never scoped to the
+    library or the page however the button reads: **they lose their unit folder too.** Stated in the
+    intro banner, the confirm dialog and the audit row, because an admin who believes otherwise has
+    quietly revoked someone's ability to upload.
+  - **Individual direct grants were REJECTED** (a role assignment on a user principal would be
+    genuinely narrow). They manufacture the exact "granted directly in SharePoint — reconciliation
+    will not remove them" state both screens already flag in red, with no Group Map row explaining
+    why. Achievable, so do not call it impossible; re-argue the trade before re-proposing.
+  - **A PERSON IN TWO ALLOWED GROUPS KEEPS ACCESS**, so `also in GHO_GF_CORU_APR` is on the member
+    row itself — before the click, not only in the dialog, because by the dialog the admin has
+    already chosen the row. Without it a CORRECT removal looks like a failed one.
+  - **`removalVerdict` has THREE answers, never a boolean:** `ends` / `survives` / `unknown`.
+    `unknown` exists because a group whose members failed to load renders like any other collapsed
+    row, so "this ends their access" would be asserted from a picture with an invisible hole.
+    `survives` beats `unknown`. Unlike the fail-open rules elsewhere, this does not refuse the
+    removal — it refuses to CLAIM the removal was sufficient. `lastMember` stays false on an
+    unreadable list for the same reason: understate, never assert.
+  - **A failed member read is an ERROR state, not `[]`.** `MemberLoad` is a 3-state union and the
+    cell says `could not read members`, never `no members` — advisory when the column was
+    decoration, load-bearing now a removal is decided from it. An admin told a group is empty stops
+    looking for the person they came for.
+  - **Removing the last member does NOT remove the grant** — the group stays mapped and allowed,
+    just empty, which reads as configured. Dialog says so; the row goes amber.
+  - **On an UNRESTRICTED page the control is inert** — everyone with site access can open it, so
+    removal changes nothing about who can. Said in four places (row, dialog, toast, audit row):
+    this is the case where it looks like it worked and did nothing.
+  - Page Access **had no audit trail at all**; it has one now (`MembersChanged`, plus the existing
+    `EventType`-is-Text safety). `Outcome` is `Success` ONLY when access genuinely ended — survived,
+    unconfirmed, inert and errored all record `Failed`, because a row reading "member removed"
+    stops someone looking.
+  - PageAccess's read-only members modal is **gone, not kept alongside** — two lists of the same
+    people drift after a write. Adding people stays on Group Management; these screens only remove.
+- **`libApiTitle` NOW LIVES IN `shared/naming.ts` (2026-08-14), and StagingAccess was broken without
+  it.** It builds URLs from the logical `LibTarget` key, and `getbytitle('Staging')` 404s on a site
+  whose library is titled `Approval Document` — so **every "Access now" cell read `unknown` and
+  neither Allow nor Remove could apply a permission.** `ApprovalLibraryAccessPage` already claimed
+  the translation happened "at the API boundary"; it never did, because the helper was a private
+  const in `FolderManager.tsx`. Gotcha #12 again: **translate at the API boundary, never in stored
+  data** — the `Target` filter and the written row still use the key `Staging`. The screen also
+  showed that retired name in 11 user-facing strings; they now resolve the live title.
 - **The site-entry rule has ONE implementation: `shared/siteEntryGroup.ts`** (2026-08-14). It was
   written out three times (GroupMapBuilder, SiteAccess, reconciliation) and this change would have
   made a fourth. `ensureSiteEntryGroup` **throws rather than creating when the group list cannot be

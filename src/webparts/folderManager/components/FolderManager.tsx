@@ -5,7 +5,7 @@ import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember }
 import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
 import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
 import { EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
+import { cachedListTitle, LIST_SUFFIX, libApiTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { IFolderManagerProps } from "./IFolderManagerProps";
@@ -61,13 +61,10 @@ type Mode      = string;
  */
 type LibTarget = "Staging" | "Documents";
 
-/**
- * The title SharePoint actually answers to, for a logical library key.
- *
- * Only the approval library moved: "Documents" is a built-in whose title has not changed, and
- * a Target value an admin already typed as the new name passes through untouched.
- */
-const libApiTitle = (lib: string): string => (lib === "Staging" ? libraryTitle() : lib);
+// libApiTitle — the title SharePoint actually answers to, for a logical library key — moved to
+// shared/naming.ts on 2026-08-14. It was private here while this was the only screen building a URL
+// from a LibTarget; StagingAccess turned out to need it too and, lacking it, had been asking for a
+// library called "Staging" that no longer exists.
 // Folder-derived content type that carries the Full Name column, so the value shows in
 // the details pane. Matched by NAME because its id differs per library. Optional: a site
 // without it still provisions normally, it just shows nothing in the pane.

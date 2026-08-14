@@ -248,6 +248,23 @@ export const libraryTitle = (): string => libraryNames.title;
 export const libraryUrlSegment = (): string => libraryNames.urlSegment;
 
 /**
+ * Translate a LOGICAL LibTarget key into the title the SharePoint API answers to.
+ *
+ * `"Staging"` is a logical key, not a name: it is the stored `Target` value on Group Map
+ * library-scope rows and the key in TARGETS, and it must keep being written and filtered on
+ * unchanged. But the library it names is titled `Approval Document` on this site, so any URL built
+ * from the key 404s. Only the API boundary translates; stored data never does.
+ *
+ * Lived as a private const in FolderManager until 2026-08-14, when StagingAccess was found issuing
+ * `getbytitle('Staging')` for its live-ACL reads — leaving every "Access now" cell reading
+ * "unknown" and both Allow and Remove unable to apply a permission. That is the failure gotcha #12
+ * describes: a wrong title 404s, which at least fails loudly, but only if somebody is looking at
+ * the column it fails in. One copy now, because the next screen to need it would have repeated the
+ * same mistake.
+ */
+export const libApiTitle = (lib: string): string => (lib === "Staging" ? libraryTitle() : lib);
+
+/**
  * Record the resolved pair. Takes the values rather than performing the lookup, keeping this
  * module free of SPFx imports — the same split as setSiteEntryName.
  *

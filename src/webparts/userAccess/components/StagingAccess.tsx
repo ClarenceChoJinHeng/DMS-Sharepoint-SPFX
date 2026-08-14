@@ -28,11 +28,20 @@ import {
   siteEntryGroupTitle,
   normalizeRoleValue,
 } from "../../../shared/groupMapModel";
-import { fetchAllSiteGroups, SpGroup } from "../../../shared/spGroups";
+import { fetchAllSiteGroups, SpGroup, SpGroupMember } from "../../../shared/spGroups";
 import { AuditOutcome, EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
+import { cachedListTitle, LIST_SUFFIX, libApiTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
+import { MemberRemoval, memberLabel, removalVerdict } from "../../../shared/accessMembers";
+import {
+  MemberRemovalDialog,
+  MemberRows,
+  MemberSummary,
+  doRemoveMember,
+  removalFor,
+  useGroupMembers,
+} from "./accessMemberUi";
 
 type Props = { context: WebPartContext; siteUrl: string; library: string };
 
@@ -110,6 +119,36 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
   // dialogs saying almost the same thing is how their wording drifts apart, and the
   // destructive one is the worst place for that.
   const [confirmRemove, setConfirmRemove] = useState<EntryRow[] | undefined>(undefined);
+  // ── Per-person removal (2026-08-14) ────────────────────────────────────────
+  // Group ids whose member list is expanded. A SET, not a single id: comparing two units' member
+  // lists is the reason an admin opens this at all, and an accordion that closes the previous row
+  // makes that impossible.
+  const [expanded, setExpanded] = useState<number[]>([]);
+  // USER ids with a removal in flight — a different namespace from `pending`, which holds GROUP
+  // ids. Sharing one array would spin a group's button because a person inside it is being removed.
+  const [pendingUsers, setPendingUsers] = useState<number[]>([]);
+  const [confirmMember, setConfirmMember] = useState<
+    { removal: MemberRemoval; group: SpGroup } | undefined
+  >(undefined);
+
+  /**
+   * The groups that actually grant entry to this library right now.
+   *
+   * Membership only means anything relative to THESE: being in a group that grants nothing here is
+   * not access, and counting it would put an "also in …" warning on nearly every row — at which
+   * point nobody reads the one that matters.
+   */
+  const allowedGroupIds = rows.map((r) => Number(r.groupId)).filter((id) => id > 0);
+
+  const { members, refresh: refreshMembers } = useGroupMembers(
+    context.spHttpClient,
+    siteUrl,
+    allowedGroupIds,
+  );
+
+  // Resolved from the live group list, so a Group Map row naming a group that has since been
+  // deleted contributes no title — and is therefore never listed as a reason access survives.
+  const titleOf = (groupId: number): string => groups.find((g) => g.id === groupId)?.title ?? "";
 
   const showToast = (message: string, error: boolean): void => {
     setToast({ message, error });
@@ -117,7 +156,17 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
   };
 
   const GET = { Accept: "application/json;odata=nometadata" };
-  const listBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(library)}')`;
+  /**
+   * `library` is the LOGICAL key ("Staging"), which is what Group Map rows store and what this
+   * component filters and writes. A URL needs the live TITLE, and on this site that is
+   * "Approval Document" — so every ACL read here was a 404 until 2026-08-14, which showed up only
+   * as "Access now: unknown" on every row and an Allow that could never apply a permission.
+   * Translate at the boundary, never in stored data (gotcha #12).
+   */
+  const listBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(library))}')`;
+  // What the client is told the library is called. `library` is an internal key and must not
+  // surface in a sentence — the page heading already resolves the live title for the same reason.
+  const libLabel = libApiTitle(library);
 
   /**
    * Library-entry rows from the Group Map.
@@ -225,7 +274,9 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
       at: new Date(),
       actorName: context.pageContext.user.displayName,
       actorEmail: context.pageContext.user.email,
-      library,
+      // The live title, not the internal key: the log is read by people, and "Staging" is a name
+      // the client retired.
+      library: libLabel,
       summary,
       details,
     }).catch(() => undefined);
@@ -325,7 +376,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
       await reload();
       showToast(
         granted
-          ? `${g.title} can now open ${library}.`
+          ? `${g.title} can now open ${libLabel}.`
           : `${g.title} mapped, but the permission could not be applied now — run Folder Reconciliation.`,
         !granted,
       );
@@ -335,10 +386,10 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
       logAccess(
         EVENT.accessGranted,
         granted
-          ? `Library access granted — ${g.title} can open ${library}`
+          ? `Library access granted — ${g.title} can open ${libLabel}`
           : `Library access mapped but NOT applied — ${g.title}`,
         granted
-          ? [`Granted Read on ${library} to: ${g.title}`, "Group Map row written (Library scope)."]
+          ? [`Granted Read on ${libLabel} to: ${g.title}`, "Group Map row written (Library scope)."]
           : [
               `Group Map row written for ${g.title}, but the live permission could not be applied.`,
               "The next Folder Reconciliation will apply it.",
@@ -382,7 +433,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
     setBusy(false);
     showToast(
       failed.length === 0
-        ? `${ok} group(s) can now open ${library}.`
+        ? `${ok} group(s) can now open ${libLabel}.`
         : `${ok} granted, ${failed.length} failed: ${failed.join(", ")}`,
       failed.length > 0,
     );
@@ -390,10 +441,10 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
     // grant would otherwise push everything else in the log off the first page.
     logAccess(
       EVENT.accessGranted,
-      `Library access granted — ${ok} group(s) can open ${library}` +
+      `Library access granted — ${ok} group(s) can open ${libLabel}` +
         (failed.length > 0 ? `, ${failed.length} not applied` : ""),
       [
-        `Granted Read on ${library} to ${ok} group(s).`,
+        `Granted Read on ${libLabel} to ${ok} group(s).`,
         `Groups: ${targets.map((t) => t.title).join(", ")}`,
         failed.length > 0
           ? `Could not fully apply: ${failed.join(", ")} — a Group Map row exists, so reconciliation will apply it.`
@@ -448,8 +499,8 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
     if (failed.length === 0) {
       showToast(
         targets.length === 1
-          ? `${targets[0].groupName || targets[0].groupId} can no longer open ${library}.`
-          : `${ok} group(s) can no longer open ${library}.`,
+          ? `${targets[0].groupName || targets[0].groupId} can no longer open ${libLabel}.`
+          : `${ok} group(s) can no longer open ${libLabel}.`,
         false,
       );
     } else {
@@ -462,7 +513,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
     // nothing on screen shows who still holds it. Recorded as Failed, naming them.
     logAccess(
       EVENT.accessRevoked,
-      `Library access revoked — ${ok} group(s) can no longer open ${library}` +
+      `Library access revoked — ${ok} group(s) can no longer open ${libLabel}` +
         (failed.length > 0 ? `, ${failed.length} NOT fully revoked` : ""),
       [
         `Removed the Group Map row and the live Read grant for ${ok} group(s).`,
@@ -473,6 +524,78 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
       ],
       failed.length > 0 ? "Failed" : "Success",
     );
+  };
+
+  /**
+   * Remove ONE PERSON from ONE GROUP — the client's actual request (2026-08-14).
+   *
+   * The narrowest lever this model has, and still not narrow: the grant belongs to the group, so the
+   * only way to take one person's access away is to take them out of it, which costs them everything
+   * else that group grants — their unit folder included. The dialog says so before this runs; this
+   * function's job is to be honest about what happened afterwards.
+   *
+   * Refreshes ONLY the affected group. A full reload would re-read every group to show one name
+   * disappearing, and would lose which rows the admin had expanded.
+   */
+  const onRemoveMember = async (removal: MemberRemoval): Promise<void> => {
+    const uid = removal.user.id;
+    setBusy(true);
+    setPendingUsers((p) => [...p, uid]);
+    setConfirmMember(undefined);
+    const who = memberLabel(removal.user);
+    const verdict = removalVerdict(removal);
+    try {
+      const err = await doRemoveMember(context.spHttpClient, siteUrl, removal.groupId, uid);
+      await refreshMembers(removal.groupId);
+      if (err) {
+        showToast(`Could not remove ${who} from ${removal.groupName}: ${err}`, true);
+        logAccess(
+          EVENT.membersChanged,
+          `FAILED to remove ${who} from ${removal.groupName}`,
+          [
+            `Attempted to remove ${who} (${removal.user.email || `user ${uid}`}) from ${removal.groupName}.`,
+            `The removal did not go through: ${err}`,
+            "They still hold whatever that group grants.",
+          ],
+          "Failed",
+        );
+        return;
+      }
+      // The toast repeats the verdict rather than saying "removed". "Removed" on a person who still
+      // has access through another group is true and useless, and it is the sentence that stops an
+      // admin finishing the job.
+      showToast(
+        verdict === "survives"
+          ? `${who} removed from ${removal.groupName}, but still has access via ${removal.survivingGroups.join(", ")}.`
+          : verdict === "unknown"
+            ? `${who} removed from ${removal.groupName}. Could not confirm whether they still have access via ${removal.unreadable.join(", ")}.`
+            : `${who} can no longer open ${libLabel}.`,
+        verdict === "survives" || verdict === "unknown",
+      );
+      logAccess(
+        EVENT.membersChanged,
+        `${who} removed from ${removal.groupName}` +
+          (verdict === "survives" ? " — access RETAINED via another group" : ""),
+        [
+          `Removed ${who} (${removal.user.email || `user ${uid}`}) from ${removal.groupName}.`,
+          `That group grants entry to ${libLabel}, and its folder permissions.`,
+          verdict === "survives"
+            ? `Access to ${libLabel} REMAINS: they are also in ${removal.survivingGroups.join(", ")}.`
+            : verdict === "unknown"
+              ? `Whether access remains is unconfirmed — could not read the members of ${removal.unreadable.join(", ")}.`
+              : `No other group listed here grants them ${libLabel}.`,
+          removal.lastMember
+            ? `${removal.groupName} now has no members, but keeps its grant.`
+            : "",
+        ].filter((l) => l.length > 0),
+        // A removal that leaves the access in place is not a clean outcome. Recorded the same way a
+        // half-applied revoke is, so the log never reads as "handled" when it is not.
+        verdict === "ends" ? "Success" : "Failed",
+      );
+    } finally {
+      setPendingUsers((p) => p.filter((id) => id !== uid));
+      setBusy(false);
+    }
   };
 
   // ── Derived view ───────────────────────────────────────────────────────────
@@ -532,11 +655,22 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
     <div style={s.wrap}>
       <style>{SPIN_KEYFRAMES}</style>
       <p style={s.intro}>
-        Which groups may <strong>open the {library} library</strong>. Folder permissions alone are
-        not enough — without an entry here, an uploader clicking <strong>{library}</strong> in the
-        left navigation gets <em>Access Denied</em>, even though a direct link to their own folder
-        works.
+        Who may <strong>open the {libLabel} library</strong>. Folder permissions alone are not
+        enough — without an entry here, an uploader clicking <strong>{libLabel}</strong> in the left
+        navigation gets <em>Access Denied</em>, even though a direct link to their own folder works.
       </p>
+
+      {/* Says the thing the client could not work out from the screen: access is held by groups,
+          so removing one person means taking them out of a group, and that is wider than this
+          page. Stated up front rather than only in the confirm dialog — by then the admin has
+          already decided, and the honest answer to "can I remove just this person?" is "yes, but
+          it costs them their folder too", which changes what they do next. */}
+      <div style={s.warnBox}>
+        <strong>Access is granted to groups, not to individuals.</strong> Expand{" "}
+        <strong>People</strong> on any row to see who is in a group and remove one of them — that
+        takes them out of the group, so they also lose the folder permissions it grants. To take
+        access away from everybody in a group at once, use <strong>Remove</strong> on the group row.
+      </div>
 
       <div style={s.okBox}>
         This does <strong>not</strong> let them see other units. Each folder has its own
@@ -558,7 +692,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
       {live === undefined && !loading && (
         <div style={s.warnBox}>
-          Could not read the current permissions of <strong>{library}</strong>, so the
+          Could not read the current permissions of <strong>{libLabel}</strong>, so the
           &ldquo;Access now&rdquo; column below is unknown. The mappings themselves are still
           accurate.
         </div>
@@ -566,7 +700,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
       {unexpected.length > 0 && (
         <div style={s.dangerBox}>
-          <strong>{unexpected.length} mapping(s) grant {library} access to a group that is not an
+          <strong>{unexpected.length} mapping(s) grant {libLabel} access to a group that is not an
           uploader, approver or Staging deleter.</strong> A viewer group here can read other
           people&rsquo;s unapproved documents. Remove them below.
           <div style={s.mono}>{unexpected.map((r) => r.groupName || r.groupId).join(", ")}</div>
@@ -575,7 +709,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
       {unmanaged.length > 0 && (
         <div style={s.warnBox}>
-          <strong>{unmanaged.length} group(s) already hold permissions on {library} without a
+          <strong>{unmanaged.length} group(s) already hold permissions on {libLabel} without a
           mapping here</strong> — granted directly in SharePoint. They are not managed by this
           tab and reconciliation will not remove them.
           <div style={s.mono}>
@@ -647,6 +781,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                   <th style={{ ...s.th, width: 28 }} />
                   <th style={s.th}>Group</th>
                   <th style={s.th}>Role</th>
+                  <th style={s.th}>People</th>
                   <th style={s.th}>Mapped here</th>
                   <th style={s.th}>Access now</th>
                   <th style={s.th} />
@@ -662,8 +797,15 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                   // exactly the wrong conclusion, so it is named for what it means.
                   const folderOnly =
                     liveGrant !== undefined && liveGrant.levels.every((n) => n === "Limited Access");
+                  // Expandable only where there is per-person access to manage. A group with no
+                  // mapping grants nobody anything here, so its member list has nothing to remove
+                  // FROM — the action on that row is Allow. The count still shows, because an
+                  // empty group is worth knowing about before allowing it.
+                  const isExpandable = row !== undefined;
+                  const isExpanded = isExpandable && expanded.indexOf(g.id) !== -1;
                   return (
-                    <tr key={g.id}>
+                    <React.Fragment key={g.id}>
+                    <tr>
                       <td style={s.checkCell}>
                         <input
                           type="checkbox"
@@ -680,6 +822,21 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                       </td>
                       <td style={s.td}>{g.title}</td>
                       <td style={s.td}>{roleFromGroupName(g.title)}</td>
+                      {/* Who is actually in the group — and, for a mapped group, the way in to
+                          removing one of them. "Remove GHO_GF_CORU_UPL" is a decision about
+                          PEOPLE, and the group name only names them if you already know the
+                          convention, which the client by their own account does not. */}
+                      <td style={s.td}>
+                        <MemberSummary
+                          group={g}
+                          members={members}
+                          expanded={isExpanded}
+                          expandable={isExpandable}
+                          onToggle={() => setExpanded((ids) =>
+                            ids.indexOf(g.id) !== -1 ? ids.filter((i) => i !== g.id) : [...ids, g.id],
+                          )}
+                        />
+                      </td>
                       <td style={s.td}>
                         {row ? <span style={s.yes}>Yes</span> : <span style={s.no}>No</span>}
                       </td>
@@ -712,6 +869,26 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                         )}
                       </td>
                     </tr>
+                    {isExpanded && (
+                      <MemberRows
+                        group={g}
+                        members={members}
+                        allowedGroupIds={allowedGroupIds}
+                        titleOf={titleOf}
+                        // 7 columns: tick, Group, Role, People, Mapped here, Access now, action.
+                        colSpan={7}
+                        busy={busy}
+                        pending={pendingUsers}
+                        onRetry={() => { refreshMembers(g.id).catch(() => undefined); }}
+                        onRemove={(u: SpGroupMember) => setConfirmMember({
+                          group: g,
+                          removal: removalFor({
+                            user: u, group: g, allowedGroupIds, members, titleOf,
+                          }),
+                        })}
+                      />
+                    )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
@@ -730,18 +907,18 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
           <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
             <div style={s.modalHead}>
               {confirmRemove.length === 1
-                ? `Remove ${library} access?`
-                : `Remove ${library} access from ${confirmRemove.length} groups?`}
+                ? `Remove ${libLabel} access?`
+                : `Remove ${libLabel} access from ${confirmRemove.length} groups?`}
             </div>
             <div style={s.modalBody}>
               {confirmRemove.length === 1 ? (
                 <>
                   <strong>{confirmRemove[0].groupName || confirmRemove[0].groupId}</strong> will no
-                  longer be able to open the <strong>{library}</strong> library.
+                  longer be able to open the <strong>{libLabel}</strong> library.
                 </>
               ) : (
                 <>
-                  These groups will no longer be able to open the <strong>{library}</strong>{" "}
+                  These groups will no longer be able to open the <strong>{libLabel}</strong>{" "}
                   library:
                   {/* Named, not counted. A count alone cannot be checked against what the
                       admin meant to select, and this is the destructive button. */}
@@ -771,6 +948,28 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
             </div>
           </div>
         </div>
+      )}
+
+      {confirmMember && (
+        <MemberRemovalDialog
+          removal={confirmMember.removal}
+          busy={busy}
+          // The wider effect, in this screen's own terms. The same group grants the unit folder,
+          // so this is never "remove from the library" however the button is labelled — and an
+          // admin who believes otherwise has quietly revoked someone's ability to upload.
+          scopeWarning={
+            <>
+              This takes them out of <strong>{confirmMember.removal.groupName}</strong>{" "}
+              <strong>everywhere</strong>, not just here. That group also grants their folder
+              permissions, so they lose the ability to upload to{" "}
+              {confirmMember.removal.groupName.length > 0 ? "that unit" : "their unit"} as well.
+              {" "}To take away only library entry, remove the whole group with{" "}
+              <strong>Remove</strong> on its row instead.
+            </>
+          }
+          onCancel={() => setConfirmMember(undefined)}
+          onConfirm={() => { onRemoveMember(confirmMember.removal).catch(() => undefined); }}
+        />
       )}
 
       {toast && (

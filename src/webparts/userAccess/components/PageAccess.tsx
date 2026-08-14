@@ -28,11 +28,22 @@ import {
   isForbiddenPageTarget,
   siteEntryGroupTitle,
 } from "../../../shared/groupMapModel";
-import { fetchAllSiteGroups, fetchBuiltInGroupIds, getGroupMembers, SpGroup, SpGroupMember } from "../../../shared/spGroups";
+import { fetchAllSiteGroups, fetchBuiltInGroupIds, SpGroup, SpGroupMember } from "../../../shared/spGroups";
 import { policyForPage, VIEW_ONLY_ROLES } from "../../../shared/pageAccessPolicy";
 import { roleFromGroupName } from "../../../shared/groupMapModel";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { AuditOutcome, EVENT } from "../../../shared/auditLog";
+import { writeAudit } from "../../../shared/spAuditLog";
+import { MemberRemoval, memberLabel, removalVerdict } from "../../../shared/accessMembers";
+import {
+  MemberRemovalDialog,
+  MemberRows,
+  MemberSummary,
+  doRemoveMember,
+  removalFor,
+  useGroupMembers,
+} from "./accessMemberUi";
 
 type Props = { context: WebPartContext; siteUrl: string };
 
@@ -94,20 +105,11 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   const [groups, setGroups]   = useState<SpGroup[]>([]);
   const [rows, setRows]       = useState<EntryRow[]>([]);
 
-  /**
-   * Members per group, for the Members column. A group absent from the map has not been read yet.
-   *
-   * Fetched separately rather than folded into the group list, because the group list is ONE
-   * request and this is one PER GROUP: batching them into the initial load would hold the whole
-   * table behind ten round-trips. The column fills in as answers arrive; the rest of each row is
-   * useful immediately.
-   *
-   * A group that fails to read is recorded as empty rather than retried. That reads the same as
-   * a genuinely empty group, which is acceptable precisely because this column is ADVISORY — it
-   * answers "who is in here" at a glance and is never what an access decision rests on. The
-   * Access now column remains the authority on what the page actually permits.
-   */
-  const [membersByGroup, setMembersByGroup] = useState<Record<number, SpGroupMember[]>>({});
+  // Members per group now live in the shared useGroupMembers hook (see below). Until 2026-08-14
+  // they were held here and a FAILED read was recorded as an empty list — acceptable while the
+  // column was advisory, and no longer so now that a removal is decided from it: "no members" on a
+  // group that merely failed to load is what stops an admin opening the row holding the person
+  // they came for.
   const [live, setLive]       = useState<LiveGrant[] | undefined>(undefined);
   const [welcome, setWelcome] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -135,15 +137,20 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
    */
   const [confirmReopen, setConfirmReopen] = useState<PageItem | undefined>(undefined);
 
-  /**
-   * The group whose full member list is open, if any.
-   *
-   * The cell shows three names with the rest on hover — fine for a glance, useless for the
-   * actual question ("is this the right seven people?"), and unreachable on a touch screen or by
-   * keyboard. A tooltip is a hint; deciding who may open a page needs a list you can read,
-   * scroll and copy from.
-   */
-  const [membersModal, setMembersModal] = useState<SpGroup | undefined>(undefined);
+  // ── Per-person removal (2026-08-14) ────────────────────────────────────────
+  // Replaces the read-only members modal that lived here. It showed three names with the rest on
+  // hover and a "View" button opening the full list — the right instinct, but it could only ever
+  // answer "who is in here", never "take this one person out", which is what the client asked for.
+  // Inline expansion shows the same names, in the same place, with the action attached; keeping the
+  // modal as well would mean two lists of the same people that can disagree after a write.
+  //
+  // A SET of expanded group ids, not one: comparing two groups' members is why an admin opens this.
+  const [expanded, setExpanded] = useState<number[]>([]);
+  // USER ids with a removal in flight — a separate namespace from `pending`, which holds GROUP ids.
+  const [pendingUsers, setPendingUsers] = useState<number[]>([]);
+  const [confirmMember, setConfirmMember] = useState<
+    { removal: MemberRemoval; group: SpGroup } | undefined
+  >(undefined);
   const [confirmFirstLock, setConfirmFirstLock] = useState<SpGroup[] | undefined>(undefined);
   // Escape hatch for the page-specific filter. Off by default and reset whenever the page
   // changes, so it can never silently stay on from a previous selection.
@@ -211,35 +218,27 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   const hiddenCount = allGroups.length - candidates.length;
 
   /**
-   * Fill the Members column, one group at a time.
+   * Members for every group on screen, fetched one at a time by the shared hook.
    *
-   * SEQUENTIAL, not Promise.all. Ten simultaneous calls is how a tenant starts returning 429s,
-   * and the column is decoration on a table that is already usable — it has no claim on the
-   * request budget. Rows fill in visibly, which also tells the admin it is still working.
-   *
-   * `cancelled` guards the unmount: the loop can outlive the component when someone switches
-   * page mid-fetch, and setting state afterwards is a React warning and a leak.
-   *
-   * Keyed on the candidate ids, so switching between "uploader groups only" and "all groups"
-   * fetches just the ones newly on screen — anything already read is skipped.
+   * Keyed on the CANDIDATES rather than only the mapped groups, so the count is there before an
+   * admin allows a group — "this group has no members" is worth knowing one click earlier, and the
+   * hook skips anything already answered when the set changes.
    */
-  const candidateIds = candidates.map((g) => g.id).join(",");
-  useEffect(() => {
-    let cancelled = false;
-    const run = async (): Promise<void> => {
-      for (const g of candidates) {
-        if (cancelled) return;
-        if (membersByGroup[g.id] !== undefined) continue;
-        const members = await getGroupMembers(context.spHttpClient, siteUrl, g.id).catch(
-          () => [] as SpGroupMember[],
-        );
-        if (cancelled) return;
-        setMembersByGroup((prev) => ({ ...prev, [g.id]: members }));
-      }
-    };
-    run().catch(() => undefined);
-    return () => { cancelled = true; };
-  }, [candidateIds]);
+  const { members, refresh: refreshMembers } = useGroupMembers(
+    context.spHttpClient,
+    siteUrl,
+    candidates.map((g) => g.id),
+  );
+
+  /**
+   * The groups that actually grant THIS page right now.
+   *
+   * Only these count towards "they are also in …": membership of a group with no mapping here is
+   * not access to this page, and counting it would warn on nearly every row.
+   */
+  const allowedGroupIds = rowsForPage.map((r) => Number(r.groupId)).filter((id) => id > 0);
+
+  const titleOf = (groupId: number): string => groups.find((g) => g.id === groupId)?.title ?? "";
 
   /**
    * The site's welcome page, read rather than assumed.
@@ -602,6 +601,109 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   };
 
   /**
+   * Record an access change. Fire-and-forget, as on the Approval Library Access screen.
+   *
+   * This screen had NO audit trail until 2026-08-14 — group grants and revokes on a page went
+   * unrecorded. Added with the per-person removal rather than separately: taking one named person's
+   * access away is exactly the change somebody asks about weeks later, and "who removed them"
+   * cannot be reconstructed from the page's ACL, which only shows who is left.
+   */
+  const logAccess = (
+    event: string,
+    summary: string,
+    details: string[],
+    outcome: AuditOutcome,
+  ): void => {
+    writeAudit(context.spHttpClient, siteUrl, {
+      event,
+      outcome,
+      source: "PageAccess",
+      at: new Date(),
+      actorName: context.pageContext.user.displayName,
+      actorEmail: context.pageContext.user.email,
+      summary,
+      details,
+    }).catch(() => undefined);
+  };
+
+  /**
+   * Remove ONE PERSON from ONE GROUP — the client's request of 2026-08-14.
+   *
+   * The same caveat as on the library screen, one step larger: a group mapped to a page is usually
+   * also mapped to folders, so this is never "remove them from this page" however the button reads.
+   * The dialog says so; this reports what actually happened.
+   */
+  const onRemoveMember = async (removal: MemberRemoval): Promise<void> => {
+    const uid = removal.user.id;
+    const p = pages.find((x) => x.fileName === target);
+    setBusy(true);
+    setPendingUsers((q) => [...q, uid]);
+    setConfirmMember(undefined);
+    const who = memberLabel(removal.user);
+    const verdict = removalVerdict(removal);
+    const pageLabel = p?.title ?? target;
+    try {
+      const err = await doRemoveMember(context.spHttpClient, siteUrl, removal.groupId, uid);
+      await refreshMembers(removal.groupId);
+      if (err) {
+        showToast(`Could not remove ${who} from ${removal.groupName}: ${err}`, true);
+        logAccess(
+          EVENT.membersChanged,
+          `FAILED to remove ${who} from ${removal.groupName}`,
+          [
+            `Attempted to remove ${who} (${removal.user.email || `user ${uid}`}) from ${removal.groupName}, which grants ${pageLabel}.`,
+            `The removal did not go through: ${err}`,
+            "They still hold whatever that group grants.",
+          ],
+          "Failed",
+        );
+        return;
+      }
+      // An UNRESTRICTED page is the case a "removed" toast would mislead on most: the person loses
+      // the group, and can still open the page, because everyone with site access can.
+      const inert = p?.unique !== true;
+      showToast(
+        inert
+          ? `${who} removed from ${removal.groupName}. ${pageLabel} is open to everyone with site access, so they can still open it.`
+          : verdict === "survives"
+            ? `${who} removed from ${removal.groupName}, but can still open ${pageLabel} via ${removal.survivingGroups.join(", ")}.`
+            : verdict === "unknown"
+              ? `${who} removed from ${removal.groupName}. Could not confirm whether they still have access via ${removal.unreadable.join(", ")}.`
+              : `${who} can no longer open ${pageLabel}.`,
+        inert || verdict !== "ends",
+      );
+      logAccess(
+        EVENT.membersChanged,
+        `${who} removed from ${removal.groupName}` +
+          (inert
+            ? ` — ${pageLabel} is unrestricted, so page access is UNCHANGED`
+            : verdict === "survives"
+              ? " — page access RETAINED via another group"
+              : ""),
+        [
+          `Removed ${who} (${removal.user.email || `user ${uid}`}) from ${removal.groupName}.`,
+          `That group is mapped to the page ${pageLabel}, and typically to folders as well — this removal affects both.`,
+          inert
+            ? `${pageLabel} is NOT restricted, so everyone with site access can still open it. Removing them from the group did not change who can open this page.`
+            : verdict === "survives"
+              ? `Access to ${pageLabel} REMAINS: they are also in ${removal.survivingGroups.join(", ")}.`
+              : verdict === "unknown"
+                ? `Whether access remains is unconfirmed — could not read the members of ${removal.unreadable.join(", ")}.`
+                : `No other group mapped to ${pageLabel} grants them access.`,
+          removal.lastMember
+            ? `${removal.groupName} now has no members, but keeps its grant.`
+            : "",
+        ].filter((l) => l.length > 0),
+        // Only a removal that genuinely ends access on a restricted page is a clean outcome.
+        !inert && verdict === "ends" ? "Success" : "Failed",
+      );
+    } finally {
+      setPendingUsers((q) => q.filter((id) => id !== uid));
+      setBusy(false);
+    }
+  };
+
+  /**
    * Can this group open the page RIGHT NOW?
    *
    * On an inheriting page the answer is yes for everyone, so nothing here is treated as drift —
@@ -639,6 +741,17 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
         <strong>folder permissions remain the document boundary</strong>. Also, SharePoint does not
         hide navigation links: a restricted page keeps its left-hand link and gives Access Denied
         when clicked. Remove the link from the navigation if you do not want it seen.
+      </div>
+
+      {/* The same explanation the Approval Library Access screen carries, for the same reason: the
+          client could not tell from the screen that access is held by groups, so "remove this one
+          person" had no visible route and looked like a missing feature. */}
+      <div style={s.openBox}>
+        <strong>Access is granted to groups, not to individuals.</strong> Expand{" "}
+        <strong>People</strong> on any allowed group to see who is in it and remove one of them —
+        that takes them out of the group, so they also lose anything else it grants, folder
+        permissions included. To close the page to everybody in a group at once, use{" "}
+        <strong>Remove</strong> on the group row.
       </div>
 
       {scopeMissing && (
@@ -790,7 +903,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
               <tr>
                 <th style={{ ...s.th, width: 28 }} />
                 <th style={s.th}>Group</th>
-                <th style={s.th}>Members</th>
+                <th style={s.th}>People</th>
                 <th style={s.th}>Mapped here</th>
                 <th style={s.th}>Access now</th>
                 <th style={s.th} />
@@ -806,8 +919,15 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                 const outOfSync =
                   page.unique && live !== undefined && (row !== undefined) !== (grant !== undefined);
                 const needsAllow = !row || !canOpen(g.id);
+                // Expandable only where there is per-person access to manage: a group with no
+                // mapping to this page grants nobody anything here, so its member list has nothing
+                // to remove FROM. The count still shows on every row — "this group has no members"
+                // is worth knowing BEFORE allowing it, not after.
+                const isExpandable = row !== undefined;
+                const isExpanded = isExpandable && expanded.indexOf(g.id) !== -1;
                 return (
-                  <tr key={g.id}>
+                  <React.Fragment key={g.id}>
+                  <tr>
                     <td style={s.checkCell}>
                       <input
                         type="checkbox"
@@ -820,39 +940,20 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                       />
                     </td>
                     <td style={s.td}>{g.title}</td>
-                    {/* Who is actually in the group. "Allow GHO_GF_CORU_UPL" is a decision about
-                        PEOPLE, and the group name only names them if you already know the
-                        convention — which the client, by their own account, does not.
-                        Names only, no emails: the cell has to stay scannable down a column of
-                        ten. The full list including emails is in the title attribute. */}
+                    {/* Who is actually in the group, and the way in to removing one of them.
+                        "Allow GHO_GF_CORU_UPL" is a decision about PEOPLE, and the group name only
+                        names them if you already know the convention — which the client, by their
+                        own account, does not. */}
                     <td style={s.td}>
-                      {(() => {
-                        const m = membersByGroup[g.id];
-                        if (m === undefined) return <span style={s.no}>loading…</span>;
-                        if (m.length === 0) {
-                          // Amber, not grey. An empty group that has been ALLOWED grants nobody
-                          // anything, and reads as configured — the one state worth interrupting
-                          // a scan for.
-                          return <span style={{ color: "#b45309" }}>no members</span>;
-                        }
-                        const shown = m.slice(0, 3).map((x) => x.title).join(", ");
-                        return (
-                          <span title={m.map((x) => `${x.title}${x.email ? ` <${x.email}>` : ""}`).join("\n")}>
-                            {shown}
-                            {/* Always offered, not only when the list is truncated. "Are these
-                                the right three?" is the same question as "are these the right
-                                seven?", and a control that appears only sometimes is one an
-                                admin never learns is there. */}
-                            <button
-                              style={{ ...s.ghost, marginLeft: 6, padding: "1px 6px", fontSize: 11 }}
-                              onClick={() => setMembersModal(g)}
-                              title={`Show all ${m.length} member${m.length === 1 ? "" : "s"} of ${g.title}`}
-                            >
-                              {m.length > 3 ? `+${m.length - 3} more` : "View"}
-                            </button>
-                          </span>
-                        );
-                      })()}
+                      <MemberSummary
+                        group={g}
+                        members={members}
+                        expanded={isExpanded}
+                        expandable={isExpandable}
+                        onToggle={() => setExpanded((ids) =>
+                          ids.indexOf(g.id) !== -1 ? ids.filter((i) => i !== g.id) : [...ids, g.id],
+                        )}
+                      />
                     </td>
                     <td style={s.td}>{row ? <span style={s.yes}>Yes</span> : <span style={s.no}>No</span>}</td>
                     <td style={s.td}>
@@ -902,6 +1003,32 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                       )}
                     </td>
                   </tr>
+                  {isExpanded && (
+                    <MemberRows
+                      group={g}
+                      members={members}
+                      allowedGroupIds={allowedGroupIds}
+                      titleOf={titleOf}
+                      // 6 columns: tick, Group, People, Mapped here, Access now, action.
+                      colSpan={6}
+                      busy={busy}
+                      pending={pendingUsers}
+                      onRetry={() => { refreshMembers(g.id).catch(() => undefined); }}
+                      // On an UNRESTRICTED page, removing someone from a group changes nothing
+                      // about who can open it — said on the row, not only in the dialog, because
+                      // otherwise the whole expansion looks like a working control.
+                      inertNote={page.unique
+                        ? undefined
+                        : "This page is open to everyone with site access, so removing someone here does not stop them opening it. Allow a group first to restrict the page."}
+                      onRemove={(u: SpGroupMember) => setConfirmMember({
+                        group: g,
+                        removal: removalFor({
+                          user: u, group: g, allowedGroupIds, members, titleOf,
+                        }),
+                      })}
+                    />
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -913,40 +1040,32 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
         </div>
       )}
 
-      {membersModal && (() => {
-        const m = membersByGroup[membersModal.id] ?? [];
-        return (
-          <div style={s.modalOverlay} onClick={() => setMembersModal(undefined)}>
-            <div style={s.modalBox} onClick={(e) => e.stopPropagation()}>
-              <div style={s.modalHead}>
-                {membersModal.title} — {m.length} member{m.length === 1 ? "" : "s"}
-              </div>
-              {/* Scrolls rather than growing: a unit group is small, but this same list is the
-                  one an admin will open on a segment-wide group one day, and a modal taller
-                  than the window has no way back to its close button. */}
-              <div style={{ ...s.modalBody, maxHeight: "50vh", overflowY: "auto" }}>
-                {m.length === 0 ? (
-                  <span style={{ color: "#b45309" }}>
-                    This group has no members, so allowing it grants nobody access.
-                  </span>
-                ) : (
-                  m.map((x) => (
-                    <div key={x.id} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "3px 0" }}>
-                      <span style={{ fontWeight: 600 }}>{x.title}</span>
-                      {/* Selectable, so an admin can copy an address out to ask someone whether
-                          they should be here — which is the usual next step after reading it. */}
-                      <span style={{ color: "#666", userSelect: "text" }}>{x.email}</span>
-                    </div>
-                  ))
-                )}
-              </div>
-              <div style={s.modalFoot}>
-                <button style={s.ghost} onClick={() => setMembersModal(undefined)}>Close</button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+      {confirmMember && (
+        <MemberRemovalDialog
+          removal={confirmMember.removal}
+          busy={busy}
+          // The wider effect, in this screen's terms. A group mapped to a page is almost always
+          // mapped to folders too, so this is never "remove them from this page".
+          scopeWarning={
+            <>
+              This takes them out of <strong>{confirmMember.removal.groupName}</strong>{" "}
+              <strong>everywhere</strong>, not just on this page. If that group also grants folder
+              permissions — most do — they lose those at the same time. To close this page to
+              everybody in the group instead, use <strong>Remove</strong> on the group row.
+            </>
+          }
+          // The case where the control looks like it worked and did nothing at all.
+          inertWarning={page?.unique === false ? (
+            <>
+              <strong>{page.title} is not restricted</strong>, so everyone with access to the site
+              can open it. Removing this person from the group will <strong>not</strong> stop them
+              opening the page — allow a group first to restrict it.
+            </>
+          ) : undefined}
+          onCancel={() => setConfirmMember(undefined)}
+          onConfirm={() => { onRemoveMember(confirmMember.removal).catch(() => undefined); }}
+        />
+      )}
 
       {confirmReopen && (
         <div style={s.modalOverlay} onClick={() => setConfirmReopen(undefined)}>
