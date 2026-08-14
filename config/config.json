@@ -58,6 +58,14 @@
         }
       ]
     },
+    "my-submissions-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/mySubmissions/MySubmissionsWebPart.js",
+          "manifest": "./src/webparts/mySubmissions/MySubmissionsWebPart.manifest.json"
+        }
+      ]
+    },
     "onboarding-web-part": {
       "components": [
         {

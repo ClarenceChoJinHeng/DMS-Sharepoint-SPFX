@@ -831,6 +831,42 @@ writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Aud
 - **Supersedes the never-built `<P> Deletion Log`** — two append-only trails would leave a permanent
   question about which is authoritative. `LIST_SUFFIX.deletionLog` still exists; nothing new reads it.
 
+## My Submissions (2026-08-14, spec `2026-08-14-my-submissions-design.md`)
+Client, for the uploaders: it is difficult to track what you uploaded. Web part **`My Submissions`**
+(`5c9d1a83-…`), its own page, **VIEW ONLY**, **uploaders only**. BUILT, not yet site-tested.
+- **It reads BOTH libraries, because a file's life spans two.** Pending and rejected sit in the
+  approval library; an approved file has been MOVED to `Documents` and deleted from the source, so one
+  library shows half a lifecycle. Both reads filter `AuthorId eq <me>`, and Auto-route preserving the
+  uploader in `Author` (verified 2026-08-08) is what makes the halves joinable at all. `Documents`
+  rows need no status read — everything there is approved by definition, and moderation is OFF.
+- **IT DOES NOT MAKE APPROVED DOCUMENTS PRIVATE, and must never be described as doing so.** Pending
+  and rejected privacy is real, enforced by Draft Item Security. Approved files live in `Documents`,
+  where every PIC reads their whole unit's approved documents by design (2026-08-09) — so filtering
+  to the signed-in user is a **convenience, not a boundary**. The client was told and **accepted**
+  this (2026-08-14: *"as long as the file inside this webpart is not exposed to another uploader that
+  is fine, the documents library they accepted the fact its going to shown by everyone else since its
+  approved"*). The requirement is that the PAGE shows one person's files — which it does.
+- **Access is the PAGE grant, not a code gate.** `pageAccessPolicy.ts` carries a dedicated rule
+  (`/submission|my.?upload|my.?file/i` → `["UPL"]`) placed **BEFORE** the generic `upload` rule.
+  Without it `My-Submissions.aspx` matches nothing, takes `DEFAULT_POLICY` = `[UPL, APR, DELS]`, and
+  offers an uploader's own-files page to the people it is private from. Pinned by tests, the ordering
+  included — both rules yield `UPL`, so only the reason line distinguishes them.
+- **The moderation mapping is NOT redefined** — `mySubmissions.ts` re-exports `statusToDecision` from
+  `approvalQueue.ts`. Two mappings of one field is how the approver's screen and the uploader's screen
+  end up disagreeing about whether a document was approved. Draft (3) reads as Pending.
+- **The rejection comment is optional by construction.** `OData__ModerationComments` is asked for and
+  the read is RETRIED WITHOUT it on failure — a `$select` naming an absent column fails the WHOLE
+  request (gotcha #11), so asking unconditionally would blank the page on a site that lacks it. A
+  rejected row with no comment says so rather than showing nothing.
+- **"Could not read" is never rendered as "you have no files."** An uploader told they have nothing,
+  when a library was merely unreachable, uploads the file again — and now there are two. Three empty
+  states, as everywhere else in this codebase.
+- Row keys are `library#itemId`: item ids repeat ACROSS libraries, and keying on the id alone drops a
+  row silently.
+- **Provisioning:** index **`Created By`** on `Documents`. Past 5,000 items the `AuthorId` filter
+  starts failing; the symptom is the error state rather than silence, but it is still a five-minute
+  fix that has to be remembered.
+
 ## Allowed File Types
 Driven by the **`AllowedFileTypes`** multi-select Choice column on `DMS Config`
 (row `allowedExtensions`) — the **single source of truth** since 2026-07-30.

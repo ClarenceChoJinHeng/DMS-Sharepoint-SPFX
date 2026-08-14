@@ -45,6 +45,16 @@ see a colleague's approved files.
 filing per person instead of per unit — the trade already set out for the client in
 `docs/client/document-visibility-within-a-unit.md`.
 
+**The client was told this and ACCEPTED it (2026-08-14, verbatim):** *"as long as the file inside
+this webpart is not exposed to another uploader that is fine, the documents library they accepted
+the fact its going to shown by everyone else since its approved."*
+
+So the requirement is exactly what this page does: **the page shows one person's files and nobody
+else's.** It is not, and is not sold as, a restriction on the `Documents` library. Recorded here
+because it is the kind of understanding that quietly reverts — the next person to read "uploaders
+only see their own files" without this paragraph will think the library is locked down, and either
+build on that or report a bug against it.
+
 ---
 
 ## 3. Decisions

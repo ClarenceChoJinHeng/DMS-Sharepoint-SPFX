@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "5c9d1a83-6f24-4b07-9e51-8d3a0c7f2b46",
+  "alias": "MySubmissionsWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "My Submissions" },
+    "description": { "default": "Shows an uploader their own uploaded files and what happened to each one — pending, approved or rejected" },
+    "officeFabricIconFontName": "DocumentSearch",
+    "properties": {}
+  }]
+}

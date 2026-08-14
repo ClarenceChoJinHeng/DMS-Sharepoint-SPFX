@@ -54,6 +54,46 @@ describe("rule ordering", () => {
   });
 });
 
+// My Submissions — an uploader's view of their own files.
+// Spec: docs/superpowers/specs/2026-08-14-my-submissions-design.md §3 D3.
+describe("the My Submissions page is for UPLOADERS only", () => {
+  const NAMES = ["My-Submissions.aspx", "MySubmissions.aspx", "My-Uploads.aspx", "My-Files.aspx"];
+
+  it("offers it to uploader groups", () => {
+    for (const name of NAMES) expect(policyForPage(name).roles).toEqual(["UPL"]);
+  });
+
+  it("does NOT offer it to approvers or Staging-deleters", () => {
+    // Without its own rule this page matches nothing and takes DEFAULT_POLICY, which is
+    // [UPL, APR, DELS] — an uploader's own-files page offered to the people it is private from.
+    for (const name of NAMES) {
+      expect(isRoleEligibleForPage(name, "APR")).toBe(false);
+      expect(isRoleEligibleForPage(name, "DELS")).toBe(false);
+      expect(isRoleEligibleForPage(name, "UPL")).toBe(true);
+    }
+  });
+
+  it("never offers it to a view-only role", () => {
+    for (const role of VIEW_ONLY_ROLES) {
+      expect(isRoleEligibleForPage("My-Submissions.aspx", role)).toBe(false);
+    }
+  });
+
+  it("is NOT reached through the generic upload rule — the reason line differs", () => {
+    // Ordering is what this asserts: both rules yield UPL, so roles alone cannot tell them apart.
+    // If the generic rule were hit first, the page would describe itself as the place documents
+    // are submitted — untrue, and the kind of wrong label that produces a wrong grant later.
+    expect(policyForPage("My-Submissions.aspx").reason).toContain("their own submissions");
+    expect(policyForPage("Upload-Form.aspx").reason).toContain("where documents are submitted");
+  });
+
+  it("does not capture the ADMIN pages that also mention uploads", () => {
+    // "Bulk-Upload" contains "upload" and must stay admin-only; the bulk rule precedes them both.
+    expect(policyForPage("Bulk-Upload.aspx").adminOnly).toBe(true);
+    expect(policyForPage("Bulk-Upload.aspx").roles).toEqual([]);
+  });
+});
+
 describe("view-only roles are never offered a page", () => {
   it("excludes MEMBER, GLOBAL and SEGVIEW everywhere", () => {
     const pages = ["Upload-Form.aspx", "ApprovalDocument.aspx", "Bulk-Upload.aspx", "CollabHome.aspx"];

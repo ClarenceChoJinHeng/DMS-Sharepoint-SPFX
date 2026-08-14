@@ -76,6 +76,20 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     },
   },
   {
+    // BEFORE the generic upload rule, and it must stay there. "My-Submissions.aspx" matches no
+    // other rule and would otherwise take DEFAULT_POLICY — UPL, APR and DELS — offering an
+    // uploader's own-files page to approvers and Staging-deleters. Naming it "My-Uploads.aspx"
+    // would land on UPL by luck, through a rule whose reason says the page is where documents are
+    // submitted — untrue of a page that only shows what already was.
+    // Spec: docs/superpowers/specs/2026-08-14-my-submissions-design.md §3 D3.
+    match: /submission|my.?upload|my.?file/i,
+    policy: {
+      roles: ["UPL"],
+      adminOnly: false,
+      reason: "Only uploader groups are listed — this page shows a person their own submissions.",
+    },
+  },
+  {
     match: /upload/i,
     policy: {
       roles: ["UPL"],
