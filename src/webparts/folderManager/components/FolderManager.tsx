@@ -114,10 +114,18 @@ const DEEP_LINK_TABS: Record<string, Tab> = {
   newsegment: "NewSegment",
 };
 
-/** The tab named by the URL hash, or Term Abbreviations. */
-function tabFromDeepLink(): Tab {
-  // `window` is always present in a web part, but a guard costs nothing and keeps this callable from
-  // a test later.
+/**
+ * The tab to open on: an explicit slug from a caller, else the URL hash, else Term Abbreviations.
+ *
+ * A guided flow passes the slug directly, because it is showing one step and the address bar is not
+ * where that decision lives. An unrecognised slug falls through to the hash and then to the default —
+ * never to a blank screen.
+ */
+function tabFromDeepLink(explicit?: string): Tab {
+  const named = DEEP_LINK_TABS[(explicit ?? "").trim().toLowerCase()];
+  if (named) return named;
+  // `window` is always present in a web part, but a guard costs nothing and keeps this callable from a
+  // test later.
   const hash = typeof window === "undefined" ? "" : window.location.hash;
   return DEEP_LINK_TABS[tabFromHash(hash)] ?? "Abbreviations";
 }
@@ -549,7 +557,11 @@ const GroupSearch: React.FC<{
 
 /* ── Main ────────────────────────────────────────────────────────────────────── */
 
-export default function FolderManager({ context }: IFolderManagerProps): React.ReactElement {
+export default function FolderManager({
+  context,
+  initialTab,
+  hideTabs,
+}: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
   // Active tab. `Staging`/`Documents` are no longer OFFERED (see the Tab type) — the folder tree
@@ -562,7 +574,8 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
   // Abbreviations, Folder Structure Management, Folder Reconciliations — which are all TABS of this
   // single page, so without the deep link they would all land here and two of the three would look
   // broken. An absent or unrecognised hash falls back to the default rather than showing nothing.
-  const [tab,          setTab]          = useState<Tab>(() => tabFromDeepLink());
+  // `initialTab` (a guided flow driving one step) wins over the URL hash, which wins over the default.
+  const [tab,          setTab]          = useState<Tab>(() => tabFromDeepLink(initialTab));
   const [libTarget]                     = useState<LibTarget>("Staging");
   /**
    * True while a mounted structure screen holds unsaved changes. Switching tabs UNMOUNTS it, which
@@ -3803,12 +3816,17 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
     <section style={s.wrap}>
       <style>{`.fm-in:focus { outline: none; box-shadow: 0 0 0 2px rgba(15,108,63,.18); }`}</style>
 
-      <h2 style={s.h2}>Folder Administration</h2>
-      <p style={s.subtitle}>
-        Name the folders a segment&rsquo;s terms produce, shape the levels beneath Unit, move what is
-        already filed, then build the tree. Who can see a folder is set on the{" "}
-        <strong>Folder Access</strong> page.
-      </p>
+      {/* Heading and tab bar both belong to the standalone "All tools" view. A guided flow supplies its
+          own heading and its own step rail, and a second row of tabs beside that rail would offer a way
+          out of the flow that looks like part of it. */}
+      {!hideTabs && <h2 style={s.h2}>Folder Administration</h2>}
+      {!hideTabs && (
+        <p style={s.subtitle}>
+          Name the folders a segment&rsquo;s terms produce, shape the levels beneath Unit, move what is
+          already filed, then build the tree. Who can see a folder is set on the{" "}
+          <strong>Folder Access</strong> page.
+        </p>
+      )}
 
       {/*
         One home for folder administration — spec `2026-08-12-term-abbreviation-page-design.md` §6.
@@ -3819,7 +3837,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
         `Staging` and `Documents` are gone (client, 2026-08-12: "I am honestly not using it"). They
         were a manual folder tree — reconciliation and the Folder Access page now cover it from data.
       */}
-      <div style={s.toggleWrap}>
+      <div style={{ ...s.toggleWrap, ...(hideTabs ? { display: "none" } : {}) }}>
         <div style={s.seg}>
           {([
             ["Abbreviations",  "Term Abbreviations"],

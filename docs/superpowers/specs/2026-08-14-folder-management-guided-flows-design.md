@@ -1,7 +1,7 @@
 # Folder Management — guided flows instead of tabs
 
 **Date:** 2026-08-14
-**Status:** SPEC ONLY — not built. Awaiting review.
+**Status:** BUILT 2026-08-14, not yet site-tested.
 **Replaces:** the five-tab bar from `2026-08-12-term-abbreviation-page-design.md` §6 as the *front door*
 (the tabs survive behind "All tools")
 **Host:** `folderManager/components/FolderAdmin.tsx` (today a 7-line shell)

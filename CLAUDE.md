@@ -821,6 +821,52 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
 > that usually decides it is that "all of CORU's 2026 Tax Returns" stops being a folder you open and
 > becomes a search.
 
+## FOLDER MANAGEMENT IS GUIDED FLOWS NOW (2026-08-14, spec `2026-08-14-folder-management-guided-flows-design.md`)
+Client: the tab bar *"is confusing and client doesnt know how it works"*. The tabs were already in work
+order, which was not enough — five equal doors do not say four of them are steps of one job.
+`FolderAdmin.tsx` is now picker → flow runner → **All tools** (the five tabs, unchanged). Rules in
+`shared/folderFlows.ts` (pure, 45 tests). BUILT, not yet site-tested.
+- **THE GOVERNING RULE, from the client: *"the flow should not stop them from doing the work."*** Every
+  step is reachable from the rail; the rail SAYS what is outstanding and padlocks almost nothing.
+  `isLocked` returns true only when a fact is **known and unmet** — anything `undefined` (unread, or a read
+  that failed) is not a lock. **Fail-open by construction, not by remembering to.**
+- **Five flows.** Add a new segment · **Add a department or unit** · Change the folder structure · Rename
+  or re-code a folder · *Retire a segment* (destructive, styled apart). **Flow 2 is the everyday one** and
+  is literally the tail of flow 1 — pinned by a test, because if they diverge one of them is wrong.
+  Without it the frequent job has no home, and an admin starts the new-segment flow and skips half of it,
+  one wrong click from a duplicate segment.
+- **FOUR locks, each on ONE definitive read:** segment exists (flow 1's later steps, and Retire),
+  `PendingLevels` set (before migrating), and **reconciliation blocked while any term lacks a code** — the
+  last is the one that matters, because that is the silent failure (recon skips the term, creates no
+  folder, no error anywhere).
+- **The abbreviation count IS affordable, contrary to an earlier draft of the spec.**
+  `AbbreviationManager` already walks the tree and already counts terms with no code, so the number is
+  exact **once the step is open**. Only pre-walking every segment on the picker is unaffordable (~115
+  requests for GHO), so the picker says "not checked" and the lock arms after the step is visited.
+  **`abbreviationsMissing: undefined` must never be read as zero.**
+- **Flows 2 and 4 ASK what you are doing** ("adding Treasury under Group Finance"), which is the only
+  thing that makes their term-store step checkable — and it pre-fills the later steps. **Matching folds
+  the FULLWIDTH ＆** (GHO's `Group Legal, Risk ＆ Compliance`), case, whitespace and zero-width chars; a
+  miss says *check the spelling*, never *you have not done step 1*. The subject is **optional** — blank
+  costs help, never progress.
+- **It DRIVES `FolderManager` (new props `initialTab`, `hideTabs`) and never dismantles it.**
+  Reconciliation is inline in a 4,000-line file and is the most site-verified code here; extracting it to
+  make it mountable would risk the wrong thing for a navigation change. Cost: one re-mount per step.
+- **Group Management and Folder Access are mounted from `userAccess/components`** inside the flows AND stay
+  standalone on the landing page — one component, two mount points, never a copy.
+- **What no checking reaches:** the right PEOPLE in a group, the right abbreviation (`TRS` vs `TREAS`), the
+  right parent term, whether they finished in the term store, anything in Power Automate. **Existence is
+  checkable; intent is not** — every tick means "this exists", never "this is right".
+- **A migration does NOT need the Power Automate flows turned off** (Auto-route spec §5.6). Auto-route
+  reads moderation status in its body, so a moved pending/rejected file takes the False branch and nothing
+  is touched. The step advises **both ways**: leaving them on is safe, pausing avoids hundreds of no-op
+  runs burning the daily quota — and an exhausted quota means the next real approval is not routed,
+  **silently**. Residual: a stale approved file still in the library gets routed mid-run and can land in
+  `Documents` under the pre-migration path.
+- **Landing page: Folder Management is now ONE link, not three.** Term Abbreviations / Folder Structure /
+  Reconciliation stopped being destinations. `#tab=` links still work — `FolderAdmin` opens **All tools**
+  for one — so no bookmark breaks; `#flow=<id>` opens a flow directly.
+
 ## CRS Settings — the admin landing page (2026-08-14, spec `2026-08-14-crs-settings-landing-page-design.md`)
 Client: they *"do not know what to do or how to operate"*. There were **14 web parts and no menu**.
 Web part **`CRS Settings`** (`4d8b7e21-…`, own bundle), built to the client's mockup; rules in

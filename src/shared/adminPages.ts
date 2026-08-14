@@ -83,18 +83,19 @@ export const CARDS: AdminCard[] = [
   {
     key: "folders",
     title: "Folder Management",
-    blurb: "Create, rename, and assign permissions to folders at any level — all at once.",
+    blurb:
+      "Add a segment, add a department or unit, change the folder structure, or run reconciliation — " +
+      "each one guided step by step.",
     icon: "folders",
     column: 1,
-    links: [
-      // In the order the work happens, which is also the order the tabs sit in. Abbreviations first
-      // because that is the step whose omission makes reconciliation create nothing, silently.
-      // All three name Folder Administration as their page: they are TABS of it, not pages of their
-      // own, so the "create a page called…" advice has to say the page that exists.
-      { key: "abbreviations", label: "CRS Term Abbreviations", match: FOLDER_ADMIN, tab: "abbreviations", pageName: "Folder Administration" },
-      { key: "structure", label: "Folder Structure Management", match: FOLDER_ADMIN, tab: "structure", pageName: "Folder Administration" },
-      { key: "reconciliation", label: "Folder Reconciliations", match: FOLDER_ADMIN, tab: "reconciliation", pageName: "Folder Administration" },
-    ],
+    // ONE link, not three, since 2026-08-14. Term Abbreviations, Folder Structure Management and Folder
+    // Reconciliation stopped being destinations when Folder Management became guided flows — they are now
+    // STEPS inside them. Three rows pointing at a picker that ignores which one was clicked would be the
+    // same "equal doors with no order" confusion the flows exist to remove, one level up. The blurb keeps
+    // them discoverable, and `#tab=` links still resolve (FolderAdmin opens All tools for one), so no
+    // bookmark breaks.
+    links: [],
+    self: { key: "folders", label: "Folder Management", match: FOLDER_ADMIN, pageName: "Folder Administration" },
   },
   {
     key: "access",
