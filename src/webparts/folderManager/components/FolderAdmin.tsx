@@ -72,7 +72,13 @@ const s: Record<string, React.CSSProperties> = {
   cardBlurb: { fontSize: 12.5, color: "#616161", margin: "5px 0 0", lineHeight: 1.5 },
   cardMetaMuted:{ fontSize: 11.5, color: "#8a8886", marginTop: 10 },
   sectionHead:{ fontSize: 12, fontWeight: 600, color: "#605e5c", textTransform: "uppercase", letterSpacing: ".04em", margin: "26px 0 10px" },
-  back:      { border: "none", background: "transparent", padding: 0, color: "#0f6c3f", fontSize: 13, cursor: "pointer", marginBottom: 14 },
+  // Copied deliberately from ApprovalDocument.tsx's backBand/backLink pair (:88-89) so the two
+  // screens' back affordance reads as one control. Keep them in step: the band is the SDG green at
+  // 8%, and only the TEXT inside is clickable — a full-width clickable band is a far bigger target
+  // than "go back" deserves, and lands you off the page on a stray click near the margin.
+  backBand:  { background: "rgba(0, 104, 74, 0.08)", borderRadius: 4, padding: "10px 16px", marginBottom: 20 },
+  back:      { border: "none", background: "transparent", padding: 0, font: "inherit", color: "rgba(0, 104, 74, 1)", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 },
+  backChev:  { fontSize: 16, lineHeight: 1, fontWeight: 700 },
   runner:    { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: 24, alignItems: "start" },
   rail:      { border: "1px solid #e8e6e6", borderRadius: 10, background: "#fafafa", padding: 12, maxWidth: 280 },
   railItem:  { display: "flex", gap: 10, width: "100%", textAlign: "left", border: "none", background: "transparent", font: "inherit", padding: "9px 8px", borderRadius: 8, cursor: "pointer", alignItems: "flex-start" },
@@ -102,6 +108,22 @@ const STATE_STYLE: Record<string, { pill: React.CSSProperties; note: React.CSSPr
   todo:    { pill: { background: "#fff2df", color: "#8a4b00", border: "1px solid #f0d9b5" }, note: { color: "#8a4b00" }, text: "To do", mark: "" },
   unknown: { pill: { background: "#f0eff0", color: "#767676" }, note: { color: "#8a8886" }, text: "Not checked", mark: "" },
 };
+
+/**
+ * The back band, as one component because there are two exits (All tools, and a flow) and a copied
+ * band drifts. `<` is written as an expression: JSX reads a literal left angle bracket in children
+ * as the start of a tag.
+ */
+function BackBand({ onClick }: { onClick: () => void }): React.ReactElement {
+  return (
+    <div style={s.backBand}>
+      <button type="button" style={s.back} onClick={onClick}>
+        <span style={s.backChev}>{"<"}</span>
+        Back to Folder Management
+      </button>
+    </div>
+  );
+}
 
 export default function FolderAdmin({ context }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
@@ -296,7 +318,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   if (allTools) {
     return (
       <section style={s.wrap}>
-        <button style={s.back} onClick={() => setAllTools(false)}>&lsaquo; Back to Folder Management</button>
+        <BackBand onClick={() => setAllTools(false)} />
         <FolderManager context={context} />
       </section>
     );
@@ -373,7 +395,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
 
   return (
     <section style={s.wrap}>
-      <button style={s.back} onClick={leaveFlow}>&lsaquo; Back to Folder Management</button>
+      <BackBand onClick={leaveFlow} />
       <h2 style={s.h2}>{active.label}</h2>
       <p style={s.sub}>
         {segment ? <>Segment: <strong>{segment.label}</strong>. </> : undefined}
