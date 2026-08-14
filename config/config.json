@@ -87,6 +87,10 @@
         {
           "entrypoint": "./lib/webparts/userAccess/FolderStructureWebPart.js",
           "manifest": "./src/webparts/userAccess/FolderStructureWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/GroupManagementWebPart.js",
+          "manifest": "./src/webparts/userAccess/GroupManagementWebPart.manifest.json"
         }
       ]
     }

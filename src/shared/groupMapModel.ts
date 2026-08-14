@@ -631,6 +631,46 @@ export function roleFromGroupName(name: string): GroupMapRole {
   return "MEMBER";
 }
 
+/**
+ * Characters SharePoint refuses in a site-group title.
+ *
+ * Checked here rather than left to the server because the server's rejection is an HTTP 500
+ * naming none of them, arriving after the admin has typed a name and staged members.
+ */
+const ILLEGAL_GROUP_NAME_CHARS = ['"', "#", "%", "&", "*", ":", "<", ">", "?", "\\", "/", "{", "|", "}", "~"];
+
+/** SharePoint's title limit. */
+const GROUP_NAME_MAX = 255;
+
+/**
+ * Validate a new group's name. Returns [] when it can be created.
+ *
+ * `existingTitles` catches the duplicate BEFORE the request, so the message can say which name
+ * clashes. `createSiteGroup` still throws DUPLICATE_GROUP — this check is a courtesy, not the
+ * guard: another admin may create the same name between the page loading and the button being
+ * pressed, and only the server sees that.
+ *
+ * Compared case-insensitively because SharePoint group titles are — "gho_gf_coru_uploader" and
+ * "GHO_GF_CORU_UPLOADER" cannot coexist, and reporting them as available would produce a failure
+ * the admin cannot explain from what is on screen.
+ */
+export function validateGroupName(name: string, existingTitles?: readonly string[]): string[] {
+  const errors: string[] = [];
+  const n = norm(name);
+  if (!n) {
+    errors.push("Enter a group name.");
+    return errors;
+  }
+  if (n.length > GROUP_NAME_MAX) errors.push(`Too long — ${GROUP_NAME_MAX} characters at most.`);
+  const bad = ILLEGAL_GROUP_NAME_CHARS.filter((c) => n.indexOf(c) !== -1);
+  if (bad.length > 0) {
+    errors.push(`SharePoint does not allow ${bad.join(" ")} in a group name.`);
+  }
+  const clash = (existingTitles ?? []).find((t) => norm(t).toLowerCase() === n.toLowerCase());
+  if (clash !== undefined) errors.push(`"${clash}" already exists on this site.`);
+  return errors;
+}
+
 /** Field-level validation for enabling the Add button. Returns [] when valid. */
 export function validateDraft(draft: GroupMapDraft): string[] {
   const errors: string[] = [];

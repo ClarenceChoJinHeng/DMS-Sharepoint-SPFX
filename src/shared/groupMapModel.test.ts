@@ -22,6 +22,7 @@ import {
   isSiteEntryGroupTitle,
   findSiteEntryGroup,
   siteEntryGroupTitle,
+  validateGroupName,
 } from "./groupMapModel";
 import { setSiteEntryName } from "./naming";
 
@@ -802,5 +803,59 @@ describe("findSiteEntryGroup", () => {
   it("matches case-insensitively, like the title check", () => {
     const odd = { id: 9, title: siteEntryGroupTitle().toLowerCase() };
     expect(findSiteEntryGroup([odd])).toBe(odd);
+  });
+});
+
+describe("validateGroupName", () => {
+  it("accepts the convention's own output", () => {
+    expect(validateGroupName("GHO_GF_CORU_UPLOADER")).toEqual([]);
+    expect(validateGroupName(suggestGroupName("GHO", ["GF", "CORU"], "APR"))).toEqual([]);
+  });
+
+  it("rejects blank and whitespace-only, and says nothing else about them", () => {
+    // One message, not four: an empty box does not also need to be told about illegal
+    // characters and length.
+    expect(validateGroupName("")).toEqual(["Enter a group name."]);
+    expect(validateGroupName("   ")).toEqual(["Enter a group name."]);
+  });
+
+  it("names the characters SharePoint refuses", () => {
+    const errs = validateGroupName("GHO/GF");
+    expect(errs.length).toBe(1);
+    expect(errs[0]).toContain("/");
+  });
+
+  it("lists every illegal character it found, not just the first", () => {
+    const errs = validateGroupName('a#b%c"');
+    expect(errs[0]).toContain("#");
+    expect(errs[0]).toContain("%");
+    expect(errs[0]).toContain('"');
+  });
+
+  it("catches a duplicate and NAMES the existing group", () => {
+    const errs = validateGroupName("GHO_GF_CORU_UPLOADER", ["GHO_GF_CORU_UPLOADER"]);
+    expect(errs.length).toBe(1);
+    expect(errs[0]).toContain("GHO_GF_CORU_UPLOADER");
+  });
+
+  it("treats a duplicate case-insensitively, because SharePoint does", () => {
+    // Reporting these as available produces a server failure the admin cannot explain from
+    // anything on screen.
+    expect(validateGroupName("gho_gf_coru_uploader", ["GHO_GF_CORU_UPLOADER"]).length).toBe(1);
+    expect(validateGroupName("  GHO_GF_CORU_UPLOADER  ", ["gho_gf_coru_uploader"]).length).toBe(1);
+  });
+
+  it("does not flag a different group", () => {
+    expect(validateGroupName("GHO_GF_CORU_APPROVER", ["GHO_GF_CORU_UPLOADER"])).toEqual([]);
+  });
+
+  it("has no opinion when it was given no list to compare against", () => {
+    expect(validateGroupName("Anything At All")).toEqual([]);
+    expect(validateGroupName("Anything At All", [])).toEqual([]);
+  });
+
+  it("rejects a name past SharePoint's limit", () => {
+    expect(validateGroupName("x".repeat(256)).length).toBe(1);
+    expect(validateGroupName("x".repeat(255))).toEqual([]);
   });
 });

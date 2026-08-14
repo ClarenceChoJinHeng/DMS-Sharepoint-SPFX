@@ -35,6 +35,13 @@ export const EVENT = {
   abbreviationChanged: "AbbreviationChanged",
   policyChanged: "PolicyChanged",
   groupMapChanged: "GroupMapChanged",
+  // The group LIFECYCLE — distinct from GroupMapChanged, which describes a MAPPING. Since
+  // 2026-08-14 those are two different screens and two different acts: a group can exist for days
+  // before anything is mapped to it, and deleting a group is not the same as removing its folder
+  // access (the ACL survives until reconciliation runs).
+  groupCreated: "GroupCreated",
+  groupDeleted: "GroupDeleted",
+  membersChanged: "MembersChanged",
 } as const;
 
 export type AuditEventType = (typeof EVENT)[keyof typeof EVENT];
@@ -56,6 +63,9 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.abbreviationChanged]: "Abbreviation changed",
   [EVENT.policyChanged]: "File type policy changed",
   [EVENT.groupMapChanged]: "Group Map changed",
+  [EVENT.groupCreated]: "Group created",
+  [EVENT.groupDeleted]: "Group deleted",
+  [EVENT.membersChanged]: "Group members changed",
 };
 
 /** Every type, in the order the viewer offers them. */
@@ -64,7 +74,7 @@ export const ALL_EVENT_TYPES: string[] = [
   EVENT.uploadRefused, EVENT.accessGranted, EVENT.accessRevoked,
   EVENT.reconciliationRun, EVENT.structureChanged, EVENT.migrationRun,
   EVENT.segmentCreated, EVENT.abbreviationChanged, EVENT.policyChanged,
-  EVENT.groupMapChanged,
+  EVENT.groupMapChanged, EVENT.groupCreated, EVENT.groupDeleted, EVENT.membersChanged,
 ];
 
 /**

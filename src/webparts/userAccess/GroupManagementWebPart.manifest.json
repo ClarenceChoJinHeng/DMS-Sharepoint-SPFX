@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "3f81c6d2-45ae-4b93-8c17-0d5e2a9f6b41",
+  "alias": "GroupManagementWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "Group Management" },
+    "description": { "default": "Admin tool — create SharePoint groups, manage their members, and delete them. Which folders a group can reach is set separately, on Folder Access" },
+    "officeFabricIconFontName": "Group",
+    "properties": {}
+  }]
+}
