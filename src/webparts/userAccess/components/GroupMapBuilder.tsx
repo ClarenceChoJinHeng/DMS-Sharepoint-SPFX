@@ -12,7 +12,6 @@ import {
   GroupMapDraft,
   GroupMapWriteRow,
   normalizeScope,
-  siteEntryGroupTitle,
   PERSONAS,
   PERSONA_FAMILIES,
   personaByKey,
@@ -21,9 +20,9 @@ import {
   Persona,
   normalizeRoleValue,
 } from "../../../shared/groupMapModel";
+import { addMemberWithSiteEntry } from "../../../shared/siteEntryGroup";
 import {
   searchSiteGroups,
-  fetchAllSiteGroups,
   createSiteGroup,
   deleteSiteGroup,
   getGroupMembers,
@@ -617,52 +616,29 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const reloadMm = async (): Promise<void> => {
     if (memberModal) setMmMembers(await getGroupMembers(context.spHttpClient, siteUrl, Number(memberModal.id)));
   };
-  // Session cache for the site-entry group lookup. Cache the PROMISE (assigned
-  // synchronously) so there is no read-modify-write of a ref across an await.
-  // Resolves to the group's id, or null if DMS_SITE_MEMBERS doesn't exist yet.
-  const entryGroupPromiseRef = useRef<Promise<number | null> | undefined>(undefined);
-  const resolveEntryGroupId = (): Promise<number | null> => {
-    if (!entryGroupPromiseRef.current) {
-      entryGroupPromiseRef.current = fetchAllSiteGroups(context.spHttpClient, siteUrl)
-        .catch(() => [])
-        .then((all) => {
-          const hit = all.find(
-            (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
-          );
-          return hit ? hit.id : null;
-        });
-    }
-    return entryGroupPromiseRef.current;
-  };
-
   const mmAdd = async (p: PersonPick): Promise<void> => {
     if (!memberModal) return;
     setMmBusy(true);
     try {
-      const targetId = Number(memberModal.id);
-      await addGroupMember(context.spHttpClient, siteUrl, targetId, p.loginName);
-      // Also grant site entry: every DMS group member needs to be able to open the
-      // site (folder-group Limited Access alone can't — site-entry-access-layer spec).
-      // Skip when the group being edited IS the entry group; re-adding is idempotent.
-      let entryNote = "";
-      const isEntryGroup =
-        memberModal.displayName.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase();
-      if (!isEntryGroup) {
-        const entryId = await resolveEntryGroupId();
-        if (entryId === null) {
-          entryNote = ` (note: ${siteEntryGroupTitle()} not found — create it so they can open the site)`;
-        } else {
-          await addGroupMember(context.spHttpClient, siteUrl, entryId, p.loginName).catch(
-            () => {
-              entryNote = ` (warning: could not add to ${siteEntryGroupTitle()})`;
-            },
-          );
-        }
-      }
+      // Adds to the target group AND to the site-entry group: folder-group Limited Access alone
+      // cannot open the site, so a member left out of it reaches nothing by navigating. That rule
+      // now lives once, in shared/siteEntryGroup.ts — it used to be written out here, in
+      // SiteAccess and inside reconciliation.
+      const res = await addMemberWithSiteEntry(
+        context.spHttpClient,
+        siteUrl,
+        { id: Number(memberModal.id), title: memberModal.displayName },
+        p.loginName,
+      );
       await reloadMm();
       setMmQuery("");
       setMmResults([]);
-      showToast(`${p.displayName} added — access is immediate.${entryNote}`, !!entryNote);
+      // The note is never dropped: it means they ARE in the group but may not be able to open the
+      // site, which nobody would discover until they tried.
+      showToast(
+        `${p.displayName} added — access is immediate.${res.note ? ` ${res.note}` : ""}`,
+        !!res.note,
+      );
     } catch (e) {
       showToast(`Add member failed: ${(e as Error).message}`, true);
     } finally {
@@ -794,15 +770,18 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       // Add any staged members now that the group exists. Failures are counted, not fatal.
       // Each member is also added to the site-entry group so they can open the site
       // (site-entry-access-layer spec). A new DMS group is never the entry group itself.
-      const entryId: number | null = stagedMembers.length > 0 ? await resolveEntryGroupId() : null;
       let addedMembers = 0;
       let failedMembers = 0;
       for (const p of stagedMembers) {
-        try { await addGroupMember(context.spHttpClient, siteUrl, Number(newGroup.id), p.loginName); addedMembers++; }
-        catch { failedMembers++; }
-        if (entryId !== null) {
-          await addGroupMember(context.spHttpClient, siteUrl, entryId, p.loginName).catch(() => undefined);
-        }
+        try {
+          await addMemberWithSiteEntry(
+            context.spHttpClient,
+            siteUrl,
+            { id: Number(newGroup.id), title: newGroup.displayName },
+            p.loginName,
+          );
+          addedMembers++;
+        } catch { failedMembers++; }
       }
       const staged = stagedMembers.length;
       const createdName = newGroup.displayName;

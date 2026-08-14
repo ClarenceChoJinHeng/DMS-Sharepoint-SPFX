@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
-import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember, createSiteGroup } from "../../../shared/spGroups";
-import { siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
+import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember } from "../../../shared/spGroups";
+import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
+import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
@@ -2039,16 +2040,13 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       // See the access-scope-mapping spec §4 and the site-entry-access-layer spec.
       try {
         setReconPhase("Ensuring site entry…");
-        const allSiteGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
-        let entry = allSiteGroups.find(
-          (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
-        );
-        if (!entry) {
-          const made = await createSiteGroup(context.spHttpClient, siteUrl, siteEntryGroupTitle());
-          entry = { id: made.id, title: made.title };
-          entries.push({ msg: `${siteEntryGroupTitle()} created`, ok: true });
-        }
-        const entryId = entry.id;
+        // Find-or-create through the shared module (siteEntryGroup.ts). It THROWS rather than
+        // creating when the group list cannot be read — creating on an unreadable list would make
+        // a second entry group alongside the real one, both looking correct. The catch below
+        // already treats that as non-fatal and names it in the log.
+        const ensured = await ensureSiteEntryGroup(context.spHttpClient, siteUrl);
+        if (ensured.created) entries.push({ msg: `${siteEntryGroupTitle()} created`, ok: true });
+        const entryId = ensured.group.id;
         if (readId === undefined) {
           entries.push({ msg: `⚠ ${siteEntryGroupTitle()}: cannot grant site Read — no "Read" role definition`, ok: false });
         } else {
@@ -2124,9 +2122,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
             // Needed to re-grant after a break — see below. Resolved here rather than
             // threaded out of the site-entry pass so this block stands alone.
             const groupsNow = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
-            const entryPid = groupsNow.find(
-              (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
-            )?.id;
+            const entryPid = findSiteEntryGroup(groupsNow)?.id;
             const brokenThisRun = new Set<string>();
             for (const row of libRows) {
               const lib = (row.Target ?? "").trim();
@@ -3268,9 +3264,7 @@ export default function FolderManager({ context }: IFolderManagerProps): React.R
       try {
         setReconPhase("Syncing site-entry group…");
         const allGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
-        const entryGroup = allGroups.find(
-          (g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase(),
-        );
+        const entryGroup = findSiteEntryGroup(allGroups);
         if (!entryGroup) {
           entries.push({ msg: `⚠ ${siteEntryGroupTitle()} not found — run "Set up site entry" first (site-entry sync skipped)`, ok: false });
         } else {

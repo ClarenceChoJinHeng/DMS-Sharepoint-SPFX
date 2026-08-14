@@ -19,7 +19,11 @@ import {
   normalizeScope,
   isForbiddenPageTarget,
   normalizeRoleValue,
+  isSiteEntryGroupTitle,
+  findSiteEntryGroup,
+  siteEntryGroupTitle,
 } from "./groupMapModel";
+import { setSiteEntryName } from "./naming";
 
 describe("personas", () => {
   it("never invents a bundle group — every persona is a set of atomic roles", () => {
@@ -734,5 +738,69 @@ describe("suggestGroupName", () => {
 
   it("never emits a trailing underscore while the admin is still picking a role", () => {
     expect(suggestGroupName("GHO", ["GF"], "")).toBe("GHO_GF");
+  });
+});
+
+// The site-entry matchers behind src/shared/siteEntryGroup.ts. A member outside the entry group
+// holds a folder grant they cannot navigate to, so a missed match here presents as a permissions
+// bug that is not one.
+describe("isSiteEntryGroupTitle", () => {
+  it("matches the resolved name", () => {
+    expect(isSiteEntryGroupTitle(siteEntryGroupTitle())).toBe(true);
+  });
+
+  it("ignores case and surrounding whitespace", () => {
+    // The title reaches this function from a search result, a Group Map row and a name box, and
+    // only one of those carries the stored casing.
+    expect(isSiteEntryGroupTitle(`  ${siteEntryGroupTitle().toUpperCase()}  `)).toBe(true);
+    expect(isSiteEntryGroupTitle(siteEntryGroupTitle().toLowerCase())).toBe(true);
+  });
+
+  it("does not match another group", () => {
+    expect(isSiteEntryGroupTitle("GHO_GF_CORU_UPLOADER")).toBe(false);
+  });
+
+  it("treats blank and absent as not the entry group, rather than throwing", () => {
+    expect(isSiteEntryGroupTitle("")).toBe(false);
+    expect(isSiteEntryGroupTitle(undefined)).toBe(false);
+  });
+
+  // setSiteEntryName mutates module state, so this restores the default afterwards. Without that,
+  // a later test comparing against the resolved title would pass or fail on test ORDER.
+  it("follows the name resolved for THIS site", () => {
+    const before = siteEntryGroupTitle();
+    try {
+      // A half-renamed site is the live case: CRS lists alongside DMS_SITE_MEMBERS (2026-08-05).
+      setSiteEntryName(["CRS_SITE_MEMBERS"]);
+      expect(siteEntryGroupTitle()).toBe("CRS_SITE_MEMBERS");
+      expect(isSiteEntryGroupTitle("crs_site_members")).toBe(true);
+      expect(isSiteEntryGroupTitle("DMS_SITE_MEMBERS")).toBe(false);
+    } finally {
+      setSiteEntryName([before]);
+    }
+  });
+});
+
+describe("findSiteEntryGroup", () => {
+  // Titles are read INSIDE each test, never captured at describe-time: describe bodies all run
+  // before any test does, so a captured title would be the pre-mutation one.
+  const other = { id: 3, title: "GHO_GF_CORU_UPLOADER" };
+
+  it("finds it among other groups", () => {
+    const entry = { id: 12, title: siteEntryGroupTitle() };
+    expect(findSiteEntryGroup([other, entry])).toBe(entry);
+  });
+
+  it("returns undefined when it is ABSENT — which is not the same as unreadable", () => {
+    // The caller must have read the list successfully first; siteEntryGroup.ts keeps those two
+    // states apart, because only one of them is a setup step the admin can act on.
+    expect(findSiteEntryGroup([other])).toBeUndefined();
+    expect(findSiteEntryGroup([])).toBeUndefined();
+    expect(findSiteEntryGroup(undefined)).toBeUndefined();
+  });
+
+  it("matches case-insensitively, like the title check", () => {
+    const odd = { id: 9, title: siteEntryGroupTitle().toLowerCase() };
+    expect(findSiteEntryGroup([odd])).toBe(odd);
   });
 });

@@ -381,6 +381,32 @@ export function siteEntryGroupTitle(): string {
 }
 
 /**
+ * Is this the site-entry group?
+ *
+ * Case-insensitive and trimmed, because the title arrives from three different places — a search
+ * result, a Group Map row, the name box on a create form — and only one of them carries the exact
+ * stored casing. An exact-match comparison fails in the dangerous direction: it would answer "no"
+ * for the entry group itself, and the caller would then try to add the entry group to itself.
+ */
+export function isSiteEntryGroupTitle(title: string | undefined): boolean {
+  return (title ?? "").trim().toLowerCase() === siteEntryGroupTitle().trim().toLowerCase();
+}
+
+/**
+ * Find the site-entry group among a list of site groups.
+ *
+ * `undefined` means ABSENT — never "could not tell". The caller must have read the group list
+ * successfully before calling, because absent and unreadable need different messages: one is a
+ * setup step the admin can take, the other is a transient error they cannot.
+ */
+export function findSiteEntryGroup<T extends { title: string }>(
+  groups: readonly T[] | undefined,
+): T | undefined {
+  for (const g of groups ?? []) if (isSiteEntryGroupTitle(g.title)) return g;
+  return undefined;
+}
+
+/**
  * What a Group Map row grants access to. See the access-scope-mapping spec.
  *
  * `Folder` is everything this list held before 2026-08-04, and `Segment`/`UnitTermGuid`

@@ -18,10 +18,10 @@ import * as React from "react";
 import { useEffect, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
-import { siteEntryGroupTitle } from "../../../shared/groupMapModel";
+import { findSiteEntryGroup, siteEntryGroupTitle } from "../../../shared/groupMapModel";
+import { ensureSiteEntryGroup, clearSiteEntryCache } from "../../../shared/siteEntryGroup";
 import {
   fetchAllSiteGroups,
-  createSiteGroup,
   getGroupMembers,
   addGroupMember,
   removeGroupMember,
@@ -144,8 +144,11 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
       // Before the Group Map read: resolves "CRS Group Map" vs "DMS Group Map" once per session.
       await primeNames(context.spHttpClient, siteUrl);
       const all = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
-      const eg = all.find((g) => g.title.trim().toLowerCase() === siteEntryGroupTitle().toLowerCase());
+      const eg = findSiteEntryGroup(all);
       setEntry(eg);
+      // This page is where the entry group gets created, so its cached lookup elsewhere on the
+      // site would otherwise stay "absent" for the rest of the session.
+      clearSiteEntryCache(siteUrl);
       const grants = await loadWebGrants();
       setWebGrants(grants);
       setEntryHasRole(
@@ -226,8 +229,14 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
   const onSetUp = async (): Promise<void> => {
     setBusy(true);
     try {
-      let eg = entry;
-      if (!eg) eg = await createSiteGroup(context.spHttpClient, siteUrl, siteEntryGroupTitle());
+      // Find-or-create goes through the shared module rather than trusting the `entry` state.
+      // That state is empty both when the group is ABSENT and when the group read FAILED, and
+      // creating on the second case makes a SECOND entry group — two groups that both look
+      // correct, with everyone's real access sitting in the original. ensureSiteEntryGroup throws
+      // on an unreadable list rather than guessing.
+      const ensured = await ensureSiteEntryGroup(context.spHttpClient, siteUrl);
+      const eg = ensured.group;
+      const madeNow = ensured.created;
       const defs = await context.spHttpClient.get(
         `${siteUrl}/_api/web/roledefinitions?$select=Id,Name`,
         SPHttpClient.configurations.v1,
@@ -249,7 +258,7 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
         EVENT.accessGranted,
         `Site entry set up — ${siteEntryGroupTitle()} can open the site`,
         [
-          `Group: ${siteEntryGroupTitle()}${entry ? " (already existed)" : " (created)"}`,
+          `Group: ${siteEntryGroupTitle()}${madeNow ? " (created)" : " (already existed)"}`,
           "Granted Read on the site itself. This grants nothing inside either library.",
         ],
         "Success",
