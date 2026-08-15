@@ -1032,6 +1032,78 @@ writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Aud
 - **Supersedes the never-built `<P> Deletion Log`** — two append-only trails would leave a permanent
   question about which is authoritative. `LIST_SUFFIX.deletionLog` still exists; nothing new reads it.
 
+## HIGHLY CONFIDENTIAL — ITS OWN LIBRARY PAIR (2026-08-15, spec `2026-08-15-highly-confidential-library-design.md`)
+Client: an HC uploader group files at **any** level and reaches **both** approval libraries;
+`GHO_GF_CORU_UPL` reaches only the normal one. **SUPERSEDES `2026-07-16-highly-confidential-securing-design.md`**
+— do not implement its elevated-flow design. BUILT, **not site-tested**; the libraries, the groups and
+the two Power Automate flows do not exist yet.
+- **Four libraries, two pairs:** `Approval Document` → `Documents`, and **`HC Approval Document` →
+  `HC Documents`**. Same tree, same abbreviations, same content approval, same draft isolation.
+  Created without spaces then retitled (gotcha #12), and **resolved at runtime, never hardcoded**.
+- **A SEPARATE LIBRARY REMOVES THE PROBLEM THE JULY SPEC SOLVED.** That design kept HC in a secured
+  subfolder and therefore needed an elevated service-account flow, a bearer trigger URL inside the
+  SPFx bundle, and a window between folder creation and securing where a peer could see the file.
+  Ordinary uploaders hold **no permission on the HC library at any moment**, so none of it is needed.
+- **`naming.ts` HAS NO HC FALLBACK, and that is the safety.** Every other name falls back to a legacy
+  literal; `cachedHcLibraries()` returns `undefined` and `hcAvailable()` is false. `libApiTitle`
+  returns the KEY for an unresolved HC target, which **404s loudly** rather than resolving to the
+  normal library. **Both halves resolve or neither does** — an HC approval library with no HC
+  documents library accepts uploads and approvals and then has nowhere to route them.
+- **THE LIBRARIES DECIDE WHETHER ROUTING IS ON; the `hcConfidentialityLevel` config row only RENAMES
+  the level** (`effectiveHcLevel`). Both simpler defaults are wrong in opposite directions: defaulting
+  to `Highly Confidential` unconditionally **hides** that level on every site without HC, where it is
+  an ordinary label anyone may pick; defaulting to blank lets a site that created the libraries but
+  missed the row file HC documents into the **normal** library.
+- **`hcRouting.ts` FAILS CLOSED, against this codebase's habit** (gotchas 10b/11, the provisioned-path
+  filters). An over-hidden segment blocks an upload someone retries a minute later; an over-offered HC
+  level publishes a secret and nobody finds out. `routeFor` returns **undefined** rather than falling
+  back — falling back is the single worst thing it could do.
+- **CLEARANCE IS A WRITE PROBE, NEVER GROUP MEMBERSHIP.** Reconciliation grants folder ACLs in a pass
+  separate from group creation, so a `_UPL_HC` group can exist for days before it grants anything —
+  the origin of the upload form's first 403. `probeFolderUploadAccessByPath` asks the HC folder
+  directly (HC folders have **no Folder Map rows**; the path comes from `swapLibrarySegment`). Cached
+  per leaf term, because clearance is per unit. Read `Low` **arithmetically, never with `&`**.
+- **THE HC UNIT FOLDER IS RESOLVED, NEVER CREATED.** One created by an uploader inherits the LIBRARY
+  root's permissions instead of carrying the unit's — exactly how an HC document becomes readable by
+  the people the unit ACL excludes. Absent ⇒ refuse and name reconciliation. **Below** the unit,
+  ensure-creation stays correct: that tier inherits by design.
+- **`LIBRARY_ROLES` IS THE FEATURE, and what matters is what is ABSENT.** `UPL` and `APR` appear in
+  **neither** HC row. `MEMBER` is absent from `DocumentsHC`; `SEGVIEW`/`GLOBAL` are absent from both
+  approval-side rows. `UPLHC`/`APRHC` are **supersets** — they cover the normal libraries too — and
+  downgrade to **Read** on both approved-side libraries (`APPROVED_SIDE_LIBS`), or the HC archive
+  becomes writable by every cleared uploader.
+- **The HC roles reuse the PLAIN permission levels.** There is no `CRS Upload HC` and there must not
+  be: the separation is which library the grant lands on, held in ONE table.
+- **HoD and C-Level keep their EXISTING groups** (client's instruction), so their existing powers
+  travel: a **HoD can delete** an approved HC document and **C-Level can share** one, with no request.
+  Consequences of that instruction, not of the code — open questions in the spec §10.
+- **Two new personas, `pic_hc` and `hou_hc`**, replacing (never accompanying) their plain
+  counterparts. A `hou_hc` **approves their own HC uploads** — the `hou` caveat, worse here.
+- **Group names accept BOTH spellings** (`_UPL_HC` and `_UPL_HIGHLY_CONFIDENTIAL`); the builder
+  suggests the long form, matching `_UPLOADER`. **Precedence comes from the existing length sort** —
+  `_UPL_HC` (7) beats `_UPL` (4) and `_HC` (3), so an HC group can never parse as a plain uploader.
+  The legacy bare `_HC` suffix now parses as `UPLHC`. The old `HC` role is **retired**.
+- **`allLibraryTitles()` — tier columns go in FOUR libraries.** The two-element literal it replaced
+  was the bug waiting: one unknown field name fails the WHOLE `validateUpdateListItem` call, and
+  auto-route drops whatever does not exist at the destination.
+- **`ApprovalDocument` resolves its library from `?lib=hc`, else tries normal then HC.** Item ids are
+  per-LIST, so `?itemId=` alone cannot say which library — the wrong one 404s or opens a DIFFERENT
+  document with the same id. **The queue stays inside one library.** Give the HC library's Name-column
+  formatting `&lib=hc`.
+- **Bulk Upload gets NO write probe**, deliberately — admin-only, and already existence-gated only
+  because an `AddListItems` probe against `Documents` would empty the form for every PIC. It writes
+  straight to the approved side, so HC there means **`HC Documents`**, path segment and metadata target.
+- **Requests match `APR` *and* `APRHC`.** A unit whose approver is the HC one has no plain `APR` row,
+  and matching `APR` alone leaves that queue permanently empty while requests pile up behind it.
+- **TWO NEW POWER AUTOMATE FLOWS ARE REQUIRED and nothing works without them** — HC Auto-route
+  (`{IsFolder}` **false**) and HC folder approval (**true**). The polarity is the whole thing, and both
+  mistakes have already been made once on the normal pair. Build as the **service account**.
+  `HC Documents` must have **content approval OFF**.
+- **MIGRATION IS OUT OF SCOPE AND MUST NOT BE SILENTLY SKIPPED.** Documents already labelled Highly
+  Confidential sit in the normal libraries, readable by their whole unit. After deploy the label
+  implies a protection they do not have — worse than before. Until a sweep runs, HC protection applies
+  only to documents filed **after** deployment.
+
 ## DELETION AND SHARE REQUESTS (2026-08-15, spec `2026-08-15-deletion-and-share-requests-design.md`)
 Client: a PIC deletes in the approval library but **not** in `Documents` — there they ASK, and the Head
 of Unit approves. HoD and C-Level delete and share directly, no request. Web part **`CRS Requests`**

@@ -159,7 +159,12 @@ export default function Requests({ context }: IRequestsProps): React.ReactElemen
         for (const r of (data.value ?? []) as Array<{ GroupId?: string; Role?: string; UnitTermGuid?: string }>) {
           // APR is the approver role. A HoU also holds DEL and SHARE, but APR is what says "this
           // person decides for this unit".
-          if ((r.Role ?? "").toUpperCase() !== "APR") continue;
+          // APR *and* APRHC. A unit whose approver is the Highly Confidential one has no plain APR
+          // row, so matching only "APR" would leave that person's queue permanently empty while
+          // requests piled up behind it — with nothing on screen to say a request had gone missing.
+          // APRHC is a superset: an HC approver decides for the whole unit, not only its HC files.
+          const role = (r.Role ?? "").toUpperCase();
+          if (role !== "APR" && role !== "APRHC") continue;
           if (myIds.indexOf(String(r.GroupId ?? "")) === -1) continue;
           const guid = (r.UnitTermGuid ?? "").trim();
           if (guid && units.indexOf(guid) === -1) units.push(guid);

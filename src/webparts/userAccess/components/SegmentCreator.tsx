@@ -7,7 +7,7 @@ import { effectiveOnDemandTiers } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
 // libraryUrlSegment, NOT libraryTitle, for anything that builds a PATH: the two differ
 // ("Approval Document" vs "/ApprovalDocument") and the title fails silently in a URL — gotcha #12.
-import { allLibraryTitles, cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
+import { allLibraryTitles, cachedListTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";

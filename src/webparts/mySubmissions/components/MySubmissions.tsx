@@ -432,7 +432,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       );
       if (res.ok) {
         for (const r of ((await res.json()).value ?? []) as Array<{ Role?: string; UnitTermGuid?: string }>) {
-          if ((r.Role ?? "").toUpperCase() !== "APR") continue;
+          // APR *and* APRHC — see the same match in Requests.tsx. A unit approved by its Highly
+          // Confidential approver has no plain APR row, and routing on APR alone would file the
+          // request against a unit nobody is recorded as approving for.
+          const role = (r.Role ?? "").toUpperCase();
+          if (role !== "APR" && role !== "APRHC") continue;
           const guid = (r.UnitTermGuid ?? "").trim();
           if (guid && next.approverUnits.indexOf(guid) === -1) next.approverUnits.push(guid);
         }

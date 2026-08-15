@@ -18,7 +18,6 @@ import {
 // mistake surfaces when the wrong person opens the document weeks later.
 import {
   RoutingContext,
-  canOfferHc,
   effectiveHcLevel,
   isHcLevel,
   refuseReason,
