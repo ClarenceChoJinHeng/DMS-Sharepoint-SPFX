@@ -156,6 +156,25 @@ const dateDDMMYY = (iso: string): string => {
  * Empty parts are dropped rather than leaving " -  - " gaps, so a document with
  * no project still reads "Acme - Invoice - 03-08-26".
  */
+/**
+ * `2026-08-02` → `02/Aug/2026`, the format agreed with the client.
+ *
+ * A native `<input type="date">` renders its own format from the BROWSER LOCALE — an en-US browser
+ * shows `mm/dd/yyyy` and no markup can change it. So the field keeps the native picker and this line
+ * says the date back underneath it, where a month NAME removes the ambiguity outright rather than
+ * asking the reader to know which convention they are looking at.
+ *
+ * Parsed by splitting, never `new Date("2026-08-02")` — that is treated as UTC and renders as the
+ * previous day for anyone west of Greenwich, which is a wrong date shown with total confidence.
+ */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const readableDate = (iso: string): string => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((iso ?? "").trim());
+  if (!m) return "";
+  const month = MONTHS[Number(m[2]) - 1];
+  return month ? `${m[3]}/${month}/${m[1]}` : "";
+};
+
 /** "a, b and c" — a comma-list a person reads, rather than a machine-joined one. */
 const listPhrase = (items: string[]): string => {
   const list = items.filter((s) => s.trim().length > 0);
@@ -2244,6 +2263,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     })()}
                     onChange={(e) => onDocumentDateChange(e.target.value)}
                   />
+                  {/* The picker's own format follows the browser locale and cannot be set from here,
+                      so the chosen date is repeated with a month NAME — unambiguous whichever
+                      convention the reader expects. */}
+                  <small>
+                    {documentDate ? `Saves as ${readableDate(documentDate)}` : "Day / Month / Year"}
+                  </small>
                 </label>
 
                 {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
