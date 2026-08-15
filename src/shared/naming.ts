@@ -265,8 +265,20 @@ export const libraryUrlSegment = (): string => libraryNames.urlSegment;
  * describes: a wrong title 404s, which at least fails loudly, but only if somebody is looking at
  * the column it fails in. One copy now, because the next screen to need it would have repeated the
  * same mistake.
+ *
+ * Four keys since 2026-08-15. `StagingHC` and `DocumentsHC` are logical keys in exactly the same
+ * way `Staging` is, and are translated here and nowhere else. An HC key with no resolved pair falls
+ * through to the key itself, which 404s LOUDLY — the deliberate choice over returning the normal
+ * library's title, which would resolve happily and route a Highly Confidential document into the
+ * library its whole unit reads.
  */
-export const libApiTitle = (lib: string): string => (lib === "Staging" ? libraryTitle() : lib);
+export const libApiTitle = (lib: string): string => {
+  if (lib === "Staging") return libraryTitle();
+  const hc = cachedHcLibraries();
+  if (lib === "StagingHC") return hc ? hc.approval.title : lib;
+  if (lib === "DocumentsHC") return hc ? hc.documents.title : lib;
+  return lib;
+};
 
 /**
  * Record the resolved pair. Takes the values rather than performing the lookup, keeping this
@@ -286,4 +298,88 @@ export function setLibraryNames(title: string, serverRelativeUrl: string): void 
 /** Test seam, and the escape hatch after a rename mid-session. */
 export function clearLibraryCache(): void {
   libraryNames = { title: LEGACY_LIBRARY, urlSegment: LEGACY_LIBRARY };
+}
+
+/* ---------------------------------------------------------------------------
+ * The Highly Confidential pair.
+ *
+ * Spec: docs/superpowers/specs/2026-08-15-highly-confidential-library-design.md
+ *
+ * Everything above resolves ONE library and falls back to a legacy name when nothing answers.
+ * This resolves TWO, and falls back to NOTHING — that difference is the whole safety of the
+ * feature and is not an oversight to be tidied up later.
+ *
+ * An unresolved normal library costs a screen. An unresolved HC library, if it fell back to
+ * anything, would file a Highly Confidential document into the library every PIC in the unit reads
+ * once it is approved — silently, under a green success toast. So `undefined` here means the level
+ * is not offered at all, and callers must treat it that way.
+ * ------------------------------------------------------------------------- */
+
+/** Probe order: the retitled name first, then the name it is created under. */
+export const HC_APPROVAL_CANDIDATES = ["HC Approval Document", "HCApprovalDocument"];
+export const HC_DOCUMENTS_CANDIDATES = ["HC Documents", "HCDocuments"];
+
+/**
+ * The normal approved-side library.
+ *
+ * Its title is `Documents` while its URL segment is `Shared Documents` — the same title/URL split as
+ * the approval library, and the reason "Shared Documents" once appeared at the head of every approved
+ * file's folder trail. Named here so the four library keys read from one place.
+ */
+export const DOCUMENTS_LIBRARY = "Documents";
+
+export interface HcLibraries {
+  approval: LibraryNames;
+  documents: LibraryNames;
+}
+
+/** `undefined` until BOTH halves resolve. Never a partial pair — see `setHcLibraryNames`. */
+let hcLibraries: HcLibraries | undefined;
+
+export function cachedHcLibraries(): HcLibraries | undefined {
+  return hcLibraries;
+}
+
+/**
+ * Is Highly Confidential usable on this site?
+ *
+ * The single question every caller should ask before offering the level. False covers both "not on
+ * this site" and "not probed yet", deliberately: from the point of view of whether it is safe to
+ * offer the level, those are the same answer, and a caller that distinguished them would eventually
+ * offer the level during the window before the probe finished.
+ */
+export function hcAvailable(): boolean {
+  return hcLibraries !== undefined;
+}
+
+/**
+ * Record the resolved HC pair. Both halves, or nothing.
+ *
+ * BOTH LIBRARIES OR NEITHER. An HC approval library with no HC documents library is worse than no HC
+ * at all: uploads succeed, approval succeeds, and then auto-route has nowhere to put the file — so a
+ * document that everyone believes is filed and protected is sitting in a queue nobody watches. The
+ * pair can be right or absent, never half-right, exactly as `title` and `urlSegment` can.
+ */
+export function setHcLibraryNames(
+  approvalTitle: string,
+  approvalUrl: string,
+  documentsTitle: string,
+  documentsUrl: string,
+): void {
+  const pair = (title: string, url: string): LibraryNames | undefined => {
+    const t = (title ?? "").trim();
+    // Same rule as setLibraryNames: a blank segment would reduce split("//") to matching every
+    // separator in the document tree.
+    const segment = (url ?? "").split("/").filter(Boolean).pop() ?? "";
+    return t.length === 0 || segment.length === 0 ? undefined : { title: t, urlSegment: segment };
+  };
+  const approval = pair(approvalTitle, approvalUrl);
+  const documents = pair(documentsTitle, documentsUrl);
+  if (!approval || !documents) return;
+  hcLibraries = { approval, documents };
+}
+
+/** Test seam, and the escape hatch after a rename mid-session. */
+export function clearHcLibraryNames(): void {
+  hcLibraries = undefined;
 }

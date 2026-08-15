@@ -15,6 +15,9 @@ import {
   setSiteEntryName,
   LIBRARY_CANDIDATES,
   setLibraryNames,
+  HC_APPROVAL_CANDIDATES,
+  HC_DOCUMENTS_CANDIDATES,
+  setHcLibraryNames,
 } from "./naming";
 
 /**
@@ -123,9 +126,60 @@ async function primeLibrary(sp: SPHttpClient, siteUrl: string): Promise<void> {
   return libraryLookup;
 }
 
+/**
+ * The Highly Confidential pair, if this site has one.
+ *
+ * Spec: docs/superpowers/specs/2026-08-15-highly-confidential-library-design.md
+ *
+ * UNLIKE primeLibrary, absence is a normal outcome rather than a failure: most sites will not have
+ * HC libraries, and `hcAvailable()` false simply means the level is never offered. So this resolves
+ * nothing and leaves the cache undefined, with no fallback of any kind.
+ *
+ * BOTH halves are probed and BOTH must answer. `setHcLibraryNames` enforces it, but the pairing
+ * matters enough to be visible here too: an HC approval library with no HC documents library accepts
+ * uploads and approvals and then has nowhere to route them.
+ */
+let hcLookup: Promise<void> | undefined;
+
+async function primeHcLibraries(sp: SPHttpClient, siteUrl: string): Promise<void> {
+  if (!hcLookup) {
+    hcLookup = (async () => {
+      const probe = async (candidates: string[]): Promise<{ title: string; url: string } | undefined> => {
+        for (const candidate of candidates) {
+          try {
+            const res: SPHttpClientResponse = await sp.get(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(candidate)}')` +
+                `?$select=Title,RootFolder/ServerRelativeUrl&$expand=RootFolder`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!res.ok) continue; // not under this title; try the next
+            const data = await res.json();
+            // Title and URL from ONE response, so a resolved title is never paired with a stale
+            // segment — the rule the normal library pair already follows.
+            return { title: data?.Title ?? candidate, url: data?.RootFolder?.ServerRelativeUrl ?? "" };
+          } catch {
+            // A network failure on one candidate must not stop the others being tried.
+          }
+        }
+        return undefined;
+      };
+      const approval = await probe(HC_APPROVAL_CANDIDATES);
+      // Short-circuit: with no approval library there is nothing to pair, and the second probe would
+      // spend two requests on every page load of every site that has no HC at all.
+      if (!approval) return;
+      const documents = await probe(HC_DOCUMENTS_CANDIDATES);
+      if (!documents) return;
+      setHcLibraryNames(approval.title, approval.url, documents.title, documents.url);
+    })();
+  }
+  return hcLookup;
+}
+
 export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<void> {
   await primeSiteEntry(sp, siteUrl);
   await primeLibrary(sp, siteUrl);
+  await primeHcLibraries(sp, siteUrl);
   const probe = makeListProbe(sp, siteUrl);
   for (const suffix of [
     LIST_SUFFIX.config,
