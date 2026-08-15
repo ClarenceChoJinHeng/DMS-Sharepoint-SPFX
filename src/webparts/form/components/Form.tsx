@@ -2092,6 +2092,205 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   /* ---------- Render ------------------------------------------------------ */
 
+  /**
+   * The per-file metadata editor.
+   *
+   * Rendered INSIDE whichever staged row is open, not once below the list (client, 2026-08-15: each
+   * file needs its own name, project, vendor, date and confidentiality). Below the list it read as one
+   * form describing all of them, which is exactly the misreading that would give five files one
+   * vendor.
+   *
+   * One instance, moved — not one per row. The fields are backed by the component-level editor state
+   * that `selectFile` loads and saves, so duplicating them per row would mean five sets of inputs
+   * bound to the same values, all changing together.
+   */
+  const activeStagedFile = draftFiles.find((x) => x.id === activeFileId);
+
+  const metaEditor = (
+    <>
+              <div className="dms-grid" style={{ marginTop: 16 }}>
+                <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
+                  <span>
+                    Document Name <em className="req">*</em>
+                  </span>
+                  {/* Typeable before a file is picked: the name is only read at upload
+                      time, and leaving it enabled avoids a greyed-out first field. */}
+                  <input
+                    type="text"
+                    value={docName}
+                    maxLength={50}
+                    onChange={(e) => onDocNameChange(e.target.value)}
+                  />
+                  {/* The saved name is assembled from four fields, so showing the result
+                      is the only way the uploader can tell what it will be called. Falls
+                      back to the original filename when every part is blank, which is
+                      exactly what buildUploadName does. */}
+                  {/* The ACTIVE staged file, not `file` — that holds the last one added, so editing an
+                      earlier row would preview a name belonging to a different document. */}
+                  {activeStagedFile ? (
+                    <small>
+                      Saves as:{" "}
+                      {buildUploadName(
+                        activeStagedFile.file.name,
+                        composeUploadBase(projectName, vendor, docName, documentDate),
+                      )}
+                    </small>
+                  ) : (
+                    <small>Max. 50 characters</small>
+                  )}
+                </label>
+
+                {/* Free-text Project Name — distinct from the Group-led Projects
+                    "Group Project Name" folder level in the card below. */}
+                <label className="dms-field">
+                  <span>
+                    Project Name <em className="req">*</em>
+                  </span>
+                  <input
+                    type="text"
+                    value={projectName}
+                    maxLength={50}
+                    onChange={(e) => onProjectNameChange(e.target.value)}
+                  />
+                  <small>Max. 50 characters</small>
+                </label>
+
+                {/* Vendor is free text. It also feeds the auto-composed document name. */}
+                <label className="dms-field">
+                  <span>
+                    Vendor/Customer Name <em className="req">*</em>
+                  </span>
+                  <input
+                    type="text"
+                    value={vendor}
+                    maxLength={50}
+                    onChange={(e) => onVendorChange(e.target.value)}
+                  />
+                  <small>Max. 50 characters</small>
+                </label>
+
+                {/* Document Type used to sit here. It moved into the folder card below:
+                    it is part of the destination path (Unit → Year → Document Type), not a
+                    property of the document, and grouping it with Unit and Year is what the
+                    client's mockup shows. */}
+
+                {/* Remark lives in the folder card above, per the mockup. */}
+              </div>
+
+              {/* Document Date | Confidential Level | Legally Privileged — one line. */}
+              <div className="dms-detail-row">
+                <label className="dms-field">
+                  <span>
+                    Document Date <em className="req">*</em>
+                  </span>
+                  <input
+                    type="date"
+                    value={documentDate}
+                    max={(() => {
+                      const d = new Date();
+                      const mm = d.getMonth() + 1;
+                      const day = d.getDate();
+                      return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+                    })()}
+                    onChange={(e) => onDocumentDateChange(e.target.value)}
+                  />
+                </label>
+
+                {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
+                    a <span> holding a real <label htmlFor> so clicking the icon does not
+                    fall through and focus the select. */}
+                <div className="dms-field">
+                  <span className="dms-labelrow">
+                    <label htmlFor="dms-form-conf">
+                      Confidential Level <em className="req">*</em>
+                    </label>
+                    <em
+                      className="dms-info"
+                      tabIndex={0}
+                      role="button"
+                      aria-label="What the confidentiality levels mean"
+                    >
+                      i
+                      <span className="dms-info-panel" role="tooltip">
+                        {/* Legally Privileged is NOT defined here any more — it has its own
+                            control and its own icon beside it, and defining it in two places
+                            invites the two texts to drift apart.
+                            Highly Confidential is deliberately absent too. Its term is
+                            removed from the term store for Phase 1, so the dropdown cannot
+                            offer it, and describing a level nobody can pick reads as a bug
+                            in UAT. The definition returns with the HC libraries in Phase 2 —
+                            see the highly-confidential-securing design on feat/hc-libraries. */}
+                        <dl>
+                          <dt>Confidential</dt>
+                          <dd>
+                            This applies to sensitive business information that is
+                            intended strictly for use within the Group, on a need-to-know
+                            basis.
+                          </dd>
+                          <dt>Restricted</dt>
+                          <dd>
+                            This applies to business information that may be disclosed to
+                            external parties only if a non-disclosure agreement has been
+                            signed.
+                          </dd>
+                        </dl>
+                      </span>
+                    </em>
+                  </span>
+                  <select
+                    id="dms-form-conf"
+                    value={confidentiality}
+                    title={
+                      options.confidentiality.find((o) => o.id === confidentiality)
+                        ?.label ?? ""
+                    }
+                    onChange={(e) => setConfidentiality(e.target.value)}
+                  >
+                    <option value="">--</option>
+                    {options.confidentiality.map((o) => (
+                      <option key={o.id} value={o.id} title={o.label}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Offered only for the level named by `legallyPrivilegedFor` in DMS Config.
+                    Unset means never offered — see the setting's note. The value is re-derived
+                    at upload time rather than trusted from here, because hiding the control
+                    does not clear the state behind it. */}
+                {settings.legallyPrivilegedFor !== "" &&
+                  confidentiality === settings.legallyPrivilegedFor && (
+                    <>
+                      <label className="dms-lp">
+                        <input
+                          type="checkbox"
+                          checked={legallyPrivileged}
+                          onChange={(e) => setLegallyPrivileged(e.target.checked)}
+                        />
+                        <span>Legally Privileged</span>
+                      </label>
+                      <em
+                        className="dms-info align-right"
+                        tabIndex={0}
+                        role="button"
+                        aria-label="What Legally Privileged means"
+                        style={{ marginBottom: 26 }}
+                      >
+                        i
+                        <span className="dms-info-panel" role="tooltip">
+                          This applies to confidential communications (email, advice,
+                          documents, conversations) between client and lawyer that are
+                          protected by law from being disclosed in a court of law or
+                          during legal proceedings.
+                        </span>
+                      </em>
+                    </>
+                  )}
+              </div>
+    </>
+  );
+
   return (
     <section className="dms-form">
       <style>{`
@@ -2507,12 +2706,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               acceptFiles(e.dataTransfer?.files);
             }}
           >
-            {file ? (
+            {/* Counts the batch, not one file. It used to name the single chosen document and offer
+                "Change Document" — with several staged, that named whichever was added last and
+                invited the client to swap it, when what they want is to add another. */}
+            {draftFiles.length > 0 ? (
               <>
                 <span className="dms-filecard-ready">READY</span>
-                <span className="name">{file.name}</span>
-                <span className="size">{formatFileSize(file.size)}</span>
-                <span className="dms-link dms-filecard-action">Change Document</span>
+                <span className="name">
+                  {draftFiles.length} document{draftFiles.length === 1 ? "" : "s"} in this batch
+                </span>
+                <span className="size">{formatFileSize(draftFiles.reduce((n, x) => n + x.file.size, 0))}</span>
+                <span className="dms-link dms-filecard-action">Add more documents</span>
               </>
             ) : (
               <>
@@ -2628,205 +2832,29 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                       is built from Project, Vendor, Document Name and Date, so change one of those.
                     </p>
                   )}
-                  <button
-                    type="button"
-                    className="dms-link dms-staged-del"
-                    disabled={busy}
-                    onClick={() => {
-                      const left = draftFiles.filter((x) => x.id !== sf.id);
-                      setDraftFiles(left);
-                      if (open) {
+                  {/* The editor belongs to the OPEN row. Only one row is open, so this renders once. */}
+                  {open && metaEditor}
+                  {open && (
+                    <button
+                      type="button"
+                      className="dms-link dms-staged-del"
+                      disabled={busy}
+                      onClick={() => {
+                        const left = draftFiles.filter((x) => x.id !== sf.id);
+                        setDraftFiles(left);
                         setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
                         if (left.length > 0) applyEditor(left[left.length - 1].meta);
-                      }
-                    }}
-                  >
-                    Delete File
-                  </button>
+                      }}
+                    >
+                      Delete File
+                    </button>
+                  )}
                 </div>
               );
             })}
           </div>
         )}
 
-        <div className="dms-grid" style={{ marginTop: 16 }}>
-          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-            <span>
-              Document Name <em className="req">*</em>
-            </span>
-            {/* Typeable before a file is picked: the name is only read at upload
-                time, and leaving it enabled avoids a greyed-out first field. */}
-            <input
-              type="text"
-              value={docName}
-              maxLength={50}
-              onChange={(e) => onDocNameChange(e.target.value)}
-            />
-            {/* The saved name is assembled from four fields, so showing the result
-                is the only way the uploader can tell what it will be called. Falls
-                back to the original filename when every part is blank, which is
-                exactly what buildUploadName does. */}
-            {file ? (
-              <small>
-                Saves as:{" "}
-                {buildUploadName(
-                  file.name,
-                  composeUploadBase(projectName, vendor, docName, documentDate),
-                )}
-              </small>
-            ) : (
-              <small>Max. 50 characters</small>
-            )}
-          </label>
-
-          {/* Free-text Project Name — distinct from the Group-led Projects
-              "Group Project Name" folder level in the card below. */}
-          <label className="dms-field">
-            <span>
-              Project Name <em className="req">*</em>
-            </span>
-            <input
-              type="text"
-              value={projectName}
-              maxLength={50}
-              onChange={(e) => onProjectNameChange(e.target.value)}
-            />
-            <small>Max. 50 characters</small>
-          </label>
-
-          {/* Vendor is free text. It also feeds the auto-composed document name. */}
-          <label className="dms-field">
-            <span>
-              Vendor/Customer Name <em className="req">*</em>
-            </span>
-            <input
-              type="text"
-              value={vendor}
-              maxLength={50}
-              onChange={(e) => onVendorChange(e.target.value)}
-            />
-            <small>Max. 50 characters</small>
-          </label>
-
-          {/* Document Type used to sit here. It moved into the folder card below:
-              it is part of the destination path (Unit → Year → Document Type), not a
-              property of the document, and grouping it with Unit and Year is what the
-              client's mockup shows. */}
-
-          {/* Remark lives in the folder card above, per the mockup. */}
-        </div>
-
-        {/* Document Date | Confidential Level | Legally Privileged — one line. */}
-        <div className="dms-detail-row">
-          <label className="dms-field">
-            <span>
-              Document Date <em className="req">*</em>
-            </span>
-            <input
-              type="date"
-              value={documentDate}
-              max={(() => {
-                const d = new Date();
-                const mm = d.getMonth() + 1;
-                const day = d.getDate();
-                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
-              })()}
-              onChange={(e) => onDocumentDateChange(e.target.value)}
-            />
-          </label>
-
-          {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
-              a <span> holding a real <label htmlFor> so clicking the icon does not
-              fall through and focus the select. */}
-          <div className="dms-field">
-            <span className="dms-labelrow">
-              <label htmlFor="dms-form-conf">
-                Confidential Level <em className="req">*</em>
-              </label>
-              <em
-                className="dms-info"
-                tabIndex={0}
-                role="button"
-                aria-label="What the confidentiality levels mean"
-              >
-                i
-                <span className="dms-info-panel" role="tooltip">
-                  {/* Legally Privileged is NOT defined here any more — it has its own
-                      control and its own icon beside it, and defining it in two places
-                      invites the two texts to drift apart.
-                      Highly Confidential is deliberately absent too. Its term is
-                      removed from the term store for Phase 1, so the dropdown cannot
-                      offer it, and describing a level nobody can pick reads as a bug
-                      in UAT. The definition returns with the HC libraries in Phase 2 —
-                      see the highly-confidential-securing design on feat/hc-libraries. */}
-                  <dl>
-                    <dt>Confidential</dt>
-                    <dd>
-                      This applies to sensitive business information that is
-                      intended strictly for use within the Group, on a need-to-know
-                      basis.
-                    </dd>
-                    <dt>Restricted</dt>
-                    <dd>
-                      This applies to business information that may be disclosed to
-                      external parties only if a non-disclosure agreement has been
-                      signed.
-                    </dd>
-                  </dl>
-                </span>
-              </em>
-            </span>
-            <select
-              id="dms-form-conf"
-              value={confidentiality}
-              title={
-                options.confidentiality.find((o) => o.id === confidentiality)
-                  ?.label ?? ""
-              }
-              onChange={(e) => setConfidentiality(e.target.value)}
-            >
-              <option value="">--</option>
-              {options.confidentiality.map((o) => (
-                <option key={o.id} value={o.id} title={o.label}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Offered only for the level named by `legallyPrivilegedFor` in DMS Config.
-              Unset means never offered — see the setting's note. The value is re-derived
-              at upload time rather than trusted from here, because hiding the control
-              does not clear the state behind it. */}
-          {settings.legallyPrivilegedFor !== "" &&
-            confidentiality === settings.legallyPrivilegedFor && (
-              <>
-                <label className="dms-lp">
-                  <input
-                    type="checkbox"
-                    checked={legallyPrivileged}
-                    onChange={(e) => setLegallyPrivileged(e.target.checked)}
-                  />
-                  <span>Legally Privileged</span>
-                </label>
-                <em
-                  className="dms-info align-right"
-                  tabIndex={0}
-                  role="button"
-                  aria-label="What Legally Privileged means"
-                  style={{ marginBottom: 26 }}
-                >
-                  i
-                  <span className="dms-info-panel" role="tooltip">
-                    This applies to confidential communications (email, advice,
-                    documents, conversations) between client and lawyer that are
-                    protected by law from being disclosed in a court of law or
-                    during legal proceedings.
-                  </span>
-                </em>
-              </>
-            )}
-        </div>
       </div>
 
       {/* ── Actions ───────────────────────────────────────────────────────────
