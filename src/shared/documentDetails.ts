@@ -183,6 +183,86 @@ export function buildDetailRows(args: {
   return [...(args.leading ?? []), ...tierRows(ft), ...fixed, ...(args.trailing ?? [])];
 }
 
+/** One tier of a document's path, with the term GUID behind the label. */
+export interface TierValue {
+  /** The readable tier name — `Department`, `Estate Mill`. */
+  label: string;
+  /** The term's label, as filed. */
+  value: string;
+  /** The term's GUID, from the `<Base>Tid` twin. Blank when the pair was written incomplete. */
+  guid: string;
+}
+
+/** Where a document sits, derived from its own fields. */
+export interface DocumentUnit {
+  /** The business segment's label. */
+  segment: string;
+  /** The deepest tier's label — the unit, on a segment whose tiers stop at Unit. */
+  unit: string;
+  /** The deepest tier's term GUID. */
+  unitTermGuid: string;
+  /** Every tier that carries a GUID, shallowest first. */
+  tiers: TierValue[];
+}
+
+/**
+ * The tier path of one document, GUIDs included.
+ *
+ * Built for the request workflow, which has to route a request to whoever approves for the unit — and
+ * the only durable key for that is the unit TERM GUID, since labels get renamed and folder names are
+ * abbreviations. `FieldValuesAsText` already carries it in the `<Base>Tid` twin, so this costs no
+ * extra request.
+ *
+ * IT RETURNS THE WHOLE CHAIN, not just the deepest tier, and that is deliberate. Nothing in an item's
+ * fields says which tiers are PERMISSIONED: a below-Unit tier such as SubUnit is created with a Tid
+ * column exactly like a permissioned one, so "deepest" can be a tier no group is ever mapped to.
+ * Routing on it would put the request in nobody's queue, with nothing on screen to say so. The caller
+ * matches the chain against the Group Map and takes the deepest tier an approver actually exists for;
+ * `unitTermGuid` is the fallback for when that list cannot be read.
+ */
+export function documentUnit(fieldText: Record<string, string>): DocumentUnit {
+  const tiers: TierValue[] = [];
+  let segment = "";
+  for (const name of discoverTierFields(fieldText)) {
+    const value = readField(fieldText, name);
+    const guid = readField(fieldText, `${tidBase(name)}Tid`);
+    if (tidBase(name) === "BusinessSegment") {
+      segment = value;
+      continue;
+    }
+    if (value.length === 0 && guid.length === 0) continue;
+    tiers.push({ label: labelFromInternalName(name), value, guid });
+  }
+  const withGuid = tiers.filter((t) => t.guid.length > 0);
+  const deepest = withGuid.length > 0 ? withGuid[withGuid.length - 1] : undefined;
+  return {
+    segment,
+    unit: deepest ? deepest.value : "",
+    unitTermGuid: deepest ? deepest.guid : "",
+    tiers: withGuid,
+  };
+}
+
+/**
+ * The deepest tier someone is recorded as approving for.
+ *
+ * `approverUnits` is every unit GUID carrying an `APR` mapping — not one person's. Searched
+ * DEEPEST-FIRST, because a document filed three tiers down belongs to the unit at the bottom, and a
+ * department-level match would hand the decision to the wrong queue.
+ *
+ * Returns `undefined` when nothing matches, which the caller must NOT read as "no approver exists": an
+ * unreadable Group Map produces exactly the same empty set.
+ */
+export function routeToApprover(unit: DocumentUnit, approverUnits: string[]): TierValue | undefined {
+  const known = (approverUnits ?? []).map((u) => (u ?? "").trim().toLowerCase()).filter((u) => u.length > 0);
+  if (known.length === 0) return undefined;
+  const tiers = unit?.tiers ?? [];
+  for (let i = tiers.length - 1; i >= 0; i--) {
+    if (known.indexOf(tiers[i].guid.toLowerCase()) !== -1) return tiers[i];
+  }
+  return undefined;
+}
+
 /**
  * A byte count as text.
  *

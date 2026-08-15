@@ -68,6 +68,20 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     },
   },
   {
+    // BEFORE the approver rule, deliberately. This page has TWO audiences — uploaders raise a
+    // deletion or share request, the Head of Unit decides it — so landing on the APR-only rule (via a
+    // name like "Approval-Requests.aspx") would leave the people who raise requests unable to open the
+    // page their own requests are listed on. It would otherwise fall to DEFAULT_POLICY, which is the
+    // same set plus DELS; explicit and narrow beats right-by-accident.
+    // Spec: docs/superpowers/specs/2026-08-15-deletion-and-share-requests-design.md
+    match: /request/i,
+    policy: {
+      roles: ["UPL", "APR"],
+      adminOnly: false,
+      reason: "Uploader and approver groups are listed — uploaders raise deletion and share requests here, and the Head of Unit decides them.",
+    },
+  },
+  {
     match: /approv/i,
     policy: {
       roles: ["APR"],

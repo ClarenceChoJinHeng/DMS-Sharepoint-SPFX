@@ -134,3 +134,24 @@ describe("isRoleEligibleForPage", () => {
     expect(isRoleEligibleForPage("", "UPL")).toBe(true);
   });
 });
+
+describe("the Requests page", () => {
+  it("offers both audiences — uploaders raise, the Head of Unit decides", () => {
+    expect(policyForPage("Requests.aspx").roles).toEqual(["UPL", "APR"]);
+    expect(policyForPage("CRS-Requests.aspx").roles).toEqual(["UPL", "APR"]);
+  });
+
+  it("beats the approver rule, so a name carrying 'approval' still reaches uploaders", () => {
+    // Ordering, pinned: on the /approv/ rule this page would list approver groups only, and the
+    // people who RAISE requests could not open the page their own requests appear on.
+    expect(policyForPage("Approval-Requests.aspx").roles).toEqual(["UPL", "APR"]);
+  });
+
+  it("does not disturb the approver's own page", () => {
+    expect(policyForPage("ApprovalDocument.aspx").roles).toEqual(["APR"]);
+  });
+
+  it("is not an administrator tool — an uploader must be able to be granted it", () => {
+    expect(policyForPage("Requests.aspx").adminOnly).toBe(false);
+  });
+});

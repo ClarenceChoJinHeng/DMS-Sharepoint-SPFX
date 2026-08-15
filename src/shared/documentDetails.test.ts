@@ -2,11 +2,13 @@ import {
   FIXED_FIELDS,
   buildDetailRows,
   discoverTierFields,
+  documentUnit,
   encodedKey,
   fieldKeys,
   formatBytes,
   labelFromInternalName,
   readField,
+  routeToApprover,
   tidBase,
   tierRows,
 } from "./documentDetails";
@@ -289,5 +291,78 @@ describe("formatBytes", () => {
 
   it("handles zero as a real size, not as missing", () => {
     expect(formatBytes(0)).toBe("0 B");
+  });
+});
+
+/**
+ * A Group Head Office file with a below-Unit SubUnit tier — the shape that makes "deepest tier" the
+ * wrong routing key. SubUnit carries a Tid column exactly like a permissioned tier does.
+ */
+const WITH_SUBUNIT: Record<string, string> = {
+  Business_x005f_x0020_x005f_Segment: "Group Head Office",
+  BusinessSegmentTid: "seg-guid",
+  Department: "Group Finance",
+  DepartmentTid: "dept-guid",
+  Unit: "Corporate Reporting",
+  UnitTid: "unit-guid",
+  SubUnit: "Treasury Ops",
+  SubUnitTid: "subunit-guid",
+  Year: "2026",
+};
+
+describe("documentUnit", () => {
+  it("reads the tier chain with the GUIDs behind the labels", () => {
+    const u = documentUnit(WITH_SUBUNIT);
+    expect(u.segment).toBe("Group Head Office");
+    expect(u.tiers.map((t) => t.value)).toEqual(["Group Finance", "Corporate Reporting", "Treasury Ops"]);
+    expect(u.tiers.map((t) => t.guid)).toEqual(["dept-guid", "unit-guid", "subunit-guid"]);
+  });
+
+  it("keeps the segment out of the tier chain — it is named separately", () => {
+    expect(documentUnit(WITH_SUBUNIT).tiers.map((t) => t.label)).not.toContain("Business Segment");
+  });
+
+  it("works on a segment nobody wrote code for", () => {
+    const u = documentUnit(UPOPSMY);
+    expect(u.segment).toBe("Upstream Operations Malaysia");
+    expect(u.tiers.map((t) => t.label)).toEqual(["Region", "Estate Mill"]);
+  });
+
+  it("drops a tier with no GUID — it cannot route anything", () => {
+    const u = documentUnit({ Region: "Johor", RegionTid: "", EstateMill: "Bukit Benut", EstateMillTid: "e-guid" });
+    expect(u.tiers.map((t) => t.guid)).toEqual(["e-guid"]);
+    expect(u.unitTermGuid).toBe("e-guid");
+  });
+
+  it("is empty rather than throwing on a document with no tiers at all", () => {
+    const u = documentUnit({ Year: "2026" });
+    expect(u.tiers).toEqual([]);
+    expect(u.unitTermGuid).toBe("");
+  });
+});
+
+describe("routeToApprover", () => {
+  it("picks the tier an approver is actually mapped to, NOT the deepest one", () => {
+    // The whole reason the chain is returned: SubUnit is below Unit and no group is mapped to it, so
+    // routing on the deepest tier would file the request where nobody can see it.
+    const hit = routeToApprover(documentUnit(WITH_SUBUNIT), ["unit-guid"]);
+    expect(hit && hit.guid).toBe("unit-guid");
+    expect(hit && hit.value).toBe("Corporate Reporting");
+  });
+
+  it("searches deepest-first, so a department mapping never beats a unit one", () => {
+    const hit = routeToApprover(documentUnit(WITH_SUBUNIT), ["dept-guid", "unit-guid"]);
+    expect(hit && hit.guid).toBe("unit-guid");
+  });
+
+  it("matches case-insensitively — a GUID's case is not data", () => {
+    const hit = routeToApprover(documentUnit(WITH_SUBUNIT), ["UNIT-GUID"]);
+    expect(hit && hit.guid).toBe("unit-guid");
+  });
+
+  it("is undefined when nothing matches — which is NOT the same as no approver existing", () => {
+    expect(routeToApprover(documentUnit(WITH_SUBUNIT), ["someone-else"])).toBeUndefined();
+    // An unreadable Group Map arrives here as an empty set and must look identical.
+    expect(routeToApprover(documentUnit(WITH_SUBUNIT), [])).toBeUndefined();
   });
 });

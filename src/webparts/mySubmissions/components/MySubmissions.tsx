@@ -34,9 +34,22 @@ import {
 } from "../../../shared/mySubmissions";
 // The metadata panel's rows. It DERIVES the tier rows from the item's own fields rather than naming
 // them, which is what makes Region/Estate·Mill appear on a segment nobody wrote code for.
-import { buildDetailRows, formatBytes } from "../../../shared/documentDetails";
-import { libraryTitle, libraryUrlSegment } from "../../../shared/naming";
+import { buildDetailRows, documentUnit, formatBytes, routeToApprover } from "../../../shared/documentDetails";
+import { cachedListTitle, LIST_SUFFIX, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+// The request rules — validation, recipient parsing and the inside/outside test — live under test in
+// shared/requests.ts and are shared with the approver's queue. Two copies of "what counts as external"
+// is how one screen ends up permitting what the other refuses.
+import {
+  RequestDraft,
+  RequestType,
+  SharePermission,
+  isExternal,
+  parseRecipients,
+  validateDraft,
+} from "../../../shared/requests";
+import { writeAudit } from "../../../shared/spAuditLog";
+import { EVENT } from "../../../shared/auditLog";
 // The preview strategy is ALREADY built and tested for the approval page: PDF, Office Online,
 // image, text, and an honest refusal. Reusing it rather than re-guessing, because the case that
 // matters is invisible until it bites — SharePoint serves an Office file as a DOWNLOAD, so a raw
@@ -83,6 +96,17 @@ const s: Record<string, React.CSSProperties> = {
   detailValue: { fontSize: 13, color: "#201f1e", marginTop: 2, overflowWrap: "break-word" },
   imageBox:    { display: "flex", alignItems: "flex-start", justifyContent: "center", width: "100%", height: "calc(100vh - 320px)", minHeight: 520, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "auto", padding: 12, boxSizing: "border-box" },
   rejectBox:   { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #f1b0b3", background: "#fde7e9", color: "#a4262c", lineHeight: 1.55, marginBottom: 16 },
+  // ── Requests ──
+  askBar:   { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 16 },
+  askBtn:   { padding: "6px 14px", fontSize: 12.5, fontFamily: "inherit", border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
+  askOff:   { padding: "6px 14px", fontSize: 12.5, fontFamily: "inherit", border: "1px solid #e6e6e6", borderRadius: 4, background: "#f4f4f4", color: "#9a9a9a", cursor: "not-allowed" },
+  okBox:    { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #b7dcc4", background: "#f3faf5", color: "#1c4d33", lineHeight: 1.55, marginBottom: 16 },
+  warnBox:  { fontSize: 12.5, padding: "12px 14px", borderRadius: 6, border: "1px solid #f2c9a0", background: "#fff8f0", color: "#8a4b00", lineHeight: 1.55, marginBottom: 12 },
+  modalBg:  { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
+  modal:    { background: "#fff", borderRadius: 8, padding: 20, width: "min(560px, 94vw)", maxHeight: "86vh", overflowY: "auto", fontSize: 13 },
+  label:    { display: "block", marginTop: 12, marginBottom: 4, fontSize: 12, fontWeight: 600, color: "#3b3a39" },
+  field:    { width: "100%", boxSizing: "border-box", padding: "7px 10px", fontSize: 13, fontFamily: "inherit", border: "1px solid #c7c7c7", borderRadius: 4 },
+  primary:  { padding: "7px 16px", fontSize: 12.5, fontFamily: "inherit", background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer" },
 };
 
 function badgeFor(status: string): React.CSSProperties {
@@ -106,6 +130,43 @@ function badgeFor(status: string): React.CSSProperties {
  */
 type RawRow = Record<string, unknown>;
 
+/**
+ * What the request form needs to know before it can offer anything.
+ *
+ * `known` is separate from the values, because every field's "not yet read" state is identical to a
+ * legitimate one: no approver units, no extra domains, external sharing off. Offering a request form
+ * built from a failed read would refuse valid recipients while naming a setting nobody had touched.
+ */
+interface RequestPolicy {
+  known: boolean;
+  /**
+   * FAILS CLOSED, unlike almost everything else in this codebase.
+   *
+   * Elsewhere the cost of a failed read is a form out of service, so `unknown` means "offer
+   * everything". Here it is a document leaving the organisation on the strength of a setting nobody
+   * could confirm — the same reason `canOfferFolderDelete` fails closed. Spec §5.3.
+   */
+  allowExternal: boolean;
+  tenantDomains: string[];
+  /** Every unit term GUID carrying an `APR` mapping — used to route the request, not to authorise it. */
+  approverUnits: string[];
+  /** False only when the list answered 404. A different failure leaves this true and fails at the write. */
+  listExists: boolean;
+}
+
+const BLANK_POLICY: RequestPolicy = {
+  known: false, allowExternal: false, tenantDomains: [], approverUnits: [], listExists: true,
+};
+
+/* JSON light with NO `__metadata`, and BOTH header halves saying nometadata — plus `odata-version: ""`
+   because SPFx injects 4.0, under which SharePoint cannot infer the entity set for a JSON-light entry
+   and a row POST 400s. All learned on the audit log; the same headers the Requests page uses. */
+const WRITE_HEADERS = {
+  Accept: "application/json;odata=nometadata",
+  "Content-Type": "application/json;odata=nometadata",
+  "odata-version": "",
+};
+
 export default function MySubmissions({ context }: IMySubmissionsProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
   // Origin with no /sites/… — a server-relative path already carries the site, so previewTarget
@@ -128,6 +189,19 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   const [open, setOpen] = useState<Submission | undefined>(undefined);
   /** Per-item metadata labels for the open row. `undefined` while in flight. */
   const [fieldText, setFieldText] = useState<Record<string, string> | undefined>(undefined);
+
+  /* ── Requests ──────────────────────────────────────────────────────────────
+     An uploader cannot delete or share in Documents, so they ask and a Head of Unit decides.
+     Spec: docs/superpowers/specs/2026-08-15-deletion-and-share-requests-design.md */
+  const [policy, setPolicy] = useState<RequestPolicy>(BLANK_POLICY);
+  const [asking, setAsking] = useState<RequestType | undefined>(undefined);
+  const [reason, setReason] = useState("");
+  const [shareWith, setShareWith] = useState("");
+  const [permission, setPermission] = useState<SharePermission>("View");
+  const [expiresAt, setExpiresAt] = useState("");
+  const [problems, setProblems] = useState<string[]>([]);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<string | undefined>(undefined);
 
   const currentUserId = async (): Promise<number> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
@@ -161,7 +235,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     // `File/Length` needs the $expand — a bare `File/Length` in a $select is rejected. Modified is
     // read alongside Created because on this page the gap between them is the story: created is when
     // the uploader sent it, modified is when the approver acted.
-    const common = "Id,FileLeafRef,FileRef,Created,Modified,File/Length";
+    // UniqueId is what a deletion or share request is raised against — a GUID that survives the
+    // rename or move that a path does not. It is a built-in field on every list item, so it costs
+    // nothing and is safe on both libraries; the minimal fallback below drops it, and the request
+    // buttons check for it rather than assuming.
+    const common = "Id,FileLeafRef,FileRef,UniqueId,Created,Modified,File/Length";
     const withStatus = approvalLibrary ? `${common},OData__ModerationStatus` : common;
     // FSObjType eq 0 = FILES ONLY. Without it every folder the uploader ever caused to be
     // created comes back as a "submission": 443 rows on the test site, and clicking one opened
@@ -219,6 +297,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         library: urlSegment,
         name: pickField(r, "FileLeafRef"),
         fileRef: pickField(r, "FileRef"),
+        uniqueId: pickField(r, "UniqueId") || undefined,
         // Documents rows carry no status: they are there because they were approved.
         status: approvalLibrary ? statusToDecision(Number(r.OData__ModerationStatus)) : "Approved",
         created: createdRaw.length > 0 ? new Date(createdRaw) : undefined,
@@ -280,7 +359,206 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
 
   const openRow = (row: Submission): void => {
     setOpen(row);
+    setAsking(undefined);
+    setSent(undefined);
+    setProblems([]);
     loadFieldText(row).catch(() => setFieldText({}));
+  };
+
+  /* ── Requests: what the form needs before it can offer anything ──────────── */
+
+  /**
+   * Three independent reads, none of which may take the page down.
+   *
+   * This whole block is decoration for the primary job — telling an uploader what happened to their
+   * files — so every failure is caught individually and `known` simply stays false. The buttons then
+   * say why rather than appearing and failing at the write.
+   */
+  const loadPolicy = async (): Promise<void> => {
+    const next: RequestPolicy = { ...BLANK_POLICY, known: true };
+
+    // The signed-in user's own domain is not a guess — they are signed in to this tenant. A config
+    // row adds more for a multi-domain tenant with no redeploy.
+    const me = (context.pageContext.user.email ?? "").toLowerCase();
+    const at = me.lastIndexOf("@");
+    if (at > -1) next.tenantDomains.push(me.slice(at + 1));
+
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items` +
+          `?$select=Title,SettingValue&$filter=Title eq 'allowExternalSharing' or Title eq 'tenantDomains'&$top=20`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (res.ok) {
+        for (const r of ((await res.json()).value ?? []) as Array<{ Title?: string; SettingValue?: string }>) {
+          const value = (r.SettingValue ?? "").trim();
+          if (r.Title === "allowExternalSharing") {
+            // Only an explicit yes turns it on. Anything else — blank, "no", a typo — stays off.
+            next.allowExternal = /^(true|yes|on|1)$/i.test(value);
+          } else if (r.Title === "tenantDomains") {
+            for (const d of value.split(/[,;\s]+/)) {
+              const clean = d.trim().toLowerCase();
+              if (clean && next.tenantDomains.indexOf(clean) === -1) next.tenantDomains.push(clean);
+            }
+          }
+        }
+      }
+    } catch {
+      /* internal-only, and the form says so */
+    }
+
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items` +
+          `?$select=Role,UnitTermGuid&$top=5000`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (res.ok) {
+        for (const r of ((await res.json()).value ?? []) as Array<{ Role?: string; UnitTermGuid?: string }>) {
+          if ((r.Role ?? "").toUpperCase() !== "APR") continue;
+          const guid = (r.UnitTermGuid ?? "").trim();
+          if (guid && next.approverUnits.indexOf(guid) === -1) next.approverUnits.push(guid);
+        }
+      }
+    } catch {
+      /* the request still routes on the document's own deepest tier */
+    }
+
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')/items?$select=Id&$top=1`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      // ONLY a 404 means absent. Any other failure leaves it true, so the uploader is told the write
+      // failed rather than being sent to an administrator over what may be a transient error.
+      if (res.status === 404) next.listExists = false;
+    } catch {
+      /* leave it true — see above */
+    }
+
+    setPolicy(next);
+  };
+
+  /**
+   * Raise a request against the open document.
+   *
+   * WHERE IT GOES is derived from the document's own tier fields, not from the folder path — folder
+   * names are abbreviations, and the durable key is the term GUID. The deepest tier an approver is
+   * actually mapped to wins: a below-Unit tier such as SubUnit carries a Tid column exactly like a
+   * permissioned one, so routing on "deepest" alone would file the request where nobody can see it.
+   */
+  const submitRequest = async (row: Submission, type: RequestType): Promise<void> => {
+    const ft = fieldText ?? {};
+    const where = documentUnit(ft);
+    const routed = routeToApprover(where, policy.approverUnits);
+
+    const draft: RequestDraft = {
+      type,
+      itemUniqueId: row.uniqueId ?? "",
+      itemName: row.name,
+      segment: where.segment,
+      unit: routed ? routed.value : where.unit,
+      reason,
+      shareWith: type === "Share" ? shareWith : undefined,
+      sharePermission: type === "Share" ? permission : undefined,
+      expiresAt: type === "Share" ? expiresAt : undefined,
+    };
+
+    const found = validateDraft(draft, {
+      allowExternal: policy.allowExternal,
+      tenantDomains: policy.tenantDomains,
+    });
+    if (found.length > 0) {
+      setProblems(found);
+      return;
+    }
+
+    setSending(true);
+    setProblems([]);
+    try {
+      const guid = routed ? routed.guid : where.unitTermGuid;
+      const body: Record<string, string> = {
+        Title: `${type} — ${row.name}`.slice(0, 255),
+        RequestType: type,
+        Status: "Pending",
+        ItemUniqueId: draft.itemUniqueId,
+        ItemName: row.name,
+        ItemUrl: row.fileRef,
+        Segment: where.segment,
+        Unit: draft.unit,
+        UnitTermGuid: guid,
+        RequestedBy: (context.pageContext.user.email ?? "").toLowerCase(),
+        // ISO, never M/D/YYYY. This is a plain /items POST through the OData layer, which answers a
+        // locale string with "Cannot convert a primitive value to the expected type 'Edm.DateTime'"
+        // — gotcha #1's format belongs to validateUpdateListItem. $filter needs ISO too, so writes
+        // and filters share one format and cannot be mismatched.
+        RequestedAt: new Date().toISOString(),
+        Reason: reason.trim(),
+      };
+      if (type === "Share") {
+        body.ShareWith = parseRecipients(shareWith).join("; ");
+        body.SharePermission = permission;
+        // OMITTED when blank rather than sent as "". A DateTime column rejects an empty string, and
+        // the whole write fails over an optional field.
+        if (expiresAt.trim().length > 0) body.ExpiresAt = new Date(`${expiresAt.trim()}T12:00:00`).toISOString();
+      }
+
+      const res: SPHttpClientResponse = await context.spHttpClient.post(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')/items`,
+        SPHttpClient.configurations.v1,
+        { headers: WRITE_HEADERS, body: JSON.stringify(body) },
+      );
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(
+          res.status === 404
+            ? "the requests list does not exist yet — ask an administrator to open the Requests page, which creates it"
+            : `HTTP ${res.status} ${text.slice(0, 160)}`,
+        );
+      }
+
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: type === "Deletion" ? EVENT.deletionRequested : EVENT.shareRequested,
+        source: "MySubmissions",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: (context.pageContext.user.email ?? "").toLowerCase(),
+        library: DOCUMENTS,
+        itemName: row.name,
+        itemUniqueId: draft.itemUniqueId,
+        itemPath: row.fileRef,
+        segment: where.segment,
+        unitPath: draft.unit,
+        summary: `${type} requested — ${row.name}`,
+        details: [
+          `Reason: ${reason.trim()}`,
+          type === "Share" ? `Recipients: ${parseRecipients(shareWith).join(", ")} (${permission})` : "",
+          type === "Share" && expiresAt.trim() ? `Expires: ${expiresAt.trim()}` : "",
+          // Recorded because it decides whether anyone ever sees the request, and it is invisible
+          // afterwards: the row looks identical either way.
+          routed ? `Routed to the ${routed.label} approver: ${routed.value}` : "No approver mapping matched this document.",
+        ].filter((d) => d.length > 0),
+      }).catch(() => undefined);
+
+      setAsking(undefined);
+      setReason("");
+      setShareWith("");
+      setExpiresAt("");
+      setPermission("View");
+      setSent(
+        routed
+          ? `Sent. The ${routed.label} approver for ${routed.value} will see it on the Requests page.`
+          : "Sent — but no approver is recorded for this document's unit, so it may sit unanswered. " +
+              "Tell an administrator: an APR mapping is missing on the Folder Access page.",
+      );
+    } catch (e) {
+      setProblems([`Could not send the request: ${(e as Error).message}`]);
+    } finally {
+      setSending(false);
+    }
   };
 
   useEffect(() => {
@@ -298,6 +576,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       const documents = await readLibrary(DOCUMENTS, segment, false, userId);
       setRows(sortNewestFirst([...staging, ...documents]));
       setLoadError(undefined);
+      // Last, and never awaited into the same try: this decides whether the request buttons can be
+      // offered, and nothing about it may cost an uploader the list of their own files.
+      loadPolicy().catch(() => setPolicy({ ...BLANK_POLICY, known: false }));
     };
     load().catch((e) => {
       // NEVER fall through to an empty list. An uploader told they have nothing, when a library was
@@ -347,6 +628,18 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       ],
     });
 
+    /* Why a request cannot be raised right now, or undefined when it can.
+       A reason, never a disappeared button: an uploader who cannot see the control assumes the
+       system does not do this and goes to ask someone in person. */
+    const requestBlock =
+      !policy.known
+        ? "Checking whether requests can be raised…"
+        : !policy.listExists
+          ? "Requests are not set up on this site yet — an administrator opens the Requests page once to create the list."
+          : !open.uniqueId
+            ? "This file's id could not be read, so a request would not find it. Reload the page and try again."
+            : undefined;
+
     return (
       <section style={s.wrap}>
         <div style={s.backBand}>
@@ -370,6 +663,41 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
               : "No reason was recorded. Ask your approver what needs changing."}
           </div>
         )}
+
+        {/* ── Asking for something to be done to this file ─────────────────────────
+            Only for APPROVED files. Those live in Documents, where an uploader has Read and nothing
+            more — so deleting or sharing one is a request. A pending or rejected file is still in the
+            approval library, where a PIC holds Delete and can simply do it. Offering the same buttons
+            there would teach people to ask permission for something they already control. */}
+        {open.status === "Approved" && (
+          <div style={s.askBar}>
+            {sent === undefined && (
+              <>
+                <button
+                  style={requestBlock === undefined ? s.askBtn : s.askOff}
+                  disabled={requestBlock !== undefined}
+                  title={requestBlock}
+                  onClick={() => { setProblems([]); setAsking("Deletion"); }}
+                >
+                  Request deletion
+                </button>
+                <button
+                  style={requestBlock === undefined ? s.askBtn : s.askOff}
+                  disabled={requestBlock !== undefined}
+                  title={requestBlock}
+                  onClick={() => { setProblems([]); setAsking("Share"); }}
+                >
+                  Request share
+                </button>
+              </>
+            )}
+            <span style={{ fontSize: 12, color: "#605e5c" }}>
+              {requestBlock ?? "Your Head of Unit decides these."}
+            </span>
+          </div>
+        )}
+
+        {sent !== undefined && <div style={s.okBox}>{sent}</div>}
 
         <div style={s.detailGrid}>
           <div>
@@ -426,6 +754,92 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             ))}
           </div>
         </div>
+
+        {asking !== undefined && (
+          <div style={s.modalBg} onClick={() => { if (!sending) setAsking(undefined); }}>
+            <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+              <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>
+                {asking === "Deletion" ? "Ask for this file to be deleted" : "Ask for this file to be shared"}
+              </p>
+              <p style={{ fontSize: 12.5, color: "#605e5c", margin: "0 0 4px", lineHeight: 1.5 }}>
+                {open.name}
+              </p>
+              <p style={{ fontSize: 12.5, color: "#605e5c", margin: "0 0 8px", lineHeight: 1.5 }}>
+                {asking === "Deletion"
+                  ? "Nothing happens until your Head of Unit approves. If they do, the file goes to the recycle bin, where it can be restored for 93 days."
+                  : "Nothing happens until your Head of Unit approves. If they do, the people below get access to this file — and nothing else."}
+              </p>
+
+              <label style={s.label}>Reason — your approver sees only this</label>
+              <textarea
+                style={{ ...s.field, minHeight: 64, resize: "vertical" }}
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+
+              {asking === "Share" && (
+                <>
+                  <label style={s.label}>Share with — email addresses, one per line or comma separated</label>
+                  <textarea
+                    style={{ ...s.field, minHeight: 56, resize: "vertical" }}
+                    value={shareWith}
+                    onChange={(e) => setShareWith(e.target.value)}
+                  />
+                  {/* Named as it is typed, not only after submitting: whether someone is outside the
+                      organisation is the fact that decides whether this is refused, and finding out
+                      at the end means retyping the lot. */}
+                  {parseRecipients(shareWith).some((r) => isExternal(r, policy.tenantDomains)) && (
+                    <div style={{ ...s.warnBox, marginTop: 8 }}>
+                      {policy.allowExternal
+                        ? "Some of these are outside the organisation. Your approver will be told."
+                        : "Some of these are outside the organisation, and that is switched off on this site — the request cannot be sent until you remove them."}
+                    </div>
+                  )}
+
+                  <label style={s.label}>They may</label>
+                  <select
+                    style={s.field}
+                    value={permission}
+                    onChange={(e) => setPermission(e.target.value === "Edit" ? "Edit" : "View")}
+                  >
+                    <option value="View">View only</option>
+                    <option value="Edit">View and edit</option>
+                  </select>
+
+                  <label style={s.label}>Access ends on (optional)</label>
+                  <input
+                    type="date"
+                    style={s.field}
+                    value={expiresAt}
+                    onChange={(e) => setExpiresAt(e.target.value)}
+                  />
+                  <p style={{ fontSize: 11.5, color: "#605e5c", marginTop: 4, lineHeight: 1.45 }}>
+                    Leave it blank and the access is permanent until someone removes it.
+                  </p>
+                </>
+              )}
+
+              {problems.length > 0 && (
+                <div style={{ ...s.rejectBox, marginTop: 12, marginBottom: 0 }}>
+                  {problems.map((p) => <div key={p}>{p}</div>)}
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+                <button
+                  style={sending ? s.askOff : s.primary}
+                  disabled={sending}
+                  onClick={() => { submitRequest(open, asking).catch(() => undefined); }}
+                >
+                  {sending ? "Sending…" : "Send the request"}
+                </button>
+                <button style={s.askBtn} disabled={sending} onClick={() => setAsking(undefined)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </section>
     );
   }
@@ -515,7 +929,12 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       <p style={s.note}>
         <strong>Pending</strong> means waiting for your approver. <strong>Rejected</strong> files stay
         here so you can see why. <strong>Approved</strong> files have moved into the main {DOCUMENTS}{" "}
-        library, where the rest of your unit can find them too.
+        library, where the rest of your unit can find them too.{" "}
+        {/* Discoverability: the buttons live in the detail view, because a deletion request should be
+            made looking at the file rather than at a row in a list. That is only obvious once you
+            know it, so the page says it. */}
+        Open an approved file to ask for it to be <strong>deleted</strong> or{" "}
+        <strong>shared</strong> — your Head of Unit decides.
         {commentsMissing && (
           <>
             {" "}

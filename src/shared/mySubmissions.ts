@@ -27,6 +27,14 @@ export interface Submission {
   name: string;
   /** Server-relative path of the file itself. */
   fileRef: string;
+  /**
+   * The file's `UniqueId` — the key a deletion or share request is raised against.
+   *
+   * A GUID rather than the path, because a request may be decided days later and a file renamed or
+   * moved in the meantime must still resolve. Undefined when the read fell back to the minimal
+   * `$select`, which is why the request buttons check for it rather than assuming it.
+   */
+  uniqueId?: string;
   status: SubmissionStatus;
   /** When it was uploaded. Auto-route preserves `Created`, so this survives the move. */
   created?: Date;

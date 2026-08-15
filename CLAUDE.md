@@ -1032,9 +1032,60 @@ writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Aud
 - **Supersedes the never-built `<P> Deletion Log`** — two append-only trails would leave a permanent
   question about which is authoritative. `LIST_SUFFIX.deletionLog` still exists; nothing new reads it.
 
+## DELETION AND SHARE REQUESTS (2026-08-15, spec `2026-08-15-deletion-and-share-requests-design.md`)
+Client: a PIC deletes in the approval library but **not** in `Documents` — there they ASK, and the Head
+of Unit approves. HoD and C-Level delete and share directly, no request. Web part **`CRS Requests`**
+(`7a4f1e93-…`), its own page. BUILT, **not site-tested**; the folder-scope grants and the `CRS Share`
+permission level do not exist yet, so **nothing works until reconciliation is re-run after deploy**.
+- **THE APPROVAL EXECUTES IN THE APPROVER'S OWN BROWSER SESSION.** Pressing Approve recycles the file
+  or grants the access as *them*. No service account, no flow, nothing acting on anyone's behalf — so
+  the audit row names who actually did it, and an approval **cannot exceed the approver's own rights**;
+  it fails loudly instead. Cost: an approval only completes while they are on the page.
+- **An approver can only approve what they can PERFORM.** That is why HoU gains `DEL` and `SHARE` — and
+  why granting them sharing rights makes them **the sharing authority for their unit, not merely an
+  approver of one**: they can then share directly, with no screen involved. Client decision, stated
+  rather than buried.
+- **PIC gained `DELS`, HoU gained `UPL`** (2026-08-15 correction — the earlier model had these exactly
+  backwards). A HoU therefore **approves their own uploads**; the client accepted this.
+- **Deletions RECYCLE, never purge** — restorable for 93 days, which is what makes approving one
+  reasonable, and the dialog says so. Resolved by **UniqueId**, so a rename or move since the request
+  was raised does not matter.
+- **Shares go through `SP.Web.ShareObject`** — the endpoint SharePoint's own Share dialog calls, so it
+  honours tenant and site sharing settings rather than working around them. **HTTP 200 does NOT mean it
+  worked**: the per-recipient result is in the BODY, exactly as with `validateUpdateListItem`
+  (gotcha #4). A tenant refusal arrives there, not as a status code.
+- **External sharing is a `DMS Config` row (`allowExternalSharing`), and it FAILS CLOSED.** Absent,
+  unreadable or anything but an explicit yes ⇒ internal only. A deliberate exception to this codebase's
+  fail-open rule, for the same reason `canOfferFolderDelete` fails closed: elsewhere a failed read costs
+  a form, here it would send a document out of the organisation on a setting nobody could confirm.
+  `tenantDomains` (also a config row) is what `isExternal` compares against — **no domains supplied
+  means every recipient reads as external**, never as internal.
+- **A web part CANNOT intercept the native Share button** — settled in
+  `2026-07-23-share-guard-retirement.md` and not re-openable. This page is the *sanctioned route*, not a
+  gate; SharePoint's own "only site owners can share" lockdown remains the backstop, and a share pressed
+  there lands with an administrator instead. Do not re-propose forcing everyone through this page.
+- **ROUTING IS ON THE TERM GUID, and "deepest tier" is the wrong key.** `documentUnit()` derives the
+  whole tier chain from the document's own `<Base>Tid` fields; `routeToApprover()` then takes the
+  **deepest tier that actually has an `APR` mapping**. A below-Unit tier such as SubUnit carries a Tid
+  column exactly like a permissioned one, so routing on the deepest alone would file the request where
+  **nobody can see it, with nothing on screen to say so**. When nothing matches, the request is still
+  sent and the requester is told an APR mapping is missing — an unreadable Group Map and a genuinely
+  absent approver look identical from here.
+- **`RequestType` and `Status` are TEXT, never Choice** — same reason as `EventType`: a value absent
+  from `Choices` fails the whole write, silently. `RequestedAt`/`ExpiresAt` are **ISO**; a blank expiry
+  is **omitted**, never sent as `""`, which a DateTime column rejects and takes the whole row with it.
+- **A failed action records `Failed`, never `Approved`.** Approving a deletion for a file that has since
+  gone, or a share the tenant refuses, must not read as done. `applyDecision` enforces it.
+- **Every approved share creates a unique permission scope** — the same 50,000-scope ceiling that killed
+  per-uploader ACLs on 2026-08-06. Workable only because shares are rare where those would have been
+  universal. **Revoke is spec'd (§5.3) and NOT yet built**, so the count currently only grows.
+- Requests are raised from **My Submissions**, on an **approved** file's detail view only — pending and
+  rejected files are still in the approval library, where a PIC holds Delete and needs no permission.
+
 ## My Submissions (2026-08-14, spec `2026-08-14-my-submissions-design.md`)
 Client, for the uploaders: it is difficult to track what you uploaded. Web part **`My Submissions`**
-(`5c9d1a83-…`), its own page, **VIEW ONLY**, **uploaders only**. BUILT, not yet site-tested.
+(`5c9d1a83-…`), its own page, **uploaders only**. BUILT, not yet site-tested. No longer strictly view
+only — it now raises the deletion and share requests above, which write a row and change no document.
 - **It reads BOTH libraries, because a file's life spans two.** Pending and rejected sit in the
   approval library; an approved file has been MOVED to `Documents` and deleted from the source, so one
   library shows half a lifecycle. Both reads filter `AuthorId eq <me>`, and Auto-route preserving the
