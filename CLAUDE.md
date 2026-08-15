@@ -1123,6 +1123,38 @@ Client, for the uploaders: it is difficult to track what you uploaded. Web part 
   starts failing; the symptom is the error state rather than silence, but it is still a five-minute
   fix that has to be remembered.
 
+## BATCHED MULTI-FILE UPLOAD (2026-08-15, spec `2026-08-15-batched-multi-file-upload-design.md`)
+Client: *"its only allowing one file per upload, client wants each file to go to different places"*,
+refined to *"they want batches… save batches and add more"*. BUILT in 1.0.104.0, **not site-tested**.
+- **A BATCH IS ONE DESTINATION FOLDER PLUS ITS FILES.** Tiers, Year and Document Type belong to the
+  batch (they *are* the folder); name, project, vendor, date, confidentiality and privilege are per
+  file. Save stages; one Upload sends everything.
+- **THE DESTINATION IS SNAPSHOT AT SAVE, never referenced.** By Upload the pickers describe whichever
+  batch is being edited *then*, so a live read writes batch 1 into batch 3's department — silently,
+  into a folder that exists and looks correct. It snapshots the **leaf term id, not the folder URL**:
+  resolving from the term at upload is what makes this rename-proof, and freezing a URL would undo it.
+- **THE UPLOADED NAME IS NOT THE TYPED NAME.** `composeUploadBase` builds
+  `[Project] - [Vendor] - [Document Name] - [Date]`, so two files with DIFFERENT typed names collide
+  when project, vendor and date match — the common case, not the exotic one. `StagedFile.finalName`
+  carries the composed name and `collisionsWithin` compares that; it is never re-derived in
+  `shared/uploadBatches.ts`, or the convention would exist twice and be free to drift.
+- **SUCCESS REMOVES, FAILURE STAYS.** That one rule makes Retry safe — an uploaded file leaves the
+  list, so it cannot be sent twice — and what remains on screen is exactly what still needs doing.
+  Rollback was rejected: it means deleting files that already uploaded, which can fail on its own.
+- **THE STALE-CHAIN GUARD GOT GENTLER AS IT GOT MORE LIKELY.** Gotcha 10b's *"reload the page"* would
+  destroy every staged batch, so a moved segment marks only **its own** batches, which stay staged and
+  ask for a re-pick. The chain is re-read **once per distinct segment**. A chain that could not be
+  READ marks nothing — unknown is not changed.
+- **NEVER OVERWRITE; the "Replace Existing File" prompt is GONE.** A batch runs unattended so nobody
+  can answer it, and the file being replaced may already be Approved and routed to `Documents`.
+- **STAGED WORK CANNOT BE PERSISTED** — a `File` is not serialisable, so a closed tab loses it. A
+  `beforeunload` guard and a *"nothing has been uploaded yet"* header are the whole mitigation; Cancel
+  confirms with a count. This is the accepted cost of staging over commit-as-you-go.
+- Rules live in **`shared/uploadBatches.ts` (pure, 48 tests)** because batching was built into
+  `BulkUpload.tsx` in 2026-07-24 and **torn out** on 2026-08-03 — 169 references in a 2,586-line file
+  over the lint limit. `Form.tsx` is the same size. Bulk Upload's deferred Phase 2 is the same model:
+  a batch there carries one metadata set, which is a difference in what a batch *contains*, not *is*.
+
 ## Allowed File Types
 Driven by the **`AllowedFileTypes`** multi-select Choice column on `DMS Config`
 (row `allowedExtensions`) — the **single source of truth** since 2026-07-30.

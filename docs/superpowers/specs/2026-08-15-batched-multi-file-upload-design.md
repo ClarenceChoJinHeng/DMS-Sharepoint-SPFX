@@ -1,6 +1,12 @@
 # Batched multi-file upload (the Form) — design
 
-**Status:** DESIGN — not yet built, awaiting review.
+**Status:** BUILT 2026-08-15 (1.0.104.0) — **not yet site-tested**. Run §10 before handing it to the
+client.
+
+One thing the design did not anticipate: the **"Replace Existing File" prompt is gone**. A batch runs
+unattended so there is nobody to answer it, and the file it offered to overwrite may already be
+Approved and routed to `Documents` — replacing that silently destroys a record an approver has acted
+on. A clash now fails that one file with its reason and lets its siblings through (§5).
 **Date:** 2026-08-15
 **Web part:** `src/webparts/form/components/Form.tsx` (the approval-library upload form).
 

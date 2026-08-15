@@ -469,23 +469,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Replace-file guard. When a name clash is found we pause the upload and ask
-  // the user whether to overwrite. The modal resolves a promise so handleUpload
-  // can stay a single linear flow. Uploads are sequential, so one shared prompt
-  // is safe.
-  const [replaceAsk, setReplaceAsk] = useState<{ name: string } | null>(null);
-  const replaceResolveRef = useRef<((ok: boolean) => void) | null>(null);
-  const askReplace = (name: string): Promise<boolean> =>
-    new Promise<boolean>((resolve) => {
-      replaceResolveRef.current = resolve;
-      setReplaceAsk({ name });
-    });
-  const answerReplace = (ok: boolean): void => {
-    setReplaceAsk(null);
-    const resolve = replaceResolveRef.current;
-    replaceResolveRef.current = null;
-    if (resolve) resolve(ok);
-  };
+  // The "Replace Existing File" prompt was REMOVED on 2026-08-15 with batching. A batch runs
+  // unattended, so there is nobody to answer it, and the file it offered to overwrite may already be
+  // Approved and routed to Documents — replacing that silently destroys a record an approver has
+  // acted on. A name clash now fails THAT ONE FILE with its reason and lets its siblings through;
+  // the uploader renames it and presses Upload again.
 
   const showToast = (message: string, type: ToastType): void => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -1565,11 +1553,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (fileRef.current) fileRef.current.value = "";
   };
 
-  /** Kept for the single-file call sites that predate batching. */
-  const acceptFile = (picked: File | undefined): void => {
-    if (picked) acceptFiles([picked]);
-  };
-
   const resetForm = (): void => {
     setFile(undefined);
     setDocName("");
@@ -2195,7 +2178,34 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-admin-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
         .dms-admin-badge { display: inline-flex; align-items: center; background: #fff4e5; border: 1px solid #f0c070; border-radius: 20px; padding: 5px 14px; font-size: 13px; font-weight: 700; color: #7a4f00; white-space: nowrap; }
         .dms-admin-row select { padding: 6px 10px; border: 1px solid #c8c8c8; border-radius: 4px; font: inherit; font-size: 13px; }
-        .dms-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; }
+        .dms-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+
+        /* Batches and staged files (2026-08-15). Plain and quiet: this list sits above the fields and
+           must not compete with them for attention. */
+        .dms-batches { margin-top: 16px; border: 1px solid #d7e3da; border-radius: 8px; padding: 12px 14px; background: #f7fbf8; }
+        .dms-batches-head { margin: 0 0 10px; font-size: 12.5px; color: #2f4c3a; }
+        .dms-batch { border: 1px solid #e3ece6; border-radius: 6px; background: #fff; padding: 10px 12px; margin-bottom: 8px; }
+        .dms-batch.needs-repick { border-color: #f2c9a0; background: #fff8f0; }
+        .dms-batch-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+        .dms-batch-no { font-weight: 600; font-size: 12.5px; }
+        .dms-batch-path { font-size: 12px; color: #4a5a50; flex: 1 1 200px; word-break: break-word; }
+        .dms-batch-count { font-size: 11.5px; color: #6b7a71; }
+        .dms-batch-files { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #4a5a50; }
+        .dms-batch-files li { margin-bottom: 3px; }
+        .dms-batch-err { display: block; color: #a4262c; font-style: normal; font-size: 11.5px; }
+        .dms-batch-warn { margin: 8px 0 0; font-size: 11.5px; color: #8a4b00; line-height: 1.5; }
+        .dms-batch-note { margin: 8px 0 0; font-size: 11.5px; color: #5f6f80; line-height: 1.5; }
+
+        .dms-staged { margin-top: 16px; }
+        .dms-staged-head { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; }
+        .dms-staged-row { border: 1px solid #e1e1e1; border-radius: 6px; margin-bottom: 6px; background: #fff; }
+        .dms-staged-row.open { border-color: #0f6c3f; }
+        .dms-staged-row.clash { border-color: #d0a05a; background: #fff8f0; }
+        .dms-staged-btn { display: flex; width: 100%; gap: 10px; align-items: center; background: none; border: none; font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
+        .dms-staged-btn .name { flex: 1 1 auto; font-size: 13px; word-break: break-word; }
+        .dms-staged-btn .size { font-size: 11.5px; color: #6b7a71; }
+        .dms-staged-btn .chev { font-size: 10px; color: #6b7a71; }
+        .dms-staged-del { display: inline-block; margin: 0 12px 10px; font-size: 12px; color: #a4262c; background: none; border: none; cursor: pointer; padding: 0; }
         .dms-btn { padding: 9px 24px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 14px; border: 1px solid transparent; }
         .dms-btn.primary { background: #0f6c3f; color: #fff; }
         .dms-btn.primary:disabled { background: #9bbfaa; cursor: default; }
@@ -2494,7 +2504,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             onDrop={(e) => {
               e.preventDefault();
               setDragOver(false);
-              acceptFile(e.dataTransfer?.files?.[0]);
+              acceptFiles(e.dataTransfer?.files);
             }}
           >
             {file ? (
@@ -2522,10 +2532,120 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             <input
               ref={fileRef}
               type="file"
+              multiple
               accept={settings.allowedFileTypes.types.join(",")}
               style={{ display: "none" }}
-              onChange={(e) => acceptFile(e.target.files?.[0])}
+              onChange={(e) => acceptFiles(e.target.files)}
             />
+          </div>
+        )}
+
+        {/* ── Saved batches ───────────────────────────────────────────────────
+            Each is one destination folder plus its files. NOTHING here has been uploaded — said
+            plainly, because the one belief a user must never form is that saving a batch sent it. */}
+        {batches.length > 0 && (
+          <div className="dms-batches">
+            <p className="dms-batches-head">
+              {batches.length} batch{batches.length === 1 ? "" : "es"} ready ·{" "}
+              {stagedNow.files} document{stagedNow.files === 1 ? "" : "s"} —{" "}
+              <strong>nothing has been uploaded yet</strong>
+            </p>
+            {batches.map((b, i) => (
+              <div key={b.id} className={`dms-batch${b.needsRepick ? " needs-repick" : ""}`}>
+                <div className="dms-batch-top">
+                  <span className="dms-batch-no">Batch {i + 1}</span>
+                  <span className="dms-batch-path">{b.pathLabels.join(" / ")}</span>
+                  <span className="dms-batch-count">
+                    {b.files.length} file{b.files.length === 1 ? "" : "s"}
+                  </span>
+                  <button
+                    type="button"
+                    className="dms-link"
+                    disabled={busy}
+                    onClick={() => setBatches(batches.filter((x) => x.id !== b.id))}
+                  >
+                    Remove
+                  </button>
+                </div>
+                {b.needsRepick && (
+                  <p className="dms-batch-warn">
+                    The folder structure for this segment changed while this page was open. Remove this
+                    batch and add it again with the current destination — its files are still listed
+                    below, and nothing has been lost.
+                  </p>
+                )}
+                <ul className="dms-batch-files">
+                  {b.files.map((sf) => (
+                    <li key={sf.id}>
+                      <span>{sf.finalName ?? sf.file.name}</span>
+                      {sf.error && <em className="dms-batch-err">{sf.error}</em>}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+            {lastRun && lastRun.failed > 0 && (
+              <p className="dms-batch-warn">
+                Uploaded {lastRun.ok}. The {lastRun.failed} still listed above could not be uploaded —
+                fix the reason shown and press Upload again. Nothing is sent twice.
+              </p>
+            )}
+            {crossBatchDupes.length > 0 && (
+              <p className="dms-batch-note">
+                The same document appears in more than one batch: {crossBatchDupes.join(", ")}. That is
+                allowed — it will be filed in each place.
+              </p>
+            )}
+            {(stagedNow.overCount || stagedNow.overBytes) && (
+              <p className="dms-batch-warn">
+                {stagedNow.files} documents are waiting in this browser and none of them have been sent
+                yet. Uploading now is safer than staging more — if this tab closes, they are lost.
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ── The batch being built ───────────────────────────────────────────
+            One row per staged file; the fields below edit whichever row is open. */}
+        {draftFiles.length > 0 && (
+          <div className="dms-staged">
+            <p className="dms-staged-head">
+              {draftFiles.length} document{draftFiles.length === 1 ? "" : "s"} selected
+            </p>
+            {draftFiles.map((sf) => {
+              const open = sf.id === activeFileId;
+              const clash = draftCollisions.indexOf(sf.id) !== -1;
+              return (
+                <div key={sf.id} className={`dms-staged-row${open ? " open" : ""}${clash ? " clash" : ""}`}>
+                  <button type="button" className="dms-staged-btn" onClick={() => selectFile(sf.id)}>
+                    <span className="name">{sf.finalName ?? sf.file.name}</span>
+                    <span className="size">{formatFileSize(sf.file.size)}</span>
+                    <span className="chev">{open ? "▲" : "▼"}</span>
+                  </button>
+                  {clash && (
+                    <p className="dms-batch-warn">
+                      Another document in this batch would be saved under this same name. The saved name
+                      is built from Project, Vendor, Document Name and Date, so change one of those.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="dms-link dms-staged-del"
+                    disabled={busy}
+                    onClick={() => {
+                      const left = draftFiles.filter((x) => x.id !== sf.id);
+                      setDraftFiles(left);
+                      if (open) {
+                        setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
+                        if (left.length > 0) applyEditor(left[left.length - 1].meta);
+                      }
+                    }}
+                  >
+                    Delete File
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
 
@@ -2709,23 +2829,55 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         </div>
       </div>
 
-      {/* ── Actions ─────────────────────────────────────────────────────── */}
+      {/* ── Actions ───────────────────────────────────────────────────────────
+          Cancel CONFIRMS when anything is staged: the work exists only in this browser, so discarding
+          it is unrecoverable — and it sits beside the button that sends everything. */}
       <div className="dms-actions">
         <button
           type="button"
           className="dms-btn secondary"
-          onClick={resetForm}
+          onClick={() => {
+            if (stagedNow.files > 0) {
+              const n = stagedNow.files;
+                const sure = window.confirm(
+                `Discard ${n} document${n === 1 ? "" : "s"}? ${n === 1 ? "It has" : "They have"} not been uploaded, and this cannot be undone.`,
+              );
+              if (!sure) return;
+            }
+            setBatches([]);
+            setDraftFiles([]);
+            setActiveFileId("");
+            setLastRun(undefined);
+            resetForm();
+          }}
           disabled={busy}
         >
           Cancel
         </button>
+        {/* Save batch, not "Add batch": it files what is on screen and clears the pickers for the next
+            destination. Hidden with nothing staged, so the single-file path is unchanged — pick a file,
+            fill it in, press Upload, which saves the batch and sends it. */}
+        {draftFiles.length > 0 && (
+          <button
+            type="button"
+            className="dms-btn secondary"
+            onClick={() => { saveBatch(); }}
+            disabled={busy || deptLoading}
+          >
+            Save batch &amp; start another
+          </button>
+        )}
         <button
           type="button"
           className="dms-btn primary"
           onClick={handleUpload}
           disabled={busy || deptLoading}
         >
-          {busy ? "Uploading…" : "Upload"}
+          {busy
+            ? "Uploading…"
+            : stagedNow.files > 0
+              ? `Upload ${stagedNow.files} document${stagedNow.files === 1 ? "" : "s"}`
+              : "Upload"}
         </button>
       </div>
 
@@ -2744,46 +2896,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         </div>
       )}
 
-      {replaceAsk && (
-        <div className="dms-popup-overlay" role="dialog" aria-modal="true">
-          <div className="dms-popup">
-            <div className="dms-popup-icon">
-              <svg
-                className="dms-popup-svg"
-                viewBox="0 0 184 184"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <circle opacity="0.3" cx="92.0001" cy="92" r="75.4872" fill="#FF952A" />
-                <circle cx="92" cy="92" r="92" fill="#FF952A" fillOpacity="0.2" />
-                <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#FF952A" strokeWidth="3" />
-                <path d="M93 66L93 100" stroke="#FF952A" strokeWidth="10" strokeLinecap="round" />
-                <path d="M93 116.804L93 118" stroke="#FF952A" strokeWidth="10" strokeLinecap="round" />
-              </svg>
-            </div>
-            <p className="dms-popup-title">Replace Existing File</p>
-            <p className="dms-popup-msg">
-              We noticed there&rsquo;s a same name file.
-              <br />
-              Are you sure you want to override this file?
-            </p>
-            <div className="dms-popup-actions">
-              <button
-                className="dms-popup-btn confirm"
-                onClick={() => answerReplace(true)}
-              >
-                Yes
-              </button>
-              <button
-                className="dms-popup-btn cancel"
-                onClick={() => answerReplace(false)}
-              >
-                No
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {toast && toast.type === "success" && (
         <div className="dms-popup-overlay" role="dialog" aria-modal="true">
