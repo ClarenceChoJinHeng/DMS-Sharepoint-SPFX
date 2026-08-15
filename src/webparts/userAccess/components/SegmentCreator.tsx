@@ -133,7 +133,18 @@ export default function SegmentCreator({
   const [family, setFamily] = useState<"BusinessSegment" | "Project">("BusinessSegment");
   const [termSetGuid, setTermSetGuid] = useState("");
   const [stagingFolder, setStagingFolder] = useState("");
-  const [tiers, setTiers] = useState<string[]>(["Department", "Unit"]);
+  // EMPTY, not ["Department", "Unit"] (client, 2026-08-15: "it is always showing department and Unit
+  // this will confuse the client").
+  //
+  // The seed was not merely confusing — it was a trap the depth check could not catch. That check
+  // compares the term set's depth to the NUMBER of tiers, so a 2-deep Upstream Ops set matched a
+  // seeded Department/Unit perfectly: right count, wrong names. It would have created
+  // `Department`/`Unit` columns for a segment whose tiers are Region and Estate/Mill, with nothing
+  // failing, surfacing later as a detail panel labelled in another segment's vocabulary.
+  //
+  // The admin NAMES the tiers here (spec 2026-08-12, "The admin NAMES the permissioned tiers"), so a
+  // default is a name nobody chose. The examples stay in the hint, where they teach without filling in.
+  const [tiers, setTiers] = useState<string[]>([]);
   const [below, setBelow] = useState<Level[]>([]);
   const [newTier, setNewTier] = useState("");
 
@@ -287,7 +298,8 @@ export default function SegmentCreator({
     label.trim() !== "" ||
     termSetGuid.trim() !== "" ||
     stagingFolder.trim() !== "" ||
-    tiers.join("|") !== "Department|Unit";
+    // Any tier at all is now an edit, since the list starts empty.
+    tiers.length > 0;
 
   useEffect(() => {
     if (onDirtyChange) onDirtyChange(dirty);
@@ -493,7 +505,7 @@ export default function SegmentCreator({
       setLabel("");
       setTermSetGuid("");
       setStagingFolder("");
-      setTiers(["Department", "Unit"]);
+      setTiers([]);
       setNewTier("");
     } catch (e) {
       setResult({ ok: false, text: (e as Error).message });
@@ -1068,11 +1080,20 @@ export default function SegmentCreator({
       <div style={s.card}>
         <p style={s.h}>Levels that carry permissions</p>
         <div style={s.hint}>
-          One folder level each, and the <strong>deepest one holds the access</strong> — that is the
-          level your groups are granted on. There must be exactly as many of these as the term set
-          has levels of terms. Head offices use Department then Unit; Upstream Ops uses Region then
-          Estate/Mill; I&amp;T uses a single level.
+          Name them yourself — one folder level each, and the{" "}
+          <strong>deepest one holds the access</strong>, which is the level your groups are granted
+          on. There must be exactly as many of these as the term set has levels of terms.
+          <br />
+          Head offices use <strong>Department</strong> then <strong>Unit</strong>; Upstream Ops uses{" "}
+          <strong>Region</strong> then <strong>Estate/Mill</strong>; I&amp;T uses a single level.
         </div>
+        {/* Empty is the starting state since 2026-08-15, so it has to read as "your turn" rather than
+            as a list that failed to load. */}
+        {tiers.length === 0 && (
+          <div style={{ ...s.tierRow, background: "#fbfbfb", border: "1px dashed #d8d8d8", color: "#767676", fontSize: 12.5 }}>
+            No levels yet — add the first one below. It becomes the top folder inside the segment.
+          </div>
+        )}
         <div style={{ marginTop: 10 }}>
           {tiers.map((t, i) => (
             <div key={`${t}-${i}`} style={s.tierRow}>
@@ -1134,16 +1155,24 @@ export default function SegmentCreator({
         <div style={s.path}>{pathPreview}</div>
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      {/* `validateNewSegment` already refuses a segment with no permissioned level, but that message
+          arrives after a click. Now the list starts empty, "no levels" is the state a first-time user
+          begins in, so the reason belongs beside the button rather than behind it. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <button
-          style={busy ? s.off : s.btn}
-          disabled={busy}
+          style={busy || tiers.length === 0 ? s.off : s.btn}
+          disabled={busy || tiers.length === 0}
           onClick={() => {
             create().catch(() => undefined); // create() reports its own failures into `result`
           }}
         >
           {busy ? "Working…" : "Create segment"}
         </button>
+        {!busy && tiers.length === 0 && (
+          <span style={{ fontSize: 12, color: "#8a4b00" }}>
+            Name at least one level that carries permissions first.
+          </span>
+        )}
         {progress && <span style={{ fontSize: 12, color: "#605e5c" }}>{progress}</span>}
       </div>
     </div>

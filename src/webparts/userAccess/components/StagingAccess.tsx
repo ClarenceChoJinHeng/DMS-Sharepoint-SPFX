@@ -72,6 +72,18 @@ const s: Record<string, React.CSSProperties> = {
   warnBox:  { marginBottom: 16, padding: "10px 12px", border: "1px solid #f2c9a0", background: "#fff8f0", borderRadius: 4, fontSize: 12, color: "#8a4b00", lineHeight: 1.5 },
   dangerBox:{ marginBottom: 16, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 4, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
   okBox:    { marginBottom: 16, padding: "10px 12px", border: "1px solid #b7dcc4", background: "#f3faf5", borderRadius: 4, fontSize: 12, color: "#0f6c3f", lineHeight: 1.5 },
+
+  // ── The designer's header block (2026-08-15) ──────────────────────────────────
+  // Explanation on the left, callouts on the right. `auto-fit` rather than a fixed pair of columns,
+  // so it stacks on a narrow window instead of squeezing the copy to one word a line.
+  headGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: 20, alignItems: "start", marginBottom: 20 },
+  headLeft: { display: "flex", gap: 14, alignItems: "flex-start" },
+  headIcon: { flexShrink: 0, width: 44, height: 44, borderRadius: "50%", background: "#eef7f1", display: "flex", alignItems: "center", justifyContent: "center", color: "#0f6c3f" },
+  headTitle:{ fontSize: 15, fontWeight: 600, margin: "0 0 6px", color: "#242424" },
+  noteCard: { display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 14px", borderRadius: 6, fontSize: 12, lineHeight: 1.5, marginBottom: 10 },
+  noteOk:   { border: "1px solid #b7dcc4", background: "#f3faf5", color: "#1c4d33" },
+  noteWarn: { border: "1px solid #f2c9a0", background: "#fff8f0", color: "#7a4300" },
+  noteTitle:{ fontWeight: 600, margin: "0 0 3px", fontSize: 12.5 },
   hint:     { fontSize: 11, color: "#666", marginTop: 8, lineHeight: 1.45 },
   toast:    { position: "fixed", bottom: 20, right: 20, padding: "10px 16px", borderRadius: 6, color: "#fff", fontSize: 13, zIndex: 50, boxShadow: "0 4px 14px rgba(0,0,0,.18)" },
   modalOverlay:{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100, padding: 16 },
@@ -681,11 +693,82 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
   return (
     <div style={s.wrap}>
       <style>{SPIN_KEYFRAMES}</style>
-      <p style={s.intro}>
-        Who may <strong>open the {libLabel} library</strong>. Folder permissions alone are not
-        enough — without an entry here, an uploader clicking <strong>{libLabel}</strong> in the left
-        navigation gets <em>Access Denied</em>, even though a direct link to their own folder works.
-      </p>
+      {/* Header block to the designer's layout (2026-08-15): the explanation on the left, the two
+          callouts on the right.
+
+          The green card states a permanent fact and is always shown. The amber one is a STATE and is
+          shown only when the ACL read actually failed — the mock drew it as a static sibling, which
+          would tell an admin on every visit that permissions cannot be verified, and train them to
+          ignore the message on the day it is true.
+
+          Its copy also drops the mock's "until permissions are synchronized": there is no sync, and
+          nothing improves by waiting. The read fails for two reasons with OPPOSITE fixes — a 404 is
+          the wrong library title, a 403 is not holding Full Control — so the status stays named. */}
+      <div style={s.headGrid}>
+        <div style={s.headLeft}>
+          <div style={s.headIcon} aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M22 20v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+          </div>
+          <div>
+            <p style={s.headTitle}>Who can access the {libLabel} library?</p>
+            <p style={{ ...s.intro, margin: 0 }}>
+              Which groups may <strong>open the {libLabel} library</strong>. Folder permissions alone
+              are not enough — without an entry here, an uploader clicking <strong>{libLabel}</strong>{" "}
+              in the left navigation gets <em>Access Denied</em>, even though a direct link to their
+              own folder works.
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <div style={{ ...s.noteCard, ...s.noteOk }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+            <div>
+              <p style={s.noteTitle}>Library access does not expand document access</p>
+              People still see only the folders and documents they already have permission to open.
+              Each folder keeps its own permissions, so other units stay hidden — this only lets them
+              reach the library.
+            </div>
+          </div>
+
+          {live === undefined && !loading && (
+            <div style={{ ...s.noteCard, ...s.noteWarn }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true">
+                <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                <path d="M12 9v4M12 17h.01" />
+              </svg>
+              <div>
+                <p style={s.noteTitle}>
+                  Unable to verify current permissions{liveError ? ` (${liveError})` : ""}
+                </p>
+                We could not read {libLabel}&rsquo;s current permissions, so the{" "}
+                <strong>Access now</strong> column reads <em>unknown</em>. The mappings below are
+                still accurate, and everything on this page still saves.
+                {liveError === "HTTP 404" && (
+                  <div style={{ marginTop: 6 }}>
+                    A <strong>404</strong> means no library by that name — check it is still titled{" "}
+                    <strong>{libLabel}</strong>.
+                  </div>
+                )}
+                {(liveError === "HTTP 403" || liveError === "HTTP 401") && (
+                  <div style={{ marginTop: 6 }}>
+                    A <strong>{liveError === "HTTP 403" ? "403" : "401"}</strong> means your account
+                    cannot read this library&rsquo;s permissions. Reading them needs Full Control on
+                    the library.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Says the thing the client could not work out from the screen: access is held by groups,
           so removing one person means taking them out of a group, and that is wider than this
@@ -699,12 +782,6 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
         access away from everybody in a group at once, use <strong>Remove</strong> on the group row.
       </div>
 
-      <div style={s.okBox}>
-        This does <strong>not</strong> let them see other units. Each folder has its own
-        permissions, so the segment and department folders stay hidden — they simply reach the
-        library, and see only what they already had access to.
-      </div>
-
       {scopeMissing && (
         <div style={s.dangerBox}>
           The <strong>Scope</strong> and <strong>Target</strong> columns are missing from{" "}
@@ -715,29 +792,6 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
 
       {loadError && (
         <div style={s.dangerBox}>Could not load: {loadError}</div>
-      )}
-
-      {live === undefined && !loading && (
-        <div style={s.warnBox}>
-          Could not read the current permissions of <strong>{libLabel}</strong>
-          {liveError ? ` (${liveError})` : ""}, so the &ldquo;Access now&rdquo; column below is
-          unknown. The mappings themselves are still accurate.
-          {/* The two likely causes need opposite fixes, and the status tells them apart — so name
-              both rather than leaving an admin to guess which one they have. */}
-          {liveError === "HTTP 404" && (
-            <div style={{ marginTop: 6 }}>
-              A <strong>404</strong> means no library by that name — check the library is still
-              titled <strong>{libLabel}</strong>.
-            </div>
-          )}
-          {(liveError === "HTTP 403" || liveError === "HTTP 401") && (
-            <div style={{ marginTop: 6 }}>
-              A <strong>{liveError === "HTTP 403" ? "403" : "401"}</strong> means your account cannot
-              read this library&rsquo;s permissions. Reading them needs Full Control on the library —
-              everything else on this page still works.
-            </div>
-          )}
-        </div>
       )}
 
       {unexpected.length > 0 && (

@@ -184,6 +184,18 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       `userAccess/components/SegmentCreator.tsx` as **tab 3** of the same web part. It writes the
       `mode` row (`ConfigType`, `Title`, `ModeLabel`, `Category`, `TermSetGuid`, `StagingFolder`,
       `SortOrder`, `Levels`) and the tier columns in BOTH libraries — and **nothing else**.
+      - **THE TIER LIST NOW STARTS EMPTY (2026-08-15, client: *"it is always showing department and
+        Unit this will confuse the client"*).** It was seeded `["Department","Unit"]`, which was not
+        just confusing — it was a trap the depth check **cannot** catch, because that check compares
+        the term set's depth to the tier **count**. A 2-deep Upstream Ops set matched the seed
+        perfectly (right count, wrong names) and would create `Department`/`Unit` columns for a
+        segment whose tiers are Region and Estate/Mill: nothing fails, and it surfaces later as a
+        detail panel labelled in another segment's vocabulary. The admin NAMES the tiers, so a
+        default is a name nobody chose. Examples stay in the hint (Head office → Department, Unit ·
+        Upstream Ops → Region, Estate/Mill · I&T → one level), an empty row reads *"No levels yet"*
+        so it cannot be mistaken for a failed load, and **Create is disabled with the reason beside
+        it** — `validateNewSegment` already refuses zero tiers, but that message arrived after a
+        click, and "no levels" is now the state every first-time user starts in.
       - **The admin NAMES the permissioned tiers.** A fixed `Department/Unit` prefix cannot onboard
         the eight remaining segments: Upstream Ops needs `Region → Estate/Mill`, I&T needs a SINGLE
         tier. So the form creates whatever columns those names imply.
@@ -764,6 +776,15 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   had asked for "Staging"** — the displayed value came from a later render than the closure did.
   `listBase` is a FUNCTION now; do not turn it back. Corollary: a name resolved at render time is
   fine for DISPLAY and never for a request.
+- **THE HEADER IS THE DESIGNER'S TWO-CARD BLOCK (2026-08-15)** — explanation left, callouts right.
+  The green *"Library access does not expand document access"* is a permanent fact and always shows.
+  **The amber *"Unable to verify current permissions"* is a STATE and shows only when the ACL read
+  actually failed** — the mock drew it as a static sibling, which would tell an admin on every visit
+  that permissions cannot be verified and train them to ignore it on the day it is true. Its copy
+  drops the mock's *"until permissions are synchronized"*: **there is no sync and waiting fixes
+  nothing** — a 404 is the wrong library title, a 403 is not holding Full Control, opposite fixes,
+  which is why the status stays named in the heading. The mock's body text also said `Staging` twice;
+  every string here resolves the live title.
 - **A failed ACL read now REPORTS ITS STATUS**, in the banner and the console. It had said only
   "could not read": `404` (wrong library title) and `403` (no Enumerate Permissions — reading a
   library's permissions needs Full Control on it) are the same sentence with opposite fixes, and the
