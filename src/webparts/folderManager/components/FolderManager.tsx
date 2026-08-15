@@ -567,8 +567,11 @@ export default function FolderManager({
   // Active tab. `Staging`/`Documents` are no longer OFFERED (see the Tab type) — the folder tree
   // they drove is retired, and `libTarget` now only ever holds its initial value, which keeps the
   // tree's helpers compiling until that code is deleted.
-  // Opens on Term Abbreviations because that is where the work starts: a term with no code gets no
-  // folder, so reconciliation has nothing to build until this tab is filled in.
+  // Opens on Term Abbreviations, NOT on the first tab, and the two are deliberately different since
+  // "New segment" moved to the front on 2026-08-15. Position states the sequence; the default states
+  // the likely job. Segments already exist on any site being administered, so landing every visit on
+  // a creation form invites a duplicate; Term Abbreviations is where the recurring work is, and a term
+  // with no code gets no folder, silently.
   //
   // …unless the URL names one. The CRS Settings landing page has three separate rows — Term
   // Abbreviations, Folder Structure Management, Folder Reconciliations — which are all TABS of this
@@ -3822,17 +3825,26 @@ export default function FolderManager({
       {!hideTabs && <h2 style={s.h2}>Folder Administration</h2>}
       {!hideTabs && (
         <p style={s.subtitle}>
-          Name the folders a segment&rsquo;s terms produce, shape the levels beneath Unit, move what is
-          already filed, then build the tree. Who can see a folder is set on the{" "}
-          <strong>Folder Access</strong> page.
+          The tabs run left to right in the order the work happens: add a segment, name the folders
+          its terms produce, shape the levels beneath Unit, move what is already filed, then build
+          the tree. Who can see a folder is set on the <strong>Folder Access</strong> page.
         </p>
       )}
 
       {/*
         One home for folder administration — spec `2026-08-12-term-abbreviation-page-design.md` §6.
-        The order is the order the work happens in: name the terms, shape the levels, move what is
-        already filed, reconcile. Segments sits last because it is the rarest — it both creates a
-        segment and, since 2026-08-14, deletes one.
+        The order is the order the work happens in, and since 2026-08-15 that starts with the segment
+        (client's request): create it, name the terms, shape the levels, move what is already filed,
+        reconcile. It sat last while it was judged "the rarest", which read the tab bar as a frequency
+        ranking rather than a sequence — but nothing else on this page can be done until a segment
+        exists, so last was the one position that could not be right.
+
+        The LABEL says "New segment" while the tab also DELETES one. Deliberate: retiring a segment
+        has its own guided flow, and naming the tab for its destructive half would put "delete" in
+        front of an admin whose job here is almost always to add.
+
+        The `newsegment` deep-link slug is UNCHANGED — it is a public name once shipped. This is a
+        label and a position, not a rename.
 
         `Staging` and `Documents` are gone (client, 2026-08-12: "I am honestly not using it"). They
         were a manual folder tree — reconciliation and the Folder Access page now cover it from data.
@@ -3840,11 +3852,11 @@ export default function FolderManager({
       <div style={{ ...s.toggleWrap, ...(hideTabs ? { display: "none" } : {}) }}>
         <div style={s.seg}>
           {([
+            ["NewSegment",     "New segment"],
             ["Abbreviations",  "Term Abbreviations"],
             ["Levels",         "Folder levels"],
             ["Migrate",        "Move existing folders"],
             ["Reconciliation", "Folder Reconciliation"],
-            ["NewSegment",     "Segments"],
           ] as Array<[Tab, string]>).map(([t, label], i, arr) => (
             <button key={t}
               onClick={() => {

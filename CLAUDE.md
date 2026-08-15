@@ -361,10 +361,18 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       right; only the warning is silent.
 - **FOLDER ADMINISTRATION IS ONE TAB BAR (2026-08-12)** — same spec §6, same web part as before
   (`Folder Manager`, GUID `02007994-…`, **retitled** `Folder Administration`; the id is unchanged so
-  pages already hosting it keep working). Five tabs, in the order the work happens: **Term
-  Abbreviations → Folder levels → Move existing folders → Folder Reconciliation → New segment**. It
-  opens on Term Abbreviations, not on Reconciliation, because reconciliation is what *fails* when the
-  codes are missing.
+  pages already hosting it keep working). Five tabs, in the order the work
+  happens — reordered 2026-08-15 on the client's request so the segment leads: **New segment → Term
+  Abbreviations → Folder levels → Move existing folders → Folder Reconciliation**. Nothing else on
+  the page can be done until a segment exists, so last was the one position that could not be right;
+  it had been put there as "the rarest", which reads the tab bar as a frequency ranking rather than a
+  sequence. The label says **New segment** though the tab also DELETES one — retiring has its own
+  guided flow, and naming the tab for its destructive half puts "delete" in front of an admin who is
+  almost always there to add. **The `newsegment` deep-link slug is UNCHANGED** (a public name once
+  shipped; this is a label and a position, not a rename). It still **opens on Term Abbreviations, not
+  on the first tab** — position states the sequence, the default states the likely job: segments
+  already exist on a site being administered, so landing every visit on a creation form invites a
+  duplicate, and reconciliation is what *fails* when the codes are missing.
   - The three `Folder Structure` tabs are **MOUNTED from `userAccess/components`, never copied** —
     `StructureManager` rewrites `Levels` and creates columns in both libraries, `SegmentCreator` writes
     a `mode` row, and drift in either surfaces weeks later as a wrong column or a half-built segment.
