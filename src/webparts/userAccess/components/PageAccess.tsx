@@ -898,14 +898,27 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
             )}
           </div>
 
+          {/* ABOVE the table: below the last row this was the one explanation of both columns,
+              sitting where the client would never scroll to. */}
+          <div style={{ ...s.hint, margin: "0 0 10px" }}>
+            <strong>Should have access</strong> is what you have recorded on this page.{" "}
+            <strong>Access now</strong> is what the page&rsquo;s permissions actually say.
+          </div>
           <table style={s.table}>
             <thead>
               <tr>
                 <th style={{ ...s.th, width: 28 }} />
                 <th style={s.th}>Group</th>
                 <th style={s.th}>People</th>
-                <th style={s.th}>Mapped here</th>
-                <th style={s.th}>Access now</th>
+                {/* Not "Mapped here" (client, 2026-08-15: they did not understand it). That named
+                    the mechanism — a Group Map row — rather than what the column tells you. Kept
+                    identical to Approval Library Access, which has the same pair. */}
+                <th style={s.th} title="Yes = you have recorded on this page that this group should be able to open the page.">
+                  Should have access
+                </th>
+                <th style={s.th} title="What the page&apos;s permissions actually say right now.">
+                  Access now
+                </th>
                 <th style={s.th} />
               </tr>
             </thead>
@@ -1009,7 +1022,7 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                       members={members}
                       allowedGroupIds={allowedGroupIds}
                       titleOf={titleOf}
-                      // 6 columns: tick, Group, People, Mapped here, Access now, action.
+                      // 6 columns: tick, Group, People, Should have access, Access now, action.
                       colSpan={6}
                       busy={busy}
                       pending={pendingUsers}
@@ -1033,10 +1046,6 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
               })}
             </tbody>
           </table>
-          <div style={s.hint}>
-            &ldquo;Mapped here&rdquo; is what this tab records; &ldquo;Access now&rdquo; is what the
-            page&rsquo;s permissions actually say.
-          </div>
         </div>
       )}
 
@@ -1080,11 +1089,11 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                 allowed again to re-restrict the page.
               </div>
               {/* Named because it is the part people do not expect: the mapping rows survive a
-                  reset, so the tab keeps saying "Mapped here: Yes" for a page that is now open
+                  reset, so the tab keeps saying "Should have access: Yes" for a page now open
                   to everybody. Better said here than discovered later. */}
               <div style={{ marginTop: 8, color: "#605e5c" }}>
                 The mappings recorded on this tab are kept, so this page will still show
-                &ldquo;Mapped here: Yes&rdquo; — those rows take effect again only if you restrict
+                &ldquo;Should have access: Yes&rdquo; — those rows take effect again only if you restrict
                 the page a second time.
               </div>
             </div>

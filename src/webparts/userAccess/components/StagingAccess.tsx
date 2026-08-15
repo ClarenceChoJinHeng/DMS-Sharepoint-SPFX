@@ -871,6 +871,15 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                 <button style={s.ghost} onClick={() => setSelected([])}>Clear</button>
               )}
             </div>
+            {/* ABOVE the table, not below it. This legend used to sit under the last row — on this
+                site that is 17 rows down, so the one explanation of the two columns was somewhere the
+                client would never scroll to, and "Mapped here" had to carry the meaning alone. */}
+            <div style={{ ...s.hint, margin: "0 0 10px" }}>
+              <strong>Should have access</strong> is what you have recorded on this page.{" "}
+              <strong>Access now</strong> is what the library&rsquo;s permissions actually say. They
+              differ until Folder Reconciliation runs — or if someone changed permissions directly in
+              SharePoint.
+            </div>
             <table style={s.table}>
               <thead>
                 <tr>
@@ -878,8 +887,15 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                   <th style={s.th}>Group</th>
                   <th style={s.th}>Role</th>
                   <th style={s.th}>People</th>
-                  <th style={s.th}>Mapped here</th>
-                  <th style={s.th}>Access now</th>
+                  {/* "Mapped here" meant nothing to the client (2026-08-15). It named the mechanism —
+                      a Group Map row — rather than what the column tells you. These two columns are
+                      the intent and the reality, and the pair is only readable if both say so. */}
+                  <th style={s.th} title="Yes = you have recorded on this page that this group should be able to open the library.">
+                    Should have access
+                  </th>
+                  <th style={s.th} title="What the library's permissions actually say right now.">
+                    Access now
+                  </th>
                   <th style={s.th} />
                 </tr>
               </thead>
@@ -971,7 +987,7 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                         members={members}
                         allowedGroupIds={allowedGroupIds}
                         titleOf={titleOf}
-                        // 7 columns: tick, Group, Role, People, Mapped here, Access now, action.
+                        // 7 columns: tick, Group, Role, People, Should have access, Access now, action.
                         colSpan={7}
                         busy={busy}
                         pending={pendingUsers}
@@ -991,11 +1007,6 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
             </table>
           </>
         )}
-        <div style={s.hint}>
-          &ldquo;Mapped here&rdquo; is what this tab records; &ldquo;Access now&rdquo; is what the
-          library&rsquo;s permissions actually say. They differ until Folder Reconciliation runs —
-          or if someone changed permissions directly in SharePoint.
-        </div>
       </div>
 
       {confirmRemove && confirmRemove.length > 0 && (
