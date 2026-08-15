@@ -156,6 +156,13 @@ const dateDDMMYY = (iso: string): string => {
  * Empty parts are dropped rather than leaving " -  - " gaps, so a document with
  * no project still reads "Acme - Invoice - 03-08-26".
  */
+/** "a, b and c" — a comma-list a person reads, rather than a machine-joined one. */
+const listPhrase = (items: string[]): string => {
+  const list = items.filter((s) => s.trim().length > 0);
+  if (list.length <= 1) return list.join("");
+  return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+};
+
 const composeUploadBase = (
   project: string,
   vendor: string,
@@ -460,6 +467,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [draftFiles, setDraftFiles] = useState<StagedFile[]>([]);
   const [activeFileId, setActiveFileId] = useState<string>("");
   const [lastRun, setLastRun] = useState<{ ok: number; failed: number } | undefined>(undefined);
+  // Which staged files failed the last save attempt. Held so the ROWS can say so — a list of every
+  // missing field of every file belongs on the rows, not in one toast.
+  const [incompleteIds, setIncompleteIds] = useState<string[]>([]);
   const [dragOver, setDragOver] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
@@ -1590,7 +1600,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * Returns the missing field names, prefixed with the file when there is more than one — "please
    * complete: Vendor/Customer Name" is unhelpful when four files are staged and one of them is short.
    */
-  const missingForFile = (sf: StagedFile, many: boolean): string[] => {
+  const missingForFile = (sf: StagedFile): string[] => {
     const meta = sf.id === activeFileId ? captureEditor() : sf.meta;
     const out: string[] = [];
     if (!(meta.documentDate ?? "")) out.push("Document Date");
@@ -1602,7 +1612,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (!(meta.docName ?? "").trim()) out.push("Document Name");
     if (!(meta.projectName ?? "").trim()) out.push("Project Name");
     if (!(meta.vendor ?? "").trim()) out.push("Vendor/Customer Name");
-    return many ? out.map((n) => `${sf.file.name}: ${n}`) : out;
+    return out;
   };
 
   /**
@@ -1623,18 +1633,48 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       return false;
     }
 
+    // TWO KINDS OF MISSING, reported separately and never enumerated per file.
+    //
+    // Listing every field of every document produced a 25-item wall of text for five files (client,
+    // 2026-08-15: "for a client they won't understand"). It also put the information in the wrong
+    // place: which document is short is a property OF THAT ROW, so the rows carry it now — an amber
+    // "Details needed" badge, and the first incomplete one opens itself.
+    //
+    // The destination fields stay listed, because there is exactly one set of them and no row to
+    // attach them to.
     const m = activeMode();
-    const missing: string[] = [];
+    const destMissing: string[] = [];
     (m?.levels ?? []).forEach((lvl, i) => {
-      if (!levelValues[i]) missing.push(lvl.label);
+      if (!levelValues[i]) destMissing.push(lvl.label);
     });
-    missing.push(...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing);
-    const many = files.length > 1;
-    for (const sf of files) missing.push(...missingForFile(sf, many));
-    if (missing.length > 0) {
-      showToast(`Please complete: ${missing.join(", ")}.`, "error");
+    destMissing.push(...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing);
+
+    const short = files.filter((sf) => missingForFile(sf).length > 0);
+    if (destMissing.length > 0 || short.length > 0) {
+      setIncompleteIds(short.map((sf) => sf.id));
+      // Open the first one that needs attention, so "fill these in" has somewhere to start.
+      if (short.length > 0 && short.every((sf) => sf.id !== activeFileId)) {
+        setDraftFiles(files);
+        applyEditor(short[0].meta);
+        setActiveFileId(short[0].id);
+      }
+      const parts: string[] = [];
+      if (destMissing.length > 0) parts.push(`choose ${listPhrase(destMissing)}`);
+      if (short.length > 0) {
+        parts.push(
+          short.length === files.length && files.length > 1
+            ? `fill in the details for all ${files.length} documents`
+            : `fill in the details for ${short.length} document${short.length === 1 ? "" : "s"}`,
+        );
+      }
+      showToast(
+        `Before saving this batch, ${parts.join(" and ")}.` +
+          (short.length > 0 ? " The documents that need attention are marked below." : ""),
+        "error",
+      );
       return false;
     }
+    setIncompleteIds([]);
 
     // Same block as before, still checked here: a rename can turn an allowed file into a name whose
     // extension no longer matches, and the composed name is what actually gets sent.
@@ -2406,6 +2446,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            the open editor — is inset by the same 12px, so nothing sits flush against the tint. */
         .dms-staged-head { display: flex; align-items: stretch; background: rgba(250, 250, 250, 1); border-radius: 6px; }
         .dms-staged-row.clash .dms-staged-head { background: transparent; }
+        .dms-staged-row.short .dms-staged-head { background: #fff8f0; }
+        .dms-staged-badge { flex: 0 1 auto; min-width: 0; font-size: 11px; color: #8a4b00; background: #ffeed9; border-radius: 10px; padding: 2px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .dms-staged-btn { display: flex; flex: 1 1 auto; min-width: 0; gap: 10px; align-items: center; background: none; border: none; font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
         .dms-staged-btn .name { flex: 1 1 auto; font-size: 13px; word-break: break-word; }
         .dms-staged-btn .size { font-size: 11.5px; color: #6b7a71; }
@@ -2829,13 +2871,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             {draftFiles.map((sf) => {
               const open = sf.id === activeFileId;
               const clash = draftCollisions.indexOf(sf.id) !== -1;
+              // Recomputed live, so the badge clears as the fields are filled rather than lingering
+              // until the next save attempt — a marker that outlives its cause is worse than none.
+              const short = incompleteIds.indexOf(sf.id) !== -1 ? missingForFile(sf) : [];
               return (
-                <div key={sf.id} className={`dms-staged-row${open ? " open" : ""}${clash ? " clash" : ""}`}>
+                <div key={sf.id} className={`dms-staged-row${open ? " open" : ""}${clash ? " clash" : ""}${short.length > 0 ? " short" : ""}`}>
                   {/* The remove control is a SIBLING of the toggle, not inside it: a button nested in a
                       button is invalid HTML, and browsers resolve it by dropping one of the two. */}
                   <div className="dms-staged-head">
                     <button type="button" className="dms-staged-btn" onClick={() => selectFile(sf.id)}>
                       <span className="name">{sf.finalName ?? sf.file.name}</span>
+                      {short.length > 0 && (
+                        // Names the fields on the row itself. The count alone would send someone
+                        // opening five documents to find the one thing each is missing.
+                        <span className="dms-staged-badge" title={`Still needed: ${listPhrase(short)}`}>
+                          Needs {listPhrase(short)}
+                        </span>
+                      )}
                       <span className="size">{formatFileSize(sf.file.size)}</span>
                       <span className="chev">{open ? "▲" : "▼"}</span>
                     </button>
