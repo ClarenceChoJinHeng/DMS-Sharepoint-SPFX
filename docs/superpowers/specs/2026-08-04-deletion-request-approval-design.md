@@ -1,7 +1,16 @@
 # Deletion Request + Approval — Design
 
 **Date:** 2026-08-04
-**Status:** DRAFT — three decisions open (§9). Depends on the `DMS Upload` level (§2).
+**Status:** SUPERSEDED 2026-08-15 by `2026-08-15-deletion-and-share-requests-design.md`.
+
+Its premise is reversed: this spec removes `Delete Items` from a PIC on **Staging**, and the client
+confirmed on 2026-08-15 that a PIC *should* delete there. The request workflow moved to **Documents**,
+where a PIC genuinely has no delete — and got simpler, because the approver can now perform the
+deletion in their own session instead of handing it to a flow with its own credentials.
+
+Kept for the §2 permission-level detail and the reasoning in §1, both of which still apply.
+
+**Was:** DRAFT — three decisions open (§9). Depends on the `DMS Upload` level (§2).
 **Branch:** `feat/folder-abbreviations`
 **Parent:** `2026-08-03-visibility-scope-and-view-group-separation-design.md` §6, which records
 that per-author delete cannot exist. This spec is the answer to that limitation rather than a
