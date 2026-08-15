@@ -7,7 +7,7 @@ import { effectiveOnDemandTiers } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
 // libraryUrlSegment, NOT libraryTitle, for anything that builds a PATH: the two differ
 // ("Approval Document" vs "/ApprovalDocument") and the title fails silently in a URL — gotcha #12.
-import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
+import { allLibraryTitles, cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
@@ -424,7 +424,10 @@ export default function SegmentCreator({
       //    returns HTTP 200 with HasException, so that failure is not even loud.
       const created: string[] = [];
       for (const col of columnsForDraft(d)) {
-        for (const lib of [libraryTitle(), DOCUMENTS_LIST_TITLE]) {
+        // FOUR libraries where the site has Highly Confidential, not two. A tier column absent
+        // from one library fails the WHOLE metadata write for a document filed there — and
+        // validateUpdateListItem answers HTTP 200 with HasException, so it is not even loud.
+        for (const lib of allLibraryTitles()) {
           setProgress(`Creating ${col.internal} in ${lib}…`);
           if (await ensureColumn(context.spHttpClient, siteUrl, lib, col.internal, col.display)) {
             created.push(`${col.internal} (${lib})`);

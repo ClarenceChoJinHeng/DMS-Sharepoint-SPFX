@@ -383,3 +383,22 @@ export function setHcLibraryNames(
 export function clearHcLibraryNames(): void {
   hcLibraries = undefined;
 }
+
+/**
+ * Every library title a metadata COLUMN must exist in — two, or four with HC.
+ *
+ * The standing warning, now with twice the surface: a column present in one library and absent from
+ * another fails in two ways that name no column. Bulk upload writes its fields unconditionally and
+ * ONE unknown field name fails the WHOLE `validateUpdateListItem` call, so every column is lost
+ * rather than the missing one; and auto-route's copy carries over only columns that EXIST at the
+ * destination, so the rest vanish with no error and a green run. `Documents` was missing four
+ * columns for months on ClarenceDMSTesting with nothing reporting it.
+ *
+ * A FUNCTION, so the HC pair is included only once primeNames has resolved it. Callers that create
+ * columns must use this rather than a two-element literal — that literal is the bug, waiting.
+ */
+export function allLibraryTitles(): string[] {
+  const hc = cachedHcLibraries();
+  const base = [libraryTitle(), DOCUMENTS_LIBRARY];
+  return hc ? [...base, hc.approval.title, hc.documents.title] : base;
+}

@@ -5,7 +5,7 @@ import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
 import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
+import { allLibraryTitles, cachedHcLibraries, cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
@@ -358,6 +358,14 @@ export default function StructureManager({
       [libraryTitle(), libraryUrlSegment()],
       [DOCUMENTS_LIST_TITLE, DOCUMENTS_URL_SEGMENT],
     ];
+    // The HC pair counts as "in use" too. A segment whose only documents are Highly Confidential
+    // would otherwise read as empty and activate a structure change immediately — stranding exactly
+    // the documents nobody can go and look at to notice.
+    const hc = cachedHcLibraries();
+    if (hc) {
+      libs.push([hc.approval.title, hc.approval.urlSegment]);
+      libs.push([hc.documents.title, hc.documents.urlSegment]);
+    }
     for (const [title, segment] of libs) {
       const res: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(title)}')/GetItems`,
@@ -645,7 +653,8 @@ export default function StructureManager({
         if (tier.labelCol) cols.push([tier.labelCol, tier.label]);
         if (tier.tidCol) cols.push([tier.tidCol, `${tier.label} ID`]);
         for (const [internal, display] of cols) {
-          for (const lib of [libraryTitle(), DOCUMENTS_LIST_TITLE]) {
+          // Four libraries once the site has HC — see allLibraryTitles.
+          for (const lib of allLibraryTitles()) {
             if (await ensureTextColumn(lib, internal, display)) created.push(`${internal} (${lib})`);
           }
         }

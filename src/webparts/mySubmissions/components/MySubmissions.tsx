@@ -35,7 +35,13 @@ import {
 // The metadata panel's rows. It DERIVES the tier rows from the item's own fields rather than naming
 // them, which is what makes Region/Estate·Mill appear on a segment nobody wrote code for.
 import { buildDetailRows, documentUnit, formatBytes, routeToApprover } from "../../../shared/documentDetails";
-import { cachedListTitle, LIST_SUFFIX, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
+import {
+  cachedHcLibraries,
+  cachedListTitle,
+  LIST_SUFFIX,
+  libraryTitle,
+  libraryUrlSegment,
+} from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 // The request rules — validation, recipient parsing and the inside/outside test — live under test in
 // shared/requests.ts and are shared with the approver's queue. Two copies of "what counts as external"
@@ -342,7 +348,16 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    */
   const loadFieldText = async (row: Submission): Promise<void> => {
     setFieldText(undefined);
-    const listTitle = row.library === docsSegment ? DOCUMENTS : libraryTitle();
+    /* Which library this row came from, by its URL segment.
+       A two-way guess (`docsSegment ? Documents : approval`) sent every Highly Confidential row to
+       the NORMAL approval library, which answers 404 for an item id it does not have — so the panel
+       showed "no details were recorded" for exactly the documents whose metadata matters most. */
+    const hc = cachedHcLibraries();
+    const listTitle =
+      row.library === docsSegment ? DOCUMENTS
+      : hc && row.library === hc.approval.urlSegment ? hc.approval.title
+      : hc && row.library === hc.documents.urlSegment ? hc.documents.title
+      : libraryTitle();
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${row.itemId})/FieldValuesAsText`,
@@ -574,7 +589,28 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       // The resolved segment, not the title — otherwise "Shared Documents" stays in every
       // approved file's folder trail.
       const documents = await readLibrary(DOCUMENTS, segment, false, userId);
-      setRows(sortNewestFirst([...staging, ...documents]));
+      /* The Highly Confidential pair, when the site has one.
+         An HC uploader's files are invisible on this page without it, and "you have not uploaded
+         anything yet" to someone who filed a Highly Confidential document last week is the worst
+         possible answer — it invites them to upload it again.
+
+         Read with the SAME AuthorId filter, so this adds no visibility whatsoever: a person sees
+         their own HC files, and only where they already hold the grant. An uncleared uploader's
+         read returns nothing because SharePoint refuses it, not because this code decided so. */
+      const hc = cachedHcLibraries();
+      let hcRows: Submission[] = [];
+      if (hc) {
+        // Each in its own try. An HC library the viewer cannot read at all is the NORMAL case for
+        // everyone without clearance, and must never take the page down or blank the two libraries
+        // that already loaded successfully.
+        try {
+          hcRows = hcRows.concat(await readLibrary(hc.approval.title, hc.approval.urlSegment, true, userId));
+        } catch { /* not cleared, or unreachable — either way, nothing of theirs to show */ }
+        try {
+          hcRows = hcRows.concat(await readLibrary(hc.documents.title, hc.documents.urlSegment, false, userId));
+        } catch { /* as above */ }
+      }
+      setRows(sortNewestFirst([...staging, ...documents, ...hcRows]));
       setLoadError(undefined);
       // Last, and never awaited into the same try: this decides whether the request buttons can be
       // offered, and nothing about it may cost an uploader the list of their own files.
@@ -590,7 +626,13 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
 
   const counts = countByStatus(rows ?? []);
   const shown = filterByTab(rows ?? [], tab);
-  const libs = [libraryUrlSegment(), docsSegment, DOCUMENTS];
+  // Every library segment the trail builder must strip. Without the HC pair, an HC file's folder
+  // trail would start with "HCApprovalDocument" — the library name presented as a folder.
+  const hcLibs = cachedHcLibraries();
+  const libs = [
+    libraryUrlSegment(), docsSegment, DOCUMENTS,
+    ...(hcLibs ? [hcLibs.approval.urlSegment, hcLibs.documents.urlSegment] : []),
+  ];
 
   /* ── The detail view ──────────────────────────────────────────────────────────
      An INNER view, not a link out. The client's point: clicking a file used to leave the page for
