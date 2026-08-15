@@ -24,7 +24,6 @@ import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
-import { DatePicker } from "@fluentui/react";
 
 import {
   Batch,
@@ -2235,80 +2234,31 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   <span>
                     Document Date <em className="req">*</em>
                   </span>
-                  {/* A CALENDAR, not typing (client, 2026-08-15: "client definitely do not want to
-                      type") — and not `type="date"` either, whose format follows the browser locale
-                      and cannot be forced to dd-mm-yyyy.
+                  {/* Back to the native picker (client, 2026-08-15: "lets just go back to default").
 
-                      Fluent's DatePicker was already a declared dependency. `formatDate` decides the
-                      whole display, so dd-mm-yyyy is exact; `allowTextInput` stays false, so the box
-                      is click-only and there is no half-typed value to validate.
+                      Three attempts to hold Fluent's DatePicker in line with the select beside it
+                      failed intermittently, and the reason is structural: Fluent injects its styles
+                      into <head> at runtime, so any rule of ours races its own. The styles prop was
+                      the correct fix for that and still did not settle it, which is a strong signal
+                      to stop paying for the control.
 
-                      Dates are built and read with LOCAL components — never `new Date(iso)`, which is
-                      parsed as UTC and lands on the previous day west of Greenwich. */}
-                  <DatePicker
-                    className="dms-datepicker"
-                    /* Styled through Fluent's OWN API, not CSS.
-                       Fluent generates its classes at runtime and injects them into <head> via
-                       merge-styles, re-inserting on re-render — so whether a stylesheet rule of ours
-                       or Fluent's own rule wins depends on insertion order at that moment. That is a
-                       race, and it is why the alignment held sometimes and not others. The `styles`
-                       prop is applied by the component itself and cannot lose it.
-
-                       `errorMessage: display none` matters most: that strip is reserved height under
-                       the field, and height on one column of a two-column row is what moved it. */
-                    styles={{ root: { margin: 0 } }}
-                    textField={{
-                      styles: {
-                        wrapper: { margin: 0 },
-                        // Copied from `.dms-field select, .dms-field input[type="text"]` above.
-                        fieldGroup: {
-                          height: 38,
-                          borderRadius: 10,
-                          borderColor: "#c8c8c8",
-                          background: "#fff",
-                          selectors: { ":hover": { borderColor: "#8a8886" } },
-                        },
-                        field: { fontFamily: "inherit", fontSize: 13, padding: "8px 10px" },
-                        errorMessage: { display: "none" },
-                      },
-                    }}
-                    placeholder="Select a date"
-                    ariaLabel="Document Date"
-                    allowTextInput={false}
-                    showGoToToday
-                    maxDate={new Date()}
-                    formatDate={(d?: Date): string =>
-                      d
-                        ? `${d.getDate() < 10 ? "0" : ""}${d.getDate()}-${
-                            d.getMonth() + 1 < 10 ? "0" : ""
-                          }${d.getMonth() + 1}-${d.getFullYear()}`
-                        : ""
-                    }
-                    value={
-                      /^\d{4}-\d{2}-\d{2}$/.test(documentDate)
-                        ? new Date(
-                            Number(documentDate.slice(0, 4)),
-                            Number(documentDate.slice(5, 7)) - 1,
-                            Number(documentDate.slice(8, 10)),
-                          )
-                        : undefined
-                    }
-                    onSelectDate={(d?: Date | null) => {
-                      if (!d) {
-                        onDocumentDateChange("");
-                        return;
-                      }
+                      WHAT THIS COSTS, stated so it is not rediscovered: the displayed format follows
+                      the BROWSER LOCALE again, so an en-US browser shows mm/dd/yyyy and no markup can
+                      change it. The client asked for dd-mm-yyyy; this does not deliver it. What it
+                      does deliver is a calendar with no typing, correct alignment, and 53KB off the
+                      bundle. If dd-mm-yyyy is required, the route is a hand-built calendar, not
+                      another pass at styling somebody else's. */}
+                  <input
+                    type="date"
+                    value={documentDate}
+                    max={(() => {
+                      const d = new Date();
                       const mm = d.getMonth() + 1;
-                      const dd = d.getDate();
-                      onDocumentDateChange(
-                        `${d.getFullYear()}-${mm < 10 ? "0" : ""}${mm}-${dd < 10 ? "0" : ""}${dd}`,
-                      );
-                    }}
+                      const day = d.getDate();
+                      return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+                    })()}
+                    onChange={(e) => onDocumentDateChange(e.target.value)}
                   />
-                  {/* No hint line under this field. It existed to disambiguate a locale-formatted
-                      native picker; the box now reads 14-08-2026 outright, so a second format beneath
-                      it contradicts the one the client asked for — and the extra line was what pushed
-                      this column out of line with Confidential Level beside it. */}
                 </label>
 
                 {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
