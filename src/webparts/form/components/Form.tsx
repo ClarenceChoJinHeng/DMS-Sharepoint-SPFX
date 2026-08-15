@@ -1767,245 +1767,52 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     return true;
   };
 
-  const handleUpload = async (): Promise<void> => {
-    const missing: string[] = [];
-    if (!file) missing.push("File");
-    const m = activeMode();
-    // Permissioned tiers first, then the below-Unit chain — the order the fields
-    // appear on screen, so the "please choose" list reads top to bottom.
-    (m?.levels ?? []).forEach((lvl, i) => {
-      if (!levelValues[i]) missing.push(lvl.label);
-    });
-    // Derived from the chain, not from hardcoded strings. Every tier is required:
-    // an optional one left blank would file documents at inconsistent depths inside
-    // a single unit, which is the whole reason the tier exists.
-    missing.push(...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing);
-    // These strings are shown to the user, so they must match the on-screen
-    // field labels — renamed to "Confidential Level" in the relayout.
-    if (!documentDate) missing.push("Document Date");
-    if (!confidentiality) missing.push("Confidential Level");
-    // The three name parts are required so every saved file carries the full
-    // [Project] - [Vendor] - [Document Name] - [Date] shape. composeUploadBase
-    // drops blank parts, so leaving these optional silently produced a shorter
-    // name than the convention promises — and after the fact a shortened name is
-    // indistinguishable from a deliberate one. Trimmed: a space is not a value.
-    if (!docName.trim()) missing.push("Document Name");
-    if (!projectName.trim()) missing.push("Project Name");
-    if (!vendor.trim()) missing.push("Vendor/Customer Name");
-    if (missing.length > 0) {
-      showToast(`Please complete: ${missing.join(", ")}.`, "error");
-      return;
-    }
-    if (!file) return;
+  /**
+   * Upload ONE staged file into an already-resolved folder.
+   *
+   * This is the old single-file handler's tail with two changes and no others: its values come from
+   * `sf.meta` instead of component state, and it RETURNS a result instead of calling `showToast` and
+   * returning. How a file is uploaded and tagged is untouched — that code is the most site-exercised
+   * in the project, and a UI change is no reason to rewrite it.
+   */
+  const uploadStagedFile = async (
+    b: Batch,
+    folderId: string,
+    sf: StagedFile,
+  ): Promise<UploadResult> => {
+    const meta = sf.meta;
+    const finalName = sf.finalName ?? sf.file.name;
+    const dest = b.destination as {
+      levelSelections: Array<{ column: string; label: string; id: string; labelCol?: string; tidCol?: string }>;
+      tierFormValues: Array<{ FieldName: string; FieldValue: string }>;
+    };
 
-    const finalName = buildUploadName(
-      file.name,
-      composeUploadBase(projectName, vendor, docName, documentDate),
-    );
-    const allowed = settings.allowedFileTypes;
-    if (allowed.kind === "none") {
-      showToast(NO_TYPES_MESSAGE, "error");
-      return;
-    }
-    if (!allowed.types.some((ext) => finalName.toLowerCase().endsWith(ext))) {
-      showToast(
-        `File type not allowed. Allowed: ${allowed.types.join(", ")}`,
-        "error",
-      );
-      return;
-    }
-
-    const mode = activeMode();
-    if (!mode || mode.levels.length === 0) {
-      showToast("No upload mode configured.", "error");
-      return;
-    }
-    // The leaf level's selected term is the permissioned Unit folder.
-    const leafIdx = mode.levels.length - 1;
-    const leafTerm = (levelChoices[leafIdx] ?? []).find(
-      (o) => o.id === levelValues[leafIdx],
-    );
-    if (!leafTerm) {
-      showToast("Please choose all folder levels before uploading.", "error");
-      return;
-    }
-
-    setBusy(true);
-    setStatus("Locating destination folder…");
-
-    // Resolve the Unit folder by its stable UniqueId (rename-proof), NOT by a
-    // name-built path. The selected leaf term is the lookup key.
-    const mapping = await lookupFolderMapping(
-      context.spHttpClient,
-      siteUrl,
-      leafTerm.id,
-    ).catch((e: unknown) => {
-      console.error("Folder map lookup error:", e);
-      return null;
-    });
-    if (!mapping || !mapping.folderUniqueId) {
-      showToast(
-        // Names BOTH causes. "Re-run reconciliation" alone was wrong half the time:
-        // since folder names come from DMS Term Abbreviation, a unit with no
-        // abbreviation row is skipped by every run, so re-running changes nothing.
-        `"${leafTerm.label}" has no folder yet. Your DMS administrator needs to give it an abbreviation in the DMS Term Abbreviation list, then run folder reconciliation.`,
-        "error",
-      );
-      setStatus("");
-      setBusy(false);
-      return;
-    }
-
-    // Rename-proof: resolve the Unit folder's CURRENT path from its UniqueId, then
-    // ensure-create the Year and Document Type subfolders under it (they inherit its ACL).
-    const unitFolder = await resolveMappedFolder(
-      context.spHttpClient,
-      siteUrl,
-      mapping.folderUniqueId,
-      mapping.folderUrl,
-    );
-    const unitSru = unitFolder.serverRelativeUrl;
-    if (!unitSru) {
-      showToast(
-        // Two different problems with two different fixes, and only one of them is
-        // reconciliation. Saying "no longer exists" on a 403 or a throttle sends an admin to
-        // re-provision an intact tree while the uploader stays blocked.
-        unitFolder.confirmedMissing
-          ? "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation."
-          : `Your folder could not be opened (HTTP ${unitFolder.status}). That is usually a permissions ` +
-            `problem rather than a missing folder — ask an administrator to check your access to this unit.`,
-        "error",
-      );
-      setStatus("");
-      setBusy(false);
-      return;
-    }
-    const plan = tierPlan();
-    const tiers = plan.tiers;
-    // Never guess at a tier whose options are not known. "Not loaded" and "this unit has
-    // no subunits" would produce the same shortened path, and the shorter one lands in a
-    // folder that exists and looks correct — the document is simply filed in the wrong
-    // place. Wait, or fail, but do not assume.
-    if (plan.unresolved.length > 0) {
-      showToast(
-        `Still checking ${plan.unresolved.join(" and ")} for this unit. ` +
-          `If this does not clear, reload the page before uploading.`,
-        "error",
-      );
-      setStatus("");
-      setBusy(false);
-      return;
-    }
-    // A malformed chain must never route a file to a partial path. It would land
-    // in a folder that exists and looks right, one tier shallower than everything
-    // else in the unit — silent misfiling, discovered only when someone cannot
-    // find the document. Block the upload and name the config row instead.
-    // A page open since before a structure change keeps filing into the OLD shape, because the
-    // config is read once at mount (gotcha #10). Every such upload re-creates the two-shapes state
-    // a migration just cleaned up — and it is invisible: the upload succeeds and lands in a folder
-    // that looks perfectly reasonable. Seen live 2026-08-11, a file filed without the Credit_Card
-    // level hours after that level went live.
-    //
-    // So re-read the chain and refuse if it moved. `undefined` means the read failed, which proves
-    // nothing and must not block: the cure would be worse than the disease.
-    const loadedMode = activeMode();
-    if (loadedMode) {
-      const fresh = await freshChainFor(loadedMode.key);
-      const inUse = loadedMode.chain ?? loadedMode.levels ?? [];
-      if (fresh && chainSignature(fresh) !== chainSignature(inUse)) {
-        showToast(
-          "The folder structure changed while this page was open, so this upload would be filed in " +
-            "the wrong place. Please reload the page and upload again — nothing has been saved.",
-          "error",
-        );
-        setStatus("");
-        setBusy(false);
-        return;
-      }
-    }
-
-    const chainError = validateChain(activeMode()?.chain ?? activeMode()?.levels ?? []);
-    if (chainError) {
-      showToast(
-        `The folder structure for this segment is not set up correctly: ${chainError.message} ` +
-          `Ask an administrator to check the DMS Config mode row.`,
-        "error",
-      );
-      setStatus("");
-      setBusy(false);
-      return;
-    }
-    const { segments, missing: missingTiers } = buildOnDemandSegments(tiers, tierSelections());
-    if (missingTiers.length > 0) {
-      showToast(`${missingTiers.join(" and ")} ${missingTiers.length > 1 ? "are" : "is"} required.`, "error");
-      setStatus("");
-      setBusy(false);
-      return;
-    }
-
-    setStatus("Preparing destination folders…");
-    // Walk the chain in order. Each folder inherits the Unit's ACL — nothing below
-    // Unit breaks inheritance, which the client confirmed on 2026-08-06.
-    let parentSru = unitSru;
-    let destFolder: Awaited<ReturnType<typeof ensureFolder>> | undefined;
-    for (const name of segments) {
-      const made = await ensureFolder(context.spHttpClient, siteUrl, parentSru, name);
-      if (!made) {
-        showToast(`Could not create the "${name}" folder.`, "error");
-        setStatus("");
-        setBusy(false);
-        return;
-      }
-      parentSru = made.serverRelativeUrl;
-      destFolder = made;
-    }
-    if (!destFolder) {
-      showToast("No destination folder could be resolved for this upload.", "error");
-      setStatus("");
-      setBusy(false);
-      return;
-    }
-
-    const folderId = destFolder.uniqueId; // upload target — a fresh, unit-scoped folder
-    let uploadedServerRelativeUrl = "";
-
-    setStatus("Checking for duplicates…");
-
-    // Flipped to true only when the user confirms overwriting an existing file.
-    let overwrite = false;
     try {
-      // Duplicate check — GetFolderById targets the folder by UniqueId, so a
-      // rename of that folder does not affect this lookup.
+      // NEVER overwrite. A clash fails this one file and lets its siblings through: the existing
+      // document may already be Approved and routed to Documents, so replacing it silently would
+      // destroy a record an approver has already acted on. The single-file form asked "replace?";
+      // with a batch running unattended there is nobody to ask.
       const existsRes: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')?$select=Exists`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (existsRes.ok) {
-        // A file with this name already exists — ask the user whether to replace
-        // it rather than silently blocking the upload.
-        setStatus("");
-        const confirmed = await askReplace(finalName);
-        if (!confirmed) {
-          setBusy(false);
-          return;
-        }
-        overwrite = true;
+        return {
+          fileId: sf.id,
+          ok: false,
+          error: `A document called "${finalName}" is already in this folder — rename it, or ask an approver about the existing one.`,
+        };
       }
     } catch {
-      // Network error on existence check — proceed; upload will surface the real error.
+      // Network error on the existence check — proceed; the upload will surface the real error.
     }
 
-    setStatus("Uploading…");
-
     try {
-      // Upload directly into the folder resolved by UniqueId. No name-path
-      // existence probe is needed — GetFolderById either resolves (folder
-      // still exists under its current name/location) or 404s (deleted).
       const uploadRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=${overwrite})?$select=ServerRelativeUrl`,
+        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
         SPHttpClient.configurations.v1,
-        { body: file },
+        { body: sf.file },
       );
       if (!uploadRes.ok) {
         let detail = `HTTP ${uploadRes.status}`;
@@ -2013,13 +1820,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           const bodyText = await uploadRes.text();
           try {
             const errJson = JSON.parse(bodyText);
-            const spMsg =
-              errJson?.error?.message?.value ?? errJson?.error?.message;
-            detail += spMsg
-              ? ` — ${spMsg}`
-              : bodyText
-                ? ` — ${bodyText.slice(0, 300)}`
-                : "";
+            const spMsg = errJson?.error?.message?.value ?? errJson?.error?.message;
+            detail += spMsg ? ` — ${spMsg}` : bodyText ? ` — ${bodyText.slice(0, 300)}` : "";
           } catch {
             if (bodyText) detail += ` — ${bodyText.slice(0, 300)}`;
           }
@@ -2027,54 +1829,24 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           /* body already consumed or unreadable */
         }
         console.error("Upload failed:", folderId, detail);
-        // A 404 here means the mapped folder no longer exists (deleted after mapping).
         const hint =
           uploadRes.status === 404
-            ? " The mapped folder may have been deleted — ask an administrator to re-run the reconciliation tool."
+            ? " The mapped folder may have been deleted — ask an administrator to re-run reconciliation."
             : "";
-        showToast(`Upload failed (${detail}).${hint}`, "error");
-        return;
+        return { fileId: sf.id, ok: false, error: `${detail}.${hint}` };
       }
       const uploadJson = await uploadRes.json();
-      uploadedServerRelativeUrl = uploadJson.ServerRelativeUrl;
+      const uploadedServerRelativeUrl = uploadJson.ServerRelativeUrl;
 
       const itemRes: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeServerRelativePath(uploadedServerRelativeUrl)}'`,
         SPHttpClient.configurations.v1,
       );
       if (!itemRes.ok) {
-        showToast("Uploaded, but could not retrieve the item to tag.", "error");
-        return;
+        return { fileId: sf.id, ok: false, error: "Uploaded, but could not retrieve the item to tag." };
       }
       const item = await itemRes.json();
 
-      // One label + one term-GUID pair per level, plus the Business Segment
-      // column (the mode's segment label / term-set GUID). Each level carries
-      // its real Staging internal names (labelCol/tidCol) from DMS Config when
-      // present; buildLevelFormValues falls back to LEVEL_COLUMNS otherwise.
-      const selections = (mode.levels ?? []).map((lvl, i) => {
-        const opt = (levelChoices[i] ?? []).find(
-          (o) => o.id === levelValues[i],
-        );
-        return {
-          column: lvl.column,
-          label: opt?.label ?? "",
-          id: opt?.id ?? "",
-          labelCol: lvl.labelCol,
-          tidCol: lvl.tidCol,
-        };
-      });
-      selections.unshift({
-        column: "BusinessSegment",
-        label: mode.label,
-        id: mode.termSetGuid,
-        labelCol: undefined,
-        tidCol: undefined,
-      });
-
-      // Level columns: BusinessSegment (injected, not a config level) takes its column
-      // names from settings.columns so a new site needs no code change; Department/Unit
-      // fall back to LEVEL_COLUMNS but are normally overridden by DMS Config Levels JSON.
       const levelCols: Record<string, ColumnPair> = {
         ...LEVEL_COLUMNS,
         BusinessSegment: {
@@ -2082,82 +1854,39 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           tid: settings.columns.businessSegmentTid,
         },
       };
-      // One entry per below-Unit tier, in chain order. How a tier writes is DERIVED,
-      // not flagged: a tier with a `tidCol` writes a plain label + GUID text pair
-      // exactly as the permissioned levels do, while a tier without one writes a
-      // single managed-metadata column as "Label|GUID". That keeps Year and Document
-      // Type byte-identical to what this form has always sent, and lets a new tier
-      // use either column shape without a migration.
-      const tierFormValues: Array<{ FieldName: string; FieldValue: string }> = [];
-      // Only APPLICABLE tiers write metadata. A unit with no subunits leaves SubUnit and
-      // SubUnitTid empty rather than storing a value from some other unit's list.
-      const metaPlan = tierPlan();
-      metaPlan.tiers.forEach((t, i) => {
-        const id = tierValues[t.column] ?? "";
-        const opts = tierOptions(t, metaPlan.parents[i]);
-        const opt = opts.find((o) => o.id === id);
-        const col = t.labelCol ?? t.column;
-        if (!col || !opt) return;
-        if (t.tidCol) {
-          tierFormValues.push({ FieldName: col, FieldValue: opt.label });
-          tierFormValues.push({ FieldName: t.tidCol, FieldValue: opt.id });
-        } else {
-          tierFormValues.push({ FieldName: col, FieldValue: toTaxValue(opts, id) });
-        }
-      });
+
       const formValues: Array<{ FieldName: string; FieldValue: string }> = [
-        ...tierFormValues,
+        ...dest.tierFormValues,
         {
           FieldName: settings.columns.confidentiality,
-          FieldValue: toTaxValue(options.confidentiality, confidentiality),
+          FieldValue: toTaxValue(options.confidentiality, meta.confidentiality ?? ""),
         },
-        ...buildLevelFormValues(levelCols, selections),
+        ...buildLevelFormValues(levelCols, dest.levelSelections),
       ];
 
-      // Document Date is required, so validation above already guarantees a
-      // value. The guard is a safety net: toSpDate("") yields the malformed
-      // "NaN/NaN/", which SharePoint rejects with a HasException that surfaces
-      // as a confusing "Uploaded, but a field failed" long after the cause.
-      if (documentDate) {
+      // Guarded because toSpDate("") yields the malformed "NaN/NaN/", which SharePoint rejects with a
+      // HasException surfacing far from its cause. Validation already guarantees a value.
+      if (meta.documentDate) {
         formValues.push({
           FieldName: settings.columns.documentDate,
-          FieldValue: toSpDate(documentDate),
+          FieldValue: toSpDate(meta.documentDate),
         });
       }
 
-      // Project Name and Vendor are optional free text, but they are written
-      // UNCONDITIONALLY — a blank field sends "" and clears the column.
-      //
-      // This matters on the replace path: Files/Add(overwrite=true) swaps the
-      // file's content but reuses the same list item, so anything not written
-      // here survives from the previous upload. Skipping blanks would leave an
-      // approver looking at a vendor or project belonging to the document that
-      // was just replaced. Sending "" is safe for a Text column (unlike the
-      // date above, where an empty value would reach toSpDate).
-      formValues.push({
-        FieldName: settings.columns.projectName,
-        FieldValue: projectName.trim(),
-      });
-      formValues.push({
-        FieldName: settings.columns.vendor,
-        FieldValue: vendor.trim(),
-      });
-      formValues.push({
-        FieldName: settings.columns.remark,
-        FieldValue: remark.trim(),
-      });
-      // Written on EVERY upload, and forced false unless the chosen confidentiality
-      // level is the one configured to offer it. The tick is hidden when the level
-      // changes, but hiding a control does not clear the state behind it, and on the
-      // replace path the list item is reused — so a document could inherit a legal
-      // flag from the file it overwrote. Deriving the value here rather than trusting
-      // the checkbox makes that impossible.
+      // Written UNCONDITIONALLY, blanks included — a Text column set to "" is cleared rather than left
+      // holding a value from somewhere else.
+      formValues.push({ FieldName: settings.columns.projectName, FieldValue: (meta.projectName ?? "").trim() });
+      formValues.push({ FieldName: settings.columns.vendor, FieldValue: (meta.vendor ?? "").trim() });
+      formValues.push({ FieldName: settings.columns.remark, FieldValue: (meta.remark ?? "").trim() });
+
+      // Re-derived, never trusted from the checkbox: hiding the control does not clear the state behind
+      // it, so a file could otherwise carry a legal marker its confidentiality does not offer.
       const privilegedApplies =
         settings.legallyPrivilegedFor !== "" &&
-        confidentiality === settings.legallyPrivilegedFor;
+        (meta.confidentiality ?? "") === settings.legallyPrivilegedFor;
       formValues.push({
         FieldName: settings.columns.legallyPrivileged,
-        FieldValue: privilegedApplies && legallyPrivileged ? "true" : "false",
+        FieldValue: privilegedApplies && (meta.legallyPrivileged ?? "") !== "" ? "true" : "false",
       });
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
@@ -2169,33 +1898,174 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         },
       );
       if (!metaRes.ok) {
-        showToast("Uploaded, but tagging metadata failed.", "error");
-        return;
+        return { fileId: sf.id, ok: false, error: "Uploaded, but tagging metadata failed." };
       }
       const metaJson = await metaRes.json();
-      const fieldError = (metaJson.value ?? []).find(
-        (v: { HasException?: boolean }) => v.HasException,
-      );
+      // HTTP 200 even on field errors (gotcha #4) — the exception is per result, not per response.
+      const fieldError = (metaJson.value ?? []).find((v: { HasException?: boolean }) => v.HasException);
       if (fieldError) {
         console.error("Field update error:", fieldError);
-        showToast(
-          `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
-          "error",
-        );
-        return;
+        return {
+          fileId: sf.id,
+          ok: false,
+          error: `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
+        };
       }
-
-      showToast(
-        "Document uploaded successfully and is pending review.",
-        "success",
-      );
-      setStatus("");
-      resetForm();
+      return { fileId: sf.id, ok: true };
     } catch (err) {
       console.error("Upload failed:", err);
-      showToast("Upload failed. Please try again.", "error");
-    } finally {
-      setBusy(false);
+      return { fileId: sf.id, ok: false, error: (err as Error).message || "Upload failed." };
+    }
+  };
+
+  /**
+   * Upload every staged batch.
+   *
+   * Each step exists for a reason learned the hard way:
+   *
+   * 1. Re-read each segment's chain ONCE — two batches on one segment cost one request, not two.
+   * 2. Mark the batches whose segment moved under them. They stay staged and ask for a re-pick; the
+   *    single-file form said "reload the page", which here would destroy every batch the client built.
+   *    A chain that could not be READ marks nothing: unknown is not changed.
+   * 3. Per batch, resolve the unit folder from its LEAF TERM (rename-proof) and ensure the below-Unit
+   *    folders once — not once per file.
+   * 4. Per file, upload and tag, collecting results rather than stopping at the first failure.
+   * 5. Fold the results back: success removes, failure stays with its reason. That is what makes Retry
+   *    safe — an uploaded file is no longer in the list, so it cannot be sent twice.
+   */
+  const handleUpload = async (): Promise<void> => {
+    // An unsaved draft is the commonest way to lose work here: files staged, destination chosen, then
+    // Upload pressed without Save batch. Save it rather than silently ignoring it. `saveBatch`'s
+    // setState has not landed yet, so this run stops and the client presses Upload again — one extra
+    // click, versus uploading a batch list that does not include what is on screen.
+    if (draftFiles.length > 0) {
+      if (!saveBatch()) return;
+      showToast("Saved the open batch — press Upload again to send everything.", "success");
+      return;
+    }
+    if (batches.length === 0) {
+      showToast("Nothing to upload yet. Add documents and save a batch first.", "error");
+      return;
+    }
+
+    setBusy(true);
+    setLastRun(undefined);
+    setStatus("Checking the folder structure…");
+
+    // One read per distinct segment. `undefined` for a segment whose chain could not be read.
+    const freshBySegment: Record<string, string | undefined> = {};
+    const segmentKeys: string[] = [];
+    for (const b of batches) if (segmentKeys.indexOf(b.segmentKey) === -1) segmentKeys.push(b.segmentKey);
+    for (const key of segmentKeys) {
+      const fresh = await freshChainFor(key);
+      freshBySegment[key] = fresh ? chainSignature(fresh) : undefined;
+    }
+
+    const marked = batchesNeedingRepick(batches, freshBySegment);
+    const stale = marked.filter((b) => b.needsRepick);
+    const runnable = uploadableBatches(marked);
+    if (stale.length > 0) {
+      setBatches(marked);
+      showToast(
+        `The folder structure changed for ${stale.length} batch${stale.length === 1 ? "" : "es"} while ` +
+          `this page was open. Choose ${stale.length === 1 ? "its" : "their"} destination again — nothing has been lost.`,
+        "error",
+      );
+      if (runnable.length === 0) {
+        setStatus("");
+        setBusy(false);
+        return;
+      }
+    }
+
+    const results: UploadResult[] = [];
+    let batchNo = 0;
+    for (const b of runnable) {
+      batchNo++;
+      const dest = b.destination as { leafTermId: string; leafLabel: string; segments: string[] };
+
+      setStatus(`Batch ${batchNo} of ${runnable.length} — locating destination folder…`);
+      const mapping = await lookupFolderMapping(context.spHttpClient, siteUrl, dest.leafTermId).catch(
+        (e: unknown) => {
+          console.error("Folder map lookup error:", e);
+          return null;
+        },
+      );
+      if (!mapping || !mapping.folderUniqueId) {
+        // Names BOTH causes: folder names come from DMS Term Abbreviation, so a unit with no
+        // abbreviation row is skipped by every run and re-running reconciliation changes nothing.
+        for (const sf of b.files) {
+          results.push({
+            fileId: sf.id,
+            ok: false,
+            error: `"${dest.leafLabel}" has no folder yet. An administrator needs to give it an abbreviation in the DMS Term Abbreviation list, then run folder reconciliation.`,
+          });
+        }
+        continue;
+      }
+
+      const unitFolder = await resolveMappedFolder(
+        context.spHttpClient,
+        siteUrl,
+        mapping.folderUniqueId,
+        mapping.folderUrl,
+      );
+      const unitSru = unitFolder.serverRelativeUrl;
+      if (!unitSru) {
+        // Two different problems with two different fixes, and only one of them is reconciliation.
+        const why = unitFolder.confirmedMissing
+          ? "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation."
+          : `Your folder could not be opened (HTTP ${unitFolder.status}). That is usually a permissions problem — ask an administrator to check your access.`;
+        for (const sf of b.files) results.push({ fileId: sf.id, ok: false, error: why });
+        continue;
+      }
+
+      // Ensure-created ONCE per batch, not per file. Everything below Unit inherits the Unit's ACL.
+      setStatus(`Batch ${batchNo} of ${runnable.length} — preparing folders…`);
+      let parentSru = unitSru;
+      let destFolder: Awaited<ReturnType<typeof ensureFolder>> | undefined;
+      let folderError = "";
+      for (const name of dest.segments) {
+        const made = await ensureFolder(context.spHttpClient, siteUrl, parentSru, name);
+        if (!made) {
+          folderError = `Could not create the "${name}" folder.`;
+          break;
+        }
+        parentSru = made.serverRelativeUrl;
+        destFolder = made;
+      }
+      if (folderError || !destFolder) {
+        const why = folderError || "No destination folder could be resolved for this batch.";
+        for (const sf of b.files) results.push({ fileId: sf.id, ok: false, error: why });
+        continue;
+      }
+
+      let fileNo = 0;
+      for (const sf of b.files) {
+        fileNo++;
+        setStatus(
+          `Batch ${batchNo} of ${runnable.length} · file ${fileNo} of ${b.files.length} — ${sf.finalName ?? sf.file.name}`,
+        );
+        results.push(await uploadStagedFile(b, destFolder.uniqueId, sf));
+      }
+    }
+
+    // `marked`, not `runnable` — a batch held back for a re-pick has no results and must survive this
+    // fold untouched.
+    const remaining = applyUploadResults(marked, results);
+    setBatches(remaining);
+    const counts = summarise(results);
+    setLastRun({ ok: counts.ok, failed: counts.failed });
+    setStatus("");
+    setBusy(false);
+    if (counts.failed === 0) {
+      showToast(`${counts.ok} document${counts.ok === 1 ? "" : "s"} uploaded and pending review.`, "success");
+    } else {
+      // Counts, never a verdict. What is left on screen is exactly what still needs doing.
+      showToast(
+        `Uploaded ${counts.ok} of ${counts.total}. ${counts.failed} could not be uploaded — see the reasons below.`,
+        "error",
+      );
     }
   };
 
