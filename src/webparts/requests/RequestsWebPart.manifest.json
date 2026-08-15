@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "7a4f1e93-2c58-4d07-b6a1-9e3c85f2d410",
+  "alias": "RequestsWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "CRS Requests" },
+    "description": { "default": "Deletion and share requests — raised by uploaders, decided by the Head of Unit" },
+    "officeFabricIconFontName": "TaskManager",
+    "properties": {}
+  }]
+}

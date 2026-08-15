@@ -109,6 +109,14 @@
           "manifest": "./src/webparts/userAccess/GroupManagementWebPart.manifest.json"
         }
       ]
+    },
+    "requests-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/requests/RequestsWebPart.js",
+          "manifest": "./src/webparts/requests/RequestsWebPart.manifest.json"
+        }
+      ]
     }
   },
   "externals": {},

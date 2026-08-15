@@ -43,6 +43,18 @@ export const EVENT = {
   groupCreated: "GroupCreated",
   groupDeleted: "GroupDeleted",
   membersChanged: "MembersChanged",
+
+  // Deletion and share requests, 2026-08-15. Safe to add because `EventType` is a TEXT column — the
+  // day it becomes a Choice, every row of a type missing from `Choices` fails the whole write and is
+  // lost silently.
+  //
+  // The REQUEST and the DECISION are separate events on purpose. Who asked, and who allowed it, are
+  // different facts, often days apart and usually different people; one row saying "shared" would
+  // lose whichever half someone came looking for.
+  deletionRequested: "DeletionRequested",
+  shareRequested: "ShareRequested",
+  requestApproved: "RequestApproved",
+  requestRejected: "RequestRejected",
 } as const;
 
 export type AuditEventType = (typeof EVENT)[keyof typeof EVENT];
@@ -68,6 +80,10 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.groupCreated]: "Group created",
   [EVENT.groupDeleted]: "Group deleted",
   [EVENT.membersChanged]: "Group members changed",
+  [EVENT.deletionRequested]: "Deletion requested",
+  [EVENT.shareRequested]: "Share requested",
+  [EVENT.requestApproved]: "Request approved",
+  [EVENT.requestRejected]: "Request rejected",
 };
 
 /** Every type, in the order the viewer offers them. */

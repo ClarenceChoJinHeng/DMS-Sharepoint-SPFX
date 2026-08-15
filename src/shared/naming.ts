@@ -35,6 +35,10 @@ export const LIST_SUFFIX = {
   abbreviation: "Term Abbreviation",
   deletionLog: "Deletion Log",
   auditLog: "Audit Log",
+  // Deletion and share requests a Head of Unit decides — 2026-08-15. NOT the same thing as
+  // `deletionLog`, which was never built: that was a record of deletions that had happened, this is
+  // the queue of ones being asked for.
+  requests: "Requests",
 };
 
 /** Returns true if a list with this exact title exists. Supplied by the caller. */
