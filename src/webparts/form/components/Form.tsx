@@ -2397,10 +2397,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
         .dms-staged { margin-top: 16px; }
         .dms-staged-head { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; }
-        .dms-staged-row { border: 1px solid #e1e1e1; border-radius: 6px; margin-bottom: 6px; background: #fff; }
-        .dms-staged-row.open { border-color: #0f6c3f; }
-        .dms-staged-row.clash { border-color: #d0a05a; background: #fff8f0; }
-        .dms-staged-btn { display: flex; width: 100%; gap: 10px; align-items: center; background: none; border: none; font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
+        .dms-staged-row { border: none; border-radius: 6px; margin-bottom: 6px; background: #fff; }
+        /* A CLASH keeps its tint. It is the one state on this row that must be visible without
+           opening it — two files heading for the same saved name, which SharePoint would not warn
+           about. With the borders gone the background is all that is left to carry it. */
+        .dms-staged-row.clash { background: #fff8f0; }
+        .dms-staged-btn { display: flex; width: 100%; gap: 10px; align-items: center; background: rgba(250, 250, 250, 1); border: none; border-radius: 6px; font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
+        .dms-staged-row.clash .dms-staged-btn { background: #fff8f0; }
         .dms-staged-btn .name { flex: 1 1 auto; font-size: 13px; word-break: break-word; }
         .dms-staged-btn .size { font-size: 11.5px; color: #6b7a71; }
         .dms-staged-btn .chev { font-size: 10px; color: #6b7a71; }
