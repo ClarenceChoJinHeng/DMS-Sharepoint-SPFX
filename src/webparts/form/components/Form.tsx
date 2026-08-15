@@ -25,6 +25,23 @@ import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/nami
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import {
+  Batch,
+  BatchDestination,
+  FileMeta,
+  StagedFile,
+  UploadResult,
+  applyUploadResults,
+  batchesNeedingRepick,
+  canSaveBatch,
+  collisionsWithin,
+  duplicateAcrossBatches,
+  inheritDefaults,
+  nextId,
+  stagedTotals,
+  summarise,
+  uploadableBatches,
+} from "../../../shared/uploadBatches";
+import {
   parseLevels,
   collectMembership,
   isLeafChainValid,
@@ -432,6 +449,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [projectName, setProjectName] = useState<string>("");
   const [remark, setRemark] = useState<string>("");
   const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
+  // ── Batches ─────────────────────────────────────────────────────────────────
+  // Spec: 2026-08-15-batched-multi-file-upload-design.md. A batch is ONE destination folder plus the
+  // files that belong in it; an upload carries several. The metadata fields below are the EDITOR for
+  // whichever staged file is open, and `draftFiles` is the batch currently being built.
+  //
+  // Nothing here reaches SharePoint until Upload, and staged work cannot be persisted because a `File`
+  // is not serialisable — hence the beforeunload guard, which is the whole mitigation.
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [draftFiles, setDraftFiles] = useState<StagedFile[]>([]);
+  const [activeFileId, setActiveFileId] = useState<string>("");
+  const [lastRun, setLastRun] = useState<{ ok: number; failed: number } | undefined>(undefined);
   const [dragOver, setDragOver] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
@@ -1358,8 +1386,107 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * entirely — so without this a drag-and-drop would happily hand an .exe to the
    * upload. See CLAUDE.md gotcha #10 for how the two checks disagreed before.
    */
-  const acceptFile = (picked: File | undefined): void => {
-    if (!picked) return;
+  /* ---------- Batch editor bridge ----------------------------------------- */
+
+  /**
+   * The metadata fields are ONE editor, reused for whichever staged file is open. `captureEditor` and
+   * `applyEditor` move values between that editor and the file.
+   *
+   * Kept as an explicit capture/apply pair rather than binding each input straight to
+   * `draftFiles[i].meta`: every existing `onChange` handler (`onDocNameChange`, `onVendorChange`, …)
+   * does more than `setState`, and rewiring all of them for a UI change would put site-verified
+   * validation at risk for no gain.
+   */
+  const captureEditor = (): FileMeta => ({
+    docName,
+    projectName,
+    vendor,
+    remark,
+    documentDate,
+    confidentiality,
+    // A boolean through a string map. Re-derived at upload time anyway (see `privilegedApplies`),
+    // because hiding the tick does not clear the state behind it.
+    legallyPrivileged: legallyPrivileged ? "1" : "",
+  });
+
+  const applyEditor = (m: FileMeta): void => {
+    setDocName(m.docName ?? "");
+    setProjectName(m.projectName ?? "");
+    setVendor(m.vendor ?? "");
+    setRemark(m.remark ?? "");
+    setDocumentDate(m.documentDate ?? "");
+    setConfidentiality(m.confidentiality ?? "");
+    setLegallyPrivileged((m.legallyPrivileged ?? "") !== "");
+  };
+
+  /** The name a staged file will actually be saved under — the composed convention, not the typed name. */
+  const finalNameFor = (f: File, m: FileMeta): string =>
+    buildUploadName(
+      f.name,
+      composeUploadBase(m.projectName ?? "", m.vendor ?? "", m.docName ?? "", m.documentDate ?? ""),
+    );
+
+  /** Fold the editor back into the file it belongs to. Returns the updated list. */
+  const commitEditor = (files: StagedFile[]): StagedFile[] => {
+    if (!activeFileId) return files;
+    const meta = captureEditor();
+    return files.map((f) =>
+      f.id === activeFileId
+        ? { ...f, typedName: meta.docName ?? "", meta, finalName: finalNameFor(f.file, meta) }
+        : f,
+    );
+  };
+
+  /** Open a different file's panel, saving the one being left. */
+  const selectFile = (id: string): void => {
+    const saved = commitEditor(draftFiles);
+    setDraftFiles(saved);
+    if (id === activeFileId) {
+      // Collapsing the open panel. The editor keeps its values; nothing is lost.
+      setActiveFileId("");
+      return;
+    }
+    const target = saved.find((f) => f.id === id);
+    if (target) applyEditor(target.meta);
+    setActiveFileId(id);
+  };
+
+  const stagedNow = stagedTotals([
+    ...batches,
+    { id: "draft", segmentKey: "", chainSignature: "", pathLabels: [], destination: {}, files: draftFiles },
+  ]);
+  const draftCollisions = collisionsWithin({
+    id: "draft", segmentKey: "", chainSignature: "", pathLabels: [], destination: {},
+    files: commitEditor(draftFiles),
+  });
+  const crossBatchDupes = duplicateAcrossBatches(batches);
+
+  /**
+   * The only protection staged work has.
+   *
+   * A `File` cannot be serialised, so there is no draft to restore and no localStorage fallback — a
+   * closed tab loses every staged batch. The browser owns this dialog's wording; all we control is
+   * whether it appears.
+   */
+  useEffect(() => {
+    if (stagedNow.files === 0) return undefined;
+    const warn = (e: BeforeUnloadEvent): string => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [stagedNow.files]);
+
+  /**
+   * Is this file an allowed type — and if not, refuse it and record why.
+   *
+   * Split out from staging so a multi-select can check every file in one pass. Returns false for a
+   * refusal, which is what keeps a disallowed type from ever entering a batch.
+   */
+  const admitFile = (picked: File | undefined): boolean => {
+    if (!picked) return false;
     const types =
       settings.allowedFileTypes.kind === "none"
         ? []
@@ -1390,10 +1517,57 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }).catch(() => undefined);
       setFile(undefined);
       if (fileRef.current) fileRef.current.value = "";
-      return;
+      return false;
     }
     setStatus("");
-    setFile(picked);
+    return true;
+  };
+
+  /**
+   * Stage every picked file into the batch being built.
+   *
+   * Accumulates in ONE pass rather than calling a per-file helper in a loop: each call would read the
+   * same stale `draftFiles`, so a five-file selection would stage only the last one — and it would look
+   * like the picker had silently dropped four files.
+   *
+   * Each new file inherits the last-typed values in this batch (copied from a sibling the user typed,
+   * visible and editable). The typed NAME is never inherited — that is the collision `collisionsWithin`
+   * exists to block.
+   */
+  const acceptFiles = (list?: FileList | ReadonlyArray<File> | null): void => {
+    if (!list) return;
+    const picked: File[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const f = (list as FileList)[i];
+      if (admitFile(f)) picked.push(f);
+    }
+    if (picked.length === 0) return;
+
+    let acc = commitEditor(draftFiles);
+    let lastAdded: StagedFile | undefined;
+    for (const f of picked) {
+      const meta: FileMeta = {
+        ...inheritDefaults({
+          id: "draft", segmentKey: "", chainSignature: "", pathLabels: [], destination: {}, files: acc,
+        }),
+        docName: "",
+      };
+      lastAdded = { id: nextId("f"), file: f, typedName: "", meta, finalName: finalNameFor(f, meta) };
+      acc = [...acc, lastAdded];
+    }
+    setDraftFiles(acc);
+    // Open the last one added, so a single pick behaves exactly as before: choose a file, start typing.
+    if (lastAdded) {
+      applyEditor(lastAdded.meta);
+      setActiveFileId(lastAdded.id);
+      setFile(lastAdded.file);
+    }
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  /** Kept for the single-file call sites that predate batching. */
+  const acceptFile = (picked: File | undefined): void => {
+    if (picked) acceptFiles([picked]);
   };
 
   const resetForm = (): void => {
