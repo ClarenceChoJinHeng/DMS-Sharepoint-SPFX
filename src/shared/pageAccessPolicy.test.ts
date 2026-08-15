@@ -4,7 +4,7 @@ import {
   VIEW_ONLY_ROLES,
   ACTION_ROLES,
 } from "./pageAccessPolicy";
-import { GroupMapRole } from "./groupMapModel";
+import { GroupMapRole, SELECTABLE_ROLES } from "./groupMapModel";
 
 describe("policyForPage — the client's four rules (2026-08-05)", () => {
   it("offers Upload-Form to uploaders only", () => {
@@ -122,7 +122,11 @@ describe("isRoleEligibleForPage", () => {
   });
 
   it("refuses every role on an admin-only page", () => {
-    const all: GroupMapRole[] = ["MEMBER", "UPL", "APR", "DEL", "DELS", "GLOBAL", "SEGVIEW", "HC", "ENTRY"];
+    // DERIVED, not hand-listed. The literal list this replaced had gone stale twice: it still
+    // named the retired "HC" role after it was split into UPLHC/APRHC, and it had never been
+    // updated for SHARE — so "every role" was quietly testing all but one of them, and the one it
+    // missed is the widest in the system.
+    const all: GroupMapRole[] = [...SELECTABLE_ROLES, "ENTRY", "SHARE"];
     for (const role of all) {
       expect(isRoleEligibleForPage("Bulk-Upload.aspx", role)).toBe(false);
     }

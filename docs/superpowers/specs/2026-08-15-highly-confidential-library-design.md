@@ -108,8 +108,16 @@ for precisely this reason on 2026-08-14.
 `_UPL_HIGHLY_CONFIDENTIAL` and `_APR_HIGHLY_CONFIDENTIAL`, because that is the form the client wrote
 and an administrator will type it.
 
-**The name builder suggests the short form**, for consistency with `_UPL`/`_APR`/`_DEL` and because
-SharePoint group names are already long at four tiers.
+**The name builder suggests the LONG form** — `GHO_GF_CORU_UPL_HIGHLY_CONFIDENTIAL`, exactly as the
+client wrote it. An earlier draft of this spec said the short one, which was wrong on both counts:
+`suffixForRole` already emits the long spelling for every other role (`_UPLOADER`,
+`_DELETER_DOCUMENTS`), so the short form would have made HC the one inconsistent case, and it is not
+the form the client used.
+
+**Precedence between the spellings is handled by the existing length sort, not by declaration order.**
+`_UPL_HC` (7 characters) is tested before `_UPL` (4) and before `_HC` (3), so a group named
+`…_UPL_HC` can never parse as a plain uploader. Worth stating because getting it wrong grants HC
+clearance to nobody while the Group Map still reads entirely correctly.
 
 **Both roles are supersets.** An HC uploader files at *any* level; an HC approver approves in *either*
 library. The separation the client asked for runs the other way: plain `UPL` and `APR` reach the HC

@@ -28,7 +28,7 @@ import { setSiteEntryName } from "./naming";
 
 describe("personas", () => {
   it("never invents a bundle group — every persona is a set of atomic roles", () => {
-    const atomic = ["MEMBER", "UPL", "APR", "DEL", "DELS", "SEGVIEW", "GLOBAL", "HC", "SHARE"];
+    const atomic = ["MEMBER", "UPL", "APR", "DEL", "DELS", "SEGVIEW", "GLOBAL", "SHARE", "UPLHC", "APRHC"];
     for (const p of PERSONAS) {
       expect(p.roles.length).toBeGreaterThan(0);
       for (const r of p.roles) expect(atomic).toContain(r);
@@ -75,9 +75,13 @@ describe("personas", () => {
   });
 
   it("keeps Head of Unit to approve + delete pending, unit-scoped", () => {
+    // TWO since 2026-08-15: the ordinary Head of Unit, and the Highly Confidential one. Separate
+    // personas rather than one with a flag, because the client's whole reason for an HC approver
+    // group was that "not all approver can see HC files" — a variant shipped alongside the plain one
+    // would defeat that on the first careless click.
     const hou = PERSONAS.filter((p) => p.family === "Head of Unit");
-    expect(hou.length).toBe(1);
-    expect(hou[0].scope).toBe("unit");
+    expect(hou.map((p) => p.key)).toEqual(["hou", "hou_hc"]);
+    for (const p of hou) expect(p.scope).toBe("unit");
     // 2026-08-09: MEMBER dropped (APR now carries Documents read by itself) and DELS added —
     // the client's "they should have the power to delete" pending or rejected files.
     // 2026-08-15: UPL, DEL and SHARE added. DEL is no longer the department head's alone —
@@ -85,6 +89,9 @@ describe("personas", () => {
     // only approve what they can perform. The two deletes are still kept apart by LIBRARY_ROLES,
     // which is where that separation actually lives; the model no longer asserts it here.
     expect(hou[0].roles).toEqual(["APR", "DELS", "UPL", "DEL", "SHARE"]);
+    // The plain Head of Unit reaches NO HC library. That absence is the feature.
+    expect(hou[0].roles).not.toContain("APRHC");
+    expect(hou[0].roles).not.toContain("UPLHC");
   });
 
   it("scopes every persona below C-Level and Head of Department to the unit", () => {
@@ -142,25 +149,42 @@ describe("personas", () => {
     expect(personaByKey("pic")?.roles).toEqual(["UPL", "DELS"]);
   });
 
-  it("offers exactly one PIC persona, with no confidentiality variants", () => {
-    // Confirmed 2026-08-07: any PIC may upload at ANY confidentiality level, all three.
-    // Confidentiality is metadata the uploader picks on the form; it is not a permission,
-    // so it cannot produce a second PIC persona. The old "Highly Confidential only" entry
-    // is gone rather than greyed out — a picker row nobody can ever choose is a question
-    // the client asks once and gets answered every time.
+  it("offers two PIC personas — ordinary, and Highly Confidential cleared", () => {
+    // REVERSED 2026-08-15, and worth stating precisely, because the old rule was right for the
+    // reason it gave. "Confidentiality is metadata, not a permission" still holds for every level
+    // EXCEPT the one routing to the HC library pair: that level is a different DESTINATION, and a
+    // destination is a permission. So there is exactly one clearance variant, not one per level.
+    //
+    // The client's three-PIC document is still wrong for the reason it always was — pic2 and pic3
+    // collapse into pic — so those keys stay absent.
     const pics = PERSONAS.filter((p) => p.family === "PIC");
-    expect(pics.length).toBe(1);
+    expect(pics.map((p) => p.key)).toEqual(["pic", "pic_hc"]);
     expect(pics[0].roles).toEqual(["UPL", "DELS"]);
-    expect(pics[0].unavailable).toBeUndefined();
+    expect(pics[1].roles).toEqual(["UPLHC", "DELS"]);
+    for (const p of pics) expect(p.unavailable).toBeUndefined();
     expect(personaByKey("pic2")).toBeUndefined();
     expect(personaByKey("pic3")).toBeUndefined();
   });
 
-  it("keeps HC out of every persona and out of the role picker", () => {
-    // The role string survives for the Phase 2 HC-library work on feat/hc-libraries, but
-    // nothing offers it: no persona, and not the picker.
+  it("never puts a plain uploader and an HC uploader on the same persona", () => {
+    // UPLHC is a SUPERSET — it covers the normal approval library too — so carrying both is not
+    // wider access, it is two group memberships to keep in step through a term rename. One person,
+    // one group, as everywhere else since 2026-08-09.
+    for (const p of PERSONAS) {
+      if (p.roles.indexOf("UPLHC") !== -1) expect(p.roles).not.toContain("UPL");
+      if (p.roles.indexOf("APRHC") !== -1) expect(p.roles).not.toContain("APR");
+    }
+  });
+
+  it("has retired the bare HC role in favour of UPLHC and APRHC", () => {
+    // The old `HC` belonged to the superseded 2026-07-16 design, where HC was a secured subfolder
+    // and a group was simply "cleared". With two libraries and two sides that word is ambiguous —
+    // cleared to upload, or to approve? — so the role now says which. Asserted because a stray "HC"
+    // row would match no library and grant nothing, silently.
     for (const p of PERSONAS) expect(p.roles).not.toContain("HC");
     expect(SELECTABLE_ROLES).not.toContain("HC");
+    expect(SELECTABLE_ROLES).toContain("UPLHC");
+    expect(SELECTABLE_ROLES).toContain("APRHC");
   });
 
   it("covers all four families", () => {
@@ -179,8 +203,26 @@ describe("roleFromGroupName — DEL and HC suffixes", () => {
     expect(roleFromGroupName("DMS_GHO_GF_CORU_DEL")).toBe("DEL");
   });
 
-  it("derives HC from an _HC suffix, so a Phase 2 group is not misread as MEMBER", () => {
-    expect(roleFromGroupName("DMS_GHO_GF_CORU_HC")).toBe("HC");
+  it("derives the HC roles from either spelling the client might type", () => {
+    // Both accepted: the long form is what the client wrote, the short one is what an administrator
+    // types when the name is already long at four tiers.
+    expect(roleFromGroupName("GHO_GF_CORU_UPL_HIGHLY_CONFIDENTIAL")).toBe("UPLHC");
+    expect(roleFromGroupName("GHO_GF_CORU_APR_HIGHLY_CONFIDENTIAL")).toBe("APRHC");
+    expect(roleFromGroupName("GHO_GF_CORU_UPL_HC")).toBe("UPLHC");
+    expect(roleFromGroupName("GHO_GF_CORU_APR_HC")).toBe("APRHC");
+  });
+
+  it("tests the HC suffix BEFORE the plain one — the length sort is load-bearing", () => {
+    // "..._UPL_HC" ends with "_HC" AND with "_UPL". Matching the shorter first would parse an HC
+    // uploader as a plain one: HC clearance granted to nobody, and the list still reading correctly.
+    expect(roleFromGroupName("GHO_GF_CORU_UPL_HC")).not.toBe("UPL");
+    expect(roleFromGroupName("GHO_GF_CORU_APR_HC")).not.toBe("APR");
+  });
+
+  it("reads a legacy bare _HC group as an HC UPLOADER", () => {
+    // Under the superseded design such a group was the unit's HC-cleared members — its uploaders.
+    // Falling through to MEMBER instead would grant plain Read at whatever tier its row sits on.
+    expect(roleFromGroupName("DMS_GHO_GF_CORU_HC")).toBe("UPLHC");
   });
 
   it("does not mistake a unit whose name merely ends in those letters", () => {
@@ -365,7 +407,9 @@ describe("normalizeScope — Choice column shapes", () => {
 
 describe("STAGING_FACING_ROLES", () => {
   it("lists exactly the roles that act on Staging", () => {
-    expect(STAGING_FACING_ROLES).toEqual(["UPL", "APR", "DELS"]);
+    // UPLHC and APRHC joined 2026-08-15: both face the normal approval library as well as the HC
+    // one, so a persona carrying either belongs on the approval-library side of the toggle.
+    expect(STAGING_FACING_ROLES).toEqual(["UPL", "APR", "DELS", "UPLHC", "APRHC"]);
   });
 
   // The isolation rule: a viewer group reaching Staging reads other people's unapproved
@@ -466,8 +510,10 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
     //
     // The exact set still matters. DELS is the power to delete pending work, so anyone ELSE
     // acquiring it is a silent grant.
+    // Later the same day: the HC variants join, for the same reasons as their plain counterparts.
+    // The exact set is still what matters.
     const withStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELS") !== -1);
-    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou", "pic"]);
+    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou", "hou_hc", "pic", "pic_hc"]);
   });
 
   it("keeps the PIC to upload alone", () => {
@@ -494,7 +540,7 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
   // accidental grant this system has.
   it("puts exactly Head of Unit and PIC on the approval-library side of the toggle", () => {
     const staging = PERSONAS.filter(personaTouchesStaging).map((p) => p.key);
-    expect(staging.sort()).toEqual(["hou", "pic"]);
+    expect(staging.sort()).toEqual(["hou", "hou_hc", "pic", "pic_hc"]);
   });
 
   it("keeps every C-Level and viewer persona off the approval-library side", () => {
@@ -520,7 +566,7 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
     const both = PERSONAS.filter(
       (p) => p.roles.indexOf("DEL") !== -1 && p.roles.indexOf("DELS") !== -1,
     );
-    expect(both.map((p) => p.key)).toEqual(["hou"]);
+    expect(both.map((p) => p.key)).toEqual(["hou", "hou_hc"]);
   });
 
   it("keeps C-Level and Head of Department off every Staging role", () => {
