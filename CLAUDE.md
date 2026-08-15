@@ -1081,6 +1081,10 @@ permission level do not exist yet, so **nothing works until reconciliation is re
   universal. **Revoke is spec'd (§5.3) and NOT yet built**, so the count currently only grows.
 - Requests are raised from **My Submissions**, on an **approved** file's detail view only — pending and
   rejected files are still in the approval library, where a PIC holds Delete and needs no permission.
+- 📄 **Client-facing note, ready to show: `docs/client/deletion-and-share-requests.md`.** Carries the
+  six things they must be told (HoU self-approval, HoU as sharing authority, the un-interceptable Share
+  button, the external-sharing assumption, shares being permanent with no revoke yet, and that this
+  changes deleting and not *seeing*), plus the two prerequisites and four open questions.
 
 ## My Submissions (2026-08-14, spec `2026-08-14-my-submissions-design.md`)
 Client, for the uploaders: it is difficult to track what you uploaded. Web part **`My Submissions`**
