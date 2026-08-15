@@ -1601,6 +1601,172 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   /* ---------- Upload ------------------------------------------------------ */
 
+  /**
+   * Per-file required fields, checked for EVERY staged file rather than only the one on screen.
+   *
+   * Returns the missing field names, prefixed with the file when there is more than one — "please
+   * complete: Vendor/Customer Name" is unhelpful when four files are staged and one of them is short.
+   */
+  const missingForFile = (sf: StagedFile, many: boolean): string[] => {
+    const meta = sf.id === activeFileId ? captureEditor() : sf.meta;
+    const out: string[] = [];
+    if (!(meta.documentDate ?? "")) out.push("Document Date");
+    if (!(meta.confidentiality ?? "")) out.push("Confidential Level");
+    // The three name parts are required so every saved file carries the full
+    // [Project] - [Vendor] - [Document Name] - [Date] shape. composeUploadBase drops blank parts, so
+    // leaving these optional silently produces a shorter name than the convention promises — and after
+    // the fact a shortened name is indistinguishable from a deliberate one.
+    if (!(meta.docName ?? "").trim()) out.push("Document Name");
+    if (!(meta.projectName ?? "").trim()) out.push("Project Name");
+    if (!(meta.vendor ?? "").trim()) out.push("Vendor/Customer Name");
+    return many ? out.map((n) => `${sf.file.name}: ${n}`) : out;
+  };
+
+  /**
+   * Stage the current draft as a batch.
+   *
+   * The DESTINATION IS SNAPSHOT HERE, not referenced. By Upload the pickers describe whatever batch is
+   * being edited then, so a live read would write batch 1 into batch 3's department — silently, into a
+   * folder that exists and looks correct.
+   *
+   * What is snapshot is the LEAF TERM ID, never the resolved folder URL. Resolving the folder from its
+   * term at upload time is what makes this rename-proof today; freezing a URL at save would quietly
+   * undo that for any folder renamed in between.
+   */
+  const saveBatch = (): boolean => {
+    const files = commitEditor(draftFiles);
+    if (files.length === 0) {
+      showToast("Add at least one document to this batch.", "error");
+      return false;
+    }
+
+    const m = activeMode();
+    const missing: string[] = [];
+    (m?.levels ?? []).forEach((lvl, i) => {
+      if (!levelValues[i]) missing.push(lvl.label);
+    });
+    missing.push(...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing);
+    const many = files.length > 1;
+    for (const sf of files) missing.push(...missingForFile(sf, many));
+    if (missing.length > 0) {
+      showToast(`Please complete: ${missing.join(", ")}.`, "error");
+      return false;
+    }
+
+    // Same block as before, still checked here: a rename can turn an allowed file into a name whose
+    // extension no longer matches, and the composed name is what actually gets sent.
+    const allowed = settings.allowedFileTypes;
+    if (allowed.kind === "none") {
+      showToast(NO_TYPES_MESSAGE, "error");
+      return false;
+    }
+    for (const sf of files) {
+      const fn = sf.finalName ?? sf.file.name;
+      if (!allowed.types.some((ext) => fn.toLowerCase().endsWith(ext))) {
+        showToast(`${fn}: file type not allowed. Allowed: ${allowed.types.join(", ")}`, "error");
+        return false;
+      }
+    }
+
+    if (!m || m.levels.length === 0) {
+      showToast("No upload mode configured.", "error");
+      return false;
+    }
+    const chainError = validateChain(m.chain ?? m.levels ?? []);
+    if (chainError) {
+      showToast(
+        `The folder structure for this segment is not set up correctly: ${chainError.message} ` +
+          `Ask an administrator to check the DMS Config mode row.`,
+        "error",
+      );
+      return false;
+    }
+
+    const plan = tierPlan();
+    if (plan.unresolved.length > 0) {
+      showToast(
+        `Still checking ${plan.unresolved.join(" and ")} for this unit. ` +
+          `If this does not clear, reload the page before saving this batch.`,
+        "error",
+      );
+      return false;
+    }
+    const { segments } = buildOnDemandSegments(plan.tiers, tierSelections());
+
+    const leafIdx = m.levels.length - 1;
+    const leafTerm = (levelChoices[leafIdx] ?? []).find((o) => o.id === levelValues[leafIdx]);
+    if (!leafTerm) {
+      showToast("Please choose all folder levels before saving this batch.", "error");
+      return false;
+    }
+
+    // Level label/GUID pairs, exactly as the single-file path built them.
+    const levelSelections = (m.levels ?? []).map((lvl, i) => {
+      const opt = (levelChoices[i] ?? []).find((o) => o.id === levelValues[i]);
+      return {
+        column: lvl.column,
+        label: opt?.label ?? "",
+        id: opt?.id ?? "",
+        labelCol: lvl.labelCol,
+        tidCol: lvl.tidCol,
+      };
+    });
+    levelSelections.unshift({
+      column: "BusinessSegment",
+      label: m.label,
+      id: m.termSetGuid,
+      labelCol: undefined,
+      tidCol: undefined,
+    });
+
+    // Below-Unit tier metadata. Only APPLICABLE tiers write: a unit with no subunits leaves SubUnit
+    // empty rather than storing a value from some other unit's list.
+    const tierFormValues: Array<{ FieldName: string; FieldValue: string }> = [];
+    plan.tiers.forEach((t, i) => {
+      const id = tierValues[t.column] ?? "";
+      const opts = tierOptions(t, plan.parents[i]);
+      const opt = opts.find((o) => o.id === id);
+      const col = t.labelCol ?? t.column;
+      if (!col || !opt) return;
+      if (t.tidCol) {
+        tierFormValues.push({ FieldName: col, FieldValue: opt.label });
+        tierFormValues.push({ FieldName: t.tidCol, FieldValue: opt.id });
+      } else {
+        tierFormValues.push({ FieldName: col, FieldValue: toTaxValue(opts, id) });
+      }
+    });
+
+    const destination: BatchDestination = {
+      leafTermId: leafTerm.id,
+      leafLabel: leafTerm.label,
+      segments,
+      levelSelections,
+      tierFormValues,
+    };
+
+    const b: Batch = {
+      id: nextId("b"),
+      segmentKey: m.key,
+      chainSignature: chainSignature(m.chain ?? m.levels ?? []),
+      pathLabels: [...levelSelections.slice(1).map((l) => l.label), ...segments],
+      destination,
+      files,
+    };
+    if (!canSaveBatch(b)) {
+      // The only remaining reason is an internal name clash, which the rows already flag.
+      showToast("Two documents in this batch would be saved under the same name.", "error");
+      return false;
+    }
+
+    setBatches([...batches, b]);
+    setDraftFiles([]);
+    setActiveFileId("");
+    setFile(undefined);
+    resetForm();
+    showToast(`Batch saved — ${b.files.length} document${b.files.length === 1 ? "" : "s"} ready.`, "success");
+    return true;
+  };
+
   const handleUpload = async (): Promise<void> => {
     const missing: string[] = [];
     if (!file) missing.push("File");
