@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
-import { SPHttpClient } from "@microsoft/sp-http";
+import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IApprovalDocumentProps } from "./IApprovalDocumentProps";
 import {
   buildQueue,
@@ -11,7 +11,7 @@ import {
   QueueEntry as QueueEntryOf,
 } from "../../../shared/approvalQueue";
 import { previewTarget } from "../../../shared/filePreview";
-import { libraryTitle, libraryUrlSegment } from "../../../shared/naming";
+import { cachedHcLibraries, hcAvailable, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -26,8 +26,8 @@ import { primeNames } from "../../../shared/spNaming";
 // evaluated at import time, before priming, and silently freeze the legacy "Staging".
 const DOCUMENTS_URL_SEGMENT = "Shared Documents";
 
-/** getbytitle() needs the title; path splitting needs the URL segment. They differ. */
-const libTitleEnc = (): string => encodeURIComponent(libraryTitle());
+/** Which library the document being reviewed lives in. */
+type ApprovalLib = "normal" | "hc";
 
 interface IFileItem {
   ID: number;
@@ -183,6 +183,44 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
   const webUrl = context.pageContext.web.absoluteUrl;
 
+  /* ---------- Which approval library ------------------------------------------
+     Spec: docs/superpowers/specs/2026-08-15-highly-confidential-library-design.md
+
+     This page reviews ONE document, reached by ?itemId=. Item ids are per-LIST, so that parameter
+     alone cannot say which library the document is in — and pointing the read at the wrong one
+     either 404s or, worse, opens a DIFFERENT document that happens to share the id.
+
+     Resolved two ways, explicit first:
+       1. `?lib=hc` on the link. The HC library's Name-column formatting should carry it, exactly as
+          the normal library's carries the link to this page at all.
+       2. Failing that, the normal library is tried and the HC one only if the item is not there.
+          Normal-first preserves today's behaviour precisely, so an id present in both resolves the
+          way it always has.
+
+     A REF, not just state: the helpers below are called inside the same async pass that resolves
+     the library, and state set mid-pass would not be visible to them. */
+  const initialLib: ApprovalLib =
+    new URLSearchParams(window.location.search).get("lib") === "hc" ? "hc" : "normal";
+  const [lib, setLib] = useState<ApprovalLib>(initialLib);
+
+  /* Plain state, no ref. `loadItem` is the only place that needs the resolved value before a render
+     happens, and it passes it explicitly to the two loads it makes — so nothing here has to be
+     mutated mid-pass, and every later render and callback reads the settled state. */
+
+  /** The approval library holding this document. Falls back to the normal one if HC never resolved. */
+  const libTitleOf = (which: ApprovalLib): string =>
+    which === "hc" ? cachedHcLibraries()?.approval.title ?? libraryTitle() : libraryTitle();
+  const libSegOf = (which: ApprovalLib): string =>
+    which === "hc"
+      ? cachedHcLibraries()?.approval.urlSegment ?? libraryUrlSegment()
+      : libraryUrlSegment();
+  const libTitle = (): string => libTitleOf(lib);
+  const libSeg = (): string => libSegOf(lib);
+  const libTitleEnc = (): string => encodeURIComponent(libTitle());
+  /** Where an approved document lands — the OTHER half of whichever pair this one belongs to. */
+  const approvedLibTitle = (): string =>
+    lib === "hc" ? cachedHcLibraries()?.documents.title ?? "Documents" : "Documents";
+
   const getItemId = (): number | null => {
     const p = new URLSearchParams(window.location.search);
     const id = p.get("itemId");
@@ -192,7 +230,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   // Back link → the file's own folder in Staging (not the library root), so the
   // approver lands where the document lives instead of having to drill back in.
   const backUrl = (): string => {
-    const base = `${webUrl}/${encodeURIComponent(libraryUrlSegment())}/Forms/AllItems.aspx`;
+    const base = `${webUrl}/${encodeURIComponent(libSeg())}/Forms/AllItems.aspx`;
     const fileRef = item?.File?.ServerRelativeUrl;
     if (!fileRef) return base;
     const folder = fileRef.slice(0, fileRef.lastIndexOf("/"));
@@ -201,10 +239,12 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
   /** Per-item metadata labels. Cannot be batched into the queue query — FieldValuesAsText is
    *  a per-item endpoint — so it is the one thing a swap has to wait for. */
-  const loadFieldText = async (itemId: number): Promise<void> => {
+  // `which` defaults to the settled state; loadItem passes it explicitly, because on the first pass
+  // the library has only just been resolved and the state has not repainted yet.
+  const loadFieldText = async (itemId: number, which: ApprovalLib = lib): Promise<void> => {
     try {
       const textRes = await context.spHttpClient.get(
-        `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items(${itemId})/FieldValuesAsText`,
+        `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items(${itemId})/FieldValuesAsText`,
         SPHttpClient.configurations.v1,
       );
       if (textRes.ok) setFieldText(await textRes.json() as IFieldText);
@@ -224,10 +264,13 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * feature. The queue is a convenience on top of a page that already works; failing to build it
    * must never block the decision the approver came to make.
    */
-  const loadQueue = async (current: IFileItem): Promise<void> => {
+  const loadQueue = async (current: IFileItem, which: ApprovalLib = lib): Promise<void> => {
     try {
+      // THE QUEUE STAYS INSIDE ONE LIBRARY. Merging the two would walk an HC approver from a Highly
+      // Confidential document straight into an ordinary one and back, and — worse — would show a
+      // plain approver nothing while quietly counting HC documents they cannot open.
       const url =
-        `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items` +
+        `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items` +
         `?$filter=OData__ModerationStatus%20eq%202` +
         `&$expand=File,Author` +
         `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl` +
@@ -252,11 +295,27 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       return;
     }
     try {
-      const url =
-        `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items(${itemId})` +
-        `?$expand=File,Author` +
-        `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl`;
-      const res = await context.spHttpClient.get(url, SPHttpClient.configurations.v1);
+      const read = async (which: ApprovalLib): Promise<SPHttpClientResponse> =>
+        context.spHttpClient.get(
+          `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items(${itemId})` +
+            `?$expand=File,Author` +
+            `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl`,
+          SPHttpClient.configurations.v1,
+        );
+      let where: ApprovalLib = lib;
+      let res = await read(where);
+      // Not in the library the link implied. On a site with Highly Confidential that is the ordinary
+      // case for an HC document whose link carried no `lib=hc`, so try the other one before giving
+      // up: an approver who cannot open the document cannot approve it, and an HC document that is
+      // never approved never reaches the people it was filed for.
+      if (!res.ok && where === "normal" && hcAvailable()) {
+        const hcRes = await read("hc");
+        if (hcRes.ok) {
+          where = "hc";
+          res = hcRes;
+          setLib("hc");
+        }
+      }
       if (!res.ok) {
         const body = await res.text().catch(() => "");
         throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
@@ -264,10 +323,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       const data: IFileItem = await res.json();
       setItem(data);
       setDecision(statusToDecision(data.OData__ModerationStatus));
-      await loadFieldText(itemId);
+      await loadFieldText(itemId, where);
       // After the document, never before: a queue failure must not stop the page loading, and
       // the current item has to be known so it can be placed in the queue.
-      await loadQueue(data);
+      await loadQueue(data, where);
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : "Could not load this document.");
     } finally {
@@ -354,7 +413,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
     // Swap the library segment, anchored on the web-relative prefix so a folder that
     // happens to be named "Staging" deeper in the tree is not mangled.
-    const prefix = `${webSru}/${libraryUrlSegment()}/`;
+    const prefix = `${webSru}/${libSeg()}/`;
     if (unitStaging.toLowerCase().indexOf(prefix.toLowerCase()) !== 0) {
       return { ok: false, reason: "could not work out the Documents path" };
     }
@@ -480,7 +539,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         // Search by filename so we don't need to guess the exact folder path.
         const safeLeaf = item.FileLeafRef.replace(/'/g, "''");
         const searchRes = await context.spHttpClient.get(
-          `${webUrl}/_api/web/lists/getbytitle('Documents')/items?$filter=FileLeafRef eq '${safeLeaf}'&$select=FileRef&$top=1`,
+          `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(approvedLibTitle())}')/items?$filter=FileLeafRef eq '${safeLeaf}'&$select=FileRef&$top=1`,
           SPHttpClient.configurations.v1
         );
         if (searchRes.ok) {
@@ -510,7 +569,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         // Remove from Documents — file is no longer approved so readers shouldn't see it.
         const safeLeaf = item.FileLeafRef.replace(/'/g, "''");
         const searchRes = await context.spHttpClient.get(
-          `${webUrl}/_api/web/lists/getbytitle('Documents')/items?$filter=FileLeafRef eq '${safeLeaf}'&$select=FileRef&$top=1`,
+          `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(approvedLibTitle())}')/items?$filter=FileLeafRef eq '${safeLeaf}'&$select=FileRef&$top=1`,
           SPHttpClient.configurations.v1
         );
         if (searchRes.ok) {
@@ -679,7 +738,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   // the deepest three path segments — Year, Document Type, and the filename — which are
   // shown separately below and are not part of the org location.
   const orgLocation = ((): string => {
-    const after = item.File.ServerRelativeUrl.split(`/${libraryUrlSegment()}/`)[1];
+    const after = item.File.ServerRelativeUrl.split(`/${libSeg()}/`)[1];
     if (!after) return "—";
     const parts = after.split("/");
     const org = parts.slice(0, Math.max(0, parts.length - 3));
@@ -913,7 +972,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" as const }}>
               {(() => {
                 // Segment › … › Unit, from the live Staging path (segment-agnostic).
-                const after = item.File.ServerRelativeUrl.split(`/${libraryUrlSegment()}/`)[1];
+                const after = item.File.ServerRelativeUrl.split(`/${libSeg()}/`)[1];
                 const parts = after ? after.split('/') : [];
                 const crumbs = parts.slice(0, Math.max(0, parts.length - 3));
                 return crumbs.map((crumb, i) => (

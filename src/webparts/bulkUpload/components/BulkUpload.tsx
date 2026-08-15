@@ -46,7 +46,13 @@ import {
   readAllowedFileTypesField,
   resolveAllowedFileTypes,
 } from "../../../shared/allowedFileTypes";
-import { cachedListTitle, LIST_SUFFIX, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
+import {
+  RoutingContext,
+  effectiveHcLevel,
+  isHcLevel,
+  selectableLevels,
+} from "../../../shared/hcRouting";
+import { cachedHcLibraries, hcAvailable, cachedListTitle, LIST_SUFFIX, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 
 /* ----------------------------------------------------------------------------
@@ -324,6 +330,8 @@ type DmsSettings = {
   // Term GUID of the ONE confidentiality level that offers the Legally Privileged
   // tick. Empty = never offered. Mirrors Form.tsx.
   legallyPrivilegedFor: string;
+  /** The confidentiality label routing to the HC pair. Blank = not configured; see effectiveHcLevel. */
+  hcConfidentialityLevel: string;
   allowedFileTypes: AllowedFileTypes;
 };
 
@@ -348,6 +356,8 @@ const DEFAULT_SETTINGS: DmsSettings = {
   stagingLibrary: "Staging",
   // Empty by default: the tick appears only once a site sets legallyPrivilegedFor.
   legallyPrivilegedFor: "",
+  // Blank, and always read together with hcAvailable() — see effectiveHcLevel.
+  hcConfidentialityLevel: "",
   // "unknown", not "configured": reaching this constant means DMS Config could not
   // be read, so the UI must not present these as configured values. Mirrors Form.tsx.
   allowedFileTypes: { kind: "unknown", types: FALLBACK_FILE_TYPES },
@@ -956,6 +966,8 @@ export default function BulkUpload({
       })(),
       legallyPrivilegedFor:
         get("legallyPrivilegedFor") ?? DEFAULT_SETTINGS.legallyPrivilegedFor,
+      hcConfidentialityLevel:
+        get("hcConfidentialityLevel") ?? DEFAULT_SETTINGS.hcConfidentialityLevel,
       // SettingValue is deliberately NOT consulted for file types any more —
       // AllowedFileTypes is the single source of truth. Spec 2026-07-30 §3.
       allowedFileTypes: resolveAllowedFileTypes(rawFileTypes),
@@ -1379,6 +1391,35 @@ export default function BulkUpload({
   //   /sites/<web>/Staging/<rest>  ->  /sites/<web>/Shared Documents/<rest>
   // Anchored on the web-relative prefix rather than a global replace, so a
   // folder that happens to be named "Staging" deeper in the tree is not mangled.
+  /* ---------- Highly Confidential ------------------------------------------
+     Spec: docs/superpowers/specs/2026-08-15-highly-confidential-library-design.md
+
+     This page writes STRAIGHT into the approved library, bypassing approval entirely — so for a
+     Highly Confidential document the destination is `HC Documents`, not `Documents`.
+
+     NO WRITE PROBE HERE, unlike the upload form, and that is deliberate rather than an omission.
+     This page is admin-only (`pageAccessPolicy` → adminOnly) and is already existence-gated only,
+     for the documented reason that an AddListItems probe against Documents would empty the form for
+     every PIC — `UPL` holds Read there by design. Admins are exempt from the segment probes
+     elsewhere for the same reason. A write they are not entitled to fails LOUDLY here: the file
+     lands nowhere and the run reports it per file. */
+  const hcCtx = (): RoutingContext => ({
+    hcLevel: effectiveHcLevel(settings.hcConfidentialityLevel, hcAvailable()),
+    hcAvailable: hcAvailable(),
+    canWriteHc: hcAvailable(),
+  });
+
+  /** True when the chosen level routes to the HC pair. */
+  const uploadingHc = (): boolean =>
+    isHcLevel(
+      options.confidentiality.find((o) => o.id === confidentiality)?.label ?? "",
+      hcCtx(),
+    );
+
+  /** The approved-side library for this upload — the title metadata is written against. */
+  const targetListTitle = (): string =>
+    uploadingHc() ? cachedHcLibraries()?.documents.title ?? DOCUMENTS_LIST_TITLE : DOCUMENTS_LIST_TITLE;
+
   const toDocumentsPath = (stagingSru: string): string | null => {
     // URL SEGMENT, not the title: this slices a server-relative path. Since the rename the
     // two differ ("Approval Document" vs "/ApprovalDocument"), and using the title here
@@ -1389,7 +1430,13 @@ export default function BulkUpload({
       return null;
     }
     const rest = stagingSru.slice(prefix.length);
-    return `${webSru}/${DOCUMENTS_URL_SEGMENT}/${rest}`;
+    // The HC pair mirrors the normal one, so only the library segment changes. Falls back to the
+    // ordinary segment ONLY when HC never resolved, which `uploadingHc` already rules out — a fall
+    // back that could actually happen would file a Highly Confidential document in the open library.
+    const segment = uploadingHc()
+      ? cachedHcLibraries()?.documents.urlSegment ?? DOCUMENTS_URL_SEGMENT
+      : DOCUMENTS_URL_SEGMENT;
+    return `${webSru}/${segment}/${rest}`;
   };
 
   /* ---------- Form digest (XHR upload path) -------------------------------- */
@@ -1729,7 +1776,7 @@ export default function BulkUpload({
         const item = await itemRes.json();
 
         const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
-          `${siteUrl}/_api/web/lists/getbytitle('${DOCUMENTS_LIST_TITLE}')/items(${item.Id})/validateUpdateListItem`,
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(targetListTitle())}')/items(${item.Id})/validateUpdateListItem`,
           SPHttpClient.configurations.v1,
           {
             headers: { "Content-Type": "application/json" },
@@ -2633,11 +2680,22 @@ export default function BulkUpload({
               onChange={(e) => setConfidentiality(e.target.value)}
             >
               <option value="">--</option>
-              {options.confidentiality.map((o) => (
-                <option key={o.id} value={o.id} title={o.label}>
-                  {o.label}
-                </option>
-              ))}
+              {/* Hidden rather than greyed out, as on the upload form. On a site with no HC
+                  libraries nothing is filtered and the level stays an ordinary label. */}
+              {(() => {
+                const ctx = hcCtx();
+                const keep = new Set(
+                  selectableLevels(options.confidentiality.map((o) => o.label), ctx)
+                    .map((l) => l.trim().toLowerCase()),
+                );
+                return options.confidentiality
+                  .filter((o) => keep.has((o.label ?? "").trim().toLowerCase()))
+                  .map((o) => (
+                    <option key={o.id} value={o.id} title={o.label}>
+                      {o.label}
+                    </option>
+                  ));
+              })()}
             </select>
           </div>
 
