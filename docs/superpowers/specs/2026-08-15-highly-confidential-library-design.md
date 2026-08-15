@@ -54,7 +54,21 @@ PIC may upload at any confidentiality level."* That stays true for every level *
 named by a new config row.
 
 A `DMS Config` setting row, `hcConfidentialityLevel`, holds the level label that routes to the HC
-pair. Default `Highly Confidential`.
+pair.
+
+**THE LIBRARIES DECIDE WHETHER ROUTING IS ON; THE ROW ONLY RENAMES THE LEVEL** (`effectiveHcLevel`).
+An earlier draft of this spec said "default `Highly Confidential`" flatly, which is wrong — and the
+opposite default is wrong too, instructively, in the other direction:
+
+- **Defaulting to `Highly Confidential` unconditionally** would HIDE that level on every site that has
+  not set up HC. There it is an ordinary metadata label any PIC has always been free to choose, so a
+  feature nobody enabled would quietly remove an existing option.
+- **Defaulting to blank unconditionally** would mean a site that created the libraries but forgot the
+  config row files Highly Confidential documents into the **normal** library — the exact failure this
+  design exists to prevent, arriving through a setting nobody knew they had to write.
+
+So: no HC libraries ⇒ no routing, and the level stays the plain label it has always been. Libraries
+present ⇒ routing on, with `Highly Confidential` as the default the client can rename.
 
 **A row rather than a constant, and a label rather than a term GUID.** The levels come from the
 `confidentiality` term set, which the client owns and renames; a constant would need a redeploy, and a

@@ -43,6 +43,31 @@ function norm(v: string | undefined): string {
   return (v ?? "").trim().toLowerCase();
 }
 
+/** The label assumed when a site has HC libraries but has not named the level. */
+export const DEFAULT_HC_LEVEL = "Highly Confidential";
+
+/**
+ * The level that actually routes, given the config row and whether the libraries exist.
+ *
+ * THE LIBRARIES DECIDE WHETHER HC ROUTING IS ON AT ALL; the config row only renames the level. Both
+ * simpler rules are wrong, in opposite and instructive ways:
+ *
+ * - Defaulting to `Highly Confidential` unconditionally would HIDE that level on every site that has
+ *   not set up HC — and there it is an ordinary metadata label any PIC has always been free to
+ *   choose. A feature nobody enabled would quietly remove an existing option.
+ * - Defaulting to blank unconditionally would mean a site that created the libraries but forgot the
+ *   config row files Highly Confidential documents into the NORMAL library. That is the exact
+ *   failure this design exists to prevent, arriving through a setting nobody knew they had to write.
+ *
+ * So: no libraries, no routing, and the level stays the plain label it has always been. Libraries
+ * present, routing on, with a sane default the client can rename.
+ */
+export function effectiveHcLevel(configured: string | undefined, libsAvailable: boolean): string {
+  const v = (configured ?? "").trim();
+  if (v.length > 0) return v;
+  return libsAvailable ? DEFAULT_HC_LEVEL : "";
+}
+
 /**
  * Is this the level that routes to Highly Confidential?
  *

@@ -1,6 +1,7 @@
 import {
   RoutingContext,
   canOfferHc,
+  effectiveHcLevel,
   isHcLevel,
   refuseReason,
   routeFor,
@@ -164,5 +165,34 @@ describe("refuseReason", () => {
     for (const ctx of cases) {
       expect(refuseReason("Highly Confidential", ctx)).toContain("Nothing has been uploaded");
     }
+  });
+});
+
+describe("effectiveHcLevel", () => {
+  it("routes nothing on a site with no HC libraries", () => {
+    // The level is an ordinary metadata label there, and always has been. Defaulting to
+    // "Highly Confidential" regardless would HIDE an existing option on every site that never
+    // asked for this feature.
+    expect(effectiveHcLevel("", false)).toBe("");
+    expect(effectiveHcLevel(undefined, false)).toBe("");
+  });
+
+  it("routes the default label once the libraries exist, config row or not", () => {
+    // The other half of the trap: defaulting to blank would let a site that created the libraries
+    // but forgot the config row file Highly Confidential documents into the NORMAL library.
+    expect(effectiveHcLevel("", true)).toBe("Highly Confidential");
+    expect(effectiveHcLevel(undefined, true)).toBe("Highly Confidential");
+  });
+
+  it("lets the config row rename the level", () => {
+    expect(effectiveHcLevel("Top Secret", true)).toBe("Top Secret");
+    expect(effectiveHcLevel("  Top Secret  ", true)).toBe("Top Secret");
+  });
+
+  it("answers which label routes, never whether anyone may use it", () => {
+    // Kept honest rather than clever: a configured level with no libraries still resolves, and
+    // canOfferHc is what refuses. Two questions, two functions.
+    expect(effectiveHcLevel("Top Secret", false)).toBe("Top Secret");
+    expect(canOfferHc({ hcLevel: "Top Secret", hcAvailable: false, canWriteHc: true })).toBe(false);
   });
 });
