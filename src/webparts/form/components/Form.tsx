@@ -2247,6 +2247,31 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                       parsed as UTC and lands on the previous day west of Greenwich. */}
                   <DatePicker
                     className="dms-datepicker"
+                    /* Styled through Fluent's OWN API, not CSS.
+                       Fluent generates its classes at runtime and injects them into <head> via
+                       merge-styles, re-inserting on re-render — so whether a stylesheet rule of ours
+                       or Fluent's own rule wins depends on insertion order at that moment. That is a
+                       race, and it is why the alignment held sometimes and not others. The `styles`
+                       prop is applied by the component itself and cannot lose it.
+
+                       `errorMessage: display none` matters most: that strip is reserved height under
+                       the field, and height on one column of a two-column row is what moved it. */
+                    styles={{ root: { margin: 0 } }}
+                    textField={{
+                      styles: {
+                        wrapper: { margin: 0 },
+                        // Copied from `.dms-field select, .dms-field input[type="text"]` above.
+                        fieldGroup: {
+                          height: 38,
+                          borderRadius: 10,
+                          borderColor: "#c8c8c8",
+                          background: "#fff",
+                          selectors: { ":hover": { borderColor: "#8a8886" } },
+                        },
+                        field: { fontFamily: "inherit", fontSize: 13, padding: "8px 10px" },
+                        errorMessage: { display: "none" },
+                      },
+                    }}
                     placeholder="Select a date"
                     ariaLabel="Document Date"
                     allowTextInput={false}
@@ -2522,20 +2547,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
         .dms-toast.error { background: #d13438; color: #fff; }
         .dms-toast.notice { background: #0f6c3f; color: #fff; }
-        /* Fluent brings its own field chrome. These values are COPIED from the rule above, not
-           approximated — 38px, 1px #c8c8c8, radius 10px — because a date field a couple of pixels
-           off its neighbour is the kind of thing that reads as sloppy without being obvious. */
-        .dms-datepicker .ms-TextField-fieldGroup { height: 38px; border: 1px solid #c8c8c8; border-radius: 10px; background: #fff; }
-        .dms-datepicker .ms-TextField-fieldGroup:hover { border-color: #8a8886; }
-        .dms-datepicker .ms-TextField-fieldGroup::after { border-radius: 10px; border-color: #0f6c3f; }
-        .dms-datepicker input { font: inherit; padding: 8px 10px; }
-        /* Fluent's wrapper adds its own block spacing, which offsets this field from the select
-           sharing its row. */
-        .dms-datepicker, .dms-datepicker .ms-TextField, .dms-datepicker .ms-TextField-wrapper { margin: 0; }
-        /* Fluent keeps a strip below the field for a validation message. Nothing can write one here —
-           the picker is click-only — so it is pure height, and height on one column of a two-column
-           row is exactly what pushed this field out of line. */
-        .dms-datepicker .ms-TextField-errorMessage { display: none; }
+        /* Deliberately NO .ms-* overrides here. They raced Fluent's runtime-injected styles and lost
+           at random; the date field is styled through its own styles prop instead.
+           (No backticks in this block — it is a template literal, and one would close it.) */
         .dms-toast-close { position: absolute; top: 10px; right: 12px; background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: .7; line-height: 1; }
         .dms-toast-close:hover { opacity: 1; }
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
