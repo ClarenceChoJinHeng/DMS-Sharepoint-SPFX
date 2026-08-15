@@ -275,7 +275,10 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
 };
 
 /**
- * Re-point the three custom levels at whatever prefix this site uses.
+ * Re-point the custom levels at whatever prefix this site uses.
+ *
+ * EVERY custom level must be listed below. A role left out keeps its literal default and silently
+ * grants nothing on a site using the other prefix — which is how SHARE shipped broken.
  *
  * MUTATES the map in place rather than replacing it, so the half-dozen existing readers
  * (`ROLE_TO_PERMISSION[g.role]`, the accepts() guard, the op counter) pick up the change with no
@@ -298,6 +301,11 @@ function applyPermissionPrefix(levelNames: string[]): void {
   ROLE_TO_PERMISSION.APR = `${prefix} Approve`;
   ROLE_TO_PERMISSION.DEL = `${prefix} Delete`;
   ROLE_TO_PERMISSION.DELS = `${prefix} Delete`;
+  // SHARE was added on 2026-08-15 hardcoded to the DMS name and MISSED here — so on a CRS site, which
+  // the live one is, reconciliation would hunt for a "DMS Share" definition that does not exist, grant
+  // nothing, and every approved share would then fail at the last step for want of Manage Permissions.
+  // Exactly the failure the comment on SHARE warns about, arriving through a different door.
+  ROLE_TO_PERMISSION.SHARE = `${prefix} Share`;
 }
 
 // Which roles each library accepts — the isolation rule that keeps viewers off
