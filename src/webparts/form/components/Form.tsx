@@ -2397,17 +2397,24 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
         .dms-staged { margin-top: 16px; }
         .dms-staged-head { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; }
-        .dms-staged-row { border: none; border-radius: 6px; margin-bottom: 6px; background: #fff; }
+        .dms-staged-row { border: none; border-radius: 6px; margin-bottom: 6px; background: #fff; overflow: hidden; }
         /* A CLASH keeps its tint. It is the one state on this row that must be visible without
            opening it — two files heading for the same saved name, which SharePoint would not warn
            about. With the borders gone the background is all that is left to carry it. */
         .dms-staged-row.clash { background: #fff8f0; }
-        .dms-staged-btn { display: flex; width: 100%; gap: 10px; align-items: center; background: rgba(250, 250, 250, 1); border: none; border-radius: 6px; font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
-        .dms-staged-row.clash .dms-staged-btn { background: #fff8f0; }
+        /* The tinted row is the padding box. Everything inside it — the header, the clash warning and
+           the open editor — is inset by the same 12px, so nothing sits flush against the tint. */
+        .dms-staged-head { display: flex; align-items: stretch; background: rgba(250, 250, 250, 1); border-radius: 6px; }
+        .dms-staged-row.clash .dms-staged-head { background: transparent; }
+        .dms-staged-btn { display: flex; flex: 1 1 auto; min-width: 0; gap: 10px; align-items: center; background: none; border: none; font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
         .dms-staged-btn .name { flex: 1 1 auto; font-size: 13px; word-break: break-word; }
         .dms-staged-btn .size { font-size: 11.5px; color: #6b7a71; }
         .dms-staged-btn .chev { font-size: 10px; color: #6b7a71; }
-        .dms-staged-del { display: inline-block; margin: 0 12px 10px; font-size: 12px; color: #a4262c; background: none; border: none; cursor: pointer; padding: 0; }
+        .dms-staged-x { flex: 0 0 auto; background: none; border: none; cursor: pointer; padding: 0 12px; font-size: 13px; line-height: 1; color: #8a8886; }
+        .dms-staged-x:hover:enabled { color: #a4262c; }
+        .dms-staged-x:disabled { cursor: not-allowed; opacity: .5; }
+        .dms-staged-body { padding: 4px 12px 12px; }
+        .dms-staged-row > .dms-batch-warn { padding: 0 12px 8px; margin-top: 6px; }
         .dms-btn { padding: 9px 24px; border-radius: 4px; cursor: pointer; font: inherit; font-size: 14px; border: 1px solid transparent; }
         .dms-btn.primary { background: #0f6c3f; color: #fff; }
         .dms-btn.primary:disabled { background: #9bbfaa; cursor: default; }
@@ -2824,11 +2831,36 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               const clash = draftCollisions.indexOf(sf.id) !== -1;
               return (
                 <div key={sf.id} className={`dms-staged-row${open ? " open" : ""}${clash ? " clash" : ""}`}>
-                  <button type="button" className="dms-staged-btn" onClick={() => selectFile(sf.id)}>
-                    <span className="name">{sf.finalName ?? sf.file.name}</span>
-                    <span className="size">{formatFileSize(sf.file.size)}</span>
-                    <span className="chev">{open ? "▲" : "▼"}</span>
-                  </button>
+                  {/* The remove control is a SIBLING of the toggle, not inside it: a button nested in a
+                      button is invalid HTML, and browsers resolve it by dropping one of the two. */}
+                  <div className="dms-staged-head">
+                    <button type="button" className="dms-staged-btn" onClick={() => selectFile(sf.id)}>
+                      <span className="name">{sf.finalName ?? sf.file.name}</span>
+                      <span className="size">{formatFileSize(sf.file.size)}</span>
+                      <span className="chev">{open ? "▲" : "▼"}</span>
+                    </button>
+                    {/* On EVERY row, not just the open one. Each row names its own file, so there is no
+                        ambiguity about what this removes — and requiring a file to be opened before it
+                        can be dropped is friction on the commonest correction: picked the wrong file. */}
+                    <button
+                      type="button"
+                      className="dms-staged-x"
+                      title={`Remove ${sf.file.name} from this batch`}
+                      aria-label={`Remove ${sf.file.name} from this batch`}
+                      disabled={busy}
+                      onClick={() => {
+                        const left = draftFiles.filter((x) => x.id !== sf.id);
+                        setDraftFiles(left);
+                        // Only move the editor if the row being removed was the one open in it.
+                        if (open) {
+                          setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
+                          if (left.length > 0) applyEditor(left[left.length - 1].meta);
+                        }
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
                   {clash && (
                     <p className="dms-batch-warn">
                       Another document in this batch would be saved under this same name. The saved name
@@ -2836,22 +2868,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     </p>
                   )}
                   {/* The editor belongs to the OPEN row. Only one row is open, so this renders once. */}
-                  {open && metaEditor}
-                  {open && (
-                    <button
-                      type="button"
-                      className="dms-link dms-staged-del"
-                      disabled={busy}
-                      onClick={() => {
-                        const left = draftFiles.filter((x) => x.id !== sf.id);
-                        setDraftFiles(left);
-                        setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
-                        if (left.length > 0) applyEditor(left[left.length - 1].meta);
-                      }}
-                    >
-                      Delete File
-                    </button>
-                  )}
+                  {open && <div className="dms-staged-body">{metaEditor}</div>}
                 </div>
               );
             })}
