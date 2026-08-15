@@ -253,6 +253,15 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // one role where a mistake is both quiet and wide: a SEGVIEW row wrongly accepted on
   // Staging hands one person every unapproved draft in an entire business segment.
   SEGVIEW: "Read",
+  // SHARE, 2026-08-15 — the right to grant someone else access, needed by whoever APPROVES a share
+  // request, because an approver can only approve what they can perform.
+  //
+  // "CRS Share" must contain Manage Permissions; nothing else in this table does, which is exactly
+  // why it is a separate level and a separate role. Verify it on the site rather than trusting the
+  // name — the same warning as CRS Approve and Approve Items, and with a worse failure: a level
+  // WITHOUT Manage Permissions leaves approvals failing at the last step, and one with too much
+  // hands a Head of Unit the ability to re-permission their whole unit.
+  SHARE: "DMS Share",
   // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
   // library at all — Limited Access on the parent chain lets a direct folder URL through but
   // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without
@@ -311,9 +320,12 @@ function applyPermissionPrefix(levelNames: string[]): void {
 // a PIC no longer needs the unit's base group just to read the approved archive. See
 // 2026-08-09-persona-driven-folder-access-design.md. DELS stays Staging-only: a Head of Unit
 // deletes PENDING work, never an approved document.
+// SHARE is DOCUMENTS-ONLY (2026-08-15). Sharing an unapproved draft would hand someone a document
+// nobody has approved yet — the isolation rule this table exists to hold. A share request can only
+// ever be raised against an approved document, so the approval library never needs it.
 const LIBRARY_ROLES: Record<LibTarget, string[]> = {
   Staging: ["UPL", "APR", "DELS"],
-  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR"],
+  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR", "SHARE"],
 };
 
 /**

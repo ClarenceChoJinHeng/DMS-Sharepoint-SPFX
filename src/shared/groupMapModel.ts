@@ -90,7 +90,15 @@ export type GroupMapRole =
   | "SEGVIEW"
   | "HC"
   | "ENTRY"
-  | "GLOBAL";
+  | "GLOBAL"
+  // SHARE, 2026-08-15. The right to grant SOMEONE ELSE access to a document — which is what makes a
+  // share-request approver able to carry out what they approve. Granting access needs Manage
+  // Permissions, and no role above carries it.
+  //
+  // Its OWN role, never a property of APR, because it is the widest thing in this table: a holder can
+  // give any access, to anyone the tenant allows, anywhere their grant reaches. Folded into an
+  // existing role it would spread silently the next time that role joined a persona.
+  | "SHARE";
 
 /** The role a library-entry row carries. Named so callers never spell it as a literal. */
 export const LIBRARY_ENTRY_ROLE: GroupMapRole = "ENTRY";
@@ -228,8 +236,10 @@ export const PERSONAS: Persona[] = [
   // downward. Listed anyway, because the capability is agreed and an admin who
   // cannot find it will assume it was forgotten.
   {
-    key: "clevel_global", family: "C-Level", scope: "segment", label: "Global — view everything",
-    roles: ["GLOBAL"],
+    key: "clevel_global", family: "C-Level", scope: "segment", label: "Global — view, delete + share everything",
+    // DEL and SHARE added 2026-08-15. NO LONGER VIEW-ONLY: a global C-Level deletes or shares any
+    // approved document anywhere, without asking anyone. The widest grant in this file.
+    roles: ["GLOBAL", "DEL", "SHARE"],
     summary: "Reads every segment, department and unit in the Documents library, down to Document Type. No Staging access, no upload, no approve.",
   },
 
@@ -237,8 +247,9 @@ export const PERSONAS: Persona[] = [
   // ROLE_TO_PERMISSION. Documents only, for the same reason as GLOBAL: a C-Level on Staging
   // would be reading an entire segment's unapproved drafts.
   {
-    key: "clevel_segment", family: "C-Level", scope: "segment", label: "Segment — view one business segment",
-    roles: ["SEGVIEW"],
+    key: "clevel_segment", family: "C-Level", scope: "segment", label: "Segment — view, delete + share one segment",
+    // As clevel_global, narrowed to one segment by the row's term.
+    roles: ["SEGVIEW", "DEL", "SHARE"],
     summary: "Reads one business segment and every department and unit under it, in the Documents library. No Staging access, no upload, no approve.",
   },
 
@@ -256,8 +267,9 @@ export const PERSONAS: Persona[] = [
   // DEL maps to "CRS Delete", which is Read + Delete Items. The read was already there; the
   // second membership only made it look as though it were not.
   {
-    key: "hod", family: "Head of Department", scope: "department", label: "View + delete, department-wide",
-    roles: ["DEL"],
+    key: "hod", family: "Head of Department", scope: "department", label: "View, delete + share, department-wide",
+    // SHARE added 2026-08-15 — HoD shares without approval, like C-Level. DEL was already here.
+    roles: ["DEL", "SHARE"],
     summary: "Reads every unit under their department in Documents, and can delete approved documents there. Cannot upload, cannot approve, and has no Staging access.",
   },
 
@@ -276,8 +288,19 @@ export const PERSONAS: Persona[] = [
   // It is deliberately NOT Documents delete: LIBRARY_ROLES keeps DELS off Documents, so a
   // Head of Unit still cannot remove an APPROVED document. That stays with Head of Department.
   {
-    key: "hou", family: "Head of Unit", scope: "unit", label: "Approve + view own unit",
-    roles: ["APR", "DELS"],
+    key: "hou", family: "Head of Unit", scope: "unit", label: "Approve, upload, delete + share own unit",
+    // Three roles added 2026-08-15, correcting the model and enabling the request workflow.
+    //
+    // UPL — the client had said a Head of Unit cannot upload; they can. Consequence, accepted
+    // explicitly: a HoU approves their OWN uploads, so the approval step is skippable by the person
+    // who files most often. The alternatives were a deadlock in any single-HoU unit, or giving Heads
+    // of Department Approve, which would also hand them every draft in the department.
+    //
+    // DEL and SHARE — because AN APPROVER CAN ONLY APPROVE WHAT THEY CAN PERFORM. Without DEL an
+    // approved deletion request fails at the last step; without SHARE an approved share does. SHARE
+    // is the wide one: it makes a HoU the sharing AUTHORITY for their unit, able to share directly
+    // without any screen, not merely an approver of other people's requests.
+    roles: ["APR", "DELS", "UPL", "DEL", "SHARE"],
     summary: "Approves every file in their own unit, can delete pending or rejected files there, and reads the unit's approved documents. Cannot upload, cannot delete approved documents, and sees no sibling unit.",
   },
 
@@ -321,8 +344,18 @@ export const PERSONAS: Persona[] = [
   // a separate DECISION — but the client has now made it, for every PIC. What changed is the
   // answer, not the reasoning: it is granted by the same group rather than by a second one.
   {
-    key: "pic", family: "PIC", scope: "unit", label: "Upload",
-    roles: ["UPL"],
+    key: "pic", family: "PIC", scope: "unit", label: "Upload + delete own pending",
+    // DELS added 2026-08-15, correcting the model: the client had said a PIC cannot delete, and the
+    // rule is the opposite in the APPROVAL LIBRARY.
+    //
+    // It needs no "own files only" rule, and that is the point. DELS is Staging-only by
+    // LIBRARY_ROLES, and Draft Item Security already hides a peer's pending work from a PIC — so
+    // "delete what you can see" IS "delete your own". The permission and the visibility are the same
+    // boundary, which means there is nothing extra to enforce and nothing that can drift apart.
+    //
+    // In DOCUMENTS a PIC still deletes nothing and shares nothing: both are requests the Head of
+    // Unit approves. See 2026-08-15-deletion-and-share-requests-design.md.
+    roles: ["UPL", "DELS"],
     summary: "Uploads to their unit at any confidentiality level, sees the unit's pending files, and reads the unit's approved documents. Cannot approve or delete.",
   },
 

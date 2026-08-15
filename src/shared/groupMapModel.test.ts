@@ -28,7 +28,7 @@ import { setSiteEntryName } from "./naming";
 
 describe("personas", () => {
   it("never invents a bundle group — every persona is a set of atomic roles", () => {
-    const atomic = ["MEMBER", "UPL", "APR", "DEL", "DELS", "SEGVIEW", "GLOBAL", "HC"];
+    const atomic = ["MEMBER", "UPL", "APR", "DEL", "DELS", "SEGVIEW", "GLOBAL", "HC", "SHARE"];
     for (const p of PERSONAS) {
       expect(p.roles.length).toBeGreaterThan(0);
       for (const r of p.roles) expect(atomic).toContain(r);
@@ -66,7 +66,8 @@ describe("personas", () => {
     expect(hod[0].scope).toBe("department");
     // MEMBER dropped 2026-08-09: DEL maps to "CRS Delete" = Read + Delete Items, so the read
     // was always there. The second membership only made it look as though it were not.
-    expect(hod[0].roles).toEqual(["DEL"]);
+    // SHARE added 2026-08-15: a HoD shares without approval.
+    expect(hod[0].roles).toEqual(["DEL", "SHARE"]);
     // DEL is the DOCUMENTS delete. DELS would put a department head on Staging, which
     // LIBRARY_ROLES routes there — and HoD has no Staging access at all.
     expect(hod[0].roles).not.toContain("DELS");
@@ -79,11 +80,11 @@ describe("personas", () => {
     expect(hou[0].scope).toBe("unit");
     // 2026-08-09: MEMBER dropped (APR now carries Documents read by itself) and DELS added —
     // the client's "they should have the power to delete" pending or rejected files.
-    expect(hou[0].roles).toEqual(["APR", "DELS"]);
-    // Deleting APPROVED documents still belongs to the department head. DELS is Staging-only
-    // by LIBRARY_ROLES, so this assertion keeps the two deletes apart at the model level as
-    // well as the library level.
-    expect(hou[0].roles).not.toContain("DEL");
+    // 2026-08-15: UPL, DEL and SHARE added. DEL is no longer the department head's alone —
+    // a Head of Unit needs it to CARRY OUT an approved deletion request, because an approver can
+    // only approve what they can perform. The two deletes are still kept apart by LIBRARY_ROLES,
+    // which is where that separation actually lives; the model no longer asserts it here.
+    expect(hou[0].roles).toEqual(["APR", "DELS", "UPL", "DEL", "SHARE"]);
   });
 
   it("scopes every persona below C-Level and Head of Department to the unit", () => {
@@ -103,8 +104,9 @@ describe("personas", () => {
     // business segment only". The two differ only in reach — GLOBAL rows are termless and
     // reach everything, a SEGVIEW row carries a segment term and reaches that segment.
     expect(SELECTABLE_ROLES).toContain("GLOBAL");
-    expect(personaByKey("clevel_global")?.roles).toEqual(["GLOBAL"]);
-    expect(personaByKey("clevel_segment")?.roles).toEqual(["SEGVIEW"]);
+    // DEL and SHARE joined both on 2026-08-15 — C-Level acts without approval.
+    expect(personaByKey("clevel_global")?.roles).toEqual(["GLOBAL", "DEL", "SHARE"]);
+    expect(personaByKey("clevel_segment")?.roles).toEqual(["SEGVIEW", "DEL", "SHARE"]);
     expect(personaByKey("clevel_global")?.unavailable).toBeUndefined();
     expect(personaByKey("clevel_segment")?.unavailable).toBeUndefined();
     expect(PERSONAS.filter((p) => p.family === "C-Level").length).toBe(2);
@@ -118,11 +120,15 @@ describe("personas", () => {
     expect(roleFromGroupName("DMS_MHO_SEGVIEW")).toBe("SEGVIEW");
   });
 
-  it("gives the C-Level personas no power beyond reading", () => {
+  it("gives the C-Level personas delete and share, but never upload or approve", () => {
+    // Rewritten 2026-08-15. C-Level is no longer view-only: the client confirmed they delete and
+    // share without approval. What must NOT change is the approval library — UPL and APR would put
+    // them among unapproved drafts, and DELS would let them delete other people's pending work.
     for (const p of PERSONAS.filter((x) => x.family === "C-Level")) {
+      expect(p.roles).toContain("DEL");
+      expect(p.roles).toContain("SHARE");
       expect(p.roles).not.toContain("UPL");
       expect(p.roles).not.toContain("APR");
-      expect(p.roles).not.toContain("DEL");
       expect(p.roles).not.toContain("DELS");
     }
   });
@@ -133,7 +139,7 @@ describe("personas", () => {
     // group — the SDG Employee role. Bundling MEMBER in here made every PIC a Documents
     // reader by default: the wrong default for a permission, and not what the client's
     // "can see the files in the unit" line meant.
-    expect(personaByKey("pic")?.roles).toEqual(["UPL"]);
+    expect(personaByKey("pic")?.roles).toEqual(["UPL", "DELS"]);
   });
 
   it("offers exactly one PIC persona, with no confidentiality variants", () => {
@@ -144,7 +150,7 @@ describe("personas", () => {
     // the client asks once and gets answered every time.
     const pics = PERSONAS.filter((p) => p.family === "PIC");
     expect(pics.length).toBe(1);
-    expect(pics[0].roles).toEqual(["UPL"]);
+    expect(pics[0].roles).toEqual(["UPL", "DELS"]);
     expect(pics[0].unavailable).toBeUndefined();
     expect(personaByKey("pic2")).toBeUndefined();
     expect(personaByKey("pic3")).toBeUndefined();
@@ -454,15 +460,21 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
     // "And to nobody else" is the half that still matters: DELS is the power to delete other
     // people's PENDING documents. Anyone else acquiring it is a silent grant, which is why
     // this asserts the exact set rather than just that HoU has it.
+    // 2026-08-15: the PIC joins, correcting the model — they delete their OWN pending and rejected
+    // files. No "own files only" rule is needed or possible: Draft Item Security already hides a
+    // peer's pending work, so what they can delete is exactly what they can see.
+    //
+    // The exact set still matters. DELS is the power to delete pending work, so anyone ELSE
+    // acquiring it is a silent grant.
     const withStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELS") !== -1);
-    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou"]);
+    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou", "pic"]);
   });
 
   it("keeps the PIC to upload alone", () => {
     // Still UPL only, even though a PIC now reads Documents too. That read comes from
     // LIBRARY_ROLES listing UPL under Documents — NOT from adding MEMBER here. If this ever
     // grows a second role, the "one group per person" property has been lost.
-    expect(rolesOf("pic")).toEqual(["UPL"]);
+    expect(rolesOf("pic")).toEqual(["UPL", "DELS"]);
   });
 
   it("leaves SDG Employee as the only persona that is purely MEMBER", () => {
@@ -496,14 +508,19 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
     }
   });
 
-  it("never puts DEL and DELS on the same persona", () => {
-    // They map to the same permission LEVEL and are told apart only by LIBRARY_ROLES. A
-    // persona holding both would reach approved documents AND other people's pending ones,
-    // and the library rule would stop meaning anything.
-    for (const p of PERSONAS) {
-      const both = p.roles.indexOf("DEL") !== -1 && p.roles.indexOf("DELS") !== -1;
-      expect(both).toBe(false);
-    }
+  it("gives BOTH deletes only to the Head of Unit", () => {
+    // Was "never puts DEL and DELS on the same persona" until 2026-08-15. That rule is genuinely
+    // superseded: a Head of Unit deletes pending work (DELS, approval library) AND carries out
+    // approved deletion requests (DEL, Documents). An approver can only approve what they can
+    // perform, so the combination is the requirement, not an accident.
+    //
+    // It is still asserted as an EXACT set, because the original worry stands for everyone else:
+    // the two roles map to the same permission level and are told apart only by LIBRARY_ROLES, so
+    // a persona quietly acquiring both reaches approved documents and other people's pending ones.
+    const both = PERSONAS.filter(
+      (p) => p.roles.indexOf("DEL") !== -1 && p.roles.indexOf("DELS") !== -1,
+    );
+    expect(both.map((p) => p.key)).toEqual(["hou"]);
   });
 
   it("keeps C-Level and Head of Department off every Staging role", () => {
@@ -857,5 +874,69 @@ describe("validateGroupName", () => {
   it("rejects a name past SharePoint's limit", () => {
     expect(validateGroupName("x".repeat(256)).length).toBe(1);
     expect(validateGroupName("x".repeat(255))).toEqual([]);
+  });
+});
+
+/**
+ * The 2026-08-15 correction — spec `2026-08-15-deletion-and-share-requests-design.md`.
+ *
+ * Pinned because the compositions ARE the security model, and until now nothing tested them: the
+ * whole suite passed both before and after the roles moved. Each case below is a rule that is silent
+ * when broken.
+ */
+describe("corrected role model (2026-08-15)", () => {
+  const rolesOf = (key: string): string[] => PERSONAS.filter((p) => p.key === key)[0].roles as string[];
+
+  it("a PIC deletes in the approval library but NOT in Documents", () => {
+    // DELS is Staging-only; DEL is the Documents one. A PIC holding DEL would make the whole
+    // deletion-request workflow pointless — they would simply delete.
+    expect(rolesOf("pic")).toContain("DELS");
+    expect(rolesOf("pic")).not.toContain("DEL");
+  });
+
+  it("a PIC cannot share — that is the request workflow", () => {
+    expect(rolesOf("pic")).not.toContain("SHARE");
+  });
+
+  it("a Head of Unit can upload", () => {
+    expect(rolesOf("hou")).toContain("UPL");
+  });
+
+  it("a Head of Unit can perform BOTH things they approve", () => {
+    // An approver can only approve what they can carry out. Without DEL an approved deletion fails
+    // at the last step; without SHARE an approved share does.
+    expect(rolesOf("hou")).toContain("DEL");
+    expect(rolesOf("hou")).toContain("SHARE");
+  });
+
+  it("HoD and C-Level act without approval — both delete and share", () => {
+    for (const key of ["hod", "clevel_global", "clevel_segment"]) {
+      expect(rolesOf(key)).toContain("DEL");
+      expect(rolesOf(key)).toContain("SHARE");
+    }
+  });
+
+  it("SHARE NEVER reaches the approval library", () => {
+    // Sharing an unapproved draft hands someone a document nobody has approved yet.
+    expect(STAGING_FACING_ROLES).not.toContain("SHARE");
+  });
+
+  it("C-Level still never touches the approval library, despite its new powers", () => {
+    // The oldest invariant here: a segment-wide viewer on Staging reads every unapproved draft in
+    // that segment. Adding DEL and SHARE must not have dragged them in.
+    for (const key of ["clevel_global", "clevel_segment"]) {
+      const persona = PERSONAS.filter((p) => p.key === key)[0];
+      expect(personaTouchesStaging(persona)).toBe(false);
+    }
+  });
+
+  it("Head of Department still never touches the approval library", () => {
+    expect(personaTouchesStaging(PERSONAS.filter((p) => p.key === "hod")[0])).toBe(false);
+  });
+
+  it("PIC and Head of Unit both touch the approval library", () => {
+    for (const key of ["pic", "hou"]) {
+      expect(personaTouchesStaging(PERSONAS.filter((p) => p.key === key)[0])).toBe(true);
+    }
   });
 });
