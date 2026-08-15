@@ -308,3 +308,27 @@ describe("decisionSummary", () => {
     expect(s).toContain("2026-12-31");
   });
 });
+
+describe("matching an approver to a unit", () => {
+  const guid = "11111111-2222-3333-4444-555555555555";
+
+  it("matches on the term GUID when the row carries one", () => {
+    expect(canDecide(row({ unitTermGuid: guid }), [guid])).toBe(true);
+  });
+
+  it("IGNORES THE LABEL once a GUID is present, so a renamed term still routes", () => {
+    // The failure this prevents: someone tidies a term label, and an approver silently stops seeing
+    // their own unit's requests — with nothing on screen to say any went missing.
+    const renamed = row({ unit: "Corporate Renamed", unitTermGuid: guid });
+    expect(canDecide(renamed, [guid])).toBe(true);
+    expect(canDecide(renamed, ["Corporate"])).toBe(false);
+  });
+
+  it("falls back to the label for rows written before GUIDs were stored", () => {
+    expect(canDecide(row(), ["Corporate"])).toBe(true);
+  });
+
+  it("matches nothing when the row identifies no unit at all", () => {
+    expect(canDecide(row({ unit: "", unitTermGuid: "" }), ["Corporate"])).toBe(false);
+  });
+});

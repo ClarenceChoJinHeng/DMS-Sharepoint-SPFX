@@ -38,7 +38,17 @@ export interface RequestRow {
   itemName: string;
   itemUrl?: string;
   segment: string;
+  /** The unit's LABEL — for display only. Never the matching key: terms get renamed. */
   unit: string;
+  /**
+   * The unit term's GUID, and the key an approver's queue actually matches on.
+   *
+   * Deleting a term orphans three lists at once and a rename changes every label, so a queue keyed on
+   * the label would quietly stop showing an approver their own unit's requests the day someone tidied
+   * up the term store — with nothing on screen to say a request had gone missing. Falls back to the
+   * label when absent, so rows written before this existed still route.
+   */
+  unitTermGuid?: string;
   requestedBy: string;
   requestedAt: string;
   reason: string;
@@ -186,10 +196,22 @@ export function validateDraft(draft: RequestDraft, ctx: ValidationContext): stri
  */
 export function canDecide(row: RequestRow, approverUnits: string[]): boolean {
   if (!row || row.status !== "Pending") return false;
+  return matchesUnit(row, approverUnits);
+}
+
+/**
+ * Does this row belong to one of these units?
+ *
+ * Matches on the term GUID when the row carries one, and only falls back to the label otherwise —
+ * see `RequestRow.unitTermGuid`.
+ */
+function matchesUnit(row: RequestRow, approverUnits: string[]): boolean {
+  const key = ((row?.unitTermGuid ?? "").trim() || (row?.unit ?? "").trim()).toLowerCase();
+  if (key.length === 0) return false;
   const units = (approverUnits ?? [])
     .map((u) => (u ?? "").trim().toLowerCase())
     .filter((u) => u.length > 0);
-  return units.indexOf((row.unit ?? "").trim().toLowerCase()) !== -1;
+  return units.indexOf(key) !== -1;
 }
 
 /**
@@ -202,8 +224,7 @@ export function canDecide(row: RequestRow, approverUnits: string[]): boolean {
 export function isVisibleTo(row: RequestRow, viewerEmail: string, approverUnits: string[]): boolean {
   const me = (viewerEmail ?? "").trim().toLowerCase();
   if (me.length > 0 && (row?.requestedBy ?? "").trim().toLowerCase() === me) return true;
-  const units = (approverUnits ?? []).map((u) => (u ?? "").trim().toLowerCase());
-  return units.indexOf((row?.unit ?? "").trim().toLowerCase()) !== -1;
+  return matchesUnit(row, approverUnits);
 }
 
 /* ── Decisions ──────────────────────────────────────────────────────────────── */
