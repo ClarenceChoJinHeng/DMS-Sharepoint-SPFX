@@ -2425,8 +2425,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            exists for only one confidentiality level: when it is absent, date and
            level fall back to an even split that lines up with Project Name and
            Vendor above, so the row does not reflow around a control that is not there. */
-        .dms-detail-row { display: flex; gap: 24px; align-items: flex-end; flex-wrap: wrap; }
+        /* TOP-aligned, with a fixed label height, so every control on the row starts at the same y.
+           Bottom-aligning made each column's position depend on its own total height — and the two
+           columns here are not the same shape: Confidential Level's label carries an info icon, and
+           Fluent's date field reserves a strip beneath itself for a validation message. Either one
+           shifts its box relative to its neighbour, which is why the date appeared to jump. */
+        .dms-detail-row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
         .dms-detail-row > .dms-field { flex: 1 1 200px; min-width: 0; }
+        .dms-detail-row > .dms-field > span,
+        .dms-detail-row > .dms-field > .dms-labelrow { min-height: 20px; display: flex; align-items: center; }
         .dms-lp { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 38px; margin-bottom: 16px; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
         .dms-lp input { accent-color: #0f6c3f; width: 16px; height: 16px; margin: 0; cursor: pointer; }
         /* Info tooltips sit on the LABEL, beside the field name. They used to be
@@ -2524,7 +2531,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-datepicker input { font: inherit; padding: 8px 10px; }
         /* Fluent's wrapper adds its own block spacing, which offsets this field from the select
            sharing its row. */
-        .dms-datepicker, .dms-datepicker .ms-TextField { margin: 0; }
+        .dms-datepicker, .dms-datepicker .ms-TextField, .dms-datepicker .ms-TextField-wrapper { margin: 0; }
+        /* Fluent keeps a strip below the field for a validation message. Nothing can write one here —
+           the picker is click-only — so it is pure height, and height on one column of a two-column
+           row is exactly what pushed this field out of line. */
+        .dms-datepicker .ms-TextField-errorMessage { display: none; }
         .dms-toast-close { position: absolute; top: 10px; right: 12px; background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: .7; line-height: 1; }
         .dms-toast-close:hover { opacity: 1; }
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
