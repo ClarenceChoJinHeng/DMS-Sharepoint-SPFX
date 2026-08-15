@@ -1,6 +1,22 @@
 # Highly Confidential Securing — Design
 
-**Status:** proposed (retention rule decided; implement after base build is verified)
+> ❌ **SUPERSEDED 2026-08-15 by `2026-08-15-highly-confidential-library-design.md`. Do not implement
+> any of this.** HC now lives in its own LIBRARY PAIR (`HC Approval Document` → `HC Documents`), not
+> in a secured subfolder of the shared library.
+>
+> Everything below — the elevated HTTP-triggered flow, the service-account connection with Full
+> Control, the trigger URL shipped as a bearer secret inside the SPFx bundle, the
+> `HasUniqueRoleAssignments` short-circuit — exists to compensate for HC files living somewhere their
+> peers can already reach. A separate library removes that premise, so none of it is needed: ordinary
+> uploaders hold no permission on the HC library at any moment, there is no window to close and
+> nothing to elevate.
+>
+> **Kept as the record of a rejected approach**, so the elevated-flow idea is not re-derived from
+> scratch. Two facts in it remain true and are worth carrying forward: an uploader cannot break
+> permissions on a folder they upload into, and a folder an uploader creates inherits the visible ACL
+> first.
+
+**Status:** SUPERSEDED — was: proposed (retention rule decided; implement after base build is verified)
 
 ## Goal
 
