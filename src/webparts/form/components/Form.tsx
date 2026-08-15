@@ -24,6 +24,7 @@ import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
+import { autoFormatDmy, isFuture, isoToDmy, parseDmy } from "../../../shared/dateInput";
 import {
   Batch,
   BatchDestination,
@@ -476,6 +477,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   // block the upload instead.
   const [childCache, setChildCache] = useState<Record<string, { terms: TermOption[]; ok: boolean }>>({});
   const [documentDate, setDocumentDate] = useState<string>("");
+  // What the user sees, in dd-mm-yyyy. `documentDate` stays ISO and remains the only value anything
+  // else reads, so a half-typed date can never reach a write.
+  const [dateText, setDateText] = useState<string>("");
+  const [dateError, setDateError] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
   const [projectName, setProjectName] = useState<string>("");
@@ -1438,6 +1443,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setVendor(m.vendor ?? "");
     setRemark(m.remark ?? "");
     setDocumentDate(m.documentDate ?? "");
+    setDateText(isoToDmy(m.documentDate ?? ""));
+    setDateError("");
     setConfidentiality(m.confidentiality ?? "");
     setLegallyPrivileged((m.legallyPrivileged ?? "") !== "");
   };
@@ -1609,6 +1616,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       applyRestrictedMode(validPaths, m, []);
     }
     setDocumentDate("");
+    // Cleared together, or the box keeps showing a date the form no longer holds.
+    setDateText("");
+    setDateError("");
     setConfidentiality("");
     setVendor("");
     setProjectName("");
@@ -2252,23 +2262,54 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   <span>
                     Document Date <em className="req">*</em>
                   </span>
+                  {/* A TEXT input, not type="date" (client, 2026-08-15: "client just want it to be
+                      dd-mm-yyyy"). A native date field renders its format from the browser locale and
+                      no markup overrides it, so the only way to guarantee dd-mm-yyyy is to own the
+                      field. Parsing, the calendar rules and the future check live in shared/dateInput,
+                      under test — a date accepted wrongly here is filed wrongly and looks fine.
+
+                      `dateText` is what the user sees and `documentDate` stays ISO, so `toSpDate` and
+                      every other consumer are untouched. */}
                   <input
-                    type="date"
-                    value={documentDate}
-                    max={(() => {
-                      const d = new Date();
-                      const mm = d.getMonth() + 1;
-                      const day = d.getDate();
-                      return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
-                    })()}
-                    onChange={(e) => onDocumentDateChange(e.target.value)}
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="dd-mm-yyyy"
+                    maxLength={10}
+                    value={dateText}
+                    aria-invalid={dateError.length > 0}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      // Deleting is detected by LENGTH, so auto-formatting never re-adds the dash the
+                      // user is trying to remove.
+                      const next = autoFormatDmy(raw, raw.length < dateText.length);
+                      setDateText(next);
+                      const parsed = parseDmy(next);
+                      if (parsed.state === "ok") {
+                        if (isFuture(parsed.iso, new Date())) {
+                          setDateError("That date is in the future.");
+                          onDocumentDateChange("");
+                          return;
+                        }
+                        setDateError("");
+                        onDocumentDateChange(parsed.iso);
+                        return;
+                      }
+                      // Half-typed is not wrong yet — the message waits for blur (see onBlur).
+                      setDateError("");
+                      onDocumentDateChange("");
+                    }}
+                    onBlur={() => {
+                      const parsed = parseDmy(dateText);
+                      setDateError(parsed.state === "invalid" ? parsed.reason : "");
+                    }}
                   />
-                  {/* The picker's own format follows the browser locale and cannot be set from here,
-                      so the chosen date is repeated with a month NAME — unambiguous whichever
-                      convention the reader expects. */}
-                  <small>
-                    {documentDate ? `Saves as ${readableDate(documentDate)}` : "Day / Month / Year"}
-                  </small>
+                  {dateError ? (
+                    <small className="dms-date-err">{dateError}</small>
+                  ) : (
+                    <small>
+                      {documentDate ? `Saves as ${readableDate(documentDate)}` : "For example 02-08-2026"}
+                    </small>
+                  )}
                 </label>
 
                 {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
@@ -2500,6 +2541,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
         .dms-toast.error { background: #d13438; color: #fff; }
         .dms-toast.notice { background: #0f6c3f; color: #fff; }
+        .dms-date-err { color: #a4262c; }
+        input[aria-invalid="true"] { border-color: #a4262c; }
         .dms-toast-close { position: absolute; top: 10px; right: 12px; background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: .7; line-height: 1; }
         .dms-toast-close:hover { opacity: 1; }
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
