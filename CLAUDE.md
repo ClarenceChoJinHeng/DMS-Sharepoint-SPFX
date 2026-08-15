@@ -912,6 +912,27 @@ Web part **`CRS Settings`** (`4d8b7e21-…`, own bundle), built to the client's 
   implementation, shared by the writer and the reader. **A slug is a public name once shipped** (an admin
   may bookmark it), so `DEEP_LINK_TABS` maps slug → `Tab` explicitly; renaming a `Tab` must not break a
   bookmark. An unrecognised hash falls back to the default tab, never a blank screen.
+- **EVERY PAGE IT LINKS TO CAN GET BACK (2026-08-15, client: *"I can't go back to CRS Settings"*).**
+  A directory whose destinations are one-way trips sends the admin to the browser Back button or the
+  site nav. `shared/backToSettings.tsx` owns the band and the destination for all nine pages.
+  - **The target is RESOLVED FROM SITE PAGES, reusing `resolveLink`** — same reason as the landing
+    page's own links, and the same rule kept in ONE place. Pattern `crs.?settings|^settings\b`, never a
+    bare `settings`, which would claim a `Site Settings` page.
+  - **A page it cannot find still gets a band**, as a plain `Back` on `history.back()`. The label must
+    not promise a destination the code could not locate — but a band that vanished on a failed read
+    would leave the admin in the dead end they reported. `missing` ⇒ history; `ambiguous` ⇒ navigate
+    anyway.
+  - **`withBackToSettings` wraps at the WEB PART boundary (`render()`), never inside a component.**
+    That seam is load-bearing: `GroupManager` and `GroupMapBuilder` are ALSO mounted as steps of a
+    Folder Management guided flow, and a band offering the way OUT — styled identically to the band
+    that goes back one step within it — would read as part of the flow. Wrapping at `render()` means
+    an embedded mount cannot inherit it, with no `embedded` prop for a caller to forget.
+  - **Folder Administration is the deliberate exception**: `FolderAdmin`'s picker renders
+    `BackToSettings` itself, so the deeper views keep their own `Back to Folder Management` rather than
+    showing two bands. `BackBand` is shared by both.
+  - Not applied to the uploader/approver pages (Upload Form, Approval Document, My Submissions) or to
+    `Folder Structure`, which the landing page does not list — a back link there would assert where the
+    user came from.
 - Property pane carries **one optional address per link** (`link_<key>`, flat, not nested). An override
   **wins outright, unchecked** — the only fix without a redeploy on a site whose names cannot be guessed.
   Placeholders name what auto-detection looks for, so the pane answers "why is this row grey".

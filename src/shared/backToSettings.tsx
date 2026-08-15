@@ -172,3 +172,32 @@ export function BackToSettings({
   }
   return <BackBand label="Back to CRS Settings" href={url} />;
 }
+
+/**
+ * Put the band above a web part's own element.
+ *
+ * Called from `render()` — the WEB PART boundary — and never from inside a component. That seam is
+ * load-bearing: several of these components are also mounted as STEPS of a Folder Management guided
+ * flow, and a band offering the way out of the flow, styled identically to the band that goes back one
+ * step within it, would read as part of the flow. Wrapping at render() means an embedded mount cannot
+ * inherit it, with no `embedded` prop for a caller to forget.
+ *
+ * Folder Administration is the deliberate exception and does NOT use this: its picker renders
+ * `BackToSettings` itself, so the deeper views keep their own "Back to Folder Management" instead of
+ * showing two bands.
+ */
+export function withBackToSettings(
+  context: WebPartContext,
+  element: React.ReactElement,
+): React.ReactElement {
+  return React.createElement(
+    "div",
+    undefined,
+    React.createElement(BackToSettings, {
+      key: "back",
+      context,
+      siteUrl: context.pageContext.web.absoluteUrl,
+    }),
+    element,
+  );
+}
