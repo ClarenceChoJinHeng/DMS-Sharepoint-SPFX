@@ -143,6 +143,42 @@ export function selectableLevels(levels: readonly string[], ctx: RoutingContext)
 }
 
 /**
+ * The same folder, in the other library.
+ *
+ * The HC tree mirrors the normal one exactly — same abbreviations, same shape, the client's own
+ * decision — so a unit folder already resolved in the approval library gives its HC twin by swapping
+ * one path segment. That is why the HC folders need no Folder Map rows: there is nothing to look up
+ * that is not already known.
+ *
+ * IT RETURNS `undefined` RATHER THAN GUESSING, and every reason is a real one:
+ *   - the path does not contain the library segment (a path from somewhere else entirely);
+ *   - either segment is blank (an unresolved library name — see naming.ts, which has no fallback);
+ *   - the segments are the same (nothing to swap, and swapping would be a no-op that reads as success).
+ *
+ * A returned path is not a promise that the folder EXISTS. It is where the folder would be; the
+ * caller probes it. Both halves matter, and the probe is the half that cannot be skipped.
+ *
+ * The segment is matched with slashes on both sides, so a unit abbreviated `ApprovalDocument` — or a
+ * segment folder that happens to share the library's name — cannot be mistaken for the library root.
+ * Only the FIRST occurrence is replaced, for the same reason: deeper repeats are folder names.
+ */
+export function swapLibrarySegment(
+  serverRelativeUrl: string | undefined,
+  fromSegment: string | undefined,
+  toSegment: string | undefined,
+): string | undefined {
+  const path = (serverRelativeUrl ?? "").trim();
+  const from = (fromSegment ?? "").trim();
+  const to = (toSegment ?? "").trim();
+  if (path.length === 0 || from.length === 0 || to.length === 0) return undefined;
+  if (from === to) return undefined;
+  const needle = `/${from}/`;
+  const at = path.indexOf(needle);
+  if (at === -1) return undefined;
+  return `${path.slice(0, at)}/${to}/${path.slice(at + needle.length)}`;
+}
+
+/**
  * Was an HC level chosen that this user cannot actually file?
  *
  * The last-moment check, run immediately before the write. A stale page is the case it exists for:

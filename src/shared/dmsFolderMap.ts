@@ -399,6 +399,71 @@ export async function probeFolderUploadAccess(
     : "denied";
 }
 
+/**
+ * The same question, asked by PATH instead of by UniqueId.
+ *
+ * Exists for the Highly Confidential libraries, whose folders are NOT in the Folder Map: that list
+ * records one folder per term, in the normal approval library. The HC tree mirrors it exactly — same
+ * abbreviations, same shape — so the HC folder is found by swapping the library segment of a path
+ * already resolved, and there is nothing to look up.
+ *
+ * A MISSING FOLDER IS THE NORMAL "NOT SET UP YET" ANSWER HERE, not an anomaly. Reconciliation builds
+ * the HC tree in its own pass; before it runs, a cleared uploader's HC folder simply does not exist.
+ * Returning "missing" so the caller hides the level is the whole point — the folder must never be
+ * ensure-created by an uploader, because a folder created that way INHERITS the library root's
+ * permissions instead of carrying the unit's, which is how a Highly Confidential document ends up
+ * readable by exactly the people the unit ACL exists to exclude.
+ *
+ * THE PATH GOES IN AS AN ODATA PARAMETER ALIAS, never as an inline quoted literal (gotcha #9). An
+ * inline path returns HTTP 400 — not 404 — once it is deep enough, and a 400 reads as "malformed
+ * request" rather than "no such folder", which is the wrong conclusion to draw here.
+ */
+export async function probeFolderUploadAccessByPath(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  serverRelativeUrl: string,
+): Promise<UploadAccess> {
+  const path = (serverRelativeUrl ?? "").trim();
+  if (path.length === 0) return "missing";
+  const url =
+    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/EffectiveBasePermissions` +
+    `?@f='${encodeServerRelativePath(path)}'`;
+  const get = async (): Promise<SPHttpClientResponse> =>
+    spHttpClient.get(url, SPHttpClient.configurations.v1, {
+      headers: { Accept: "application/json;odata=nometadata" },
+    });
+
+  // The same short retry budget as the UniqueId probe: this runs on the upload form's interaction
+  // path, and holding the form on a spinner is worse than an inconclusive answer.
+  let res: SPHttpClientResponse = await get();
+  for (
+    let attempt = 0;
+    (res.status === 429 || res.status === 503) && attempt < 3;
+    attempt++
+  ) {
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(8000, 500 * 2 ** attempt);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    res = await get();
+  }
+
+  if (res.status === 401 || res.status === 403) return "denied";
+  // Security trimming answers 404 for folders the user cannot see, so this is not proof of absence.
+  // It does not matter: both readings mean the same thing here, and neither may offer the level.
+  if (res.status === 404) return "missing";
+  if (!res.ok) {
+    console.warn(
+      `HC upload-access probe was inconclusive (HTTP ${res.status}) for ${path} — the level stays hidden.`,
+    );
+    return "unknown";
+  }
+  const d = await res.json().catch(() => null);
+  if (!d || d.Low === undefined) return "unknown";
+  // Arithmetic, never `&`: JS bitwise coerces to a SIGNED 32-bit int, and Full Control returns
+  // Low = "4294967295", which as a signed int is -1.
+  return hasPermissionBit(Number(d.Low), ADD_LIST_ITEMS_BIT) ? "granted" : "denied";
+}
+
 /** Repoint an existing mapping row at a different folder. */
 export async function updateFolderMapping(
   spHttpClient: SPHttpClient,

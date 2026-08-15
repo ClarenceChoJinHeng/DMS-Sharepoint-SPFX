@@ -9,8 +9,22 @@ import {
   ensureFolder,
   encodeServerRelativePath,
   probeFolderUploadAccess,
+  probeFolderUploadAccessByPath,
+  resolveFolderByPath,
   FolderMapRow,
 } from "../../../shared/dmsFolderMap";
+// Highly Confidential routing. Every rule lives in the shared module under test, because each has a
+// wrong version that looks identical on screen: the file uploads, the toast is green, and the
+// mistake surfaces when the wrong person opens the document weeks later.
+import {
+  RoutingContext,
+  canOfferHc,
+  effectiveHcLevel,
+  isHcLevel,
+  refuseReason,
+  selectableLevels,
+  swapLibrarySegment,
+} from "../../../shared/hcRouting";
 import {
   AccessVerdict,
   filterProvisionedPaths,
@@ -21,7 +35,14 @@ import {
 } from "../../../shared/segmentReadiness";
 import { formatFileSize } from "../../../shared/fileSize";
 import { EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/naming";
+import {
+  cachedHcLibraries,
+  cachedListTitle,
+  hcAvailable,
+  LIST_SUFFIX,
+  libraryTitle,
+  libraryUrlSegment,
+} from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 
@@ -366,6 +387,14 @@ type DmsSettings = {
   // Empty means "never offer it", which is the correct behaviour for a site that
   // has not configured the row — better than guessing a level.
   legallyPrivilegedFor: string;
+  /**
+   * The confidentiality LABEL that routes to the Highly Confidential library pair.
+   *
+   * Blank here means "not configured", NOT "no HC": `effectiveHcLevel` decides, and the libraries
+   * existing is what turns routing on. A site with no HC libraries keeps Highly Confidential as the
+   * ordinary metadata label it has always been, which is why this cannot simply default to it.
+   */
+  hcConfidentialityLevel: string;
   allowedFileTypes: AllowedFileTypes;
 };
 
@@ -392,6 +421,8 @@ const DEFAULT_SETTINGS: DmsSettings = {
   // to a confidentiality term GUID. Defaulting to a guessed level would offer a
   // legal flag under the wrong heading.
   legallyPrivilegedFor: "",
+  // Blank, and always read together with hcAvailable() — see the field's note.
+  hcConfidentialityLevel: "",
   // "unknown", not "configured": reaching this constant means DMS Config could not
   // be read, and the UI must say so rather than present these as configured values.
   // The old list here was [".pdf", ".xls", ".xlsx"] — missing .doc/.docx, which is
@@ -536,6 +567,61 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const perm = activeMode()?.levels ?? [];
     return perm.length > 0 ? levelValues[perm.length - 1] ?? "" : "";
   };
+
+  /* ---------- Highly Confidential clearance -------------------------------
+     Spec: docs/superpowers/specs/2026-08-15-highly-confidential-library-design.md
+
+     CLEARANCE IS A WRITE PROBE, NEVER GROUP MEMBERSHIP. Reconciliation grants folder ACLs in a pass
+     separate from group creation, so a `..._UPL_HC` group can exist for days before it grants
+     anything — the gap that produced the upload form's original HTTP 403. Here the symptom would be
+     worse than a refused upload: an offered level with nowhere to file it.
+
+     Cached per LEAF TERM, because the answer is per unit — a person may be cleared for one unit and
+     not another. `undefined` means "not asked yet, or inconclusive", which `canOfferHc` reads as no. */
+  const [hcWrite, setHcWrite] = useState<Record<string, boolean>>({});
+  const hcProbed = useRef<Record<string, true>>({});
+
+  /**
+   * The routing context for the CURRENT selection.
+   *
+   * Built fresh on each read rather than held in state: `hcAvailable()` is answered by primeNames
+   * after mount, so a context captured once would freeze the answer from before the probe returned.
+   */
+  const hcContext = (): RoutingContext => ({
+    hcLevel: effectiveHcLevel(settings.hcConfidentialityLevel, hcAvailable()),
+    hcAvailable: hcAvailable(),
+    canWriteHc: hcWrite[permissionedLeafTerm()],
+  });
+
+  /** The label behind a confidentiality term id — the routing rules compare labels, not GUIDs. */
+  const confidentialityLabel = (termId: string): string =>
+    options.confidentiality.find((o) => o.id === termId)?.label ?? "";
+
+  useEffect(() => {
+    const leaf = permissionedLeafTerm();
+    // Nothing to ask when the site has no HC libraries, or when no unit is chosen yet. Asked ONCE
+    // per leaf: an inconclusive answer is not retried, because it already fails closed and a retry
+    // loop against a throttled site would hold the form open indefinitely.
+    if (!hcAvailable() || !leaf || hcProbed.current[leaf]) return;
+    hcProbed.current[leaf] = true;
+    const ask = async (): Promise<void> => {
+      const mapping = await lookupFolderMapping(context.spHttpClient, siteUrl, leaf).catch(() => null);
+      if (!mapping?.folderUniqueId) return;
+      const unit = await resolveMappedFolder(
+        context.spHttpClient, siteUrl, mapping.folderUniqueId, mapping.folderUrl,
+      );
+      // The HC twin of a folder already resolved. The trees mirror each other by design, so there is
+      // no second Folder Map to read — but the path is only where the folder WOULD be, and the probe
+      // is what decides whether it exists and is writable.
+      const hcPath = swapLibrarySegment(
+        unit.serverRelativeUrl, libraryUrlSegment(), cachedHcLibraries()?.approval.urlSegment,
+      );
+      if (!hcPath) return;
+      const verdict = await probeFolderUploadAccessByPath(context.spHttpClient, siteUrl, hcPath);
+      if (verdict === "granted") setHcWrite((w) => ({ ...w, [leaf]: true }));
+    };
+    ask().catch(() => undefined);
+  }, [levelValues, uploadMode, settings.hcConfidentialityLevel]);
 
   /**
    * Walk the below-Unit chain, dropping tiers that do not apply here.
@@ -956,6 +1042,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       })(),
       legallyPrivilegedFor:
         get("legallyPrivilegedFor") ?? DEFAULT_SETTINGS.legallyPrivilegedFor,
+      hcConfidentialityLevel:
+        get("hcConfidentialityLevel") ?? DEFAULT_SETTINGS.hcConfidentialityLevel,
       // SettingValue is deliberately NOT consulted for file types any more —
       // AllowedFileTypes is the single source of truth. Spec 2026-07-30 §3.
       allowedFileTypes: resolveAllowedFileTypes(rawFileTypes),
@@ -2074,12 +2162,79 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         continue;
       }
 
+      /* A BATCH IS ONE FOLDER, BUT NOT NECESSARILY ONE LIBRARY.
+         Tiers, Year and Document Type belong to the batch; confidentiality is per FILE. So one saved
+         batch can legitimately hold a Confidential document and a Highly Confidential one, and those
+         go to different libraries. Resolved lazily, and only when a file actually needs it — a batch
+         with no HC file must never pay for a folder resolution, and must never fail because the HC
+         tree does not exist. */
+      const hcCtx = hcContext();
+      /** Resolved at most once per batch, and only if a file in it is Highly Confidential. */
+      let hcDest: { id?: string; error?: string } | undefined;
+      const resolveHcFolder = async (): Promise<{ id?: string; error?: string }> => {
+        const hcUnit = swapLibrarySegment(
+          unitSru, libraryUrlSegment(), cachedHcLibraries()?.approval.urlSegment,
+        );
+        if (!hcUnit) return { error: "The Highly Confidential library could not be resolved on this site." };
+        // THE UNIT FOLDER IS RESOLVED, NEVER CREATED. One created by an uploader would inherit the
+        // LIBRARY root's permissions instead of carrying the unit's — which is exactly how a Highly
+        // Confidential document becomes readable by the people the unit ACL exists to exclude. If it
+        // is absent, reconciliation is the fix and the upload refuses until then.
+        const unitHere = await resolveFolderByPath(context.spHttpClient, siteUrl, hcUnit);
+        if (!unitHere) {
+          return {
+            error:
+              "The Highly Confidential folder for this unit does not exist yet, or you cannot reach it. " +
+              "Ask an administrator to run folder reconciliation.",
+          };
+        }
+        // Below the unit, ensure-creation is correct and matches the normal path: everything below
+        // Unit inherits the unit's ACL by design.
+        let parent = unitHere.serverRelativeUrl;
+        let folderId = unitHere.uniqueId;
+        for (const name of dest.segments) {
+          const made = await ensureFolder(context.spHttpClient, siteUrl, parent, name);
+          if (!made) {
+            return {
+              error:
+                `Could not create the "${name}" folder in the Highly Confidential library.`,
+            };
+          }
+          parent = made.serverRelativeUrl;
+          folderId = made.uniqueId;
+        }
+        return { id: folderId };
+      };
+
       let fileNo = 0;
       for (const sf of b.files) {
         fileNo++;
         setStatus(
           `Batch ${batchNo} of ${runnable.length} · file ${fileNo} of ${b.files.length} — ${sf.finalName ?? sf.file.name}`,
         );
+        const level = confidentialityLabel(sf.meta.confidentiality ?? "");
+        if (isHcLevel(level, hcCtx)) {
+          // RE-CHECKED HERE, not trusted from the dropdown. Settings and clearance are read once at
+          // mount, so a tab left open across a clearance change would otherwise submit against the
+          // old answer — gotcha 10b, where a stale chain filed into the old folder shape and nothing
+          // looked wrong. Hiding a control never clears the state behind it either.
+          const refused = refuseReason(level, hcCtx);
+          if (refused) {
+            results.push({ fileId: sf.id, ok: false, error: refused });
+            continue;
+          }
+          if (hcDest === undefined) hcDest = await resolveHcFolder();
+          if (!hcDest.id) {
+            results.push({
+              fileId: sf.id,
+              ok: false,
+              error: hcDest.error ?? "No Highly Confidential destination could be resolved.",
+            });
+            continue;
+          }
+          results.push(await uploadStagedFile(b, hcDest.id, sf));
+          continue;
+        }
         results.push(await uploadStagedFile(b, destFolder.uniqueId, sf));
       }
     }
@@ -2312,11 +2467,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     onChange={(e) => setConfidentiality(e.target.value)}
                   >
                     <option value="">--</option>
-                    {options.confidentiality.map((o) => (
-                      <option key={o.id} value={o.id} title={o.label}>
-                        {o.label}
-                      </option>
-                    ))}
+                    {/* HIDDEN, NOT DISABLED. A greyed-out "Highly Confidential" tells an uncleared
+                        uploader that the level exists and that some of their unit's documents are
+                        filed under it — information they have no need for. The client chose hidden.
+                        On a site with no HC libraries nothing is filtered: the level stays the
+                        ordinary metadata label it has always been. */}
+                    {(() => {
+                      const ctx = hcContext();
+                      const allowed = selectableLevels(
+                        options.confidentiality.map((o) => o.label), ctx,
+                      );
+                      const keep = new Set(allowed.map((l) => l.trim().toLowerCase()));
+                      return options.confidentiality
+                        .filter((o) => keep.has((o.label ?? "").trim().toLowerCase()))
+                        .map((o) => (
+                          <option key={o.id} value={o.id} title={o.label}>
+                            {o.label}
+                          </option>
+                        ));
+                    })()}
                   </select>
                 </div>
 

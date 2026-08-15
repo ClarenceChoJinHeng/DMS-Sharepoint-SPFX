@@ -6,6 +6,7 @@ import {
   refuseReason,
   routeFor,
   selectableLevels,
+  swapLibrarySegment,
 } from "./hcRouting";
 
 /** The levels as the client's term set orders them. */
@@ -194,5 +195,45 @@ describe("effectiveHcLevel", () => {
     // canOfferHc is what refuses. Two questions, two functions.
     expect(effectiveHcLevel("Top Secret", false)).toBe("Top Secret");
     expect(canOfferHc({ hcLevel: "Top Secret", hcAvailable: false, canWriteHc: true })).toBe(false);
+  });
+});
+
+describe("swapLibrarySegment", () => {
+  const P = "/sites/CRS/ApprovalDocument/GHO/GCA/CORU";
+
+  it("swaps the library segment and leaves the tree alone", () => {
+    expect(swapLibrarySegment(P, "ApprovalDocument", "HCApprovalDocument")).toBe(
+      "/sites/CRS/HCApprovalDocument/GHO/GCA/CORU",
+    );
+  });
+
+  it("matches on a slash-delimited segment, so a folder of the same name is safe", () => {
+    // A unit abbreviated "ApprovalDocument" is absurd but a segment folder sharing the library's
+    // name is not, and a bare indexOf would rewrite the wrong one.
+    const odd = "/sites/CRS/ApprovalDocument/GHO/ApprovalDocument/CORU";
+    expect(swapLibrarySegment(odd, "ApprovalDocument", "HCApprovalDocument")).toBe(
+      "/sites/CRS/HCApprovalDocument/GHO/ApprovalDocument/CORU",
+    );
+  });
+
+  it("refuses a path that does not contain the library at all", () => {
+    expect(swapLibrarySegment("/sites/CRS/Shared Documents/GHO", "ApprovalDocument", "HCApprovalDocument"))
+      .toBeUndefined();
+  });
+
+  it("refuses when either segment is unresolved — naming.ts has no HC fallback", () => {
+    expect(swapLibrarySegment(P, "ApprovalDocument", "")).toBeUndefined();
+    expect(swapLibrarySegment(P, "", "HCApprovalDocument")).toBeUndefined();
+    expect(swapLibrarySegment(undefined, "ApprovalDocument", "HCApprovalDocument")).toBeUndefined();
+  });
+
+  it("refuses a no-op swap rather than returning a path that changed nothing", () => {
+    // Returning the same path would read as success and file an HC document in the normal library.
+    expect(swapLibrarySegment(P, "ApprovalDocument", "ApprovalDocument")).toBeUndefined();
+  });
+
+  it("handles a library whose URL segment contains a space", () => {
+    expect(swapLibrarySegment("/sites/CRS/Shared Documents/GHO", "Shared Documents", "HCDocuments"))
+      .toBe("/sites/CRS/HCDocuments/GHO");
   });
 });
