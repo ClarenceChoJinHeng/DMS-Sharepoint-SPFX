@@ -158,25 +158,6 @@ const dateDDMMYY = (iso: string): string => {
  * Empty parts are dropped rather than leaving " -  - " gaps, so a document with
  * no project still reads "Acme - Invoice - 03-08-26".
  */
-/**
- * `2026-08-02` → `02/Aug/2026`, the format agreed with the client.
- *
- * A native `<input type="date">` renders its own format from the BROWSER LOCALE — an en-US browser
- * shows `mm/dd/yyyy` and no markup can change it. So the field keeps the native picker and this line
- * says the date back underneath it, where a month NAME removes the ambiguity outright rather than
- * asking the reader to know which convention they are looking at.
- *
- * Parsed by splitting, never `new Date("2026-08-02")` — that is treated as UTC and renders as the
- * previous day for anyone west of Greenwich, which is a wrong date shown with total confidence.
- */
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const readableDate = (iso: string): string => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((iso ?? "").trim());
-  if (!m) return "";
-  const month = MONTHS[Number(m[2]) - 1];
-  return month ? `${m[3]}/${month}/${m[1]}` : "";
-};
-
 /** "a, b and c" — a comma-list a person reads, rather than a machine-joined one. */
 const listPhrase = (items: string[]): string => {
   const list = items.filter((s) => s.trim().length > 0);
@@ -2299,9 +2280,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                       );
                     }}
                   />
-                  <small>
-                    {documentDate ? `Saves as ${readableDate(documentDate)}` : "Day-Month-Year"}
-                  </small>
+                  {/* No hint line under this field. It existed to disambiguate a locale-formatted
+                      native picker; the box now reads 14-08-2026 outright, so a second format beneath
+                      it contradicts the one the client asked for — and the extra line was what pushed
+                      this column out of line with Confidential Level beside it. */}
                 </label>
 
                 {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
@@ -2533,12 +2515,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
         .dms-toast.error { background: #d13438; color: #fff; }
         .dms-toast.notice { background: #0f6c3f; color: #fff; }
-        /* Fluent brings its own field chrome. Pull the height and the border into line with the
-           form's other inputs, or the date sits visibly proud of the row it shares. */
-        .dms-datepicker .ms-TextField-fieldGroup { height: 38px; border: 1px solid #c7c7c7; border-radius: 6px; }
+        /* Fluent brings its own field chrome. These values are COPIED from the rule above, not
+           approximated — 38px, 1px #c8c8c8, radius 10px — because a date field a couple of pixels
+           off its neighbour is the kind of thing that reads as sloppy without being obvious. */
+        .dms-datepicker .ms-TextField-fieldGroup { height: 38px; border: 1px solid #c8c8c8; border-radius: 10px; background: #fff; }
         .dms-datepicker .ms-TextField-fieldGroup:hover { border-color: #8a8886; }
-        .dms-datepicker .ms-TextField-fieldGroup::after { border-radius: 6px; border-color: #0f6c3f; }
-        .dms-datepicker input { font-family: inherit; font-size: 14px; }
+        .dms-datepicker .ms-TextField-fieldGroup::after { border-radius: 10px; border-color: #0f6c3f; }
+        .dms-datepicker input { font: inherit; padding: 8px 10px; }
+        /* Fluent's wrapper adds its own block spacing, which offsets this field from the select
+           sharing its row. */
+        .dms-datepicker, .dms-datepicker .ms-TextField { margin: 0; }
         .dms-toast-close { position: absolute; top: 10px; right: 12px; background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: .7; line-height: 1; }
         .dms-toast-close:hover { opacity: 1; }
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
