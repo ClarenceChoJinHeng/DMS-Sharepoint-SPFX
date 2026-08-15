@@ -174,7 +174,13 @@ const composeUploadBase = (
     .join(" - ");
 
 type TermOption = { id: string; label: string };
-type ToastType = "error" | "success";
+/**
+ * `success` is NOT a generic "that worked" — it renders the full "Upload Successful / awaiting
+ * approval" modal, and nothing but a completed upload may claim it (client, 2026-08-15: it fired on
+ * Save batch, which sends nothing). `notice` is the quiet slide-in for everything else that went
+ * right.
+ */
+type ToastType = "error" | "success" | "notice";
 
 type UploadMode = {
   key: string;
@@ -1786,7 +1792,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setActiveFileId("");
     setFile(undefined);
     resetForm();
-    showToast(`Batch saved — ${b.files.length} document${b.files.length === 1 ? "" : "s"} ready.`, "success");
+    // `notice`, never `success`: nothing has been sent, and the success modal says "awaiting approval".
+    showToast(
+      `Batch saved — ${b.files.length} document${b.files.length === 1 ? "" : "s"} ready to upload.`,
+      "notice",
+    );
     return true;
   };
 
@@ -1963,7 +1973,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     // click, versus uploading a batch list that does not include what is on screen.
     if (draftFiles.length > 0) {
       if (!saveBatch()) return;
-      showToast("Saved the open batch — press Upload again to send everything.", "success");
+      showToast("Saved the open batch — press Upload again to send everything.", "notice");
       return;
     }
     if (batches.length === 0) {
@@ -2464,6 +2474,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-status { margin-top: 16px; font-size: 13px; }
         .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
         .dms-toast.error { background: #d13438; color: #fff; }
+        .dms-toast.notice { background: #0f6c3f; color: #fff; }
         .dms-toast-close { position: absolute; top: 10px; right: 12px; background: none; border: none; cursor: pointer; font-size: 16px; color: inherit; opacity: .7; line-height: 1; }
         .dms-toast-close:hover { opacity: 1; }
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
@@ -2983,8 +2994,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
       {status && <p className="dms-status">{status}</p>}
 
-      {toast && toast.type === "error" && (
-        <div className="dms-toast error" role="alert">
+      {toast && (toast.type === "error" || toast.type === "notice") && (
+        <div className={`dms-toast ${toast.type}`} role="alert">
           {toast.message}
           <button
             className="dms-toast-close"
@@ -3039,8 +3050,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               </svg>
             </div>
             <p className="dms-popup-title">Upload Successful</p>
+            {/* Counts, because a batch can be five. "Your document is awaiting approval" after
+                uploading five reads as though four went missing. */}
             <p className="dms-popup-msg">
-              Your document is awaiting approval.
+              {lastRun && lastRun.ok > 1
+                ? `Your ${lastRun.ok} documents are awaiting approval.`
+                : "Your document is awaiting approval."}
               <br />
               Please visit Home page to track progress.
             </p>
