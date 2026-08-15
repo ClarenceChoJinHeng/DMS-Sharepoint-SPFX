@@ -5,7 +5,7 @@ import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember }
 import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
 import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
 import { EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, LIST_SUFFIX, libApiTitle } from "../../../shared/naming";
+import { cachedListTitle, hcAvailable, LIST_SUFFIX, libApiTitle } from "../../../shared/naming";
 // One parser for the `#tab=` deep link, shared with the CRS Settings page that writes it — the two
 // halves of one contract, so they cannot drift.
 import { tabFromHash } from "../../../shared/adminPages";
@@ -62,7 +62,21 @@ type Mode      = string;
  * indexes LIBRARY_ROLES and the progress feeds. Renaming the key would silently orphan that
  * stored data. Translate to the real title at the API boundary instead — libApiTitle().
  */
-type LibTarget = "Staging" | "Documents";
+type LibTarget = "Staging" | "Documents" | "StagingHC" | "DocumentsHC";
+
+/**
+ * The libraries a reconciliation run walks.
+ *
+ * The HC pair joins ONLY when the site actually has one, so a site without Highly Confidential
+ * behaves exactly as before and pays nothing — no extra reads, no empty progress panels, and no
+ * "library root not found" lines in the log for two libraries nobody asked for.
+ *
+ * A FUNCTION, not a constant, because `hcAvailable()` is answered by primeNames at mount and this
+ * module is evaluated long before that. A const captured at import time would always say "no HC".
+ */
+const BASE_LIBS: LibTarget[] = ["Staging", "Documents"];
+const reconLibs = (): LibTarget[] =>
+  hcAvailable() ? [...BASE_LIBS, "StagingHC", "DocumentsHC"] : BASE_LIBS;
 
 // libApiTitle — the title SharePoint actually answers to, for a logical library key — moved to
 // shared/naming.ts on 2026-08-14. It was private here while this was the only screen building a URL
@@ -96,7 +110,9 @@ let resolvedFolderCtName: string | undefined;
  * that code is a separate cleanup, and keeping the branch type-reachable leaves the file compiling
  * and lint-clean in the meantime.
  */
-type Tab       = LibTarget | "Reconciliation" | "Abbreviations" | "Levels" | "Migrate" | "NewSegment";
+// Spelled out rather than `LibTarget | …`: since 2026-08-15 LibTarget carries the two HC keys, and
+// deriving Tab from it would invent two browsable tabs for libraries that have no tree UI at all.
+type Tab       = "Staging" | "Documents" | "Reconciliation" | "Abbreviations" | "Levels" | "Migrate" | "NewSegment";
 
 /**
  * Tabs the CRS Settings landing page may deep-link to, by slug.
@@ -262,6 +278,13 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // WITHOUT Manage Permissions leaves approvals failing at the last step, and one with too much
   // hands a Head of Unit the ability to re-permission their whole unit.
   SHARE: "DMS Share",
+  // The HC roles use the SAME permission levels as their plain counterparts, deliberately. There is
+  // no "CRS Upload HC" level and there must not be: the separation between ordinary and Highly
+  // Confidential is which LIBRARY the grant lands on, and that is held by LIBRARY_ROLES above. A
+  // second set of levels would be a second place for the same separation to live, and the two would
+  // drift — with the drift invisible until someone read an HC document they should not have.
+  UPLHC: "DMS Upload",
+  APRHC: "DMS Approve",
   // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
   // library at all — Limited Access on the parent chain lets a direct folder URL through but
   // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without
@@ -306,6 +329,8 @@ function applyPermissionPrefix(levelNames: string[]): void {
   // nothing, and every approved share would then fail at the last step for want of Manage Permissions.
   // Exactly the failure the comment on SHARE warns about, arriving through a different door.
   ROLE_TO_PERMISSION.SHARE = `${prefix} Share`;
+  ROLE_TO_PERMISSION.UPLHC = `${prefix} Upload`;
+  ROLE_TO_PERMISSION.APRHC = `${prefix} Approve`;
 }
 
 // Which roles each library accepts — the isolation rule that keeps viewers off
@@ -331,9 +356,28 @@ function applyPermissionPrefix(levelNames: string[]): void {
 // SHARE is DOCUMENTS-ONLY (2026-08-15). Sharing an unapproved draft would hand someone a document
 // nobody has approved yet — the isolation rule this table exists to hold. A share request can only
 // ever be raised against an approved document, so the approval library never needs it.
+//
+// THE HC ROWS, 2026-08-15. Read them for what is ABSENT: `UPL` and `APR` appear in neither, and that
+// single omission is the entire Highly Confidential feature. An ordinary uploader and an ordinary
+// approver reach the HC libraries not at all — not with reduced rights, not read-only, not at all.
+//
+// This table's whole reason for existing is that a new role reaches no library until someone names
+// it here, which is exactly the property HC needs. Adding "UPL" to StagingHC would hand every PIC in
+// the unit every Highly Confidential draft, and nothing on any screen would look different.
+//
+// MEMBER is absent from DocumentsHC: an SDG Employee reads their unit's approved documents and is
+// not HC-cleared. SEGVIEW and GLOBAL are absent from BOTH approval-side rows, HC included — a
+// segment-wide viewer on an approval library reads every unapproved draft in that segment.
+//
+// DEL, SEGVIEW, GLOBAL and SHARE DO appear on DocumentsHC, on the client's explicit instruction that
+// "the same HOD and the same C level segment and global can read". Their existing powers travel with
+// them: a Head of Department can delete an approved HC document and C-Level can share one. Both are
+// consequences of that instruction rather than of this table, and both are open questions in the spec.
 const LIBRARY_ROLES: Record<LibTarget, string[]> = {
-  Staging: ["UPL", "APR", "DELS"],
-  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR", "SHARE"],
+  Staging: ["UPL", "APR", "DELS", "UPLHC", "APRHC"],
+  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR", "SHARE", "UPLHC", "APRHC"],
+  StagingHC: ["UPLHC", "APRHC", "DELS"],
+  DocumentsHC: ["DEL", "GLOBAL", "SEGVIEW", "SHARE", "UPLHC", "APRHC"],
 };
 
 /**
@@ -349,11 +393,19 @@ const LIBRARY_ROLES: Record<LibTarget, string[]> = {
  * reads to answer "what does this role do", and two of them would let the answer depend on
  * which one they happened to open.
  */
-const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR"];
+const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR", "UPLHC", "APRHC"];
+
+/**
+ * The APPROVED-side libraries, where those roles are downgraded to Read.
+ *
+ * Both of them, or the HC archive becomes writable by every cleared uploader — the exact bug this
+ * downgrade was written to prevent on `Documents`, reintroduced one library along.
+ */
+const APPROVED_SIDE_LIBS: LibTarget[] = ["Documents", "DocumentsHC"];
 
 /** The level a role grants IN A GIVEN LIBRARY. Always use this, never the raw table. */
 function permissionForRole(lib: LibTarget, role: string): string | undefined {
-  if (lib === "Documents" && DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1) return "Read";
+  if (APPROVED_SIDE_LIBS.indexOf(lib) > -1 && DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1) return "Read";
   return ROLE_TO_PERMISSION[role];
 }
 
@@ -641,7 +693,11 @@ export default function FolderManager({
   // One feed per library per kind — four panels. A single merged pair made a
   // 700-step run read as one undifferentiated wall; the client's question is
   // always "how is Staging doing", never "how is the run doing".
-  const emptyFeeds = (): Record<LibTarget, ProgItem[]> => ({ Staging: [], Documents: [] });
+  // All four keys always, even on a site with no HC: the panels render from reconLibs(), so the
+  // unused pair costs two empty arrays and nothing on screen. Keying them lazily would mean
+  // pushFolder spreading `undefined` the first time an HC step reported.
+  const emptyFeeds = (): Record<LibTarget, ProgItem[]> =>
+    ({ Staging: [], Documents: [], StagingHC: [], DocumentsHC: [] });
   const [folderFeeds,  setFolderFeeds]  = useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
   const [assignFeeds,  setAssignFeeds]  = useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
   const [reconCounts,  setReconCounts]  = useState<{ folders: number; assigns: number }>({ folders: 0, assigns: 0 });
@@ -2654,7 +2710,7 @@ export default function FolderManager({
       const folderCtIds = new Map<LibTarget, string>();
       /** Libraries with content approval on — the only ones a moderation status may be written to. */
       const moderatedLibs = new Set<LibTarget>();
-      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+      for (const lib of reconLibs()) {
         const ct = await loadFolderContentTypeId(lib);
         if (ct) folderCtIds.set(lib, ct);
         // Names both candidates: "no CRS Folder content type" on a site that still has the
@@ -2700,7 +2756,7 @@ export default function FolderManager({
         }
       }
       let plannedOps = 0;
-      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+      for (const lib of reconLibs()) {
         for (const t of targets) {
           plannedOps += 1;
           if (fullNameFields.has(lib)) plannedOps += 1;
@@ -2749,7 +2805,7 @@ export default function FolderManager({
       // Note this reverts a folder renamed by hand. Deliberate — the abbreviation
       // list is the single source of truth and every library must agree — and
       // harmless, because uploads resolve by UniqueId rather than by path.
-      const renameLibs = ["Staging", "Documents"] as LibTarget[];
+      const renameLibs = reconLibs();
       const renameRoots = new Map<string, string>();
       for (const lib of renameLibs) {
         const r = await getLibraryRoot(lib);
@@ -2814,7 +2870,7 @@ export default function FolderManager({
         }
       }
 
-      for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+      for (const lib of reconLibs()) {
         const root = await getLibraryRoot(lib);
         if (!root) {
           entries.push({ msg: `${lib}: library root not found — skipped`, ok: false });
@@ -3580,7 +3636,7 @@ export default function FolderManager({
           const descendFrom = targets.filter((t) => !t.isLeaf);
           let unclaimed = 0;
           let unreadable = 0;
-          for (const lib of ["Staging", "Documents"] as LibTarget[]) {
+          for (const lib of reconLibs()) {
             const root = await getLibraryRoot(lib);
             if (!root) continue;
             for (const t of descendFrom) {
@@ -4027,7 +4083,7 @@ export default function FolderManager({
               {/* One row per library, two panels each. Grouping by library rather than
                   by kind is what the client actually reads: "is Staging done" is a
                   question, "are all folders done across both libraries" is not. */}
-              {(["Staging", "Documents"] as LibTarget[]).map((lib) => (
+              {reconLibs().map((lib) => (
                 <div key={lib} style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#0f6c3f", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>{lib}</div>
                   {/* flexWrap + flex-basis makes the two panels sit side-by-side on wide
