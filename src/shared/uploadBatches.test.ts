@@ -116,6 +116,24 @@ describe("collisionsWithin", () => {
     expect(collisionsWithin(b).sort()).toEqual(["f1", "f2", "f3"]);
   });
 
+  it("prefers finalName, because THAT is what reaches SharePoint", () => {
+    // Different typed names, identical composed names — the case comparing typed names would miss.
+    const a = { ...staged("f1", "scan1.pdf", "Rewards"), finalName: "P1 - V1 - 010826.pdf" };
+    const b = { ...staged("f2", "scan2.pdf", "Bonuses"), finalName: "P1 - V1 - 010826.pdf" };
+    expect(collisionsWithin(batch("b1", [a, b])).sort()).toEqual(["f1", "f2"]);
+  });
+
+  it("does not flag files whose typed names match but whose composed names differ", () => {
+    const a = { ...staged("f1", "scan1.pdf", "Rewards"), finalName: "P1 - V1 - 010826.pdf" };
+    const b = { ...staged("f2", "scan2.pdf", "Rewards"), finalName: "P2 - V1 - 010826.pdf" };
+    expect(collisionsWithin(batch("b1", [a, b]))).toEqual([]);
+  });
+
+  it("falls back to the typed name when the form has not computed one", () => {
+    const b = batch("b1", [staged("f1", "a.pdf", "Same"), staged("f2", "b.pdf", "Same")]);
+    expect(collisionsWithin(b).sort()).toEqual(["f1", "f2"]);
+  });
+
   it("does NOT flag the same name in different batches — that is the destination's problem", () => {
     const b1 = batch("b1", [staged("f1", "a.pdf", "Same")]);
     const b2 = batch("b2", [staged("f2", "b.pdf", "Same")]);

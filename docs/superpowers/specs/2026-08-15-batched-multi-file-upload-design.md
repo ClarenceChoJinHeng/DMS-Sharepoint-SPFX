@@ -174,6 +174,53 @@ already routed to `Documents`.
 `Form.tsx` keeps the UI, the requests and the existing per-file upload call — the code that is
 site-verified and must not be rewritten for what is a UI change.
 
+### 7.1 Two facts found while reading `Form.tsx`, which shape the integration
+
+**The uploaded name is NOT the typed name.** `handleUpload` builds it as
+`buildUploadName(file.name, composeUploadBase(projectName, vendor, docName, documentDate))` (:1461) —
+the `[Project] - [Vendor] - [Document Name] - [Date]` convention. So "Document Name" is one *segment*
+of the result, and **two files with different typed names still collide** when project, vendor and date
+match. Comparing typed names would miss precisely that case.
+
+`StagedFile.finalName` therefore holds the composed name, computed by the form and stored, and
+`collisionsWithin` prefers it. Not re-derived in `uploadBatches.ts`: a second copy of the naming
+convention would be free to drift from the one that actually performs the upload.
+
+**A batch must snapshot its destination, not reference the pickers.** Today the handler reads
+`levelValues`, `levelChoices`, `tierValues` and `tierPlan()` live, because there is one destination and
+it is the one on screen. With several batches, the pickers describe whichever batch is being edited
+*now* — so uploading batch 1 would use batch 3's department, silently, into a real folder that looks
+correct.
+
+`Batch.destination` is therefore captured at **Save batch**, when the pickers are current and validated,
+and holds:
+
+| Key | Purpose |
+|---|---|
+| `unitSru` | the permissioned leaf folder — where ensure-creation starts |
+| `segments` | below-Unit folder names in chain order |
+| `levelSelections` | the label/GUID pairs `buildLevelFormValues` needs |
+| `tierFormValues` | the already-built `FieldName`/`FieldValue` pairs for below-Unit tiers |
+
+Upload then needs **no picker state at all**: ensure `segments` under `unitSru`, then per file write
+`tierFormValues` + `levelSelections` + that file's own metadata.
+
+### 7.2 The remaining integration, in order
+
+1. `batches: Batch[]` (saved) and `draftFiles: StagedFile[]` (the batch being built); `activeFileId`
+   selects which per-file panel is open.
+2. The existing field block becomes the editor for the active file. Switching panels captures the
+   editor into that file and loads the next — the existing `onChange` handlers are left alone.
+3. **Save batch** captures the editor, runs `canSaveBatch`, snapshots the destination per §7.1, and
+   pushes a `Batch`. **New batch** clears the pickers via the existing `resetForm`.
+4. `handleUpload` becomes: re-read the chain **once per distinct segment** → `batchesNeedingRepick` →
+   for each uploadable batch, ensure folders once → per file, the existing upload + tag code with its
+   values taken from `sf.meta` instead of component state → collect `UploadResult[]` →
+   `applyUploadResults`.
+5. The per-file tail of today's handler (:1636–:1846) is extracted as
+   `uploadStagedFile(dest, sf): Promise<UploadResult>` — it returns a result instead of calling
+   `showToast` and `return`, which is the only behavioural change to that code.
+
 ---
 
 ## 8. Why this is factored this way: batching has been removed from this project once

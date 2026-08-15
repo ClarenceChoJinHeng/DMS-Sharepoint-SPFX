@@ -21,6 +21,14 @@
 /** Opaque per-file metadata. This module never reads a field; `Form.tsx` owns the shape. */
 export type FileMeta = Record<string, string>;
 
+/**
+ * Opaque destination snapshot. `Form.tsx` owns the shape; nothing here inspects it.
+ *
+ * Deliberately not narrowed: the moment this module knows what a destination contains, it knows about
+ * term GUIDs and SharePoint columns, and it stops being the thing that can be tested without a tenant.
+ */
+export type BatchDestination = Record<string, unknown>;
+
 /** One file staged for upload. */
 export interface StagedFile {
   /** Stable within a session. Never an array index — rows are removed mid-run (see applyUploadResults). */
@@ -29,6 +37,18 @@ export interface StagedFile {
   file: File;
   /** What the user typed in "Document Name". Blank keeps the original filename. */
   typedName: string;
+  /**
+   * The name this file will actually be uploaded under, computed by `Form.tsx`.
+   *
+   * NOT the typed name. The form composes `[Project] - [Vendor] - [Document Name] - [Date]` via
+   * `composeUploadBase`, then extension-proofs it with `buildUploadName` — so the typed name is one
+   * SEGMENT of the result, and two files with different typed names can still collide (same project,
+   * same vendor, same date). Comparing typed names would miss exactly that case.
+   *
+   * Kept here rather than re-derived, because re-deriving would mean a second copy of the naming
+   * convention living somewhere it could drift from the one that does the upload.
+   */
+  finalName?: string;
   meta: FileMeta;
   /** Set only after a failed upload attempt — the reason shown on the row. */
   error?: string;
@@ -46,8 +66,16 @@ export interface Batch {
   chainSignature: string;
   /** Folder names in chain order, for display: ["GHO", "Group Finance", "Corporate", "2026", "Tax Return"]. */
   pathLabels: string[];
-  /** Everything `Form.tsx` needs to rebuild the write. Opaque here, as with `FileMeta`. */
-  destination: Record<string, string>;
+  /**
+   * A SNAPSHOT of everything `Form.tsx` needs to write this batch, taken when the batch was saved.
+   * Opaque here, as with `FileMeta`.
+   *
+   * A snapshot rather than a reference to the pickers, because by Upload the pickers describe whatever
+   * batch is being edited NOW — batch 1 would be written using batch 3's department. It holds the
+   * unit's server-relative URL, the below-Unit folder names, the level selections for
+   * `buildLevelFormValues`, and the already-built tier field/value pairs.
+   */
+  destination: BatchDestination;
   files: StagedFile[];
   /** Set by `batchesNeedingRepick` when this batch's segment changed shape under it. */
   needsRepick?: boolean;
@@ -96,7 +124,13 @@ export function resolveUploadName(original: string, typed: string): string {
 export function collisionsWithin(batch: Batch): string[] {
   const byName = new Map<string, string[]>();
   for (const f of batch?.files ?? []) {
-    const key = resolveUploadName(f.file?.name ?? "", f.typedName).toLowerCase();
+    // `finalName` when the form has computed it — the composed
+    // `[Project] - [Vendor] - [Name] - [Date]`, which is what actually reaches SharePoint. The
+    // fallback keeps this module usable on its own; the form always supplies the real name.
+    const key = (f.finalName && f.finalName.trim().length > 0
+      ? f.finalName
+      : resolveUploadName(f.file?.name ?? "", f.typedName)
+    ).toLowerCase();
     const seen = byName.get(key);
     if (seen) seen.push(f.id);
     else byName.set(key, [f.id]);
