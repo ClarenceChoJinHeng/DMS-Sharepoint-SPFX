@@ -93,6 +93,7 @@ export const ALL_EVENT_TYPES: string[] = [
   EVENT.reconciliationRun, EVENT.structureChanged, EVENT.migrationRun,
   EVENT.segmentCreated, EVENT.segmentDeleted, EVENT.abbreviationChanged, EVENT.policyChanged,
   EVENT.groupMapChanged, EVENT.groupCreated, EVENT.groupDeleted, EVENT.membersChanged,
+  EVENT.deletionRequested, EVENT.shareRequested, EVENT.requestApproved, EVENT.requestRejected,
 ];
 
 /**
