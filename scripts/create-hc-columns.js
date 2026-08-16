@@ -141,33 +141,45 @@
 
   /* ── Run ──────────────────────────────────────────────────────────────────── */
 
+  /*
+   * Every document library on the site, read ONCE.
+   *
+   * Probing candidate titles with getbytitle() works, but each miss is a 404 the browser
+   * logs to the console whether or not the code handles it — so a completely successful
+   * run printed two red errors and looked broken. Matching against the list collection
+   * costs one request, is silent, and can name what IS there when nothing matches.
+   */
+  const allLists = await fetch(
+    `${SITE}/_api/web/lists?$select=Title&$filter=BaseTemplate eq 101`,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  )
+    .then((r) => (r.ok ? r.json() : { value: [] }))
+    .then((d) => (d.value || []).map((l) => l.Title));
+
   for (const candidates of LIBRARIES) {
+    // Case-insensitive: SharePoint titles are, and an admin who typed "HC documents"
+    // should not be told the library does not exist.
+    const library = candidates.find((c) =>
+      allLists.some((t) => t.toLowerCase() === c.toLowerCase()),
+    );
+    if (!library) {
+      console.error(
+        `%c\nx no library titled ${candidates.map((c) => `"${c}"`).join(" or ")}`,
+        "font-weight:bold;color:#a4262c",
+      );
+      console.error(`  Document libraries on this site: ${allLists.join(", ") || "(none readable)"}`);
+      continue;
+    }
+
     // Existence is matched on INTERNAL name, never the display title: a matching title
     // over a different internal name fails exactly like an absent column, and looks
     // completely correct in the UI.
-    let library;
-    let res;
-    for (const candidate of candidates) {
-      const attempt = await fetch(
-        `${listBase(candidate)}/fields?$select=InternalName&$top=500`,
-        { headers: { Accept: "application/json;odata=nometadata" } },
-      );
-      if (attempt.ok) {
-        library = candidate;
-        res = attempt;
-        break;
-      }
-    }
-    if (!library) {
-      console.error(
-        `%c\nx no library found under ${candidates.map((c) => `"${c}"`).join(" or ")}`,
-        "font-weight:bold;color:#a4262c",
-      );
-      console.error(
-        "  Create it, or run the snippet below to see what the document libraries are called:\n" +
-          "  fetch(`${_spPageContextInfo.webAbsoluteUrl}/_api/web/lists?$select=Title&$filter=BaseTemplate eq 101`,\n" +
-          "    {headers:{Accept:'application/json;odata=nometadata'}}).then(r=>r.json()).then(d=>console.table(d.value));",
-      );
+    const res = await fetch(
+      `${listBase(library)}/fields?$select=InternalName&$top=500`,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) {
+      console.error(`  x could not read "${library}"'s columns (HTTP ${res.status})`);
       continue;
     }
 
