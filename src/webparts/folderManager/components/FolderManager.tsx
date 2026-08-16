@@ -2414,11 +2414,49 @@ export default function FolderManager({
             const lj = await listRes.json();
             const entryListBase = `${siteUrl}/_api/web/lists(guid'${lj.Id}')`;
             if (lj.HasUniqueRoleAssignments !== true) {
-              // Enforcing on an inheriting library is impossible — SharePoint refuses a role
-              // assignment on an inheriting securable — and the inheritance itself is the far
-              // bigger problem, since site Read then reaches every document in the library.
-              entries.push({ msg: `  ⚠ ${lib}: still inherits site permissions — site-entry state NOT enforced, and every site member can read this library. Break inheritance.`, ok: false });
-              continue;
+              /* AN INHERITING CRS LIBRARY IS A LIVE EXPOSURE, so this breaks it rather than
+                 reporting it.
+
+                 The site-entry group holds Read on the WEB, so a library that still inherits is
+                 readable by every site member — every uploader, approver and viewer — no matter how
+                 carefully the folders beneath it are locked. There is no case in which a CRS library
+                 should inherit.
+
+                 Found live 2026-08-17: BOTH HC libraries were in exactly this state. The libraries
+                 existed, the folder tree was built and locked, and the whole time the library root
+                 was readable by anyone who could open the site — on the two libraries where that
+                 matters most. Nothing reported it, because the block that breaks inheritance runs
+                 inside the library-scope ROWS loop and the HC libraries have no rows. The same
+                 structural gap as the page lockdown: the mechanism is driven by grant rows, and the
+                 thing that needs protecting has none.
+
+                 copyRoleAssignments=false, as everywhere else: with true every inherited grant is
+                 carried forward, so the library stays readable by exactly the same people and the
+                 run reports success — a failure invisible from the log. */
+              const broke = await withThrottleRetry(() => context.spHttpClient.post(
+                `${entryListBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              ));
+              if (!broke.ok) {
+                entries.push({ msg: `  ✗ ${lib}: INHERITS site permissions and could not be secured (HTTP ${broke.status}) — every site member can read this library`, ok: false });
+                continue;
+              }
+              entries.push({ msg: `  ↳ ${lib}: inherited site permissions — inheritance BROKEN (no permissions copied)`, ok: true });
+              /* Owners go straight back on. With nothing copied, the only remaining access is site
+                 collection administrators, so an owner who is not also one would lose the library.
+                 `typeof`, not `!== undefined`: ownerGroupId is `number | null`, and null slips past
+                 an undefined check straight into the request as the string "null". */
+              if (fullCtrlId !== undefined && typeof ownerGroupId === "number") {
+                try {
+                  await addRoleAssignmentToList(entryListBase, ownerGroupId, fullCtrlId);
+                  entries.push({ msg: `  ↳ ${lib}: site Owners → Full Control restored`, ok: true });
+                } catch (e) {
+                  entries.push({ msg: `  ✗ ${lib}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                }
+              }
+              // Fall through deliberately: the site-entry rule below now applies to a library with
+              // unique permissions, which is the only state in which it means anything.
             }
             const raRes = await context.spHttpClient.get(
               `${entryListBase}/roleassignments?$select=PrincipalId,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=RoleDefinitionBindings`,
