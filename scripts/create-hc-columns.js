@@ -40,8 +40,22 @@
 
   const SITE = _spPageContextInfo.webAbsoluteUrl;
 
-  /** The two HC libraries, by TITLE (after the retitle). */
-  const LIBRARIES = ["HC Approval Document", "HC Documents"];
+  /**
+   * The two HC libraries, as CANDIDATE titles in probe order.
+   *
+   * The retitled name first, then the name the library is created under. Same order and
+   * same reason as `HC_APPROVAL_CANDIDATES` in shared/naming.ts: a list's URL is fixed at
+   * creation and never moves on rename, so the two halves diverge on purpose — and until
+   * someone performs the retitle, the library answers only to the space-free name.
+   *
+   * An earlier version of this script demanded the retitled name and answered 404 for a
+   * library sitting right there, which reads as "you created it wrong" rather than "you
+   * have not renamed it yet".
+   */
+  const LIBRARIES = [
+    ["HC Approval Document", "HCApprovalDocument"],
+    ["HC Documents", "HCDocuments"],
+  ];
 
   /**
    * Every non-taxonomy column, as (internalName, displayName, type).
@@ -127,22 +141,44 @@
 
   /* ── Run ──────────────────────────────────────────────────────────────────── */
 
-  for (const library of LIBRARIES) {
-    console.log(`%c\n${library}`, "font-weight:bold;font-size:14px");
-
+  for (const candidates of LIBRARIES) {
     // Existence is matched on INTERNAL name, never the display title: a matching title
     // over a different internal name fails exactly like an absent column, and looks
     // completely correct in the UI.
-    const res = await fetch(
-      `${listBase(library)}/fields?$select=InternalName&$top=500`,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (!res.ok) {
+    let library;
+    let res;
+    for (const candidate of candidates) {
+      const attempt = await fetch(
+        `${listBase(candidate)}/fields?$select=InternalName&$top=500`,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (attempt.ok) {
+        library = candidate;
+        res = attempt;
+        break;
+      }
+    }
+    if (!library) {
       console.error(
-        `  x could not read "${library}" (HTTP ${res.status}). ` +
-          "Check the title is exactly right — a library is reached by TITLE, not by URL.",
+        `%c\nx no library found under ${candidates.map((c) => `"${c}"`).join(" or ")}`,
+        "font-weight:bold;color:#a4262c",
+      );
+      console.error(
+        "  Create it, or run the snippet below to see what the document libraries are called:\n" +
+          "  fetch(`${_spPageContextInfo.webAbsoluteUrl}/_api/web/lists?$select=Title&$filter=BaseTemplate eq 101`,\n" +
+          "    {headers:{Accept:'application/json;odata=nometadata'}}).then(r=>r.json()).then(d=>console.table(d.value));",
       );
       continue;
+    }
+
+    console.log(`%c\n${library}`, "font-weight:bold;font-size:14px");
+    if (library !== candidates[0]) {
+      // Not an error — the library exists and the columns will be created correctly. But the
+      // web parts resolve BOTH candidates too, so this only matters for how it reads on screen.
+      console.log(
+        `  (still titled "${library}" — retitle it to "${candidates[0]}" when convenient; ` +
+          "the URL stays as it is, which is the point)",
+      );
     }
     const present = new Set(
       ((await res.json()).value || []).map((f) => (f.InternalName || "").toLowerCase()),
@@ -202,8 +238,9 @@
       "_x0020_ in the internal name, and here that is the correct outcome.",
   );
   console.log(
-    "%cThen verify:",
+    "%cThen verify — diff InternalName, never Title:",
     "font-weight:bold",
-    `${SITE}/_api/web/lists/getbytitle('HC Approval Document')/fields?$select=Title,InternalName&$filter=Hidden eq false`,
+    `${SITE}/_api/web/lists/getbytitle('${encodeURIComponent(LIBRARIES[0][0])}')` +
+      "/fields?$select=Title,InternalName&$filter=Hidden eq false",
   );
 })();
