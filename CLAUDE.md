@@ -315,8 +315,24 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   tier.** Structure becomes `Business Segment → Department → Unit → SubUnit → Year → Document Type`,
   and the client may not reorder or remove any of the first four. But SubUnit is authored
   `"permissioned": false`, so it needs **no groups, no Group Map rows, no abbreviation rows and no
-  code change** — just a term set, `SubUnit`/`SubUnitTid` columns in BOTH libraries, and one
-  `Levels` entry before `Year`. Subunit data not yet supplied by the client.
+  code change** — just `SubUnit`/`SubUnitTid` columns in BOTH libraries and one `Levels` entry
+  before `Year`. Subunit data not yet supplied by the client.
+  - **⚠ SUBUNIT TERMS ARE AUTHORED UNDER THE UNIT TERM, NOT IN A TERM SET OF THEIR OWN
+    (2026-08-17, client's data).** Some units under a department have subunits and some have none,
+    and the subunits are unit-SPECIFIC — which a flat standalone set cannot express: it offers every
+    unit the same list, so a Finance Operations uploader would be shown Finance Land's subunits.
+    Authoring under the unit makes optionality fall out of the data (no children ⇒ the tier is not
+    offered) with nothing to configure and no "N/A" terms.
+  - **This is what the architecture already assumes.** Reconciliation's walk stops at
+    `permissionedDepth`, and its own comment says *"anything deeper in the term tree is a below-Unit
+    tier: created on demand by the upload form, inheriting this folder's ACL, never provisioned
+    here"* (`FolderManager.tsx` ~2046). So terms under a unit are **safe to author now**: no folders,
+    no ACLs, no group-map warnings.
+  - **NOT YET BUILT, and it fails SILENTLY until it is.** A below-Unit tier still reads its options
+    from the `termSet` id in its `Levels` entry, so terms under the unit produce an EMPTY dropdown
+    rather than an error. The option source must become "children of the chosen unit term" in
+    `Form.tsx`, `BulkUpload.tsx`, `StructureManager` (which today asks for a term set ID) and
+    `DocumentSearch`. Tell the client to author the terms; do NOT tell them it works yet.
   - **THE UNIT IS STILL THE SMALLEST CONFIDENTIALITY BOUNDARY.** Two SubUnits under one Unit see
     each other's documents completely — the ACL is on the Unit folder and SubUnit inherits it.
     Confirmed by the client 2026-08-10 when asked directly. Everything in
