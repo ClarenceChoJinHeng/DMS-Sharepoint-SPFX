@@ -1237,6 +1237,12 @@ was bundled in `config.json`, and its GUID was in the feature's `componentIds`.
   install/update only. The bundle refreshes on its own, so web parts appear to update while the
   customizer does not — which reads as "the button fix didn't work" rather than "the app wasn't
   updated".
+- **⚠ ON ClarenceDMSTesting THE REGISTRATION IS MANUAL, NOT FROM THE FEATURE (2026-08-16).** Even after
+  `skipFeatureDeployment: false` and an app update, the element never provisioned, so the
+  `UserCustomAction` was POSTed by hand and the button then worked immediately. **Do not read this
+  site's working button as proof that `elements.xml` provisions.** On SDG's tenant, deploy, then run
+  the usercustomactions check below; if it returns 0, register it by hand the same way. Verified live:
+  the customizer's DOM selectors are current and correct — registration was the only thing missing.
 - **CHECK FOR A HAND-MADE REGISTRATION BEFORE DEPLOYING:**
   `/_api/web/usercustomactions?$select=Title,Location,ClientSideComponentId`. Two registrations of one
   component load it twice — two buttons, two MutationObservers.
