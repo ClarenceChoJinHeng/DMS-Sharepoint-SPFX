@@ -9,7 +9,6 @@ import { BaseClientSideWebPart } from "@microsoft/sp-webpart-base";
 
 import DocumentSearch from "./components/DocumentSearch";
 import { IDocumentSearchProps } from "./components/IDocumentSearchProps";
-import { withBackToSettings } from "../../shared/backToSettings";
 
 export interface IDocumentSearchWebPartProps {
   pageSize: number;
@@ -22,10 +21,12 @@ export default class DocumentSearchWebPart extends BaseClientSideWebPart<IDocume
       // The slider cannot produce 0, but a page saved before this property existed can.
       pageSize: this.properties.pageSize > 0 ? this.properties.pageSize : 10,
     });
-    /* Wrapped at the WEB PART boundary, never inside the component — the same seam every other CRS
-       page uses. It is load-bearing: a component that renders its own back band would carry it into
-       any future embedded mount, where a link OUT of the host page reads as part of the host. */
-    ReactDom.render(withBackToSettings(this.context, element), this.domElement);
+    /* NO "Back to CRS Settings" band, deliberately — the same exclusion the upload form, the
+       approval page and My Submissions carry, and for the same reason. This web part lives on the
+       HOME page and is for everyone, so a back link would assert the visitor arrived from an admin
+       page they have most likely never opened and may not be permitted to open. The band belongs to
+       pages the CRS Settings directory actually links to; this is not one. */
+    ReactDom.render(element, this.domElement);
   }
 
   protected onDispose(): void {
