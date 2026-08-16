@@ -2,7 +2,7 @@
 
 **Date started:** 2026-08-16
 **Site:** `/sites/ClarenceDMSTesting`
-**Package:** 1.0.122.0
+**Package:** 1.0.123.0
 **Goal:** exercise everything built, fix what testing finds, then migrate to SDG's site.
 
 Supersedes `docs/superpowers/specs/2026-07-28-dms-uat-test-plan.md`, which covers 7 of the current 15
@@ -215,7 +215,7 @@ Anything to change, however small. A note here costs five seconds; a forgotten o
 | 3 | Migration runbook | Per-page restriction is a required per-site step and is documented nowhere. | major | open |
 | 4 | `shared/spGroups.ts` | **No throttle handling on any group operation. Add/remove member and create/delete group are single-shot, so a burst of writes gets a 429/503 and fails outright. Hit live 2026-08-16 removing one account from 8 groups. `dmsFolderMap.ts` retries 429/503 honouring `Retry-After` in six places — group operations are the one bulk-write path without it, and group creation in bulk is exactly what migration to SDG's tenant will do. | major | **fixed 1.0.122.0** |
 | 6 | `FolderManager.tsx` reconciliation, page pass | **ROOT CAUSE OF #1.** Reconciliation does break inheritance on Site Pages and grant from Group Map rows — but it iterates only pages that HAVE grant rows. An `adminOnly` page has no eligible groups, so no rows, so reconciliation never visits it and it stays inheriting and open to every site member. The lock mechanism is driven by grants; admin pages by definition have none. | **blocker** | open |
-| 7 | `FolderManager.tsx` library pass | **The site-entry grant is inverted on this site, and cannot self-heal.** The restore is conditional on the group having had access BEFORE the break, so whatever state existed at first break is frozen. Live: `Approval Document` HAS `CRS_SITE_MEMBERS` Read (the code comment says it must NOT) and `Documents` has NONE (the comment says it MUST). The block is guarded on `HasUniqueRoleAssignments !== true`, so re-running reconciliation skips it. Risk named in that same comment: the approval guard resolves the destination folder in Documents as the approver and needs that Read — without it approvers 404 on every destination while the run logs success. | **blocker** | open — manual fix applied? |
+| 7 | `FolderManager.tsx` library pass | **The site-entry grant is inverted on this site, and cannot self-heal.** The restore is conditional on the group having had access BEFORE the break, so whatever state existed at first break is frozen. Live: `Approval Document` HAS `CRS_SITE_MEMBERS` Read (the code comment says it must NOT) and `Documents` has NONE (the comment says it MUST). The block is guarded on `HasUniqueRoleAssignments !== true`, so re-running reconciliation skips it. Risk named in that same comment: the approval guard resolves the destination folder in Documents as the approver and needs that Read — without it approvers 404 on every destination while the run logs success. | **blocker** | **fixed 1.0.123.0** — reconciliation now asserts the state every run, in both directions |
 | 5 | `shared/spGroups.ts` `fail()` | A throttled response body is HTML, and it is surfaced raw to the user — a wall of `<!DOCTYPE html>` where a sentence belongs. Should name the status and say "SharePoint is busy, retry shortly". | minor | **fixed 1.0.122.0** |
 
 Severity: **blocker** (migration cannot proceed) · **major** (wrong behaviour, workaround exists) ·

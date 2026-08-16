@@ -2366,6 +2366,112 @@ export default function FolderManager({
         entries.push({ msg: `⚠ Library access skipped — ${(e as Error).message}`, ok: false });
       }
 
+      // ── SITE-ENTRY LIBRARY STATE ──────────────────────────────────────────────
+      //
+      // Asserts, on EVERY run, that the site-entry group holds Read on the approved-side
+      // libraries and holds nothing on the approval-side ones.
+      //
+      // ── Why this is ENFORCED rather than authored ────────────────────────────
+      // It is not configuration; it is a structural requirement of the approval flow. The
+      // approval guard resolves the destination folder in Documents AS THE APPROVER, and that
+      // works only because the site-entry group holds Read on that library. Without it every
+      // approver 404s on every destination — approval refused for everyone, with a run log that
+      // reports success.
+      //
+      // Until now the only thing maintaining it was the one-time `entryHadAccess` restore at the
+      // moment inheritance was first broken. That freezes whatever state happened to exist then,
+      // and is skipped forever after (the block is guarded on HasUniqueRoleAssignments). Found
+      // live 2026-08-16 in the EXACT INVERSE of the intent: the site-entry group held Read on the
+      // approval library, where it must never be, and held nothing on Documents, where it must
+      // always be. Neither could self-correct, and no screen reported either one.
+      //
+      // A Group Map row would also work, and must NOT be the answer: it would leave the entire
+      // approval flow depending on an administrator remembering one row on every new site.
+      //
+      // Decided by the logical LibTarget key via APPROVED_SIDE_LIBS, never by library title —
+      // titles get renamed (`Staging` → `Approval Document`) and a name test would silently stop
+      // matching. Gotcha #12, in a place where the cost of silence is over-exposure.
+      try {
+        setReconPhase("Checking site-entry library access…");
+        const groupsForEntry = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+        const entryId = findSiteEntryGroup(groupsForEntry)?.id;
+        if (entryId === undefined) {
+          entries.push({ msg: `⚠ ${siteEntryGroupTitle()}: group not found — site-entry library access not checked`, ok: false });
+        } else if (readId === undefined) {
+          entries.push({ msg: `⚠ Site-entry library access: no "Read" role definition on site — skipped`, ok: false });
+        } else {
+          for (const lib of reconLibs()) {
+            const shouldHold = APPROVED_SIDE_LIBS.indexOf(lib) > -1;
+            const listRes = await context.spHttpClient.get(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=Id,HasUniqueRoleAssignments`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!listRes.ok) {
+              entries.push({ msg: `  ⚠ ${lib}: library not found (HTTP ${listRes.status}) — site-entry access not checked`, ok: false });
+              continue;
+            }
+            const lj = await listRes.json();
+            const entryListBase = `${siteUrl}/_api/web/lists(guid'${lj.Id}')`;
+            if (lj.HasUniqueRoleAssignments !== true) {
+              // Enforcing on an inheriting library is impossible — SharePoint refuses a role
+              // assignment on an inheriting securable — and the inheritance itself is the far
+              // bigger problem, since site Read then reaches every document in the library.
+              entries.push({ msg: `  ⚠ ${lib}: still inherits site permissions — site-entry state NOT enforced, and every site member can read this library. Break inheritance.`, ok: false });
+              continue;
+            }
+            const raRes = await context.spHttpClient.get(
+              `${entryListBase}/roleassignments?$select=PrincipalId,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=RoleDefinitionBindings`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!raRes.ok) {
+              // Never guessed at: an unreadable ACL is not evidence of absence. Acting on it would
+              // either re-grant what is already there or remove what nobody could see.
+              entries.push({ msg: `  ⚠ ${lib}: could not read permissions (HTTP ${raRes.status}) — site-entry state not enforced`, ok: false });
+              continue;
+            }
+            const raJson = await raRes.json();
+            const held = ((raJson.value ?? []) as Array<{ PrincipalId?: number; RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }> }>)
+              .filter((ra) => ra.PrincipalId === entryId);
+
+            if (shouldHold && held.length === 0) {
+              try {
+                await addRoleAssignmentToList(entryListBase, entryId, readId);
+                entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} → Read GRANTED (approval resolves destinations as the approver and needs it)`, ok: true });
+                bumpAssigns();
+              } catch (e) {
+                entries.push({ msg: `  ✗ ${lib}: could not grant ${siteEntryGroupTitle()} — APPROVALS MAY FAIL — ${(e as Error).message}`, ok: false });
+              }
+            } else if (!shouldHold && held.length > 0) {
+              // Every binding, not just Read: a hand-made grant may be at any level, and removing
+              // only the one this code would have made would leave the wider one in place.
+              let removed = 0;
+              for (const ra of held) {
+                for (const binding of ra.RoleDefinitionBindings ?? []) {
+                  if (binding.Id === undefined) continue;
+                  const del = await withThrottleRetry(() => context.spHttpClient.post(
+                    `${entryListBase}/roleassignments/removeroleassignment(principalid=${entryId},roledefid=${binding.Id})`,
+                    SPHttpClient.configurations.v1,
+                    { headers: { Accept: "application/json;odata=nometadata" } },
+                  ));
+                  if (del.ok) removed++;
+                  else entries.push({ msg: `  ✗ ${lib}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`, ok: false });
+                }
+              }
+              if (removed > 0) {
+                entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} REMOVED (${removed} level(s)) — site entry is a door into the site, not library access`, ok: true });
+              }
+            } else {
+              entries.push({ msg: `  ✓ ${lib}: ${siteEntryGroupTitle()} ${shouldHold ? "holds Read" : "has no access"} — correct`, ok: true });
+            }
+            await tick();
+          }
+        }
+      } catch (e) {
+        entries.push({ msg: `⚠ Site-entry library access skipped — ${(e as Error).message}`, ok: false });
+      }
+
       // ── PAGE ACCESS PASS ──────────────────────────────────────────────────────
       // Re-asserts every `Scope = Page` row, so page access self-heals the same way folder
       // and library access do.
