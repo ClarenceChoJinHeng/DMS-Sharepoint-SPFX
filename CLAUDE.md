@@ -1158,6 +1158,84 @@ permission level do not exist yet, so **nothing works until reconciliation is re
   button, the external-sharing assumption, shares being permanent with no revoke yet, and that this
   changes deleting and not *seeing*), plus the two prerequisites and four open questions.
 
+## CRS SEARCH (2026-08-16, spec `2026-08-16-document-search-design.md`)
+Client: *"add a search bar in homepage that allows them to search files via metadata"*. Web part
+**`CRS Search`** (`8b2f4a95-…`, own bundle), for the **home page**. Rules in `shared/documentSearch.ts`
+(pure, 72 tests). BUILT, **not site-tested**.
+- **THE ASK WAS CORRECTED MID-CONVERSATION AND THE SECOND VERSION GOVERNS.** It began *"only user who
+  created that file can see it"*; asked what a non-uploader should see, the client replied *"the
+  security part follows the today's hierachy of how the group works. PIC sees only their own unit, HOU
+  sees the unit, HOD sees the entire unit and segment and glboal you get the gist"*. The first reading
+  is My Submissions, which already exists, and would have shown a Head of Department **nothing**.
+- **IT ENFORCES NO PERMISSIONS, AND MUST NEVER BE CHANGED TO.** Search applies ACLs at query time and a
+  REST list read returns only items the caller can open, so the hierarchy falls out of the folder ACLs
+  reconciliation already grants. That is the **safe** direction: a bug here can only return FEWER rows
+  than the person is entitled to. A role check written here could return more, and would be a second,
+  drifting copy of `groupMapModel.ts`. Say plainly to the client: **a PIC finds their whole unit's
+  approved documents**, exactly as browsing already shows them.
+- **TWO ENGINES, and the split is not arbitrary.** Search/KQL for `Documents` + `HC Documents`; REST
+  `$filter` for the two approval libraries.
+  - `$filter` **cannot** search the approved side: SharePoint throws the **5,000-item list view
+    threshold** on any filter it cannot serve from an index, and **`substringof` cannot use an index at
+    all**. Past 5,000 items free-text search FAILS rather than returning less.
+  - Search cannot serve the approval side: crawl latency, and that library holds the just-uploaded file
+    in front of the one person certain it exists.
+- **THE GAP BETWEEN THEM IS REAL AND IS CLOSED BY A THIRD READ.** A file approved two minutes ago has
+  been moved out of the approval library and deleted from the source (that delete is load-bearing for
+  security), and is not yet crawled — so it is in **neither** engine. `buildRecentFilter` adds a
+  `Modified ge <24h ago>` read of the approved side, merged and **deduped on `UniqueId`, never on path**
+  (a moved file is still one file). `Modified` is indexable and the window keeps the set tiny, which is
+  exactly why the MAIN read could not be done this way. It runs on every search, not only on an empty
+  one — the gap is per document, not per query.
+- **THE TIER FILTERS ARE DERIVED FROM THE SEGMENT'S `Levels` CHAIN**, cascading over the term tree. A
+  hardcoded `Department`/`Unit` pair is the bug already fixed once in the details panel: on Upstream Ops
+  (`Region`, `Estate/Mill`) both rows read blank. Here it would be worse — **a filter that silently
+  matches nothing reads as "there are no such documents"**. Tier options are children of the tier above,
+  so choosing a new Department **clears everything below it**, or a stale Unit queries a combination
+  that cannot exist.
+- **⚠ ONE UNVERIFIED ASSUMPTION, isolated in `managedProperty()` for exactly that reason.** KQL filters
+  only on MANAGED PROPERTIES, and this assumes SharePoint auto-creates queryable `<InternalName>OWSTEXT`
+  / `OWSDATE` ones. **Verify on the live site before trusting the dropdowns.** Fallback: map crawled
+  properties to `RefinableString00`–`99` in **Site Settings → Search Schema** — a site collection admin
+  can do this **without tenant access**, the same route as the in-site term store pivot. Encoded names
+  keep their encoding (`Business_x0020_SegmentOWSTEXT`); decoding names a property that does not exist,
+  and **a KQL clause naming a nonexistent property matches nothing rather than erroring**.
+- **`kqlPathScope` returns BLANK rather than an unscoped query** — an unscoped KQL query searches the
+  whole tenant. `buildKql` returns blank for blank scope or no criteria, and blank means *do not run*,
+  never *match everything*. `IsDocument:true` excludes folders (`FSObjType eq 0` on the REST half — the
+  REST spelling `FileSystemObjectType` is rejected inside a `$filter`).
+- **Dates differ per engine and must not be unified:** KQL takes `2026-08-16`; OData takes ISO
+  `datetime'2026-08-16T00:00:00Z'`. Gotcha #1's `M/D/YYYY` belongs to `validateUpdateListItem` and is
+  wrong in both. Display is `DD/MMM/YYYY`.
+- **`refused` is a THIRD outcome, not a failure.** An uncleared user's HC read 403s, and that is the
+  correct answer to their query — counting it as an error puts a permanent warning in front of everyone
+  who is not HC-cleared and trains them to ignore it. `failedLibraries` never names a refusal.
+- **A partial failure shows its rows AND says what is missing**, naming the library and the status.
+  Three empty states as everywhere else; `error` explicitly says it is **not** a statement that nothing
+  matched.
+- **Not added to the CRS Settings landing page** — that page is admin-only by the client's instruction,
+  and this is for everyone. It goes on the home page.
+
+## THE `+ New Folder` BUTTON WAS BUILT AND NEVER RAN (2026-08-16)
+Client asked for the library command bar to read **`+ New Folder`** instead of **`+ Create or upload`**.
+The code for it had existed for months in `extensions/hideAppBar/HideAppBarApplicationCustomizer.ts`
+(`_injectNewFolderButton` hides the native button and drives its "Folder" menu item behind the scenes),
+was bundled in `config.json`, and its GUID was in the feature's `componentIds`.
+- **BUNDLING A COMPONENT ONLY MAKES IT AVAILABLE.** An application customizer runs only where a
+  `UserCustomAction` points at it, and **no registration existed anywhere in this repo** — no
+  `sharepoint/assets/`, no script. So the extension was deployed, correct and completely inert, with
+  nothing on screen or in any log to suggest the feature had ever been written. Fixed by adding
+  `sharepoint/assets/elements.xml` + `features[0].assets.elementManifests` in `package-solution.json`.
+- **CHECK FOR A HAND-MADE REGISTRATION BEFORE DEPLOYING:**
+  `/_api/web/usercustomactions?$select=Title,Location,ClientSideComponentId`. Two registrations of one
+  component load it twice — two buttons, two MutationObservers.
+- **The upload-hiding gate was STALE and silently matching nothing.** It tested
+  `pathname.includes("/staging")`, which stopped matching the day the library was recreated as
+  `Approval Document` at `/ApprovalDocument`. Now gated on the list TITLE against all CRS libraries
+  (`_isCrsLibrary`) — a title is also the only thing that identifies `Documents`, whose URL segment is
+  `Shared Documents` (gotcha #12). Applies to **every** CRS library now: every upload is meant to arrive
+  through the form, which is what gives a document its metadata, routing and approval trail.
+
 ## My Submissions (2026-08-14, spec `2026-08-14-my-submissions-design.md`)
 Client, for the uploaders: it is difficult to track what you uploaded. Web part **`My Submissions`**
 (`5c9d1a83-…`), its own page, **uploaders only**. BUILT, not yet site-tested. No longer strictly view

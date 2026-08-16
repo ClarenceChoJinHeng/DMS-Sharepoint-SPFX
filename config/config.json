@@ -74,6 +74,14 @@
         }
       ]
     },
+    "document-search-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/documentSearch/DocumentSearchWebPart.js",
+          "manifest": "./src/webparts/documentSearch/DocumentSearchWebPart.manifest.json"
+        }
+      ]
+    },
     "onboarding-web-part": {
       "components": [
         {

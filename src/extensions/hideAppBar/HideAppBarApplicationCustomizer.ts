@@ -15,12 +15,50 @@ export default class HideAppBarApplicationCustomizer extends BaseApplicationCust
     return Promise.resolve();
   }
 
+  /**
+   * Every library this system files into, under both the created and the retitled name.
+   *
+   * Mirrors LIBRARY_CANDIDATES / HC_*_CANDIDATES in shared/naming.ts. Compared here as literals
+   * rather than imported because an application customizer loads on EVERY page of the site, and
+   * pulling in naming.ts would drag its resolution cache into every page load to answer a question
+   * a string comparison answers.
+   */
+  private static readonly CRS_LIBRARIES = [
+    "approval document",
+    "approvaldocument",
+    "staging",
+    "documents",
+    "hc approval document",
+    "hcapprovaldocument",
+    "hc documents",
+    "hcdocuments",
+  ];
+
+  /**
+   * True on a library this system owns.
+   *
+   * Matched on the list TITLE, not on the URL. The previous test was
+   * `pathname.includes("/staging")`, which silently stopped matching anything the day the library
+   * was recreated as `Approval Document` at `/ApprovalDocument` — so the upload items came back on
+   * the one library they had been hidden from, and nothing reported it. A title is also the only
+   * thing that identifies `Documents`, whose URL segment is `Shared Documents` (gotcha #12).
+   *
+   * Absent list context means this is not a library page — a site page, the home page — so the
+   * answer is false and no menu is touched.
+   */
+  private _isCrsLibrary(): boolean {
+    const title = (this.context.pageContext.list?.title ?? "").trim().toLowerCase();
+    if (title.length === 0) return false;
+    return HideAppBarApplicationCustomizer.CRS_LIBRARIES.indexOf(title) !== -1;
+  }
+
   private _onDomChange(): void {
+    if (!this._isCrsLibrary()) return;
     this._injectNewFolderButton();
-    // Upload item hiding is Staging-only
-    if (window.location.pathname.toLowerCase().includes("/staging")) {
-      this._hideUploadMenuItems();
-    }
+    // Every upload is meant to arrive through the upload form, in every library this system owns —
+    // that is what gives a document its metadata, its folder routing and its approval trail. A file
+    // dragged straight into a library has none of them, and looks completely normal in the view.
+    this._hideUploadMenuItems();
   }
 
   private _injectNewFolderButton(): void {

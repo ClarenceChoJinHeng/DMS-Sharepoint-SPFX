@@ -1,0 +1,24 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "8b2f4a95-7c31-4d68-9e04-1a6b3f8c25d7",
+  "alias": "DocumentSearchWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "CRS Search" },
+    "description": { "default": "Search the document repository by metadata. Results are limited to what each person is already allowed to open." },
+    "officeFabricIconFontName": "Search",
+    "properties": {
+      "pageSize": 10
+    }
+  }]
+}
