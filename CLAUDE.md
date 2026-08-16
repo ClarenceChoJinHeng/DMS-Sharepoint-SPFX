@@ -1226,6 +1226,17 @@ was bundled in `config.json`, and its GUID was in the feature's `componentIds`.
   `sharepoint/assets/`, no script. So the extension was deployed, correct and completely inert, with
   nothing on screen or in any log to suggest the feature had ever been written. Fixed by adding
   `sharepoint/assets/elements.xml` + `features[0].assets.elementManifests` in `package-solution.json`.
+- **`skipFeatureDeployment` MUST STAY `false`, and it was `true` — which is why adding `elements.xml`
+  alone changed nothing.** That flag tells SharePoint not to activate the solution's feature on the
+  site, and the feature is the only thing that provisions `elements.xml`. Silent by construction: the
+  package deploys, the bundle loads, every web part works, and the customizer never runs, with nothing
+  connecting the two. `false` requires the app to be added per site rather than offered tenant-wide —
+  already this project's model (site collection app catalog). **Do NOT add an explanatory `_comment_`
+  key to `package-solution.json`**: the schema forbids additional properties and the build fails.
+- **AFTER UPLOADING THE PACKAGE, the app must be UPDATED in Site Contents.** Feature elements run on
+  install/update only. The bundle refreshes on its own, so web parts appear to update while the
+  customizer does not — which reads as "the button fix didn't work" rather than "the app wasn't
+  updated".
 - **CHECK FOR A HAND-MADE REGISTRATION BEFORE DEPLOYING:**
   `/_api/web/usercustomactions?$select=Title,Location,ClientSideComponentId`. Two registrations of one
   component load it twice — two buttons, two MutationObservers.

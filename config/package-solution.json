@@ -5,7 +5,6 @@
     "id": "4c93b50e-03c1-4005-a280-add0da86c86f",
     "version": "1.0.121.0",
     "includeClientSideAssets": true,
-    "_comment_skipFeatureDeployment": "MUST stay false. true tells SharePoint not to activate the solution's feature on the site — and the feature is what provisions sharepoint/assets/elements.xml, which is the ONLY thing that registers the + New Folder application customizer. With true the package deploys, the bundle loads, every web part works, and the customizer never runs, with nothing anywhere to say why. This site already adds the app explicitly from a site collection app catalog, which is exactly what false requires.",
     "skipFeatureDeployment": false,
     "isDomainIsolated": false,
     "webApiPermissionRequests": [],
