@@ -2,7 +2,7 @@
 
 **Date started:** 2026-08-16
 **Site:** `/sites/ClarenceDMSTesting`
-**Package:** 1.0.121.0
+**Package:** 1.0.122.0
 **Goal:** exercise everything built, fix what testing finds, then migrate to SDG's site.
 
 Supersedes `docs/superpowers/specs/2026-07-28-dms-uat-test-plan.md`, which covers 7 of the current 15
@@ -210,7 +210,11 @@ Anything to change, however small. A note here costs five seconds; a forgotten o
 
 | # | Where | What | Severity | Status |
 |---|---|---|---|---|
-| 1 | | | | |
+| 1 | CRS Settings + the 9 pages it links to | **Any uploader can open every admin page.** `CRS_SITE_MEMBERS` grants site-level `Read` — it must, or a guest cannot reach Home — and every admin page inherits site permissions. Confirmed live 2026-08-16 with a guest holding only Read + Limited Access. Not a code bug: `pageAccessPolicy.ts` is a UI filter and says so; the boundary is the SharePoint page grant, and nothing performs it or prompts for it. Would have shipped to SDG identically. | **blocker** | open |
+| 2 | `CrsSettings.tsx` | No `IsSiteAdmin` check, unlike `AuditLog.tsx` and `BulkUpload.tsx`. Defence in depth only — the real boundary is #1 — but it means the page lists every admin tool to anyone who reaches the URL. | major | open |
+| 3 | Migration runbook | Per-page restriction is a required per-site step and is documented nowhere. | major | open |
+| 4 | `shared/spGroups.ts` | **No throttle handling on any group operation. Add/remove member and create/delete group are single-shot, so a burst of writes gets a 429/503 and fails outright. Hit live 2026-08-16 removing one account from 8 groups. `dmsFolderMap.ts` retries 429/503 honouring `Retry-After` in six places — group operations are the one bulk-write path without it, and group creation in bulk is exactly what migration to SDG's tenant will do. | major | **fixed 1.0.122.0** |
+| 5 | `shared/spGroups.ts` `fail()` | A throttled response body is HTML, and it is surfaced raw to the user — a wall of `<!DOCTYPE html>` where a sentence belongs. Should name the status and say "SharePoint is busy, retry shortly". | minor | **fixed 1.0.122.0** |
 
 Severity: **blocker** (migration cannot proceed) · **major** (wrong behaviour, workaround exists) ·
 **minor** (cosmetic, wording, layout).

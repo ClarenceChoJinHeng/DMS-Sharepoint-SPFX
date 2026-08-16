@@ -21,9 +21,57 @@ const POST_HEADERS = {
   "Content-Type": "application/json;odata=nometadata",
 };
 
+/**
+ * A readable failure.
+ *
+ * SharePoint answers a throttle with an HTML page, not JSON — so the raw body put a wall of
+ * `<!DOCTYPE html><html xml:lang="en"…` in front of the user where a sentence belongs, and said
+ * nothing about what to do about it. Seen live 2026-08-16 removing one account from eight groups.
+ *
+ * HTML is therefore never shown: it is never the explanation, only the transport's error page.
+ */
 const fail = async (label: string, res: SPHttpClientResponse): Promise<never> => {
+  if (res.status === 429 || res.status === 503) {
+    throw new Error(
+      `${label}: SharePoint is busy and refused the request (HTTP ${res.status}). ` +
+        "It was retried and stayed busy. Wait a minute and try again — nothing was changed.",
+    );
+  }
   const body = await res.text().catch(() => "");
-  throw new Error(`${label} HTTP ${res.status} ${body.slice(0, 200)}`);
+  const looksLikeHtml = /^\s*<(?:!doctype|html)/i.test(body);
+  const detail = looksLikeHtml
+    ? "(SharePoint returned an error page rather than a message)"
+    : body.slice(0, 200);
+  throw new Error(`${label} HTTP ${res.status} ${detail}`);
+};
+
+/**
+ * Run a write, retrying while SharePoint says it is busy.
+ *
+ * ── Why this exists ──────────────────────────────────────────────────────────
+ * `dmsFolderMap.ts` has retried 429/503 in six places since reconciliation was built, because that
+ * code makes hundreds of writes and a dropped one silently loses a folder. Group operations were
+ * the ONE bulk-write path without it — and creating groups and adding members in bursts is exactly
+ * what migrating to a new tenant does. It failed live on the eighth removal of eight.
+ *
+ * `Retry-After` is honoured whenever SharePoint sends it, because it knows how long it wants; the
+ * exponential fallback covers the case where it does not, and is capped so a page cannot appear to
+ * hang indefinitely.
+ *
+ * The request is passed as a THUNK rather than as a URL, so the retry cannot drift from the
+ * original call — a second copy of the request would be a second thing to keep correct.
+ */
+const withThrottleRetry = async (
+  send: () => Promise<SPHttpClientResponse>,
+): Promise<SPHttpClientResponse> => {
+  let res = await send();
+  for (let attempt = 0; (res.status === 429 || res.status === 503) && attempt < 5; attempt++) {
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    res = await send();
+  }
+  return res;
 };
 
 export async function fetchAllSiteGroups(sp: SPHttpClient, siteUrl: string): Promise<SpGroup[]> {
@@ -108,11 +156,16 @@ export async function createSiteGroup(
   siteUrl: string,
   title: string,
 ): Promise<SpGroup> {
-  const res = await sp.post(`${siteUrl}/_api/web/sitegroups`, SPHttpClient.configurations.v1, {
-    headers: POST_HEADERS,
-    body: JSON.stringify({ Title: title.trim() }),
-  });
+  const res = await withThrottleRetry(() =>
+    sp.post(`${siteUrl}/_api/web/sitegroups`, SPHttpClient.configurations.v1, {
+      headers: POST_HEADERS,
+      body: JSON.stringify({ Title: title.trim() }),
+    }),
+  );
   if (!res.ok) {
+    // A throttle is not a duplicate, and its HTML body must not be pattern-matched for
+    // "already in use" — hand it to `fail`, which says so in a sentence.
+    if (res.status === 429 || res.status === 503) return fail("create group", res);
     const body = await res.text().catch(() => "");
     if (body.toLowerCase().indexOf("already in use") !== -1) throw new Error(DUPLICATE_GROUP);
     throw new Error(`create group HTTP ${res.status} ${body.slice(0, 200)}`);
@@ -145,10 +198,11 @@ export async function addGroupMember(
   groupId: number,
   loginName: string,
 ): Promise<void> {
-  const res = await sp.post(
-    `${siteUrl}/_api/web/sitegroups(${groupId})/users`,
-    SPHttpClient.configurations.v1,
-    { headers: POST_HEADERS, body: JSON.stringify({ LoginName: loginName }) },
+  const res = await withThrottleRetry(() =>
+    sp.post(`${siteUrl}/_api/web/sitegroups(${groupId})/users`, SPHttpClient.configurations.v1, {
+      headers: POST_HEADERS,
+      body: JSON.stringify({ LoginName: loginName }),
+    }),
   );
   if (!res.ok) return fail("add member", res);
 }
@@ -159,10 +213,12 @@ export async function removeGroupMember(
   groupId: number,
   userId: number,
 ): Promise<void> {
-  const res = await sp.post(
-    `${siteUrl}/_api/web/sitegroups(${groupId})/users/removebyid(${userId})`,
-    SPHttpClient.configurations.v1,
-    { headers: POST_HEADERS },
+  const res = await withThrottleRetry(() =>
+    sp.post(
+      `${siteUrl}/_api/web/sitegroups(${groupId})/users/removebyid(${userId})`,
+      SPHttpClient.configurations.v1,
+      { headers: POST_HEADERS },
+    ),
   );
   if (!res.ok) return fail("remove member", res);
 }
@@ -177,10 +233,12 @@ export async function deleteSiteGroup(
   siteUrl: string,
   groupId: number,
 ): Promise<void> {
-  const res = await sp.post(
-    `${siteUrl}/_api/web/sitegroups/removebyid(${groupId})`,
-    SPHttpClient.configurations.v1,
-    { headers: POST_HEADERS },
+  const res = await withThrottleRetry(() =>
+    sp.post(
+      `${siteUrl}/_api/web/sitegroups/removebyid(${groupId})`,
+      SPHttpClient.configurations.v1,
+      { headers: POST_HEADERS },
+    ),
   );
   if (!res.ok) return fail("delete group", res);
 }
