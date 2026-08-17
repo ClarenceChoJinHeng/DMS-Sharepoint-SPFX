@@ -60,17 +60,23 @@ form's two top-level tabs and whether a Business Segment is required; internally
 for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** — not "NBBOL"),
 3 Upstream Ops, 2 SDGI, 2 I&T, 1 Group-led Project, 1 Group Business Ventures & Transformation
 (**added by the client 2026-08-17**; head-office shape, no term set yet, in no code fallback).
-- **EVERY FAMILY IS EXACTLY TWO PERMISSIONED LEVELS**, corrected 2026-08-17 against the client's own
-  folder-structure table. I&T was documented as a **single** level and is not — they split it into
-  `I&T Operating Units/Department → Unit`. Group-led Project was documented as **three** and is not:
-  `Project Name` is the **top folder name**, the slot `Business Segment` fills for every other family,
-  never a tier. Both errors, and the question that surfaced them, are the same misreading — **counting
-  the business segment as a level.** It is `StagingFolder`, above the chain. Getting it wrong is not
-  cosmetic: the depth check demands the term set's depth equal the tier count, and a third tier moves
-  every unit's ACL one level DOWN onto a folder no Group Map row points at — reconciliation walks the
-  term tree and caps at the tier count, so it grants silently and looks correct.
-  The stale "I&T uses a single level" also sat in `SegmentCreator`'s hint copy, where the person
-  onboarding I&T would have read it; fixed there in the same change.
+- **EVERY FAMILY IS TWO PERMISSIONED LEVELS EXCEPT I&T, WHICH IS ONE** (corrected 2026-08-17 against
+  the client's folder-structure table, then against their explicit confirmation). Group-led Project was
+  documented as **three** and is not: `Project Name` is the **top folder name**, the slot
+  `Business Segment` fills for every other family, never a tier. I&T's table row appears to split into
+  `I&T Operating Units/Department → Unit`, but the client confirmed **one tier**, so its term set must
+  be **1-deep** and that `Unit` cell is not a permissioned tier (if a folder level is wanted there, it
+  goes on the Folder levels tab as `"permissioned": false`).
+  - **The recurring misreading is counting the business segment as a level.** It is `StagingFolder`,
+    above the chain — which is why "Head Office is three levels" and "I&T is three" both feel right and
+    are both wrong by one. **Declaring one tier too MANY is the silent direction:** the depth check
+    demands the term set's depth equal the tier count, and reconciliation walks the term tree capped at
+    that count, so the extra tier moves every unit's ACL a level DOWN onto a folder no Group Map row
+    points at — it grants successfully and looks correct. One too FEW is loud: the form refuses and
+    writes nothing.
+  - `SegmentCreator`'s hint copy asserted "I&T uses a single level" while the spec said two; it now
+    names the SDGI pair instead and says outright that the business segment is the Top folder name and
+    not one of these. That sentence is the only thing standing between a 2027 onboarder and this bug.
 - **Pilot scope (2026):** the **4 Head Office segments**, all `Levels = [Department, Unit]`
   (shared columns — zero new columns). All 4 term sets exist flat in the `DMS Metadata` term
   group (GUIDs below) and are in the code fallbacks: `DEFAULT_MODES` in `Form.tsx` +
