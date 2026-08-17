@@ -421,6 +421,26 @@ const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR", "UPLHC", "APRHC"];
  */
 const APPROVED_SIDE_LIBS: LibTarget[] = ["Documents", "DocumentsHC"];
 
+/**
+ * The libraries the SITE-ENTRY group may hold Read on: `Documents`, and nothing else.
+ *
+ * NOT the same set as APPROVED_SIDE_LIBS, and the difference is the whole point. That table answers
+ * "where is an uploader's grant downgraded to Read", which is true of both approved-side libraries.
+ * This one answers "who may reach the library at all", and for the HC pair the answer is only people
+ * with HC clearance.
+ *
+ * `Documents` needs it because the approval guard resolves the destination folder AS THE APPROVER,
+ * and that read depends on it. `HC Documents` does not: an HC approver reaches it through their own
+ * `_APR_HC` group, and HC Auto-route runs as the service account. Neither needs a site-wide grant.
+ *
+ * A separate set rather than a reuse of APPROVED_SIDE_LIBS because the first version of this pass DID
+ * reuse it, and so granted the site-entry group Read on `HC Documents` — every site member able to
+ * open the Highly Confidential library. Caught on the very next run (2026-08-17). It contradicted the
+ * HC design directly: `MEMBER` is absent from the `DocumentsHC` row of LIBRARY_ROLES, and what is
+ * ABSENT from those rows is the feature. Site entry is that same grant wearing a different name.
+ */
+const SITE_ENTRY_LIBS: LibTarget[] = ["Documents"];
+
 /** The level a role grants IN A GIVEN LIBRARY. Always use this, never the raw table. */
 function permissionForRole(lib: LibTarget, role: string): string | undefined {
   if (APPROVED_SIDE_LIBS.indexOf(lib) > -1 && DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1) return "Read";
@@ -2430,7 +2450,9 @@ export default function FolderManager({
           entries.push({ msg: `⚠ Site-entry library access: no "Read" role definition on site — skipped`, ok: false });
         } else {
           for (const lib of reconLibs()) {
-            const shouldHold = APPROVED_SIDE_LIBS.indexOf(lib) > -1;
+            // SITE_ENTRY_LIBS, not APPROVED_SIDE_LIBS — see the comment on that constant. The HC
+            // pair is closed to everyone without HC clearance, on both sides.
+            const shouldHold = SITE_ENTRY_LIBS.indexOf(lib) > -1;
             const listRes = await context.spHttpClient.get(
               `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=Id,HasUniqueRoleAssignments`,
               SPHttpClient.configurations.v1,
