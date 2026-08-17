@@ -31,7 +31,6 @@ import {
   blocksNext,
   firstIncompleteStep,
   isLocked,
-  labelMatches,
   lockReason,
   remainingCount,
   stepState,
@@ -122,6 +121,15 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   const [segments, setSegments] = useState<Segment[] | undefined>(undefined);
   const [segKey, setSegKey] = useState("");
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
+  /**
+   * Bumped to re-read the segment list.
+   *
+   * The list was read once on mount, so a segment created on the New segment step never appeared here:
+   * the rail said "Not checked" and Next stayed disabled while the panel beside it said the segment was
+   * configured (client, 2026-08-17: *"Weird, I created the Segment but it is showing this."*). A screen
+   * that contradicts itself is worse than one that says nothing.
+   */
+  const [reload, setReload] = useState(0);
 
   /** The subject of flows 2 and 4 — what makes their term-store step checkable at all. */
   const [subject, setSubject] = useState("");
@@ -166,7 +174,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       setSegments(undefined);
       setLoadError((e as Error).message);
     });
-  }, [siteUrl]);
+  }, [siteUrl, reload]);
 
   const segment = (segments ?? []).filter((x) => x.key === segKey)[0];
 
@@ -258,16 +266,10 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
     if (!flow || flow.asksSubject !== "newSegment") return facts;
     // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
     if (segments === undefined) return facts;
-    // The list read fine, so a blank name is the admin not having answered — not a failure. Reported as
-    // `subjectGiven: false`, which gates Next with "type the name first" rather than leaving it enabled
-    // on a step visibly not done.
-    if (subject.trim().length === 0) return { ...facts, subjectGiven: false };
-    return {
-      ...facts,
-      subjectGiven: true,
-      segmentExists: labelMatches(segments.map((x) => x.label), subject),
-    };
-  }, [flow, facts, segments, subject]);
+    // The list read fine, so "nothing picked" is the admin not having answered — not a failure.
+    if (!segment) return { ...facts, subjectGiven: false };
+    return { ...facts, subjectGiven: true, segmentExists: true };
+  }, [flow, facts, segments, segment]);
 
   /** Open a flow on the first thing left to do. */
   const openFlow = (f: Flow): void => {
@@ -428,35 +430,47 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
        genuinely the same and re-mounts only when it changes. The re-mount cost per step was accepted
        in the design — reconciliation is inline in a 4,000-line file, and extracting it to make it
        mountable would risk the most site-verified code here for a navigation change. */
-    /* The new segment's NAME, asked on the step that creates it.
+    /* AFTER the form, a PICKER of the segments that exist — not a name to type.
+       Client, 2026-08-17: *"The UX flow kinda doesn't make sense, what is What will the new segment be
+       called?"* — and they were right twice over. Asking for the name up front asked for the same value
+       the form below was already asking for, which reads as a bug; and the list was read once on mount,
+       so a segment created on this very step never appeared, leaving the rail saying "Not checked" beside
+       a panel saying "is configured".
 
-       This is what makes "have they saved it yet" answerable at all — see the `asksSubject:
-       "newSegment"` note in shared/folderFlows.ts for why a row COUNT could not do it. Rendered above
-       the form rather than as its own step, because it is the same value they are about to type into
-       the form: asking twice on two screens would read as a bug. */
-    const asksName = active.asksSubject === "newSegment" && st.id === "createSegment";
+       Picking is better than typing on every count: nothing to spell (so no fullwidth-＆ trap), it is the
+       same control every other flow uses, and it is derived from data so it survives a refresh, a second
+       tab and someone else's session. It also sets `segKey`, which is what carries the segment into steps
+       3-6 instead of leaving each one to ask again. */
+    const confirms = active.asksSubject === "newSegment" && st.id === "createSegment";
     return (
       <div>
-        {asksName && (
-          <div style={{ marginBottom: 16 }}>
-            <label style={s.label} htmlFor="fa-newseg">What will the new segment be called?</label>
-            <input
-              id="fa-newseg"
-              style={s.input}
-              value={subject}
-              placeholder="e.g. Group Head Office"
-              onChange={(e) => setSubject(e.target.value)}
-            />
-            {/* OPTIONAL, like the other flows' subject: blank means we cannot check, which shows as
-                "not checked" and gates nothing. Costing help is acceptable; costing progress is not. */}
+        <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
+        {confirms && (
+          <div style={{ ...s.card, marginTop: 18, marginBottom: 0 }}>
+            <label style={s.label} htmlFor="fa-newseg">Which segment did you just create?</label>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <select
+                id="fa-newseg"
+                style={s.select}
+                value={segKey}
+                onChange={(e) => setSegKey(e.target.value)}
+              >
+                <option value="">Select a segment&hellip;</option>
+                {(segments ?? []).map((x) => (
+                  <option key={x.key} value={x.key}>{x.label}</option>
+                ))}
+              </select>
+              {/* The list is read on mount, and Create happens after — so without this the segment just
+                  made is missing from its own confirmation. One list read. */}
+              <button style={s.ghost} onClick={() => setReload((n) => n + 1)}>Refresh list</button>
+            </div>
             <div style={s.hint}>
-              Type it here as well as in the form below, exactly the same. It is how this page can tell
-              the segment was saved — and it takes the later steps straight to it. Leave it blank and
-              nothing is checked.
+              {segments === undefined
+                ? "The segment list could not be read, so this cannot be confirmed here — carry on, and use the rail to move between steps."
+                : "Press Create above first, then Refresh list and pick it. That is how this page knows the segment was saved, and it takes the later steps straight to it."}
             </div>
           </div>
         )}
-        <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
       </div>
     );
   };

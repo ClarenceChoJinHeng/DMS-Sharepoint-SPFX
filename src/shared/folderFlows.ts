@@ -343,8 +343,8 @@ export function blocksNext(step: FlowStep, facts: FlowFacts): string {
     // this branch Next stayed enabled on a step visibly not done — reported twice by the client.
     if (f.subjectGiven === false) {
       return (
-        "Type the new segment's name above first, then fill in the form and press Create. " +
-        "The name is how this page can tell the segment was saved."
+        "Press Create above, then pick the segment below to confirm it saved. " +
+        "If you have already created it, use Refresh list — or jump straight on from the list of steps."
       );
     }
   }

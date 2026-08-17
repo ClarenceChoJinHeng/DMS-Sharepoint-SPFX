@@ -382,10 +382,14 @@ describe("blocksNext", () => {
 describe("blocksNext — the blank name", () => {
   const st = (): FlowStep => step("newSegment", "createSegment");
 
-  it("blocks Next when the name has not been typed and the segment list WAS readable", () => {
+  it("blocks Next until the created segment is confirmed, when the list WAS readable", () => {
     // Reported twice by the client (2026-08-17): "Umm I still can click next, I haven't fill up New
-    // Segment yet...". The first build treated a blank name as UNKNOWN and therefore gated nothing.
-    expect(blocksNext(st(), { subjectGiven: false })).toContain("Type the new segment's name");
+    // Segment yet...". The first build treated "not answered" as UNKNOWN and therefore gated nothing.
+    const msg = blocksNext(st(), { subjectGiven: false });
+    expect(msg).toContain("Press Create above");
+    // Names the way out, because the gate can legitimately be wrong after a page refresh — the rail
+    // stays clickable, and the message has to say so or a correct gate reads as a dead end.
+    expect(msg).toContain("list of steps");
   });
 
   it("still does NOT block when the segment list could not be read", () => {
@@ -401,10 +405,13 @@ describe("blocksNext — the blank name", () => {
     expect(blocksNext(st(), { segmentExists: true, subjectGiven: false })).toBe("");
   });
 
-  it("moves on to 'create it first' once a name IS typed but matches nothing", () => {
+  it("moves on to 'create it first' once a segment IS picked but does not exist", () => {
+    // Reachable only from stale facts — picking a segment implies it exists. Kept because the two
+    // messages must stay distinguishable: "confirm what you made" and "you have not made it" are
+    // different instructions, and collapsing them into one is how a gate stops being actionable.
     const msg = blocksNext(st(), { subjectGiven: true, segmentExists: false });
     expect(msg).toContain("Create the segment first");
-    expect(msg).not.toContain("Type the new segment's name");
+    expect(msg).not.toContain("Press Create above");
   });
 
   it("allows Next when the typed name matches an existing segment", () => {

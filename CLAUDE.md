@@ -1005,17 +1005,29 @@ order, which was not enough — five equal doors do not say four of them are ste
     exists), then **name blank ⇒ "type the name first"**, then **typed but unmatched ⇒ "create it
     first"**. A test pins that `subjectGiven: false` gates NO other step, since it is set for the whole
     flow and every step sees it.
-  - **Flow 1 now ASKS THE NEW SEGMENT'S NAME (`asksSubject: "newSegment"`), and that is what made any of
-    this answerable.** `segmentExists` is only computed for a CHOSEN segment, and flow 1 has no picker —
-    the segment does not exist yet — so **the `segmentExists` padlock on its abbreviation step could
-    never fire in the one flow it was written for** (found on the client's site 2026-08-17). Matching a
-    typed name against the loaded `mode` rows via `labelMatches` fixes both. Counting rows was the
-    obvious alternative and is WRONG: a baseline taken when the flow opens resets on a page refresh, so
-    the flow would then refuse work already done — worse than no check. The name is **optional** (blank ⇒
-    unknown ⇒ nothing gated), asked on the same step as the form because it is the same value they are
-    about to type, and it takes steps 3-6 straight to that segment instead of an empty picker.
+  - **Flow 1 CONFIRMS THE CREATED SEGMENT WITH A PICKER (`asksSubject: "newSegment"`), and that is what
+    made any of this answerable.** `segmentExists` is only computed for a CHOSEN segment, and flow 1 had
+    no picker — the segment does not exist yet — so **the `segmentExists` padlock on its abbreviation step
+    could never fire in the one flow it was written for** (found on the client's site 2026-08-17).
+    Choosing the segment after Create sets `segKey`, which answers the gate AND carries the segment into
+    steps 3-6 instead of leaving each to ask again.
+  - **THREE DESIGNS WERE TRIED IN ONE SITTING; the first two are instructive.** *Counting `mode` rows*
+    fails on a page refresh — a baseline taken when the flow opens resets, so the flow then refuses work
+    already done, worse than no check. *Asking for the name as text* asked for the same value the form
+    below already asked for (the client: *"what is What will the new segment be called?"*), and reads as
+    a bug rather than a feature. **Picking beats typing on every count:** nothing to spell — so no
+    fullwidth-＆ trap — it is the control every other flow already uses, and it is derived from data, so
+    it survives a refresh, a second tab and someone else's session.
+  - **⚠ THE SEGMENT LIST IS READ ON MOUNT, AND CREATE HAPPENS AFTER IT.** So the segment just made was
+    missing from its own confirmation, and the rail said *"Not checked"* beside a panel saying *"is
+    configured"* — a screen contradicting itself, which is worse than one that says nothing. Hence the
+    `reload` counter and an explicit **Refresh list** button. Do not assume a mount-time read reflects
+    anything a step below it has since written.
   - The fact is **derived at render, not in the facts effect**: that effect performs three list reads, so
-    keying it on the typed name would fire all three per keystroke.
+    keying it on the picked segment would fire all three per change.
+  - Both gate messages **name the way out** (*"or jump straight on from the list of steps"*), because the
+    gate can legitimately be wrong after a refresh. The rail stays clickable throughout, and a correct
+    gate with no stated escape reads as a dead end.
 - **FOUR locks, each on ONE definitive read:** segment exists (flow 1's later steps, and Retire),
   `PendingLevels` set (before migrating), and **reconciliation blocked while any term lacks a code** — the
   last is the one that matters, because that is the silent failure (recon skips the term, creates no
