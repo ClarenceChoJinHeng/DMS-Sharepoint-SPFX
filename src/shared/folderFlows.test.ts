@@ -378,3 +378,44 @@ describe("blocksNext", () => {
     expect(labelMatches(["Group Legal, Risk ＆ Compliance"], "group legal, risk & compliance")).toBe(true);
   });
 });
+
+describe("blocksNext — the blank name", () => {
+  const st = (): FlowStep => step("newSegment", "createSegment");
+
+  it("blocks Next when the name has not been typed and the segment list WAS readable", () => {
+    // Reported twice by the client (2026-08-17): "Umm I still can click next, I haven't fill up New
+    // Segment yet...". The first build treated a blank name as UNKNOWN and therefore gated nothing.
+    expect(blocksNext(st(), { subjectGiven: false })).toContain("Type the new segment's name");
+  });
+
+  it("still does NOT block when the segment list could not be read", () => {
+    // The distinction the first build got wrong. Fail-open exists for READS THAT CAN FAIL, not for a text
+    // box nobody filled in — a throttled list cannot blank a local field, so gating on the field strands
+    // nobody, while gating on an unreadable list strands everybody.
+    expect(blocksNext(st(), {})).toBe("");
+  });
+
+  it("says nothing once the segment exists, even with no name typed", () => {
+    // Order matters: a page reopened after the work is done has no typed name, and must not then be told
+    // to create a segment that already exists.
+    expect(blocksNext(st(), { segmentExists: true, subjectGiven: false })).toBe("");
+  });
+
+  it("moves on to 'create it first' once a name IS typed but matches nothing", () => {
+    const msg = blocksNext(st(), { subjectGiven: true, segmentExists: false });
+    expect(msg).toContain("Create the segment first");
+    expect(msg).not.toContain("Type the new segment's name");
+  });
+
+  it("allows Next when the typed name matches an existing segment", () => {
+    expect(blocksNext(st(), { subjectGiven: true, segmentExists: true })).toBe("");
+  });
+
+  it("does not leak the blank-name gate onto any other step", () => {
+    // `subjectGiven` is set for the whole flow, so every step sees it. Only createSegment may use it —
+    // Term Abbreviations must gate on missing codes alone.
+    expect(blocksNext(step("newSegment", "abbreviations"), { subjectGiven: false })).toBe("");
+    expect(blocksNext(step("newSegment", "groups"), { subjectGiven: false })).toBe("");
+    expect(blocksNext(step("addUnit", "addTerm"), { subjectGiven: false })).toBe("");
+  });
+});

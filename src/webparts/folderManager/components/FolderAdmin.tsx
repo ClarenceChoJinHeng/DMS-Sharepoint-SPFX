@@ -256,8 +256,17 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    */
   const effectiveFacts: FlowFacts = React.useMemo(() => {
     if (!flow || flow.asksSubject !== "newSegment") return facts;
-    if (segments === undefined || subject.trim().length === 0) return facts;
-    return { ...facts, segmentExists: labelMatches(segments.map((x) => x.label), subject) };
+    // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
+    if (segments === undefined) return facts;
+    // The list read fine, so a blank name is the admin not having answered — not a failure. Reported as
+    // `subjectGiven: false`, which gates Next with "type the name first" rather than leaving it enabled
+    // on a step visibly not done.
+    if (subject.trim().length === 0) return { ...facts, subjectGiven: false };
+    return {
+      ...facts,
+      subjectGiven: true,
+      segmentExists: labelMatches(segments.map((x) => x.label), subject),
+    };
   }, [flow, facts, segments, subject]);
 
   /** Open a flow on the first thing left to do. */

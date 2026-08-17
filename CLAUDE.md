@@ -993,6 +993,18 @@ order, which was not enough — five equal doors do not say four of them are ste
     flow with every fact false and asserts exactly two gate.
   - **UNKNOWN never gates**, same rule as `isLocked`. A throttled config list would otherwise strand an
     admin on step 2 with no way forward.
+  - **⚠ BUT A BLANK FORM FIELD IS NOT "UNKNOWN", AND CONFLATING THE TWO SHIPPED A GATE THAT NEVER
+    FIRED.** The first build derived `segmentExists` only once a name had been typed, so with the field
+    empty — the state every admin starts in — nothing was gated and Next stayed enabled on a step visibly
+    not done. The client reported it twice. **Fail-open exists for READS THAT CAN FAIL, not for a text box
+    nobody has filled in:** a throttled list cannot blank a local field, so gating on the field strands
+    nobody, whereas gating on an unreadable list strands everybody. Hence `FlowFacts.subjectGiven`, set
+    **only when the segment list was readable**, which keeps the one genuine fail-open case intact.
+  - `blocksNext` therefore answers `createSegment` in a fixed order: **exists ⇒ allow** (a page reopened
+    after the work is done has no typed name and must not be told to create a segment that already
+    exists), then **name blank ⇒ "type the name first"**, then **typed but unmatched ⇒ "create it
+    first"**. A test pins that `subjectGiven: false` gates NO other step, since it is set for the whole
+    flow and every step sees it.
   - **Flow 1 now ASKS THE NEW SEGMENT'S NAME (`asksSubject: "newSegment"`), and that is what made any of
     this answerable.** `segmentExists` is only computed for a CHOSEN segment, and flow 1 has no picker —
     the segment does not exist yet — so **the `segmentExists` padlock on its abbreviation step could

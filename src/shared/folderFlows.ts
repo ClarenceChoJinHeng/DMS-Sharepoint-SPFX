@@ -76,6 +76,16 @@ export interface FlowFacts {
   pendingLevels?: boolean;
   /** The subject term was found in the tree (flows 2 and 4). */
   subjectFound?: boolean;
+  /**
+   * The admin has typed the subject — for flow 1, the new segment's name.
+   *
+   * Set ONLY when the segment list was readable, so this never fires on a failed read. That split is
+   * the point: **fail-open exists for reads that can fail, not for a text box nobody has filled in.**
+   * A throttled list cannot blank a local field, so gating on it cannot strand anyone — whereas
+   * treating blank as "unknown" left Next enabled on a step plainly not done, which is what the client
+   * reported twice (2026-08-17).
+   */
+  subjectGiven?: boolean;
 }
 
 const RECONCILE: FlowStep = {
@@ -324,6 +334,20 @@ export function blocksNext(step: FlowStep, facts: FlowFacts): string {
   if (!step) return "";
   const reason = NEXT_GATED_STEPS[step.id];
   if (!reason) return "";
+  const f = facts ?? {};
+  if (step.id === "createSegment") {
+    // Already created — nothing to say, whatever else is unknown.
+    if (f.segmentExists === true) return "";
+    // Name not typed yet, on a site whose segment list WAS readable. Blank is not "unknown" here: it is
+    // the admin not having answered, and no failed read can produce it (see `subjectGiven`). Without
+    // this branch Next stayed enabled on a step visibly not done — reported twice by the client.
+    if (f.subjectGiven === false) {
+      return (
+        "Type the new segment's name above first, then fill in the form and press Create. " +
+        "The name is how this page can tell the segment was saved."
+      );
+    }
+  }
   return stepState(step, facts) === "todo" ? reason : "";
 }
 
