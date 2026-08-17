@@ -13,6 +13,7 @@ import {
   AbbrevRowDraft,
   changedRows,
   folderNameFor,
+  groupRowsByParent,
   hasBlockingProblem,
   renamingRows,
   RowProblem,
@@ -83,6 +84,12 @@ const s: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid #f3f2f1",
   },
   tierHead: { display: "flex", alignItems: "center", gap: 12, padding: "10px 10px 6px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", color: "#605e5c", flexWrap: "wrap" },
+  // The parent term's name above its children. Deliberately NOT uppercase like `tierHead`: this is a
+  // real term label ("Group Legal, Risk ＆ Compliance"), and shouting it loses the casing the client
+  // authored — and would sit level with the tier heading instead of under it.
+  parentHead: { display: "flex", alignItems: "baseline", gap: 8, padding: "12px 10px 4px", fontSize: 13, fontWeight: 600, color: "#242424", flexWrap: "wrap", borderTop: "1px solid #f0f0f0" },
+  parentCount: { fontSize: 11.5, fontWeight: 400, color: "#8a8886" },
+  parentGroup: { paddingLeft: 10, borderLeft: "2px solid #eef2f5" },
   // Spans every track: a collision message names another term and its parent, and truncating it into
   // one column would hide the half that says which other row to look at.
   problem: { fontSize: 11, lineHeight: 1.5, marginTop: 3, gridColumn: "1 / -1" },
@@ -544,7 +551,29 @@ export default function AbbreviationManager({
                     </button>
                   )}
                 </div>
-                {levelRows.map((r) => {
+                {/* GROUPED UNDER THE PARENT TERM (client, 2026-08-17). A flat `UNIT (63)` list is
+                    alphabetical across the whole segment, so `Tax` sat between `SDGI` and `Treasury`
+                    with nothing saying which department any of them belonged to. It also makes the rule
+                    visible: codes must be unique among SIBLINGS, so two departments may each hold a
+                    `TAX` unit — which looks like a duplicate in a flat list and is perfectly legal
+                    here. */}
+                {groupRowsByParent(levelRows, rows).map((g) => (
+                  <div key={g.parentGuid || "__top"} style={g.parentGuid ? s.parentGroup : undefined}>
+                    {g.parentGuid ? (
+                      <div style={s.parentHead}>
+                        {/* An UNRESOLVED parent is labelled, never hidden: a row with no code still
+                            needs one, and dropping it is the one failure this page exists to stop. */}
+                        <span>{g.parentLabel || "Parent term not found"}</span>
+                        <span style={s.parentCount}>
+                          {g.rows.length} {levelName.toLowerCase()}
+                          {g.rows.length === 1 ? "" : "s"}
+                          {g.rows.filter((x) => x.abbreviation.trim() === "").length > 0
+                            ? ` · ${g.rows.filter((x) => x.abbreviation.trim() === "").length} without a code`
+                            : ""}
+                        </span>
+                      </div>
+                    ) : undefined}
+                    {g.rows.map((r) => {
                   const p = problems[r.termGuid];
                   const name = folderNameFor(r.abbreviation);
                   return (
@@ -568,6 +597,8 @@ export default function AbbreviationManager({
                     </div>
                   );
                 })}
+                  </div>
+                ))}
               </div>
             );
           })}

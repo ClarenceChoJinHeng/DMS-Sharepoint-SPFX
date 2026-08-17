@@ -2,6 +2,7 @@ import {
   AbbrevRowDraft,
   changedRows,
   folderNameFor,
+  groupRowsByParent,
   hasBlockingProblem,
   LONG_NAME_THRESHOLD,
   renamingRows,
@@ -142,5 +143,72 @@ describe("changedRows / renamingRows", () => {
   it("separates a RENAME from a first-time fill", () => {
     // t3 and t4 had a code and now have a different one, so a live folder gets renamed. t2 is new.
     expect(renamingRows(rows).map((r) => r.termGuid)).toEqual(["t3", "t4"]);
+  });
+});
+
+describe("groupRowsByParent", () => {
+  // Client, 2026-08-17: the flat `UNIT (63)` list was alphabetical across the whole segment, so `Tax`
+  // sat between `SDGI` and `Treasury` with nothing saying whose department any of them was.
+  const dept = (guid: string, label: string): AbbrevRowDraft => ({
+    termGuid: guid, label, level: "Department", parentGuid: "", abbreviation: "X",
+  });
+  const unit = (guid: string, label: string, parent: string): AbbrevRowDraft => ({
+    termGuid: guid, label, level: "Unit", parentGuid: parent, abbreviation: "",
+  });
+
+  const all: AbbrevRowDraft[] = [
+    dept(GF, "Group Finance"),
+    dept(MHO_GA, "Group Human Resources"),
+    unit("u1", "Tax", GF),
+    unit("u2", "Treasury", GF),
+    unit("u3", "Rewards", MHO_GA),
+  ];
+  const units = all.filter((r) => r.level === "Unit");
+
+  it("groups each unit under its department and names the parent", () => {
+    const g = groupRowsByParent(units, all);
+    expect(g.map((x) => x.parentLabel)).toEqual(["Group Finance", "Group Human Resources"]);
+    expect(g[0].rows.map((r) => r.label)).toEqual(["Tax", "Treasury"]);
+    expect(g[1].rows.map((r) => r.label)).toEqual(["Rewards"]);
+  });
+
+  it("orders groups by the PARENT's position, not alphabetically by child", () => {
+    // Departments must appear in the same sequence as the Department block above. Sorting by child label
+    // would put "Rewards" before "Tax" and reorder the departments for no reason.
+    const shuffled = [units[2], units[0], units[1]];
+    expect(groupRowsByParent(shuffled, all).map((x) => x.parentLabel))
+      .toEqual(["Group Finance", "Group Human Resources"]);
+  });
+
+  it("matches the parent case-insensitively, since GUID casing is not guaranteed", () => {
+    const odd = [unit("u9", "Odd", GF.toUpperCase())];
+    expect(groupRowsByParent(odd, all)[0].parentLabel).toBe("Group Finance");
+  });
+
+  it("KEEPS a row whose parent cannot be resolved, with a blank label", () => {
+    // Dropping it would hide a term that still needs a code — the one failure this screen exists to
+    // prevent, since reconciliation skips such a term silently and creates no folder.
+    const orphan = [unit("u8", "Stray", "cccc3333-3333-4333-8333-cccccccccccc")];
+    const g = groupRowsByParent(orphan, all);
+    expect(g.length).toBe(1);
+    expect(g[0].parentLabel).toBe("");
+    expect(g[0].rows[0].label).toBe("Stray");
+  });
+
+  it("puts a top-level row in its own group, keyed by the empty parent", () => {
+    const g = groupRowsByParent(all.filter((r) => r.level === "Department"), all);
+    expect(g.length).toBe(1);
+    expect(g[0].parentGuid).toBe("");
+    expect(g[0].rows.length).toBe(2);
+  });
+
+  it("loses no rows, whatever the parents look like", () => {
+    const mixed = [...units, unit("u8", "Stray", "zzzz")];
+    const total = groupRowsByParent(mixed, all).reduce((n, g) => n + g.rows.length, 0);
+    expect(total).toBe(mixed.length);
+  });
+
+  it("survives empty input rather than throwing", () => {
+    expect(groupRowsByParent([], all)).toEqual([]);
   });
 });

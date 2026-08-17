@@ -171,3 +171,63 @@ export function changedRows(rows: AbbrevRowDraft[]): AbbrevRowDraft[] {
 export function renamingRows(rows: AbbrevRowDraft[]): AbbrevRowDraft[] {
   return changedRows(rows).filter((r) => (r.original ?? "").trim() !== "");
 }
+
+/** One parent's worth of rows, for rendering a level grouped under the level above it. */
+export interface ParentGroup {
+  parentGuid: string;
+  /** The parent term's label, or "" when it could not be resolved. */
+  parentLabel: string;
+  rows: AbbrevRowDraft[];
+}
+
+/**
+ * Group one level's rows under their parent term.
+ *
+ * Client, 2026-08-17: *"maybe we should put the unit under the department… if we can move those UNITS
+ * under Group HUman Resources, that would make the UX experience nicer"*. A flat `UNIT (63)` list is
+ * alphabetical across the whole segment, so `Tax` sits between `SDGI` and `Treasury` with nothing saying
+ * which department any of them belongs to — and on this client's data the labels carry a prefix
+ * (`Rewards ＆ HRIS - Rewards`) precisely because the tree had been flattened away.
+ *
+ * It also makes the RULE visible: abbreviations must be unique among **siblings**, not across the
+ * segment. Two departments may each hold a `TAX` unit — which reads as a duplicate in a flat list and is
+ * perfectly legal once the rows sit under their parents.
+ *
+ * Order: groups are sorted by where their parent sits in `allRows`, which is the term store's own order
+ * for the level above — so departments appear here in the same sequence as in the Department block.
+ * Alphabetical-by-child would reorder them for no reason. Rows keep their order within a group.
+ *
+ * A parent that cannot be resolved yields `parentLabel: ""` rather than being dropped. Dropping would
+ * hide a row that still needs a code, which is the one thing this screen exists to prevent.
+ */
+export function groupRowsByParent(
+  levelRows: AbbrevRowDraft[],
+  allRows: AbbrevRowDraft[],
+): ParentGroup[] {
+  const labelOf: Record<string, string> = {};
+  const parentIndex: Record<string, number> = {};
+  (allRows ?? []).forEach((r, i) => {
+    const k = (r.termGuid ?? "").toLowerCase();
+    labelOf[k] = r.label;
+    if (parentIndex[k] === undefined) parentIndex[k] = i;
+  });
+
+  const order: string[] = [];
+  const byParent: Record<string, AbbrevRowDraft[]> = {};
+  for (const r of levelRows ?? []) {
+    const key = (r.parentGuid ?? "").toLowerCase();
+    if (byParent[key] === undefined) {
+      byParent[key] = [];
+      order.push(key);
+    }
+    byParent[key].push(r);
+  }
+
+  const rank = (k: string): number =>
+    parentIndex[k] === undefined ? Number.MAX_SAFE_INTEGER : parentIndex[k];
+
+  return order
+    .slice()
+    .sort((a, b) => rank(a) - rank(b))
+    .map((key) => ({ parentGuid: key, parentLabel: labelOf[key] ?? "", rows: byParent[key] }));
+}
