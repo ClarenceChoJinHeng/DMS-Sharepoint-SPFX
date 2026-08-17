@@ -971,7 +971,13 @@ Client: the tab bar *"is confusing and client doesnt know how it works"*. The ta
 order, which was not enough — five equal doors do not say four of them are steps of one job.
 `FolderAdmin.tsx` is now picker → flow runner → **All tools** (the five tabs, unchanged). Rules in
 `shared/folderFlows.ts` (pure, 45 tests). BUILT, not yet site-tested.
-- **THE GOVERNING RULE, from the client: *"the flow should not stop them from doing the work."*** Every
+- **THE GOVERNING RULE: *"the flow should not stop them from doing the work."* ⚠ ATTRIBUTED TO THE CLIENT
+  UNTIL 2026-08-17, WHEN CLARENCE CORRECTED IT — it was never theirs.** Kept, because it earns its place,
+  but as OUR design rule, so it may be traded off rather than cited as a constraint handed down. Their
+  actual ask is narrower and stronger: *"I just want to ensure this flow is working properly and it should
+  make them understand how it work."* So a step **definitively** not done must say so and hold the Next
+  button (`blocksNext`), while a step merely unchecked must block nobody — fail-open guards against a
+  WRONG check, not against checking. Every
   step is reachable from the rail; the rail SAYS what is outstanding and padlocks almost nothing.
   `isLocked` returns true only when a fact is **known and unmet** — anything `undefined` (unread, or a read
   that failed) is not a lock. **Fail-open by construction, not by remembering to.**

@@ -7,9 +7,13 @@
 // them are steps of one job, and the order is what breaks. Miss Term Abbreviations and reconciliation
 // creates NOTHING, silently.
 //
-// THE GOVERNING RULE, stated by the client: *"the flow should not stop them from doing the work."* So this
-// screen marks what is outstanding and locks almost nothing. The rules live in shared/folderFlows.ts,
-// where `isLocked` is written so any unknown fact — unread, or a read that failed — cannot lock a step.
+// THE GOVERNING RULE: *"the flow should not stop them from doing the work."* Attributed to the client
+// until 2026-08-17, when Clarence corrected it — it was never theirs, so it is a design rule of ours and
+// can be traded off. The actual ask is *"ensure this flow is working properly and it should make them
+// understand how it work"*, which is narrower and stronger: a step definitively not done must SAY so and
+// hold the Next button, while a step we merely have not checked must not block anyone. The rules live in
+// shared/folderFlows.ts, where `isLocked` keeps any unknown fact — unread, or a read that failed — from
+// locking a step; that guards against a WRONG check, not against checking.
 //
 // It DRIVES FolderManager rather than dismantling it: reconciliation lives inline in a 4,000-line file and
 // is the most site-verified code in the project, so a navigation change must not go near it. Steps

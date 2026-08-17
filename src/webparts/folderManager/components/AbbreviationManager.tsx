@@ -437,10 +437,6 @@ export default function AbbreviationManager({
     }
   };
 
-  /* ── Render ────────────────────────────────────────────────────────────────── */
-
-  if (loading) return <p style={{ fontSize: 13, color: "#605e5c" }}>Loading segments&hellip;</p>;
-
   const seg = segment();
   const missing = rows.filter((r) => r.abbreviation.trim() === "").length;
 
@@ -451,12 +447,21 @@ export default function AbbreviationManager({
      no-terms case explicitly rather than relying on the loading flag having cleared.
 
      Reports the LIVE value, not the saved one, so typing a code lifts the gate immediately and clearing
-     one puts it back — the count on screen and the gate can never disagree. */
+     one puts it back — the count on screen and the gate can never disagree.
+
+     ⚠ IT MUST STAY ABOVE THE `if (loading)` RETURN BELOW. Placed after it, the hook was skipped on the
+     first render and called on the next, which is a hook-count change — React throws and the whole page
+     renders BLANK, with the flow's heading and rail gone too (2026-08-17). Hooks are unconditional or
+     they are a crash; an early return is exactly the kind of line that hides one. */
   useEffect(() => {
     if (!onMissingChange) return;
     const knowable = !loading && !treeLoading && seg !== undefined && rows.length > 0;
     onMissingChange(knowable ? missing : undefined);
   }, [onMissingChange, loading, treeLoading, seg, rows.length, missing]);
+
+  /* ── Render ────────────────────────────────────────────────────────────────── */
+
+  if (loading) return <p style={{ fontSize: 13, color: "#605e5c" }}>Loading segments&hellip;</p>;
 
   return (
     <div>

@@ -7,10 +7,17 @@
  * not enough, because five equal doors do not say that four of them are steps of one job. The order is
  * the thing that breaks — miss Term Abbreviations and reconciliation creates NOTHING, silently.
  *
- * THE GOVERNING RULE, from the client (2026-08-14): *"the flow should not stop them from doing the
- * work."* So locks are few, each rests on ONE definitive read, and every other step is
- * marked-but-passable. `isLocked` is written so that anything unknown — a fact not read yet, or a read
- * that failed — is NOT a lock. Fail-open by construction rather than by remembering to.
+ * THE GOVERNING RULE: *"the flow should not stop them from doing the work."* **Recorded as a client
+ * quote until 2026-08-17, when Clarence corrected it — it was never theirs.** Kept as a design rule
+ * because it earns its place on its own terms, but it is OURS, so it can be traded off rather than
+ * treated as a constraint handed down. The actual requirement is narrower and stronger: *"I just want to
+ * ensure this flow is working properly and it should make them understand how it work."*
+ *
+ * What that means in practice: locks are few and each rests on ONE definitive read, but a step that is
+ * definitively not done SHOULD say so and SHOULD hold the Next button (see `blocksNext`). `isLocked` is
+ * still written so anything unknown — a fact not read yet, or a read that failed — is NOT a lock;
+ * fail-open by construction rather than by remembering to. That protects against a wrong check, which is
+ * a different thing from declining to check at all.
  */
 
 /** Where a step's work happens. */
