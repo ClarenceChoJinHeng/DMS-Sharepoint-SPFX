@@ -328,7 +328,14 @@ export const PERSONAS: Persona[] = [
     // is the wide one: it makes a HoU the sharing AUTHORITY for their unit, able to share directly
     // without any screen, not merely an approver of other people's requests.
     roles: ["APR", "DELS", "UPL", "DEL", "SHARE"],
-    summary: "Approves every file in their own unit, can delete pending or rejected files there, and reads the unit's approved documents. Cannot upload, cannot delete approved documents, and sees no sibling unit.",
+    // SUMMARY CORRECTED 2026-08-17. It still read "Cannot upload, cannot delete approved
+    // documents" — written for the pre-2026-08-15 role set and never updated when UPL, DEL and
+    // SHARE were added directly above. The persona picker therefore told an administrator, on
+    // screen, the opposite of what the persona does, in the same words the `hod` entry uses
+    // correctly. Cost real time on 2026-08-17: a Head of Unit could not upload, and this line
+    // read as confirmation that they were never meant to. A roles array and its description
+    // drifting apart is invisible to every test, because nothing asserts on prose.
+    summary: "Approves every file in their own unit, uploads to it, and deletes pending or rejected files there. Reads the unit's approved documents and can delete or share them — which makes them the unit's sharing authority, not merely an approver of requests. Sees no sibling unit.",
   },
 
   // ── Head of Unit, Highly Confidential ──────────────────────────────────────
@@ -400,7 +407,11 @@ export const PERSONAS: Persona[] = [
     // In DOCUMENTS a PIC still deletes nothing and shares nothing: both are requests the Head of
     // Unit approves. See 2026-08-15-deletion-and-share-requests-design.md.
     roles: ["UPL", "DELS"],
-    summary: "Uploads to their unit at any confidentiality level, sees the unit's pending files, and reads the unit's approved documents. Cannot approve or delete.",
+    // SUMMARY CORRECTED 2026-08-17, same drift as `hou`: it read "Cannot approve or delete"
+    // while DELS had been added directly above on 2026-08-15. "Cannot delete" is the sentence a
+    // PIC would be shown to explain why they must raise a request — and it is wrong in the
+    // library where they hold delete outright.
+    summary: "Uploads to their unit at any confidentiality level, sees the unit's pending files, and deletes their own pending or rejected ones. Reads the unit's approved documents but cannot approve; deleting or sharing an approved document is a request the Head of Unit decides.",
   },
 
   // ── PIC, Highly Confidential ───────────────────────────────────────────────

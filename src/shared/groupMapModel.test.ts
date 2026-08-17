@@ -986,3 +986,36 @@ describe("corrected role model (2026-08-15)", () => {
     }
   });
 });
+
+// ── A persona's SUMMARY must not contradict its ROLES ────────────────────────
+//
+// Both `hou` and `pic` gained roles on 2026-08-15 and kept summaries written for the previous
+// model, so until 2026-08-17 the persona picker told administrators that a Head of Unit
+// "Cannot upload" and a PIC "Cannot approve or delete" — the opposite of what those personas do.
+// Nothing caught it, because nothing in this suite asserted on prose, and prose is the only part
+// of a persona an administrator actually reads before choosing one.
+//
+// This is deliberately a NEGATIVE check. Asserting that a summary describes every role would
+// force a brittle word-for-word match; asserting it never DENIES a role it holds catches the
+// drift that actually happened, and stays quiet about wording.
+describe("persona summaries do not deny a capability the persona has", () => {
+  // Literal patterns, never built from a string at runtime: @rushstack/security/no-unsafe-regexp
+  // rejects the dynamic form, and the warning baseline is a hard 19.
+  const CLAIMS: Array<{ verb: string; deny: RegExp; roles: GroupMapRole[] }> = [
+    { verb: "upload",  deny: /(cannot|can't|no)\s+upload/i,  roles: ["UPL", "UPLHC"] },
+    { verb: "approve", deny: /(cannot|can't|no)\s+approve/i, roles: ["APR", "APRHC"] },
+    { verb: "delete",  deny: /(cannot|can't|no)\s+delete/i,  roles: ["DEL", "DELS"] },
+    // "shar" so one pattern covers both "share" and "sharing".
+    { verb: "share",   deny: /(cannot|can't|no)\s+shar/i,    roles: ["SHARE"] },
+  ];
+
+  for (const persona of PERSONAS) {
+    for (const claim of CLAIMS) {
+      const holds = claim.roles.some((r) => persona.roles.indexOf(r) !== -1);
+      if (!holds) continue;
+      it(`${persona.key} holds ${claim.roles.join("/")} so its summary must not deny "${claim.verb}"`, () => {
+        expect(claim.deny.test(persona.summary)).toBe(false);
+      });
+    }
+  }
+});
