@@ -1,0 +1,63 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "sd-gatrie-client-side-solution",
+    "id": "4c93b50e-03c1-4005-a280-add0da86c86f",
+    "version": "1.0.145.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": false,
+    "isDomainIsolated": false,
+    "webApiPermissionRequests": [],
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.23.0"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "sd-gatrie description"
+      },
+      "longDescription": {
+        "default": "sd-gatrie description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "sd-gatrie Feature",
+        "description": "The feature that activates elements of the sd-gatrie solution.",
+        "id": "cf0be485-9c38-49ac-8bf3-b874346aa7d8",
+        "version": "1.0.1.0",
+        "componentIds": [
+          "21b82fca-081a-4ce4-bbe6-a83f2fce63a3",
+          "c1d2e3f4-a5b6-47c8-d9e0-f1a2b3c4d5e6",
+          "3a8f2e6d-1b4c-4a7f-8e9d-2c5b7f3a1e6d",
+          "02007994-7d63-4178-9a43-2b6ec96f9e44",
+          "7b3e9c14-2a8d-4f61-9b0e-5d3c8a1f4e72",
+          "299700f0-9a8e-4367-8018-1f9d54b92705",
+          "a5955b3e-0945-4ad4-9cb1-db8006c7fa7f",
+          "695640a1-5bf9-4582-adbe-30a988c4945a",
+          "591eb30f-4bb3-4853-a799-a41c5664d7fc",
+          "2d6d7010-8bc0-4ac2-8573-fe694db220f8",
+          "ba145053-3728-4b6c-8a1e-a393c520abb2",
+          "c7a41f6b-5d92-4e08-9a37-6b1f2c8d4e05",
+          "9e2c4d17-8b3a-4f60-a5d1-7c0e6b28f394",
+          "3f81c6d2-45ae-4b93-8c17-0d5e2a9f6b41",
+          "5c9d1a83-6f24-4b07-9e51-8d3a0c7f2b46",
+          "4d8b7e21-9c65-4a3f-b028-5e71d9c4a836",
+          "8b2f4a95-7c31-4d68-9e04-1a6b3f8c25d7"
+        ],
+        "assets": {
+          "elementManifests": ["elements.xml"]
+        }
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/sd-gatrie.sppkg"
+  }
+}
