@@ -22,7 +22,8 @@ import { abbrevListTitle } from "../../../shared/folderAbbreviation";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import {
   GroupMapRole,
-  SELECTABLE_ROLES,
+  PERSONAS,
+  namingRoleFor,
   normalizeRoleValue,
   roleLabel,
   suggestGroupName,
@@ -93,6 +94,29 @@ const s: Record<string, React.CSSProperties> = {
   toast:     { position: "fixed", bottom: 20, right: 20, padding: "10px 16px", borderRadius: 4, fontSize: 13, color: "#fff", zIndex: 200, maxWidth: 460, lineHeight: 1.45 },
 };
 
+/**
+ * The tier a persona's rows sit on, or "unit" for an unknown key.
+ *
+ * Defaults to the NARROWEST scope on purpose: an unknown persona naming a group after a unit describes
+ * less reach than it has, which is the harmless direction. Defaulting to "segment" would name a
+ * unit-scoped group as though it covered everything.
+ */
+function personaScope(key: string): "segment" | "department" | "unit" {
+  const p = PERSONAS.filter((x) => x.key === key)[0];
+  return p ? p.scope : "unit";
+}
+
+/** Personas grouped by family, in PERSONAS order, for an <optgroup> list. */
+function personaFamilies(): Array<{ family: string; items: typeof PERSONAS }> {
+  const out: Array<{ family: string; items: typeof PERSONAS }> = [];
+  for (const p of PERSONAS) {
+    const last = out[out.length - 1];
+    if (last && last.family === p.family) last.items.push(p);
+    else out.push({ family: p.family, items: [p] });
+  }
+  return out;
+}
+
 export default function GroupManager({ context, siteUrl }: Props): React.ReactElement {
   const [canManage, setCanManage] = useState<boolean | undefined>(undefined);
   const [loading, setLoading] = useState(true);
@@ -106,7 +130,6 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
   // Create form
   const [newName, setNewName] = useState("");
   const [nameTouched, setNameTouched] = useState(false);
-  const [builderOpen, setBuilderOpen] = useState(false);
   const [modes, setModes] = useState<ModePick[]>([]);
   const [mode, setMode] = useState<ModePick | undefined>(undefined);
   const [levels, setLevels] = useState<TermLite[][]>([]);
@@ -124,7 +147,23 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
    */
   const [codes, setCodes] = useState<Record<string, string>>({});
   const [chosen, setChosen] = useState<TermLite[]>([]);
-  const [builderRole, setBuilderRole] = useState<GroupMapRole | "">("");
+  /**
+   * The chosen PERSONA key, not a raw role (spec 2026-08-18 §3).
+   *
+   * Folder Access dropped its role chips so nobody hand-assembles a wrong combination; this screen kept
+   * them, which was the same trap in a second place — nobody should have to choose between "Delete
+   * pending files" and "View only — whole department". The persona also decides the NAME, via its
+   * declared `namingRole`.
+   */
+  const [builderPersona, setBuilderPersona] = useState<string>("");
+  /**
+   * Free-text naming, off by default (client, 2026-08-18: *"client doesn't care about naming convention
+   * and they will simple type it in for no reason"*).
+   *
+   * It cannot be removed outright: `CRS_SITE_MEMBERS` follows no convention, and there will always be a
+   * one-off. But the admin has to opt in, which is the opposite of the old default.
+   */
+  const [advanced, setAdvanced] = useState(false);
   const [staged, setStaged] = useState<PersonPick[]>([]);
   const [peopleQuery, setPeopleQuery] = useState("");
   const [peopleResults, setPeopleResults] = useState<PersonPick[]>([]);
@@ -344,15 +383,21 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
    * lose it, so the same cascade is offered here purely as a name generator. The admin may ignore
    * it entirely and type any name — it always was a suggestion, never a rule.
    */
-  const applyBuilder = (m: ModePick | undefined, path: TermLite[], role: GroupMapRole | ""): void => {
+  const applyBuilder = (m: ModePick | undefined, path: TermLite[], persona: string): void => {
     if (!m) return;
     // Code per tier, falling back to the LABEL when a term has no code yet. A fallback rather than a
     // refusal because this box only suggests a name — but such a group will not line up with its folder,
     // so the hint below the field says which tiers are missing a code.
+    // TRUNCATED BY THE PERSONA'S SCOPE. A Head of Department group is named `GHO_GF_HOD`, not
+    // `GHO_GF_TAX_HOD` — its row sits on the DEPARTMENT term and reaches the units beneath by fan-out, so
+    // a unit in its name would describe a narrower grant than it has. C-Level is segment-wide and takes no
+    // tier at all.
+    const scope = personaScope(persona);
+    const depth = scope === "segment" ? 0 : scope === "department" ? 1 : path.length;
     const built = suggestGroupName(
       m.code || m.label,
-      path.map((t) => codes[t.id.toLowerCase()] || t.label),
-      role,
+      path.slice(0, depth).map((t) => codes[t.id.toLowerCase()] || t.label),
+      namingRoleFor(persona),
     );
     // Never silently overwrite something the admin typed. The name is the one field here they may
     // have composed by hand for a reason.
@@ -371,7 +416,7 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
     if (!m) return;
     const tops = await loadTerms(`${siteUrl}/_api/v2.1/termStore/sets/${m.termSetGuid}/children`);
     setLevels(tops.length ? [tops] : []);
-    applyBuilder(m, [], builderRole);
+    applyBuilder(m, [], builderPersona);
   };
 
   const pickTerm = async (levelIndex: number, termId: string): Promise<void> => {
@@ -388,7 +433,7 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
       if (kids.length) nextLevels.push(kids);
     }
     setLevels(nextLevels);
-    applyBuilder(mode, path, builderRole);
+    applyBuilder(mode, path, builderPersona);
   };
 
   /* ── Create ────────────────────────────────────────────────────────────── */
@@ -428,11 +473,14 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
       setStaged([]);
       setPeopleQuery("");
       setPeopleResults([]);
-      setBuilderOpen(false);
       setMode(undefined);
       setChosen([]);
       setLevels([]);
-      setBuilderRole("");
+      setBuilderPersona("");
+      // `advanced` is deliberately NOT reset: someone creating one-off groups is usually creating several,
+      // and silently snapping the name field back to read-only between them would read as the page
+      // fighting them.
+
       await reload();
 
       showToast(
@@ -622,30 +670,45 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
       <div style={s.card}>
         <p style={s.head}>Create a group</p>
 
+        {/* THE NAME IS AN OUTPUT, NOT AN INPUT (client, 2026-08-18: *"client doesn't care about naming
+            convention and they will simple type it in for no reason"*).
+
+            The name is load-bearing: Folder Access recovers a group's role by PARSING ITS SUFFIX, so a
+            hand-typed `GHO_GF_TAX_HC_UPLOADER` — suffix in the middle — parses as a PLAIN uploader and
+            pre-selects the wrong role, which an admin then accepts because it looks right. Deriving it
+            from the persona removes the guess.
+
+            Read-only rather than hidden: the admin must be able to SEE what will be created, and a
+            disabled-looking field with the value in it says "this is decided" better than no field. */}
         <label style={s.label} htmlFor="gm-name">Group name</label>
         <input
           id="gm-name"
-          style={s.input}
+          style={advanced ? s.input : { ...s.input, background: "#f3f2f1", color: "#323130" }}
           value={newName}
-          placeholder="e.g. GHO_GF_CORU_UPLOADER"
+          readOnly={!advanced}
+          placeholder={advanced ? "e.g. CRS_SITE_MEMBERS" : "Choose a segment, tier and persona below"}
           onChange={(e) => { setNewName(e.target.value); setNameTouched(true); }}
         />
         {newName.trim() !== "" && nameErrors.length > 0 && (
           <p style={s.err}>{nameErrors.join(" ")}</p>
         )}
 
+        {/* The escape hatch, and it cannot be removed: `CRS_SITE_MEMBERS` follows no convention, and there
+            will always be a one-off. But it is opt-in, which is the opposite of the old default. */}
+        <label style={{ ...s.hint, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={advanced}
+            onChange={(e) => { setAdvanced(e.target.checked); setNameTouched(false); }}
+          />
+          Type the name myself (advanced) — for one-offs like the site-entry group
+        </label>
         <p style={s.hint}>
-          <button
-            type="button"
-            style={{ ...s.ghost, padding: "3px 10px" }}
-            onClick={() => setBuilderOpen(!builderOpen)}
-          >
-            {builderOpen ? "▾" : "▸"} Build the name from a segment and unit
-          </button>{" "}
-          Optional — it only fills the box above. Nothing is mapped here.
+          Nothing is granted here. Once the group exists, reconciliation applies its folder access.
         </p>
 
-        {builderOpen && (
+        {/* Always shown — this IS the form now, not an optional helper beside a text box. */}
+        {!advanced && (
           <div style={{ paddingLeft: 12, borderLeft: "2px solid #e1e1e1", marginTop: 10 }}>
             <label style={s.label} htmlFor="gm-seg">Segment</label>
             <select
@@ -681,24 +744,45 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
               </div>
             ))}
 
-            <label style={s.label} htmlFor="gm-role">Role</label>
+            {/* PERSONA, not a raw role (client, 2026-08-18). The role list offered things like "Delete
+                pending files" and "View only — whole department", which are combinations nobody should
+                have to assemble; Folder Access dropped its role chips for this reason and this screen was
+                the same trap in a second place. The persona also decides the NAME, through its declared
+                `namingRole` — so name and capability can no longer disagree. */}
+            <label style={s.label} htmlFor="gm-persona">Persona</label>
             <select
-              id="gm-role"
+              id="gm-persona"
               style={s.select}
-              value={builderRole}
+              value={builderPersona}
               onChange={(e) => {
-                const r = e.target.value as GroupMapRole | "";
-                setBuilderRole(r);
-                applyBuilder(mode, chosen, r);
+                const k = e.target.value;
+                setBuilderPersona(k);
+                applyBuilder(mode, chosen, k);
               }}
             >
-              <option value="">— select a role —</option>
-              {SELECTABLE_ROLES.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
+              <option value="">— select a persona —</option>
+              {personaFamilies().map((f) => (
+                <optgroup key={f.family} label={f.family}>
+                  {f.items.map((p) => (
+                    <option key={p.key} value={p.key}>{p.label}</option>
+                  ))}
+                </optgroup>
+              ))}
             </select>
-            <p style={s.hint}>
-              The role here only shapes the <strong>name</strong>. What the group can actually do is
-              decided by the persona you give it on the Folder Access page.
-            </p>
+            {builderPersona !== "" && (
+              <p style={s.hint}>
+                {/* The roles are SHOWN rather than chosen. An admin should be able to see what a persona
+                    carries — that is how a wrong pick gets caught before 60 groups exist — without being
+                    able to assemble one by hand. */}
+                Grants:{" "}
+                <strong>
+                  {(PERSONAS.filter((x) => x.key === builderPersona)[0]?.roles ?? [])
+                    .map((r) => roleLabel(r))
+                    .join(" · ")}
+                </strong>
+                . Mapped at <strong>{personaScope(builderPersona)}</strong> level.
+              </p>
+            )}
             {/* Says WHY a name came out with a full term label in it. Without this the fallback is
                 invisible: the box just reads `GHO_GF_Compliance & Operational Risk` and looks like a bug
                 rather than a missing code. It matters beyond tidiness — reconciliation names the folder
