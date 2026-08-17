@@ -251,6 +251,18 @@ export const SELECTABLE_ROLES: GroupMapRole[] =
  */
 export interface Persona {
   key: string;
+  /**
+   * The role whose suffix names this persona's group. DECLARED, never derived.
+   *
+   * "Its first role" is wrong, and wrong in the dangerous direction: `employee_hc` is
+   * `["MEMBER", "MEMBERHC"]`, so first-role naming would call it `<unit>_EMPLOYEE`, which parses back as
+   * plain `MEMBER` — presenting an HC-CLEARED VIEWER GROUP AS HAVING NO CLEARANCE. Silent, and exactly
+   * what the suffix table exists to prevent.
+   *
+   * A test asserts every persona declares one and that each round-trips through `roleFromGroupName` back
+   * to itself, so a new persona cannot be added without answering this.
+   */
+  namingRole: GroupMapRole;
   /** Family heading in the picker, matching the client's own document. */
   family: "C-Level" | "Head of Department" | "Head of Unit" | "PIC" | "SDG Employee";
   label: string;
@@ -306,7 +318,7 @@ export const PERSONAS: Persona[] = [
   // downward. Listed anyway, because the capability is agreed and an admin who
   // cannot find it will assume it was forgotten.
   {
-    key: "clevel_global", family: "C-Level", scope: "segment", label: "Global — view, delete + share everything",
+    key: "clevel_global", namingRole: "GLOBAL", family: "C-Level", scope: "segment", label: "Global — view, delete + share everything",
     // DEL and SHARE added 2026-08-15. NO LONGER VIEW-ONLY: a global C-Level deletes or shares any
     // approved document anywhere, without asking anyone. The widest grant in this file.
     roles: ["GLOBAL", "DEL", "SHARE"],
@@ -317,7 +329,7 @@ export const PERSONAS: Persona[] = [
   // ROLE_TO_PERMISSION. Documents only, for the same reason as GLOBAL: a C-Level on Staging
   // would be reading an entire segment's unapproved drafts.
   {
-    key: "clevel_segment", family: "C-Level", scope: "segment", label: "Segment — view, delete + share one segment",
+    key: "clevel_segment", namingRole: "SEGVIEW", family: "C-Level", scope: "segment", label: "Segment — view, delete + share one segment",
     // As clevel_global, narrowed to one segment by the row's term.
     roles: ["SEGVIEW", "DEL", "SHARE"],
     summary: "Reads one business segment and every department and unit under it, in the Documents library. No Staging access, no upload, no approve.",
@@ -337,7 +349,7 @@ export const PERSONAS: Persona[] = [
   // DEL maps to "CRS Delete", which is Read + Delete Items. The read was already there; the
   // second membership only made it look as though it were not.
   {
-    key: "hod", family: "Head of Department", scope: "department", label: "View only, department-wide",
+    key: "hod", namingRole: "DEPTVIEW", family: "Head of Department", scope: "department", label: "View only, department-wide",
     /* VIEW-ONLY SINCE 2026-08-17 (client: "HOD no need deletion power, he only view" and "Head of
        Department do not have share functionality that is HOU, just needs View"). Both DEL and SHARE
        left; deletion authority is now entirely the Head of Unit's, which is where the request
@@ -369,7 +381,7 @@ export const PERSONAS: Persona[] = [
   // It is deliberately NOT Documents delete: LIBRARY_ROLES keeps DELS off Documents, so a
   // Head of Unit still cannot remove an APPROVED document. That stays with Head of Department.
   {
-    key: "hou", family: "Head of Unit", scope: "unit", label: "Approve, upload, delete + share own unit",
+    key: "hou", namingRole: "APR", family: "Head of Unit", scope: "unit", label: "Approve, upload, delete + share own unit",
     // Three roles added 2026-08-15, correcting the model and enabling the request workflow.
     //
     // UPL — the client had said a Head of Unit cannot upload; they can. Consequence, accepted
@@ -472,7 +484,7 @@ export const PERSONAS: Persona[] = [
   // a separate DECISION — but the client has now made it, for every PIC. What changed is the
   // answer, not the reasoning: it is granted by the same group rather than by a second one.
   {
-    key: "pic", family: "PIC", scope: "unit", label: "Upload + delete own pending",
+    key: "pic", namingRole: "UPL", family: "PIC", scope: "unit", label: "Upload + delete own pending",
     // DELS added 2026-08-15, correcting the model: the client had said a PIC cannot delete, and the
     // rule is the opposite in the APPROVAL LIBRARY.
     //
@@ -501,7 +513,7 @@ export const PERSONAS: Persona[] = [
   // leaves two rows to keep in step through a term rename. One person, one group, as everywhere else
   // since 2026-08-09.
   {
-    key: "pic_hc", family: "PIC", scope: "unit", label: "Upload incl. Highly Confidential + delete own pending",
+    key: "pic_hc", namingRole: "UPLHC", family: "PIC", scope: "unit", label: "Upload incl. Highly Confidential + delete own pending",
     /* DELS → DELSHC, 2026-08-17, and this closed a LIVE LEAK rather than tidying a name.
        DELS is held by the PLAIN PIC too, so while DELS was listed on the HC approval library every
        plain PIC held CRS Delete there. Draft Item Security narrowed it — a non-approver sees only
@@ -525,7 +537,7 @@ export const PERSONAS: Persona[] = [
   //
   // Approval-side absent, like every view role: a viewer there would be reading unapproved drafts.
   {
-    key: "employee_hc", family: "SDG Employee", scope: "unit", label: "View only, incl. Highly Confidential",
+    key: "employee_hc", namingRole: "MEMBERHC", family: "SDG Employee", scope: "unit", label: "View only, incl. Highly Confidential",
     roles: ["MEMBER", "MEMBERHC"],
     summary: "Reads their own unit's approved documents, including Highly Confidential ones. Cannot upload, approve, delete or share. An SDG Employee without this clearance cannot see Highly Confidential documents at all.",
   },
@@ -535,7 +547,7 @@ export const PERSONAS: Persona[] = [
   // Now the ONLY persona whose whole purpose is MEMBER. Since 2026-08-09 every other persona
   // carries its own Documents read, so this one means exactly what its name says: someone who
   // views and does nothing else.
-  { key: "employee", family: "SDG Employee", scope: "unit", label: "No power — view only", roles: ["MEMBER"], summary: "Reads their own unit's approved documents. Cannot upload or approve." },
+  { key: "employee", namingRole: "MEMBER", family: "SDG Employee", scope: "unit", label: "No power — view only", roles: ["MEMBER"], summary: "Reads their own unit's approved documents. Cannot upload or approve." },
 ];
 
 /** Family headings in display order, so the picker cannot drift from the model. */
@@ -827,6 +839,11 @@ const ROLE_SUFFIXES_UNSORTED: RoleSuffix[] = [
   // (suffixForRole returns "" for it), so there is no `_MEMBER` to extend. `_VIEWER_*` instead,
   // matching the ROLE_LABEL wording an admin sees.
   { suffix: "_VIEWER_HIGHLY_CONFIDENTIAL", role: "MEMBERHC" },
+  // Added 2026-08-18. `_EMPLOYEE` gives the base group a parseable name; `_HOD` is the client's
+  // preferred spelling for Head of Department. Both are ADDITIVE — the older `_DEPARTMENT_VIEWER`
+  // and `_DEPTVIEW` below still parse, so no existing group is stranded.
+  { suffix: "_EMPLOYEE", role: "MEMBER" },
+  { suffix: "_HOD", role: "DEPTVIEW" },
   { suffix: "_VIEWER_HC", role: "MEMBERHC" },
   { suffix: "_DEPARTMENT_VIEWER", role: "DEPTVIEW" },
   { suffix: "_DEPTVIEW", role: "DEPTVIEW" },
@@ -870,14 +887,42 @@ const CANONICAL_SUFFIX: Record<string, string> = {
   DEL: "_DELETER_DOCUMENTS",
   DELS: "_DELETER_STAGING",
   SEGVIEW: "_SEGVIEW",
-  DEPTVIEW: "_DEPARTMENT_VIEWER",
+  // `_HOD`, not `_DEPARTMENT_VIEWER` (client, 2026-08-18). Note HOU is Head of UNIT — a department
+  // group must not borrow it. Both older spellings stay in ROLE_SUFFIXES so groups already named
+  // that way keep parsing; only new names use this one.
+  DEPTVIEW: "_HOD",
   UPLHC: "_UPL_HIGHLY_CONFIDENTIAL",
   DELSHC: "_DELS_HIGHLY_CONFIDENTIAL",
   MEMBERHC: "_VIEWER_HIGHLY_CONFIDENTIAL",
+  /**
+   * MEMBER now carries a suffix, and this closes a hole rather than tidying one.
+   *
+   * The base group used to be bare (`GHO_GF_TAX`), and `roleFromGroupName` FALLS THROUGH to MEMBER for
+   * any name it does not recognise — so a bare name and a typo were the same answer, which is how a
+   * mistyped approver group reads as view-only. With every generated name carrying a suffix, that
+   * fallback can later be made loud. (Not changed here: it would reclassify groups on existing sites.)
+   */
+  MEMBER: "_EMPLOYEE",
 };
 
+/**
+ * The role whose suffix names a persona's group, or "" for an unknown persona.
+ *
+ * A lookup rather than a second table: `Persona.namingRole` is declared beside the roles it names, so the
+ * two cannot drift. "" is returned for an unknown key so a caller falls back to an unsuffixed name rather
+ * than throwing mid-form — the name is a suggestion, and a missing suffix is visible while an exception is
+ * a blank screen.
+ */
+export function namingRoleFor(personaKey: string): GroupMapRole | "" {
+  const p = PERSONAS.filter((x) => x.key === personaKey)[0];
+  return p ? p.namingRole : "";
+}
+
 export function suffixForRole(role: GroupMapRole | ""): string {
-  if (role === "MEMBER" || role === "GLOBAL" || role === "") return "";
+  // GLOBAL alone stays suffix-less: `suggestGroupName` returns the literal "GLOBAL" for it, so there is
+  // no <seg>_<tier> stem for a suffix to hang off. MEMBER was in this guard until 2026-08-18 and is now
+  // `_EMPLOYEE` — see the note on CANONICAL_SUFFIX.MEMBER for why a bare base-group name was a hole.
+  if (role === "GLOBAL" || role === "") return "";
   const canonical = CANONICAL_SUFFIX[role];
   if (canonical !== undefined) return canonical;
   for (const s of ROLE_SUFFIXES) if (s.role === role) return s.suffix;
@@ -892,6 +937,10 @@ export function suffixForRole(role: GroupMapRole | ""): string {
  */
 export function roleFromGroupName(name: string): GroupMapRole {
   const n = norm(name).toUpperCase();
+  // The global C-Level group is named "GLOBAL" outright — no stem, so no suffix to match. Without this it
+  // fell through to MEMBER, meaning the WIDEST grant in the model parsed back as the narrowest. Exact
+  // match only: a group merely ENDING in the word would be a different group.
+  if (n === "GLOBAL") return "GLOBAL";
   for (const { suffix, role } of ROLE_SUFFIXES) {
     if (n.endsWith(suffix)) return role;
   }

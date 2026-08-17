@@ -3,6 +3,7 @@ import {
   isDuplicateRow,
   validateDraft,
   roleFromGroupName,
+  namingRoleFor,
   suggestGroupName,
   suffixForRole,
   ROLE_SUFFIXES,
@@ -272,8 +273,11 @@ describe("suggestGroupName — new role suffixes", () => {
     );
   });
 
-  it("leaves MEMBER unsuffixed — the base group is identified by having no suffix", () => {
-    expect(suggestGroupName("GHO", ["Group Finance"], "MEMBER")).toBe("GHO_Group Finance");
+  it("names MEMBER `_EMPLOYEE` — the base group is no longer identified by ABSENCE", () => {
+    // CHANGED 2026-08-18 (client). This previously asserted a bare `GHO_Group Finance`, which made a
+    // base group indistinguishable from a name roleFromGroupName simply did not recognise — the two both
+    // answered MEMBER. That is how a mistyped approver group reads as view-only.
+    expect(suggestGroupName("GHO", ["Group Finance"], "MEMBER")).toBe("GHO_Group Finance_EMPLOYEE");
   });
 
   it("round-trips: a suggested name parses back to the role it was built for", () => {
@@ -464,15 +468,17 @@ describe("suffixForRole", () => {
     expect(suffixForRole("DEL")).toBe("_DELETER_DOCUMENTS");
   });
 
-  it("returns nothing for the roles that are not named by suffix", () => {
-    expect(suffixForRole("MEMBER")).toBe("");
+  it("returns nothing ONLY for GLOBAL and the empty role", () => {
+    // MEMBER left this list on 2026-08-18. GLOBAL stays because `suggestGroupName` returns the literal
+    // "GLOBAL" for it — there is no <seg>_<tier> stem for a suffix to attach to.
+    expect(suffixForRole("MEMBER")).toBe("_EMPLOYEE");
     expect(suffixForRole("GLOBAL")).toBe("");
     expect(suffixForRole("")).toBe("");
   });
 
   it("round-trips through roleFromGroupName for every selectable role", () => {
     for (const role of SELECTABLE_ROLES) {
-      if (role === "MEMBER" || role === "GLOBAL") continue; // no suffix by design
+      if (role === "GLOBAL") continue; // fixed literal name, no stem to suffix
       expect(roleFromGroupName(`GHO_GF_CORU${suffixForRole(role)}`)).toBe(role);
     }
   });
@@ -843,9 +849,9 @@ describe("suggestGroupName", () => {
     );
   });
 
-  it("MEMBER gets no suffix (base/viewer group)", () => {
+  it("MEMBER is suffixed `_EMPLOYEE` (base/viewer group)", () => {
     expect(suggestGroupName("Group Head Office", ["Group Finance"], "MEMBER")).toBe(
-      "Group Head Office_Group Finance",
+      "Group Head Office_Group Finance_EMPLOYEE",
     );
   });
 
@@ -1095,4 +1101,72 @@ describe("persona summaries do not deny a capability the persona has", () => {
       });
     }
   }
+});
+
+describe("persona naming roles", () => {
+  // Spec: 2026-08-18-group-creation-and-bulk-provisioning-design.md §2.2. The group name stops being
+  // typed and becomes derived from the persona, so the persona has to say which suffix names it.
+  it("declares a naming role for EVERY persona", () => {
+    // The guard that makes the rest safe: a new persona cannot be added without answering this.
+    for (const p of PERSONAS) {
+      expect(typeof p.namingRole).toBe("string");
+      expect(p.namingRole.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("ROUND-TRIPS: the name built for a persona parses back to that persona's naming role", () => {
+    // The property the whole scheme rests on. If a generated name parses back to a DIFFERENT role, Folder
+    // Access pre-selects the wrong one and an admin accepts it because it looks right.
+    for (const p of PERSONAS) {
+      const name = suggestGroupName("GHO", ["GF", "TAX"], p.namingRole);
+      expect(roleFromGroupName(name)).toBe(p.namingRole);
+    }
+  });
+
+  it("does NOT name employee_hc as a plain employee", () => {
+    // The specific trap that made a declared naming role necessary: employee_hc is
+    // ["MEMBER", "MEMBERHC"], so "use the first role" would name it `_EMPLOYEE`, parse back as plain
+    // MEMBER, and present an HC-CLEARED VIEWER GROUP AS HAVING NO CLEARANCE.
+    expect(namingRoleFor("employee_hc")).toBe("MEMBERHC");
+    expect(namingRoleFor("employee")).toBe("MEMBER");
+    const hc = suggestGroupName("GHO", ["GF", "TAX"], namingRoleFor("employee_hc"));
+    const plain = suggestGroupName("GHO", ["GF", "TAX"], namingRoleFor("employee"));
+    expect(hc).not.toBe(plain);
+    expect(roleFromGroupName(hc)).toBe("MEMBERHC");
+  });
+
+  it("names the base group _EMPLOYEE instead of leaving it bare", () => {
+    // A bare name was indistinguishable from an unrecognised one, because roleFromGroupName falls through
+    // to MEMBER. Every generated name now carries a suffix.
+    expect(suggestGroupName("GHO", ["GF", "TAX"], "MEMBER")).toBe("GHO_GF_TAX_EMPLOYEE");
+  });
+
+  it("names Head of Department _HOD, and never borrows the Head of UNIT wording", () => {
+    // Client's spelling, 2026-08-18. HOU is Head of Unit; a department group must not look like one.
+    expect(suggestGroupName("GHO", ["GF"], namingRoleFor("hod"))).toBe("GHO_GF_HOD");
+    expect(suggestGroupName("GHO", ["GF"], namingRoleFor("hod"))).not.toContain("HOU");
+  });
+
+  it("still parses the OLDER department spellings, so no existing group is stranded", () => {
+    // `_HOD` is additive. A group already named the long way keeps working.
+    expect(roleFromGroupName("GHO_GF_DEPARTMENT_VIEWER")).toBe("DEPTVIEW");
+    expect(roleFromGroupName("GHO_GF_DEPTVIEW")).toBe("DEPTVIEW");
+  });
+
+  it("returns \"\" for an unknown persona rather than throwing", () => {
+    // Called while a form is mid-edit; an exception there is a blank screen, a missing suffix is visible.
+    expect(namingRoleFor("not_a_persona")).toBe("");
+  });
+
+  it("gives the two unit uploader personas DIFFERENT names", () => {
+    // pic and pic_hc both upload, and only the suffix says which library. Same name = a silent clearance
+    // change on whichever group was created second.
+    expect(namingRoleFor("pic")).toBe("UPL");
+    expect(namingRoleFor("pic_hc")).toBe("UPLHC");
+    const a = suggestGroupName("GHO", ["GF", "TAX"], namingRoleFor("pic"));
+    const b = suggestGroupName("GHO", ["GF", "TAX"], namingRoleFor("pic_hc"));
+    expect(a).not.toBe(b);
+    expect(roleFromGroupName(a)).toBe("UPL");
+    expect(roleFromGroupName(b)).toBe("UPLHC");
+  });
 });
