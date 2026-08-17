@@ -208,10 +208,29 @@ export function validateNewSegment(
     );
   }
 
-  if (draft.permissioned.length === 0) {
+  // TWO is the floor, not one (client's instruction 2026-08-17: "I think best to force them to
+  // create two not one. atleast two"). Every one of the thirteen intended segments is two tiers —
+  // head offices Department/Unit, Upstream Ops Region/Estate·Mill, SDGI Refinery/Department, I&T
+  // `I&T Operating Units/Department`/Unit (that slash is ONE tier name, not two tiers).
+  //
+  // This is NOT redundant with the term-set depth check, which is the reason it is worth having. That
+  // check compares the declared count to the set's depth, so ONE declared tier against a ONE-deep set
+  // passes it cleanly — and a set is one-deep exactly when someone has authored the departments but
+  // not yet the units. The segment then saves with the DEPARTMENT holding the access, so every unit
+  // in a department shares one ACL and one folder. Nothing fails; it surfaces later as "this person
+  // can see another unit's documents".
+  //
+  // Deliberately a refusal rather than a warning: the depth check's own get-out is warn-and-allow
+  // when depth is UNKNOWN, and stacking a second soft signal on the one shape that reads as complete
+  // would leave the dangerous case advisory in both places.
+  if (draft.permissioned.length < 2) {
     errors.push(
-      "Name at least one permissioned level — the level whose folders carry the permissions, " +
-        "usually Unit. Without one there is nothing for reconciliation to grant access to.",
+      draft.permissioned.length === 0
+        ? "Name the levels that carry permissions — at least two, e.g. Department then Unit. " +
+            "Without them there is nothing for reconciliation to grant access to."
+        : "Name at least two levels that carry permissions, e.g. Department then Unit. With only " +
+            `"${draft.permissioned[0]?.label?.trim() || "one level"}" the permissions land on that ` +
+            "level's folders, so everything beneath it shares one set of access.",
     );
   }
   const seen: Record<string, string> = {};

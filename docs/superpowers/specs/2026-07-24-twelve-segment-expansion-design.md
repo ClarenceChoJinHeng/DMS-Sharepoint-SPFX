@@ -30,8 +30,8 @@ architecture; no umbrella "Head Office" level is added.
 | 7 | NBPOL Upstream Operations | Upstream Ops | Region → Estate/Mill | 2027 |
 | 8 | SDGI Malaysia | SDGI | Refinery → Department | 2027 |
 | 9 | SDGI Overseas | SDGI | Refinery → Department | 2027 |
-| 10 | Innovation & Technology Malaysia | I&T | I&T Operating Units/Department (**one tier**) | 2027 |
-| 11 | Innovation & Technology Overseas | I&T | I&T Operating Units/Department (**one tier**) | 2027 |
+| 10 | Innovation & Technology Malaysia | I&T | I&T Operating Units/Department → Unit | 2027 |
+| 11 | Innovation & Technology Overseas | I&T | I&T Operating Units/Department → Unit | 2027 |
 | 12 | Group-led Project | Projects | Department → Unit (top folder is the **Project Name**) | 2027 |
 | 13 | Group Business Ventures & Transformation | Head Office | Department → Unit | 2027 |
 
@@ -43,24 +43,32 @@ architecture; no umbrella "Head Office" level is added.
 > - **Segment 13 is new**, same shape as a head office. It needs its own term set and is absent from
 >   every code fallback (`DEFAULT_MODES`, `RECON_MODES`) — inert until a `mode` row exists, so this is a
 >   note rather than a defect.
-> - **I&T stays ONE tier — confirmed by the client 2026-08-17**, so its term set must be **1-deep**.
->   Their table appeared to split it (`I&T Operating Units/Department` then `Unit`) and this spec briefly
->   recorded two before they confirmed one. **I&T is therefore the one family that is not two levels**,
->   and the `Unit` cell in their table is not a permissioned tier. If a folder level is wanted there
->   anyway, it belongs on the Folder levels tab as `"permissioned": false` — a folder that inherits,
->   needing no group, no abbreviation and no Group Map row.
+> - **I&T is TWO tiers, and "one tier" meant one tier NAME.** This row was recorded as a single level in
+>   July, flipped to one again on 2026-08-17, and settled at two the same day when the client clarified:
+>   *"what I meant by one tier is the I&T Operating Units/Department not the entire thing"*.
+>   `I&T Operating Units/Department` is **one tier name containing a slash**, with `Unit` below it. The
+>   slash reads as a tier boundary and is not one — a `/` inside a level name is the one punctuation mark
+>   in this system that means nothing structural, which is exactly why it misleads.
 >
-> **The recurring misreading, across every one of these rows, is counting the business segment as a
-> tier.** It is the Top folder name, above the chain. It is worth being blunt about the cost: the depth
-> check demands the term set's depth equal the tier count, and reconciliation walks the term tree capped
-> at that count — so one tier too many moves every unit's ACL a level DOWN onto a folder no Group Map row
-> points at. It grants successfully and looks correct. Declaring one tier too FEW is the loud direction:
-> the form refuses and writes nothing.
+> **THE RECURRING MISREADING, ACROSS EVERY ONE OF THESE ROWS, IS COUNTING THE BUSINESS SEGMENT AS A
+> TIER.** It is the Top folder name, above the chain. It is worth being blunt about the cost, because it
+> decides the direction to err in: the depth check demands the term set's depth equal the tier count, and
+> reconciliation walks the term tree capped at that count — so **one tier too MANY moves every unit's ACL
+> a level down onto a folder no Group Map row points at, grants successfully, and looks correct.** One
+> too FEW is loud: the form refuses and writes nothing.
+>
+> **ALL THIRTEEN FAMILIES ARE EXACTLY TWO TIERS, and `validateNewSegment` now REFUSES fewer than two**
+> (client's instruction 2026-08-17: *"I think best to force them to create two not one. atleast two"*).
+> That floor is not redundant with the depth check, which is why it is worth having: one declared tier
+> against a **one-deep** set passes the depth check cleanly, and a set is one-deep precisely when someone
+> has authored the departments and not yet the units. The segment then saves with the **department**
+> holding the access, so every unit under it shares one folder and one ACL. It is a refusal rather than a
+> warning because the depth check's own get-out is warn-and-allow when depth is unknown, and a second
+> soft signal would leave the one shape that reads as complete advisory in both places.
 >
 > `I&T Operating Units/Department` keeps its slash in the **label**, but `sanitizeFolderSegment` removes
 > illegal characters rather than substituting, so the derived column is `I&TOperatingUnitsDepartment` —
-> the same way `Estate/Mill` yields `EstateMill`. Still worth confirming the slash is a real name and not
-> two alternatives written in one cell.
+> the same way `Estate/Mill` yields `EstateMill`.
 
 Every segment ends with **Year → Document Type** below the leaf level — these remain
 ensure-created subfolders inheriting the Unit folder's ACL, **not** term levels.

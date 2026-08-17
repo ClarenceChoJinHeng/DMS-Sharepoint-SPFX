@@ -162,11 +162,16 @@ describe("validateNewSegment", () => {
     expect(validateNewSegment(draft(), existing)).toEqual([]);
   });
 
-  it("accepts a SINGLE permissioned tier — I&T needs exactly one", () => {
+  it("accepts I&T's TWO tiers — the slashed name is one tier, not two", () => {
+    // Replaces an assertion that a single tier was valid "because I&T needs exactly one". The client
+    // corrected that on 2026-08-17: `I&T Operating Units/Department` is ONE TIER NAME containing a
+    // slash, and `Unit` sits below it. So I&T is two tiers like every other family, and the old test
+    // was pinning the very misreading that produced it — counting the business segment as a tier and
+    // therefore having to drop a real one to make the arithmetic work.
     const d = draft({
       label: "I&T Malaysia",
       stagingFolder: "ITMY",
-      permissioned: [{ label: "I&T Operating Unit" }],
+      permissioned: [{ label: "I&T Operating Units/Department" }, { label: "Unit" }],
     });
     expect(validateNewSegment(d, existing)).toEqual([]);
   });
@@ -193,12 +198,59 @@ describe("validateNewSegment", () => {
     expect(validateNewSegment(draft({ stagingFolder: "gho" }), existing).length).toBe(1);
   });
 
-  it("requires a name, a folder, a term set and at least one permissioned tier", () => {
+  it("requires a name, a folder, a term set and the permissioned tiers", () => {
     const errs = validateNewSegment(
       draft({ label: "", stagingFolder: "", termSetGuid: "", permissioned: [] }),
       existing,
     );
     expect(errs.length).toBe(4);
+  });
+
+  it("REFUSES a single permissioned tier — two is the floor", () => {
+    // The client's instruction 2026-08-17, and not redundant with depthVerdict: one declared tier
+    // against a ONE-deep set passes the depth check, and a set is one-deep precisely when the
+    // departments have been authored and the units have not. That saves with the DEPARTMENT holding
+    // the access, so every unit under it shares one folder and one ACL.
+    const errs = validateNewSegment(draft({ permissioned: [{ label: "Department" }] }), existing);
+    expect(errs.length).toBe(1);
+    expect(errs[0]).toContain("at least two");
+    // Names the tier back, so the message is about THIS draft rather than a rule recital.
+    expect(errs[0]).toContain("Department");
+  });
+
+  it("accepts exactly two permissioned tiers", () => {
+    const errs = validateNewSegment(
+      draft({ permissioned: [{ label: "Region" }, { label: "Estate/Mill" }] }),
+      existing,
+    );
+    expect(errs).toEqual([]);
+  });
+
+  it("accepts every intended segment family's tier pair, I&T's slashed tier name included", () => {
+    // All thirteen intended segments are two tiers. I&T reads as three only if the business segment
+    // is counted, and `I&T Operating Units/Department` is ONE tier name containing a slash — the
+    // misreading that flipped this spec twice on 2026-08-17.
+    const families: Array<[string, string]> = [
+      ["Department", "Unit"],
+      ["Region", "Estate/Mill"],
+      ["Refinery", "Department"],
+      ["I&T Operating Units/Department", "Unit"],
+    ];
+    for (const [a, b] of families) {
+      const errs = validateNewSegment(
+        draft({ permissioned: [{ label: a }, { label: b }] }),
+        existing,
+      );
+      expect(errs).toEqual([]);
+    }
+  });
+
+  it("says what a single tier COSTS, not merely that it is disallowed", () => {
+    // An admin refused without a reason retypes the same thing or gives up. The message has to name
+    // the consequence — everything beneath shares one set of access — because that is the fact that
+    // makes the second tier obviously worth adding.
+    const errs = validateNewSegment(draft({ permissioned: [{ label: "Unit" }] }), existing);
+    expect(errs[0]).toContain("shares one set of access");
   });
 
   it("refuses two tiers that would need the same column", () => {
