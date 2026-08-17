@@ -2353,7 +2353,18 @@ export default function FolderManager({
               try {
                 await addRoleAssignmentToList(listBase, spGroupPrincipalId(row.GroupId ?? ""), roleDefId);
                 entries.push({ msg: `  ↳ ${label} → ${levelName} (library)`, ok: true });
-                pushAssign("Documents", `${lib} → ${row.GroupName} (${levelName}, library scope)`, "ok");
+                /* The panel is the library the row TARGETS, not a constant. Every library-scope
+                   grant was pushed to the Documents feed regardless of its Target, so the 17
+                   Staging grants appeared under "Documents group assignments" while the Staging
+                   panel sat empty — spotted live 2026-08-17. The grants themselves always landed
+                   correctly; only the reporting was wrong, which on a screen whose whole job is
+                   showing what happened to which library is worse than it sounds.
+
+                   Falls back to Documents for an unrecognised Target rather than dropping the line:
+                   a row aimed at a library that does not exist is already reported as an error
+                   above, and losing its progress entry as well would hide the evidence. */
+                const panel: LibTarget = reconLibs().indexOf(lib as LibTarget) > -1 ? (lib as LibTarget) : "Documents";
+                pushAssign(panel, `${lib} → ${row.GroupName} (${levelName}, library scope)`, "ok");
                 bumpAssigns();
                 await tick();
               } catch (e) {
@@ -2630,6 +2641,10 @@ export default function FolderManager({
                   try {
                     await addRoleAssignmentToList(itemBase, spGroupPrincipalId(row.GroupId ?? ""), readId);
                     entries.push({ msg: `  ↳ ${label} → Read (page)`, ok: true });
+                    /* A PAGE grant has no library, so no panel is right — there are only the four
+                       library feeds. Documents is arbitrary but stable, and the line says "page
+                       scope" so it cannot be mistaken for a library grant. A fifth panel for pages
+                       would be the honest fix; not worth reshaping the progress UI for it today. */
                     pushAssign("Documents", `${file} → ${row.GroupName} (Read, page scope)`, "ok");
                     bumpAssigns();
                     await tick();
