@@ -980,6 +980,30 @@ order, which was not enough — five equal doors do not say four of them are ste
   is literally the tail of flow 1 — pinned by a test, because if they diverge one of them is wrong.
   Without it the frequent job has no home, and an admin starts the new-segment flow and skips half of it,
   one wrong click from a duplicate segment.
+- **NEXT IS DISABLED UNTIL THE STEP IS DONE — on exactly TWO steps (2026-08-17, client: *"won't it make
+  more sense once client finish filling up the New Segment and saved and only next step is
+  available?"*).** `blocksNext` in `shared/folderFlows.ts`, gating `createSegment` and `abbreviations`;
+  the reason renders **beside** the greyed button, because an unexplained disabled button reads as a
+  broken page and the admin's next move is to reload rather than finish the step.
+  - **It gates on an explicit ALLOW-LIST, never on "any `todo` step",** because most facts behind
+    `stepState` are advisory and gating them would trap someone who did the work another way:
+    `groupsExist` is read by the naming convention that `suggestGroupName` only *suggests*, so a
+    hand-named group reads as absent; `subjectFound` misses on a genuine spelling difference; mapping
+    groups after building folders is a legitimate order. Pinned by a test that walks every step of every
+    flow with every fact false and asserts exactly two gate.
+  - **UNKNOWN never gates**, same rule as `isLocked`. A throttled config list would otherwise strand an
+    admin on step 2 with no way forward.
+  - **Flow 1 now ASKS THE NEW SEGMENT'S NAME (`asksSubject: "newSegment"`), and that is what made any of
+    this answerable.** `segmentExists` is only computed for a CHOSEN segment, and flow 1 has no picker —
+    the segment does not exist yet — so **the `segmentExists` padlock on its abbreviation step could
+    never fire in the one flow it was written for** (found on the client's site 2026-08-17). Matching a
+    typed name against the loaded `mode` rows via `labelMatches` fixes both. Counting rows was the
+    obvious alternative and is WRONG: a baseline taken when the flow opens resets on a page refresh, so
+    the flow would then refuse work already done — worse than no check. The name is **optional** (blank ⇒
+    unknown ⇒ nothing gated), asked on the same step as the form because it is the same value they are
+    about to type, and it takes steps 3-6 straight to that segment instead of an empty picker.
+  - The fact is **derived at render, not in the facts effect**: that effect performs three list reads, so
+    keying it on the typed name would fire all three per keystroke.
 - **FOUR locks, each on ONE definitive read:** segment exists (flow 1's later steps, and Retire),
   `PendingLevels` set (before migrating), and **reconciliation blocked while any term lacks a code** — the
   last is the one that matters, because that is the silent failure (recon skips the term, creates no

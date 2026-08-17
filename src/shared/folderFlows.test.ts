@@ -3,6 +3,7 @@ import {
   Flow,
   FlowFacts,
   FlowStep,
+  blocksNext,
   firstIncompleteStep,
   flowById,
   isLocked,
@@ -312,5 +313,68 @@ describe("nearMatches — for 'check the spelling'", () => {
   it("caps the list, so the hint stays a hint", () => {
     const many = ["Group A", "Group B", "Group C", "Group D", "Group E"];
     expect(nearMatches(many, "Group", 3).length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe("blocksNext", () => {
+  // The client, 2026-08-17: "won't it make more sense once client finish filling up the New Segment and
+  // saved and only next step is available?" Before this, Next advanced from a step that had not been
+  // done — and the padlock meant to mark it could not fire either, because `segmentExists` is only ever
+  // computed for a CHOSEN segment and flow 1 has no picker.
+  it("blocks Next on New segment until the segment exists", () => {
+    const st = step("newSegment", "createSegment");
+    expect(blocksNext(st, { segmentExists: false })).toContain("Create the segment first");
+    expect(blocksNext(st, { segmentExists: true })).toBe("");
+  });
+
+  it("does NOT block while the fact is unknown — a failed read must never trap anyone", () => {
+    // The rule that matters most here, and the same one `isLocked` follows. A config list that 500s or
+    // throttles would otherwise strand an admin on step 2 with no way forward and no explanation.
+    expect(blocksNext(step("newSegment", "createSegment"), {})).toBe("");
+    expect(blocksNext(step("newSegment", "abbreviations"), {})).toBe("");
+  });
+
+  it("blocks Next while any term still has no folder code", () => {
+    const st = step("newSegment", "abbreviations");
+    expect(blocksNext(st, { abbreviationsMissing: 3 })).toContain("no folder code");
+    expect(blocksNext(st, { abbreviationsMissing: 0 })).toBe("");
+  });
+
+  it("NEVER blocks on an advisory step, however definite the fact looks", () => {
+    // `groupsExist` is read by the NAMING CONVENTION, which suggestGroupName only suggests — so a
+    // hand-named group reads as absent. Gating on it would stop an admin who had already done the work,
+    // which is the exact failure the whole fail-open design exists to avoid.
+    expect(blocksNext(step("newSegment", "groups"), { groupsExist: false })).toBe("");
+    // A typed subject that merely differs in spelling must cost help, never progress.
+    expect(blocksNext(step("addUnit", "addTerm"), { subjectFound: false })).toBe("");
+    // Mapping groups after building folders is a legitimate order, so ordering is advice here.
+    expect(blocksNext(step("newSegment", "folderAccess"), { folderAccessRows: false })).toBe("");
+  });
+
+  it("gates exactly two step ids, across every flow — pinned so a new gate must be deliberate", () => {
+    const gated: string[] = [];
+    for (const f of FLOWS) {
+      for (const st of f.steps) {
+        // Every fact false at once: anything gateable will gate.
+        const all: FlowFacts = {
+          segmentExists: false, groupsExist: false, folderAccessRows: false,
+          foldersExist: false, abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
+        };
+        if (blocksNext(st, all).length > 0 && gated.indexOf(st.id) === -1) gated.push(st.id);
+      }
+    }
+    expect(gated.sort()).toEqual(["abbreviations", "createSegment"]);
+  });
+
+  it("asks Add a new segment for the segment's NAME, which is what makes the gate answerable", () => {
+    // A row COUNT was the obvious alternative and is wrong: a baseline taken when the flow opens resets
+    // on a page refresh, so the flow would then refuse work already done. A name is derived from data.
+    expect(flow("newSegment").asksSubject).toBe("newSegment");
+  });
+
+  it("matches the typed name the way labelMatches does, so a fullwidth ＆ still counts as created", () => {
+    // The client's GHO really contains "Group Legal, Risk ＆ Compliance"; a segment label could too, and
+    // an admin typing a plain & must not be told their segment does not exist.
+    expect(labelMatches(["Group Legal, Risk ＆ Compliance"], "group legal, risk & compliance")).toBe(true);
   });
 });

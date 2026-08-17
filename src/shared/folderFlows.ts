@@ -53,7 +53,7 @@ export interface Flow {
    * "adding Treasury under Group Finance" can be looked for in the tree; "you did something in the term
    * store" cannot.
    */
-  asksSubject?: "add" | "rename";
+  asksSubject?: "add" | "rename" | "newSegment";
   steps: FlowStep[];
 }
 
@@ -119,6 +119,20 @@ export const FLOWS: Flow[] = [
     blurb: "A whole new business segment or project, with its own term set and tiers.",
     tone: "normal",
     needsSegment: false,
+    /**
+     * Asks for the new segment's NAME up front, which is the only thing that makes "have they created
+     * it yet" answerable (2026-08-17, client: the Next button should not be available until the New
+     * segment form is filled in and saved).
+     *
+     * Counting mode rows was the obvious alternative and is wrong: a baseline taken when the flow opens
+     * resets on a page refresh, so the flow would then refuse work the admin had already done — worse
+     * than no check, and a direct breach of "the flow should not stop them from doing the work".
+     * Matching a NAME is derived from data, so it survives a refresh, a second tab and a shared session.
+     *
+     * It also stops being an extra question: the name is what they were going to type into the form
+     * anyway, and naming it lets steps 3-6 open on that segment instead of an empty picker.
+     */
+    asksSubject: "newSegment",
     steps: [
       {
         id: "termSet",
@@ -272,6 +286,45 @@ export function isLocked(step: FlowStep, facts: FlowFacts): boolean {
 /** Why it is locked, for the UI. Blank when it is not. */
 export function lockReason(step: FlowStep, facts: FlowFacts): string {
   return isLocked(step, facts) ? (step.lock?.reason ?? "") : "";
+}
+
+/**
+ * The steps whose `todo` is DEFINITIVE enough to disable the Next button.
+ *
+ * An explicit list rather than "any todo step", because most of the facts behind `stepState` are
+ * advisory and gating on them would trap someone who did the work a different way:
+ *
+ *   - `groups` reads site groups by the NAMING CONVENTION, which `suggestGroupName` only suggests. A
+ *     hand-named group reads as absent, so gating here would stop an admin who had already made it.
+ *   - `addTerm` / `renameTerm` match a typed subject against the tree. The subject is optional and the
+ *     match folds fullwidth ＆, case and zero-width characters — but a genuine spelling difference
+ *     still misses, and that must cost help, never progress.
+ *   - `folderAccess` is a definitive read, but an admin may deliberately map groups after building the
+ *     folders. Ordering is advice there, not a prerequisite.
+ *
+ * That leaves the two where `todo` means the next step CANNOT work: no segment row to code against, and
+ * a term with no code that reconciliation would silently skip.
+ */
+const NEXT_GATED_STEPS: Record<string, string> = {
+  createSegment:
+    "Create the segment first — fill in this form and press Create. Until the segment exists there is " +
+    "nothing for the next steps to point at.",
+  abbreviations:
+    "Some terms still have no folder code. Reconciliation skips those silently and creates no folder " +
+    "for them, so finish here first.",
+};
+
+/**
+ * Why the Next button should be disabled on this step. Blank means enabled.
+ *
+ * Enabled whenever the fact is UNKNOWN, exactly as `isLocked` is — a config list that could not be read
+ * must never trap someone mid-flow. So this can only ever fire on a positive "not done yet".
+ */
+export function blocksNext(step: FlowStep, facts: FlowFacts): string {
+  if (!step) return "";
+  const reason = NEXT_GATED_STEPS[step.id];
+  if (!reason) return "";
+  return stepState(step, facts) === "todo" ? reason : "";
 }
 
 /**

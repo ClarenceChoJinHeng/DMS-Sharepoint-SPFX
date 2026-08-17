@@ -28,8 +28,10 @@ import {
   Flow,
   FlowFacts,
   FlowStep,
+  blocksNext,
   firstIncompleteStep,
   isLocked,
+  labelMatches,
   lockReason,
   remainingCount,
   stepState,
@@ -232,6 +234,32 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
     return () => { cancelled = true; };
   }, [flow ? flow.id : "", segKey, segments]);
 
+  /**
+   * The facts, plus the one fact only the "add a new segment" flow can answer.
+   *
+   * That flow has no segment picker — the segment does not exist yet — so the effect above never sets
+   * `segmentExists`, and `undefined` is never a lock. The result was a padlock and a Next gate that
+   * could not fire in the one flow they were written for (found on the client's site 2026-08-17).
+   *
+   * Answered here by matching the NAME the admin said they were creating against the loaded mode rows,
+   * via `labelMatches` so a fullwidth ＆, stray whitespace or a pasted zero-width character does not
+   * read as "not created yet".
+   *
+   * DERIVED AT RENDER, deliberately, rather than added to the effect's dependencies: the effect performs
+   * three list reads, and keying it on `subject` would fire all three on every keystroke. `segments` is
+   * already in state, so this costs nothing.
+   *
+   * Three-state on purpose:
+   *   - name blank, or the segment list unreadable  -> undefined, so nothing is gated (fail open);
+   *   - a row matches                                -> true;
+   *   - the list read fine and nothing matches       -> false, the only case that gates.
+   */
+  const effectiveFacts: FlowFacts = React.useMemo(() => {
+    if (!flow || flow.asksSubject !== "newSegment") return facts;
+    if (segments === undefined || subject.trim().length === 0) return facts;
+    return { ...facts, segmentExists: labelMatches(segments.map((x) => x.label), subject) };
+  }, [flow, facts, segments, subject]);
+
   /** Open a flow on the first thing left to do. */
   const openFlow = (f: Flow): void => {
     setFlow(f);
@@ -316,7 +344,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   const idx = Math.max(0, Math.min(stepIdx, steps.length - 1));
   const step = steps[idx];
   const needsPick = active.needsSegment && !segment;
-  const locked = isLocked(step, facts);
+  const locked = isLocked(step, effectiveFacts);
 
   const renderStep = (st: FlowStep): React.ReactElement => {
     // The segment picker stands in front of every step of a segment-scoped flow: without it the screens
@@ -391,8 +419,36 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
        genuinely the same and re-mounts only when it changes. The re-mount cost per step was accepted
        in the design — reconciliation is inline in a 4,000-line file, and extracting it to make it
        mountable would risk the most site-verified code here for a navigation change. */
+    /* The new segment's NAME, asked on the step that creates it.
+
+       This is what makes "have they saved it yet" answerable at all — see the `asksSubject:
+       "newSegment"` note in shared/folderFlows.ts for why a row COUNT could not do it. Rendered above
+       the form rather than as its own step, because it is the same value they are about to type into
+       the form: asking twice on two screens would read as a bug. */
+    const asksName = active.asksSubject === "newSegment" && st.id === "createSegment";
     return (
-      <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
+      <div>
+        {asksName && (
+          <div style={{ marginBottom: 16 }}>
+            <label style={s.label} htmlFor="fa-newseg">What will the new segment be called?</label>
+            <input
+              id="fa-newseg"
+              style={s.input}
+              value={subject}
+              placeholder="e.g. Group Head Office"
+              onChange={(e) => setSubject(e.target.value)}
+            />
+            {/* OPTIONAL, like the other flows' subject: blank means we cannot check, which shows as
+                "not checked" and gates nothing. Costing help is acceptable; costing progress is not. */}
+            <div style={s.hint}>
+              Type it here as well as in the form below, exactly the same. It is how this page can tell
+              the segment was saved — and it takes the later steps straight to it. Leave it blank and
+              nothing is checked.
+            </div>
+          </div>
+        )}
+        <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
+      </div>
     );
   };
 
@@ -403,13 +459,13 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       <p style={s.sub}>
         {segment ? <>Segment: <strong>{segment.label}</strong>. </> : undefined}
         {subject.trim().length > 0 ? <>Subject: <strong>{subject.trim()}</strong>. </> : undefined}
-        {remainingCount(active, facts)} of {steps.length} step{steps.length === 1 ? "" : "s"} still to check.
+        {remainingCount(active, effectiveFacts)} of {steps.length} step{steps.length === 1 ? "" : "s"} still to check.
       </p>
 
       <div style={s.runner}>
         <nav style={s.rail}>
           {steps.map((st, i) => {
-            const state = stepState(st, facts);
+            const state = stepState(st, effectiveFacts);
             const style = STATE_STYLE[state];
             const isActive = i === idx;
             return (
@@ -424,7 +480,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 <span>
                   <span style={s.railLabel}>{st.label}</span>
                   <span style={{ ...s.railState, ...style.note }}>
-                    {isLocked(st, facts) ? "Needs an earlier step" : style.text}
+                    {isLocked(st, effectiveFacts) ? "Needs an earlier step" : style.text}
                   </span>
                 </span>
               </button>
@@ -438,31 +494,50 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
 
           {locked && (
             <div style={s.lockBox}>
-              <strong>Not ready yet.</strong> {lockReason(step, facts)}
+              <strong>Not ready yet.</strong> {lockReason(step, effectiveFacts)}
             </div>
           )}
 
           {!locked && renderStep(step)}
 
-          <div style={s.navBar}>
-            <button
-              style={idx === 0 ? s.off : s.ghost}
-              disabled={idx === 0}
-              onClick={() => setStepIdx(Math.max(0, idx - 1))}
-            >
-              &lsaquo; Back
-            </button>
-            <button
-              style={idx >= steps.length - 1 ? s.off : s.primary}
-              disabled={idx >= steps.length - 1}
-              onClick={() => setStepIdx(Math.min(steps.length - 1, idx + 1))}
-            >
-              Next step &rsaquo;
-            </button>
-            {idx >= steps.length - 1 && (
-              <button style={s.ghost} onClick={leaveFlow}>Finish</button>
-            )}
-          </div>
+          {/* Next is unavailable until the step is actually done (2026-08-17, client: "won't it make
+              more sense once client finish filling up the New Segment and saved and only next step is
+              available?").
+
+              Only for the two steps whose `todo` is definitive — see NEXT_GATED_STEPS. It stays enabled
+              on every advisory step and on every UNKNOWN fact, so a list that could not be read cannot
+              trap someone mid-flow. The rail entries remain clickable either way: this makes the
+              recommended path obvious without making the others unreachable, which is the client's own
+              rule that the flow must not stop them working. */}
+          {(() => {
+            const blocked = blocksNext(step, effectiveFacts);
+            const last = idx >= steps.length - 1;
+            return (
+              <>
+                <div style={s.navBar}>
+                  <button
+                    style={idx === 0 ? s.off : s.ghost}
+                    disabled={idx === 0}
+                    onClick={() => setStepIdx(Math.max(0, idx - 1))}
+                  >
+                    &lsaquo; Back
+                  </button>
+                  <button
+                    style={last || blocked ? s.off : s.primary}
+                    disabled={last || blocked.length > 0}
+                    onClick={() => setStepIdx(Math.min(steps.length - 1, idx + 1))}
+                  >
+                    Next step &rsaquo;
+                  </button>
+                  {last && <button style={s.ghost} onClick={leaveFlow}>Finish</button>}
+                </div>
+                {/* The reason sits BESIDE the disabled button, never only in a tooltip: a greyed button
+                    with no explanation reads as a broken page, and the admin's next move is to reload
+                    rather than to finish the step. */}
+                {!last && blocked.length > 0 && <div style={s.hint}>{blocked}</div>}
+              </>
+            );
+          })()}
         </div>
       </div>
     </section>
