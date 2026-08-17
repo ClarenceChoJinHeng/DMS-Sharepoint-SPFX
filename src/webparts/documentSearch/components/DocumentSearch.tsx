@@ -364,14 +364,23 @@ export default function DocumentSearch({ context, pageSize }: IDocumentSearchPro
     const level = seg.levels[index];
     if (!level) return;
     const base = `${siteUrl}/_api/v2.1/termStore/sets`;
-    // A below-Unit tier has its own term set and no place in the segment's own tree.
+    // A below-Unit tier draws EITHER from its own flat term set (Year, Document Type) OR from the
+    // children of the term above it inside the segment's own tree (SubUnit) — the presence of
+    // `termSet` is the discriminator, exactly as in the upload form.
+    //
+    // That second case used to fall through to a blank URL, so a SubUnit filter rendered with no
+    // options at all. Invisible while nothing used the shape; the explicit "Under each Unit" button
+    // on the Folder levels screen (2026-08-17) is what makes it reachable, and a filter that cannot
+    // be used reads as "this metadata was never captured".
+    const cascade =
+      parentId.length > 0 ? `${base}/${seg.termSetGuid}/terms/${parentId}/children` : "";
     const url = level.permissioned
       ? parentId.length > 0
-        ? `${base}/${seg.termSetGuid}/terms/${parentId}/children`
+        ? cascade
         : `${base}/${seg.termSetGuid}/children`
       : level.termSet.length > 0
         ? `${base}/${level.termSet}/children`
-        : "";
+        : cascade;
     const options = url.length === 0 ? [] : await readTerms(url);
     setTierOptions((prev) => ({ ...prev, [level.column]: options }));
   };
@@ -760,6 +769,17 @@ export default function DocumentSearch({ context, pageSize }: IDocumentSearchPro
               const parentChosen =
                 i === 0 || (tierIds[segment.levels[i - 1].column] ?? "").length > 0;
               if (!parentChosen) return undefined;
+              /* A cascading tier does not apply where the term above has no children — not every
+                 unit has SubUnits (client, 2026-08-10), and the upload form already hides it for
+                 the same reason. Without this the button added on 2026-08-17 would put an empty
+                 dropdown in front of most units.
+
+                 `[]` ONLY, never `undefined`: a failed read leaves it undefined (the catch at the
+                 call site never reaches setTierOptions), and hiding on that would silently drop a
+                 filter whose options merely failed to load. Empty is not unknown, as everywhere
+                 else here. */
+              const cascading = !level.permissioned && level.termSet.length === 0;
+              if (cascading && options !== undefined && options.length === 0) return undefined;
               const current = (criteria.tiers ?? []).filter((t) => t.column === level.column)[0];
               return (
                 <div style={s.field} key={level.column}>

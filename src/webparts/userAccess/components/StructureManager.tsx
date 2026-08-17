@@ -52,7 +52,20 @@ interface SegmentRow {
 /** The in-progress "add a level" form. */
 interface DraftTier {
   label: string;
-  termSetGuid: string; // blank = values come from the level above
+  /**
+   * TRUE = the values sit under each Unit in the term store, so every unit offers its own — the
+   * SubUnit shape (client, 2026-08-10; asked for as an explicit button 2026-08-17).
+   *
+   * It exists because the stored discriminator is the ABSENCE of `termSet`, and a blank text box is
+   * a poor way to express a mode. The admin who needs this most is the one who does not know that
+   * leaving a field empty is a decision — they would paste some other segment's set ID, and every
+   * unit would then be offered every other unit's subunits, which reads as working.
+   *
+   * When true the GUID is CLEARED rather than merely ignored, so a half-typed ID cannot survive into
+   * the saved chain by a later toggle back.
+   */
+  fromUnit: boolean;
+  termSetGuid: string; // only meaningful when fromUnit is false
   position: number;    // index within the below-Unit list
 }
 
@@ -139,6 +152,15 @@ function setCheckStyle(c: SetCheck): React.CSSProperties {
 function canAddTier(adding: DraftTier, check: SetCheck): boolean {
   const label = adding.label.trim();
   if (!label || !columnNameFor(label)) return false;
+  // A per-unit tier has no ID to validate, so the term-set verdict must not gate it. Without this
+  // the two could disagree: `setCheck` is computed from whatever is in the GUID field, and a
+  // "notfound" left over from a paste before the toggle would keep Add disabled with a message
+  // about a term set the admin can no longer see.
+  if (adding.fromUnit) return true;
+  // A SHARED-LIST tier must actually name a set. Blank is not neutral here — it is the stored
+  // discriminator for per-unit, so saving it would silently produce the other kind of tier from a
+  // screen that says "one shared list".
+  if (!normalizeGuid(adding.termSetGuid)) return false;
   return check.state !== "malformed" && check.state !== "notfound" && check.state !== "checking";
 }
 
@@ -148,6 +170,8 @@ const s: Record<string, React.CSSProperties> = {
   warn:      { background: "#fff4e5", border: "1px solid #f0d9b5", color: "#7a4f00" },
   ok:        { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
   card:      { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
+  radioRow:  { display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, lineHeight: 1.5, cursor: "pointer" },
+  radioHint: { fontSize: 12, color: "#605e5c" },
   segRow:    { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, flexWrap: "wrap" },
   segName:   { fontSize: 15, fontWeight: 600, color: "#1b1b1b" },
   path:      { fontSize: 12, color: "#605e5c", fontFamily: "Consolas, monospace", marginTop: 4, wordBreak: "break-all" },
@@ -858,7 +882,11 @@ export default function StructureManager({
         {adding === undefined ? (
           <button
             style={s.ghost}
-            onClick={() => setAdding({ label: "", termSetGuid: "", position: onDemand.length })}
+            // Defaults to per-unit, because SubUnit is the tier the client is actually adding and
+            // the shared-list kind (Year, Document Type) already exists on every segment.
+            onClick={() =>
+              setAdding({ label: "", fromUnit: true, termSetGuid: "", position: onDemand.length })
+            }
           >
             + Add folder level
           </button>
@@ -878,23 +906,68 @@ export default function StructureManager({
               libraries.
             </p>
 
-            <label style={s.label} htmlFor="sm-set">Where its values come from</label>
-            <input
-              id="sm-set"
-              style={s.input}
-              value={adding.termSetGuid}
-              onChange={(e) => setAdding({ ...adding, termSetGuid: e.target.value })}
-              placeholder="Paste a term set ID, or leave blank"
-            />
-            <p style={s.hint}>
-              Leave <strong>blank</strong> if the values sit under each Unit in the term store — every
-              unit then offers its own. Paste a <strong>term set ID</strong> if all units pick from
-              one shared list.
-            </p>
-            {setCheck.state !== "blank" && (
-              <p style={{ ...s.hint, marginTop: 6, fontSize: 12, ...setCheckStyle(setCheck) }}>
-                {setCheckMessage(setCheck)}
-              </p>
+            <span style={s.label}>Where its values come from</span>
+            {/* An EXPLICIT choice, not a blank field (client, 2026-08-17: "can you add a button call
+                have subunit?"). The stored discriminator is the absence of `termSet`, so this used to
+                be expressed by leaving a text box empty — undiscoverable, and the wrong guess is
+                silent: paste any other set's ID and every unit is offered every other unit's
+                subunits, with nothing on screen to say so. */}
+            <div style={{ display: "grid", gap: 8, marginBottom: 4 }}>
+              <label style={s.radioRow} htmlFor="sm-src-unit">
+                <input
+                  id="sm-src-unit"
+                  type="radio"
+                  name="sm-src"
+                  checked={adding.fromUnit}
+                  // Clearing the GUID is deliberate, not tidiness: a half-typed ID that survived the
+                  // toggle would be saved the moment anyone switched back, producing a shared-list
+                  // tier from a screen the admin last saw set to per-unit.
+                  onChange={() => setAdding({ ...adding, fromUnit: true, termSetGuid: "" })}
+                />
+                <span>
+                  <strong>Under each Unit</strong> in the term store — every unit offers its own.
+                  <br />
+                  <span style={s.radioHint}>
+                    This is <strong>SubUnit</strong>. Author the terms under each unit; a unit with
+                    none simply never shows the dropdown, so nothing here has to be configured per
+                    unit. No abbreviation, no group and no permissions — the folders inherit the
+                    Unit&rsquo;s access.
+                  </span>
+                </span>
+              </label>
+              <label style={s.radioRow} htmlFor="sm-src-set">
+                <input
+                  id="sm-src-set"
+                  type="radio"
+                  name="sm-src"
+                  checked={!adding.fromUnit}
+                  onChange={() => setAdding({ ...adding, fromUnit: false })}
+                />
+                <span>
+                  <strong>One shared list</strong> for every unit — from a term set.
+                  <br />
+                  <span style={s.radioHint}>
+                    Like Year and Document Type. Every unit is offered the same options.
+                  </span>
+                </span>
+              </label>
+            </div>
+            {!adding.fromUnit && (
+              <>
+                <label style={s.label} htmlFor="sm-set">Term set ID</label>
+                <input
+                  id="sm-set"
+                  style={s.input}
+                  value={adding.termSetGuid}
+                  onChange={(e) => setAdding({ ...adding, termSetGuid: e.target.value })}
+                  placeholder="023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf"
+                />
+                {setCheck.state !== "blank" && (
+                  <p style={{ ...s.hint, marginTop: 6, fontSize: 12, ...setCheckStyle(setCheck) }}>
+                    {setCheckMessage(setCheck)}
+                  </p>
+                )}
+              </>
             )}
 
             <label style={s.label} htmlFor="sm-pos">Position</label>

@@ -357,11 +357,33 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     tier: created on demand by the upload form, inheriting this folder's ACL, never provisioned
     here"* (`FolderManager.tsx` ~2046). So terms under a unit are **safe to author now**: no folders,
     no ACLs, no group-map warnings.
-  - **NOT YET BUILT, and it fails SILENTLY until it is.** A below-Unit tier still reads its options
-    from the `termSet` id in its `Levels` entry, so terms under the unit produce an EMPTY dropdown
-    rather than an error. The option source must become "children of the chosen unit term" in
-    `Form.tsx`, `BulkUpload.tsx`, `StructureManager` (which today asks for a term set ID) and
-    `DocumentSearch`. Tell the client to author the terms; do NOT tell them it works yet.
+  - **BUILT (2026-08-17) — this section previously said "NOT YET BUILT", and that was stale.** The
+    cascade exists in `Form.tsx` and `BulkUpload.tsx` (`tierPlan` → `childCache` → `decideTier`), and
+    `StructureManager` has always stored it. **`termSet` ABSENT on a below-Unit tier IS the
+    discriminator** — options come from the children of the term above, starting at the permissioned
+    leaf. So SubUnit terms authored under each unit work with no code change. Not yet site-tested.
+    - **The button the client asked for exists now.** Adding the tier previously meant *leaving a
+      text box blank*, which is undiscoverable and whose wrong guess is silent: paste any other set's
+      ID and every unit is offered every other unit's subunits, and it reads as working. The Folder
+      levels screen now offers an explicit **"Under each Unit"** vs **"One shared list"** choice,
+      defaulting to per-unit, and switching to per-unit **CLEARS** the GUID rather than ignoring it —
+      a half-typed ID that survived the toggle would be saved the moment anyone switched back.
+      `canAddTier` no longer lets the term-set verdict gate a per-unit tier (a stale `notfound` would
+      disable Add over a field the admin can no longer see), and now REFUSES a shared-list tier with
+      a blank ID — blank is not neutral there, it is the other kind of tier.
+    - **`DocumentSearch` was the one real gap and is fixed.** A non-permissioned tier with no
+      `termSet` fell through to a blank URL, so a SubUnit filter rendered with **no options** — and a
+      filter that cannot be used reads as "this metadata was never captured". A cascading tier with a
+      genuinely empty option list is now HIDDEN, matching the upload form; `[]` only, never
+      `undefined`, because a failed read leaves it undefined and hiding on that would drop a filter
+      whose options merely failed to load. Empty ≠ unknown, again.
+    - **Optionality needs no configuration.** A unit with no child terms simply never shows the
+      dropdown (`decideTier` → skip), and a tier that does not apply legitimately files one level
+      shallower. But an **unresolved** option list blocks the upload naming the tier — treating
+      unknown as "does not apply" would file a document a level too shallow, silently.
+    - **A stale SubUnit selection cannot leak across units.** `tierSelections` keeps only selections
+      still present in their tier's CURRENT options, so changing the Unit drops a SubUnit belonging to
+      another unit and the upload is refused naming it — never written into the wrong unit's folder.
   - **THE UNIT IS STILL THE SMALLEST CONFIDENTIALITY BOUNDARY.** Two SubUnits under one Unit see
     each other's documents completely — the ACL is on the Unit folder and SubUnit inherits it.
     Confirmed by the client 2026-08-10 when asked directly. Everything in
