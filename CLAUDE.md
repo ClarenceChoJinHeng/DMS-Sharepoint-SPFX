@@ -997,6 +997,20 @@ order, which was not enough — five equal doors do not say four of them are ste
 - **It DRIVES `FolderManager` (new props `initialTab`, `hideTabs`) and never dismantles it.**
   Reconciliation is inline in a 4,000-line file and is the most site-verified code here; extracting it to
   make it mountable would risk the wrong thing for a navigation change. Cost: one re-mount per step.
+  - **⚠ THE RE-MOUNT NEEDS A `key`, AND ITS ABSENCE WAS A LIVE BUG (found on the client's site
+    2026-08-17, first time anyone stepped through a flow).** `FolderManager` resolves `initialTab` in a
+    `useState` **initialiser**, which React runs once per mounted instance — so with no key React
+    reconciled the same element type across a step change, kept the instance, and never read the new
+    prop. Stepping from *New segment* to *CRS Term Abbreviations* moved the heading and the rail
+    highlight while **the New segment form stayed on screen**. Worse than a dead link, because it looks
+    like it worked: the admin fills in one screen under another step's title. Fixed with
+    `key={st.screen.tab}` in `FolderAdmin`.
+  - Keyed on the **tab**, not the step id: `ABBREVIATIONS` is a step of four different flows, so keying
+    on the tab re-uses the instance where the screen genuinely is the same and re-mounts only when it
+    changes. A step-id key would throw away a half-typed screen on any same-tab move.
+  - **The general trap: a prop named `initialX` is read ONCE.** Anything driving such a component from
+    outside must either key it or the component must watch the prop — and "it renders the right heading"
+    is not evidence either happened.
 - **Group Management and Folder Access are mounted from `userAccess/components`** inside the flows AND stay
   standalone on the landing page — one component, two mount points, never a copy.
 - **What no checking reaches:** the right PEOPLE in a group, the right abbreviation (`TRS` vs `TREAS`), the

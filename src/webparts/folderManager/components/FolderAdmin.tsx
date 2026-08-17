@@ -376,7 +376,24 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
         : <GroupMapBuilder context={context} siteUrl={siteUrl} />;
     }
 
-    return <FolderManager context={context} initialTab={st.screen.tab} hideTabs />;
+    /* THE `key` IS LOAD-BEARING, and its absence was a live bug (2026-08-17): stepping from
+       "New segment" to "CRS Term Abbreviations" changed the heading and the rail highlight while the
+       New segment FORM stayed on screen.
+
+       FolderManager resolves `initialTab` in a `useState` INITIALISER, which React runs once per
+       mounted instance. Without a key React reconciles the same element type across a step change,
+       keeps the instance, and the new prop is never read — so the flow silently drives nothing and the
+       page describes a screen the admin is not looking at. Worse than a dead link, because it looks
+       like it worked: they would fill in one form under another step's heading.
+
+       Keyed on the TAB rather than the step id on purpose: steps of different flows share a tab
+       (ABBREVIATIONS appears in four), so keying on the tab re-uses the instance where the screen is
+       genuinely the same and re-mounts only when it changes. The re-mount cost per step was accepted
+       in the design — reconciliation is inline in a 4,000-line file, and extracting it to make it
+       mountable would risk the most site-verified code here for a navigation change. */
+    return (
+      <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
+    );
   };
 
   return (
