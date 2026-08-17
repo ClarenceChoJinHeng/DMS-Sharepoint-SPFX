@@ -153,6 +153,33 @@ hard block; the column absent falls back to code defaults plus an admin-only war
 Provisioning deliberately does not set this — breaking inheritance means naming the service account,
 and a wrong guess locks the flows out of the list they write to.
 
+### 4.1 Columns — use the script, not the UI
+
+**`docs/column-provisioning/provision-crs-columns.js`.** Set `SITE`, paste into the console on the
+target site, run. Re-runnable: it skips existing columns and names any list that does not exist yet,
+so run it now for the lists and **again after §5** for the libraries.
+
+**Why not the UI:** the UI cannot set an internal name, and an internal name is frozen at creation
+forever. Create "Document Date" by hand and you get `Document_x0020_Date`; the code reads
+`DocumentDate`. The column then looks right, sorts right and appears in views — and every write
+silently drops it.
+
+Its manifest was read off the live test site rather than inferred from the code, which corrected four
+things: `FolderUrl` is **Note** (a deep path exceeds 255 characters), Folder Map has a `Library`
+column, Term Abbreviation has a `Level` column, and the test site's `Documents` carries `FullName`
+where its three siblings carry `Full_x0020_Name`.
+
+**One deliberate divergence from the test site:** `Role`, `Scope`, `ConfigType`, `Category`, `Library`
+and `Level` are Choice columns there and **Text** here. A Choice column fails the *entire* write when
+a value is missing from its list, silently, and `Role` has gained `DELS`, `SHARE`, `UPLHC` and
+`APRHC` since that column was made. `AllowedFileTypes` stays MultiChoice — its `Choices` *are* the
+setting.
+
+**The three taxonomy columns are created unbound.** REST cannot bind a taxonomy field (verified
+2026-07-27: *"A type named 'SP.TaxonomyField' could not be resolved by the model"*). The script
+creates them with the correct internal names — the permanent, error-prone half — and lists them at
+the end; bind each in Library settings → column → **Term Set Settings** once §3 exists.
+
 **Verify:** every list resolves by title, and `AllowedFileTypes` returns its `Choices`.
 
 ---
