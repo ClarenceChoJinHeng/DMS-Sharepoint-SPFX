@@ -22,7 +22,9 @@ import { abbrevListTitle } from "../../../shared/folderAbbreviation";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import {
   GroupMapRole,
+  GroupMapWriteRow,
   PERSONAS,
+  buildGroupMapRow,
   namingRoleFor,
   normalizeRoleValue,
   roleLabel,
@@ -252,6 +254,63 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
     }
   };
 
+  /** One Group Map row. Same endpoint, headers and Title fallback as Folder Access — one shape, not two. */
+  const postRow = async (row: GroupMapWriteRow): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(GROUP_MAP_LIST())}')/items`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+        },
+        // Title is mandatory on a default SP list; set it so the create never 400s.
+        body: JSON.stringify({ Title: row.GroupName || row.GroupId, ...row }),
+      },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`HTTP ${res.status} ${body.slice(0, 200)}`);
+    }
+  };
+
+  /**
+   * The Group Map rows a newly created group needs — ONE PER ROLE in its persona.
+   *
+   * Spec 2026-08-18 §4. The dropdowns already collected segment, tier and persona to build the name, so
+   * writing the rows here costs nothing extra and takes the PARSE off the critical path: the role is
+   * recorded from the persona that was chosen, never recovered from the group's name.
+   *
+   * Returns [] when there is nothing safe to write — no persona, no segment, or a free-typed name with no
+   * cascade behind it. A group with no rows is inert and mappable later on Folder Access; a GUESSED row is
+   * a grant nobody chose.
+   */
+  const rowsForNewGroup = (groupId: string, groupName: string): GroupMapWriteRow[] => {
+    const p = PERSONAS.filter((x) => x.key === builderPersona)[0];
+    if (!p || advanced || !mode) return [];
+    const scope = personaScope(p.key);
+    // A SEGMENT-scope row carries UnitTermGuid === the term-set guid; that is how Folder Access records
+    // "the segment IS the tier", and reconciliation reads it the same way.
+    const tierGuid =
+      scope === "segment"
+        ? mode.termSetGuid
+        : scope === "department"
+          ? chosen[0]?.id ?? ""
+          : chosen[chosen.length - 1]?.id ?? "";
+    if (!tierGuid) return [];
+    return p.roles.map((r) =>
+      buildGroupMapRow({
+        groupId,
+        groupName,
+        role: r,
+        segmentGuid: mode.termSetGuid,
+        tierGuid,
+        // No `scope` and no `target`: absent scope reads as Folder, and buildGroupMapRow sets Target "" for
+        // it. These are FOLDER grants — library and page entry rows are a different screen's job.
+      }),
+    );
+  };
+
   const loadModes = async (): Promise<ModePick[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG_LIST())}')/items?$select=ModeLabel,TermSetGuid,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
@@ -466,8 +525,37 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
         }
       }
 
+      /* THE MAPPING ROWS — spec 2026-08-18 §4.
+         Written AFTER the group exists, because a row needs its integer GroupId.
+
+         The group is NOT rolled back on a row failure. Deleting it would destroy a group that may already
+         have the members added above, and re-running is safe because the group is then found by name. The
+         2026-08-14 design had the opposite rule and that is exactly what made "created but not assigned"
+         inexpressible. So a half-done write is REPORTED as half-done rather than flattened either way:
+         claiming success would leave a group granting nothing, and claiming failure would send someone
+         hunting for a group that exists. */
+      // String(): the SP group id is an INTEGER and the Group Map column is Text. Grants key on this
+      // value, so it has to match what Folder Access writes — a number here would serialise the same
+      // but the type would drift the moment anything compared them.
+      const wanted = rowsForNewGroup(String(made.id), made.title);
+      let mapped = 0;
+      for (const row of wanted) {
+        try {
+          await postRow(row);
+          mapped++;
+        } catch (e) {
+          notes.push(`mapping ${row.Role}: ${(e as Error).message}`);
+        }
+      }
+
       // Captured before the reset below, which is about to clear all of it.
       const createdName = made.title;
+      const mapNote =
+        wanted.length === 0
+          ? " It grants nothing yet — assign it on the Folder Access page."
+          : mapped === wanted.length
+            ? ` Mapped at ${personaScope(builderPersona)} level with ${mapped} role${mapped === 1 ? "" : "s"} — run Folder Reconciliation to apply it.`
+            : ` ⚠ Only ${mapped} of ${wanted.length} mappings were written — finish it on Folder Access before reconciling.`;
       setNewName("");
       setNameTouched(false);
       setStaged([]);
@@ -485,9 +573,11 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
 
       showToast(
         `"${createdName}" created${added ? ` with ${added} member${added === 1 ? "" : "s"}` : ""}.` +
-        " It grants nothing yet — assign it on the Folder Access page." +
+        mapNote +
         (notes.length ? ` ${notes.join(" ")}` : ""),
-        failed > 0 || notes.length > 0,
+        // Amber/red whenever anything is outstanding, INCLUDING a partial mapping — a green toast over a
+        // half-written mapping is the one outcome nobody would go back and check.
+        failed > 0 || notes.length > 0 || mapped < wanted.length,
       );
       log(
         EVENT.groupCreated,
