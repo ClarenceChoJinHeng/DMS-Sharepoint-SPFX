@@ -22,6 +22,7 @@ import { cachedListTitle, LIST_SUFFIX, libraryTitle } from "../../../shared/nami
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { EVENT } from "../../../shared/auditLog";
+import { normalizeRoleValue } from "../../../shared/groupMapModel";
 import {
   RequestRow,
   RequestStatus,
@@ -159,12 +160,17 @@ export default function Requests({ context }: IRequestsProps): React.ReactElemen
         for (const r of (data.value ?? []) as Array<{ GroupId?: string; Role?: string; UnitTermGuid?: string }>) {
           // APR is the approver role. A HoU also holds DEL and SHARE, but APR is what says "this
           // person decides for this unit".
-          // APR *and* APRHC. A unit whose approver is the Highly Confidential one has no plain APR
-          // row, so matching only "APR" would leave that person's queue permanently empty while
-          // requests piled up behind it — with nothing on screen to say a request had gone missing.
-          // APRHC is a superset: an HC approver decides for the whole unit, not only its HC files.
-          const role = (r.Role ?? "").toUpperCase();
-          if (role !== "APR" && role !== "APRHC") continue;
+          /* APR ALONE since 2026-08-17: APRHC is retired, and `normalizeRoleValue` aliases a stored
+             "APRHC" to "APR", so a legacy row still routes here. Any approver who is a Head of Unit
+             now reaches HC through APR.
+
+             normalizeRoleValue, NOT a raw toUpperCase — which is what this was, and it was a latent
+             bug of the same class formModel.ts documents. The Group Map's Role is often the LONG form
+             ("APPROVER", as "UPLOADER" was found live on 2026-08-07), and a raw compare against "APR"
+             skips such a row. The consequence is silent and total: that unit's approver queue stays
+             empty for ever while requests pile up behind it, with nothing on screen to say so. */
+          const role = normalizeRoleValue(r.Role ?? "");
+          if (role !== "APR") continue;
           if (myIds.indexOf(String(r.GroupId ?? "")) === -1) continue;
           const guid = (r.UnitTermGuid ?? "").trim();
           if (guid && units.indexOf(guid) === -1) units.push(guid);

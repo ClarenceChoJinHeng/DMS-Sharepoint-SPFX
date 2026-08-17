@@ -305,7 +305,14 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // second set of levels would be a second place for the same separation to live, and the two would
   // drift — with the drift invisible until someone read an HC document they should not have.
   UPLHC: "DMS Upload",
-  APRHC: "DMS Approve",
+  // 2026-08-17. The HC roles reuse the PLAIN permission levels — there is no "CRS Upload HC" and
+  // there must not be. The separation is which LIBRARY the grant lands on, held in ONE table
+  // (LIBRARY_ROLES); a parallel set of levels would be a second place for it to drift.
+  DELSHC: "DMS Delete",
+  MEMBERHC: "Read",
+  // Plain Read, like MEMBER and SEGVIEW — the difference is reach, not level: every unit beneath one
+  // department, in Documents and HC Documents.
+  DEPTVIEW: "Read",
   // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
   // library at all — Limited Access on the parent chain lets a direct folder URL through but
   // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without
@@ -351,7 +358,11 @@ function applyPermissionPrefix(levelNames: string[]): void {
   // Exactly the failure the comment on SHARE warns about, arriving through a different door.
   ROLE_TO_PERMISSION.SHARE = `${prefix} Share`;
   ROLE_TO_PERMISSION.UPLHC = `${prefix} Upload`;
-  ROLE_TO_PERMISSION.APRHC = `${prefix} Approve`;
+  // 2026-08-17: DELSHC re-pointed here for the same reason SHARE had to be — a role whose level name
+  // is left at the DMS literal makes reconciliation hunt for a definition that does not exist on a
+  // CRS site, grant nothing, and report success. MEMBERHC and DEPTVIEW need no line: "Read" is a
+  // built-in level with no prefix.
+  ROLE_TO_PERMISSION.DELSHC = `${prefix} Delete`;
 }
 
 // Which roles each library accepts — the isolation rule that keeps viewers off
@@ -394,11 +405,30 @@ function applyPermissionPrefix(levelNames: string[]): void {
 // "the same HOD and the same C level segment and global can read". Their existing powers travel with
 // them: a Head of Department can delete an approved HC document and C-Level can share one. Both are
 // consequences of that instruction rather than of this table, and both are open questions in the spec.
+/* REVISED 2026-08-17 — spec 2026-08-17-hc-clearance-and-role-revision-design.md.
+   HC clearance is now a dedicated group for the two roles at the BOTTOM of the hierarchy only — the
+   uploader and the plain viewer. Every management role reaches HC through the role it already holds.
+
+   What matters here is what is ABSENT. `MEMBER` and `DELS` appear on NEITHER HC row, and that single
+   absence is the whole feature: it is what stops a plain PIC and a plain SDG Employee reaching HC.
+
+   Three changes, each avoiding a collision where a role held by TWO personas would grant to one of
+   them and not the other:
+     · APR added to both HC rows — APRHC retired, because it would then grant nothing extra.
+     · DELS REMOVED from StagingHC, replaced by DELSHC. This closed a live leak: the plain PIC holds
+       DELS, so every plain PIC held CRS Delete on the HC approval library.
+     · DEPTVIEW replaces DEL for Head of Department — which is what makes DEL safe on the HC rows,
+       since DEL is held ONLY by Head of Unit from today. If DEL is ever returned to a wider persona,
+       HC delete travels with it. */
 const LIBRARY_ROLES: Record<LibTarget, string[]> = {
-  Staging: ["UPL", "APR", "DELS", "UPLHC", "APRHC"],
-  Documents: ["MEMBER", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR", "SHARE", "UPLHC", "APRHC"],
-  StagingHC: ["UPLHC", "APRHC", "DELS"],
-  DocumentsHC: ["DEL", "GLOBAL", "SEGVIEW", "SHARE", "UPLHC", "APRHC"],
+  Staging: ["UPL", "APR", "DELS", "UPLHC", "DELSHC"],
+  Documents: ["MEMBER", "DEPTVIEW", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR", "SHARE", "UPLHC"],
+  // NO `DEL` HERE, and that was a real mistake caught by test: C-Level carries DEL too
+  // (clevel_global = GLOBAL + DEL + SHARE), so DEL on this row would let a C-Level read and delete
+  // UNAPPROVED HC drafts — breaking the rule that keeps every view role off both approval libraries.
+  // A Head of Unit's delete on pending HC work comes from DELSHC, which only they and pic_hc hold.
+  StagingHC: ["UPLHC", "DELSHC", "APR"],
+  DocumentsHC: ["UPLHC", "MEMBERHC", "APR", "DEL", "DEPTVIEW", "GLOBAL", "SEGVIEW", "SHARE"],
 };
 
 /**
@@ -414,7 +444,10 @@ const LIBRARY_ROLES: Record<LibTarget, string[]> = {
  * reads to answer "what does this role do", and two of them would let the answer depend on
  * which one they happened to open.
  */
-const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR", "UPLHC", "APRHC"];
+// APRHC dropped 2026-08-17 (retired role). DELSHC is deliberately NOT here: like DELS it never
+// reaches an approved-side library at all, so there is nothing to downgrade — and listing it would
+// imply it does. DEPTVIEW and MEMBERHC are Read already.
+const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR", "UPLHC"];
 
 /**
  * The APPROVED-side libraries, where those roles are downgraded to Read.

@@ -43,6 +43,7 @@ import {
   libraryUrlSegment,
 } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { normalizeRoleValue } from "../../../shared/groupMapModel";
 // The request rules — validation, recipient parsing and the inside/outside test — live under test in
 // shared/requests.ts and are shared with the approver's queue. Two copies of "what counts as external"
 // is how one screen ends up permitting what the other refuses.
@@ -432,11 +433,14 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       );
       if (res.ok) {
         for (const r of ((await res.json()).value ?? []) as Array<{ Role?: string; UnitTermGuid?: string }>) {
-          // APR *and* APRHC — see the same match in Requests.tsx. A unit approved by its Highly
-          // Confidential approver has no plain APR row, and routing on APR alone would file the
-          // request against a unit nobody is recorded as approving for.
-          const role = (r.Role ?? "").toUpperCase();
-          if (role !== "APR" && role !== "APRHC") continue;
+          /* APR ALONE since 2026-08-17 — see the same match in Requests.tsx. APRHC is retired, and
+             `normalizeRoleValue` aliases a stored "APRHC" to "APR", so a legacy row still routes.
+
+             normalizeRoleValue, NOT a raw toUpperCase: the Group Map's Role is often the LONG form
+             ("APPROVER"), and a raw compare skips such a row — which would file the request against a
+             unit nobody is recorded as approving for, silently. */
+          const role = normalizeRoleValue(r.Role ?? "");
+          if (role !== "APR") continue;
           const guid = (r.UnitTermGuid ?? "").trim();
           if (guid && next.approverUnits.indexOf(guid) === -1) next.approverUnits.push(guid);
         }

@@ -107,7 +107,40 @@ export type GroupMapRole =
   // "cleared" is ambiguous — cleared to upload, or to approve? — so the role says which. The legacy
   // `_HC` group-name suffix now parses as UPLHC, which is what such a group meant.
   | "UPLHC"
-  | "APRHC"
+  // APRHC RETIRED 2026-08-17 — spec 2026-08-17-hc-clearance-and-role-revision-design.md. The client
+  // reversed their 2026-08-15 instruction: "any approver which is HOU can see Highly Confidential
+  // files as well. So we do not need a dedicated HOU". With plain APR on both HC rows of
+  // LIBRARY_ROLES, an APRHC row would grant exactly nothing extra. The `_APR_HC` group-name suffix
+  // stays MAPPED to APR, so a group somebody already created keeps working and means what it now
+  // means — dropping the suffix would silently reclassify it as a base MEMBER group.
+  //
+  // HC clearance is now a dedicated group for the two roles at the BOTTOM of the hierarchy only: the
+  // uploader (UPLHC + DELSHC) and the plain viewer (MEMBERHC). Every management role reaches HC
+  // through the role it already holds.
+  //
+  // DELSHC exists because DELS CANNOT be listed on the HC approval library: the plain PIC holds DELS
+  // too, so listing it there gave every plain PIC CRS Delete on HC — a live leak until today. Draft
+  // Item Security narrowed it (a non-approver sees only their own items, and a plain PIC has no HC
+  // files) but an APPROVED HC file sitting there before Auto-route moves it is visible to every
+  // reader, and they held delete on it.
+  | "DELSHC"
+  // MEMBERHC — the SDG Employee who may read HC. Named for the CLEARANCE, and it cannot reuse the
+  // `_MEMBER_HC` suffix because MEMBER is the BASE group and carries no suffix at all.
+  | "MEMBERHC"
+  // DEPTVIEW, 2026-08-17. Head of Department became view-only ("HOD no need deletion power, he only
+  // view" / "do not have share functionality that is HOU, just needs View"), so DEL and SHARE left
+  // that persona.
+  //
+  // It needs its OWN role and cannot reuse MEMBER — the obvious move, and wrong. MEMBER is the SDG
+  // Employee role and is deliberately absent from HC Documents, so reusing it would either lose
+  // HoD's HC read, or, if MEMBER were added to HC Documents to restore it, hand every SDG Employee
+  // HC read and destroy the dedicated HC viewer group in the same stroke. One role cannot grant HC
+  // to one persona and withhold it from another.
+  //
+  // What SEGVIEW is to a segment, one tier down: plain Read, fanning DOWN to every unit beneath the
+  // department, on Documents and HC Documents. Absent from both approval libraries, like every view
+  // role — a viewer there would be reading other people's unapproved drafts.
+  | "DEPTVIEW"
   | "ENTRY"
   | "GLOBAL"
   // SHARE, 2026-08-15. The right to grant SOMEONE ELSE access to a document — which is what makes a
@@ -137,7 +170,10 @@ export const LIBRARY_ENTRY_ROLE: GroupMapRole = "ENTRY";
 // belongs under the approval-library half of the Folder Access picker exactly as UPL and APR do.
 // Being derived rather than listed is what stops the HC personas being filed under Documents, which
 // would present the widest grant in the system as an ordinary one.
-export const STAGING_FACING_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS", "UPLHC", "APRHC"];
+// DELSHC replaced APRHC here 2026-08-17. DEPTVIEW is deliberately ABSENT for the same reason GLOBAL
+// and SEGVIEW are: it is a view role, and a viewer reaching an approval library would be reading
+// other people's unapproved drafts.
+export const STAGING_FACING_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS", "UPLHC", "DELSHC"];
 
 /**
  * What to SHOW instead of the role code. Display only — the stored `Role` value stays the short
@@ -166,7 +202,12 @@ export const ROLE_LABEL: Record<string, string> = {
   // Named for the CLEARANCE, not the library, because these roles grant in the normal libraries too.
   // "HC uploader" would read as "uploads only to HC", which is the opposite of what they do.
   UPLHC:   "Uploader — Highly Confidential cleared",
-  APRHC:   "Approver — Highly Confidential cleared",
+  DELSHC:  "Delete pending files — Highly Confidential cleared",
+  MEMBERHC: "View only — Highly Confidential cleared",
+  // Named for the SCOPE, not "View only", because that is what distinguishes it from MEMBER — the
+  // level is identical and only the reach differs. An admin choosing between two rows both reading
+  // "View only" has nothing to go on.
+  DEPTVIEW: "View only — whole department",
 };
 
 /** The label for a role code, falling back to the code so an unknown value stays visible. */
@@ -189,8 +230,10 @@ export function roleLabel(role: string): string {
 // SEGVIEW rejoined 2026-08-07, when the client asked for a per-segment C-Level alongside the
 // global one. HC stays out: it is Phase 2, its term is deleted, and offering it would let an
 // admin author a row that can never be granted.
+// 2026-08-17: APRHC removed (retired). DELSHC, MEMBERHC and DEPTVIEW added — each is a role an admin
+// can legitimately author, and omitting one would make its persona unauthorable by hand.
 export const SELECTABLE_ROLES: GroupMapRole[] =
-  ["MEMBER", "UPL", "APR", "DEL", "DELS", "GLOBAL", "SEGVIEW", "UPLHC", "APRHC"];
+  ["MEMBER", "UPL", "APR", "DEL", "DELS", "GLOBAL", "SEGVIEW", "DEPTVIEW", "UPLHC", "DELSHC", "MEMBERHC"];
 
 /**
  * The client's personas, as membership combinations of atomic per-unit groups.
@@ -294,10 +337,21 @@ export const PERSONAS: Persona[] = [
   // DEL maps to "CRS Delete", which is Read + Delete Items. The read was already there; the
   // second membership only made it look as though it were not.
   {
-    key: "hod", family: "Head of Department", scope: "department", label: "View, delete + share, department-wide",
-    // SHARE added 2026-08-15 — HoD shares without approval, like C-Level. DEL was already here.
-    roles: ["DEL", "SHARE"],
-    summary: "Reads every unit under their department in Documents, and can delete approved documents there. Cannot upload, cannot approve, and has no Staging access.",
+    key: "hod", family: "Head of Department", scope: "department", label: "View only, department-wide",
+    /* VIEW-ONLY SINCE 2026-08-17 (client: "HOD no need deletion power, he only view" and "Head of
+       Department do not have share functionality that is HOU, just needs View"). Both DEL and SHARE
+       left; deletion authority is now entirely the Head of Unit's, which is where the request
+       workflow already put the performing half of it.
+
+       DEPTVIEW, not MEMBER — see the role's own comment. MEMBER is the SDG Employee role and is
+       absent from HC Documents, so reusing it here would either lose this persona's HC read or,
+       if MEMBER were added there to restore it, hand every SDG Employee HC read.
+
+       MIGRATION: an existing HoD mapping must be RE-CREATED with this persona. Its rows still say
+       DEL/SHARE and will keep granting delete — the change does not fail, it silently retains the
+       power the client removed. Reconciliation must then be re-run. */
+    roles: ["DEPTVIEW"],
+    summary: "Reads every unit under their department, in Documents and in HC Documents. Cannot upload, cannot approve, cannot delete or share, and has no access to either approval library.",
   },
 
   // ── Head of Unit — the approver, at the UNIT tier ──────────────────────────
@@ -327,7 +381,34 @@ export const PERSONAS: Persona[] = [
     // approved deletion request fails at the last step; without SHARE an approved share does. SHARE
     // is the wide one: it makes a HoU the sharing AUTHORITY for their unit, able to share directly
     // without any screen, not merely an approver of other people's requests.
-    roles: ["APR", "DELS", "UPL", "DEL", "SHARE"],
+    /* UPLHC ADDED 2026-08-17 (client: "HOU uploads to HC yes, any type of HOU can upload to HC, so we
+       do not need a separate HOU for HC").
+
+       ON THE PERSONA, NOT BY PUTTING `UPL` ON THE HC LIBRARY — that distinction is the whole safety
+       of it. The plain PIC holds UPL as well, so listing UPL on the HC approval library would give
+       EVERY PIC HC upload and destroy the dedicated HC uploader group the client asked for in the
+       same breath. Granting UPLHC to this persona reaches the same capability with no leak and no new
+       role. Same shape as the DEPTVIEW decision: a role held by two personas cannot grant to one of
+       them and withhold from the other.
+
+       HC delete comes from DEL, which is on both HC rows of LIBRARY_ROLES — safe ONLY because HoD
+       lost DEL on the same day. If DEL is ever given back to a wider persona, HC delete travels with
+       it. */
+    /* UPLHC REPLACES UPL here rather than joining it. UPLHC is a SUPERSET — LIBRARY_ROLES lists it on
+       the normal approval library as well — so carrying both would be two rows granting the same
+       thing on the same folder, and two things to keep in step through a term rename. Pinned by the
+       "never both" test.
+
+       This works only because `collectMembership` counts UPLHC as an uploader role, fixed the same
+       day. Before that fix it recognised UPL alone, which is why `pic_hc` — UPLHC and no UPL — had
+       zero uploadable paths and HC upload had never worked for anyone. */
+    /* DELSHC here too, and NOT `DEL` on the HC approval library, which was the first attempt and was
+       WRONG: C-Level carries DEL as well (clevel_global is GLOBAL+DEL+SHARE), so DEL on StagingHC
+       would have let a C-Level read and delete UNAPPROVED HC drafts — breaking the rule that keeps
+       every view role off both approval libraries. Caught by the test asserting DEL's exact holders.
+       DELSHC is held only by this persona and pic_hc, so it is the safe way to give a Head of Unit
+       delete on pending HC work. */
+    roles: ["APR", "DELS", "DEL", "SHARE", "UPLHC", "DELSHC"],
     // SUMMARY CORRECTED 2026-08-17. It still read "Cannot upload, cannot delete approved
     // documents" — written for the pre-2026-08-15 role set and never updated when UPL, DEL and
     // SHARE were added directly above. The persona picker therefore told an administrator, on
@@ -338,22 +419,18 @@ export const PERSONAS: Persona[] = [
     summary: "Approves every file in their own unit, uploads to it, and deletes pending or rejected files there. Reads the unit's approved documents and can delete or share them — which makes them the unit's sharing authority, not merely an approver of requests. Sees no sibling unit.",
   },
 
-  // ── Head of Unit, Highly Confidential ──────────────────────────────────────
+  // ── Head of Unit, Highly Confidential — RETIRED 2026-08-17 ─────────────────
   //
-  // The client's reason for a separate approver group, in their words: "if client wants to ensure
-  // not all approver can see HC files". So this is the persona a unit's HC approver gets, and the
-  // ordinary `hou` persona reaches no HC library at all.
+  // It existed for the client's 2026-08-15 rule, in their words: "if client wants to ensure not all
+  // approver can see HC files". They reversed it on 2026-08-17 — "any approver which is HOU can see
+  // Highly Confidential files as well. So we do not need a dedicated HOU" — and with plain APR on
+  // both HC rows of LIBRARY_ROLES this persona became an exact duplicate of `hou`.
   //
-  // Carries UPLHC as well as APRHC for the same reason `hou` carries UPL: a Head of Unit uploads,
-  // and an HC-cleared one uploads HC. The self-approval consequence noted on `hou` therefore applies
-  // to HC too, and is worse there — the person approving an HC document may be the person who filed
-  // it, in the one place where a second pair of eyes matters most. Stated, not hidden; the client
-  // separates the groups if they want it separated.
-  {
-    key: "hou_hc", family: "Head of Unit", scope: "unit", label: "Approve incl. Highly Confidential, upload, delete + share",
-    roles: ["APRHC", "UPLHC", "DELS", "DEL", "SHARE"],
-    summary: "Everything a Head of Unit does, plus approving and reading Highly Confidential documents for this unit. A Head of Unit without this clearance cannot see them at all.",
-  },
+  // Deleted rather than left hidden: a persona nobody may pick is a row in the picker that exists to
+  // be mis-picked, and its APRHC rows would grant nothing while looking like clearance. The
+  // capability is not lost — `hou` now carries UPLHC, and APR reaches both HC libraries.
+  //
+  // See docs/superpowers/specs/2026-08-17-hc-clearance-and-role-revision-design.md §3.
 
   // ── PIC ────────────────────────────────────────────────────────────────────
   //
@@ -425,8 +502,32 @@ export const PERSONAS: Persona[] = [
   // since 2026-08-09.
   {
     key: "pic_hc", family: "PIC", scope: "unit", label: "Upload incl. Highly Confidential + delete own pending",
-    roles: ["UPLHC", "DELS"],
-    summary: "Everything a PIC does, plus filing and reading Highly Confidential documents for this unit. A PIC without this clearance is never even shown the Highly Confidential level.",
+    /* DELS → DELSHC, 2026-08-17, and this closed a LIVE LEAK rather than tidying a name.
+       DELS is held by the PLAIN PIC too, so while DELS was listed on the HC approval library every
+       plain PIC held CRS Delete there. Draft Item Security narrowed it — a non-approver sees only
+       their own items, and a plain PIC has no HC files — but an APPROVED HC file sitting in that
+       library before Auto-route moves it is visible to every reader, and they held delete on it.
+       A role held by two personas cannot grant to one and withhold from the other, so the HC twin
+       is its own role. See the spec §3.3. */
+    roles: ["UPLHC", "DELSHC"],
+    summary: "Everything a PIC does, plus filing and reading Highly Confidential documents for this unit, and deleting their own pending HC files. A PIC without this clearance is never even shown the Highly Confidential level.",
+  },
+
+  // ── SDG Employee, Highly Confidential ──────────────────────────────────────
+  //
+  // New 2026-08-17, on the client's instruction: "there also should be a separate viewer group, the
+  // SDG employee who can only see needs another group."
+  //
+  // Read on HC Documents and nothing else. It REPLACES the plain `employee` persona for a cleared
+  // person rather than accompanying it: MEMBERHC is not a superset, so a cleared viewer needs the
+  // plain MEMBER row as well to read the normal library — which is why this persona carries BOTH.
+  // One person, one group, as everywhere else since 2026-08-09.
+  //
+  // Approval-side absent, like every view role: a viewer there would be reading unapproved drafts.
+  {
+    key: "employee_hc", family: "SDG Employee", scope: "unit", label: "View only, incl. Highly Confidential",
+    roles: ["MEMBER", "MEMBERHC"],
+    summary: "Reads their own unit's approved documents, including Highly Confidential ones. Cannot upload, approve, delete or share. An SDG Employee without this clearance cannot see Highly Confidential documents at all.",
   },
 
   // ── SDG Employee ───────────────────────────────────────────────────────────
@@ -674,10 +775,20 @@ const ROLE_ALIASES: Record<string, GroupMapRole> = {
   MEMBER: "MEMBER",
   VIEWER: "MEMBER",
   SEGMENTVIEW: "SEGVIEW",
+  // APRHC RETIRED 2026-08-17 — aliased to APR rather than dropped. A row already storing "APRHC"
+  // must keep routing somewhere: request routing matches on the normalised role, and an unrecognised
+  // value passes through unchanged and matches nothing, so that unit's approver queue would go
+  // permanently empty while requests piled up behind it. APR now reaches both HC libraries, so this
+  // alias is exact rather than approximate.
+  APRHC: "APR",
+  DEPARTMENTVIEW: "DEPTVIEW",
+  VIEWER_HC: "MEMBERHC",
 };
 
 /** Every short code the permission tables key on. Listed, not derived — the union is a type. */
-const SHORT_ROLE_CODES = ["MEMBER", "UPL", "APR", "DEL", "DELS", "SEGVIEW", "UPLHC", "APRHC", "GLOBAL", "ENTRY"];
+// APRHC deliberately ABSENT so the alias above can fire — a short code wins outright, so leaving it
+// here would make the alias dead code and the retirement silent.
+const SHORT_ROLE_CODES = ["MEMBER", "UPL", "APR", "DEL", "DELS", "SEGVIEW", "UPLHC", "DELSHC", "MEMBERHC", "DEPTVIEW", "SHARE", "GLOBAL", "ENTRY"];
 
 export function normalizeRoleValue(raw: string): string {
   const v = (raw ?? "").trim().toUpperCase().replace(/[\s-]+/g, "_");
@@ -709,9 +820,23 @@ const ROLE_SUFFIXES_UNSORTED: RoleSuffix[] = [
   // uploader. Worth stating because getting it wrong would grant HC clearance to nobody while
   // looking entirely correct in the list.
   { suffix: "_UPL_HIGHLY_CONFIDENTIAL", role: "UPLHC" },
-  { suffix: "_APR_HIGHLY_CONFIDENTIAL", role: "APRHC" },
   { suffix: "_UPL_HC", role: "UPLHC" },
-  { suffix: "_APR_HC", role: "APRHC" },
+  { suffix: "_DELS_HIGHLY_CONFIDENTIAL", role: "DELSHC" },
+  { suffix: "_DELS_HC", role: "DELSHC" },
+  // MEMBERHC cannot use `_MEMBER_HC`: MEMBER is the BASE group and carries no suffix at all
+  // (suffixForRole returns "" for it), so there is no `_MEMBER` to extend. `_VIEWER_*` instead,
+  // matching the ROLE_LABEL wording an admin sees.
+  { suffix: "_VIEWER_HIGHLY_CONFIDENTIAL", role: "MEMBERHC" },
+  { suffix: "_VIEWER_HC", role: "MEMBERHC" },
+  { suffix: "_DEPARTMENT_VIEWER", role: "DEPTVIEW" },
+  { suffix: "_DEPTVIEW", role: "DEPTVIEW" },
+  // `_APR_HC` NOW RESOLVES TO PLAIN APR (2026-08-17). APRHC is retired — any approver who is a Head
+  // of Unit reaches HC through APR — so a group somebody already created under either spelling keeps
+  // working and means what it now means. Deleting the suffixes instead would make such a name fall
+  // through to MEMBER: a group titled "…_APR_HC" silently reclassified as a view-only base group,
+  // which is both wrong and completely invisible in the mapping list.
+  { suffix: "_APR_HIGHLY_CONFIDENTIAL", role: "APR" },
+  { suffix: "_APR_HC", role: "APR" },
   // LEGACY. Under the superseded 2026-07-16 design a `..._HC` group was the unit's HC-cleared
   // members — its uploaders. Kept so such a group still parses as something sensible rather than
   // falling through to MEMBER, which would grant plain Read at whatever tier its row sits on.
@@ -728,8 +853,33 @@ export const ROLE_SUFFIXES: RoleSuffix[] = ROLE_SUFFIXES_UNSORTED.slice().sort(
  * The suffix written into a NEW group name for a role — the long form, since that is the
  * convention the client asked for. MEMBER and GLOBAL return "" (base group / hand-picked).
  */
+/**
+ * The ONE suffix written into a new name per role, stated explicitly.
+ *
+ * Derived-by-search was wrong and broke on 2026-08-17: ROLE_SUFFIXES is sorted LONGEST-FIRST (the
+ * length sort is load-bearing for PARSING), and once `_APR_HIGHLY_CONFIDENTIAL` was re-pointed at
+ * APR, a search for "the first suffix whose role is APR" returned that 24-character legacy spelling
+ * instead of `_APPROVER`. Every new approver group would have been suggested with an HC name.
+ *
+ * Reading order out of a table sorted for a different purpose is the bug; this map is the fix.
+ * Several spellings are ACCEPTED for parsing, exactly one is WRITTEN.
+ */
+const CANONICAL_SUFFIX: Record<string, string> = {
+  UPL: "_UPLOADER",
+  APR: "_APPROVER",
+  DEL: "_DELETER_DOCUMENTS",
+  DELS: "_DELETER_STAGING",
+  SEGVIEW: "_SEGVIEW",
+  DEPTVIEW: "_DEPARTMENT_VIEWER",
+  UPLHC: "_UPL_HIGHLY_CONFIDENTIAL",
+  DELSHC: "_DELS_HIGHLY_CONFIDENTIAL",
+  MEMBERHC: "_VIEWER_HIGHLY_CONFIDENTIAL",
+};
+
 export function suffixForRole(role: GroupMapRole | ""): string {
   if (role === "MEMBER" || role === "GLOBAL" || role === "") return "";
+  const canonical = CANONICAL_SUFFIX[role];
+  if (canonical !== undefined) return canonical;
   for (const s of ROLE_SUFFIXES) if (s.role === role) return s.suffix;
   return `_${role}`;
 }

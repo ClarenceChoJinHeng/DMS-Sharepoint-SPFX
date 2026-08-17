@@ -184,7 +184,16 @@ export function collectMembership(
     const role = normalizeRoleValue(r.role ?? "");
     if (role === "GLOBAL") continue; // read-only role, no term, no upload
     if (r.termGuid) memberTerms.add(normGuid(r.termGuid));
-    if (role === "UPL") {
+    /* UPLHC COUNTS AS AN UPLOADER ROLE, added 2026-08-17 — and its absence was a real bug rather than
+       a refinement. `pic_hc` carries UPLHC and no UPL, so every HC-cleared PIC had ZERO uploader
+       leaves and the form told them "your account isn't fully provisioned to upload". HC upload had
+       therefore never worked for anybody. The same failure mode as the long-form Role value recorded
+       above: the folder ACL was correct and the form disagreed with it.
+
+       UPLHC is a SUPERSET — LIBRARY_ROLES lists it on the normal approval library too — so one leaf
+       per row is right, and WHICH library a given upload lands in is decided later by the
+       confidentiality level, never here. */
+    if (role === "UPL" || role === "UPLHC") {
       uploaderLeaves.push({ termGuid: r.termGuid, segment: r.segment });
     }
   }

@@ -680,8 +680,8 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
 |---|---|---|---|---|
 | C-Level (global) | `GLOBAL` | all segments | view everything | **none** |
 | C-Level (segment) | `SEGVIEW` | one segment | view that segment, all the way down | **none** |
-| Head of Department | `DEL` | department | view **every unit under the dept**, + delete approved docs | **none** — does NOT approve |
-| Head of Unit | `APR`, `DELS` | unit | view own path | **approve + view every file in their unit, + delete pending/rejected** |
+| Head of Department | `DEPTVIEW` | department | view **every unit under the dept**, incl. HC — **nothing else** | **none** — does NOT approve |
+| Head of Unit | `APR`, `DEL`, `DELS`, `SHARE`, `UPLHC`, `DELSHC` | unit | view own path, delete + share | **approve + view every file in their unit, delete pending/rejected, upload incl. HC** |
 | PIC | `UPL` | unit | **view own path** | upload at **any** confidentiality level |
 | SDG Employee | `MEMBER` | unit | view own path | none |
 
@@ -1097,7 +1097,50 @@ writers; NOT yet site-tested, and the flows are not built.** Web part **`CRS Aud
 - **Supersedes the never-built `<P> Deletion Log`** — two append-only trails would leave a permanent
   question about which is authoritative. `LIST_SUFFIX.deletionLog` still exists; nothing new reads it.
 
+## HC CLEARANCE IS ONLY FOR PIC AND SDG EMPLOYEE (2026-08-17, spec `2026-08-17-hc-clearance-and-role-revision-design.md`)
+The client **reversed their 2026-08-15 rule** (*"any approver which is HOU can see Highly Confidential
+files as well… we do not need a dedicated HOU but rather a dedicated PIC who is an uploader only and
+dedicated viewer who is SDG Employee"*), and separately made **Head of Department view-only** (*"HOD no
+need deletion power, he only view"* / *"do not have share functionality that is HOU, just needs View"*).
+- **HC clearance is a dedicated group for the two roles at the BOTTOM only** — the uploader and the
+  plain viewer. Every management role reaches HC through the role it already holds. Say this to the
+  client, because it reads oddly: **a Head of Unit needs no clearance, an SDG Employee does.**
+- `APRHC` and the `hou_hc` persona are **RETIRED**. `_APR_HC` group names and stored `APRHC` values
+  resolve to plain `APR` (suffix kept + `ROLE_ALIASES`) — dropping them would make such a name fall
+  through to **MEMBER**, silently reclassifying an approver group as view-only.
+- **THREE COLLISIONS, all the same shape: a role held by two personas cannot grant to one and withhold
+  from the other.** Each obvious implementation hands HC to people the client excluded.
+  1. **HoU uploads HC via `UPLHC` ON THE PERSONA, never `UPL` on the HC library** — the plain PIC holds
+     `UPL`, so that would give *every* PIC HC upload. `UPLHC` **replaces** `UPL` on `hou` (it is a
+     superset covering the normal library too, so both would be two rows granting the same thing).
+  2. **HoD gets `DEPTVIEW`, never `MEMBER`** — `MEMBER` is the SDG Employee role and is absent from
+     `DocumentsHC`; reusing it would either lose HoD's HC read or, once added there, hand every SDG
+     Employee HC read. `DEPTVIEW` is what `SEGVIEW` is to a segment, one tier down.
+  3. **`DELSHC`, because `DELS` cannot sit on the HC approval library** — the plain PIC holds `DELS`, so
+     **until today every plain PIC held `CRS Delete` on HC Approval.** A live leak, narrowed by Draft
+     Item Security but real for an approved HC file awaiting Auto-route.
+- **⚠ `DEL` IS NOT ON `StagingHC`, AND AN EARLIER DRAFT GOT THIS WRONG.** The reasoning "HoD lost `DEL`,
+  so `DEL` is now HoU-exclusive" is false — **C-Level carries `DEL` too** (`clevel_global` =
+  `GLOBAL+DEL+SHARE`). `DEL` there would have given a C-Level read and delete on **unapproved HC
+  drafts**. HoU's HC pending delete comes from `DELSHC`. *"Role X is exclusive to persona Y"* is a claim
+  about the whole `PERSONAS` array; both holders sets are pinned by test.
+- **`collectMembership` NOW COUNTS `UPLHC` AS AN UPLOADER ROLE — its absence meant HC upload had NEVER
+  WORKED.** `pic_hc` carries `UPLHC` and no `UPL`, so every HC-cleared PIC had zero uploadable paths and
+  was told *"your account isn't fully provisioned to upload"* — the folder ACL correct, the form
+  disagreeing, exactly as with the long-form `Role` bug of 2026-08-07.
+- **`suffixForRole` reads a CANONICAL map, not `ROLE_SUFFIXES`.** That table is sorted longest-first for
+  *parsing*; once `_APR_HIGHLY_CONFIDENTIAL` pointed at `APR`, a search returned it instead of
+  `_APPROVER` and every new approver group was suggested with an HC name.
+- **Live tables:** `Staging: UPL·APR·DELS·UPLHC·DELSHC` · `Documents: MEMBER·DEPTVIEW·GLOBAL·SEGVIEW·UPL·APR·DEL·SHARE·UPLHC`
+  · `StagingHC: UPLHC·DELSHC·APR` · `DocumentsHC: UPLHC·MEMBERHC·APR·DEL·DEPTVIEW·GLOBAL·SEGVIEW·SHARE`.
+- **MIGRATION: an existing HoD mapping must be RE-CREATED with the persona** — its rows still say
+  `DEL`/`SHARE` and keep granting delete. It does not fail; it silently retains the power the client
+  removed. **Reconciliation must be re-run**, and this is the one change that *reduces* access.
+
 ## HIGHLY CONFIDENTIAL — ITS OWN LIBRARY PAIR (2026-08-15, spec `2026-08-15-highly-confidential-library-design.md`)
+> ⚠ **The role/clearance half of this section is SUPERSEDED by 2026-08-17 above** — `APRHC` and `hou_hc`
+> no longer exist, `MEMBER`'s absence from `DocumentsHC` is now joined by `DELS`, and HC clearance is
+> only for PIC and SDG Employee. **The library-pair ARCHITECTURE below is unchanged and still governs.**
 Client: an HC uploader group files at **any** level and reaches **both** approval libraries;
 `GHO_GF_CORU_UPL` reaches only the normal one. **SUPERSEDES `2026-07-16-highly-confidential-securing-design.md`**
 — do not implement its elevated-flow design. BUILT, **not site-tested**; the libraries, the groups and
