@@ -78,14 +78,20 @@ const s: Record<string, React.CSSProperties> = {
   // (`backLinkStyle` in shared/backToSettings) without the band, because it is a descent into a
   // deeper screen rather than an exit — banding it would make two opposite moves look identical.
   back:      { border: "none", background: "transparent", padding: 0, font: "inherit", color: "rgba(0, 104, 74, 1)", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 },
-  runner:    { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: 24, alignItems: "start" },
-  rail:      { border: "1px solid #e8e6e6", borderRadius: 10, background: "#fafafa", padding: 12, maxWidth: 280 },
+  // FLEX, not `repeat(auto-fit, …)`. That grid made as many 240px columns as would fit, so on a wide
+  // screen it produced a third empty column and the panel — spanning two — left a band of dead space to
+  // its right (client, 2026-08-17: "CAn you remove the padding?"). Flex gives the same wrapping on a
+  // narrow screen with no phantom tracks on a wide one.
+  runner:    { display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" },
+  rail:      { border: "1px solid #e8e6e6", borderRadius: 10, background: "#fafafa", padding: 12, flex: "0 1 240px" },
   railItem:  { display: "flex", gap: 10, width: "100%", textAlign: "left", border: "none", background: "transparent", font: "inherit", padding: "9px 8px", borderRadius: 8, cursor: "pointer", alignItems: "flex-start" },
   railActive:{ background: "#eef7f1" },
   railNum:   { flexShrink: 0, width: 20, height: 20, borderRadius: "50%", fontSize: 11, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", marginTop: 1 },
   railLabel: { fontSize: 12.5, fontWeight: 600, lineHeight: 1.35 },
   railState: { fontSize: 11, lineHeight: 1.4, marginTop: 2, display: "block" },
-  panel:     { minWidth: 0, gridColumn: "span 2" },
+  // `flex: 1 1 420px` — takes the rest of the row, wraps under the rail below ~700px. The old
+  // `gridColumn: span 2` belonged to the auto-fit grid above and is what left the dead band.
+  panel:     { minWidth: 0, flex: "1 1 420px" },
   stepHead:  { fontSize: 18, fontWeight: 600, margin: "0 0 4px" },
   stepHint:  { fontSize: 13, color: "#5f5f5f", margin: "0 0 16px", lineHeight: 1.55 },
   outside:   { border: "1px solid #cfd8e3", background: "#f4f7fb", borderRadius: 8, padding: "14px 16px", fontSize: 13, color: "#2b3f56", lineHeight: 1.6 },
@@ -100,6 +106,7 @@ const s: Record<string, React.CSSProperties> = {
   danger:    { marginBottom: 16, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 8, fontSize: 12.5, color: "#a4262c", lineHeight: 1.5 },
   allTools:  { marginTop: 30, paddingTop: 16, borderTop: "1px solid #eceaea" },
   hint:      { fontSize: 11.5, color: "#5f6f80", marginTop: 6, lineHeight: 1.5 },
+  doneBox:   { border: "1px solid #c6e3d1", background: "#f1f8f4", borderRadius: 8, padding: "12px 14px", fontSize: 13, color: "#0f6c3f", lineHeight: 1.55, marginBottom: 14 },
 };
 
 const STATE_STYLE: Record<string, { pill: React.CSSProperties; note: React.CSSProperties; text: string; mark: string }> = {
@@ -130,6 +137,17 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    * that contradicts itself is worse than one that says nothing.
    */
   const [reload, setReload] = useState(0);
+  /**
+   * Whether the New segment FORM is open on step 2.
+   *
+   * Closed by default and closed again once a segment is confirmed, because a creation form still sitting
+   * under the confirmation of what was just created invites creating it twice (client, 2026-08-17: *"when
+   * i create GHO and the Form still showing below it is really weird"*). Duplicating a segment is not
+   * harmless either — `validateNewSegment` refuses a duplicate LABEL and a duplicate top folder, but two
+   * segments differing only in punctuation still slug to one key, which presents as the new one shadowing
+   * the old.
+   */
+  const [showForm, setShowForm] = useState(false);
 
   /** The subject of flows 2 and 4 — what makes their term-store step checkable at all. */
   const [subject, setSubject] = useState("");
@@ -442,9 +460,32 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
        tab and someone else's session. It also sets `segKey`, which is what carries the segment into steps
        3-6 instead of leaving each one to ask again. */
     const confirms = active.asksSubject === "newSegment" && st.id === "createSegment";
+    // On step 2 the form is BEHIND A BUTTON, and closes once the segment is confirmed. Everywhere else
+    // the step IS the screen, so it renders directly.
+    if (confirms && !showForm && segment) {
+      return (
+        <div>
+          <div style={s.doneBox}>
+            <strong>{segment.label}</strong> is created — top folder <strong>{segment.code}</strong>.
+            The remaining steps below are set up for it.
+          </div>
+          <button style={s.ghost} onClick={() => setShowForm(true)}>+ Create another segment</button>
+        </div>
+      );
+    }
     return (
       <div>
-        <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
+        {confirms && !showForm && (
+          <div style={{ marginBottom: 16 }}>
+            <button style={s.primary} onClick={() => setShowForm(true)}>+ Create a new segment</button>
+            <div style={s.hint}>
+              Already created it? Pick it below instead — there is no need to open the form again.
+            </div>
+          </div>
+        )}
+        {(!confirms || showForm) && (
+          <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
+        )}
         {confirms && (
           <div style={{ ...s.card, marginTop: 18, marginBottom: 0 }}>
             <label style={s.label} htmlFor="fa-newseg">Which segment did you just create?</label>
@@ -453,7 +494,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 id="fa-newseg"
                 style={s.select}
                 value={segKey}
-                onChange={(e) => setSegKey(e.target.value)}
+                // Confirming closes the form: it has served its purpose, and leaving a creation form under
+                // the confirmation of what was just created is what made this read as broken.
+                onChange={(e) => { setSegKey(e.target.value); if (e.target.value) setShowForm(false); }}
               >
                 <option value="">Select a segment&hellip;</option>
                 {(segments ?? []).map((x) => (
