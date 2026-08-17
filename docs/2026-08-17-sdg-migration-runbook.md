@@ -128,8 +128,18 @@ Create as `CRS <suffix>`.
 | `CRS Group Map` | `GroupId` (Number), `GroupName` (Text), `Segment` (Text), `UnitTermGuid` (Text), `Role` (**Text**), `Scope` (Text), `Target` (Text) |
 | `CRS Folder Map` | as written by the Folder Map web part |
 | `CRS Term Abbreviation` | keyed by term GUID; `Title` holds the term's label |
-| `CRS Audit Log` | **self-provisioned by the Audit Log page — do not hand-create** |
-| `CRS Requests` | `RequestType` (**Text**), `Status` (**Text**), `RequestedAt` / `ExpiresAt` (DateTime, ISO) |
+| `CRS Audit Log` | **self-provisioned — do not hand-create** (see below) |
+| `CRS Requests` | **self-provisioned — do not hand-create** (see below) |
+
+**Two of these create themselves, and that changes the order.** `CRS Audit Log` and `CRS Requests`
+are each provisioned by a button on their own page, with the exact columns, types and indexes the
+code expects. Hand-creating either is worse than not creating it: a column of the wrong type — a
+`Choice` where the code writes free text — fails the **whole** write, silently, on every row.
+
+So: **hand-create only `CRS Config`, `CRS Group Map`, `CRS Folder Map` and `CRS Term Abbreviation`
+here.** The other two come after §8, from their pages. Verified 2026-08-17 — Folder Map, Term
+Abbreviation and Group Map create no list of their own, so those three genuinely must be made by
+hand.
 
 **`Role`, `RequestType`, `Status` and `EventType` must be TEXT, never Choice.** Writing a value
 absent from a Choice column's `Choices` fails the **whole** write, silently — so the day someone adds
