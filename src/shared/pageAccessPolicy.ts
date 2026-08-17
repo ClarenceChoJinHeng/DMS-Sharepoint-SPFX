@@ -104,11 +104,28 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     },
   },
   {
+    // APPROVERS BELONG HERE TOO (2026-08-17, client: "client wants HOU to be able to get into
+    // upload form to upload, basically apr can upload").
+    //
+    // A Head of Unit uploads as well as approves — the `hou` persona has carried UPL since the
+    // 2026-08-15 role correction. But a group mapped BEFORE that correction holds only APR and
+    // DELS rows, so keying this page on UPL alone locked out every Head of Unit provisioned
+    // earlier. Found live 2026-08-17: an APR account got AccessDenied on the upload form while
+    // the run log showed the page granted to the UPL group alone.
+    //
+    // Listing APR fixes both cases with no data migration — the older HoU groups need no new
+    // Group Map row, and a pure approver group reaches the page too, which is what was asked.
+    //
+    // The page grant only opens the FORM. Whether anything can be filed from it is decided by
+    // the folder ACL: the form probes AddListItems on the destination and shows the "not ready"
+    // empty state where that fails. So a role listed here that cannot write sees an empty
+    // cascade rather than an upload that fails at the end — the safe direction, and the reason
+    // widening this list cannot grant anyone the ability to upload somewhere new.
     match: /upload/i,
     policy: {
-      roles: ["UPL"],
+      roles: ["UPL", "APR"],
       adminOnly: false,
-      reason: "Only uploader groups are listed — this page is where documents are submitted.",
+      reason: "Uploader and approver groups are listed — this page is where documents are submitted, and a Head of Unit uploads as well as approves.",
     },
   },
 ];

@@ -7,10 +7,23 @@ import {
 import { GroupMapRole, SELECTABLE_ROLES } from "./groupMapModel";
 
 describe("policyForPage — the client's four rules (2026-08-05)", () => {
-  it("offers Upload-Form to uploaders only", () => {
+  // Was uploaders-only until 2026-08-17. The client's rule is that a Head of Unit uploads as
+  // well as approves ("basically apr can upload"), and an HoU group mapped before the
+  // 2026-08-15 persona correction carries no UPL row — so keying the page on UPL alone denied
+  // the upload form to every Head of Unit already provisioned.
+  it("offers Upload-Form to uploaders AND approvers", () => {
     const p = policyForPage("Upload-Form.aspx");
-    expect(p.roles).toEqual(["UPL"]);
+    expect(p.roles).toEqual(["UPL", "APR"]);
     expect(p.adminOnly).toBe(false);
+  });
+
+  it("still never offers Upload-Form to a view-only role", () => {
+    // Widening to APR must not widen to the oversight roles: a C-Level or Head of Department
+    // holds no permission in the approval library at all, so the page would open onto an empty
+    // cascade and imply an ability they do not have.
+    for (const role of VIEW_ONLY_ROLES) {
+      expect(isRoleEligibleForPage("Upload-Form.aspx", role)).toBe(false);
+    }
   });
 
   it("offers ApprovalDocument to approvers only", () => {
@@ -49,7 +62,7 @@ describe("rule ordering", () => {
 
   it("still treats a plain upload page as an uploader page", () => {
     for (const name of ["Upload.aspx", "Upload-Form.aspx", "UploadForm.aspx"]) {
-      expect(policyForPage(name).roles).toEqual(["UPL"]);
+      expect(policyForPage(name).roles).toEqual(["UPL", "APR"]);
     }
   });
 });
@@ -80,9 +93,12 @@ describe("the My Submissions page is for UPLOADERS only", () => {
   });
 
   it("is NOT reached through the generic upload rule — the reason line differs", () => {
-    // Ordering is what this asserts: both rules yield UPL, so roles alone cannot tell them apart.
-    // If the generic rule were hit first, the page would describe itself as the place documents
-    // are submitted — untrue, and the kind of wrong label that produces a wrong grant later.
+    // Ordering is what this asserts. Until 2026-08-17 both rules yielded exactly ["UPL"], so the
+    // reason line was the ONLY thing that could tell them apart. It no longer is — the generic
+    // upload rule now also lists APR — which makes the roles assertion above a second, harder
+    // guard: if the generic rule were hit first, My Submissions would be offered to approvers,
+    // the people it is private from. The reason check stays, because a wrong label is what
+    // produces a wrong grant later even when the roles happen to match.
     expect(policyForPage("My-Submissions.aspx").reason).toContain("their own submissions");
     expect(policyForPage("Upload-Form.aspx").reason).toContain("where documents are submitted");
   });
@@ -115,8 +131,13 @@ describe("view-only roles are never offered a page", () => {
 
 describe("isRoleEligibleForPage", () => {
   it("allows the matching role and refuses the others", () => {
+    // THE ASYMMETRY IS DELIBERATE and is the point of this case. Approvers reach the upload
+    // form (2026-08-17 — a Head of Unit uploads as well as approves), but uploaders must never
+    // reach the approval queue. Making these mirror each other would hand every PIC the power
+    // to approve their own documents, which is the one thing the whole approval flow exists to
+    // prevent.
     expect(isRoleEligibleForPage("Upload-Form.aspx", "UPL")).toBe(true);
-    expect(isRoleEligibleForPage("Upload-Form.aspx", "APR")).toBe(false);
+    expect(isRoleEligibleForPage("Upload-Form.aspx", "APR")).toBe(true);
     expect(isRoleEligibleForPage("ApprovalDocument.aspx", "APR")).toBe(true);
     expect(isRoleEligibleForPage("ApprovalDocument.aspx", "UPL")).toBe(false);
   });

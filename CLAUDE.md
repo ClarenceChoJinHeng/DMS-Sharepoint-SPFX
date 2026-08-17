@@ -708,6 +708,21 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   confidentiality level.
 - **`DELS` now belongs to Head of Unit** (was: no persona). It is delete on the **approval library
   only** — pending and rejected files.
+- **THE UPLOAD FORM PAGE ACCEPTS `APR` AS WELL AS `UPL` (2026-08-17, client: *"client wants HOU to
+  be able to get into upload form to upload, basically apr can upload"*).** `pageAccessPolicy.ts`'s
+  `/upload/i` rule listed `["UPL"]`, so an approver got **AccessDenied on the upload form** — found
+  live with a real second account, while the run log showed the page granted to the UPL group alone.
+  - **The `hou` persona has carried `UPL` since the 2026-08-15 correction, and that is not enough.**
+    A Head of Unit group mapped BEFORE that correction holds only `APR` and `DELS` rows, so keying
+    the page on `UPL` locked out every HoU already provisioned. Listing `APR` fixes both that group
+    and a pure approver group with **no data migration** — no new Group Map row, no re-run.
+  - **Widening this list cannot grant anyone a new place to upload.** The page grant opens the FORM;
+    the folder ACL decides what can be filed, because the form probes `AddListItems` on the
+    destination and shows the "not ready" empty state where that fails. A role listed here that
+    cannot write sees an empty cascade — the safe direction.
+  - **The asymmetry with `ApprovalDocument.aspx` is deliberate and pinned by test:** approvers reach
+    the upload form, uploaders must NEVER reach the approval queue. Mirroring them would let every
+    PIC approve their own documents. View-only roles stay excluded from both.
 - **Folder Access is persona-only.** The role chips are gone: picking a persona applies its roles.
   A library toggle above the group field splits the personas — Documents (C-Level ×2, HoD, SDG
   Employee) vs Approval Document (HoU, PIC). That grouping is **derived** via
