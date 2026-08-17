@@ -9,6 +9,7 @@ import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
+import { Toast, ToastKind } from "../../../shared/toast";
 import {
   AbbrevRowDraft,
   changedRows,
@@ -128,7 +129,18 @@ export default function AbbreviationManager({
   const [loading, setLoading] = useState(true);
   const [treeLoading, setTreeLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; text: string } | undefined>(undefined);
+  /**
+   * The last outcome, shown as a floating Toast rather than a banner at the top of the page — this
+   * screen is 70-odd rows long, so the top is off-screen when Save is pressed and nothing appears to
+   * happen (client, 2026-08-17).
+   *
+   * `warn` marks a HALF-success: the rows were written and the audit row was not. It matters because a
+   * success auto-dismisses and a warning does not — a partial outcome that clears itself would be read
+   * as a clean save.
+   */
+  const [result, setResult] = useState<{ ok: boolean; warn?: boolean; text: string } | undefined>(
+    undefined,
+  );
   /** Existing list item ids by term GUID, so a save updates rather than duplicating. */
   const [itemIds, setItemIds] = useState<Record<string, number>>({});
 
@@ -425,6 +437,7 @@ export default function AbbreviationManager({
       setRows(rows.map((r) => ({ ...r, original: r.abbreviation.trim() })));
       setResult({
         ok: true,
+        warn: !auditOk,
         text:
           `Saved ${written} abbreviation${written === 1 ? "" : "s"} for ${seg.label}. ` +
           `No folder has changed yet — run Folder Reconciliation to create or rename them.` +
@@ -472,7 +485,21 @@ export default function AbbreviationManager({
 
   return (
     <div>
-      {result && <div style={{ ...s.msg, ...(result.ok ? s.ok : s.err) }}>{result.text}</div>}
+      {/* A FLOATING toast, not a banner in the flow of the page. Save sits at the bottom of 70-odd rows,
+          so a message at the top is off-screen exactly when it is written and pressing Save reads as
+          doing nothing (client, 2026-08-17).
+
+          Three kinds, because the dismissal differs: a success clears itself, while a FAILURE and a
+          half-success (rows written, audit row not) stay until closed. A toast that clears itself after an
+          error is worse than the banner it replaced — it can be missed entirely rather than merely be out
+          of view. */}
+      {result && (
+        <Toast
+          kind={(!result.ok ? "err" : result.warn ? "warn" : "ok") as ToastKind}
+          text={result.text}
+          onDismiss={() => setResult(undefined)}
+        />
+      )}
 
       <div style={{ marginBottom: 16 }}>
         <label style={s.label}>Segment</label>
