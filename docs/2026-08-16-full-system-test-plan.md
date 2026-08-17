@@ -2,7 +2,7 @@
 
 **Date started:** 2026-08-16
 **Site:** `/sites/ClarenceDMSTesting`
-**Package:** 1.0.125.0
+**Package:** 1.0.126.0
 **Goal:** exercise everything built, fix what testing finds, then migrate to SDG's site.
 
 Supersedes `docs/superpowers/specs/2026-07-28-dms-uat-test-plan.md`, which covers 7 of the current 15

@@ -75,6 +75,24 @@ type LibTarget = "Staging" | "Documents" | "StagingHC" | "DocumentsHC";
  * module is evaluated long before that. A const captured at import time would always say "no HC".
  */
 const BASE_LIBS: LibTarget[] = ["Staging", "Documents"];
+/**
+ * The library's REAL TITLE, for anything a person reads.
+ *
+ * `LibTarget` values are logical KEYS, not names: `Staging` is the stored `Target` on every
+ * library-scope Group Map row and the discriminator throughout this file. Renaming the key would
+ * orphan those rows. But showing the key put "Staging" and "StagingHC" on screen for libraries the
+ * client knows as "Approval Document" and "HC Approval Document" — asked about live 2026-08-17, and
+ * a fair complaint: nothing else in the product calls them that.
+ *
+ * So the key is translated at the point of DISPLAY, exactly as it is translated at the API boundary
+ * by the same function. Safe here and nowhere else: a name resolved at render time is fine for
+ * display and never for a request (see the StagingAccess `listBase` bug, 2026-08-14).
+ *
+ * An unresolved HC target returns its key rather than a guess, which is deliberate — the same
+ * loud-failure rule `libApiTitle` follows for requests.
+ */
+const libDisplayName = (lib: string): string => libApiTitle(lib);
+
 const reconLibs = (): LibTarget[] =>
   hcAvailable() ? [...BASE_LIBS, "StagingHC", "DocumentsHC"] : BASE_LIBS;
 
@@ -791,7 +809,7 @@ export default function FolderManager({
       { headers: { Accept: "application/json" } },
     ), reconWaitNote);
     if (!res.ok) {
-      console.warn(`getLibraryRoot('${lib}') failed: HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      console.warn(`getLibraryRoot('${libDisplayName(lib)}') failed: HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
       return null;
     }
     const data = await res.json();
@@ -2255,7 +2273,7 @@ export default function FolderManager({
               // Read either way) and closes that off.
               const levelName = permissionForRole(lib as LibTarget, role);
               const roleDefId = roleDefs.find((r) => r.name === levelName)?.id;
-              const label = `${row.GroupName || row.GroupId} → ${lib}`;
+              const label = `${row.GroupName || row.GroupId} → ${libDisplayName(lib)}`;
               if (levelName === undefined) {
                 entries.push({ msg: `  ⚠ ${label}: role "${role}" grants nothing (retired or unknown) — skipped`, ok: false });
                 continue;
@@ -2270,7 +2288,7 @@ export default function FolderManager({
                 { headers: { Accept: "application/json;odata=nometadata" } },
               );
               if (!listRes.ok) {
-                entries.push({ msg: `  ⚠ ${label}: library "${lib}" not found — check the Target value`, ok: false });
+                entries.push({ msg: `  ⚠ ${label}: library "${libDisplayName(lib)}" not found — check the Target value`, ok: false });
                 continue;
               }
               const listJson = await listRes.json();
@@ -2310,11 +2328,11 @@ export default function FolderManager({
                   { headers: { Accept: "application/json;odata=nometadata" } },
                 ));
                 if (!broke.ok) {
-                  entries.push({ msg: `  ✗ ${lib}: could not break inheritance (HTTP ${broke.status}) — nothing granted`, ok: false });
+                  entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not break inheritance (HTTP ${broke.status}) — nothing granted`, ok: false });
                   continue;
                 }
                 brokenThisRun.add(listId);
-                entries.push({ msg: `  ↳ ${lib}: inheritance broken (no permissions copied)`, ok: true });
+                entries.push({ msg: `  ↳ ${libDisplayName(lib)}: inheritance broken (no permissions copied)`, ok: true });
                 // Two principals go back on, and BOTH are load-bearing.
                 //
                 // Owners: with nothing copied, the only remaining access is site collection
@@ -2323,9 +2341,9 @@ export default function FolderManager({
                 if (fullCtrlId !== undefined) {
                   try {
                     await addRoleAssignmentToList(listBase, ownerGroupId as number, fullCtrlId);
-                    entries.push({ msg: `  ↳ ${lib}: site Owners → Full Control restored`, ok: true });
+                    entries.push({ msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`, ok: true });
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${lib}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                    entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`, ok: false });
                   }
                 }
                 // Site entry: the approval guard resolves the destination folder in
@@ -2338,16 +2356,16 @@ export default function FolderManager({
                   // It did not have access before, so it does not get any now. Logged rather
                   // than silent: on Staging this is the correct and intended outcome, and an
                   // unexplained absence here would look like the restore had failed.
-                  entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} had no access before — not granted (site entry is not library access)`, ok: true });
+                  entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} had no access before — not granted (site entry is not library access)`, ok: true });
                 } else if (entryPid !== undefined && readId !== undefined) {
                   try {
                     await addRoleAssignmentToList(listBase, entryPid, readId);
-                    entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} → Read restored (keeps approval working)`, ok: true });
+                    entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read restored (keeps approval working)`, ok: true });
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${lib}: could not restore ${siteEntryGroupTitle()} — approvals may fail — ${(e as Error).message}`, ok: false });
+                    entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not restore ${siteEntryGroupTitle()} — approvals may fail — ${(e as Error).message}`, ok: false });
                   }
                 } else {
-                  entries.push({ msg: `  ⚠ ${lib}: ${siteEntryGroupTitle()} or "Read" not resolved — approvals may fail until it holds Read here`, ok: false });
+                  entries.push({ msg: `  ⚠ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} or "Read" not resolved — approvals may fail until it holds Read here`, ok: false });
                 }
               }
               try {
@@ -2364,7 +2382,7 @@ export default function FolderManager({
                    a row aimed at a library that does not exist is already reported as an error
                    above, and losing its progress entry as well would hide the evidence. */
                 const panel: LibTarget = reconLibs().indexOf(lib as LibTarget) > -1 ? (lib as LibTarget) : "Documents";
-                pushAssign(panel, `${lib} → ${row.GroupName} (${levelName}, library scope)`, "ok");
+                pushAssign(panel, `${libDisplayName(lib)} → ${row.GroupName} (${levelName}, library scope)`, "ok");
                 bumpAssigns();
                 await tick();
               } catch (e) {
@@ -2419,7 +2437,7 @@ export default function FolderManager({
               { headers: { Accept: "application/json;odata=nometadata" } },
             );
             if (!listRes.ok) {
-              entries.push({ msg: `  ⚠ ${lib}: library not found (HTTP ${listRes.status}) — site-entry access not checked`, ok: false });
+              entries.push({ msg: `  ⚠ ${libDisplayName(lib)}: library not found (HTTP ${listRes.status}) — site-entry access not checked`, ok: false });
               continue;
             }
             const lj = await listRes.json();
@@ -2450,10 +2468,10 @@ export default function FolderManager({
                 { headers: { Accept: "application/json;odata=nometadata" } },
               ));
               if (!broke.ok) {
-                entries.push({ msg: `  ✗ ${lib}: INHERITS site permissions and could not be secured (HTTP ${broke.status}) — every site member can read this library`, ok: false });
+                entries.push({ msg: `  ✗ ${libDisplayName(lib)}: INHERITS site permissions and could not be secured (HTTP ${broke.status}) — every site member can read this library`, ok: false });
                 continue;
               }
-              entries.push({ msg: `  ↳ ${lib}: inherited site permissions — inheritance BROKEN (no permissions copied)`, ok: true });
+              entries.push({ msg: `  ↳ ${libDisplayName(lib)}: inherited site permissions — inheritance BROKEN (no permissions copied)`, ok: true });
               /* Owners go straight back on. With nothing copied, the only remaining access is site
                  collection administrators, so an owner who is not also one would lose the library.
                  `typeof`, not `!== undefined`: ownerGroupId is `number | null`, and null slips past
@@ -2461,9 +2479,9 @@ export default function FolderManager({
               if (fullCtrlId !== undefined && typeof ownerGroupId === "number") {
                 try {
                   await addRoleAssignmentToList(entryListBase, ownerGroupId, fullCtrlId);
-                  entries.push({ msg: `  ↳ ${lib}: site Owners → Full Control restored`, ok: true });
+                  entries.push({ msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`, ok: true });
                 } catch (e) {
-                  entries.push({ msg: `  ✗ ${lib}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                  entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`, ok: false });
                 }
               }
               // Fall through deliberately: the site-entry rule below now applies to a library with
@@ -2477,7 +2495,7 @@ export default function FolderManager({
             if (!raRes.ok) {
               // Never guessed at: an unreadable ACL is not evidence of absence. Acting on it would
               // either re-grant what is already there or remove what nobody could see.
-              entries.push({ msg: `  ⚠ ${lib}: could not read permissions (HTTP ${raRes.status}) — site-entry state not enforced`, ok: false });
+              entries.push({ msg: `  ⚠ ${libDisplayName(lib)}: could not read permissions (HTTP ${raRes.status}) — site-entry state not enforced`, ok: false });
               continue;
             }
             const raJson = await raRes.json();
@@ -2487,10 +2505,10 @@ export default function FolderManager({
             if (shouldHold && held.length === 0) {
               try {
                 await addRoleAssignmentToList(entryListBase, entryId, readId);
-                entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} → Read GRANTED (approval resolves destinations as the approver and needs it)`, ok: true });
+                entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read GRANTED (approval resolves destinations as the approver and needs it)`, ok: true });
                 bumpAssigns();
               } catch (e) {
-                entries.push({ msg: `  ✗ ${lib}: could not grant ${siteEntryGroupTitle()} — APPROVALS MAY FAIL — ${(e as Error).message}`, ok: false });
+                entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not grant ${siteEntryGroupTitle()} — APPROVALS MAY FAIL — ${(e as Error).message}`, ok: false });
               }
             } else if (!shouldHold && held.length > 0) {
               // Every binding, not just Read: a hand-made grant may be at any level, and removing
@@ -2505,14 +2523,14 @@ export default function FolderManager({
                     { headers: { Accept: "application/json;odata=nometadata" } },
                   ));
                   if (del.ok) removed++;
-                  else entries.push({ msg: `  ✗ ${lib}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`, ok: false });
+                  else entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`, ok: false });
                 }
               }
               if (removed > 0) {
-                entries.push({ msg: `  ↳ ${lib}: ${siteEntryGroupTitle()} REMOVED (${removed} level(s)) — site entry is a door into the site, not library access`, ok: true });
+                entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} REMOVED (${removed} level(s)) — site entry is a door into the site, not library access`, ok: true });
               }
             } else {
-              entries.push({ msg: `  ✓ ${lib}: ${siteEntryGroupTitle()} ${shouldHold ? "holds Read" : "has no access"} — correct`, ok: true });
+              entries.push({ msg: `  ✓ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} ${shouldHold ? "holds Read" : "has no access"} — correct`, ok: true });
             }
             await tick();
           }
@@ -2874,7 +2892,7 @@ export default function FolderManager({
         if (ct) folderCtIds.set(lib, ct);
         // Names both candidates: "no CRS Folder content type" on a site that still has the
         // DMS-named one would read as a missing artefact rather than a rename half-done.
-        else entries.push({ msg: `⚠ ${lib}: no ${FOLDER_CONTENT_TYPE_CANDIDATES.map(n => `"${n}"`).join(" or ")} content type — folders keep the built-in Folder type and the details pane will not show Full Name`, ok: true });
+        else entries.push({ msg: `⚠ ${libDisplayName(lib)}: no ${FOLDER_CONTENT_TYPE_CANDIDATES.map(n => `"${n}"`).join(" or ")} content type — folders keep the built-in Folder type and the details pane will not show Full Name`, ok: true });
         const f = await loadFullNameField(lib);
         if (f.internalName) fullNameFields.set(lib, f.internalName);
         // ok:true deliberately. This is a warning, not an error: `errorsBeforePrune`
@@ -2883,7 +2901,7 @@ export default function FolderManager({
         // rows look deleted. A missing display column cannot shorten the target list, so
         // gating prune on it would silently disable self-healing over a cosmetic column.
         // The ⚠ still puts it in "Needs attention" where an admin will see it.
-        else entries.push({ msg: `⚠ ${lib}: ${f.note ?? "no Full Name column"} — folders will show only their abbreviation`, ok: true });
+        else entries.push({ msg: `⚠ ${libDisplayName(lib)}: ${f.note ?? "no Full Name column"} — folders will show only their abbreviation`, ok: true });
 
         // Does this library moderate? Folders created in a content-approval library arrive
         // PENDING (verified live 2026-08-07: every folder in Approval Document was status 2),
@@ -2907,7 +2925,7 @@ export default function FolderManager({
           );
           if (modRes.ok && (await modRes.json()).EnableModeration === true) {
             moderatedLibs.add(lib);
-            entries.push({ msg: `${lib}: content approval is on — provisioned folders will be approved so they stay visible`, ok: true });
+            entries.push({ msg: `${libDisplayName(lib)}: content approval is on — provisioned folders will be approved so they stay visible`, ok: true });
           }
         } catch {
           // Unreadable means "assume not moderated": writing OData__ModerationStatus to a
@@ -2996,7 +3014,7 @@ export default function FolderManager({
             wantName,
           );
           if (renamed.ok) {
-            entries.push({ msg: `  ✎ ${lib}${parentRel}: renamed ${oldName} → ${wantName}`, ok: true });
+            entries.push({ msg: `  ✎ ${libDisplayName(lib)}${parentRel}: renamed ${oldName} → ${wantName}`, ok: true });
             if (lib === "Staging") newStagingUrl = renamed.serverRelativeUrl ?? "";
             await tick();
           } else if (renamed.conflict) {
@@ -3004,12 +3022,12 @@ export default function FolderManager({
             // documents behind a single ACL — the isolation failure findCollisions
             // exists to prevent — so this needs a person.
             entries.push({
-              msg: `  ⚠ ${t.label} — cannot rename "${oldName}" to "${wantName}" in ${lib}: a folder of that name is already there. Fix the abbreviation, then re-run.`,
+              msg: `  ⚠ ${t.label} — cannot rename "${oldName}" to "${wantName}" in ${libDisplayName(lib)}: a folder of that name is already there. Fix the abbreviation, then re-run.`,
               ok: false,
             });
           } else {
             entries.push({
-              msg: `  ✗ ${t.label} — rename "${oldName}" → "${wantName}" in ${lib} FAILED (HTTP ${renamed.status}) ${renamed.detail ?? ""}`,
+              msg: `  ✗ ${t.label} — rename "${oldName}" → "${wantName}" in ${libDisplayName(lib)} FAILED (HTTP ${renamed.status}) ${renamed.detail ?? ""}`,
               ok: false,
             });
           }
@@ -3032,12 +3050,12 @@ export default function FolderManager({
       for (const lib of reconLibs()) {
         const root = await getLibraryRoot(lib);
         if (!root) {
-          entries.push({ msg: `${lib}: library root not found — skipped`, ok: false });
+          entries.push({ msg: `${libDisplayName(lib)}: library root not found — skipped`, ok: false });
           continue;
         }
         for (const t of targets) {
           const full = `${root}${t.relPath}`;
-          const folderLabel = `${lib}${t.relPath}`;
+          const folderLabel = `${libDisplayName(lib)}${t.relPath}`;
           try {
             pushFolder(lib, `${folderLabel} — creating…`, "run");
             const existed = await folderExists(full);
@@ -3494,7 +3512,7 @@ export default function FolderManager({
                 `${full}/${plan.lastPath.join("/")}`,
               );
               if (gridProbe.folder) {
-                entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`, ok: true });
+                entries.push({ msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`, ok: true });
                 setLastFolder(lib, `${t.label} grid: already complete, skipped`, "skip");
                 // The fast path settles every planned grid step in one probe; the
                 // estimate has to see them land or it keeps counting them as pending.
@@ -3520,11 +3538,11 @@ export default function FolderManager({
               };
               await buildTier(full, 0);
               }
-              entries.push({ msg: `  ↳ ${lib}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
+              entries.push({ msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
               setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal} ✓`, "ok");
             }
           } catch (e) {
-            entries.push({ msg: `${lib}${t.relPath} — FAILED: ${(e as Error).message}`, ok: false });
+            entries.push({ msg: `${libDisplayName(lib)}${t.relPath} — FAILED: ${(e as Error).message}`, ok: false });
           }
         }
       }
@@ -3808,7 +3826,7 @@ export default function FolderManager({
                 if (expected.has(`${t.relPath}/${name}`.toLowerCase())) continue;
                 unclaimed++;
                 entries.push({
-                  msg: `  ⚠ NO TERM: ${lib}${t.relPath}/${name} — no live term maps to this folder, but its permissions are unchanged and its documents are still reachable. Review it; nothing was deleted.`,
+                  msg: `  ⚠ NO TERM: ${libDisplayName(lib)}${t.relPath}/${name} — no live term maps to this folder, but its permissions are unchanged and its documents are still reachable. Review it; nothing was deleted.`,
                   ok: false,
                 });
               }
@@ -4244,13 +4262,15 @@ export default function FolderManager({
                   question, "are all folders done across both libraries" is not. */}
               {reconLibs().map((lib) => (
                 <div key={lib} style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#0f6c3f", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>{lib}</div>
+                  {/* The title, not the key — `key={lib}` above stays the key, because a React key
+                      must be a stable identifier and two libraries could in principle share a title. */}
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#0f6c3f", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>{libDisplayName(lib)}</div>
                   {/* flexWrap + flex-basis makes the two panels sit side-by-side on wide
                       screens and stack on narrow (mobile) — no media query needed. */}
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
                     {([
-                      { title: `${lib} folders`, feed: folderFeeds[lib] },
-                      { title: `${lib} group assignments`, feed: assignFeeds[lib] },
+                      { title: `${libDisplayName(lib)} folders`, feed: folderFeeds[lib] },
+                      { title: `${libDisplayName(lib)} group assignments`, feed: assignFeeds[lib] },
                     ] as const).map((panel) => (
                       <div key={panel.title} style={{ flex: "1 1 280px", minWidth: 0, border: "1px solid #e5e5e5", borderRadius: 4, overflow: "hidden" }}>
                         <div style={{ padding: "6px 10px", background: "#f7f7f7", fontSize: 12, fontWeight: 600, color: "#444", borderBottom: "1px solid #eee" }}>{panel.title}</div>
