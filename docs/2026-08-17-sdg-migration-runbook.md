@@ -88,10 +88,45 @@ Managed **in the site**, never the tenant admin centre — the client refuses te
 Needs Site Collection Administrator, or Contributor on the term group.
 
 1. Site Settings → **Term store management**.
-2. Create the site-collection term group.
-3. Create one term set **per business segment**, plus `Document Type`, `Year/Period`,
-   `Confidentiality`.
-4. Author Department and Unit terms under each segment set.
+2. Create the site-collection term group (call it `CRS`).
+3. **Import, do not hand-author.** Per set: **Import term set** → pick the CSV. The set name comes
+   from inside the file, so do not pre-create the sets.
+
+| File | Term set | Depts | Units |
+|---|---|---|---|
+| `2026-08-17-sdg-group-head-office.csv` | Group Head Office | 8 | 63 |
+| `2026-08-17-sdg-minamas-head-office.csv` | Minamas Head Office | 19 | 45 |
+| `2026-08-17-sdg-nbpol-head-office.csv` | NBPOL Head Office | 12 | 20 |
+| `01-document-type.csv` | Document Type | — | 21 |
+| `02-year.csv` | Year | — | 4 |
+| `03-confidentiality.csv` | Confidentiality | — | 5 |
+
+**The three files dated 2026-08-17 are the CLIENT's structure and supersede `05`, `06` and `07`**,
+which are ClarenceDMSTesting's and differ substantially. Do not import the old ones.
+
+**Do not import** `04-vendor.csv` (retired — Vendor/Customer Name is free text and there is no vendor
+term set), nor `08-upstream-malaysia-head-office.csv` / `11-upstream-operations-malaysia.csv`
+(segments the client has not asked for).
+
+**Two gaps in the imported data, both awaiting the client:**
+- **Minamas `Sustainability` and its four units are NOT in the CSV.** The client supplied
+  `MHO_SUS_HSE` alongside `MHO_SC_QM`, `MHO_SC_ESG` and `MHO_SC_HMS` — but `SC` is already Supply
+  Chain, so three Sustainability units would file under Supply Chain's folder. Held back rather than
+  guessed. Add the department and its units once answered; nothing else changes.
+- Two label typos left exactly as supplied: NBPOL's `Environment, Safety ＆ Heath` (*Heath*), and
+  `Value Creation / Value Transformation` serving as both department and unit.
+
+Everything else corrected, with each deviation recorded in the `Note` column of
+`2026-08-17-sdg-abbreviations.csv`: trailing spaces trimmed from 20 labels, `＆` substituted for `&`
+throughout, five missing department codes added (`MHO_CC_*` ×2, `MHO_GCA_PMOPS`, `MHO_PNE_PROD_OPS`,
+`NBPOLHO_CDS_UPSUPPORT`, `NBPOLHO_IT_SAP`), one wrong one fixed (`CEOOA` → `CC`), the space inside
+`GHO_GS_SDGI HSE` replaced with an underscore, and ten single-unit departments given a unit code that
+repeats the department's.
+
+**Validated before use:** no duplicate folder paths, no department carrying two codes, no two
+departments sharing a code within a segment, no sibling unit-code collisions, and every term in the
+three segment CSVs has exactly one row in the abbreviation table — so no term can be skipped for want
+of a code.
 
 **Rules to give the client in writing, because every one of these fails silently:**
 

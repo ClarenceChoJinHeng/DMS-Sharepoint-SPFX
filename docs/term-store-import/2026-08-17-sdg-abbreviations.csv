@@ -1,0 +1,129 @@
+Segment,SegmentCode,Department,DepartmentCode,Unit,UnitCode,FolderPath,ClientSuppliedCode,Note
+Group Head Office,GHO,Group Human Resources,GHR,Rewards ＆ HRIS - Rewards,REWARDS,GHO/GHR/REWARDS,GHO_GHR_REWARDS,trailing space trimmed from label
+Group Head Office,GHO,Group Human Resources,GHR,Rewards ＆ HRIS - Nadi HRIS,NHRIS,GHO/GHR/NHRIS,GHO_GHR_NHRIS,
+Group Head Office,GHO,Group Human Resources,GHR,Rewards ＆ HRIS - GHR Payroll,PAYROLL,GHO/GHR/PAYROLL,GHO_GHR_PAYROLL,
+Group Head Office,GHO,Group Human Resources,GHR,Talent ＆ Learning - Talent Strategy,TS,GHO/GHR/TS,GHO_GHR_TS,
+Group Head Office,GHO,Group Human Resources,GHR,Talent ＆ Learning - Talent Management,TM,GHO/GHR/TM,GHO_GHR_TM,
+Group Head Office,GHO,Group Human Resources,GHR,Talent ＆ Learning - Talent Acquisition,TA,GHO/GHR/TA,GHO_GHR_TA,
+Group Head Office,GHO,Group Human Resources,GHR,Talent ＆ Learning - Learning ＆ Development,LND,GHO/GHR/LND,GHO_GHR_LND,
+Group Head Office,GHO,Group Human Resources,GHR,Talent ＆ Learning - GH Campus,GHC,GHO/GHR/GHC,GHO_GHR_GHC,trailing space trimmed from label
+Group Head Office,GHO,Group Human Resources,GHR,Talent ＆ Learning - The Crest,THECREST,GHO/GHR/THECREST,GHO_GHR_THECREST,trailing space trimmed from label
+Group Head Office,GHO,Group Human Resources,GHR,Performance ＆ Analytics - Performance,PERFORMANCE,GHO/GHR/PERFORMANCE,GHO_GHR_PERFORMANCE,trailing space trimmed from label
+Group Head Office,GHO,Group Human Resources,GHR,Performance ＆ Analytics - Analytics,ANALYTICS,GHO/GHR/ANALYTICS,GHO_GHR_ANALYTICS,trailing space trimmed from label
+Group Head Office,GHO,Group Human Resources,GHR,Industrial Relations ＆ Compliance,IRC,GHO/GHR/IRC,GHO_GHR_IRC,trailing space trimmed from label
+Group Head Office,GHO,Group Human Resources,GHR,HR Head Office ＆ Org Design - HR Head Office,HRHO,GHO/GHR/HRHO,GHO_GHR_HRHO,
+Group Head Office,GHO,Group Human Resources,GHR,HR Head Office ＆ Org Design - Org Design,HROD,GHO/GHR/HROD,GHO_GHR_HROD,
+Group Head Office,GHO,Group Human Resources,GHR,Org Culture ＆ Workplace Services - Org Culture ＆ Transformation,OCWS_OCT,GHO/GHR/OCWS_OCT,GHO_GHR_OCWS_OCT,
+Group Head Office,GHO,Group Human Resources,GHR,Org Culture ＆ Workplace Services - Integrated Facilities Management,OCWS_IFM,GHO/GHR/OCWS_IFM,GHO_GHR_OCWS_IFM,trailing space trimmed from label
+Group Head Office,GHO,Group Human Resources,GHR,Org Culture ＆ Workplace Services - Admin ＆ Sports,OCWS_ANS,GHO/GHR/OCWS_ANS,GHO_GHR_OCWS_ANS,trailing space trimmed from label
+Group Head Office,GHO,Group Finance,GF,Finance - Upstream Malaysia,UPMY,GHO/GF/UPMY,GHO_GF_UPMY,trailing space trimmed from label
+Group Head Office,GHO,Group Finance,GF,Finance - Reporting,REPORTING,GHO/GF/REPORTING,GHO_GF_REPORTING,trailing space trimmed from label
+Group Head Office,GHO,Group Finance,GF,Finance - Consolidation,CONSOL,GHO/GF/CONSOL,GHO_GF_CONSOL,
+Group Head Office,GHO,Group Finance,GF,Corporate Finance,CF,GHO/GF/CF,GHO_GF_CF,trailing space trimmed from label
+Group Head Office,GHO,Group Finance,GF,Tax,TAX,GHO/GF/TAX,GHO_GF_TAX,
+Group Head Office,GHO,Group Finance,GF,Treasury,TREASURY,GHO/GF/TREASURY,GHO_GF_TREASURY,
+Group Head Office,GHO,Group Finance,GF,Finance Land ＆ SDGRE,LAND_SDGRE,GHO/GF/LAND_SDGRE,GHO_GF_LAND_SDGRE,
+Group Head Office,GHO,Group Finance,GF,Global Procurement,GPROC,GHO/GF/GPROC,GHO_GF_GPROC,
+Group Head Office,GHO,Group Finance,GF,Group IT,GIT,GHO/GF/GIT,GHO_GF_GIT,
+Group Head Office,GHO,Group Finance,GF,Compliance ＆ Operational Risk,CORU,GHO/GF/CORU,GHO_GF_CORU,
+Group Head Office,GHO,"Group Legal, Risk ＆ Compliance",GLRC,Group Legal,LEGAL,GHO/GLRC/LEGAL,GHO_GLRC_LEGAL,
+Group Head Office,GHO,"Group Legal, Risk ＆ Compliance",GLRC,Group Risk,RISK,GHO/GLRC/RISK,GHO_GLRC_RISK,
+Group Head Office,GHO,"Group Legal, Risk ＆ Compliance",GLRC,Group Compliance,GCO,GHO/GLRC/GCO,GHO_GLRC_GCO,
+Group Head Office,GHO,President's Office,PO,Strategic Governance ＆ Communications,STRATGOV_COMMS,GHO/PO/STRATGOV_COMMS,GHO_PO_STRATGOV_COMMS,
+Group Head Office,GHO,President's Office,PO,Strategy Partner Malaysia ＆ Indonesia,SP_MY_ID,GHO/PO/SP_MY_ID,GHO_PO_SP_MY_ID,
+Group Head Office,GHO,President's Office,PO,Strategy Partner PNG ＆ SI,SP_PNGSI,GHO/PO/SP_PNGSI,GHO_PO_SP_PNGSI,
+Group Head Office,GHO,President's Office,PO,Strategy Partner Midstream ＆ Investments,SPMID_INVT,GHO/PO/SPMID_INVT,GHO_PO_SPMID_INVT,
+Group Head Office,GHO,President's Office,PO,Strategy Partner Downstream,SPDNSTRM,GHO/PO/SPDNSTRM,GHO_PO_SPDNSTRM,
+Group Head Office,GHO,President's Office,PO,Strategic Planning,SP,GHO/PO/SP,GHO_PO_SP,
+Group Head Office,GHO,Group Corporate Affairs,GCA,Global Marketing ＆ Branding - Strategic ＆ Customer Marketing,GMB_SCM,GHO/GCA/GMB_SCM,GHO_GCA_GMB_SCM,trailing space trimmed from label
+Group Head Office,GHO,Group Corporate Affairs,GCA,Global Marketing ＆ Branding - Product Marketing B2C,GMB_PMB2C,GHO/GCA/GMB_PMB2C,GHO_GCA_GMB_PMB2C,
+Group Head Office,GHO,Group Corporate Affairs,GCA,Global Marketing ＆ Branding - Strategic Communications,GMB_STRATCOMMS,GHO/GCA/GMB_STRATCOMMS,GHO_GCA_GMB_STRATCOMMS,missing space before hyphen added to label
+Group Head Office,GHO,Group Corporate Affairs,GCA,Group Operation Services - Workforce Management Unit,GOS_WMU,GHO/GCA/GOS_WMU,GHO_GCA_GOS_WMU,
+Group Head Office,GHO,Group Corporate Affairs,GCA,Group Operation Services - Agri Sumber Prestari,GOS_ASP,GHO/GCA/GOS_ASP,GHO_GCA_GOS_ASP,
+Group Head Office,GHO,Group Corporate Affairs,GCA,Group Operation Services - Government Relations,GOS_GOVTREL,GHO/GCA/GOS_GOVTREL,GHO_GCA_GOS_GOVTREL,trailing space trimmed from label
+Group Head Office,GHO,Group Corporate Affairs,GCA,Group Operation Services - Chairman Office,GOS_CO,GHO/GCA/GOS_CO,GHO_GCA_GOS_CO,trailing space trimmed from label
+Group Head Office,GHO,Group Corporate Affairs,GCA,Group Communications - Strategic Communications,GC_STRATCOMMS,GHO/GCA/GC_STRATCOMMS,GHO_GCA_GC_STRATCOMMS,trailing space trimmed from label
+Group Head Office,GHO,Group Corporate Affairs,GCA,Group Communications - Brand Communications,GC_BRANDCOMMS,GHO/GCA/GC_BRANDCOMMS,GHO_GCA_GC_BRANDCOMMS,trailing space trimmed from label
+Group Head Office,GHO,Group Corporate Affairs,GCA,Group Communications - Events ＆ Protocol,GC_EP,GHO/GCA/GC_EP,GHO_GCA_GC_EP,
+Group Head Office,GHO,Group Corporate Affairs,GCA,Investor Relations,IR,GHO/GCA/IR,GHO_GCA_IR,
+Group Head Office,GHO,Group Corporate Affairs,GCA,Elaeis Garden,EG,GHO/GCA/EG,GHO_GCA_EG,
+Group Head Office,GHO,Group Corporate Affairs,GCA,Yayasan Guthrie,YG,GHO/GCA/YG,GHO_GCA_YG,
+Group Head Office,GHO,Group Sustainability,GS,Sustainable Supply Chain,SSC,GHO/GS/SSC,GHO_GS_SSC,
+Group Head Office,GHO,Group Sustainability,GS,Climate Change ＆ Reporting,CLIMATE_CR,GHO/GS/CLIMATE_CR,GHO_GS_CLIMATE_CR,
+Group Head Office,GHO,Group Sustainability,GS,"Global Health, Safety ＆ Environment",GLOBALHSE,GHO/GS/GLOBALHSE,GHO_GS_GLOBALHSE,
+Group Head Office,GHO,Group Sustainability,GS,"SDGI Health, Safety ＆ Environment",SDGI_HSE,GHO/GS/SDGI_HSE,GHO_GS_SDGI HSE,space in code replaced with underscore; missing space after comma added to label
+Group Head Office,GHO,Group Sustainability,GS,Sustainability Compliance,SC,GHO/GS/SC,GHO_GS_SC,
+Group Head Office,GHO,Group Sustainability,GS,Conservation ＆ Biodiversity,CNB,GHO/GS/CNB,GHO_GS_CNB,
+Group Head Office,GHO,"Group Integrity, Governance ＆ Assurance",GIGA,GCA IT ＆ Analytics,GCAIT_ANALYTICS,GHO/GIGA/GCAIT_ANALYTICS,GHO_GIGA_GCAIT_ANALYTICS,
+Group Head Office,GHO,"Group Integrity, Governance ＆ Assurance",GIGA,Group Integrity ＆ Governance Unit,GIG,GHO/GIGA/GIG,GHO_GIGA_GIG,
+Group Head Office,GHO,"Group Integrity, Governance ＆ Assurance",GIGA,Group Fraud ＆ Corruption Risk Mgmt,GRCRM,GHO/GIGA/GRCRM,GHO_GIGA_GRCRM,
+Group Head Office,GHO,"Group Integrity, Governance ＆ Assurance",GIGA,Practice Management,PM,GHO/GIGA/PM,GHO_GIGA_PM,
+Group Head Office,GHO,"Group Integrity, Governance ＆ Assurance",GIGA,"GCA UPMY, R＆D ＆ HO",GCA_UPMY_RDHO,GHO/GIGA/GCA_UPMY_RDHO,GHO_GIGA_GCA_UPMY_RDHO,
+Group Head Office,GHO,"Group Integrity, Governance ＆ Assurance",GIGA,GCA SDGI,GCA_SDGI,GHO/GIGA/GCA_SDGI,GHO_GIGA_GCA_SDGI,
+Group Head Office,GHO,Group Corporate Secretarial,COSEC,Guthrie,GUTHRIE,GHO/COSEC/GUTHRIE,GHO_COSEC_GUTHRIE,trailing space trimmed from label
+Group Head Office,GHO,Group Corporate Secretarial,COSEC,SDGI,SDGI,GHO/COSEC/SDGI,GHO_COSEC_SDGI,trailing space trimmed from label
+Minamas Head Office,MHO,CEO Office Administration,CEOOA,Expatriate Formalities,EXPATF,MHO/CEOOA/EXPATF,MHO_CEOOA_EXPATF,
+Minamas Head Office,MHO,CEO Office Administration,CEOOA,General Administration ＆ Building Management,GABM,MHO/CEOOA/GABM,MHO_CEOOA_GABM,
+Minamas Head Office,MHO,Corporate Communication,CC,Corporate Social Responsibility ＆ Operations Comms,CSR_OPSCOMMS,MHO/CC/CSR_OPSCOMMS,MHO_CEOOA_CSR_OPSCOMMS,department code corrected from CEOOA to CC
+Minamas Head Office,MHO,Corporate Communication,CC,Internal ＆ External Comms,INEXCOMMS,MHO/CC/INEXCOMMS,MHO_INEXCOMMS,department code CC added
+Minamas Head Office,MHO,Corporate Services,CS,Government Relations,GOVTREL,MHO/CS/GOVTREL,MHO_CS_GOVTREL,
+Minamas Head Office,MHO,Corporate Services,CS,Land Regulation,LANDREL,MHO/CS/LANDREL,MHO_CS_LANDREL,
+Minamas Head Office,MHO,Corporate Services,CS,Licensing ＆ Operation Security,LOS,MHO/CS/LOS,MHO_CS_LOS,
+Minamas Head Office,MHO,Corporate Services,CS,Minority Shareholder Relation,MSR,MHO/CS/MSR,MHO_CS_MSR,
+Minamas Head Office,MHO,Corporate Services,CS,Partnership Development,PARTDEV,MHO/CS/PARTDEV,MHO_CS_PARTDEV,
+Minamas Head Office,MHO,General Accounting,GA,Asset Management,AM,MHO/GA/AM,MHO_GA_AM,
+Minamas Head Office,MHO,General Accounting,GA,General Ledger,GL,MHO/GA/GL,MHO_GA_GL,
+Minamas Head Office,MHO,General Accounting,GA,Holding ＆ Consolidation,HCONSOL,MHO/GA/HCONSOL,MHO_GA_HCONSOL,
+Minamas Head Office,MHO,General Accounting,GA,Tax Compliance,TAX,MHO/GA/TAX,MHO_GA_TAX,
+Minamas Head Office,MHO,Group Compliance,GCO,Group Compliance,GCO,MHO/GCO/GCO,MHO_GCO,unit code repeats the department code
+Minamas Head Office,MHO,Group Corporate Assurance,GCA,Data Intelligence ＆ Investigations,DIINVESTN,MHO/GCA/DIINVESTN,MHO_GCA_DIINVESTN,
+Minamas Head Office,MHO,Group Corporate Assurance,GCA,Estate ＆ Other Operations,EOOPS,MHO/GCA/EOOPS,MHO_GCA_EOOPS,
+Minamas Head Office,MHO,Group Corporate Assurance,GCA,Practice Management,PM,MHO/GCA/PM,MHO_GCA_PM,
+Minamas Head Office,MHO,Group Corporate Assurance,GCA,Project ＆ Mill Operations,PMOPS,MHO/GCA/PMOPS,MHO_PMOPS,department code GCA added
+Minamas Head Office,MHO,Group Integrity ＆ Governance,GIG,Group Integrity ＆ Governance,GIG,MHO/GIG/GIG,MHO_GIG,unit code repeats the department code
+Minamas Head Office,MHO,Human Resource Management,HRM,HR Business Partner and Industrial Relations,HRBP_IR,MHO/HRM/HRBP_IR,MHO_HRM_HRBP_IR,
+Minamas Head Office,MHO,Human Resource Management,HRM,"HR Rewards, Services, and Performance",HRRSP,MHO/HRM/HRRSP,MHO_HRM_HRRSP,
+Minamas Head Office,MHO,Human Resource Management,HRM,Organisation Development and Talent Management,ODTM,MHO/HRM/ODTM,MHO_HRM_ODTM,
+Minamas Head Office,MHO,Information Technology Services,ITS,Business Application ＆ Development,BADEV,MHO/ITS/BADEV,MHO_ITS_BADEV,
+Minamas Head Office,MHO,Information Technology Services,ITS,Infrastructure ＆ IT Security,INFRA_ITS,MHO/ITS/INFRA_ITS,MHO_ITS_INFRA_ITS,trailing space trimmed from label
+Minamas Head Office,MHO,Information Technology Services,ITS,SAP Strategic Project ＆ Data,SAPSTRATPD,MHO/ITS/SAPSTRATPD,MHO_ITS_SAPSTRATPD,
+Minamas Head Office,MHO,Legal ＆ Corporate Secretary,LCS,Corporate Secretary,COSEC,MHO/LCS/COSEC,MHO_LCS_COSEC,
+Minamas Head Office,MHO,Legal ＆ Corporate Secretary,LCS,Legal,LEGAL,MHO/LCS/LEGAL,MHO_LCS_LEGAL,
+Minamas Head Office,MHO,Performance Monitoring Unit ＆ Mechanisation,PMUM,Mechanisation,MEC,MHO/PMUM/MEC,MHO_PMUM_MEC,
+Minamas Head Office,MHO,Performance Monitoring Unit ＆ Mechanisation,PMUM,Performance Monitoring Unit,PMU,MHO/PMUM/PMU,MHO_PMUM_PMU,
+Minamas Head Office,MHO,Plantation Operation,POP,Estate Report,ER,MHO/POP/ER,MHO_POP_ER,
+Minamas Head Office,MHO,Plantation Operation,POP,Management Report,MR,MHO/POP/MR,MHO_POP_MR,
+Minamas Head Office,MHO,Plantation Operation,POP,Mill Report,MILLR,MHO/POP/MILLR,MHO_POP_MILLR,
+Minamas Head Office,MHO,Plantation Operation,POP,Task Force Operation,TFO,MHO/POP/TFO,MHO_POP_TFO,
+Minamas Head Office,MHO,Production ＆ Engineering,PNE,Engineering,ENGINEERING,MHO/PNE/ENGINEERING,MHO_PNE_ENGINEERING,
+Minamas Head Office,MHO,Production ＆ Engineering,PNE,Production ＆ Operation,PROD_OPS,MHO/PNE/PROD_OPS,MHO_PROD_OPS,department code PNE added
+Minamas Head Office,MHO,Risk Management,GRM,Risk Management,GRM,MHO/GRM/GRM,MHO_GRM,unit code repeats the department code
+Minamas Head Office,MHO,Supply Chain,SC,Procurement,PROC,MHO/SC/PROC,MHO_SC_PROC,
+Minamas Head Office,MHO,Supply Chain,SC,Logistics,LOGS,MHO/SC/LOGS,MHO_SC_LOGS,
+Minamas Head Office,MHO,Taxation,TAX,Taxation,TAX,MHO/TAX/TAX,MHO_TAX,unit code repeats the department code
+Minamas Head Office,MHO,Treasury,TREAS,Funding Operations,FO,MHO/TREAS/FO,MHO_TREAS_FO,
+Minamas Head Office,MHO,Treasury,TREAS,Insurance Management,INSURM,MHO/TREAS/INSURM,MHO_TREAS_INSURM,
+Minamas Head Office,MHO,Treasury,TREAS,Payment,PAYMENT,MHO/TREAS/PAYMENT,MHO_TREAS_PAYMENT,
+Minamas Head Office,MHO,Treasury,TREAS,Account Payable,AC,MHO/TREAS/AC,MHO_TREAS_AC,
+Minamas Head Office,MHO,Upstream Productivity,UPPROD,Upstream Productivity,UPPROD,MHO/UPPROD/UPPROD,MHO_UPPROD,unit code repeats the department code
+Minamas Head Office,MHO,Value Creation / Value Transformation,VCVT,Value Creation / Value Transformation,VCVT,MHO/VCVT/VCVT,MHO_VCVT,unit code repeats the department code
+NBPOL Head Office,NBPOLHO,Sustainability,SUS,Certification,CERT,NBPOLHO/SUS/CERT,NBPOLHO_SUS_CERT,
+NBPOL Head Office,NBPOLHO,Sustainability,SUS,"Environment, Safety ＆ Heath",ESH,NBPOLHO/SUS/ESH,NBPOLHO_SUS_ESH,label reads Heath not Health - left exactly as supplied
+NBPOL Head Office,NBPOLHO,Land Department,LAND,Land Management,LM,NBPOLHO/LAND/LM,NBPOLHO_Land_LM,department code upper-cased
+NBPOL Head Office,NBPOLHO,Land Department,LAND,Surveying,SURVEYING,NBPOLHO/LAND/SURVEYING,NBPOLHO_Land_SURVEYING,department code upper-cased
+NBPOL Head Office,NBPOLHO,Legal,LEGAL,Legal,LEGAL,NBPOLHO/LEGAL/LEGAL,NBPOLHO_LEGAL,unit repeats the department per client instruction
+NBPOL Head Office,NBPOLHO,Transformation,TF,Transformation,TF,NBPOLHO/TF/TF,NBPOLHO_TF,unit repeats the department per client instruction
+NBPOL Head Office,NBPOLHO,Group Corporate Assurance,GCA,Group Corporate Assurance,GCA,NBPOLHO/GCA/GCA,NBPOLHO_GCA,unit repeats the department per client instruction
+NBPOL Head Office,NBPOLHO,Engineering ＆ Mill Services,EMS,Engineering Services,ES,NBPOLHO/EMS/ES,NBPOLHO_EMS_ES,
+NBPOL Head Office,NBPOLHO,Performance Management Unit,PMU,Performance Management Unit,PMU,NBPOLHO/PMU/PMU,NBPOLHO_PMU,unit code repeats the department code
+NBPOL Head Office,NBPOLHO,Corporate Development ＆ Services,CDS,Upstream Support,UPSUPPORT,NBPOLHO/CDS/UPSUPPORT,NBPOLHO_UPSUPPORT,department code CDS added
+NBPOL Head Office,NBPOLHO,Finance,FIN,Tax,TAX,NBPOLHO/FIN/TAX,NBPOLHO_FIN_TAX,
+NBPOL Head Office,NBPOLHO,Finance,FIN,Finance Reporting,REPORTING,NBPOLHO/FIN/REPORTING,NBPOLHO_FIN_REPORTING,trailing space trimmed from label
+NBPOL Head Office,NBPOLHO,NBPOL Procurement,PROC,Corporate Office,CO,NBPOLHO/PROC/CO,NBPOLHO_PROC_CO,trailing space trimmed from label
+NBPOL Head Office,NBPOLHO,Information Technology,IT,NBPOL IT Application Development,AD,NBPOLHO/IT/AD,NBPOLHO_IT_AD,
+NBPOL Head Office,NBPOLHO,Information Technology,IT,NBPOL IT SAP Support,SAP,NBPOLHO/IT/SAP,NBPOLHO_SAP,department code IT added
+NBPOL Head Office,NBPOLHO,Human Resources,HR,HR Strategy ＆ Talent,ST,NBPOLHO/HR/ST,NBPOLHO_HR_ST,
+NBPOL Head Office,NBPOLHO,Human Resources,HR,HR Operations,HROPS,NBPOLHO/HR/HROPS,NBPOLHO_HR_HROPS,
+NBPOL Head Office,NBPOLHO,Human Resources,HR,Management Academy,MA,NBPOLHO/HR/MA,NBPOLHO_HR_MA,
+NBPOL Head Office,NBPOLHO,Human Resources,HR,Travel,TRAVEL,NBPOLHO/HR/TRAVEL,NBPOLHO_HR_TRAVEL,
+NBPOL Head Office,NBPOLHO,Human Resources,HR,HRMIS,HRMIS,NBPOLHO/HR/HRMIS,NBPOLHO_HR_HRMIS,
