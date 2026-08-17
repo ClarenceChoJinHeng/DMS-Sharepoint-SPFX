@@ -1032,6 +1032,15 @@ order, which was not enough — five equal doors do not say four of them are ste
   `PendingLevels` set (before migrating), and **reconciliation blocked while any term lacks a code** — the
   last is the one that matters, because that is the silent failure (recon skips the term, creates no
   folder, no error anywhere).
+- **⚠ THE ABBREVIATION COUNT WAS NEVER ACTUALLY WIRED UP UNTIL 2026-08-17.** `AbbreviationManager`
+  computed `missing` for its own warning banner and told nobody, so `FlowFacts.abbreviationsMissing`
+  stayed `undefined`, unknown gates nothing, and **Next was clickable on a screen covered in "no folder
+  will be created" warnings** — the exact silent failure the lock exists to prevent. Fixed with
+  `onMissingChange` → `IFolderManagerProps.onAbbreviationsMissingChange` → `FolderAdmin`, the same
+  report-upward shape as `onCreated`. It reports the **live** value, not the saved one, so the count on
+  screen and the gate can never disagree; and it reports `undefined` — never 0 — while loading, with no
+  segment chosen, or for a term set with no terms, because each of those computes 0 from an empty list and
+  0 means "all done" to a caller.
 - **The abbreviation count IS affordable, contrary to an earlier draft of the spec.**
   `AbbreviationManager` already walks the tree and already counts terms with no code, so the number is
   exact **once the step is open**. Only pre-walking every segment on the picker is unaffordable (~115

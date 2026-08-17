@@ -38,4 +38,13 @@ export interface IFolderManagerProps {
    * creating a segment twice.
    */
   hideSegmentDelete?: boolean;
+  /**
+   * Passed through to `AbbreviationManager`: how many terms have no folder code, or `undefined` when that
+   * is not knowable.
+   *
+   * The guided flow gates its Next button on this and cannot work it out itself — the count needs a walk
+   * of the whole term tree (~115 requests for GHO), which the abbreviations screen has already paid for.
+   * Ignored by `FolderMap`, which shares this interface.
+   */
+  onAbbreviationsMissingChange?: (missing: number | undefined) => void;
 }

@@ -148,11 +148,23 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    * the old.
    */
   const [showForm, setShowForm] = useState(false);
+  /**
+   * Terms with no folder code, as reported by the abbreviations screen once it is open.
+   *
+   * NOT read here, deliberately: the count needs a walk of the whole term tree (~115 requests for GHO),
+   * which is why the facts effect leaves it undefined. The screen that already walked it hands the number
+   * over instead. Until it does, `undefined` gates nothing — which is why Next was clickable on a screen
+   * covered in "no folder will be created" warnings (client, 2026-08-17).
+   */
+  const [abbrevMissing, setAbbrevMissing] = useState<number | undefined>(undefined);
 
   /** The subject of flows 2 and 4 — what makes their term-store step checkable at all. */
   const [subject, setSubject] = useState("");
 
-  const [facts, setFacts] = useState<FlowFacts>({});
+  // RAW reads only. The derived `effectiveFacts` below layers on the two facts that no list read can
+  // answer: the abbreviation count (a term-tree walk, paid for by the screen that needs it anyway) and
+  // flow 1's segmentExists (no picker, because the segment does not exist yet).
+  const [baseFacts, setBaseFacts] = useState<FlowFacts>({});
 
   const GET = { Accept: "application/json;odata=nometadata" };
 
@@ -254,9 +266,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
           ).length > 0;
         }
       }
-      if (!cancelled) setFacts(next);
+      if (!cancelled) setBaseFacts(next);
     };
-    load().catch(() => { if (!cancelled) setFacts({}); });
+    load().catch(() => { if (!cancelled) setBaseFacts({}); });
     return () => { cancelled = true; };
   }, [flow ? flow.id : "", segKey, segments]);
 
@@ -281,25 +293,29 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    *   - the list read fine and nothing matches       -> false, the only case that gates.
    */
   const effectiveFacts: FlowFacts = React.useMemo(() => {
+    // The abbreviations screen's own count wins whenever it has one, in EVERY flow — four of the five
+    // include that step. Spread first so the block below still overrides `segmentExists`.
+    const facts: FlowFacts =
+      abbrevMissing === undefined ? baseFacts : { ...baseFacts, abbreviationsMissing: abbrevMissing };
     if (!flow || flow.asksSubject !== "newSegment") return facts;
     // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
     if (segments === undefined) return facts;
     // The list read fine, so "nothing picked" is the admin not having answered — not a failure.
     if (!segment) return { ...facts, subjectGiven: false };
     return { ...facts, subjectGiven: true, segmentExists: true };
-  }, [flow, facts, segments, segment]);
+  }, [flow, baseFacts, segments, segment, abbrevMissing]);
 
   /** Open a flow on the first thing left to do. */
   const openFlow = (f: Flow): void => {
     setFlow(f);
     setAllTools(false);
     setSubject("");
-    setStepIdx(firstIncompleteStep(f, facts));
+    setStepIdx(firstIncompleteStep(f, baseFacts));
   };
 
   const leaveFlow = (): void => {
     setFlow(undefined);
-    setFacts({});
+    setBaseFacts({});
     setStepIdx(0);
   };
 
@@ -503,6 +519,10 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                that — and note this is scoped to THIS flow, not to `hideTabs`, because Retire mounts the
                same tab embedded and needs the button. */
             hideSegmentDelete={active.id === "newSegment"}
+            /* The abbreviations screen hands over its own count — the flow cannot afford the term-tree
+               walk that produces it, and without it `undefined` gated nothing, so Next was clickable on a
+               screen full of "no folder will be created" warnings. */
+            onAbbreviationsMissingChange={setAbbrevMissing}
           />
         )}
         {confirms && (

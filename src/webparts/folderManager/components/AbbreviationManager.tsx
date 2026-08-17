@@ -94,12 +94,26 @@ export interface AbbreviationManagerProps {
   context: WebPartContext;
   siteUrl: string;
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * How many terms currently have no folder code, or `undefined` when that is not knowable.
+   *
+   * Reported upward because the guided flow gates its Next button on it and CANNOT afford to work it out
+   * itself — the count needs a walk of the whole term tree (~115 requests for GHO). This screen has
+   * already paid for that walk, so the number is free here and unaffordable anywhere else. Without it
+   * `abbreviationsMissing` stayed `undefined`, unknown never gates, and Next sat enabled on a screen full
+   * of "no folder will be created" warnings (client, 2026-08-17).
+   *
+   * `undefined` means NOT KNOWABLE — no segment chosen, the tree still loading, or a term set with no
+   * terms — and must never be reported as 0, which would read as "all done".
+   */
+  onMissingChange?: (missing: number | undefined) => void;
 }
 
 export default function AbbreviationManager({
   context,
   siteUrl,
   onDirtyChange,
+  onMissingChange,
 }: AbbreviationManagerProps): React.ReactElement {
   const [segments, setSegments] = useState<SegmentOption[]>([]);
   const [chosen, setChosen] = useState<string>("");
@@ -429,6 +443,20 @@ export default function AbbreviationManager({
 
   const seg = segment();
   const missing = rows.filter((r) => r.abbreviation.trim() === "").length;
+
+  /* Report the count up to whatever hosts this screen — the guided flow gates Next on it.
+     THE THREE UNKNOWN CASES ARE THE POINT: still loading, no segment chosen, or a term set with no terms
+     at all. Each would compute `missing === 0` from an empty `rows`, and 0 means "all done" to a caller,
+     which is the one answer that must never be inferred from an absence. `rows.length === 0` covers the
+     no-terms case explicitly rather than relying on the loading flag having cleared.
+
+     Reports the LIVE value, not the saved one, so typing a code lifts the gate immediately and clearing
+     one puts it back — the count on screen and the gate can never disagree. */
+  useEffect(() => {
+    if (!onMissingChange) return;
+    const knowable = !loading && !treeLoading && seg !== undefined && rows.length > 0;
+    onMissingChange(knowable ? missing : undefined);
+  }, [onMissingChange, loading, treeLoading, seg, rows.length, missing]);
 
   return (
     <div>
