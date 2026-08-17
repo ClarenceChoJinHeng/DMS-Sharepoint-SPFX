@@ -17,6 +17,8 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
+import { parseLevels } from "../../../shared/formModel";
+import { abbrevListTitle } from "../../../shared/folderAbbreviation";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import {
   GroupMapRole,
@@ -52,7 +54,14 @@ type Props = { context: WebPartContext; siteUrl: string };
 const GROUP_MAP_LIST = (): string => cachedListTitle(LIST_SUFFIX.groupMap);
 const CONFIG_LIST = (): string => cachedListTitle(LIST_SUFFIX.config);
 
-type ModePick = { label: string; termSetGuid: string };
+/**
+ * A segment as this page needs it.
+ *
+ * `code` is the StagingFolder and `levelNames` come from the mode row's `Levels` chain. Both were added
+ * 2026-08-17 for the client: the suggested name must use FOLDER CODES (`GHO_GF_COR`), and the cascade
+ * must be labelled with the segment's own tier names rather than "Level 1" / "Level 2".
+ */
+type ModePick = { label: string; termSetGuid: string; code: string; levelNames: string[] };
 type TermLite = { id: string; label: string };
 /** A Group Map row, only as much of it as the delete dialog has to describe. */
 type MapRow = { itemId: number; groupId: string; role: GroupMapRole; segment: string; tier: string };
@@ -101,6 +110,19 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
   const [modes, setModes] = useState<ModePick[]>([]);
   const [mode, setMode] = useState<ModePick | undefined>(undefined);
   const [levels, setLevels] = useState<TermLite[][]>([]);
+  /**
+   * Folder code by term GUID, from the CRS Term Abbreviation list.
+   *
+   * The suggested name is built from CODES, not labels (client, 2026-08-17: *"client would want the group
+   * name to be GHO_GF_COR"*). That is not only shorter — it is the only form that MATCHES ANYTHING.
+   * Reconciliation names every folder from these codes, and FolderAdmin's `groupsExist` check looks for
+   * groups whose name starts with the segment's StagingFolder — so a group called
+   * `Group Head Office_Group Finance_…` matched neither its own folder nor that check.
+   *
+   * Read once for the whole list rather than per segment: 167 rows on this tenant, one request, and the
+   * builder is used repeatedly in a sitting.
+   */
+  const [codes, setCodes] = useState<Record<string, string>>({});
   const [chosen, setChosen] = useState<TermLite[]>([]);
   const [builderRole, setBuilderRole] = useState<GroupMapRole | "">("");
   const [staged, setStaged] = useState<PersonPick[]>([]);
@@ -158,19 +180,60 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
     }
   };
 
+  /**
+   * Folder codes by term GUID.
+   *
+   * Fails to `{}` rather than throwing: with no codes the builder falls back to term labels, which still
+   * produces a usable suggestion. Blocking group creation because an unrelated list could not be read
+   * would be the wrong trade — nothing on this screen writes a permission, and the admin may type any
+   * name they like.
+   */
+  const loadCodes = async (): Promise<Record<string, string>> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(abbrevListTitle())}')/items` +
+          `?$select=TermGuid,Abbreviation&$top=5000`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return {};
+      const data = await res.json();
+      const out: Record<string, string> = {};
+      for (const r of (data.value ?? []) as Array<{ TermGuid?: string; Abbreviation?: string }>) {
+        const key = (r.TermGuid ?? "").trim().toLowerCase();
+        const code = (r.Abbreviation ?? "").trim();
+        // A row with a BLANK code is the same as no row: that term gets no folder, so there is no code to
+        // put in a name. Skipped rather than stored as "", which would beat the label fallback and yield
+        // a name with an empty segment in it.
+        if (key && code) out[key] = code;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  };
+
   const loadModes = async (): Promise<ModePick[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG_LIST())}')/items?$select=ModeLabel,TermSetGuid,Levels&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG_LIST())}')/items?$select=ModeLabel,TermSetGuid,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$orderby=SortOrder`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
     if (!res.ok) return [];
     const data = await res.json();
-    return ((data.value ?? []) as Array<{ ModeLabel?: string; TermSetGuid?: string; Levels?: string }>)
+    return ((data.value ?? []) as Array<{
+      ModeLabel?: string; TermSetGuid?: string; StagingFolder?: string; Levels?: string;
+    }>)
       .filter((r) => (r.TermSetGuid ?? "").trim() && (r.Levels ?? "").trim())
       .map((r) => ({
         label: (r.ModeLabel ?? "").trim() || (r.TermSetGuid ?? "").trim(),
         termSetGuid: (r.TermSetGuid ?? "").trim(),
+        code: (r.StagingFolder ?? "").trim(),
+        // PERMISSIONED tiers only — those are the levels this cascade walks. A below-Unit tier such as
+        // SubUnit carries no group and must not appear as a dropdown here.
+        levelNames: parseLevels(r.Levels ?? "")
+          .filter((l) => l.permissioned !== false)
+          .map((l) => l.label),
       }));
   };
 
@@ -225,6 +288,7 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
     loadCanManage().then(setCanManage).catch(() => setCanManage(false));
     reload().catch(() => undefined);
     loadModes().then(setModes).catch(() => undefined);
+    loadCodes().then(setCodes).catch(() => undefined);
   }, []);
 
   // Debounced people search, the same shape as the other access pages.
@@ -282,7 +346,14 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
    */
   const applyBuilder = (m: ModePick | undefined, path: TermLite[], role: GroupMapRole | ""): void => {
     if (!m) return;
-    const built = suggestGroupName(m.label, path.map((t) => t.label), role);
+    // Code per tier, falling back to the LABEL when a term has no code yet. A fallback rather than a
+    // refusal because this box only suggests a name — but such a group will not line up with its folder,
+    // so the hint below the field says which tiers are missing a code.
+    const built = suggestGroupName(
+      m.code || m.label,
+      path.map((t) => codes[t.id.toLowerCase()] || t.label),
+      role,
+    );
     // Never silently overwrite something the admin typed. The name is the one field here they may
     // have composed by hand for a reason.
     if (nameTouched && newName.trim() && newName.trim() !== built) {
@@ -589,7 +660,15 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
 
             {levels.map((options, i) => (
               <div key={i}>
-                <label style={s.label} htmlFor={`gm-lvl-${i}`}>Level {i + 1}</label>
+                {/* The segment's OWN tier name — Department, Unit, Region, Estate/Mill (client, 2026-08-17:
+                    "show Segment, Department, Unit instead of level 1 and level 2"). "Level 2" is a
+                    position, not a thing anyone recognises, and this page already knows the names.
+                    Falls back to the position when the chain is shorter than the tree, which is the
+                    depth mismatch the New segment form refuses — better an unhelpful label than a
+                    blank one. */}
+                <label style={s.label} htmlFor={`gm-lvl-${i}`}>
+                  {(mode ? mode.levelNames[i] : "") || `Level ${i + 1}`}
+                </label>
                 <select
                   id={`gm-lvl-${i}`}
                   style={s.select}
@@ -620,6 +699,21 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
               The role here only shapes the <strong>name</strong>. What the group can actually do is
               decided by the persona you give it on the Folder Access page.
             </p>
+            {/* Says WHY a name came out with a full term label in it. Without this the fallback is
+                invisible: the box just reads `GHO_GF_Compliance & Operational Risk` and looks like a bug
+                rather than a missing code. It matters beyond tidiness — reconciliation names the folder
+                from the code, so a group named off a label lines up with nothing. */}
+            {chosen.filter((t) => !codes[t.id.toLowerCase()]).length > 0 && (
+              <p style={{ ...s.hint, color: "#7a4f00" }}>
+                No folder code yet for{" "}
+                <strong>
+                  {chosen.filter((t) => !codes[t.id.toLowerCase()]).map((t) => t.label).join(", ")}
+                </strong>
+                , so the name uses the full term name instead. Give it a code on{" "}
+                <strong>CRS Term Abbreviations</strong> first — reconciliation names the folder from that
+                code, and a group named after the term will not line up with it.
+              </p>
+            )}
           </div>
         )}
 
