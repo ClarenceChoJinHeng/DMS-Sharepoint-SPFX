@@ -484,7 +484,21 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
           </div>
         )}
         {(!confirms || showForm) && (
-          <FolderManager key={st.screen.tab} context={context} initialTab={st.screen.tab} hideTabs />
+          <FolderManager
+            key={st.screen.tab}
+            context={context}
+            initialTab={st.screen.tab}
+            hideTabs
+            /* The creation announces itself, so nothing has to be inferred: close the form, select the
+               new segment, and re-read the list so it appears in the picker and in every later step.
+               Before this the only signal was the admin choosing from a dropdown they had to refresh
+               first — which left the form open under its own success message. */
+            onSegmentCreated={(key) => {
+              setSegKey(key);
+              setShowForm(false);
+              setReload((n) => n + 1);
+            }}
+          />
         )}
         {confirms && (
           <div style={{ ...s.card, marginTop: 18, marginBottom: 0 }}>

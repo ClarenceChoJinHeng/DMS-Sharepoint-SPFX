@@ -20,4 +20,13 @@ export interface IFolderManagerProps {
    * beside it would offer a way out of the flow that looks like part of it.
    */
   hideTabs?: boolean;
+  /**
+   * Fired when the New segment tab actually writes a segment, with its derived key and label.
+   *
+   * Passed straight through to `SegmentCreator`. It exists so the guided flow can close the creation
+   * form and select the new segment on the creation ITSELF, rather than inferring it from a re-read plus
+   * a question to the admin — which is why the form used to sit open underneath its own success message.
+   * Ignored by `FolderMap`, which shares this interface.
+   */
+  onSegmentCreated?: (key: string, label: string) => void;
 }

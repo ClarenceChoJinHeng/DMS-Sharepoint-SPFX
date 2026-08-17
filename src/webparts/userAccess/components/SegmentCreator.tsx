@@ -118,12 +118,22 @@ export interface SegmentCreatorProps {
   siteUrl: string;
   /** Fired as the form gains or loses unsaved input, so the page can guard a tab switch. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Fired once a segment has actually been written, with its DERIVED key and its label.
+   *
+   * Exists so a host can react to the creation instead of inferring it. The guided flow could only
+   * infer it by re-reading the mode rows and asking the admin which one was new — which is why the
+   * form stayed open under its own success message (client, 2026-08-17). `key` is the value nobody
+   * types (`mode_<slug>`), so it is also the only reliable way for a caller to select the new row.
+   */
+  onCreated?: (key: string, label: string) => void;
 }
 
 export default function SegmentCreator({
   context,
   siteUrl,
   onDirtyChange,
+  onCreated,
 }: SegmentCreatorProps): React.ReactElement {
   const [existing, setExisting] = useState<ExistingSegment[]>([]);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
@@ -469,6 +479,9 @@ export default function SegmentCreator({
       }
 
       setExisting([...existing, { key, label: d.label.trim(), stagingFolder: folder, sortOrder }]);
+      // Announced only past every failure path above, so a host can treat it as proof the row exists
+      // rather than as "Create was pressed". Guarded because the standalone page passes no handler.
+      if (onCreated) onCreated(key, d.label.trim());
       setResult({
         ok: true,
         checklist: true,

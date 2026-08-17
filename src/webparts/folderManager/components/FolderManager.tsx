@@ -600,6 +600,11 @@ type FolderNode = {
 
 const s: Record<string, React.CSSProperties> = {
   wrap:          { maxWidth: 880, margin: "32px auto", padding: "0 24px 48px", fontFamily: "'Segoe UI', sans-serif" },
+  // Mounted inside a guided flow step, where the panel already supplies width, centring and padding.
+  // Reusing `wrap` there added a SECOND set of all three — an indent plus an 880px cap inside a panel
+  // often narrower than that, which is the "margin and padding" the client asked to remove. Font stays,
+  // because the flow does not set one on the step body.
+  wrapEmbedded:  { fontFamily: "'Segoe UI', sans-serif" },
   h2:            { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   subtitle:      { fontSize: 13, color: "#666", margin: "0 0 24px" },
   toggleWrap:    { display: "flex", justifyContent: "center", marginBottom: 24 },
@@ -707,6 +712,7 @@ export default function FolderManager({
   context,
   initialTab,
   hideTabs,
+  onSegmentCreated,
 }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
@@ -4295,7 +4301,7 @@ export default function FolderManager({
   const treeTab = tab === "Staging" || tab === "Documents";
 
   return (
-    <section style={s.wrap}>
+    <section style={hideTabs ? s.wrapEmbedded : s.wrap}>
       <style>{`.fm-in:focus { outline: none; box-shadow: 0 0 0 2px rgba(15,108,63,.18); }`}</style>
 
       {/* Heading and tab bar both belong to the standalone "All tools" view. A guided flow supplies its
@@ -4386,6 +4392,7 @@ export default function FolderManager({
           context={context}
           siteUrl={siteUrl}
           onDirtyChange={(d) => { setDirty(d); if (!d) setTabBlocked(false); }}
+          onCreated={onSegmentCreated}
         />
       ) : tab === "Reconciliation" ? (
         <div>
