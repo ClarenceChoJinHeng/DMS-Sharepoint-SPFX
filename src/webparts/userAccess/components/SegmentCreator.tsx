@@ -26,6 +26,7 @@ import {
   columnsForDraft,
   depthVerdict,
   ExistingSegment,
+  fieldConflicts,
   isGuid,
   modeKeyFor,
   NewSegmentDraft,
@@ -72,6 +73,9 @@ const s: Record<string, React.CSSProperties> = {
   card: { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
   label: { display: "block", fontSize: 12, fontWeight: 600, color: "#323130", margin: "14px 0 4px" },
   input: { width: "100%", boxSizing: "border-box", padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4 },
+  // Spread OVER `input`, so the red border is the only difference and the two can never drift apart.
+  inputBad: { border: "1px solid #d13438", background: "#fdf6f6" },
+  fieldErr: { fontSize: 12, color: "#a4262c", marginTop: 4, marginBottom: 8, lineHeight: 1.45, fontWeight: 600 },
   hint: { fontSize: 11, color: "#8a8886", marginTop: 3, lineHeight: 1.5 },
   btn: { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px", fontSize: 13, cursor: "pointer" },
   ghost: { background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
@@ -127,6 +131,22 @@ export interface SegmentCreatorProps {
    * types (`mode_<slug>`), so it is also the only reliable way for a caller to select the new row.
    */
   onCreated?: (key: string, label: string) => void;
+  /**
+   * Whether the existing-segments list offers **Delete**. Absent means yes.
+   *
+   * Set false by the "Add a new segment" flow (client, 2026-08-17: *"why do we allow client to delete in
+   * the Add a New Segment flow? we should ony allow them to create not delete"*). Retiring a segment has
+   * its own guided flow, which moves the documents out first and asks for a typed confirmation — putting
+   * the same Delete button one click from a creation form offers the destructive half with none of that.
+   *
+   * DEFAULTS TO SHOWN on purpose. The Retire flow's delete step mounts this very screen, so a default of
+   * hidden would silently remove the button from the flow whose entire purpose is to use it — and the
+   * standalone Segments tab needs it too. Only the create flow opts out.
+   *
+   * The list itself STAYS either way: seeing that a segment already exists is what stops someone
+   * creating it twice.
+   */
+  allowDelete?: boolean;
 }
 
 export default function SegmentCreator({
@@ -134,6 +154,7 @@ export default function SegmentCreator({
   siteUrl,
   onDirtyChange,
   onCreated,
+  allowDelete,
 }: SegmentCreatorProps): React.ReactElement {
   const [existing, setExisting] = useState<ExistingSegment[]>([]);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
@@ -835,6 +856,12 @@ export default function SegmentCreator({
   /* ── Render ────────────────────────────────────────────────────────────────── */
 
   const key = modeKeyFor(label);
+  /* Live, per-field collisions — the same ones Create refuses, rendered next to the field that caused
+     them. This form is taller than the viewport, so the summary at the top is off-screen exactly when it
+     matters, and pressing Create reads as doing nothing (client, 2026-08-17). Recomputed every render
+     rather than in state: it is three array scans over a list of segments, and state would be one more
+     thing that can disagree with the fields. */
+  const conflicts = fieldConflicts(draft(), existing);
   const folderPreview = sanitizeFolderSegment(stagingFolder).trim();
   const pathPreview =
     `/${folderPreview || "TOPFOLDER"}/` +
@@ -868,23 +895,30 @@ export default function SegmentCreator({
               <span style={s.tierMeta}>
                 top folder <strong>{seg.stagingFolder || "—"}</strong>
               </span>
-              <button
-                style={s.danger}
-                disabled={busy || seg.itemId === undefined}
-                title={
-                  seg.itemId === undefined
-                    ? "This row has no id, so it cannot be deleted from here."
-                    : "Remove this segment"
-                }
-                onClick={() => openDelete(seg)}
-              >
-                Delete
-              </button>
+              {/* HIDDEN, not disabled, when the host says so. A greyed Delete still tells an admin the
+                  option belongs here and invites hunting for the way to enable it; in the create flow it
+                  does not belong here at all. Absent prop = shown, so the Retire flow (which mounts this
+                  same screen) and the standalone Segments tab are untouched. */}
+              {allowDelete !== false && (
+                <button
+                  style={s.danger}
+                  disabled={busy || seg.itemId === undefined}
+                  title={
+                    seg.itemId === undefined
+                      ? "This row has no id, so it cannot be deleted from here."
+                      : "Remove this segment"
+                  }
+                  onClick={() => openDelete(seg)}
+                >
+                  Delete
+                </button>
+              )}
             </div>
           ))}
           <p style={s.hint}>
-            Deleting a segment stops it being offered and removes its folder-access mappings. It
-            does not delete any document, and never deletes a column.
+            {allowDelete === false
+              ? "Listed so you can see what is already set up — creating one that exists is refused. To retire a segment, use Retire a segment from Folder Management."
+              : "Deleting a segment stops it being offered and removes its folder-access mappings. It does not delete any document, and never deletes a column."}
           </p>
         </div>
       )}
@@ -1043,11 +1077,12 @@ export default function SegmentCreator({
       <div style={s.card}>
         <label style={s.label}>Segment name</label>
         <input
-          style={s.input}
+          style={conflicts.label ? { ...s.input, ...s.inputBad } : s.input}
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder="Upstream Operations"
         />
+        {conflicts.label ? <div style={s.fieldErr}>{conflicts.label}</div> : undefined}
         <div style={s.hint}>
           What uploaders pick from the Segment dropdown.
           {key ? ` Its configuration key will be ${key}.` : ""}
@@ -1069,11 +1104,14 @@ export default function SegmentCreator({
 
         <label style={s.label}>Term set ID</label>
         <input
-          style={s.input}
+          style={conflicts.termSet ? { ...s.input, ...s.inputBad } : s.input}
           value={termSetGuid}
           onChange={(e) => setTermSetGuid(e.target.value)}
           placeholder="023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf"
         />
+        {/* Shown BEFORE the term-store verdict, and it is the more urgent of the two: a set that
+            resolves perfectly well is still wrong if another segment owns it. */}
+        {conflicts.termSet ? <div style={s.fieldErr}>{conflicts.termSet}</div> : undefined}
         {check.state !== "blank" && (
           <div style={{ ...s.hint, ...setCheckStyle(check), fontWeight: 600 }}>
             {setCheckMessage(check)}
@@ -1082,11 +1120,12 @@ export default function SegmentCreator({
 
         <label style={s.label}>Top folder name</label>
         <input
-          style={s.input}
+          style={conflicts.folder ? { ...s.input, ...s.inputBad } : s.input}
           value={stagingFolder}
           onChange={(e) => setStagingFolder(e.target.value)}
           placeholder="UPOPS"
         />
+        {conflicts.folder ? <div style={s.fieldErr}>{conflicts.folder}</div> : undefined}
         <div style={s.hint}>
           The one folder every document in this segment sits under, in both libraries. Short and
           upper-case by convention. It cannot be shared with another segment.

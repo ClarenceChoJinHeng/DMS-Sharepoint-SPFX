@@ -150,6 +150,63 @@ export function isGuid(raw: string): boolean {
 }
 
 /**
+ * The three collisions that can be shown BESIDE the field that caused them, as they are typed.
+ *
+ * Client, 2026-08-17: *"the way to show an error is weirdly not noticeable. I type in the same GUID and
+ * yes it shows but when I click on Create Segment it doesn't push me up but only show a dialog which
+ * only I can see once I scroll up manually."* The form is taller than the viewport, so a summary at the
+ * top is invisible at the moment it is needed — and the admin's reading is that Create did nothing.
+ *
+ * Deliberately NOT a second rule set: each message is the same collision `validateNewSegment` refuses,
+ * so this can never permit what Create would reject. It returns only the three that BELONG to a single
+ * field; everything else (a name with no letters, a bad tier list) stays in the summary, because a
+ * message has to sit next to the thing it is about or it is just a differently-placed summary.
+ *
+ * Empty strings mean "nothing to say", so a caller can render unconditionally.
+ */
+export function fieldConflicts(
+  draft: NewSegmentDraft,
+  existing: ExistingSegment[],
+): { label: string; folder: string; termSet: string } {
+  const norm = (v: string): string => v.trim().toLowerCase();
+  const rows = existing ?? [];
+  const label = draft.label.trim();
+  const key = modeKeyFor(label);
+  const folder = sanitizeFolderSegment(draft.stagingFolder).trim();
+
+  let labelMsg = "";
+  if (label) {
+    const byName = rows.filter((e) => norm(e.label) === norm(label))[0];
+    // The KEY clash is reported on the name field too, because the key is derived from the name and is
+    // not a field anyone can edit — telling someone their key collides while showing them no key would
+    // leave them nothing to change.
+    const byKey = rows.filter((e) => key && norm(e.key) === norm(key))[0];
+    if (byName) labelMsg = `"${byName.label}" already exists.`;
+    else if (byKey) {
+      labelMsg =
+        `This name produces the key "${key}", which "${byKey.label}" already uses. ` +
+        `Differ by more than punctuation.`;
+    }
+  }
+
+  let folderMsg = "";
+  if (folder) {
+    const clash = rows.filter((e) => norm(e.stagingFolder) === norm(folder))[0];
+    if (clash) folderMsg = `"${folder}" is already the top folder for "${clash.label}".`;
+  }
+
+  let setMsg = "";
+  if (isGuid(draft.termSetGuid)) {
+    const clash = rows.filter(
+      (e) => normalizeGuid(e.termSetGuid ?? "") === normalizeGuid(draft.termSetGuid),
+    )[0];
+    if (clash) setMsg = `This term set already belongs to "${clash.label}".`;
+  }
+
+  return { label: labelMsg, folder: folderMsg, termSet: setMsg };
+}
+
+/**
  * Everything that must be true before a single column is created.
  *
  * Nothing here touches the term store — depth is measured separately because it costs requests,
@@ -206,6 +263,24 @@ export function validateNewSegment(
     errors.push(
       "Paste the segment's term set ID. It looks like 023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf.",
     );
+  } else {
+    // TWO SEGMENTS MUST NOT SHARE A TERM SET, and until 2026-08-17 nothing checked it — found while
+    // the client was deliberately re-entering an existing GUID to see the error.
+    //
+    // It is not merely redundant data. **Group Map rows key on `Segment` = the term-set GUID** (a
+    // folder-access row stores the set, not the mode key), so two segments sharing a set share each
+    // other's access rows: granting a group in one silently grants it in the other, and deleting one
+    // segment removes the other's mappings. They would also build identical trees from identical
+    // abbreviations under two top folders, doubling every folder and splitting the documents.
+    const setClash = existing.filter(
+      (e) => normalizeGuid(e.termSetGuid ?? "") === normalizeGuid(draft.termSetGuid),
+    )[0];
+    if (setClash) {
+      errors.push(
+        `That term set is already used by "${setClash.label}". Two segments cannot share one term ` +
+          `set — they would build the same folders twice and share each other's folder-access rows.`,
+      );
+    }
   }
 
   // TWO is the floor, not one (client's instruction 2026-08-17: "I think best to force them to

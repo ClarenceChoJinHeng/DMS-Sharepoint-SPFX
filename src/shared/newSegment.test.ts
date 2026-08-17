@@ -4,6 +4,7 @@ import {
   columnNameFor,
   columnsForDraft,
   depthVerdict,
+  fieldConflicts,
   ExistingSegment,
   isGuid,
   modeKeyFor,
@@ -245,6 +246,20 @@ describe("validateNewSegment", () => {
     }
   });
 
+  it("REFUSES a term set another segment already uses", () => {
+    // Nothing checked this until 2026-08-17, found while the client re-entered an existing GUID to see
+    // what the error looked like. It is not redundant data: Group Map rows key on `Segment` = the
+    // TERM-SET GUID, so two segments sharing a set share each other's folder-access rows — granting a
+    // group in one grants it in the other, and retiring one removes the other's mappings.
+    const withSet: ExistingSegment[] = [
+      { key: "mode_gho", label: "Group Head Office", stagingFolder: "GHO", sortOrder: 1, termSetGuid: SET },
+    ];
+    const errs = validateNewSegment(draft({ label: "Something Else", stagingFolder: "SE" }), withSet);
+    expect(errs.length).toBe(1);
+    expect(errs[0]).toContain("Group Head Office");
+    expect(errs[0]).toContain("share one term set");
+  });
+
   it("says what a single tier COSTS, not merely that it is disallowed", () => {
     // An admin refused without a reason retypes the same thing or gives up. The message has to name
     // the consequence — everything beneath shares one set of access — because that is the fact that
@@ -283,6 +298,64 @@ describe("validateNewSegment", () => {
       existing,
     );
     expect(errs.join(" ")).not.toContain("structure for this segment is empty");
+  });
+});
+
+describe("fieldConflicts", () => {
+  // The form is taller than the viewport, so the error summary at the top is off-screen exactly when it
+  // is needed and pressing Create reads as doing nothing (client, 2026-08-17).
+  // `key` is DERIVED by modeKeyFor and never hand-typed, so the fixture uses the value a real row would
+  // carry. The shorter `mode_gho` used elsewhere in this file predates the deriving form and would make
+  // the key-clash case silently untestable — there would be nothing for a slugged name to collide with.
+  const rows: ExistingSegment[] = [
+    {
+      key: "mode_group_head_office",
+      label: "Group Head Office",
+      stagingFolder: "GHO",
+      sortOrder: 1,
+      termSetGuid: SET,
+    },
+  ];
+
+  it("names the owner of a duplicate term set", () => {
+    const c = fieldConflicts(draft({ label: "X", stagingFolder: "XX" }), rows);
+    expect(c.termSet).toContain("Group Head Office");
+    expect(c.label).toBe("");
+    expect(c.folder).toBe("");
+  });
+
+  it("reports a duplicate name and a duplicate top folder on their OWN fields", () => {
+    const c = fieldConflicts(draft({ label: "Group Head Office", stagingFolder: "GHO" }), []);
+    expect(c.label).toBe("");
+    const c2 = fieldConflicts(draft({ label: "Group Head Office", stagingFolder: "GHO" }), rows);
+    expect(c2.label).toContain("already exists");
+    expect(c2.folder).toContain("GHO");
+  });
+
+  it("reports a KEY clash on the name field, since the key is not a field anyone can edit", () => {
+    // "Group Head Office" and "Group  Head  Office" slug to one key. Reporting that against an invisible
+    // derived value would leave the admin nothing to change.
+    // Whitespace only, no punctuation: `sanitizeFolderSegment` keeps a legal character such as `!`, so
+    // "Group Head Office!" would slug to a DIFFERENT key and be a legitimate new segment.
+    const c = fieldConflicts(draft({ label: "Group  Head  Office", stagingFolder: "ZZ" }), rows);
+    expect(c.label).toContain("mode_group_head_office");
+  });
+
+  it("says nothing on an empty or still-being-typed draft", () => {
+    // It runs on every keystroke, so a half-typed GUID must not flash an error.
+    const c = fieldConflicts(draft({ label: "", stagingFolder: "", termSetGuid: "023a" }), rows);
+    expect(c).toEqual({ label: "", folder: "", termSet: "" });
+  });
+
+  it("never permits what validateNewSegment would refuse", () => {
+    // The guarantee that matters: this is a re-presentation of the same collisions, not a second rule
+    // set. Anything flagged inline must also be in the summary.
+    const d = draft({ label: "Group Head Office", stagingFolder: "GHO" });
+    const c = fieldConflicts(d, rows);
+    const errs = validateNewSegment(d, rows).join(" ");
+    if (c.label) expect(errs).toContain("already exists");
+    if (c.folder) expect(errs).toContain("cannot share one folder");
+    if (c.termSet) expect(errs).toContain("share one term set");
   });
 });
 

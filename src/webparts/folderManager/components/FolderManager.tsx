@@ -713,6 +713,7 @@ export default function FolderManager({
   initialTab,
   hideTabs,
   onSegmentCreated,
+  hideSegmentDelete,
 }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
@@ -4393,6 +4394,9 @@ export default function FolderManager({
           siteUrl={siteUrl}
           onDirtyChange={(d) => { setDirty(d); if (!d) setTabBlocked(false); }}
           onCreated={onSegmentCreated}
+          // Inverted here, once: the prop that travels is "hide", the prop SegmentCreator takes is
+          // "allow", and both defaults must mean the button is shown.
+          allowDelete={!hideSegmentDelete}
         />
       ) : tab === "Reconciliation" ? (
         <div>

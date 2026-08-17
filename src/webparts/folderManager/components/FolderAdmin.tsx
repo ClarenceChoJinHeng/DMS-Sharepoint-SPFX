@@ -498,6 +498,11 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               setShowForm(false);
               setReload((n) => n + 1);
             }}
+            /* Delete belongs to the Retire flow, which moves the documents out first and asks for a typed
+               confirmation. Offering it beside a creation form gives the destructive half with none of
+               that — and note this is scoped to THIS flow, not to `hideTabs`, because Retire mounts the
+               same tab embedded and needs the button. */
+            hideSegmentDelete={active.id === "newSegment"}
           />
         )}
         {confirms && (

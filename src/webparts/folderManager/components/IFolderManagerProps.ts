@@ -29,4 +29,13 @@ export interface IFolderManagerProps {
    * Ignored by `FolderMap`, which shares this interface.
    */
   onSegmentCreated?: (key: string, label: string) => void;
+  /**
+   * Hide **Delete** on the New segment tab's list of existing segments.
+   *
+   * Set by the "Add a new segment" flow only. NOT keyed off `hideTabs`, because the **Retire** flow mounts
+   * this same tab with `hideTabs` set and Delete is the whole point of that step — so the two cases must
+   * be told apart explicitly. The list itself is never hidden: seeing what exists is what stops someone
+   * creating a segment twice.
+   */
+  hideSegmentDelete?: boolean;
 }
