@@ -100,6 +100,10 @@ Minamas Head Office,MHO,Production ＆ Engineering,PNE,Production ＆ Operation,
 Minamas Head Office,MHO,Risk Management,GRM,Risk Management,GRM,MHO/GRM/GRM,MHO_GRM,unit code repeats the department code
 Minamas Head Office,MHO,Supply Chain,SC,Procurement,PROC,MHO/SC/PROC,MHO_SC_PROC,
 Minamas Head Office,MHO,Supply Chain,SC,Logistics,LOGS,MHO/SC/LOGS,MHO_SC_LOGS,
+Minamas Head Office,MHO,Sustainability,SUS,"Health, Safety, and Environment",HSE,MHO/SUS/HSE,MHO_SUS_HSE,department code changed from SC to SUS by the client 2026-08-17 — SC is Supply Chain
+Minamas Head Office,MHO,Sustainability,SUS,Sustainability Compliance ＆ Quality Management,QM,MHO/SUS/QM,MHO_SUS_QM,
+Minamas Head Office,MHO,Sustainability,SUS,"Environment, Social ＆ Governance",ESG,MHO/SUS/ESG,MHO_SUS_ESG,
+Minamas Head Office,MHO,Sustainability,SUS,Health ＆ Medical Services,HMS,MHO/SUS/HMS,MHO_SUS_HMS,
 Minamas Head Office,MHO,Taxation,TAX,Taxation,TAX,MHO/TAX/TAX,MHO_TAX,unit code repeats the department code
 Minamas Head Office,MHO,Treasury,TREAS,Funding Operations,FO,MHO/TREAS/FO,MHO_TREAS_FO,
 Minamas Head Office,MHO,Treasury,TREAS,Insurance Management,INSURM,MHO/TREAS/INSURM,MHO_TREAS_INSURM,

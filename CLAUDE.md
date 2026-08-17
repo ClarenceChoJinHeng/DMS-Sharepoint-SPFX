@@ -56,9 +56,21 @@ has a `Category` (`BusinessSegment` | `Project` — the top-level family, NOT a 
 form's two top-level tabs and whether a Business Segment is required; internally still the
 `side` property), a term-set GUID, and a `Levels` JSON chain
 (variable depth, e.g. `[{"label":"Department","column":"Department"},{"label":"Unit","column":"Unit"}]`).
-**12 intended modes** (see `docs/superpowers/specs/2026-07-24-twelve-segment-expansion-design.md`
+**13 intended modes** (see `docs/superpowers/specs/2026-07-24-twelve-segment-expansion-design.md`
 for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** — not "NBBOL"),
-3 Upstream Ops, 2 SDGI, 2 I&T, 1 Group-led Project.
+3 Upstream Ops, 2 SDGI, 2 I&T, 1 Group-led Project, 1 Group Business Ventures & Transformation
+(**added by the client 2026-08-17**; head-office shape, no term set yet, in no code fallback).
+- **EVERY FAMILY IS EXACTLY TWO PERMISSIONED LEVELS**, corrected 2026-08-17 against the client's own
+  folder-structure table. I&T was documented as a **single** level and is not — they split it into
+  `I&T Operating Units/Department → Unit`. Group-led Project was documented as **three** and is not:
+  `Project Name` is the **top folder name**, the slot `Business Segment` fills for every other family,
+  never a tier. Both errors, and the question that surfaced them, are the same misreading — **counting
+  the business segment as a level.** It is `StagingFolder`, above the chain. Getting it wrong is not
+  cosmetic: the depth check demands the term set's depth equal the tier count, and a third tier moves
+  every unit's ACL one level DOWN onto a folder no Group Map row points at — reconciliation walks the
+  term tree and caps at the tier count, so it grants silently and looks correct.
+  The stale "I&T uses a single level" also sat in `SegmentCreator`'s hint copy, where the person
+  onboarding I&T would have read it; fixed there in the same change.
 - **Pilot scope (2026):** the **4 Head Office segments**, all `Levels = [Department, Unit]`
   (shared columns — zero new columns). All 4 term sets exist flat in the `DMS Metadata` term
   group (GUIDs below) and are in the code fallbacks: `DEFAULT_MODES` in `Form.tsx` +

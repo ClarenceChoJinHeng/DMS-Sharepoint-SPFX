@@ -1088,7 +1088,9 @@ export default function SegmentCreator({
           on. There must be exactly as many of these as the term set has levels of terms.
           <br />
           Head offices use <strong>Department</strong> then <strong>Unit</strong>; Upstream Ops uses{" "}
-          <strong>Region</strong> then <strong>Estate/Mill</strong>; I&amp;T uses a single level.
+          <strong>Region</strong> then <strong>Estate/Mill</strong>; SDGI uses <strong>Refinery</strong>{" "}
+          then <strong>Department</strong>. Two is the usual answer — the business segment itself is the
+          Top folder name above, not one of these.
         </div>
         {/* Empty is the starting state since 2026-08-15, so it has to read as "your turn" rather than
             as a list that failed to load. */}

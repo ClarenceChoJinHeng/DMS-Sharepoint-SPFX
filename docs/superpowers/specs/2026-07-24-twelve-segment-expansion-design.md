@@ -30,9 +30,32 @@ architecture; no umbrella "Head Office" level is added.
 | 7 | NBPOL Upstream Operations | Upstream Ops | Region → Estate/Mill | 2027 |
 | 8 | SDGI Malaysia | SDGI | Refinery → Department | 2027 |
 | 9 | SDGI Overseas | SDGI | Refinery → Department | 2027 |
-| 10 | Innovation & Technology Malaysia | I&T | I&T Operating Units | 2027 |
-| 11 | Innovation & Technology Overseas | I&T | I&T Operating Units | 2027 |
-| 12 | Group-led Project | Projects | Project Name → Department → Unit | 2027 |
+| 10 | Innovation & Technology Malaysia | I&T | I&T Operating Units/Department → Unit | 2027 |
+| 11 | Innovation & Technology Overseas | I&T | I&T Operating Units/Department → Unit | 2027 |
+| 12 | Group-led Project | Projects | Department → Unit (top folder is the **Project Name**) | 2027 |
+| 13 | Group Business Ventures & Transformation | Head Office | Department → Unit | 2027 |
+
+> **Revised 2026-08-17 from the client's own folder-structure table.** Three rows changed and one was
+> added, and the corrections all run the same way — **towards two levels**:
+> - **I&T is NOT a single level.** The client split `I&T Operating Units` into
+>   `I&T Operating Units/Department → Unit`. The single-level claim was also in `SegmentCreator`'s hint
+>   copy, where whoever onboards I&T would have read it; it is fixed there too.
+> - **Group-led Project has two levels, not three.** `Project Name` is the segment's **top folder
+>   name** — the slot `Business Segment` occupies for every other family — not a permissioned tier. This
+>   row read as three only because the top folder was listed inside the chain.
+> - **Segment 13 is new**, same shape as a head office. It needs its own term set and is absent from
+>   every code fallback (`DEFAULT_MODES`, `RECON_MODES`) — inert until a `mode` row exists, so this is a
+>   note rather than a defect.
+>
+> **Every family is now exactly two levels**, which matters because the depth check requires the term
+> set's depth to equal the tier count: all remaining segments need a **2-deep** term set. The recurring
+> misreading is counting the business segment as a tier — it is the Top folder name, and a third tier
+> would move each unit's ACL down onto a folder no Group Map row points at.
+>
+> `I&T Operating Units/Department` keeps its slash in the **label**, but `sanitizeFolderSegment` removes
+> illegal characters rather than substituting, so the derived column is `I&TOperatingUnitsDepartment` —
+> the same way `Estate/Mill` yields `EstateMill`. Worth confirming with the client that the slash is a
+> real name and not two alternatives written in one cell.
 
 Every segment ends with **Year → Document Type** below the leaf level — these remain
 ensure-created subfolders inheriting the Unit folder's ACL, **not** term levels.
