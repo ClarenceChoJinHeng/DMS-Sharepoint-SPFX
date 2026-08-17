@@ -386,7 +386,7 @@ describe("blocksNext — the blank name", () => {
     // Reported twice by the client (2026-08-17): "Umm I still can click next, I haven't fill up New
     // Segment yet...". The first build treated "not answered" as UNKNOWN and therefore gated nothing.
     const msg = blocksNext(st(), { subjectGiven: false });
-    expect(msg).toContain("Press Create above");
+    expect(msg).toContain("Create the segment above");
     // Names the way out, because the gate can legitimately be wrong after a page refresh — the rail
     // stays clickable, and the message has to say so or a correct gate reads as a dead end.
     expect(msg).toContain("list of steps");
@@ -411,7 +411,9 @@ describe("blocksNext — the blank name", () => {
     // different instructions, and collapsing them into one is how a gate stops being actionable.
     const msg = blocksNext(st(), { subjectGiven: true, segmentExists: false });
     expect(msg).toContain("Create the segment first");
-    expect(msg).not.toContain("Press Create above");
+    // Tracks the CURRENT wording of the other message. Left pointing at a retired string this assertion
+    // would pass for ever while proving nothing, which is worse than not having it.
+    expect(msg).not.toContain("Create the segment above");
   });
 
   it("allows Next when the typed name matches an existing segment", () => {

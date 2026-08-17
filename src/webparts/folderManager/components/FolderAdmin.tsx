@@ -479,7 +479,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
           <div style={{ marginBottom: 16 }}>
             <button style={s.primary} onClick={() => setShowForm(true)}>+ Create a new segment</button>
             <div style={s.hint}>
-              Already created it? Pick it below instead — there is no need to open the form again.
+              Already created it earlier? Pick it below to carry on — no need to open the form again.
             </div>
           </div>
         )}
@@ -507,7 +507,12 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
         )}
         {confirms && (
           <div style={{ ...s.card, marginTop: 18, marginBottom: 0 }}>
-            <label style={s.label} htmlFor="fa-newseg">Which segment did you just create?</label>
+            {/* "Which segment did you just create?" described the case that no longer needs this control
+                — creation selects itself since 1.0.136.0 — and the client read the dropdown as a way to
+                CREATE one: *"I actually thought at first that I can recreate Group Head Office when I
+                already create."* Naming it for RESUMING is the whole point: this exists for coming back
+                to an unfinished segment, and it is also what carries the segment into steps 3-6. */}
+            <label style={s.label} htmlFor="fa-newseg">Continuing an earlier segment?</label>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               <select
                 id="fa-newseg"
@@ -528,8 +533,8 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
             </div>
             <div style={s.hint}>
               {segments === undefined
-                ? "The segment list could not be read, so this cannot be confirmed here — carry on, and use the rail to move between steps."
-                : "Press Create above first, then Refresh list and pick it. That is how this page knows the segment was saved, and it takes the later steps straight to it."}
+                ? "The segment list could not be read, so a segment cannot be picked here — carry on, and use the list of steps to move between them."
+                : "Only needed if you created it earlier, or reopened this page. A segment you create above is selected for you. Picking one takes the remaining steps straight to it — it does not create anything."}
             </div>
           </div>
         )}
