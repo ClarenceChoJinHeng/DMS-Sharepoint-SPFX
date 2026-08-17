@@ -286,22 +286,28 @@ If a name must differ, use the CRS Settings property-pane override (`link_<key>`
 the pattern matches. A name the pattern cannot match fails as a **dead link** — no error, no clue —
 on the one page whose job is telling people where to go.
 
-### 8.1 ⚠ RESTRICT THE ADMIN PAGES — REQUIRED, NOT OPTIONAL
+### 8.1 Admin pages — locked automatically, but VERIFY
 
-**This is open finding #1/#6 and there is no automatic fix.** `CRS_SITE_MEMBERS` holds site-level
-Read, admin pages inherit site permissions, and reconciliation's page pass only visits pages that
-**have** Group Map grant rows — an admin-only page has none, so it is never visited and stays open to
-every uploader.
-
-Using **Page Access**, restrict each of these to site owners:
+**Reconciliation now locks these itself** (1.0.129.0, spec
+`2026-08-17-admin-page-lockdown-design.md`), so this is no longer a manual step. It breaks
+inheritance on every page whose name is `adminOnly`, grants site Owners Full Control, and strips
+every other grant — asserted on **every** run, not once:
 
 ```
 CRS-Settings · Folder-Administration · Group-Management · Site-Access
 Approval-Library-Access · Page-Access · Folder-Access · CRS-Audit-Log · Bulk-Upload
 ```
 
-**Verify with a non-admin account.** Not as yourself — you are an owner and will see everything
-regardless. This is the single most important verification in this document.
+It runs in §12. Watch the log for `LOCKED to site owners` on the first run and
+`already locked — correct` on the second.
+
+**You must still verify, with a non-admin account.** Not as yourself — you are an owner and will see
+everything regardless. Performing and verifying are different things, and this is the single most
+important verification in this document.
+
+**If a page is missing from the log**, its file name did not match the policy pattern and it is
+**still open**. Either rename it to match the §8 table or add the pattern to `pageAccessPolicy.ts` —
+do not assume the lock covered it. Five admin pages were in exactly that state until 2026-08-17.
 
 Grant the working pages normally: `Upload-Form` to uploader **and approver** groups,
 `Approval-Document` to approver groups, `My-Submissions` to uploader groups.

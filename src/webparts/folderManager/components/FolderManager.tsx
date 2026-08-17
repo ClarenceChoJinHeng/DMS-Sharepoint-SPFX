@@ -4,6 +4,9 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember } from "../../../shared/spGroups";
 import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
 import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
+// The SAME policy the admin screens filter with, so a page cannot be admin-only in the UI and wide
+// open in SharePoint. See docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md.
+import { policyForPage } from "../../../shared/pageAccessPolicy";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, hcAvailable, LIST_SUFFIX, libApiTitle } from "../../../shared/naming";
 // One parser for the `#tab=` deep link, shared with the CRS Settings page that writes it — the two
@@ -2638,6 +2641,18 @@ export default function FolderManager({
                   entries.push({ msg: `  ⚠ ${file}: the site home page cannot be restricted — ${rowsForPage.length} mapping(s) refused`, ok: false });
                   continue;
                 }
+                if (policyForPage(file).adminOnly) {
+                  /* REFUSED so the two page passes cannot fight (spec §4).
+                     An adminOnly page has roles: [], so GroupMapBuilder never offers one — but a
+                     hand-authored row can still target it. Without this, THIS pass would grant Read
+                     and the lockdown pass below would strip it again, every run, both logged, for
+                     ever. Refusing here makes the order of the two passes irrelevant, which is a
+                     correctness property rather than a sequencing convention.
+                     The row is left in place, as with the welcome page: deleting authored data is
+                     not this pass's job. */
+                  entries.push({ msg: `  ⚠ ${file}: administrator-only page — ${rowsForPage.length} mapping(s) refused (it is locked to site owners below)`, ok: false });
+                  continue;
+                }
                 const item = items.find((p) => p.file === file);
                 if (!item) {
                   entries.push({ msg: `  ⚠ ${file}: page not found in ${PAGES_LIST} — check the Target value`, ok: false });
@@ -2698,6 +2713,162 @@ export default function FolderManager({
         }
       } catch (e) {
         entries.push({ msg: `⚠ Page access skipped — ${(e as Error).message}`, ok: false });
+      }
+
+      /* ── ADMIN PAGE LOCKDOWN ────────────────────────────────────────────────────────────
+         Spec: docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md
+
+         CRS_SITE_MEMBERS holds Read on the WEB — it must, or a user granted only a folder is
+         denied on Home and the site reads as broken — and Site Pages inherits from the web. So
+         every uploader could open every admin page: Folder Administration, Group Management,
+         Site Access, Folder Access, Page Access, the Audit Log, Bulk Upload. Confirmed live
+         2026-08-16 with a guest holding only Read plus Limited Access.
+
+         The pass ABOVE cannot fix it, and that is the whole point: it iterates pages that HAVE
+         Group Map rows, and an adminOnly page has roles: [] so no row can exist for it. The
+         mechanism is driven by grants and the thing needing protection has none — the same
+         structural gap that left both HC libraries readable (finding #10) and inverted the
+         site-entry grant (#7). Both were fixed by ASSERTING the required state every run.
+
+         Deliberately a SEPARATE pass with its own Site Pages read rather than a restructure of
+         the block above: that block builds everything inside `if (pageRows.length > 0)`, and
+         reshaping the most site-verified code in this file days before a client migration is the
+         wrong risk. One extra GET per run, out of thousands.
+
+         Site collection administrators bypass role assignments entirely, so this cannot lock an
+         administrator out of their own site. */
+      try {
+        setReconPhase("Locking administrator pages…");
+        const PAGES_LIST = "Site Pages";
+        const pagesBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(PAGES_LIST)}')`;
+
+        // The site's REAL welcome page, not just the "home.aspx" constant — a renamed welcome page
+        // slips past the constant, and locking it makes the site unreachable for everyone who is
+        // not an administrator. Same read, and same reasoning, as the pass above.
+        let adminWelcome = "";
+        try {
+          const wRes = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/RootFolder?$select=WelcomePage`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (wRes.ok) {
+            const wj = await wRes.json();
+            adminWelcome = ((wj.WelcomePage ?? "") as string).split("/").pop()?.toLowerCase() ?? "";
+          }
+        } catch { /* fall back to the constant alone */ }
+
+        const pgItemsRes = await context.spHttpClient.get(
+          `${pagesBase}/items?$select=Id,FileLeafRef,HasUniqueRoleAssignments&$top=500`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!pgItemsRes.ok) {
+          // FAILS OPEN on the READ: there is no page list to act on, and inventing one is not
+          // possible. The runbook's manual restriction step stays the backstop.
+          entries.push({ msg: `⚠ Administrator pages: could not read ${PAGES_LIST} (HTTP ${pgItemsRes.status}) — none checked`, ok: false });
+        } else if (fullCtrlId === undefined || typeof ownerGroupId !== "number") {
+          // Without Owners to restore, breaking inheritance would leave the page reachable only by
+          // site collection administrators — a lockout of every ordinary owner. Refuse instead.
+          entries.push({ msg: `⚠ Administrator pages: site Owners group or "Full Control" not resolved — none locked`, ok: false });
+        } else {
+          const pgJson2 = await pgItemsRes.json();
+          const adminPageItems = ((pgJson2.value ?? []) as Array<{ Id: number; FileLeafRef?: string; HasUniqueRoleAssignments?: boolean }>)
+            .map((p) => ({ id: p.Id, file: (p.FileLeafRef ?? "").toLowerCase(), unique: p.HasUniqueRoleAssignments === true }))
+            // Matched by FILE NAME through the same policy the admin screens filter with. On a site
+            // holding other content a page called "Configuration.aspx" would match — accepted, and
+            // mitigated by logging every lock BY NAME so a wrong one is visible in the run log
+            // rather than discovered by whoever lost access. An exact allow-list was rejected: this
+            // client renames everything at import, and the list would stop matching silently.
+            .filter((p) => p.file !== "" && !isForbiddenPageTarget(p.file) && p.file !== adminWelcome)
+            .filter((p) => policyForPage(p.file).adminOnly);
+
+          if (adminPageItems.length === 0) {
+            entries.push({ msg: `Administrator pages: none found in ${PAGES_LIST}`, ok: true });
+          }
+
+          for (const page of adminPageItems) {
+            const itemBase = `${pagesBase}/items(${page.id})`;
+            let locked = page.unique;
+
+            if (!page.unique) {
+              /* copyRoleAssignments=false, as everywhere else: with true every inherited grant is
+                 carried forward, so the page stays visible to exactly the same people and the run
+                 reports success — a failure invisible from the log. */
+              const broke = await withThrottleRetry(() => context.spHttpClient.post(
+                `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              ));
+              if (!broke.ok) {
+                // Reported as STILL OPEN, never as locked. A page reported locked that is not is
+                // the one outcome worse than today's, because it stops anyone looking.
+                entries.push({ msg: `  ✗ ${page.file}: INHERITS site permissions and could not be locked (HTTP ${broke.status}) — every site member can still open it`, ok: false });
+                continue;
+              }
+              entries.push({ msg: `  ↳ ${page.file}: inherited site permissions — LOCKED to site owners`, ok: true });
+              locked = true;
+              try {
+                await addRoleAssignmentToList(itemBase, ownerGroupId, fullCtrlId);
+                entries.push({ msg: `  ↳ ${page.file}: site Owners → Full Control restored`, ok: true });
+              } catch (e) {
+                entries.push({ msg: `  ✗ ${page.file}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+              }
+            }
+            if (!locked) continue;
+
+            /* ASSERT IN BOTH DIRECTIONS (spec §3), which is the half that is easy to leave out.
+               A page can be UNIQUE AND STILL EXPOSED — inheritance broken, with a group granted
+               Read on it by hand or by an earlier version of this code. Checking only
+               HasUniqueRoleAssignments would call that page locked. */
+            const raRes = await context.spHttpClient.get(
+              `${itemBase}/roleassignments?$select=PrincipalId,Member/Title,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=Member,RoleDefinitionBindings`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!raRes.ok) {
+              // FAILS OPEN for THIS page: stripping assignments from a list we could not read would
+              // remove grants nobody could see. Unreadable is not evidence of absence.
+              entries.push({ msg: `  ⚠ ${page.file}: could not read permissions (HTTP ${raRes.status}) — left as is`, ok: false });
+              continue;
+            }
+            const raJson2 = await raRes.json();
+            const assignments = (raJson2.value ?? []) as Array<{
+              PrincipalId?: number;
+              Member?: { Title?: string };
+              RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+            }>;
+            let stripped = 0;
+            for (const ra of assignments) {
+              if (ra.PrincipalId === ownerGroupId) continue;      // the one principal that stays
+              if (ra.PrincipalId === undefined) continue;
+              for (const binding of ra.RoleDefinitionBindings ?? []) {
+                if (binding.Id === undefined) continue;
+                const del = await withThrottleRetry(() => context.spHttpClient.post(
+                  `${itemBase}/roleassignments/removeroleassignment(principalid=${ra.PrincipalId},roledefid=${binding.Id})`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ));
+                if (del.ok) {
+                  stripped++;
+                  /* Named, never counted silently. An administrator who deliberately granted
+                     someone the Audit Log will see it taken away and read why — removing it
+                     silently would be worse than not removing it, because they would go on
+                     believing the grant was there. */
+                  entries.push({ msg: `  ↳ ${page.file}: removed ${ra.Member?.Title ?? `principal ${ra.PrincipalId}`} ("${binding.Name ?? binding.Id}") — administrator-only page`, ok: true });
+                } else {
+                  entries.push({ msg: `  ✗ ${page.file}: could not remove ${ra.Member?.Title ?? ra.PrincipalId} (HTTP ${del.status}) — they can still open this page`, ok: false });
+                }
+              }
+            }
+            if (page.unique && stripped === 0) {
+              entries.push({ msg: `✓ ${page.file}: administrator-only, already locked — correct`, ok: true });
+            }
+            await tick();
+          }
+        }
+      } catch (e) {
+        entries.push({ msg: `⚠ Administrator page lockdown skipped — ${(e as Error).message}`, ok: false });
       }
 
       // Ancestor rel-paths of a target, excluding the folder itself and the library root.

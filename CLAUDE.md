@@ -708,6 +708,40 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   confidentiality level.
 - **`DELS` now belongs to Head of Unit** (was: no persona). It is delete on the **approval library
   only** — pending and rejected files.
+- **RECONCILIATION LOCKS THE ADMIN PAGES ITSELF (2026-08-17, client: *"can we not auto restrict the
+  admin pages?"*).** Spec `2026-08-17-admin-page-lockdown-design.md`. Closes the last blocker before
+  migration. `CRS_SITE_MEMBERS` holds Read on the WEB — it must, or a folder-only user is denied on
+  Home — and Site Pages inherits, so **every uploader could open every admin page**.
+  - **The existing page pass could not fix it, and that is the point:** it iterates pages that HAVE
+    Group Map rows, and an `adminOnly` page has `roles: []` so no row can exist. **Third instance of
+    one structural gap** — the mechanism is driven by grant rows and the thing needing protection has
+    none (the others: HC libraries inheriting, #10; the inverted site-entry grant, #7). All three are
+    fixed the same way: **assert the required state every run** instead of deriving it from rows.
+  - **A SEPARATE pass with its own Site Pages read**, not a restructure of the row pass — that block
+    builds everything inside `if (pageRows.length > 0)`, and reshaping the most site-verified code in
+    the file days before a client migration is the wrong risk. One extra GET per run.
+  - **It asserts in BOTH directions.** A page can be **unique and still exposed** — inheritance
+    broken with a group granted Read by hand — so checking `HasUniqueRoleAssignments` alone would
+    call it locked. Every non-Owners assignment is stripped, and **each removal is logged with the
+    principal named**: silently removing a deliberate grant is worse than not removing it, because
+    the admin goes on believing it is there.
+  - **The row pass now REFUSES a row targeting an `adminOnly` page**, so the two cannot fight —
+    otherwise one grants Read and the other strips it, every run, for ever. Order then stops
+    mattering, which is a correctness property rather than a sequencing convention.
+  - **Fails CLOSED per page, OPEN on the read.** Unreadable Site Pages ⇒ lock nothing; an unreadable
+    ACL ⇒ skip **that** page unchanged (stripping what you could not read removes invisible grants);
+    a failed break ⇒ reported **still open** with the status, never as locked.
+  - **THE COVERAGE TEST FOUND FIVE ADMIN PAGES THE POLICY NEVER MATCHED**, and none by inspection:
+    `Group-Management` (`group.?manager` does not match "Management"), `Site-Access`, `Page-Access`
+    and `CRS-Audit-Log` (all fell to `DEFAULT_POLICY` = UPL/APR/DELS), and **`Approval-Library-Access`,
+    which matched `/approv/i`** — the screen that grants library permissions, classified as an
+    approver page. Harmless while restriction was a manual step nobody did; now the rule decides what
+    gets locked, **an unmatched name is a page left open silently, for ever**. Pattern is now
+    `/folder|group.?manag|config|setting|mapping|admin|access|audit/i`, pinned by a test listing every
+    page the runbook creates on both sides of the line.
+  - Matched by FILE NAME, so a client page called `Configuration.aspx` would be locked. Accepted:
+    every lock is logged by name. An exact allow-list was rejected — this client renames everything
+    at import, and the list would stop matching silently.
 - **THE UPLOAD FORM PAGE ACCEPTS `APR` AS WELL AS `UPL` (2026-08-17, client: *"client wants HOU to
   be able to get into upload form to upload, basically apr can upload"*).** `pageAccessPolicy.ts`'s
   `/upload/i` rule listed `["UPL"]`, so an approver got **AccessDenied on the upload form** — found

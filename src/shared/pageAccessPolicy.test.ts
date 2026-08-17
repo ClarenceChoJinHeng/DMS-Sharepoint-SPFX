@@ -180,3 +180,49 @@ describe("the Requests page", () => {
     expect(policyForPage("Requests.aspx").adminOnly).toBe(false);
   });
 });
+
+// ── Every page reconciliation must lock, and every page it must not ──────────
+//
+// Reconciliation's admin-page lockdown (2026-08-17) decides what to restrict by running each
+// Site Pages file name through policyForPage and acting on `adminOnly`. So a pattern that stops
+// matching does not fail — it SILENTLY STOPS PROTECTING that page, which is the exact failure the
+// pass was built to remove.
+//
+// These are the page names in the migration runbook §8. If a page is renamed, this list and the
+// runbook change together or the rename ships a hole.
+// Spec: docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md
+describe("admin page lockdown coverage", () => {
+  const MUST_LOCK = [
+    "CRS-Settings.aspx",
+    "Folder-Administration.aspx",
+    "Group-Management.aspx",
+    "Site-Access.aspx",
+    "Approval-Library-Access.aspx",
+    "Page-Access.aspx",
+    "Folder-Access.aspx",
+    "CRS-Audit-Log.aspx",
+    "Bulk-Upload.aspx",
+  ];
+
+  // The working pages. Locking any of these to owners takes the system away from the people it
+  // exists for — a far louder failure than the one above, but worth pinning in the same place.
+  const MUST_NOT_LOCK = [
+    "Upload-Form.aspx",
+    "Approval-Document.aspx",
+    "My-Submissions.aspx",
+    "CRS-Requests.aspx",
+    "Home.aspx",
+  ];
+
+  for (const name of MUST_LOCK) {
+    it(`${name} is adminOnly, so reconciliation locks it`, () => {
+      expect(policyForPage(name).adminOnly).toBe(true);
+    });
+  }
+
+  for (const name of MUST_NOT_LOCK) {
+    it(`${name} is NOT adminOnly, so reconciliation leaves it alone`, () => {
+      expect(policyForPage(name).adminOnly).toBe(false);
+    });
+  }
+});

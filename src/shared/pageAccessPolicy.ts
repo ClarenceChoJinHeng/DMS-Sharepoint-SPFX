@@ -60,7 +60,27 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     },
   },
   {
-    match: /folder|group.?manager|config|setting|mapping|admin/i,
+    // FIVE ADMIN PAGES WERE NOT MATCHED BY THIS RULE UNTIL 2026-08-17, and every one of them fell
+    // through to a policy that offered it to ordinary users. Found by the coverage test added with
+    // the admin-page lockdown, not by inspection:
+    //
+    //   Group-Management.aspx      — "group.?manager" requires "manager"; the page is "Management".
+    //   Site-Access.aspx           — matched nothing, took DEFAULT_POLICY (UPL, APR, DELS).
+    //   Page-Access.aspx           — same.
+    //   CRS-Audit-Log.aspx         — same. Its web part has an IsSiteAdmin gate; the page grant did not.
+    //   Approval-Library-Access    — WORSE: matched /approv/i below, so the screen that grants library
+    //                                permissions was classified as an approver page.
+    //
+    // This mattered little while page restriction was a manual step nobody performed. It matters
+    // now: reconciliation locks exactly the pages this rule marks adminOnly, so a name that does not
+    // match is not a mislabel — it is a page left open, silently, for ever.
+    //
+    // `group.?manag` not `group.?manager`, so Manager and Management both match. `access` covers the
+    // four access screens; Folder-Access already matched via "folder", and keeping "access" general
+    // means a fifth access screen is covered on the day it is created rather than the day someone
+    // notices. Checked against every non-admin page name: Upload-Form, Approval-Document,
+    // My-Submissions, CRS-Requests and Home match none of these tokens.
+    match: /folder|group.?manag|config|setting|mapping|admin|access|audit/i,
     policy: {
       roles: [],
       adminOnly: true,
