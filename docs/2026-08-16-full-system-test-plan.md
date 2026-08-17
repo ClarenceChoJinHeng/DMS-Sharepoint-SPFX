@@ -234,6 +234,7 @@ Severity: **blocker** (migration cannot proceed) · **major** (wrong behaviour, 
 2. §4 passes end to end with **real second accounts**.
 3. §7.7 passes — an uncleared uploader cannot see the HC level.
 4. `npx heft test --clean` green, warnings at the 19 baseline.
-5. The migration runbook updated with everything this testing changed — especially the per-site setup
+5. **The migration runbook — `docs/2026-08-17-sdg-migration-runbook.md`** — updated with everything
+   this testing changed — especially the per-site setup
    steps: column parity, `Created By` index on `Documents`, audit list permissions, Search Schema
    mappings if 5.3 needs them, and the customizer registration if the feature does not provision.
