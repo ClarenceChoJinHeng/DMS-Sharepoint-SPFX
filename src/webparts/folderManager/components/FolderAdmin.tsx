@@ -104,6 +104,7 @@ const s: Record<string, React.CSSProperties> = {
   label:     { display: "block", fontWeight: 600, fontSize: 12, margin: "0 0 4px" },
   select:    { width: "100%", maxWidth: 420, boxSizing: "border-box", padding: "7px 10px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff" },
   input:     { width: "100%", maxWidth: 420, boxSizing: "border-box", padding: "7px 10px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4 },
+  railBusy:  { cursor: "not-allowed", opacity: 0.55 },
   navBar:    { display: "flex", gap: 8, marginTop: 20, paddingTop: 16, borderTop: "1px solid #eceaea", flexWrap: "wrap" },
   primary:   { padding: "7px 16px", fontSize: 13, background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer" },
   off:       { padding: "7px 16px", fontSize: 13, background: "#e6e6e6", color: "#9a9a9a", border: "none", borderRadius: 4, cursor: "not-allowed" },
@@ -167,6 +168,20 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   const [abbrevMissing, setAbbrevMissing] = useState<number | undefined>(undefined);
   /** Which creation control the Group Management step shows. Defaults to the bulk run — see the note there. */
   const [groupMode, setGroupMode] = useState<"all" | "one">("all");
+  /**
+   * True while a bulk group run is in flight, reported up by `BulkGroupProvisioner`.
+   *
+   * The run lives in that component's state with no resume, so a step change unmounts it and stops it
+   * part-way — SILENTLY, which is the likely cause of 302 of 308 groups on the rehearsal site. So the
+   * rail, Back, Next, Finish and the way out of the flow are all held for the duration.
+   *
+   * This is the one thing in the runner that DOES padlock navigation, and the exception is deliberate.
+   * The client's rule is that the flow must not stop them doing the work — here navigation destroys
+   * work already in progress, which is the same reasoning that makes a tab switch with unsaved
+   * abbreviations a refusal rather than a "discard?" prompt. It is also temporary and self-clearing,
+   * and the step itself offers Stop, so nobody is held longer than they choose to be.
+   */
+  const [runBusy, setRunBusy] = useState(false);
 
   /** The subject of flows 2 and 4 — what makes their term-store step checkable at all. */
   const [subject, setSubject] = useState("");
@@ -472,13 +487,18 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 Create all groups for a segment
               </button>
               <button
-                style={groupMode === "one" ? s.modeOn : s.modeOff}
+                style={groupMode === "one" && !runBusy ? s.modeOn : s.modeOff}
+                // Switching mode unmounts the provisioner, which stops a run exactly as a step change
+                // does. Held for the same reason and for the same duration.
+                disabled={runBusy}
                 onClick={() => setGroupMode("one")}
               >
                 Create one group
               </button>
             </div>
-            {groupMode === "all" && <BulkGroupProvisioner context={context} siteUrl={siteUrl} />}
+            {groupMode === "all" && (
+              <BulkGroupProvisioner context={context} siteUrl={siteUrl} onBusyChange={setRunBusy} />
+            )}
             {/* The LIST always renders — hiding what already exists is how a group gets created twice. Only
                 the create form follows the switch. */}
             <GroupManager
@@ -606,7 +626,8 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
 
   return (
     <section style={s.wrap}>
-      <BackBand label="Back to Folder Management" onClick={leaveFlow} />
+      {/* Held during a run for the same reason as the rail: this is the widest exit on the screen. */}
+      <BackBand label="Back to Folder Management" onClick={leaveFlow} disabled={runBusy} />
       <h2 style={s.h2}>{active.label}</h2>
       <p style={s.sub}>
         {segment ? <>Segment: <strong>{segment.label}</strong>. </> : undefined}
@@ -623,9 +644,14 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
             return (
               <button
                 key={st.id}
-                style={{ ...s.railItem, ...(isActive ? s.railActive : {}) }}
+                style={{ ...s.railItem, ...(isActive ? s.railActive : {}), ...(runBusy ? s.railBusy : {}) }}
                 // EVERY step is reachable. The rail says what is outstanding; it does not padlock
                 // navigation — the client's rule is that the flow must not stop them working.
+                //
+                // The ONE exception is a bulk group run in flight: leaving this step unmounts it and
+                // stops it part-way, silently. That is navigation destroying work rather than
+                // navigation being inconvenient, and it clears itself the moment the run ends.
+                disabled={runBusy}
                 onClick={() => setStepIdx(i)}
               >
                 <span style={{ ...s.railNum, ...style.pill }}>{style.mark || i + 1}</span>
@@ -668,25 +694,38 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               <>
                 <div style={s.navBar}>
                   <button
-                    style={idx === 0 ? s.off : s.ghost}
-                    disabled={idx === 0}
+                    style={idx === 0 || runBusy ? s.off : s.ghost}
+                    disabled={idx === 0 || runBusy}
                     onClick={() => setStepIdx(Math.max(0, idx - 1))}
                   >
                     &lsaquo; Back
                   </button>
                   <button
-                    style={last || blocked ? s.off : s.primary}
-                    disabled={last || blocked.length > 0}
+                    style={last || blocked || runBusy ? s.off : s.primary}
+                    disabled={last || blocked.length > 0 || runBusy}
                     onClick={() => setStepIdx(Math.min(steps.length - 1, idx + 1))}
                   >
                     Next step &rsaquo;
                   </button>
-                  {last && <button style={s.ghost} onClick={leaveFlow}>Finish</button>}
+                  {last && (
+                    <button style={runBusy ? s.off : s.ghost} disabled={runBusy} onClick={leaveFlow}>
+                      Finish
+                    </button>
+                  )}
                 </div>
                 {/* The reason sits BESIDE the disabled button, never only in a tooltip: a greyed button
                     with no explanation reads as a broken page, and the admin's next move is to reload
                     rather than to finish the step. */}
-                {!last && blocked.length > 0 && <div style={s.hint}>{blocked}</div>}
+                {!last && blocked.length > 0 && !runBusy && <div style={s.hint}>{blocked}</div>}
+                {/* Beside the greyed buttons, never only in a tooltip — the same rule as the Next
+                    gate. A held navigation bar with no stated reason reads as a broken page. */}
+                {runBusy && (
+                  <div style={s.hint}>
+                    A bulk group run is in progress. Moving away from this step would stop it part-way,
+                    so navigation is held until it finishes — press <strong>Stop</strong> above to end
+                    it early. Anything already written stays written.
+                  </div>
+                )}
               </>
             );
           })()}

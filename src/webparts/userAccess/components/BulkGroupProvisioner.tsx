@@ -12,7 +12,7 @@
 // PREVIEW BEFORE ANYTHING IS WRITTEN. Group deletion is manual and one at a time, so a plan this size is not
 // an action to take on trust — the preview is the review step and the CSV is the cross-check.
 import * as React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { parseLevels } from "../../../shared/formModel";
@@ -39,7 +39,22 @@ import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { Toast, ToastKind } from "../../../shared/toast";
 
-type Props = { context: WebPartContext; siteUrl: string };
+type Props = {
+  context: WebPartContext;
+  siteUrl: string;
+  /**
+   * Reported while a run is in flight, so a HOST can hold its own navigation.
+   *
+   * The run lives in component state and has no resume, so changing step, pressing Next or Back, or
+   * leaving the page stops it part-way — and it stops SILENTLY, which is the likely cause of 302 of
+   * the 308 groups on the rehearsal site. The component cannot disable a rail it does not own, so it
+   * reports instead, the same report-upward shape as `onAbbreviationsMissingChange`.
+   *
+   * Optional: the standalone Group Management page has nothing to hold, and it must still be able to
+   * mount this without knowing about flows.
+   */
+  onBusyChange?: (busy: boolean) => void;
+};
 
 type Seg = BulkSegment & { key: string; label: string };
 
@@ -98,7 +113,11 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
   throw lastErr ?? new Error("throttled");
 }
 
-export default function BulkGroupProvisioner({ context, siteUrl }: Props): React.ReactElement {
+export default function BulkGroupProvisioner({
+  context,
+  siteUrl,
+  onBusyChange,
+}: Props): React.ReactElement {
   const [segments, setSegments] = useState<Seg[] | undefined>(undefined);
   const [chosen, setChosen] = useState("");
   const [rows, setRows] = useState<AbbrevRowDraft[] | undefined>(undefined);
@@ -119,7 +138,36 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
+  /**
+   * Set by Stop, read by the run loop. A REF, not state: the loop is one long async function and a
+   * state value it closed over at render time would stay false however many times Stop was pressed —
+   * the same stale-closure trap as the counters below.
+   */
+  const stopRef = useRef(false);
+  const [stopping, setStopping] = useState(false);
   const [toast, setToast] = useState<{ kind: ToastKind; text: string } | undefined>(undefined);
+
+  useEffect(() => {
+    if (onBusyChange) onBusyChange(busy);
+  }, [busy]);
+
+  /**
+   * Closing or reloading the tab mid-run stops it part-way, and until now said nothing at all.
+   *
+   * The browser prompt is the whole mitigation — there is no resume to offer — but the run is
+   * repeatable since 1.0.151.0, so a stopped run is finished by pressing Run again rather than
+   * being unrecoverable. Same guard as the staged batches in `BulkUpload.tsx`.
+   */
+  useEffect(() => {
+    if (!busy) return undefined;
+    const warn = (e: BeforeUnloadEvent): string => {
+      e.preventDefault();
+      e.returnValue = "";
+      return "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy]);
 
   const seg = (segments ?? []).filter((x) => x.key === chosen)[0];
   const abbrevList = (): string => encodeURIComponent(abbrevListTitle());
@@ -328,6 +376,8 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
 
   const run = async (): Promise<void> => {
     if (!plan || !seg || !existingRows) return;
+    stopRef.current = false;
+    setStopping(false);
     setBusy(true);
     // A LOCAL log, mirrored into state. Counters read from state during a run would see their render-time
     // value and report zero — the same stale-closure trap as reconciliation's counts.
@@ -343,7 +393,15 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
     const seen: GroupMapWriteRow[] = existingRows.slice();
 
     say(`${seg.label}: ${plan.groups.length} planned, ${toCreateCount(plan)} to create.`);
+    let stopped = false;
     for (const g of plan.groups) {
+      // Checked BETWEEN groups, never inside one: a group whose rows are half written is the state
+      // that needs a human to look at it, and this is a stop, not an abort. What has landed stays.
+      if (stopRef.current) {
+        stopped = true;
+        say(`■ Stopped by you. Everything above is done and stays done — press Run again to finish.`);
+        break;
+      }
       let id = titles[g.name.toLowerCase()];
       if (id === undefined) {
         try {
@@ -383,18 +441,26 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
       }
     }
     say(
-      `Done. ${made} created, ${mapped} mappings written, ` +
+      `${stopped ? "Stopped" : "Done"}. ${made} created, ${mapped} mappings written, ` +
       `${already} already there (not re-written), ${failed} failed.`,
     );
     setToast({
-      kind: failed > 0 ? "warn" : "ok",
+      // A stopped run is a WARNING however cleanly it stopped — it is unfinished, and a green toast
+      // over a half-provisioned segment is how 302 of 308 goes unnoticed a second time.
+      kind: failed > 0 || stopped ? "warn" : "ok",
       text:
+        (stopped ? `Stopped part-way. ` : "") +
         `${made} groups created and ${mapped} mappings written for ${seg.label}.` +
+        (stopped ? " Press Run again to finish the rest — nothing already written is touched." : "") +
         (already > 0 ? ` ${already} mapping(s) were already there and were left alone.` : "") +
         (failed > 0 ? ` ${failed} failed — see the log.` : "") +
         " Nothing is granted until Folder Reconciliation runs.",
     });
     setBusy(false);
+    setStopping(false);
+    // stopRef is cleared at the START of the next run, not here: after the awaits above the linter
+    // cannot prove the ref has not moved, and a reset that lands after a fresh press would arm a run
+    // nobody asked to stop.
     // Re-read, so a second press sees what the first made instead of trying to create it again.
     await loadForSegment(seg).catch(() => undefined);
   };
@@ -541,6 +607,19 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
               {busy ? "Working…" : `Create ${toCreateCount(plan)} groups and map ${plan.groups.length}`}
             </button>
             <button style={s.ghost} disabled={busy} onClick={exportCsv}>Export CSV</button>
+            {/* Leaving the page is the only other way out of a run, and holding the flow's navigation
+                without offering a way to stop would trap an admin for the length of a 300-group run.
+                Safe to offer only because the run is repeatable: it stops between groups and what
+                landed stays. */}
+            {busy && (
+              <button
+                style={s.ghost}
+                disabled={stopping}
+                onClick={() => { stopRef.current = true; setStopping(true); }}
+              >
+                {stopping ? "Stopping after this group…" : "Stop"}
+              </button>
+            )}
           </div>
           {existingRows !== undefined && (
             <p style={s.hint}>
@@ -550,7 +629,8 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
           )}
           {busy && (
             <p style={s.hint}>
-              Leave this tab open — the run has no resume, and closing it stops it part-way.
+              Leave this tab open and stay on this step — the run has no resume, and leaving stops it
+              part-way. Nothing already written would be lost, and pressing Run again finishes the rest.
             </p>
           )}
         </>

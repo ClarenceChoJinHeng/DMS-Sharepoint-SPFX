@@ -20,8 +20,8 @@ Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
 > 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
-> built and part-run on the dcistaging rehearsal site. The duplicate-row bug is **fixed in 1.0.151.0 and
-> not yet site-tested**; **four defects remain**, listed there in build order. `CRS Group Map` has been
+> built and part-run on the dcistaging rehearsal site. The duplicate-row and killed-run bugs are **fixed in 1.0.152.0 and
+> not yet site-tested**; **three defects remain**, listed there in build order. `CRS Group Map` has been
 > cleared and **reconciliation must not be run** until the row count is right.
 
 > 📍 **Current site state, and what is outstanding: `docs/2026-08-07-project-state.md`.**
@@ -871,7 +871,18 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
       by another route. An unreadable list is `undefined`, never `[]`, and HOLDS the run with the
       reason on screen: this codebase fails open nearly everywhere because the cost is a form out of
       service for a minute; here it is hundreds of duplicate rows nobody would find.
-  - **Four defects remain open — see `docs/2026-08-18-bulk-groups-handoff.md` before running it.**
+  - **NAVIGATING AWAY FROM A RUN USED TO KILL IT SILENTLY** (fixed 1.0.152.0). The run lives in
+    component state with no resume, so a step change unmounts it mid-way — the likely cause of 302 of
+    308 groups on the rehearsal site. `onBusyChange` reports it up and `FolderAdmin` holds the rail,
+    Back, Next, Finish, the mode switch and the back band, with the reason beside the greyed buttons;
+    the `beforeunload` guard sits in the component so the standalone page is covered too.
+    - **This is the ONLY padlock in the guided runner**, against its own rule that the flow must not
+      stop an admin working — because here navigation destroys work in flight, exactly as a tab switch
+      with unsaved abbreviations does. Temporary, self-clearing, and paired with a **Stop** button so
+      nobody is held longer than they choose. Stop lands BETWEEN groups, and a stopped run reports as
+      a warning however cleanly it stopped.
+    - **Stop is only safe because the run is idempotent** — pressing Run again finishes the gaps.
+  - **Three defects remain open — see `docs/2026-08-18-bulk-groups-handoff.md` before running it.**
 - **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
   folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.
   New web part **`Group Management`** (`3f81c6d2-…`, inside the `user-access-web-parts` bundle) owns

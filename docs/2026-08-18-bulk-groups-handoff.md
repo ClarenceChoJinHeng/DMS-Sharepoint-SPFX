@@ -26,7 +26,7 @@ dcistaging's tree is NOT the client's: it lacks Group Corporate Secretarial and 
 So **308 is correct there, and CRS should plan 324** (63 × 5 + 8 + 1). A different number on CRS is a
 real gap, not a repeat of this.
 
-Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.151.0** (defect 1), 1056
+Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.152.0** (defects 1-2), 1056
 tests, 15 warnings (the baseline).
 
 ---
@@ -79,13 +79,29 @@ before the press rather than discovered after it.
 **A single run against an empty Group Map is clean**, which is why the list was cleared rather than
 deduplicated by hand.
 
-### 2. Navigation during a run kills it, silently
+### 2. Navigation during a run kills it, silently — **FIXED, 1.0.152.0, not yet site-tested**
 
 The run lives in component state with no resume, so changing step, pressing Next/Back or closing the tab
-stops it part-way with no warning. This is the likely cause of 302 of 308.
+stopped it part-way with no warning. This is the likely cause of 302 of 308.
 
-**Fix:** surface `busy` to the host so Next, Back and the rail are disabled, plus a `beforeunload` guard.
-Same reasoning as the staged-batch guard in `BulkUpload.tsx`.
+**Fixed:** `BulkGroupProvisioner` reports `busy` up through a new `onBusyChange` prop (the same
+report-upward shape as `onAbbreviationsMissingChange`), and `FolderAdmin` holds the rail, Back, Next,
+Finish, the mode switch and the *Back to Folder Management* band for the duration, with the reason
+beside the greyed buttons. The `beforeunload` guard lives in the component, so the standalone Group
+Management page is covered too.
+
+- **This is the one place in the runner that padlocks navigation, and the exception is argued rather
+  than assumed.** The flow's rule is that it must not stop an admin doing the work; here navigation
+  destroys work already in flight, which is the same reasoning that makes a tab switch with unsaved
+  abbreviations a refusal rather than a "discard?" prompt. It is temporary and self-clearing.
+- **A Stop button was added with it**, because holding every exit for the length of a 300-group run
+  and offering no way out would be half a feature. It stops **between groups**, never inside one, and
+  a stopped run reports as a WARNING however cleanly it stopped — a green toast over a
+  half-provisioned segment is how 302 of 308 goes unnoticed a second time.
+- **Stopping is only safe because of defect 1.** Pressing Run again finishes what is missing and
+  re-writes nothing, so an interrupted run is now a pause rather than a mess.
+- The mode switch is held too: *Create one group* unmounts the provisioner exactly as a step change
+  does.
 
 ### 3. The mappings table shows one bare term
 

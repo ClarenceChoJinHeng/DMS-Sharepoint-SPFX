@@ -81,20 +81,29 @@ export function BackBand({
   label,
   onClick,
   href,
+  disabled,
 }: {
   label: string;
   onClick?: () => void;
   href?: string;
+  /**
+   * Hold the way out while leaving would destroy work in flight — a bulk group run is the case this
+   * exists for. Rendered as a greyed BUTTON even in `href` mode, because an anchor cannot be disabled
+   * and a link that silently ignores a click reads as a broken page. Defaults to false, so every
+   * existing caller is unchanged.
+   */
+  disabled?: boolean;
 }): React.ReactElement {
+  const style = disabled ? { ...backLinkStyle, opacity: 0.5, cursor: "not-allowed" } : backLinkStyle;
   return (
     <div style={backBandStyle}>
-      {href === undefined ? (
-        <button type="button" style={backLinkStyle} onClick={onClick}>
+      {href === undefined || disabled ? (
+        <button type="button" style={style} disabled={disabled} onClick={disabled ? undefined : onClick}>
           <span style={backChevronStyle}>{"<"}</span>
           {label}
         </button>
       ) : (
-        <a href={href} style={backLinkStyle}>
+        <a href={href} style={style}>
           <span style={backChevronStyle}>{"<"}</span>
           {label}
         </a>
