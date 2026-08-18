@@ -982,7 +982,20 @@ export default function GroupManager({ context, siteUrl, hideCreateForm }: Props
           </p>
         )}
 
-        <div style={{ marginTop: 10 }}>
+        {/* SCROLLS, once the list is long enough to be a page of its own (defect 4, 2026-08-18):
+            303 groups pushed everything else off the screen, including the create form above.
+
+            Capped only while every group is COLLAPSED. The member editor inside an expanded group
+            carries an absolutely-positioned people picker, and a scroll container would clip its
+            results for any group near the bottom — trading a long page for a control that silently
+            cannot be used. When one group is open the admin is working inside it, not scanning the
+            list, so the cap has nothing to do. */}
+        <div
+          style={{
+            marginTop: 10,
+            ...(openGroup === undefined ? { maxHeight: "60vh", overflowY: "auto" as const } : {}),
+          }}
+        >
           {loading && <p style={s.hint}>Loading…</p>}
           {!loading && visible.length === 0 && (
             <p style={s.hint}>

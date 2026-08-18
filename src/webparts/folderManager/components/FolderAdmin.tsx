@@ -21,7 +21,7 @@
 // Access, which it does not host, are mounted straight from userAccess — one component, two mount points,
 // never a second copy.
 import * as React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import FolderManager from "./FolderManager";
 import { IFolderManagerProps } from "./IFolderManagerProps";
@@ -183,6 +183,26 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    */
   const [runBusy, setRunBusy] = useState(false);
 
+  /**
+   * Hold navigation while a run is in flight, and RE-READ THE FACTS when it ends.
+   *
+   * `groupsExist` is read when the segment is picked, so after a run that created 300 groups the
+   * rail still said the step was *To do* (defect 5, 2026-08-18). Cosmetic in the sense that nothing
+   * is wrong underneath, and not cosmetic in the sense that matters: the rail is the thing telling
+   * an admin what is left, and one entry known to be lying is enough to stop them trusting the rest.
+   *
+   * The same reason the segment list gained an explicit refresh — a mount-time read reflects nothing
+   * a step below it has since written.
+   */
+  const wasRunBusy = useRef(false);
+  const onRunBusyChange = (b: boolean): void => {
+    // The previous value lives in a REF, not read inside a setState updater: an updater must be
+    // pure, and one that also queued a refresh would fire it twice under StrictMode.
+    if (wasRunBusy.current && !b) setReload((n) => n + 1);
+    wasRunBusy.current = b;
+    setRunBusy(b);
+  };
+
   /** The subject of flows 2 and 4 — what makes their term-store step checkable at all. */
   const [subject, setSubject] = useState("");
 
@@ -254,7 +274,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
         // Groups, by the naming convention. ADVISORY — `suggestGroupName` only suggests, so a
         // hand-named group reads as absent. This can mark, never lock.
         const groups = await context.spHttpClient
-          .get(`${siteUrl}/_api/web/sitegroups?$select=Title&$top=500`, SPHttpClient.configurations.v1, { headers: GET })
+          // $top=5000, not 500: a provisioned segment is ~324 groups on its own, and a truncated
+          // read would report an existing segment's groups as absent.
+          .get(`${siteUrl}/_api/web/sitegroups?$select=Title&$top=5000`, SPHttpClient.configurations.v1, { headers: GET })
           .then(async (r) => (r.ok ? ((await r.json()).value ?? []) as Array<{ Title?: string }> : undefined))
           .catch(() => undefined);
         if (groups) {
@@ -295,7 +317,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
     };
     load().catch(() => { if (!cancelled) setBaseFacts({}); });
     return () => { cancelled = true; };
-  }, [flow ? flow.id : "", segKey, segments]);
+    // `reload` is in here so a bulk run's results are picked up the moment it ends — see
+    // onRunBusyChange. It also refreshes the segment list, which is harmless and occasionally right.
+  }, [flow ? flow.id : "", segKey, segments, reload]);
 
   /**
    * The facts, plus the one fact only the "add a new segment" flow can answer.
@@ -497,7 +521,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               </button>
             </div>
             {groupMode === "all" && (
-              <BulkGroupProvisioner context={context} siteUrl={siteUrl} onBusyChange={setRunBusy} />
+              <BulkGroupProvisioner context={context} siteUrl={siteUrl} onBusyChange={onRunBusyChange} />
             )}
             {/* The LIST always renders — hiding what already exists is how a group gets created twice. Only
                 the create form follows the switch. */}

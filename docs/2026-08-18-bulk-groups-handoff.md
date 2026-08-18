@@ -26,7 +26,7 @@ dcistaging's tree is NOT the client's: it lacks Group Corporate Secretarial and 
 So **308 is correct there, and CRS should plan 324** (63 × 5 + 8 + 1). A different number on CRS is a
 real gap, not a repeat of this.
 
-Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.153.0** (defects 1-3), 1063
+Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.154.0** (all five defects), 1063
 tests, 15 warnings (the baseline).
 
 ---
@@ -47,7 +47,7 @@ Do not read `docs/2026-08-17-sdg-migration-runbook.md` §10–§12 as done. Re-c
 
 ---
 
-## Open defects, in build order
+## Open defects, in build order — ALL FIVE FIXED 2026-08-18, NONE SITE-TESTED
 
 ### 1. The bulk run duplicates Group Map rows — ~~THE BUG~~ **FIXED, 1.0.151.0, not yet site-tested**
 
@@ -128,21 +128,34 @@ department row was indistinguishable from a unit one. Client asked for **Tier 1 
 Segments with no `mode` row (Upstream Malaysia's placeholder) resolve nothing and say so; those rows
 already carry the `stale` badge beside them.
 
-### 4. The group list is not scrollable
+### 4. The group list is not scrollable — **FIXED, 1.0.154.0, not yet site-tested**
 
-303 groups stretch the page; the list needs its own `max-height` and overflow. Same class of problem as
-defect 2 — a 300-item run and a 300-item list were both designed as if they would be small.
+303 groups stretched the page, pushing the create form off the top. The list now caps at `60vh` and
+scrolls — **but only while every group is collapsed.** An expanded group's member editor carries an
+absolutely-positioned people picker, and a scroll container clips it for any group near the bottom:
+that trades a long page for a control that silently cannot be used. With one group open the admin is
+working inside it rather than scanning the list, so the cap has nothing to do.
 
-### 5. Step 4's tick does not refresh after a run
+### 5. Step 4's tick does not refresh after a run — **FIXED, 1.0.154.0, not yet site-tested**
 
-`groupsExist` is read when the segment is picked, so the step still says *To do* once the groups exist.
-Cosmetic, but it makes the rail lie.
+`groupsExist` was read when the segment was picked, so the step still said *To do* after a run created
+300 groups. `onRunBusyChange` bumps `reload` on the busy→idle edge and the facts effect keys on it.
+Cosmetic in that nothing underneath was wrong; not cosmetic in the way that counts — the rail is what
+tells an admin what is left, and one entry known to be lying is enough to stop them trusting the rest.
+
+Found alongside it: the groups read was `$top=500`, and a provisioned segment is ~324 groups on its
+own. Now 5000 — a truncated read would have reported an existing segment's groups as absent.
 
 ---
 
 ## Then, in this order
 
-1. One bulk run → expect ~6 created, ~790 rows, **0 failed** (the 302 existing groups log as `=`)
+0. **Deploy 1.0.154.0 to dcistaging first** — every fix below is code, and none has been run on a site.
+   Check the INSTALLED version in Site Contents, and remember dcistaging's own site-collection catalog
+   takes precedence over the tenant one.
+1. One bulk run → expect ~6 created, ~790 rows, **0 failed** (the 302 existing groups log as `=`).
+   `CRS Group Map` is empty, so the dedupe has nothing to skip on this run — **press Run a second time
+   to prove it**: the correct result is 0 created, 0 written, ~790 already there.
 2. Spot-check `CRS Group Map`: a `_HOD` row must carry the **department** term, a unit row the leaf
 3. Folder Reconciliation — first time at this scale, ~1 hour, single tab, no resume
 4. Two-account verification: upload → approve → route

@@ -20,8 +20,8 @@ Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
 > 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
-> built and part-run on the dcistaging rehearsal site. Three of the five defects are **fixed in 1.0.153.0 and
-> not yet site-tested**; **two defects remain**, listed there in build order. `CRS Group Map` has been
+> built and part-run on the dcistaging rehearsal site. All five defects are **fixed in 1.0.154.0 and
+> NONE of it site-tested**; deploy and re-run the bulk provisioning before anything else. `CRS Group Map` has been
 > cleared and **reconciliation must not be run** until the row count is right.
 
 > 📍 **Current site state, and what is outstanding: `docs/2026-08-07-project-state.md`.**
@@ -898,7 +898,15 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
       as a term with no children would present a unit AS a department. A chain of one legitimately
       means "on a department"; unresolved means "we do not know" — rendered differently on purpose.
     - The CSV split with it, from the SAME function as the screen.
-  - **Two defects remain open — see `docs/2026-08-18-bulk-groups-handoff.md` before running it.**
+  - The **group list scrolls** at `60vh`, but only while every group is COLLAPSED — an expanded
+    group's people picker is absolutely positioned, and a scroll container clips it for any group near
+    the bottom, trading a long page for a control that silently cannot be used.
+  - **The rail re-reads its facts when a run ENDS** (`onRunBusyChange` → `reload`). `groupsExist` was
+    read when the segment was picked, so the step still said *To do* after 300 groups were created. A
+    mount-time read reflects nothing a step below it has since written — the same trap as the segment
+    picker's Refresh button.
+  - **All five defects are fixed in 1.0.154.0 and NONE is site-tested** — see
+    `docs/2026-08-18-bulk-groups-handoff.md` before running it.
 - **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
   folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.
   New web part **`Group Management`** (`3f81c6d2-…`, inside the `user-access-web-parts` bundle) owns
