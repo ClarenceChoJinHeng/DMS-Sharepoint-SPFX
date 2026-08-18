@@ -170,6 +170,18 @@ Preview (315 groups · 47 already exist · 268 to create)
   hides.
 - **Idempotent.** An existing group is not re-created; its rows are still asserted, because a group with no
   row is the state that grants nothing.
+  - ⚠ **"ASSERTED" WAS BUILT AS "WRITTEN AGAIN", AND THAT IS THE 642-ROW BUG** (found on the rehearsal
+    site, fixed in 1.0.151.0 by `splitPlannedRows`). Asserting a row means writing it *if it is not
+    already there* — so the run reads every Group Map row first and partitions each group's planned rows
+    against them, per ROW rather than per group, because a run stopped part-way leaves a group made with
+    only some of its rows written and pressing Run again is the only resume this has.
+  - The asymmetry is why nobody caught it: group creation *was* idempotent, so a second press logged
+    `= already existed (mapping only)` on every line while doubling the mappings behind them. No screen
+    shows a row twice.
+  - The read is **paged** (`$top` caps a page, it does not lift the 5,000-item threshold; one segment on
+    CRS is ~790 rows) and **fails closed** — an unreadable Group Map holds the run rather than being
+    treated as empty, the opposite of this codebase's usual rule and for the usual reason: here the cost
+    of guessing is hundreds of rows nobody would ever find.
 - **CSV export for the cross-check**, reusing `groupExportCsv.ts`.
 - **~660 creations will throttle.** Needs the same retry as reconciliation's group pass, plus a run log — a
   bulk run that dies half-way must say what it made.

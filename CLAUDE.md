@@ -20,8 +20,8 @@ Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
 > 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
-> built and part-run on the dcistaging rehearsal site, with **five open defects listed in build order**;
-> the first is a real bug (the run duplicates Group Map rows on a second press). `CRS Group Map` has been
+> built and part-run on the dcistaging rehearsal site. The duplicate-row bug is **fixed in 1.0.151.0 and
+> not yet site-tested**; **four defects remain**, listed there in build order. `CRS Group Map` has been
 > cleared and **reconciliation must not be run** until the row count is right.
 
 > 📍 **Current site state, and what is outstanding: `docs/2026-08-07-project-state.md`.**
@@ -856,7 +856,22 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
     Group Map rows**, which takes the name-parse off the critical path entirely.
   - **Bulk provisioning exists** (`BulkGroupProvisioner`, on Group Management and in the flow's group
     step): 5 personas per unit + `_HOD` per department + `_SEGVIEW` per segment, planned from the
-    abbreviation rows. **It duplicates rows on a second press — see the handoff before running it.**
+    abbreviation rows.
+  - **THE RUN IS IDEMPOTENT FOR ROWS AS WELL AS GROUPS SINCE 1.0.151.0** (`splitPlannedRows` in
+    `shared/bulkGroups.ts`), and the asymmetry is what made the bug invisible: an existing group title
+    was always mapped rather than re-created, so a second press logged `= already existed (mapping
+    only)` on every line **while writing every mapping underneath it again** — 642 rows on the
+    rehearsal site. Nothing on any screen shows a row twice, so the only symptom is a count nobody has
+    a reference for. It reuses `isDuplicateRow`, never a second definition of "the same mapping".
+    - **The partition is per ROW.** A run stopped part-way leaves a group made with one of its rows
+      written; skipping the whole group as done would strand it for good. Pressing Run again is the
+      only resume this has (defect 2), so completing the gaps IS the recovery path.
+    - **The Group Map read is PAGED and fails CLOSED.** `$top` caps a page and does not lift the
+      5,000-item threshold, and a truncated read reports unseen rows as absent — the same duplication
+      by another route. An unreadable list is `undefined`, never `[]`, and HOLDS the run with the
+      reason on screen: this codebase fails open nearly everywhere because the cost is a form out of
+      service for a minute; here it is hundreds of duplicate rows nobody would find.
+  - **Four defects remain open — see `docs/2026-08-18-bulk-groups-handoff.md` before running it.**
 - **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
   folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.
   New web part **`Group Management`** (`3f81c6d2-…`, inside the `user-access-web-parts` bundle) owns

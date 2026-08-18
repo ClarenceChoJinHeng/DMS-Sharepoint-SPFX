@@ -14,7 +14,13 @@
 // Pure and SPFx-free: every rule here decides what gets created on a real tenant, and the cost of being
 // wrong is hundreds of groups that have to be deleted by hand.
 import { AbbrevRowDraft, folderNameFor } from "./abbreviationDraft";
-import { namingRoleFor, PERSONAS, suggestGroupName } from "./groupMapModel";
+import {
+  GroupMapWriteRow,
+  isDuplicateRow,
+  namingRoleFor,
+  PERSONAS,
+  suggestGroupName,
+} from "./groupMapModel";
 
 /** A segment, as the planner needs it. */
 export interface BulkSegment {
@@ -160,4 +166,46 @@ export function planBulkGroups(
 /** How many of a plan's groups would actually be created. The rest are mapped only. */
 export function toCreateCount(plan: BulkPlan): number {
   return (plan?.groups ?? []).filter((g) => !g.exists).length;
+}
+
+/**
+ * Split a run's planned Group Map rows into the ones that must be written and the ones the list
+ * already holds.
+ *
+ * **THE RUN USED TO WRITE UNCONDITIONALLY, AND THAT IS THE 642-ROW BUG.** Group creation was already
+ * idempotent — an existing title is mapped, never re-created — so a second press looked safe and read
+ * as safe in the log: every line said `= already existed (mapping only)`. The mappings behind those
+ * lines were written again every time. The rehearsal site reached 642 rows for a segment that needs
+ * ~790 across a complete run, and there is nothing on any screen that shows a row twice, so the only
+ * symptom is a number nobody has a reference for.
+ *
+ * Deduping is what makes a run REPEATABLE, which matters more than tidiness: the run has no resume
+ * (defect 2), so finishing an interrupted one means pressing Run again — and that press must complete
+ * the missing rows without touching the rows that landed. Hence the partition is per ROW, never per
+ * group: a group whose UPL row was written and whose DELS row was not is exactly the state an
+ * interrupted run leaves behind, and skipping the whole group would strand it for good.
+ *
+ * `isDuplicateRow` is reused rather than re-derived — GroupMapBuilder's Add button has always keyed on
+ * GroupId + Scope + Target + term + Role, and a second definition of "the same mapping" would be free
+ * to drift from the one an admin sees on the Folder Access page.
+ *
+ * Candidates are also compared against EACH OTHER, so a planner that ever emitted one row twice cannot
+ * double it either. Nothing produces that today; it costs a line to make it unreachable.
+ */
+export function splitPlannedRows(
+  existing: GroupMapWriteRow[],
+  candidates: GroupMapWriteRow[],
+): { fresh: GroupMapWriteRow[]; duplicate: GroupMapWriteRow[] } {
+  const seen = (existing ?? []).slice();
+  const fresh: GroupMapWriteRow[] = [];
+  const duplicate: GroupMapWriteRow[] = [];
+  for (const c of candidates ?? []) {
+    if (isDuplicateRow(seen, c)) {
+      duplicate.push(c);
+    } else {
+      fresh.push(c);
+      seen.push(c);
+    }
+  }
+  return { fresh, duplicate };
 }

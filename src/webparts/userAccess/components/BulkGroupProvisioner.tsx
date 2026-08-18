@@ -23,9 +23,17 @@ import {
   BulkSegment,
   PlannedGroup,
   planBulkGroups,
+  splitPlannedRows,
   toCreateCount,
 } from "../../../shared/bulkGroups";
-import { buildGroupMapRow, GroupMapWriteRow, PERSONAS } from "../../../shared/groupMapModel";
+import {
+  buildGroupMapRow,
+  GroupMapRole,
+  GroupMapWriteRow,
+  normalizeRoleValue,
+  normalizeScope,
+  PERSONAS,
+} from "../../../shared/groupMapModel";
 import { createSiteGroup } from "../../../shared/spGroups";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
@@ -96,6 +104,17 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
   const [rows, setRows] = useState<AbbrevRowDraft[] | undefined>(undefined);
   /** Existing site groups by lower-cased title, so one already there is MAPPED rather than re-created. */
   const [titles, setTitles] = useState<Record<string, number>>({});
+  /**
+   * The Group Map rows already on the list — what a re-run must NOT write again.
+   *
+   * `undefined` means the list could not be READ, never that it is empty, and the two must not
+   * collapse into one: an unreadable list looks exactly like an empty one from here, and treating
+   * it as empty is the 642-row bug arriving by a second route. This is the deliberate fail-CLOSED
+   * case (as with `canOfferFolderDelete`) — everywhere else in this codebase an unreadable list
+   * fails open, because the cost is a form that takes itself out of service for a minute. The cost
+   * here is hundreds of duplicate rows that nothing on any screen will ever show you.
+   */
+  const [existingRows, setExistingRows] = useState<GroupMapWriteRow[] | undefined>(undefined);
   const [picked, setPicked] = useState<string[]>(OFFERED);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -144,9 +163,65 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
 
   /* ── Rows + existing groups for the chosen segment ────────────────────────── */
 
+  /**
+   * Every Group Map row on the list, so the run can tell a mapping that already exists from one it
+   * still has to write. Throws rather than returning `[]` — see `existingRows`.
+   *
+   * PAGED, and that is not defensive decoration. `$top` caps a page, it does not raise the 5,000-item
+   * list view threshold, so one segment on the client's site (~790 rows) plus a second segment puts
+   * this list past a single page. A truncated read reports the rows it could not see as absent, which
+   * is precisely the state that writes them all a second time — the bug, wearing the fix's clothes.
+   *
+   * Scope and Target are asked for and the request retried without them, exactly as GroupMapBuilder
+   * does: a $select naming a column that does not exist fails the WHOLE request with HTTP 400
+   * (CLAUDE.md #11), so a site that predates those columns would otherwise be unable to run at all.
+   */
+  const loadGroupMapRows = async (): Promise<GroupMapWriteRow[]> => {
+    const base = `${siteUrl}/_api/web/lists/getbytitle('${groupMapList()}')/items`;
+    const full = "Id,GroupId,GroupName,Segment,UnitTermGuid,Role,Scope,Target";
+    const lean = "Id,GroupId,GroupName,Segment,UnitTermGuid,Role";
+    let select = full;
+    let url = `${base}?$select=${select}&$top=2000`;
+    const out: GroupMapWriteRow[] = [];
+    // Bounded: 50 pages is 100,000 rows, far past anything this list can hold, and a malformed
+    // nextLink that pointed at itself would otherwise spin the page during a 700-group run.
+    for (let page = 0; page < 50 && url; page++) {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        url, SPHttpClient.configurations.v1, { headers: GET },
+      );
+      if (!res.ok) {
+        if (page === 0 && select === full) {
+          select = lean;
+          url = `${base}?$select=${select}&$top=2000`;
+          continue;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      for (const r of (data.value ?? []) as Array<Record<string, string>>) {
+        out.push({
+          GroupId: r.GroupId ?? "",
+          GroupName: r.GroupName ?? "",
+          Segment: r.Segment ?? "",
+          UnitTermGuid: r.UnitTermGuid ?? "",
+          // A hand-authored row saying "UPLOADER" means UPL. Left raw it would not match the row
+          // the run is about to write, and the run would write a second copy of it.
+          Role: normalizeRoleValue(r.Role ?? "") as GroupMapRole,
+          // Blank reads as Folder — every row written before the column existed is one.
+          Scope: normalizeScope(r.Scope),
+          Target: r.Target ?? "",
+        });
+      }
+      const next = (data["odata.nextLink"] ?? data["@odata.nextLink"] ?? "") as string;
+      url = next && next.indexOf("http") === 0 ? next : "";
+    }
+    return out;
+  };
+
   const loadForSegment = async (target: Seg): Promise<void> => {
     setLoading(true);
     setRows(undefined);
+    setExistingRows(undefined);
     try {
       // Walk only as deep as there are permissioned levels — the same rule as the abbreviations page.
       const maxDepth = target.levelNames.length;
@@ -202,8 +277,13 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
         }
         setTitles(map);
       }
+
+      // Read LAST, so a failure here leaves the preview intact and gates only the Run button. The
+      // admin can still review the plan and export the CSV while the reason is on screen.
+      setExistingRows(await loadGroupMapRows());
     } catch (e) {
       setRows(undefined);
+      setExistingRows(undefined);
       setToast({ kind: "err", text: `Could not read this segment — ${(e as Error).message}` });
     } finally {
       setLoading(false);
@@ -247,7 +327,7 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
   };
 
   const run = async (): Promise<void> => {
-    if (!plan || !seg) return;
+    if (!plan || !seg || !existingRows) return;
     setBusy(true);
     // A LOCAL log, mirrored into state. Counters read from state during a run would see their render-time
     // value and report zero — the same stale-closure trap as reconciliation's counts.
@@ -255,7 +335,12 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
     const say = (t: string): void => { lines.push(t); setLog([...lines]); };
     let made = 0;
     let mapped = 0;
+    let already = 0;
     let failed = 0;
+    // The rows the list holds, grown by every row this run writes. A LOCAL copy for the same reason
+    // the counters are local — state set during a run is not visible to the closure reading it — but
+    // also because two groups can legitimately share a mapping and the second must see the first.
+    const seen: GroupMapWriteRow[] = existingRows.slice();
 
     say(`${seg.label}: ${plan.groups.length} planned, ${toCreateCount(plan)} to create.`);
     for (const g of plan.groups) {
@@ -276,21 +361,36 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
       } else {
         say(`= ${g.name} (already existed — mapping only)`);
       }
-      for (const row of rowsFor(g, String(id))) {
+      // Rows the list already holds are NOT written again. Group creation was always idempotent, so
+      // a second press read as safe while it re-wrote every mapping behind it — 642 rows on the
+      // rehearsal site. Per row rather than per group, so a run stopped part-way is finished by the
+      // next press instead of being skipped as "that group is done".
+      const { fresh, duplicate } = splitPlannedRows(seen, rowsFor(g, String(id)));
+      if (duplicate.length > 0) {
+        already += duplicate.length;
+        say(`  = ${duplicate.length} mapping(s) already there (${duplicate.map((r) => r.Role).join(", ")})`);
+      }
+      for (const row of fresh) {
         try {
           await withRetry(() => postRow(row));
           mapped++;
+          // Only after it lands. A failed write must stay writable by the next press.
+          seen.push(row);
         } catch (e) {
           failed++;
           say(`  ✗ ${g.name} → ${row.Role} — ${(e as Error).message}`);
         }
       }
     }
-    say(`Done. ${made} created, ${mapped} mappings written, ${failed} failed.`);
+    say(
+      `Done. ${made} created, ${mapped} mappings written, ` +
+      `${already} already there (not re-written), ${failed} failed.`,
+    );
     setToast({
       kind: failed > 0 ? "warn" : "ok",
       text:
         `${made} groups created and ${mapped} mappings written for ${seg.label}.` +
+        (already > 0 ? ` ${already} mapping(s) were already there and were left alone.` : "") +
         (failed > 0 ? ` ${failed} failed — see the log.` : "") +
         " Nothing is granted until Folder Reconciliation runs.",
     });
@@ -422,16 +522,32 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
             </div>
           )}
 
+          {existingRows === undefined && !loading && (
+            <div style={s.warnBox}>
+              <strong>{cachedListTitle(LIST_SUFFIX.groupMap)} could not be read, so this run is held.</strong>{" "}
+              Without it there is no way to tell a mapping that already exists from one that is missing,
+              and the run would write a second copy of every row it cannot see. Nothing on any screen
+              shows a row twice, so that is a mistake you would not find. Re-pick the segment to try the
+              read again.
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap" }}>
             <button
-              style={busy || plan.groups.length === 0 ? s.off : s.btn}
-              disabled={busy || plan.groups.length === 0}
+              style={busy || plan.groups.length === 0 || !existingRows ? s.off : s.btn}
+              disabled={busy || plan.groups.length === 0 || !existingRows}
               onClick={() => { run().catch(() => setBusy(false)); }}
             >
               {busy ? "Working…" : `Create ${toCreateCount(plan)} groups and map ${plan.groups.length}`}
             </button>
             <button style={s.ghost} disabled={busy} onClick={exportCsv}>Export CSV</button>
           </div>
+          {existingRows !== undefined && (
+            <p style={s.hint}>
+              Safe to run twice: {existingRows.length} mapping row(s) are already on{" "}
+              {cachedListTitle(LIST_SUFFIX.groupMap)} and will be left alone. Only what is missing is written.
+            </p>
+          )}
           {busy && (
             <p style={s.hint}>
               Leave this tab open — the run has no resume, and closing it stops it part-way.

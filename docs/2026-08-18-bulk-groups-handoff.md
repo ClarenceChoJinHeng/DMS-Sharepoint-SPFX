@@ -26,8 +26,8 @@ dcistaging's tree is NOT the client's: it lacks Group Corporate Secretarial and 
 So **308 is correct there, and CRS should plan 324** (63 × 5 + 8 + 1). A different number on CRS is a
 real gap, not a repeat of this.
 
-Deployed there: **1.0.150.0**. Latest commit `d0490a6` on `feat/folder-abbreviations`, 1050 tests, 19
-warnings (the baseline).
+Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.151.0** (defect 1), 1056
+tests, 15 warnings (the baseline).
 
 ---
 
@@ -49,14 +49,32 @@ Do not read `docs/2026-08-17-sdg-migration-runbook.md` §10–§12 as done. Re-c
 
 ## Open defects, in build order
 
-### 1. The bulk run duplicates Group Map rows — THE BUG
+### 1. The bulk run duplicates Group Map rows — ~~THE BUG~~ **FIXED, 1.0.151.0, not yet site-tested**
 
-`BulkGroupProvisioner.rowsFor` writes rows **unconditionally**. The run is idempotent for *groups* (an
-existing title is mapped, not re-created) and not for *rows*, so a second press writes every mapping
-again. That is where 642 rows came from.
+`BulkGroupProvisioner.rowsFor` wrote rows **unconditionally**. The run was idempotent for *groups* (an
+existing title is mapped, not re-created) and not for *rows*, so a second press wrote every mapping
+again. That is where 642 rows came from — and the log read as safe while it happened, every line saying
+`= already existed (mapping only)` about the group whose rows were being doubled underneath it.
 
-**Fix:** read the segment's existing rows and filter with `isDuplicateRow` from `groupMapModel.ts` —
-`GroupMapBuilder.tsx` already does exactly this. Re-read after the run so a second press sees them.
+**Fixed** by `splitPlannedRows` in `shared/bulkGroups.ts` (pure, 6 tests), reusing `isDuplicateRow`
+rather than re-deriving what "the same mapping" means — a second definition would be free to drift from
+the one an admin sees on Folder Access. The run now reads every Group Map row first, partitions each
+group's planned rows into fresh and duplicate, writes only the fresh ones, and grows its local copy as
+it goes (so a row is never doubled within one run either).
+
+Three things worth keeping:
+- **The partition is per ROW, not per group.** A run stopped part-way (defect 2) leaves a group made
+  with one of its two rows written; skipping the whole group as "done" would strand it permanently.
+  A press after an interrupted run now completes exactly what is missing.
+- **The read is PAGED.** `$top` caps a page, it does not lift the 5,000-item threshold, and one
+  segment on CRS is ~790 rows. A truncated read reports the rows it could not see as absent — the
+  same bug wearing the fix's clothes.
+- **It fails CLOSED.** An unreadable Group Map is `undefined`, never `[]`, and holds the Run button
+  with the reason on screen. This codebase fails open nearly everywhere; there the cost is a form out
+  of service for a minute, here it is hundreds of duplicate rows that no screen will ever show you.
+
+The button now also states the row count it will leave alone, so "safe to press twice" is visible
+before the press rather than discovered after it.
 
 **A single run against an empty Group Map is clean**, which is why the list was cleared rather than
 deduplicated by hand.

@@ -1,5 +1,6 @@
 import { AbbrevRowDraft } from "./abbreviationDraft";
-import { BulkSegment, planBulkGroups, toCreateCount } from "./bulkGroups";
+import { BulkSegment, planBulkGroups, splitPlannedRows, toCreateCount } from "./bulkGroups";
+import { GroupMapRole, GroupMapWriteRow } from "./groupMapModel";
 
 const SET = "cccc3333-3333-4333-8333-cccccccccccc";
 const GF = "aaaa1111-1111-4111-8111-aaaaaaaaaaaa";
@@ -131,5 +132,64 @@ describe("planBulkGroups", () => {
       expect(g.name).not.toContain(" ");
       expect(g.name.indexOf("GHO_")).toBe(0);
     }
+  });
+});
+
+describe("splitPlannedRows", () => {
+  const row = (
+    groupId: string,
+    role: GroupMapRole,
+    tier = "u1",
+  ): GroupMapWriteRow => ({
+    GroupId: groupId,
+    GroupName: `G${groupId}`,
+    Segment: SET,
+    UnitTermGuid: tier,
+    Role: role,
+    Scope: "Folder",
+    Target: "",
+  });
+
+  it("keeps a row the list does not hold", () => {
+    const out = splitPlannedRows([], [row("7", "UPL")]);
+    expect(out.fresh.map((r: GroupMapWriteRow) => r.Role)).toEqual(["UPL"]);
+    expect(out.duplicate).toEqual([]);
+  });
+
+  it("drops a row the list already holds — the second-press bug", () => {
+    // THE DEFECT: the run wrote unconditionally, so a second press re-wrote every mapping.
+    // 642 rows on the rehearsal site came from exactly this.
+    const existing = [row("7", "UPL"), row("7", "DELS")];
+    const out = splitPlannedRows(existing, [row("7", "UPL"), row("7", "DELS")]);
+    expect(out.fresh).toEqual([]);
+    expect(out.duplicate.length).toBe(2);
+  });
+
+  it("keeps the rows that are new when only some of a group's rows exist", () => {
+    // A run killed part-way (defect 2) leaves exactly this state: the group made, one of its
+    // two rows written. The re-run must finish it, not skip the group wholesale.
+    const out = splitPlannedRows([row("7", "UPL")], [row("7", "UPL"), row("7", "DELS")]);
+    expect(out.fresh.map((r: GroupMapWriteRow) => r.Role)).toEqual(["DELS"]);
+    expect(out.duplicate.map((r: GroupMapWriteRow) => r.Role)).toEqual(["UPL"]);
+  });
+
+  it("de-duplicates WITHIN the candidates, not only against the list", () => {
+    // Nothing in the planner produces two identical rows today. If anything ever does, both would
+    // be written — the same silent doubling, from a different direction.
+    const out = splitPlannedRows([], [row("7", "UPL"), row("7", "UPL")]);
+    expect(out.fresh.length).toBe(1);
+    expect(out.duplicate.length).toBe(1);
+  });
+
+  it("treats a different group, tier or role as a different row", () => {
+    const existing = [row("7", "UPL", "u1")];
+    expect(splitPlannedRows(existing, [row("8", "UPL", "u1")]).fresh.length).toBe(1);
+    expect(splitPlannedRows(existing, [row("7", "UPL", "u2")]).fresh.length).toBe(1);
+    expect(splitPlannedRows(existing, [row("7", "APR", "u1")]).fresh.length).toBe(1);
+  });
+
+  it("matches case-insensitively, because term GUID casing differs between stores", () => {
+    const existing = [row("7", "UPL", "AAAA-BBBB")];
+    expect(splitPlannedRows(existing, [row("7", "UPL", "aaaa-bbbb")]).fresh).toEqual([]);
   });
 });
