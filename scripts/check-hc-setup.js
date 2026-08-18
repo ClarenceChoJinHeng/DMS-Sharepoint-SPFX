@@ -29,7 +29,20 @@
 (async () => {
   "use strict";
 
-  const SITE = _spPageContextInfo.webAbsoluteUrl;
+  /**
+   * The site URL, WITHOUT depending on `_spPageContextInfo`.
+   *
+   * That global exists only on a rendered SharePoint page. Paste this into the console while looking
+   * at an `_api` response — which is exactly what someone checking columns has open — and it throws
+   * `_spPageContextInfo is not defined` before doing anything, which reads as a broken script rather
+   * than as the wrong tab (hit 2026-08-19).
+   *
+   * The fallback derives the site from the path, so it works on any page of the site collection,
+   * including an `_api` URL. Cookies travel with same-origin fetch either way.
+   */
+  const SITE =
+    (typeof _spPageContextInfo !== "undefined" && _spPageContextInfo && _spPageContextInfo.webAbsoluteUrl) ||
+    location.origin + ((location.pathname.match(/^\/sites\/[^/]+/) || [""])[0]);
 
   /** Candidate titles, retitled name first — a library answers to whichever it has. */
   const LIBRARIES = [
