@@ -36,10 +36,11 @@ import { formatFileSize } from "../../../shared/fileSize";
 import { offersLegalPrivilege } from "../../../shared/legalPrivilege";
 import { EVENT } from "../../../shared/auditLog";
 import {
+  LIST_SUFFIX,
   cachedHcLibraries,
   cachedListTitle,
   hcAvailable,
-  LIST_SUFFIX,
+  libApiTitle,
   libraryTitle,
   libraryUrlSegment,
 } from "../../../shared/naming";
@@ -1901,6 +1902,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     b: Batch,
     folderId: string,
     sf: StagedFile,
+    /**
+     * The library the tagging call must address, by TITLE.
+     *
+     * ⚠ THE FILE IS PLACED BY FOLDER ID AND TAGGED BY LIBRARY TITLE, and those two have to agree.
+     * `GetFolderById` reaches into any library, so an HC document landed in `HC Approval Document`
+     * correctly — while `validateUpdateListItem` was hardcoded to `settings.stagingLibrary`, the
+     * NORMAL approval library. Item ids are per-LIST, so that call looked for the new item's id in the
+     * wrong list: 404 on a good day, and on a bad one it finds a DIFFERENT document with that id and
+     * writes the metadata onto it, reporting success. HC uploads could never tag, on any site
+     * (2026-08-19).
+     *
+     * Defaulted rather than required so no other caller changes behaviour.
+     */
+    libraryTitleForTagging: string = settings.stagingLibrary,
   ): Promise<UploadResult> => {
     const meta = sf.meta;
     const finalName = sf.finalName ?? sf.file.name;
@@ -2021,7 +2036,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       });
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/lists/getbytitle('${settings.stagingLibrary}')/items(${item.Id})/validateUpdateListItem`,
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitleForTagging)}')/items(${item.Id})/validateUpdateListItem`,
         SPHttpClient.configurations.v1,
         {
           headers: { "Content-Type": "application/json" },
@@ -2029,7 +2044,19 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         },
       );
       if (!metaRes.ok) {
-        return { fileId: sf.id, ok: false, error: "Uploaded, but tagging metadata failed." };
+        // NAMES THE STATUS AND THE LIBRARY. "tagging metadata failed" threw both away, and the two
+        // causes need opposite fixes: a 404 is the wrong library title (which is exactly how the HC
+        // mismatch above hid for so long), a 403 is permissions on that list, a 400 is a malformed
+        // payload. An hour went into distinguishing them by hand on 2026-08-19.
+        const body = await metaRes.text().catch(() => "");
+        console.error("Tagging failed:", metaRes.status, libraryTitleForTagging, body);
+        return {
+          fileId: sf.id,
+          ok: false,
+          error:
+            `Uploaded, but tagging failed — HTTP ${metaRes.status} on "${libraryTitleForTagging}"` +
+            (metaRes.status === 404 ? " (no library with that title)" : ""),
+        };
       }
       const metaJson = await metaRes.json();
       // HTTP 200 even on field errors (gotcha #4) — the exception is per result, not per response.
@@ -2241,7 +2268,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             });
             continue;
           }
-          results.push(await uploadStagedFile(b, hcDest.id, sf));
+          // The HC approval library BY NAME, resolved at runtime. `hcAvailable()` is already true here
+          // — refuseReason and resolveHcFolder both ran — so the pair is resolved and this cannot fall
+          // back to the normal library, which is the one outcome that must never happen quietly.
+          results.push(
+            await uploadStagedFile(b, hcDest.id, sf, libApiTitle("StagingHC")),
+          );
           continue;
         }
         results.push(await uploadStagedFile(b, destFolder.uniqueId, sf));

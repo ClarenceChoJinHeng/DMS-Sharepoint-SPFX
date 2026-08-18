@@ -1554,6 +1554,20 @@ the two Power Automate flows do not exist yet.
   per-LIST, so `?itemId=` alone cannot say which library — the wrong one 404s or opens a DIFFERENT
   document with the same id. **The queue stays inside one library.** Give the HC library's Name-column
   formatting `&lib=hc`.
+- **⚠ THE FILE IS PLACED BY FOLDER ID AND TAGGED BY LIBRARY TITLE, AND THOSE TWO MUST AGREE** (fixed
+  1.0.170.0; **HC uploads from the form could never tag, on any site**). `GetFolderById` reaches into any
+  library, so an HC document landed in `HC Approval Document` correctly — while `validateUpdateListItem`
+  was hardcoded to `settings.stagingLibrary`, the NORMAL approval library.
+  - **Item ids are per-LIST.** So that call looked for the new item's id in the wrong list: a 404 on a
+    good day, and on a bad one it finds a DIFFERENT document holding that id and writes the metadata
+    onto it, reporting success. The symptom was the generic *"Uploaded, but tagging metadata failed"*.
+  - `uploadStagedFile` now takes the target library title, defaulted so no other caller changes, and the
+    HC branch passes `libApiTitle("StagingHC")`.
+  - **`BulkUpload` already had this right** (`targetListTitle()` switches on `uploadingHc()`), which is
+    the tell: two upload paths, one pattern, one of them written by hand.
+  - **The failure message now names the STATUS and the LIBRARY.** "tagging metadata failed" discarded
+    both, and the causes need opposite fixes — 404 is the wrong title, 403 is permissions on that list,
+    400 is a malformed payload. Distinguishing them by hand cost an hour on 2026-08-19.
 - **Bulk Upload gets NO write probe**, deliberately — admin-only, and already existence-gated only
   because an `AddListItems` probe against `Documents` would empty the form for every PIC. It writes
   straight to the approved side, so HC there means **`HC Documents`**, path segment and metadata target.
