@@ -26,6 +26,7 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import FolderManager from "./FolderManager";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import GroupManager from "../../userAccess/components/GroupManager";
+import BulkGroupProvisioner from "../../userAccess/components/BulkGroupProvisioner";
 import GroupMapBuilder from "../../userAccess/components/GroupMapBuilder";
 import {
   FLOWS,
@@ -449,7 +450,17 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
 
     if (st.screen.kind === "component") {
       return st.screen.id === "groups"
-        ? <GroupManager context={context} siteUrl={siteUrl} />
+        ? (
+          <div>
+            <GroupManager context={context} siteUrl={siteUrl} />
+            {/* The bulk run belongs HERE most of all: this step is reached while provisioning a whole
+                segment, which is precisely when creating 300 groups by hand is the wrong answer. Mounted
+                from the same component as the standalone page — one model, two mount points, never a copy.
+                Its absence here was reported as "I thought it will auto populate the group": the feature
+                existed, and the one screen that needed it did not show it. */}
+            <BulkGroupProvisioner context={context} siteUrl={siteUrl} />
+          </div>
+        )
         : <GroupMapBuilder context={context} siteUrl={siteUrl} />;
     }
 
