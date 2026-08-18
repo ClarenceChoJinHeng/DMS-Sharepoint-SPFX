@@ -1237,6 +1237,13 @@ order, which was not enough — five equal doors do not say four of them are ste
   - Both gate messages **name the way out** (*"or jump straight on from the list of steps"*), because the
     gate can legitimately be wrong after a refresh. The rail stays clickable throughout, and a correct
     gate with no stated escape reads as a dead end.
+- **THE SEGMENT PICKER DOES NOT STAND IN FRONT OF AN INSTRUCTION-ONLY STEP** (client, 2026-08-19:
+  *"weird the first step is asking for the business segment when it is suppose to be showing only a sign
+  to users"*). It replaced the content of EVERY step of a segment-scoped flow until a segment was chosen
+  — including a `kind: "outside"` step, which renders nothing but instructions for work done elsewhere
+  (pause a Power Automate flow, edit the term store) and uses no segment. So the one thing that step
+  exists to say was hidden behind a dropdown asking for a value it has no use for. The next step asks,
+  which is where the subject is first needed.
 - **FOUR locks, each on ONE definitive read:** segment exists (flow 1's later steps, and Retire),
   `PendingLevels` set (before migrating), and **reconciliation blocked while any term lacks a code** — the
   last is the one that matters, because that is the silent failure (recon skips the term, creates no

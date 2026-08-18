@@ -501,9 +501,16 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   const locked = isLocked(step, effectiveFacts);
 
   const renderStep = (st: FlowStep): React.ReactElement => {
-    // The segment picker stands in front of every step of a segment-scoped flow: without it the screens
-    // below have no subject, and half of them would show the wrong one.
-    if (needsPick) {
+    // The segment picker stands in front of every step that HAS a subject: without it the screens below
+    // have none, and half of them would show the wrong one.
+    //
+    // But NOT in front of an "outside" step (client, 2026-08-19: *"weird the first step is asking for
+    // the business segment when it is suppose to be showing only a sign to users"*). Those steps render
+    // nothing but instructions for work done elsewhere — pausing a Power Automate flow, editing the term
+    // store — and none of them uses the segment. Replacing that instruction with a dropdown hid the one
+    // thing the step exists to say, and asked for a value the step has no use for. The next step asks,
+    // which is where the subject is first needed.
+    if (needsPick && st.screen.kind !== "outside") {
       return (
         <div>
           <label style={s.label}>Which segment?</label>
