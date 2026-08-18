@@ -128,7 +128,12 @@ const s = {
   popupMsg:    { fontSize: 14, color: "#555", margin: "0 0 28px", lineHeight: 1.6 } as React.CSSProperties,
   popupBtn:    { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 6, padding: "12px 28px", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", minWidth: 183 } as React.CSSProperties,
   // Secondary popup button — only used when a primary is present, so the two are distinguishable.
-  popupBtnGhost:{ background: "#fff", color: "#201f1e", border: "1px solid #8a8886", marginTop: 10 } as React.CSSProperties,
+  // No marginTop any more: the buttons live in a flex row (popupBtnRow) whose `gap` spaces them on
+  // BOTH axes. A vertical margin did nothing when they sat side by side, which is how they ended up
+  // touching each other (found on site 2026-08-18) — the card is text-align:center and a <button> is
+  // inline, so they flowed onto one line with no separation at all.
+  popupBtnGhost:{ background: "#fff", color: "#201f1e", border: "1px solid #8a8886" } as React.CSSProperties,
+  popupBtnRow: { display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginTop: 24 } as React.CSSProperties,
   navRow:      { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" as const, marginBottom: 8 } as React.CSSProperties,
   navControls: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const } as React.CSSProperties,
   navBtn:      { padding: "5px 12px", fontSize: 13, fontFamily: "inherit", fontWeight: 600, color: "#0f6c3f", background: "#fff", border: "1px solid #0f6c3f", borderRadius: 4, cursor: "pointer" } as React.CSSProperties,
@@ -691,17 +696,19 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           {/* Primary advances to the next UNDECIDED item, whereas Prev/Next move by position.
               Deliberate: after deciding, the approver wants the next piece of work; while
               browsing, they want the next document in the list. */}
-          {nextIdx !== -1 && (
-            <button style={s.popupBtn} onClick={() => { goTo(nextIdx).catch(() => undefined); }}>
-              Approve another file
+          <div style={s.popupBtnRow}>
+            {nextIdx !== -1 && (
+              <button style={s.popupBtn} onClick={() => { goTo(nextIdx).catch(() => undefined); }}>
+                Approve another file
+              </button>
+            )}
+            <button
+              style={nextIdx !== -1 ? { ...s.popupBtn, ...s.popupBtnGhost } : s.popupBtn}
+              onClick={() => { window.location.href = backUrl(); }}
+            >
+              Back to library
             </button>
-          )}
-          <button
-            style={nextIdx !== -1 ? { ...s.popupBtn, ...s.popupBtnGhost } : s.popupBtn}
-            onClick={() => { window.location.href = backUrl(); }}
-          >
-            Back to library
-          </button>
+          </div>
         </div>
       </div>
     );

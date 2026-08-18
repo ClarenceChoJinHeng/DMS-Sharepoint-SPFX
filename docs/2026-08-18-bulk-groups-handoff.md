@@ -236,8 +236,36 @@ on the same group is still applied.
 3. Folder Reconciliation — first time at this scale, ~1 hour, single tab, no resume
 4. Two-account verification: upload → approve → route
 
-**Nothing in this system has been verified end to end yet, on any site.** That is still the real
-outstanding risk; everything above is provisioning.
+## ✅ VERIFIED END TO END, 2026-08-18 — the first time on any site
+
+`GHO / GF / TAX`, two gmail guest accounts, one JPG.
+
+1. **Upload** — chocheetuck4 (`_UPLOADER`) opened the form, which auto-detected
+   `Group Head Office > Group Finance > Tax` from group membership and locked the tiers. File landed in
+   `Approval Document/GHO/GF/TAX/2024/Tax Return`, Pending, with every field.
+2. **Approval** — the approval screen showed the preview, the full metadata and *Publish to GHO > GF >
+   TAX*. Approved.
+3. **Auto-route** — the file moved to `Documents/GHO/GF/TAX/2024/Tax Return` and left the approval
+   library. **`Created By` is still chocheetuck4**, and Business Segment, Department, Unit, Year,
+   Document Type and Confidentiality all survived the copy. Those are the two steps that had never been
+   proven, and both are what the `bNewDocumentUpdate: true` stamp and the column-parity rule exist for.
+4. **Notification** — the uploader received "Your file has been approved" with the correct location
+   (`GHO > GF > TAX > 2024 > Tax Return`) and a working file link.
+
+Also confirmed in passing: an approver group reaches the upload form and gets its own uploadable path
+(the 2026-08-17 "APR can upload" decision), and an uploader is correctly DENIED on
+`ApprovalDocument.aspx` (the deliberate asymmetry).
+
+**Still unverified:** anything HC (no content type on the HC pair, and neither HC flow exists), the
+deletion and share request flows, and whether a PIC who is not an admin can actually SEE the approved
+file in `Documents` — see below.
+
+### One thing to check next
+
+The `Documents` view bar shows a **Show All Files** view, which SharePoint adds when content approval is
+on. The routed file is visible to an ADMIN, which proves nothing — admins see drafts. **Have
+chocheetuck4 open `Documents/GHO/GF/TAX/2024/Tax Return` and confirm they can see it.** If they cannot,
+`Documents` still has moderation on and every routed file is invisible to the unit it belongs to.
 
 ---
 
