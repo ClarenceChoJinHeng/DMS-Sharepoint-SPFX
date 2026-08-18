@@ -134,7 +134,7 @@ export default function GroupMembersEditor({
       // res.note is never dropped: it means they ARE in the group but may not be able to open the
       // site, which neither they nor the admin would discover until they tried.
       showToast(
-        `${p.displayName} added to ${group.title} — this grants that group's folders immediately.` +
+        `${p.displayName} added to ${group.title} — they may need to sign out and back in first.` +
           (res.note ? ` ${res.note}` : ""),
         !!res.note,
       );
@@ -237,6 +237,17 @@ export default function GroupMembersEditor({
         Everyone added here also joins <strong>{siteEntryGroupTitle()}</strong>, without which they
         cannot open the site at all. Membership is a <strong>group</strong> change: it applies to every
         folder this group is mapped to, in every library — not only to what is listed above.
+      </p>
+      {/* OBSERVED ON SITE 2026-08-18, and it cost an hour of diagnosis. A guest who already had the
+          site open kept being bounced off a page their new group grants, while every permission read
+          back correct — group membership, the page role assignment, the Read binding, even their own
+          `currentuser/groups`. A full sign-out and sign-in fixed it. So the copy must NOT promise
+          "access is immediate": the first thing anyone does when told that is conclude the tool
+          failed. */}
+      <p style={s.hint}>
+        If someone already has the site open, they may need to <strong>sign out and back in</strong>{" "}
+        before new access takes effect. Their permissions are correct from the moment they are added —
+        it is their signed-in session that is out of date.
       </p>
     </div>
   );

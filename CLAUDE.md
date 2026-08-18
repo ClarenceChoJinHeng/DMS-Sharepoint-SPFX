@@ -1025,6 +1025,16 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   - **No list schema change and no migration** — same Group Map rows, same groups.
   - Audit gained `GroupCreated` / `GroupDeleted` / `MembersChanged`, safe because `EventType` is a
     **Text** column. `GroupMapChanged` stays, and stays on Folder Access: it describes a MAPPING.
+- **⚠ A NEW GROUP DOES NOT REACH A SESSION ALREADY OPEN (observed 2026-08-18, cost an hour).** A guest
+  added to `GHO_GF_TAX_APPROVER` was bounced off `Upload-Form.aspx` to the Documents library while EVERY
+  permission read back correct: group membership, the page role assignment, its `Read` binding, and the
+  user's own `currentuser/groups` listing the new group. A full sign-out and sign-in fixed it instantly.
+  It is the signed-in SESSION that is stale, not the permissions.
+  - **The toast must not say "access is immediate."** It did, which is why the first conclusion was that
+    the tool had failed, and the diagnosis ran through six API checks before anyone tried the obvious.
+  - Diagnostic order for "I added them and they still cannot get in": is the principal the right one (a
+    gmail guest can exist TWICE for one address), is the group granted on the page, is the binding
+    `Read`, does their own session list the group — then **have them sign out and back in.**
 - **REMOVING ONE PERSON'S ACCESS IS BUILT ON BOTH ACCESS SCREENS (2026-08-14, client: the two
   screens *"doesn't make sense in terms of user experience"* — removing someone should remove the
   USER, not their whole group).** Spec `2026-08-14-per-person-access-removal-design.md`; rules in
