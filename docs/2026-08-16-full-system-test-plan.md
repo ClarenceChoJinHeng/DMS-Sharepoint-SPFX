@@ -1,8 +1,8 @@
 # CRS — Full system test plan (pre-migration)
 
-**Date started:** 2026-08-16
+**Date started:** 2026-08-16 · **last updated 2026-08-19**
 **Site:** `/sites/ClarenceDMSTesting`
-**Package:** 1.0.127.0
+**Package:** 1.0.170.0
 **Goal:** exercise everything built, fix what testing finds, then migrate to SDG's site.
 
 Supersedes `docs/superpowers/specs/2026-07-28-dms-uat-test-plan.md`, which covers 7 of the current 15
@@ -39,19 +39,33 @@ extra. A guest account was used for this on 2026-08-08 and worked.
 
 ## 1. Prerequisites — these gate everything
 
-- [ ] **1.1 Re-run Folder Reconciliation.** Not optional. The deletion/share workflow's folder-scope
+- [x] **1.1 Re-run Folder Reconciliation.** **DONE 2026-08-18** — ~40 min, 2,706 steps, all four
+      libraries. No `SKIPPED (no abbreviation)`, no collision aborts. A clean re-run afterwards
+      created 0 folders, which is the other half of the proof. Not optional. The deletion/share workflow's folder-scope
       grants and the `CRS Share` level exist on no folder until it runs, and the one-group-per-person
       change (`UPL`/`APR` reading `Documents`) also lands here.
       *Expect:* a clean run — no `NO TERM`, no missing-abbreviation reports.
 - [ ] **1.2 `CRS Share` permission level exists** and actually contains the sharing rights.
       Site Settings → Site permissions → Permission levels.
-- [ ] **1.3 `Highly Confidential` exists as a TERM** in the confidentiality set (`0d6d1da8-…`).
+- [x] **1.3 `Highly Confidential` exists as a TERM** — confirmed 2026-08-19 in the site term store
+      (`DMS` group -> Confidentiality Level -> Highly Confidential, alongside Confidential and
+      Restricted). The whole HC vertical was blocked on this.
+- [ ] ~~1.3 (old wording)~~ **`Highly Confidential` exists as a TERM** in the confidentiality set (`0d6d1da8-…`).
       Suspected missing — the upload form offered only Confidential and Restricted on 2026-08-15.
       Without it the entire HC vertical (§7) is untestable.
-- [ ] **1.4 `Documents` content approval is OFF.** Tell-tale without a query: the view bar shows
+- [x] **1.4 `Documents` content approval is OFF.** **PROVEN 2026-08-18 the only way that counts** — a
+      non-admin uploader opened `Documents/GHO/GF/TAX/2024/Tax Return` and saw the routed file. Visible
+      to an admin proves nothing; admins see drafts. The `Show All Files` view on that library is a
+      leftover from an earlier setting, not an active one.
+- [ ] ~~1.4 (old wording)~~ **`Documents` content approval is OFF.** Tell-tale without a query: the view bar shows
       `Approve/reject Items` + `Show All Files` when it is on. If on, every routed file is invisible
       to viewers and presents as a permissions bug that is not one.
-- [ ] **1.5 Column parity across all FOUR libraries.** Diff `/fields?$select=Title,InternalName`.
+- [x] **1.5 Column parity — HC PAIR VERIFIED 2026-08-19** by `scripts/check-hc-setup.js`: all 21
+      columns present on both, every one the right type, all three taxonomy columns bound to the right
+      term sets. **Run that script rather than diffing XML by hand** — it also catches a
+      `Confidentiality Level` created as plain Text and a column bound to the wrong term set, both of
+      which look correct in the UI. The normal pair is unverified by the script but demonstrably works.
+- [ ] ~~1.5 (old wording)~~ **Column parity across all FOUR libraries.** Diff `/fields?$select=Title,InternalName`.
       A matching display name over a different internal name fails exactly like an absent column and
       looks correct in the UI — and one unknown field name fails the WHOLE metadata write.
 - [ ] **1.6 Audit log list provisioned** (open CRS Audit Log once; it self-provisions) and its
@@ -96,7 +110,15 @@ door and the thing the client said they could not operate.
 
 The part the client cares about most; everything else is scaffolding around it.
 
-- [ ] **4.1 Upload a file as the PIC** **(2-acct)**. Metadata written; lands at the END of the chain.
+> ✅ **4.1, 4.6 and 4.7 PASSED on 2026-08-18 with two guest accounts** — the first end-to-end pass on
+> any site. Upload auto-detected `Group Head Office > Group Finance > Tax` from group membership and
+> locked the tiers; the file landed Pending with every field; the approver saw it with its metadata and
+> approved; Auto-route moved it to `Documents/GHO/GF/TAX/2024/Tax Return`, deleted the source, and
+> **kept chocheetuck4 in `Created By`** with all metadata intact. The approval email carried the right
+> path and a working link. The two steps that had never been proven are the uploader stamp and metadata
+> surviving the copy; both hold.
+
+- [x] **4.1 Upload a file as the PIC** **(2-acct)**. Metadata written; lands at the END of the chain.
 - [ ] **4.2 Batched multi-file upload** — two batches to different destinations, several files each.
       Then the real test: edit the pickers so they describe batch 3, upload, and **batch 1 must still
       land where it was staged**.
@@ -105,14 +127,56 @@ The part the client cares about most; everything else is scaffolding around it.
 - [ ] **4.4 Success removes, failure stays.** After a partial failure the list holds exactly what
       still needs doing, and Retry cannot double-send.
 - [ ] **4.5 A peer PIC cannot see the pending file** **(2-acct)** — Draft Item Security.
-- [ ] **4.6 The Head of Unit CAN see it, and approves it** **(2-acct)**.
-- [ ] **4.7 Auto-route moves it** to `Documents`, keeps the uploader in Created By, and **deletes the
-      source**. That delete is load-bearing for security, not housekeeping.
+- [x] **4.6 The Head of Unit CAN see it, and approves it** **(2-acct)**. Passed 2026-08-18.
+- [x] **4.7 Auto-route moves it** to `Documents`, keeps the uploader in Created By, and **deletes the
+      source**. That delete is load-bearing for security, not housekeeping. Passed 2026-08-18.
 - [ ] **4.8 Folders created during upload arrive Approved**, or other PICs cannot navigate to their
       own files.
 - [ ] **4.9 Reject a file** — the reason reaches the uploader.
 - [ ] **4.10 Provisioned-path gating** — a unit the uploader cannot upload into does not appear at
       all; an admin sees it labelled *"not fully set up yet"* and can still select it.
+
+---
+
+## 4b. PAGE ACCESS — added 2026-08-19, after a full day lost to it
+
+Every failure here presents as "the app is broken" and none of it is code. Test with a **real second
+account**, and re-test after every reconciliation.
+
+- [ ] **4b.1 An uploader can open the Upload Form.** Needs a **page-scope grant for that unit's
+      `_UPLOADER` group**, made on Page Access. Verified 2026-08-18 for `GHO_GF_TAX_UPLOADER`.
+- [ ] **4b.2 An approver can open the Upload Form too** — `APR` is on that page's policy since
+      2026-08-17, because a Head of Unit uploads as well. Verified: the form auto-detected the path for
+      an approver group whose rows are `APR + DELS + DEL + SHARE + UPLHC + DELSHC`.
+- [ ] **4b.3 An uploader is DENIED on `ApprovalDocument.aspx`** — verified 2026-08-18. The asymmetry is
+      deliberate and pinned by test; mirroring the two would let every PIC approve their own documents.
+- [ ] **4b.4 A restricted page with NO grant rows locks everyone out silently.** Clearing
+      `CRS Group Map` deletes the Page-scope rows while leaving inheritance broken, and reconciliation
+      reports `Page access: no Page-scope mappings` as a green tick. Two user-facing pages were
+      unreachable by everyone but Owners for hours. **Re-check after any Group Map reset.**
+- [ ] **4b.5 A new group does NOT reach a session already open.** After adding someone to a group they
+      may keep being bounced until they **sign out and back in** — every permission read back correct
+      (membership, page assignment, `Read` binding, their own `currentuser/groups`) and it was the
+      SESSION that was stale. Cost an hour on 2026-08-19.
+- [ ] **4b.6 A gmail guest can exist TWICE for one address** (an OTP guest and a personal Microsoft
+      account). Check `LoginName`, not the email, when "I added them and they still cannot get in".
+
+---
+
+## 4c. STALE CACHES — added 2026-08-19
+
+Settings, library names and modes are read once in a mount-time effect. Everything here is a real
+failure that looks like a bug in the feature you were testing.
+
+- [ ] **4c.1 After renaming a library, hard refresh every open tab.** The name cache is a module-level
+      promise primed once per page load. A tab that resolved `HCDocuments` before the rename kept using
+      it and 404d on a library that exists — reported as *"could not read its columns"* on a screen
+      that had nothing to do with names.
+- [ ] **4c.2 After any config change, hard refresh** before concluding anything about it.
+- [ ] **4c.3 Legally Privileged: the config row holds LEVEL NAMES.** Set
+      `legallyPrivilegedFor = Confidential;Highly Confidential`; the tick must appear for BOTH. Until
+      1.0.169.0 the check compared the dropdown's raw value — a term GUID — so the row had to hold a
+      GUID to match anything at all, and no screen could explain it.
 
 ---
 
@@ -161,20 +225,40 @@ the next real approval is not routed, silently.
 **Nothing here works until 1.3 passes and the setup below is done.** This is the least-tested thing
 in the system, and the consequence of a mistake is the worst.
 
-- [ ] **7.1** `CRS Folder` content type on both HC libraries, with `Full Name` on it.
+> **State on 2026-08-19:** libraries exist and pass the column/type/term-set check; the `CRS Folder`
+> content type is attached to both and reconciliation has stamped the folders (`Full Name` shows
+> `Group Head Office` on the GHO folder in both). **Both HC flows are built** with the right polarity.
+> An HC upload now lands in `HC Approval Document` **with its metadata** (1.0.170.0 — before that it
+> could never tag, on any site). What remains untested is everything about who can SEE it.
+
+- [x] **7.1** `CRS Folder` content type on both HC libraries, with `Full Name` on it. Done 2026-08-19.
 - [ ] **7.2** Create `*_UPL_HIGHLY_CONFIDENTIAL` / `*_APR_HIGHLY_CONFIDENTIAL` for one unit and map
       them with the HC personas.
-- [ ] **7.3** Re-run reconciliation — it must now build and grant **all four** libraries.
-- [ ] **7.4** Build the two Power Automate flows **as the service account**: HC Auto-route with
+- [x] **7.3** Re-run reconciliation — it must now build and grant **all four** libraries. Done
+      2026-08-18; the HC folder tree exists and carries the folder content type.
+- [x] **7.4 BUILT 2026-08-19** and both trigger conditions verified by eye: HC Auto Route `false`,
+      HC folder approval `true`. ⚠ **Built under `clarence@trinergydigital.com`, not a service
+      account** — acceptable here, MUST be the service account on CRS or both flows stop silently the
+      day that password changes.
+- [ ] ~~7.4 (original)~~ Build the two Power Automate flows **as the service account**: HC Auto-route with
       `{IsFolder}` = **false**, HC folder approval = **true**. The polarity is the whole thing, and
       both mistakes have already been made once on the normal pair.
-- [ ] **7.5 `HC Documents` content approval OFF.**
-- [ ] **7.6** A cleared uploader sees Highly Confidential and files into the HC library. **(2-acct)**
+- [x] **7.5 `HC Documents` content approval OFF.** Verified by script 2026-08-19.
+- [x] **7.6** A cleared uploader sees Highly Confidential and files into the HC library. **(2-acct)**
+      Passed 2026-08-19 — and **with metadata**, which is the part 1.0.170.0 fixed.
+- [ ] **7.6b Approve an HC file and confirm HC Auto-route moves it to `HC Documents`** with
+      `Created By` and metadata intact. The flows exist but have never fired.
 - [ ] **7.7 AN UNCLEARED UPLOADER DOES NOT SEE THE LEVEL AT ALL** **(2-acct)** — the most important
       single test in this plan.
 - [ ] **7.8** HC files appear in CRS Search for the cleared user, marked HC, and not at all for the
       uncleared one — with **no error banner**, because a refusal is not a failure.
 - [ ] **7.9** Approval and routing complete into `HC Documents`.
+- [ ] **7.11 THE HC PAIR IS NOT MIGRATED BY A STRUCTURE CHANGE — KNOWN BROKEN.** `SubtreeMigrator`
+      walks a hardcoded two-element list (`Staging`, `Documents`) and `LibTarget` is typed to those two,
+      so the HC libraries are invisible to it. Found 2026-08-19: after adding a level, `HC Approval
+      Document/GHO/GF/TAX` holds BOTH `2025` (old shape) and `Archive 1` (new) while the normal pair was
+      migrated cleanly. Same class as register #6 and #10 — a mechanism written for two libraries when
+      there are four. See register #15.
 - [ ] **7.10** Note and decide: documents already labelled Highly Confidential sit in the NORMAL
       libraries and stay there. Migration is out of scope and must not be silently skipped.
 
@@ -223,6 +307,13 @@ Anything to change, however small. A note here costs five seconds; a forgotten o
 | 12 | `groupMapModel.ts` (`GroupName` column) + every screen and log that renders it | **A Group Map row caches the group's NAME, and a rename desynchronises it forever.** The row stores the group's integer `GroupId` — which is what reconciliation grants against, so grants are always correct — plus a `GroupName` snapshot taken when the mapping was created. Nothing refreshes it. Found live 2026-08-17: Folder Access, Group Management's filter and every reconciliation log line named `DMS_GHO_GF_CORU_UPL`, a group that **does not exist**; the real group is `GHO_GF_CORU_UPL` (id 53), renamed in the `DMS_` → `CRS` pass. The grant was right the whole time and the entire audit surface was lying. **Migration makes this universal, not incidental** — SDG renames every group at import (memory `dms-to-crs-rename-pending`), so every row on every screen and every `↳ … → CRS Upload` line will name a group nobody can find, across 50+ groups, read by people who do not know the system. Cost 20 minutes to diagnose here with full context. Fix: resolve the display name from the live group by **id** at render/log time; fall back to the stored name only when the id does not resolve, and SAY so — a deleted group and a renamed one need opposite fixes (gotcha #9's rule again). | major | open |
 | 5 | `shared/spGroups.ts` `fail()` | A throttled response body is HTML, and it is surfaced raw to the user — a wall of `<!DOCTYPE html>` where a sentence belongs. Should name the status and say "SharePoint is busy, retry shortly". | minor | **fixed 1.0.122.0** |
 
+| 13 | `FolderManager.tsx` page pass + `pageAccessPolicy.ts` | **Page access is not derived from anything — it needs a Page-scope Group Map row per group, per page.** The policy file is a UI filter over a manual action and says so, but its name and CLAUDE.md both read as though a role grants a page. Consequences seen live 2026-08-18: `Upload-Form.aspx` and `ApprovalDocument.aspx` sat restricted with NO grants after `CRS Group Map` was cleared, so only Owners could open them, and reconciliation logged `Page access: no Page-scope mappings` as a green tick. Doing it properly by hand means ~120 rows here and ~260 on CRS — every one saying the same thing, because the page needs ROLE granularity, not unit granularity. Client chose to keep the pages restricted rather than let them inherit. **Agreed fix (option B):** reconciliation derives these grants from the Folder rows' roles, so a page can never be stranded and a new unit needs no manual step; plus a `⚠ restricted but nothing grants access` warning in the same pass. | **blocker** | open — agreed, not yet built |
+| 14 | `Form.tsx` `uploadStagedFile` | **HC uploads could never tag, on any site.** The file is placed by FOLDER ID (`GetFolderById` reaches into any library, so it landed in `HC Approval Document` correctly) while the tagging call named the library by TITLE and was hardcoded to `settings.stagingLibrary` — the NORMAL approval library. Item ids are per-list, so `validateUpdateListItem` looked for the new id in the wrong list: 404 on a good day, and on a bad one it finds a DIFFERENT document with that id and writes the metadata onto it, reporting success. Symptom was the generic *"Uploaded, but tagging metadata failed"*. `BulkUpload` already did this right via `targetListTitle()` — two upload paths, one pattern, one written by hand. | **blocker** | **fixed 1.0.170.0** — the target title is a parameter, the HC branch passes `libApiTitle("StagingHC")`, and the failure now names the STATUS and the LIBRARY |
+| 15 | `SubtreeMigrator.tsx` | **A structure change migrates only two of the four libraries.** Hardcoded `[Staging, Documents]` with `LibTarget` typed to match, so the HC pair keeps the old shape while the normal pair is migrated and `Levels` goes live — one segment with two shapes, in the libraries where a mistake matters most. Found 2026-08-19. `allLibraryTitles()` exists precisely for this and its own comment warns that a two-element literal is "the bug, waiting". | **blocker** | open |
+| 16 | `Form.tsx`, `BulkUpload.tsx` | **Legally Privileged compared the confidentiality TERM ID, not the label**, so `legallyPrivilegedFor` had to hold a GUID to match anything — while HC routing resolved the label first. Two rules over one dropdown wanting opposite shapes in config, with nothing on screen able to explain either. Client asked for the tick on Highly Confidential and no config value could have delivered it. | major | **fixed 1.0.169.0** — both compare the label; the row now holds LEVEL NAMES and accepts a `;`/`,` list |
+| 17 | `CRS Config` | Two stale rows: **`term_highlyConfidential`** (a GUID) is read by NO code — HC routing uses `hcConfidentialityLevel`, absent here, and correctly defaults to the literal `Highly Confidential`; and **`stagingLibrary = Staging`** is superseded and would 404 if anything trusted it (the live title wins). Harmless, and exactly the sort of row that misleads the next reader. | minor | open |
+| 18 | Reconciliation | **A full run re-walks every segment across four libraries — ~40-60 min — even when one unit changed.** Client's request 2026-08-19: pick which business segments to run, and ideally be TOLD which ones changed. Change detection is answerable from data already loaded (term tree vs Folder Map vs abbreviation rows) but must **recommend, never restrict** — grants drift for reasons the term tree cannot see, so a full run stays one click away. | major | open — spec next |
+
 Severity: **blocker** (migration cannot proceed) · **major** (wrong behaviour, workaround exists) ·
 **minor** (cosmetic, wording, layout).
 
@@ -230,10 +321,15 @@ Severity: **blocker** (migration cannot proceed) · **major** (wrong behaviour, 
 
 ## 11. Exit criteria — what "done" means before migrating
 
-1. Every **blocker** and **major** closed, or explicitly accepted in writing.
-2. §4 passes end to end with **real second accounts**.
-3. §7.7 passes — an uncleared uploader cannot see the HC level.
-4. `npx heft test --clean` green, warnings at the 19 baseline.
+1. Every **blocker** and **major** closed, or explicitly accepted in writing. **Open blockers as of
+   2026-08-19: #13 (page grants not derived) and #15 (HC not migrated).**
+2. ✅ §4 passes end to end with **real second accounts** — done 2026-08-18.
+3. §7.7 passes — an uncleared uploader cannot see the HC level. **Still the single most important
+   untested thing in the system.**
+4. §7.6b passes — an HC file actually routes to `HC Documents`.
+5. §4b passes — page access, with a second account, re-checked after a reconciliation.
+6. `npx heft test --clean` green, warnings at the 15 baseline (was 19; the count fell as files were
+   split out, not by suppressing anything).
 5. **The migration runbook — `docs/2026-08-17-sdg-migration-runbook.md`** — updated with everything
    this testing changed — especially the per-site setup
    steps: column parity, `Created By` index on `Documents`, audit list permissions, Search Schema
