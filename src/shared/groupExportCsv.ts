@@ -10,7 +10,16 @@
 export interface GroupExportRow {
   group: string;
   segment: string;
-  tier: string;
+  /**
+   * The tier chain, split one column per tier — NOT one "Tier" cell (client, 2026-08-18).
+   *
+   * A row stores only the leaf term, and `Tax`, `Legal` and `PM` each exist under several
+   * departments, so a single label is genuinely ambiguous about which folder is being granted. A
+   * department-scope row carries `tier1` alone and leaves `tier2` blank, which is also what tells it
+   * apart from a unit row — previously they were indistinguishable in both the table and this file.
+   */
+  tier1: string;
+  tier2: string;
   role: string;
   memberName: string;
   memberEmail: string;
@@ -19,7 +28,8 @@ export interface GroupExportRow {
 export const GROUP_EXPORT_HEADERS = [
   "Group",
   "Segment",
-  "Tier",
+  "Tier 1",
+  "Tier 2",
   "Role",
   "Member Name",
   "Member Email",
@@ -46,7 +56,7 @@ export function toCsv(rows: GroupExportRow[]): string {
   const lines = [GROUP_EXPORT_HEADERS.map(csvCell).join(",")];
   for (const r of rows) {
     lines.push(
-      [r.group, r.segment, r.tier, r.role, r.memberName, r.memberEmail]
+      [r.group, r.segment, r.tier1, r.tier2, r.role, r.memberName, r.memberEmail]
         .map(csvCell)
         .join(","),
     );

@@ -26,7 +26,7 @@ dcistaging's tree is NOT the client's: it lacks Group Corporate Secretarial and 
 So **308 is correct there, and CRS should plan 324** (63 × 5 + 8 + 1). A different number on CRS is a
 real gap, not a repeat of this.
 
-Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.152.0** (defects 1-2), 1056
+Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.153.0** (defects 1-3), 1063
 tests, 15 warnings (the baseline).
 
 ---
@@ -103,13 +103,30 @@ Management page is covered too.
 - The mode switch is held too: *Create one group* unmounts the provisioner exactly as a step change
   does.
 
-### 3. The mappings table shows one bare term
+### 3. The mappings table shows one bare term — **FIXED, 1.0.153.0, not yet site-tested**
 
-Folder Access shows `Tier` as a single label, so a unit row does not say which department it is in, and a
-department row is indistinguishable from a unit one. Client asked for **Tier 1 / Tier 2** columns.
+Folder Access showed `Tier` as a single label, so a unit row did not say which department it was in, and a
+department row was indistinguishable from a unit one. Client asked for **Tier 1 / Tier 2** columns.
 
-A row stores only the **leaf** term GUID, so the department must be derived by walking the segment's term
-tree — the walk `BulkGroupProvisioner` already performs. Build `guid → {tier1, tier2}` once per segment.
+**Fixed:** `shared/termChains.ts` (pure, 7 tests) turns a walked tree into `guid → [labels]`, and
+`GroupMapBuilder` walks each distinct segment **once**, bounded by its permissioned depth.
+
+- **It replaces a per-term read and is cheaper than what it replaces** — ~130 requests for a
+  provisioned segment against ~8 for the walk (one per department, plus the top level).
+- **The depth bound is load-bearing.** SubUnit terms are authored *under each unit*, so an unbounded
+  walk would fetch every SubUnit on the site to answer a question about departments. `parseLevels`
+  keeps non-permissioned entries, so the `permissioned !== false` filter is what sets the bound.
+- **A branch that could not be read abandons the whole segment**, which then reads *Tier not known*.
+  Reporting it as a term with no children would present a unit as a department — the exact wrong
+  statement these columns exist to prevent. Unknown ≠ empty, again.
+- **A chain of one means "this row is on a department"; unresolved means "we do not know".** They
+  render differently on purpose, and a department row's blank Tier 2 shows as a dash, because that
+  emptiness is the fact identifying it.
+- **The CSV split with it** (`Tier 1`, `Tier 2` headers) from the same function as the screen — the
+  export is the client's cross-check, and two derivations of one value drift.
+
+Segments with no `mode` row (Upstream Malaysia's placeholder) resolve nothing and say so; those rows
+already carry the `stale` badge beside them.
 
 ### 4. The group list is not scrollable
 

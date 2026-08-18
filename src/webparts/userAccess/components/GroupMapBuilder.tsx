@@ -31,6 +31,8 @@ import {
   GroupExportRow,
   NO_MEMBERS,
 } from "../../../shared/groupExportCsv";
+import { parseLevels } from "../../../shared/formModel";
+import { chainFor, tierChains, TermNode } from "../../../shared/termChains";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames, permissionLevelNames } from "../../../shared/spNaming";
@@ -38,7 +40,30 @@ import { writeAudit } from "../../../shared/spAuditLog";
 
 type Props = { context: WebPartContext; siteUrl: string };
 type GroupPick = { id: string; displayName: string };
-type ModePick = { label: string; termSetGuid: string };
+/** What a segment-scope row shows where a tier would be — it grants across the whole segment. */
+const SEGMENT_LEVEL = "(segment level)";
+/**
+ * Shown when the term tree could not be walked. Deliberately not blank and deliberately not the
+ * GUID: blank reads as "this row has no department", and a GUID reads as data corruption. Neither
+ * is true — the row is fine and the lookup failed.
+ */
+const TIER_UNKNOWN = "Tier not known";
+
+/** Case-insensitive GUID comparison, at module scope so the walk can use it before render. */
+function guidEq(a: string, b: string): boolean {
+  return (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+}
+
+type ModePick = {
+  label: string;
+  termSetGuid: string;
+  /**
+   * Permissioned tier names, shallowest first. Carried so the ancestry walk knows how deep to go —
+   * a walk past the permissioned depth would descend into below-Unit tiers (SubUnit terms are
+   * authored under each unit), which is hundreds of requests for terms no Group Map row can name.
+   */
+  levelNames: string[];
+};
 type TermLite = { id: string; label: string };
 type ExistingRow = GroupMapWriteRow & { itemId: number };
 
@@ -235,9 +260,11 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const [results, setResults]     = useState<GroupPick[]>([]);
   const [searching, setSearching] = useState(false);
 
-  // Cache of tier term GUID -> label, so the Existing mappings table shows the unit
-  // name instead of a raw GUID. Populated lazily as rows load.
-  const [tierLabels, setTierLabels] = useState<Record<string, string>>({});
+  // Cache of tier term GUID -> its chain of labels, so the Existing mappings table shows
+  // "Group Finance / Tax" instead of a raw GUID. Populated lazily as rows load.
+  const [tierChainMap, setTierChains] = useState<Record<string, string[]>>({});
+  /** Segments whose tree has been walked, so a second load does not re-walk them. */
+  const walkedSegments = useRef<Record<string, true>>({});
 
   // NOTE (2026-08-14): creating a group, editing its members and deleting it all left this
   // screen for the Group Management web part — spec
@@ -273,7 +300,17 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     const data = await res.json();
     return ((data.value ?? []) as Array<{ ModeLabel?: string; TermSetGuid?: string; Levels?: string }>)
       .filter((r) => (r.TermSetGuid ?? "").trim() && (r.Levels ?? "").trim())
-      .map((r) => ({ label: (r.ModeLabel ?? "").trim() || (r.TermSetGuid ?? "").trim(), termSetGuid: (r.TermSetGuid ?? "").trim() }));
+      .map((r) => ({
+        label: (r.ModeLabel ?? "").trim() || (r.TermSetGuid ?? "").trim(),
+        termSetGuid: (r.TermSetGuid ?? "").trim(),
+        // PERMISSIONED tiers only, and the filter is load-bearing: `parseLevels` keeps a
+        // `"permissioned": false` entry, and walking to that depth would descend into the
+        // below-Unit tiers (SubUnit terms are authored under each unit) — hundreds of requests
+        // for terms no Group Map row can ever name.
+        levelNames: parseLevels(r.Levels ?? "")
+          .filter((l) => l.permissioned !== false)
+          .map((l) => l.label),
+      }));
   };
 
   const loadTerms = async (url: string): Promise<TermLite[]> => {
@@ -358,34 +395,71 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
     }
   };
 
-  // Resolve tier term GUIDs to labels for the Existing mappings table (raw GUIDs are
-  // meaningless to the client). One read per distinct unit term; cached.
-  const loadTierLabels = async (rows: ExistingRow[]): Promise<void> => {
-    // Dedupe to distinct, not-yet-resolved unit terms up front so the async loop never
-    // re-reads its own accumulator across an await (avoids a race-condition lint error).
-    const seen = new Set<string>();
-    const need = rows.filter((r) => {
-      if (!r.UnitTermGuid || !r.Segment || r.UnitTermGuid === r.Segment) return false;
-      if (tierLabels[r.UnitTermGuid] || seen.has(r.UnitTermGuid)) return false;
-      seen.add(r.UnitTermGuid);
-      return true;
-    });
-    const map: Record<string, string> = {};
-    for (const r of need) {
-      try {
-        const res: SPHttpClientResponse = await context.spHttpClient.get(
-          `${siteUrl}/_api/v2.1/termStore/sets/${r.Segment}/terms/${r.UnitTermGuid}?$select=labels`,
-          SPHttpClient.configurations.v1,
-          { headers: { Accept: "application/json" } },
-        );
-        if (res.ok) {
-          const d = await res.json();
-          const nm = (d.labels ?? [])[0]?.name as string | undefined;
-          if (nm) map[r.UnitTermGuid] = nm;
-        }
-      } catch { /* leave as GUID */ }
+  /**
+   * Resolve tier terms for the Existing mappings table — the whole CHAIN, not just the leaf label.
+   *
+   * A row stores only the leaf GUID, so a unit row never said which department it was in and a
+   * department row was indistinguishable from a unit one (client, 2026-08-18). `Tax`, `Legal` and
+   * `PM` each exist under several departments on the client's tree, so the leaf label alone is
+   * ambiguous about which folder a grant reaches — not merely terse.
+   *
+   * WALKS THE TREE ONCE PER SEGMENT rather than reading each term. That is what makes the ancestry
+   * affordable at all, and it is also far cheaper than what it replaces: one read per distinct unit
+   * term was ~130 requests for a provisioned segment, against ~8 for the walk (one per department,
+   * plus the top level).
+   *
+   * Bounded by the segment's PERMISSIONED depth. Below-Unit tiers are authored under each unit, so
+   * an unbounded walk would fetch every SubUnit on the site to answer a question about departments.
+   */
+  const loadTierChains = async (rows: ExistingRow[], modeList: ModePick[]): Promise<void> => {
+    // Distinct segments that actually appear in a folder row, resolved up front so the async loop
+    // never re-reads its own accumulator across an await (avoids a race-condition lint error).
+    const wanted: string[] = [];
+    for (const r of rows) {
+      const g = (r.Segment ?? "").trim();
+      if (!g || !r.UnitTermGuid) continue;
+      if (wanted.indexOf(g) === -1 && !walkedSegments.current[g.toLowerCase()]) wanted.push(g);
     }
-    if (Object.keys(map).length) setTierLabels((prev) => ({ ...prev, ...map }));
+    if (wanted.length === 0) return;
+
+    const nodes: TermNode[] = [];
+    for (const setGuid of wanted) {
+      const mode = modeList.filter((m) => guidEq(m.termSetGuid, setGuid))[0];
+      // No mode row means no declared depth. Walking blind is the one thing not to do here — it is
+      // unbounded — so the segment is left unresolved and its rows say so, which is honest: a
+      // mapping under a segment with no mode row is already flagged `stale` beside it.
+      const depth = mode ? mode.levelNames.length : 0;
+      if (depth <= 0) continue;
+      const walk = async (parentId: string, level: number): Promise<void> => {
+        if (level > depth) return;
+        const url = parentId
+          ? `${siteUrl}/_api/v2.1/termStore/sets/${setGuid}/terms/${parentId}/children?$select=id,labels`
+          : `${siteUrl}/_api/v2.1/termStore/sets/${setGuid}/children?$select=id,labels`;
+        const res: SPHttpClientResponse = await context.spHttpClient.get(
+          url, SPHttpClient.configurations.v1, { headers: { Accept: "application/json" } },
+        );
+        // THROWS rather than returning empty. A branch that could not be read must never be
+        // reported as a term with no children — that presents a unit as though it were a
+        // department, which is the exact wrong statement these columns exist to prevent. One bad
+        // branch abandons the whole segment, whose rows then say "tier not known".
+        if (!res.ok) throw new Error(`term store HTTP ${res.status}`);
+        const kids = (
+          ((await res.json()).value ?? []) as Array<{ id?: string; labels?: Array<{ name?: string }> }>
+        );
+        for (const k of kids) {
+          if (!k.id) continue;
+          nodes.push({ id: k.id, label: (k.labels ?? [])[0]?.name ?? "", parentId });
+          await walk(k.id, level + 1);
+        }
+      };
+      const ok = await walk("", 1).then(() => true).catch(() => false);
+      // Marked walked only when the walk completed, so a transient failure is retried on the next
+      // load rather than cached as "this segment has no terms".
+      if (ok) walkedSegments.current[setGuid.toLowerCase()] = true;
+    }
+
+    const chains = tierChains(nodes);
+    if (Object.keys(chains).length) setTierChains((prev) => ({ ...prev, ...chains }));
   };
 
   /* ── Mount ─────────────────────────────────────────────────────────────── */
@@ -414,10 +488,12 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       .catch(() => undefined);
   }, []);
 
-  // Whenever the mappings change, resolve any new tier labels.
+  // Whenever the mappings change, resolve any new tier chains. Keyed on `modes` too: the walk
+  // needs a segment's declared depth, and the two loads race on mount — without it the first
+  // render after `existing` lands would abandon every segment for want of a mode row.
   useEffect(() => {
-    if (existing.length) loadTierLabels(existing).catch(() => undefined);
-  }, [existing]);
+    if (existing.length) loadTierChains(existing, modes).catch(() => undefined);
+  }, [existing, modes]);
 
   /* ── Group search (debounced) ──────────────────────────────────────────── */
 
@@ -546,11 +622,31 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   const isStaleRow = (r: ExistingRow): boolean =>
     modes.length > 0 && !!r.Segment && !modes.some((m) => sameGuid(m.termSetGuid, r.Segment));
 
-  /** Same text the Tier column shows, reused so the CSV and the screen never disagree. */
-  const tierLabelFor = (r: ExistingRow): string => {
-    if (!r.UnitTermGuid) return "";
-    if (r.UnitTermGuid === r.Segment) return "(segment level)";
-    return tierLabels[r.UnitTermGuid] ?? r.UnitTermGuid;
+  /**
+   * The tier chain a row points at, or `undefined` when it was never resolved.
+   *
+   * `undefined` is NOT the same as a chain of one, and conflating them is the misreading these
+   * columns exist to end: a chain of one means "this row is on a department", while unresolved
+   * means "we do not know which tier this is". Presenting the second as the first would label a
+   * unit row with a department heading — a wrong statement about who a grant reaches.
+   */
+  const tierChainFor = (r: ExistingRow): string[] | undefined => {
+    if (!r.UnitTermGuid) return [];
+    if (sameGuid(r.UnitTermGuid, r.Segment)) return [SEGMENT_LEVEL];
+    return chainFor(tierChainMap, r.UnitTermGuid);
+  };
+
+  /**
+   * The two tier cells, for the screen and for the CSV — one function, so they cannot disagree.
+   *
+   * A chain deeper than two is JOINED into the second cell rather than truncated: every family
+   * today is exactly two permissioned tiers, but silently dropping a third would hide part of the
+   * path a grant reaches, and a wrong-looking cell is recoverable where a missing one is not.
+   */
+  const tierCells = (r: ExistingRow): { tier1: string; tier2: string } => {
+    const chain = tierChainFor(r);
+    if (chain === undefined) return { tier1: TIER_UNKNOWN, tier2: "" };
+    return { tier1: chain[0] ?? "", tier2: chain.slice(1).join(" › ") };
   };
 
   /**
@@ -588,10 +684,12 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
     const rows: GroupExportRow[] = [];
     for (const r of existing) {
+      const cells = tierCells(r);
       const base = {
         group: r.GroupName || r.GroupId,
         segment: r.Segment ? segmentLabelFor(r.Segment) : "",
-        tier: tierLabelFor(r),
+        tier1: cells.tier1,
+        tier2: cells.tier2,
         role: r.Role,
       };
       const members = byGroup[r.GroupId] ?? [];
@@ -1261,7 +1359,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
             </th>
             <th style={s.th}>Group</th>
             <th style={s.th}>Segment</th>
-            <th style={s.th}>Tier</th>
+            <th style={s.th}>Tier 1</th>
+            <th style={s.th}>Tier 2</th>
             <th style={s.th}>Role</th>
             <th style={s.th} />
           </tr>
@@ -1269,7 +1368,9 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         <tbody>
           {existingForDisplay.length === 0 && (
             <tr>
-              <td style={s.td} colSpan={6}>
+              {/* 7 columns since the Tier split — an empty-state cell that stops short leaves a
+                  ragged edge that reads as a rendering fault. */}
+              <td style={s.td} colSpan={7}>
                 No folder mappings yet.
                 {existing.length > 0 && (
                   // Says where the rows went. Without this, an admin who can see mappings exist
@@ -1312,17 +1413,36 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
                     ? <span title="A C-Level global row carries no term: it reaches every segment.">All segments</span>
                     : <span style={{ color: "#605e5c" }}>Not applicable</span>}
               </td>
-              <td style={s.td}>
-                {r.UnitTermGuid
-                  ? (r.UnitTermGuid === r.Segment
-                      ? "(segment level)"
-                      : tierLabels[r.UnitTermGuid] ?? <span style={s.mono}>{r.UnitTermGuid}</span>)
+              {/* TWO tier cells (client, 2026-08-18). One bare term could not say which department
+                  a unit belonged to, and made a department row look exactly like a unit row — while
+                  the difference between them is the difference between granting one unit and
+                  granting all of them. */}
+              {(() => {
+                const cells = tierCells(r);
+                const known = cells.tier1 !== TIER_UNKNOWN;
+                const first = r.UnitTermGuid
+                  ? (known
+                      ? cells.tier1
+                      : <span
+                          style={{ color: "#8a4b00" }}
+                          title="The segment's term tree could not be read, so this row's tier is not known. The mapping itself is unaffected."
+                        >{TIER_UNKNOWN}</span>)
                   : r.Role === "GLOBAL"
                     ? <span title="Reaches every folder in every segment, at Read, in Documents only.">Every folder</span>
                     : r.Target
                       ? <span style={s.mono} title="This row grants entry to a library or page, not a folder.">{r.Target}</span>
-                      : <span style={{ color: "#605e5c" }}>Not applicable</span>}
-              </td>
+                      : <span style={{ color: "#605e5c" }}>Not applicable</span>;
+                return (
+                  <>
+                    <td style={s.td}>{first}</td>
+                    {/* A department-scope row legitimately has no Tier 2, and that emptiness is the
+                        fact that identifies it — so it reads as a dash, not as a missing value. */}
+                    <td style={s.td}>
+                      {cells.tier2 || <span style={{ color: "#605e5c" }}>—</span>}
+                    </td>
+                  </>
+                );
+              })()}
               {/* The label, not the code. "DELS" told an administrator nothing, and being one
                   letter from "DEL" — a DIFFERENT role, in the other library — made it worse than
                   uninformative. The code is still what is stored and what reconciliation reads. */}

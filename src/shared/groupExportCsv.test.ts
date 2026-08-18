@@ -9,7 +9,8 @@ import {
 const row = (over: Partial<GroupExportRow> = {}): GroupExportRow => ({
   group: "DMS_GHO_GF_CORU_APR",
   segment: "Group Head Office",
-  tier: "Compliance ＆ Operational Risk (CORU)",
+  tier1: "Group Finance",
+  tier2: "Compliance ＆ Operational Risk (CORU)",
   role: "APR",
   memberName: "Jane Doe",
   memberEmail: "jane.doe@example.com",
@@ -60,7 +61,7 @@ describe("csvCell", () => {
 
 describe("toCsv", () => {
   it("emits the header row even with no data", () => {
-    expect(toCsv([])).toBe("Group,Segment,Tier,Role,Member Name,Member Email");
+    expect(toCsv([])).toBe("Group,Segment,Tier 1,Tier 2,Role,Member Name,Member Email");
   });
 
   it("emits one line per member row, CRLF separated", () => {
@@ -77,12 +78,12 @@ describe("toCsv", () => {
   it("keeps a group with no members as a single placeholder row", () => {
     const csv = toCsv([row({ memberName: NO_MEMBERS, memberEmail: "" })]);
     expect(csv.split("\r\n")[1]).toBe(
-      `DMS_GHO_GF_CORU_APR,Group Head Office,Compliance ＆ Operational Risk (CORU),APR,${NO_MEMBERS},`,
+      `DMS_GHO_GF_CORU_APR,Group Head Office,Group Finance,Compliance ＆ Operational Risk (CORU),APR,${NO_MEMBERS},`,
     );
   });
 
   it("keeps column alignment when a tier contains a comma", () => {
-    const csv = toCsv([row({ tier: "Group Legal, Risk ＆ Compliance" })]);
+    const csv = toCsv([row({ tier1: "Group Legal, Risk ＆ Compliance", tier2: "Legal" })]);
     expect(csv.split("\r\n")[1]).toContain('"Group Legal, Risk ＆ Compliance"');
   });
 });
