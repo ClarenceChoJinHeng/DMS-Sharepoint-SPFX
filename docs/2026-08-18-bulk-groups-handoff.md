@@ -222,6 +222,45 @@ on the same group is still applied.
 
 ---
 
+## ⚠ PAGE ACCESS WAS NEVER GRANTED TO 56 OF 60 UNITS — FIXED 1.0.171.0, NOT SITE-TESTED
+
+Found 2026-08-19, while reading the reconciliation log during the from-scratch rebuild. The
+`Applying page access…` phase reported eight grants:
+
+```
+✓ upload-form.aspx → GHO_GCA_EG_APPROVER (Read, page scope)
+✓ upload-form.aspx → GHO_GCA_EG_UPLOADER (Read, page scope)
+… six more, all GCA units
+```
+
+Those eight are the rows **an administrator wrote by hand** while diagnosing an AccessDenied on
+2026-08-18. Nothing else had ever created a `Scope = Page` row, because nothing creates them: bulk
+provisioning writes Folder-scope rows, the guided flows never mention page access, Group Management
+does not offer it. **So every uploader and approver outside those four units was denied the upload
+form**, on a site whose folder ACLs were completely correct.
+
+Fixed by deriving page access from the roles groups already hold at folder scope — spec
+`docs/superpowers/specs/2026-08-19-derived-page-access-design.md`, rules in `shared/pageGrants.ts`
+(pure, 34 tests). **No list change, no row change:** redeploy and re-run reconciliation.
+
+**What the next run should show**, and this is the check:
+
+- `Page access: 4 page(s) to assert, from 308 group(s) with roles and 8 mapping row(s)`
+- ~120 grants on `upload-form.aspx` (`from UPL` / `from APR`), ~60 on `approvaldocument.aspx`,
+  and the same again for `my-submissions.aspx` and any `requests.aspx`
+- the eight hand-made rows appearing as **derived**, not as `mapping row` — they are now redundant
+  rather than load-bearing, and may be deleted
+- **no `⚠ restricted, but no group holds …`** line. That warning is the state the site was in for
+  two days with nothing reporting it; seeing it now means the Group Map read came back short.
+
+**It also revokes**, at page scope only: a group whose mapping rows are deleted loses the page on the
+next run, each removal named in the log. ⚠ Do **not** extend that to library or folder scope —
+SharePoint's automatic **Limited Access** entries live in those permission lists, and stripping
+"anything not intended" there would take every group's folder access away on a run that reported
+success.
+
+---
+
 ## Then, in this order
 
 0. ~~Deploy~~ **Deploy 1.0.165.0** — everything from 1.0.159.0 onward is unreleased — every fix below is code, and none has been run on a site.

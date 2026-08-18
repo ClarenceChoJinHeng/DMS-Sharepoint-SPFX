@@ -168,3 +168,46 @@ export function isRoleEligibleForPage(fileName: string, role: GroupMapRole): boo
   if (VIEW_ONLY_ROLES.indexOf(role) !== -1) return false;
   return policyForPage(fileName).roles.indexOf(role) !== -1;
 }
+
+/**
+ * Did an explicit rule match this page name, or did it fall through to the default?
+ *
+ * `policyForPage` cannot answer this — it returns the same shape either way — and the distinction
+ * decides whether reconciliation may DERIVE grants for the page. See
+ * docs/superpowers/specs/2026-08-19-derived-page-access-design.md §2.1.
+ *
+ * Reads the same RULES array, so there is no second list of page names to drift. A hardcoded list
+ * of file names inside FolderManager.tsx was the alternative, and its drift is silent: a page
+ * renamed in one place and not the other either stops being granted or starts being locked, with
+ * nothing reported.
+ */
+export function pageMatchedRule(fileName: string): boolean {
+  const n = (fileName ?? "").trim().toLowerCase();
+  for (const r of RULES) if (r.match.test(n)) return true;
+  return false;
+}
+
+/**
+ * Roles that reconciliation may grant this page AUTOMATICALLY, from the roles groups already hold
+ * at folder scope. `[]` means derive nothing and leave the page alone.
+ *
+ * ⚠ EMPTY FOR AN UNMATCHED PAGE, and that is the whole safety of it. Granting at page scope
+ * requires breaking the page's inheritance first, after which ONLY the listed groups can open it.
+ * Deriving from DEFAULT_POLICY (UPL, APR, DELS) would therefore break the site home page,
+ * CollabHome.aspx and anything the client authored, and lock out every role not in that list —
+ * SDG Employee, Head of Department and C-Level hold none of them. Reconciliation would take the
+ * site away from most of its users on a run that reported success.
+ *
+ * Empty for an adminOnly page too: those have `roles: []` already and belong to the lockdown pass,
+ * which strips every non-Owners assignment. Two passes asserting opposite states on one page would
+ * fight every run, for ever.
+ *
+ * View-only roles are filtered out for the same reason they are never OFFERED one: a reader who
+ * opened the upload form could not upload anyway, holding no Staging permission.
+ */
+export function derivedRolesForPage(fileName: string): GroupMapRole[] {
+  if (!pageMatchedRule(fileName)) return [];
+  const p = policyForPage(fileName);
+  if (p.adminOnly) return [];
+  return p.roles.filter((r) => VIEW_ONLY_ROLES.indexOf(r) === -1);
+}

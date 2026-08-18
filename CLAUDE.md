@@ -860,6 +860,50 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   - Matched by FILE NAME, so a client page called `Configuration.aspx` would be locked. Accepted:
     every lock is logged by name. An exact allow-list was rejected — this client renames everything
     at import, and the list would stop matching silently.
+- **PAGE ACCESS IS DERIVED FROM FOLDER ROLES SINCE 1.0.171.0 — nothing had ever created a Page row.**
+  Spec `2026-08-19-derived-page-access-design.md`; rules in `shared/pageGrants.ts` (pure, 34 tests).
+  Reconciliation granted a page only to groups holding a **`Scope = Page`** row, and no tool writes
+  one: bulk provisioning writes FOLDER rows, the guided flows never mention page access, Group
+  Management does not offer it. So on dcistaging, after 308 groups and 790 rows, **8 of ~120
+  uploader/approver groups could open `Upload-Form.aspx`** — the four units an admin had unblocked by
+  hand while diagnosing an AccessDenied. The log said `8 mappings applied`: true, and it told nobody.
+  - **FOURTH INSTANCE OF ONE STRUCTURAL GAP** — the mechanism is driven by grant ROWS and the thing
+    needing the grant has none (the others: the inverted site-entry library grant, the HC libraries
+    inheriting, the admin pages readable by uploaders). All four fixed the same way: **assert the
+    required state every run.**
+  - **The loop is driven by the PAGES now, not the rows**, and that inversion IS the fix. Any group
+    holding a qualifying role at ANY tier in ANY segment gets the page: a page is not scoped to a
+    unit and cannot be. What they may actually FILE is still decided by the folder ACL, which the
+    upload form probes — so a group listed here that cannot write sees an empty cascade.
+  - **⚠ DERIVATION FIRES ONLY ON A PAGE WHOSE NAME MATCHED A RULE, and that gate is the whole
+    safety.** `policyForPage` answers identically whether `/upload/i` matched or the name fell to
+    `DEFAULT_POLICY` (`UPL, APR, DELS`). Granting at page scope requires BREAKING the page's
+    inheritance first, after which only the listed groups can open it — so deriving from that default
+    would break the site home page, `CollabHome.aspx` and every page the client authored, and lock
+    out every role not in the list: SDG Employee, Head of Department and C-Level hold none of them.
+    Reconciliation would take the site away from most of its users on a run reporting success. Hence
+    `pageMatchedRule` + `derivedRolesForPage`, both reading the existing `RULES` array so there is no
+    second list of page names to drift.
+  - **Hand-made Page rows SURVIVE and merge**, deduped on `GroupId` — a Page row is the only way to
+    grant a page the policy does not imply, and it still works on a page that derives nothing.
+  - **The full ACL is ASSERTED: a group with no qualifying role is REMOVED, named in the log.** So
+    deleting a group's mapping rows now revokes its page on the next run. ⚠ **Safe at page scope and
+    NOWHERE ELSE** — a Site Pages item is a LEAF, while a library or folder root also carries
+    SharePoint's automatic **Limited Access** entry for every principal granted further down (~308 of
+    them on the approval library), so the same rule there would strip them all and take every group's
+    folder access away on a run that reported success. Do not lift `groupsToRemove` above a leaf.
+  - **Only site Owners is protected.** The site-entry group is deliberately NOT: it holds Read on the
+    WEB, so on an inheriting page it is there by inheritance and vanishes when inheritance breaks — a
+    page-SCOPE assignment for it can only have been added by hand, and would hand every plain member
+    the upload form. **User principals are never removal candidates**, since individual grants were
+    rejected as a mechanism in `2026-08-14-per-person-access-removal-design.md`.
+  - **A restricted page with nobody now SAYS SO** (`⚠ restricted, but no group holds UPL or APR`) — a
+    warning, not a refusal: an empty set is correct on a site with no groups, and refusing would
+    leave the page INHERITING, i.e. readable by every site member.
+  - **Fails OPEN on the read, CLOSED per page on the write.** An unreadable Group Map derives
+    nothing; an unreadable page ACL removes nothing but still grants. The Group Map read is `$top=5000`
+    and does NOT lift the 5,000-item threshold — past ~5 segments it must be paged, or a truncated
+    read would under-derive and then strip grants that should stay.
 - **THE UPLOAD FORM PAGE ACCEPTS `APR` AS WELL AS `UPL` (2026-08-17, client: *"client wants HOU to
   be able to get into upload form to upload, basically apr can upload"*).** `pageAccessPolicy.ts`'s
   `/upload/i` rule listed `["UPL"]`, so an approver got **AccessDenied on the upload form** — found

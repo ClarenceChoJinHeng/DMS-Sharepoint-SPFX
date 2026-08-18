@@ -6,7 +6,8 @@ import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
 import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
 // The SAME policy the admin screens filter with, so a page cannot be admin-only in the UI and wide
 // open in SharePoint. See docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md.
-import { policyForPage } from "../../../shared/pageAccessPolicy";
+import { policyForPage, derivedRolesForPage } from "../../../shared/pageAccessPolicy";
+import { groupRolesById, intendedPageGroups, groupsToRemove } from "../../../shared/pageGrants";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, hcAvailable, LIST_SUFFIX, libApiTitle } from "../../../shared/naming";
 // One parser for the `#tab=` deep link, shared with the CRS Settings page that writes it — the two
@@ -2637,12 +2638,17 @@ export default function FolderManager({
           entries.push({ msg: `Page access: skipped — Scope/Target columns not present on DMS Group Map`, ok: true });
         } else {
           const pgJson = await pgRes.json();
-          const pageRows = ((pgJson.value ?? []) as Array<{ GroupId?: string; GroupName?: string; Role?: string; Scope?: string; Target?: string }>)
+          const allRows = (pgJson.value ?? []) as Array<{ GroupId?: string; GroupName?: string; Role?: string; Scope?: string; Target?: string }>;
+          const pageRows = allRows
             .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "page")
             .filter((r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "");
-          if (pageRows.length === 0) {
-            entries.push({ msg: `Page access: no Page-scope mappings`, ok: true });
-          } else if (readId === undefined) {
+          /* THE HALF THAT USED TO BE THROWN AWAY (spec 2026-08-19 §1). Page access was granted only
+             to groups with a Page row, and nothing creates those rows — bulk provisioning writes
+             FOLDER rows. On dcistaging that meant 8 of 120 uploader/approver groups could open the
+             upload form, and the log said `8 mappings applied`, which was true and told nobody.
+             The roles are now derived from the same response. */
+          const groupRoles = groupRolesById(allRows);
+          if (readId === undefined) {
             entries.push({ msg: `⚠ Page access: no "Read" role definition on site — skipped`, ok: false });
           } else {
             const PAGES_LIST = "Site Pages";
@@ -2675,19 +2681,51 @@ export default function FolderManager({
               const items = ((itemsJson.value ?? []) as Array<{ Id: number; FileLeafRef?: string; HasUniqueRoleAssignments?: boolean }>)
                 .map((p) => ({ id: p.Id, file: (p.FileLeafRef ?? "").toLowerCase(), unique: p.HasUniqueRoleAssignments === true }));
 
-              // Grouped by page so inheritance is broken ONCE per page rather than once per row.
-              const byPage = new Map<string, typeof pageRows>();
-              for (const r of pageRows) {
-                const key = (r.Target ?? "").trim().toLowerCase();
-                byPage.set(key, [...(byPage.get(key) ?? []), r]);
+              /* DRIVEN BY THE PAGES, not by the rows. A page whose policy names roles is
+                 processed whether or not anyone wrote a row for it — that inversion IS the fix.
+                 Hand-made rows still contribute their own targets, so a row aimed at a page the
+                 policy says nothing about (a deliberate exception) is still honoured. */
+              const derivedFiles = items
+                .filter((p) => p.file !== "" && derivedRolesForPage(p.file).length > 0)
+                .map((p) => p.file);
+              const rowFiles = pageRows.map((r) => (r.Target ?? "").trim().toLowerCase());
+              const files: string[] = [];
+              for (const f of derivedFiles.concat(rowFiles)) if (f !== "" && files.indexOf(f) === -1) files.push(f);
+
+              /* ONLY site Owners is protected, matching the lockdown pass below.
+                 The site-entry group is deliberately NOT protected: it holds Read on the WEB, so on
+                 an inheriting page it is present by inheritance and disappears the moment
+                 inheritance is broken. A page-SCOPE assignment for it can therefore only have been
+                 added by hand, and it would give every plain member the upload form — exactly what
+                 the policy exists to prevent. Members/Visitors likewise: a CRS page granted to the
+                 site's default members group is not a grant to respect.
+                 `typeof`, not `!== undefined`: ownerGroupId is `number | null`, and null slips past
+                 an undefined check straight into the array. */
+              const protectedIds: number[] = typeof ownerGroupId === "number" ? [ownerGroupId] : [];
+
+              if (files.length === 0) {
+                // Says so, rather than saying nothing. Silence here reads as "page access was fine",
+                // and on a site whose pages are named so that no rule matches, that is exactly wrong.
+                entries.push({ msg: `Page access: no page on this site carries a role policy, and no Page-scope mapping exists — nothing to grant`, ok: true });
+              } else {
+                entries.push({ msg: `Page access: ${files.length} page(s) to assert, from ${groupRoles.length} group(s) with roles and ${pageRows.length} mapping row(s)`, ok: true });
               }
 
-              for (const [file, rowsForPage] of Array.from(byPage.entries())) {
+              for (const file of files) {
+                const rowsForPage = pageRows.filter((r) => (r.Target ?? "").trim().toLowerCase() === file);
                 if (isForbiddenPageTarget(file) || file === welcome) {
                   // Refused by name, every run, rather than applied once and regretted. The row
                   // is left in place: deleting authored data on the client's behalf is not this
                   // pass's job, and the refusal is logged so it can be removed deliberately.
-                  entries.push({ msg: `  ⚠ ${file}: the site home page cannot be restricted — ${rowsForPage.length} mapping(s) refused`, ok: false });
+                  /* Reads correctly whether it arrived from a row or from derivation. A client who
+                     set the welcome page TO the upload form would otherwise be told "0 mapping(s)
+                     refused", which reads as a bug in the tool rather than a refusal. */
+                  entries.push({
+                    msg: rowsForPage.length > 0
+                      ? `  ⚠ ${file}: the site home page cannot be restricted — ${rowsForPage.length} mapping(s) refused`
+                      : `  ⚠ ${file}: the site home page cannot be restricted — page access NOT applied to it`,
+                    ok: false,
+                  });
                   continue;
                 }
                 if (policyForPage(file).adminOnly) {
@@ -2704,8 +2742,21 @@ export default function FolderManager({
                 }
                 const item = items.find((p) => p.file === file);
                 if (!item) {
-                  entries.push({ msg: `  ⚠ ${file}: page not found in ${PAGES_LIST} — check the Target value`, ok: false });
+                  /* Only a ROW can be wrong here. A derived file name came FROM this list, so it
+                     cannot be missing; a row's Target is typed by hand and a typo is worth naming. */
+                  if (rowsForPage.length > 0) {
+                    entries.push({ msg: `  ⚠ ${file}: page not found in ${PAGES_LIST} — check the Target value`, ok: false });
+                  }
                   continue;
+                }
+                const intended = intendedPageGroups(file, groupRoles, pageRows);
+                if (intended.length === 0 && derivedRolesForPage(file).length > 0) {
+                  /* WARNED, NOT REFUSED (spec §5). An empty set is correct on a site with no groups
+                     yet, and the page still ends up Owners-only — administrator-only until groups
+                     exist. Refusing would leave it INHERITING, i.e. readable by every site member,
+                     which is worse. This is the exact state dcistaging sat in for two days with
+                     nothing reporting it. */
+                  entries.push({ msg: `  ⚠ ${file}: restricted, but no group holds ${derivedRolesForPage(file).join(" or ")} — nobody but site owners can open it`, ok: false });
                 }
                 const itemBase = `${pagesBase}/items(${item.id})`;
                 if (!item.unique) {
@@ -2734,22 +2785,92 @@ export default function FolderManager({
                     }
                   }
                 }
-                for (const row of rowsForPage) {
-                  const label = `${row.GroupName || row.GroupId} → ${file}`;
-                  // ALWAYS Read, never the row's own level. A page is opened or it is not, and
-                  // granting "DMS Upload" on a page item would be a meaningless binding that
-                  // reads, in the permissions UI, like an upload right on the page.
-                  if (normalizeRoleValue(row.Role ?? "") !== "ENTRY") {
-                    entries.push({ msg: `  ⚠ ${label}: role "${row.Role}" on a Page row — granting Read (page access is Read by definition)`, ok: true });
+                /* ── ASSERT, don't only add (spec §4) ───────────────────────────────────
+                   Removing a group is SAFE HERE AND NOWHERE ELSE. A Site Pages item is a LEAF, so
+                   its role assignments hold only what somebody deliberately granted. A library or
+                   folder root also carries SharePoint's automatic Limited Access entry for every
+                   principal with a grant further down — ~308 of them on the approval library — and
+                   stripping "anything not intended" there would take every group's folder access
+                   away on a run that reported success. Do not lift this block above a leaf. */
+                const held: Record<number, true> = {};
+                const raRes = await context.spHttpClient.get(
+                  `${itemBase}/roleassignments?$select=PrincipalId,Member/Title,Member/PrincipalType,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=Member,RoleDefinitionBindings`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                );
+                if (!raRes.ok) {
+                  // FAILS OPEN for this page: stripping what could not be read removes grants
+                  // nobody saw. The grants below still run, so a transient read never denies a page.
+                  entries.push({ msg: `  ⚠ ${file}: could not read current permissions (HTTP ${raRes.status}) — nothing removed`, ok: false });
+                } else {
+                  const raJson = await raRes.json();
+                  const assignments = (raJson.value ?? []) as Array<{
+                    PrincipalId?: number;
+                    Member?: { Title?: string; PrincipalType?: number };
+                    RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+                  }>;
+                  const current = assignments
+                    .filter((ra) => ra.PrincipalId !== undefined)
+                    .map((ra) => ({
+                      principalId: ra.PrincipalId as number,
+                      title: ra.Member?.Title ?? `principal ${ra.PrincipalId}`,
+                      // 8 = SharePointGroup. A USER principal is never a candidate: individual
+                      // grants were rejected as a mechanism in the per-person removal spec, and
+                      // removing them here would quietly implement what that spec declined.
+                      isGroup: ra.Member?.PrincipalType === 8,
+                      bindings: ra.RoleDefinitionBindings ?? [],
+                    }));
+                  for (const c of current) held[c.principalId] = true;
+                  for (const gone of groupsToRemove(intended, current, protectedIds)) {
+                    const full = current.filter((c) => c.principalId === gone.principalId)[0];
+                    for (const binding of full?.bindings ?? []) {
+                      if (binding.Id === undefined) continue;
+                      const del = await withThrottleRetry(() => context.spHttpClient.post(
+                        `${itemBase}/roleassignments/removeroleassignment(principalid=${gone.principalId},roledefid=${binding.Id})`,
+                        SPHttpClient.configurations.v1,
+                        { headers: { Accept: "application/json;odata=nometadata" } },
+                      ));
+                      if (del.ok) {
+                        delete held[gone.principalId];
+                        /* NAMED, never counted silently. An administrator who granted this by hand
+                           must be able to read why it went — removing it silently is worse than not
+                           removing it, because they go on believing it is there. */
+                        const why = derivedRolesForPage(file).length > 0
+                          ? `holds no ${derivedRolesForPage(file).join(" or ")} role`
+                          : `no mapping grants this page`;
+                        entries.push({ msg: `  ⚠ ${file}: removed ${gone.title} ("${binding.Name ?? binding.Id}") — ${why}`, ok: false });
+                      } else {
+                        entries.push({ msg: `  ✗ ${file}: could not remove ${gone.title} (HTTP ${del.status}) — they can still open this page`, ok: false });
+                      }
+                    }
+                  }
+                }
+
+                for (const g of intended) {
+                  const label = `${g.groupName || g.groupId} → ${file}`;
+                  let pid = 0;
+                  try {
+                    pid = spGroupPrincipalId(g.groupId);
+                  } catch (e) {
+                    entries.push({ msg: `  ✗ ${label} FAILED: ${(e as Error).message}`, ok: false });
+                    continue;
+                  }
+                  if (held[pid]) {
+                    // Already there. Re-granting is harmless, but 120 identical lines per page bury
+                    // the ones that changed, which is what a log is for.
+                    continue;
                   }
                   try {
-                    await addRoleAssignmentToList(itemBase, spGroupPrincipalId(row.GroupId ?? ""), readId);
-                    entries.push({ msg: `  ↳ ${label} → Read (page)`, ok: true });
+                    // ALWAYS Read, never a row's own level. A page is opened or it is not, and
+                    // granting "CRS Upload" on a page item is a meaningless binding that reads, in
+                    // the permissions UI, like an upload right on the page.
+                    await addRoleAssignmentToList(itemBase, pid, readId);
+                    entries.push({ msg: `  ↳ ${label} → Read (page, ${g.source === "derived" ? `from ${g.via}` : "mapping row"})`, ok: true });
                     /* A PAGE grant has no library, so no panel is right — there are only the four
                        library feeds. Documents is arbitrary but stable, and the line says "page
                        scope" so it cannot be mistaken for a library grant. A fifth panel for pages
                        would be the honest fix; not worth reshaping the progress UI for it today. */
-                    pushAssign("Documents", `${file} → ${row.GroupName} (Read, page scope)`, "ok");
+                    pushAssign("Documents", `${file} → ${g.groupName || g.groupId} (Read, page scope)`, "ok");
                     bumpAssigns();
                     await tick();
                   } catch (e) {
