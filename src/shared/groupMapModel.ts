@@ -195,6 +195,11 @@ export const ROLE_LABEL: Record<string, string> = {
   UPL:     "Uploader",
   APR:     "Approver",
   DEL:     "Delete approved documents",
+  // Was MISSING until 2026-08-18, so it rendered as the bare code "SHARE" on Folder Access while
+  // every role beside it read as a sentence — the exact thing this table exists to prevent. It is a
+  // real role: Head of Unit and both C-Level personas carry it, which makes a Head of Unit the
+  // SHARING AUTHORITY for their unit rather than merely an approver of requests.
+  SHARE:   "Share approved documents",
   DELS:    "Delete pending files",
   GLOBAL:  "C-Level — all segments",
   SEGVIEW: "C-Level — one segment",

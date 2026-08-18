@@ -24,6 +24,7 @@ import {
   findSiteEntryGroup,
   siteEntryGroupTitle,
   validateGroupName,
+  roleLabel,
 } from "./groupMapModel";
 import { setSiteEntryName } from "./naming";
 
@@ -1168,5 +1169,27 @@ describe("persona naming roles", () => {
     expect(a).not.toBe(b);
     expect(roleFromGroupName(a)).toBe("UPL");
     expect(roleFromGroupName(b)).toBe("UPLHC");
+  });
+});
+
+describe("roleLabel covers every role a persona can hold", () => {
+  it("has a sentence for every role in PERSONAS, never the bare code", () => {
+    // SHARE was missing until 2026-08-18 and rendered as "SHARE" on Folder Access, beside five roles
+    // that read as sentences. The fallback is deliberate — an unknown value must stay visible — but it
+    // makes a MISSING label indistinguishable from an unknown role, so nothing reports the gap.
+    //
+    // Iterates PERSONAS rather than SELECTABLE_ROLES, which is the list of roles derivable from a
+    // group NAME and does not include SHARE. That difference is why the gap survived.
+    const missing: string[] = [];
+    for (const p of PERSONAS) {
+      for (const r of p.roles) {
+        if (roleLabel(r) === r) missing.push(`${p.key}:${r}`);
+      }
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it("still shows an unrecognised code rather than hiding it", () => {
+    expect(roleLabel("WHAT")).toBe("WHAT");
   });
 });

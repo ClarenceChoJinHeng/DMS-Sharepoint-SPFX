@@ -949,6 +949,11 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   - **The select-all checkbox is GONE with the flat table.** Behind 308 collapsed headers it would have
     put "delete every mapping on the site" two clicks away. Per-row checkboxes inside an expanded group
     still feed Delete selected.
+  - **`SHARE` HAD NO `ROLE_LABEL` ENTRY** until 2026-08-18, so it rendered as the bare code beside
+    five roles reading as sentences. The fallback is deliberate — an unknown value must stay visible —
+    which is exactly why a MISSING label reports nothing. Now pinned by a test iterating **`PERSONAS`,
+    not `SELECTABLE_ROLES`**: that list is the roles derivable from a group NAME and excludes `SHARE`,
+    which is how the gap survived.
   - **FOLDER ACCESS IS NEVER A REQUIRED STEP**, and must never join `NEXT_GATED_STEPS`: membership is
     INTENT, and intent is not checkable — nothing can tell whether the RIGHT people are in a group.
     **Reconciliation grants to a group, not to its members**, so an empty group is a valid end state:

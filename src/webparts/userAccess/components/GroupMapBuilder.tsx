@@ -144,7 +144,9 @@ const s: Record<string, React.CSSProperties> = {
   gPill:      { fontSize: 11, padding: "1px 7px", borderRadius: 10, background: "#eef4ff", border: "1px solid #cfe0ff", color: "#1b4b8a", whiteSpace: "nowrap" },
   gTier:      { fontSize: 11.5, color: "#605e5c", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 320 },
   gBody:      { padding: "4px 10px 10px 24px", background: "#fcfcfc" },
-  disc:       { background: "none", border: "none", padding: "0 0 10px", cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 13, fontWeight: 600, color: "#0f6c3f" },
+  // `display: block` is load-bearing: a <button> is inline by default, so the two disclosures and the
+  // "Groups (308)" heading all rendered on ONE line, reading as a single run of words.
+  disc:       { display: "block", background: "none", border: "none", padding: "0 0 10px", cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 13, fontWeight: 600, color: "#0f6c3f", textAlign: "left" },
   th:         { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:         { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "top" },
   delBtn:     { padding: "3px 10px", fontSize: 12, color: "#a4262c", border: "1px solid #a4262c", borderRadius: 4, background: "#fff", cursor: "pointer" },
@@ -1193,13 +1195,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       {/* Collapsed by default. Everything below is reference an admin needs ONCE (when the
           permission levels are first created, or when choosing between DEL and DELS) and never
           again — but it used to sit above the form on every visit. */}
-      <button
-        onClick={() => setRolesOpen((v) => !v)}
-        style={{
-          background: "none", border: "none", padding: "0 0 10px", cursor: "pointer",
-          fontFamily: "'Segoe UI', sans-serif", fontSize: 13, fontWeight: 600, color: "#0f6c3f",
-        }}
-      >
+      <button onClick={() => setRolesOpen((v) => !v)} style={s.disc}>
         {rolesOpen ? "▾" : "▸"} How roles and permission levels work
       </button>
 
@@ -1386,9 +1382,13 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       {/* Counts GROUPS now, with the mapping total beside it — the list is one row per group, and a
           count you cannot reconcile with the rows in front of you is worse than none. Both are of
           what is SHOWN: library, site and page rows live on their own pages. */}
-      <div style={{ fontSize: 13, fontWeight: 600, color: "#0f6c3f", margin: "0 0 12px", paddingBottom: 8, borderBottom: "2px solid #0f6c3f", display: "inline-block" }}>
-        Groups ({mappingGroups.length}) · {existingForDisplay.length} mapping
-        {existingForDisplay.length === 1 ? "" : "s"}
+      {/* Wrapped in a block, so the inline-block underline still hugs its own text instead of the
+          heading joining the disclosure buttons above it on one line. */}
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#0f6c3f", margin: "0 0 12px", paddingBottom: 8, borderBottom: "2px solid #0f6c3f", display: "inline-block" }}>
+          Groups ({mappingGroups.length}) · {existingForDisplay.length} mapping
+          {existingForDisplay.length === 1 ? "" : "s"}
+        </div>
       </div>
 
       {/* Existing rows */}
