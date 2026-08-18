@@ -1,5 +1,21 @@
 # SDG DMS — Claude Code Project Context
 
+> ⛔ **BEFORE YOU CHANGE ANYTHING: READ THE CURRENT SOURCE, AND CONFIRM THE LIVE STATE.** Standing rule
+> from the client, 2026-08-18 — *"always check the code and current situation first before we make a
+> changes or not due to old file or old comments new session claude will destroy the progress."*
+>
+> **This file goes stale, and it is detailed enough to be convincing when it does.** In one day it was
+> found claiming SubUnit was unbuilt (it was built), that the abbreviation count was wired up (it was
+> computed and never handed over), and that `MEMBER` groups carry no suffix (they carry `_EMPLOYEE`). The
+> migration runbook recorded 71 abbreviation codes as saved after the client had cleared the list.
+>
+> So: **grep the file before editing it** — a comment is evidence of intent, not of behaviour. **Check the
+> INSTALLED app version in Site Contents** before diagnosing any UI report; the catalog listing is not the
+> same thing, and a site-collection catalog beats the tenant one. **Ask which site** — this project spans
+> `/sites/CRS` on SDG's tenant and `/sites/ClarenceDMSTesting` on ours, with different term sets, GUIDs and
+> counts; never check one's data against the other's reference files. **One fix, one deploy, one check.**
+> See memory `feedback-verify-live-state-before-changing`.
+
 Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
