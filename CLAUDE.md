@@ -593,8 +593,16 @@ Document_x0020_Type        <- "Document Type" (migrated 2026-07-24 from the old 
 Year                       <- plain "Year", NOT Year_x002f_Period (client renamed it; matches FIELDS in Form.tsx)
 DocumentDate               <- DateTime, no space encoding
 Confidentiality_x0020_Level
-LegallyPrivileged          <- Yes/No, written as the STRING "true"/"false"; shown only for the level
-                              named by the `legallyPrivilegedFor` DMS Config row (blank = never offered)
+LegallyPrivileged          <- Yes/No, written as the STRING "true"/"false"; shown only for the levels
+                              LISTED by the `legallyPrivilegedFor` DMS Config row (blank = never
+                              offered). A LIST since 2026-08-19 (client: the tick must show for Highly
+                              Confidential too) — `Confidential;Highly Confidential`, semicolon OR comma
+                              separated, matched trimmed and case-insensitively. It was a single `===`
+                              compare, so naming HC would have REMOVED the tick from Confidential: the
+                              setting could express "one level" and nothing else. Rule lives in
+                              `shared/legalPrivilege.ts` (pure, 10 tests) and is shared by FOUR call
+                              sites — the write derivation and the render guard in BOTH upload web parts,
+                              which were hand-maintained copies of each other deciding a legal marker.
 Remark                     <- a DEDICATED column, not the built-in _ExtendedDescription
 Full_x0020_Name            <- on the recreated library. The OLD Staging library had `FullName0`
                               (created as "FullName", then renamed) and `Documents` still does —

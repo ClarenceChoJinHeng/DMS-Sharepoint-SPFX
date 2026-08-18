@@ -33,6 +33,7 @@ import {
   segmentProvisionState,
 } from "../../../shared/segmentReadiness";
 import { formatFileSize } from "../../../shared/fileSize";
+import { offersLegalPrivilege } from "../../../shared/legalPrivilege";
 import { EVENT } from "../../../shared/auditLog";
 import {
   cachedHcLibraries,
@@ -2002,9 +2003,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
       // Re-derived, never trusted from the checkbox: hiding the control does not clear the state behind
       // it, so a file could otherwise carry a legal marker its confidentiality does not offer.
-      const privilegedApplies =
-        settings.legallyPrivilegedFor !== "" &&
-        (meta.confidentiality ?? "") === settings.legallyPrivilegedFor;
+      const privilegedApplies = offersLegalPrivilege(
+        meta.confidentiality,
+        settings.legallyPrivilegedFor,
+      );
       formValues.push({
         FieldName: settings.columns.legallyPrivileged,
         FieldValue: privilegedApplies && (meta.legallyPrivileged ?? "") !== "" ? "true" : "false",
@@ -2491,9 +2493,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 {/* Offered only for the level named by `legallyPrivilegedFor` in DMS Config.
                     Unset means never offered — see the setting's note. The value is re-derived
                     at upload time rather than trusted from here, because hiding the control
-                    does not clear the state behind it. */}
-                {settings.legallyPrivilegedFor !== "" &&
-                  confidentiality === settings.legallyPrivilegedFor && (
+                    does not clear the state behind it.
+
+                    A LIST since 2026-08-19 (client: the tick must show for Highly Confidential too),
+                    so `Confidential;Highly Confidential` offers it on both. One value behaves exactly
+                    as it always did. */}
+                {offersLegalPrivilege(confidentiality, settings.legallyPrivilegedFor) && (
                     <>
                       <label className="dms-lp">
                         <input

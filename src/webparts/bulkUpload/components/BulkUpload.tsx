@@ -53,6 +53,7 @@ import {
   selectableLevels,
 } from "../../../shared/hcRouting";
 import { cachedHcLibraries, hcAvailable, cachedListTitle, LIST_SUFFIX, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
+import { offersLegalPrivilege } from "../../../shared/legalPrivilege";
 import { primeNames } from "../../../shared/spNaming";
 
 /* ----------------------------------------------------------------------------
@@ -1648,9 +1649,10 @@ export default function BulkUpload({
     // Re-derived here rather than trusted from state: hiding the tick does not
     // clear it, so a user who ticks it and then changes the level would otherwise
     // stamp true on a level that never offers it. Mirrors Form.tsx.
-    const privilegedApplies =
-      settings.legallyPrivilegedFor !== "" &&
-      confidentiality === settings.legallyPrivilegedFor;
+    const privilegedApplies = offersLegalPrivilege(
+      confidentiality,
+      settings.legallyPrivilegedFor,
+    );
     const formValues: Array<{ FieldName: string; FieldValue: string }> = [
       // One entry per below-Unit tier, in chain order, resolved by the caller.
       ...labels.tierFormValues,
@@ -2699,12 +2701,12 @@ export default function BulkUpload({
             </select>
           </div>
 
-          {/* Offered only for the level named by `legallyPrivilegedFor` in DMS
-              Config. Unset means never offered. The value is re-derived at upload
-              time rather than trusted from here, because hiding the control does
-              not clear the state behind it. */}
-          {settings.legallyPrivilegedFor !== "" &&
-            confidentiality === settings.legallyPrivilegedFor && (
+          {/* Offered only for the levels LISTED by `legallyPrivilegedFor` in DMS
+              Config (a list since 2026-08-19; one value behaves as before). Unset
+              means never offered. The value is re-derived at upload time rather
+              than trusted from here, because hiding the control does not clear the
+              state behind it. */}
+          {offersLegalPrivilege(confidentiality, settings.legallyPrivilegedFor) && (
               <>
                 <label className="dms-lp">
                   <input
