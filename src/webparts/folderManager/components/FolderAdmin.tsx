@@ -110,6 +110,9 @@ const s: Record<string, React.CSSProperties> = {
   ghost:     { padding: "7px 16px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
   danger:    { marginBottom: 16, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 8, fontSize: 12.5, color: "#a4262c", lineHeight: 1.5 },
   allTools:  { marginTop: 30, paddingTop: 16, borderTop: "1px solid #eceaea" },
+  modeBar:   { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" },
+  modeOn:    { padding: "7px 14px", fontSize: 13, fontWeight: 600, background: "#0f6c3f", color: "#fff", border: "1px solid #0f6c3f", borderRadius: 4, cursor: "pointer" },
+  modeOff:   { padding: "7px 14px", fontSize: 13, background: "#fff", color: "#1b1b1b", border: "1px solid #c7c7c7", borderRadius: 4, cursor: "pointer" },
   hint:      { fontSize: 11.5, color: "#5f6f80", marginTop: 6, lineHeight: 1.5 },
   doneBox:   { border: "1px solid #c6e3d1", background: "#f1f8f4", borderRadius: 8, padding: "12px 14px", fontSize: 13, color: "#0f6c3f", lineHeight: 1.55, marginBottom: 14 },
 };
@@ -162,6 +165,8 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    * covered in "no folder will be created" warnings (client, 2026-08-17).
    */
   const [abbrevMissing, setAbbrevMissing] = useState<number | undefined>(undefined);
+  /** Which creation control the Group Management step shows. Defaults to the bulk run — see the note there. */
+  const [groupMode, setGroupMode] = useState<"all" | "one">("all");
 
   /** The subject of flows 2 and 4 — what makes their term-store step checkable at all. */
   const [subject, setSubject] = useState("");
@@ -452,16 +457,35 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       return st.screen.id === "groups"
         ? (
           <div>
-            {/* BULK FIRST, and only in the flow. This step is reached while provisioning a whole segment,
-                so the bulk run is the main event and the single form is the exception — the reverse of the
-                standalone page, where an admin has usually come to make one group.
+            {/* ONE creation control with a mode switch, not two cards doing the same job (client,
+                2026-08-18). Defaults to ALL, because that is why an admin is on this step — they are
+                provisioning a whole segment, and creating 300 groups by hand is the wrong answer.
 
-                Order was the actual bug the second time round: mounted below, it sat under the create form
-                AND the whole "Groups on this site" list, so the client reported the feature missing while
-                looking at the screen that contained it. A feature below the fold on the one screen that
-                needs it is indistinguishable from one that was never built. */}
-            <BulkGroupProvisioner context={context} siteUrl={siteUrl} />
-            <GroupManager context={context} siteUrl={siteUrl} />
+                The single form is still reachable, because it is the only route to a group that follows no
+                convention: CRS_SITE_MEMBERS, or a one-off nobody planned. Removing it would make the
+                advanced free-text name unreachable from the flow. */}
+            <div style={s.modeBar}>
+              <button
+                style={groupMode === "all" ? s.modeOn : s.modeOff}
+                onClick={() => setGroupMode("all")}
+              >
+                Create all groups for a segment
+              </button>
+              <button
+                style={groupMode === "one" ? s.modeOn : s.modeOff}
+                onClick={() => setGroupMode("one")}
+              >
+                Create one group
+              </button>
+            </div>
+            {groupMode === "all" && <BulkGroupProvisioner context={context} siteUrl={siteUrl} />}
+            {/* The LIST always renders — hiding what already exists is how a group gets created twice. Only
+                the create form follows the switch. */}
+            <GroupManager
+              context={context}
+              siteUrl={siteUrl}
+              hideCreateForm={groupMode === "all"}
+            />
           </div>
         )
         : <GroupMapBuilder context={context} siteUrl={siteUrl} />;

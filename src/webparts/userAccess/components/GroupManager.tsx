@@ -51,7 +51,18 @@ import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 
-type Props = { context: WebPartContext; siteUrl: string };
+type Props = {
+  context: WebPartContext;
+  siteUrl: string;
+  /**
+   * Hide the single-group create form, leaving the group LIST and its members.
+   *
+   * Set by the guided flow, which offers one creation control with a mode switch instead of stacking two
+   * cards that do the same job (client, 2026-08-18). Absent means shown, so the standalone page is
+   * unaffected. The list is never hidden — it is how an admin sees what already exists.
+   */
+  hideCreateForm?: boolean;
+};
 
 /** Resolved per site — the client renames these to "CRS …" at import. */
 const GROUP_MAP_LIST = (): string => cachedListTitle(LIST_SUFFIX.groupMap);
@@ -119,7 +130,7 @@ function personaFamilies(): Array<{ family: string; items: typeof PERSONAS }> {
   return out;
 }
 
-export default function GroupManager({ context, siteUrl }: Props): React.ReactElement {
+export default function GroupManager({ context, siteUrl, hideCreateForm }: Props): React.ReactElement {
   const [canManage, setCanManage] = useState<boolean | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
@@ -757,6 +768,7 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
       </p>
 
       {/* ── Create ─────────────────────────────────────────────────────── */}
+      {!hideCreateForm && (
       <div style={s.card}>
         <p style={s.head}>Create a group</p>
 
@@ -946,6 +958,7 @@ export default function GroupManager({ context, siteUrl }: Props): React.ReactEl
           </button>
         </div>
       </div>
+      )}
 
       {/* ── The groups ─────────────────────────────────────────────────── */}
       <div style={s.card}>
