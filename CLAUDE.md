@@ -818,6 +818,29 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
   Employee) vs Approval Document (HoU, PIC). That grouping is **derived** via
   `personaTouchesStaging()`, never hand-listed: filing C-Level under the approval library would
   present the widest accidental grant in the system as normal.
+- **⚠ GROUP NAMES CHANGED 2026-08-18 — `_EMPLOYEE` AND `_HOD` ARE NEW SUFFIXES.** Spec
+  `2026-08-18-group-creation-and-bulk-provisioning-design.md`; live state and five open defects in
+  **`docs/2026-08-18-bulk-groups-handoff.md`**.
+  - **`MEMBER` NO LONGER CARRIES NO SUFFIX.** It was a bare `GHO_GF_TAX`, and `roleFromGroupName` **falls
+    through to MEMBER** for anything unrecognised — so a bare name and a typo were the same answer, which
+    is how a mistyped approver group reads as view-only. Now `GHO_GF_TAX_EMPLOYEE`. Do NOT restore the
+    bare form: making that fallback loud later is only safe *because* every generated name now carries a
+    suffix (deliberately not done yet — it would reclassify groups on existing sites).
+  - **`DEPTVIEW` is `_HOD`**, the client's spelling. **HOU is Head of UNIT** — a department group must
+    never borrow it. `_DEPARTMENT_VIEWER` and `_DEPTVIEW` still parse, so nothing already named is
+    stranded; only new names use `_HOD`.
+  - **`suffixForRole` no longer short-circuits MEMBER**, and **`roleFromGroupName` now recognises the
+    literal `GLOBAL`** — it used to fall through to MEMBER, so the WIDEST grant in the model parsed back
+    as the narrowest.
+  - **Every persona DECLARES its `namingRole`; never derive it from `roles[0]`.** `employee_hc` is
+    `["MEMBER","MEMBERHC"]`, so first-role naming would present an HC-cleared viewer group as having no
+    clearance. Pinned by a round-trip test across every persona.
+  - **Group Management asks for a PERSONA, and the name is derived and read-only** (free text behind an
+    advanced toggle, for `CRS_SITE_MEMBERS` and genuine one-offs). **Creating a group also writes its
+    Group Map rows**, which takes the name-parse off the critical path entirely.
+  - **Bulk provisioning exists** (`BulkGroupProvisioner`, on Group Management and in the flow's group
+    step): 5 personas per unit + `_HOD` per department + `_SEGVIEW` per segment, planned from the
+    abbreviation rows. **It duplicates rows on a second press — see the handoff before running it.**
 - **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
   folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.
   New web part **`Group Management`** (`3f81c6d2-…`, inside the `user-access-web-parts` bundle) owns

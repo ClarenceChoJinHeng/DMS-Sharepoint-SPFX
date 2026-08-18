@@ -31,6 +31,22 @@ warnings (the baseline).
 
 ---
 
+## ⚠ The CLIENT site was also reset on 2026-08-18
+
+Separately from the rehearsal, on **`sdguthrie.sharepoint.com/sites/CRS`** the client emptied
+**`CRS Folder Map`, `CRS Group Map` and `CRS Term Abbreviation`**, and deleted the handful of groups
+created by hand. So the migration runbook's progress is **stale from §10 onwards**: the 71 GHO
+abbreviation codes recorded as saved there were cleared and re-entered, and any group created before that
+point is gone.
+
+What still stands on CRS: the four libraries and their columns, the three term sets, the permission
+levels, the config rows, and the three `mode` rows. What does not: abbreviations, group map rows, folder
+map rows, groups.
+
+Do not read `docs/2026-08-17-sdg-migration-runbook.md` §10–§12 as done. Re-check the lists.
+
+---
+
 ## Open defects, in build order
 
 ### 1. The bulk run duplicates Group Map rows — THE BUG
