@@ -921,6 +921,38 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
     FAIL, not for reads still running.** Pinned by test to gate that step alone.
   - **All five defects are fixed in 1.0.156.0, and only the first has been run on a site** — see
     `docs/2026-08-18-bulk-groups-handoff.md` before running it.
+- **MEMBERSHIP MOVED *TO* FOLDER ACCESS, AND MAPPING LEFT IT (2026-08-18, client's instruction).**
+  Spec `2026-08-18-folder-access-membership-design.md`. Supersedes the membership half of the
+  2026-08-14 separation below; everything else there stands.
+  - **Bulk provisioning removed Folder Access's original job.** Creating a group writes its Group Map
+    rows and a bulk run writes 790 in one press, so the mapping form was the fallback for a hand-named
+    group — while sitting at the top of the page, stating that mapping is manual work done here. And
+    the one genuinely recurring job in the system, **putting a person into their unit's group**, was on
+    Group Management, a page an admin otherwise visits twice in a segment's life.
+  - **Group Management answers "what groups exist"; Folder Access answers "who is in them, and what
+    they reach".** The persona stays on Group Management and CANNOT move: a persona decides the group's
+    NAME, so it must be known before the group exists. Anything Folder Access does is after the fact.
+  - **ONE ROW PER GROUP (308), not per mapping (790), and that is forced.** Membership is a property of
+    the GROUP, and a unit's approver group carries six mapping rows — a per-mapping editor would show
+    the same people 13 times per unit with 13 Add boxes doing one thing. `groupMappingsByGroup` in
+    `shared/groupMappings.ts` (pure, 6 tests) keys on **`GroupId`, never the name**: two groups can be
+    renamed alike, a stored name can be stale, and the id is what `removeGroupMember` needs.
+  - **`GroupMembersEditor` is MOVED, not copied** — Group Management lost its editor. Two lists of the
+    same people drift, and re-merging these pages is what the client called confusing on 2026-08-14.
+    Not `accessMemberUi.tsx`, which is removal-only for library/page grants and gains no Add: adding
+    someone there would look scoped to that library or page and never is.
+  - **The add-mapping form is a DISCLOSURE, closed** — not deleted. Two narrow cases have no other
+    route: a group made with the advanced free-text name and no persona gets **no rows at all**
+    (`rowsForNewGroup` returns `[]`), and one group covering two tiers cannot be expressed anywhere
+    else. Mapping the first any other way means deleting and re-creating the group, which loses its
+    members.
+  - **The select-all checkbox is GONE with the flat table.** Behind 308 collapsed headers it would have
+    put "delete every mapping on the site" two clicks away. Per-row checkboxes inside an expanded group
+    still feed Delete selected.
+  - **FOLDER ACCESS IS NEVER A REQUIRED STEP**, and must never join `NEXT_GATED_STEPS`: membership is
+    INTENT, and intent is not checkable — nothing can tell whether the RIGHT people are in a group.
+    **Reconciliation grants to a group, not to its members**, so an empty group is a valid end state:
+    the grant is in place and applies the moment someone is added, with nothing to re-run.
 - **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
   folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.
   New web part **`Group Management`** (`3f81c6d2-…`, inside the `user-access-web-parts` bundle) owns

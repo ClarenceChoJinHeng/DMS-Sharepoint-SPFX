@@ -33,6 +33,8 @@ import {
 } from "../../../shared/groupExportCsv";
 import { parseLevels } from "../../../shared/formModel";
 import { chainFor, tierChains, TermNode } from "../../../shared/termChains";
+import { groupMappingsByGroup } from "../../../shared/groupMappings";
+import GroupMembersEditor from "./GroupMembersEditor";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames, permissionLevelNames } from "../../../shared/spNaming";
@@ -136,6 +138,13 @@ const s: Record<string, React.CSSProperties> = {
   modalHead:  { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid #eee", fontWeight: 600, fontSize: 14 },
   modalBody:  { padding: "12px 16px", overflowY: "auto" },
   table:      { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 },
+  gList:      { border: "1px solid #ececec", borderRadius: 6, background: "#fff" },
+  gRow:       { display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", borderBottom: "1px solid #f0f0f0" },
+  gName:      { fontWeight: 600, fontSize: 13, flex: 1, textAlign: "left", background: "none", border: "none", cursor: "pointer", padding: 0, color: "#1b1b1b", fontFamily: "inherit" },
+  gPill:      { fontSize: 11, padding: "1px 7px", borderRadius: 10, background: "#eef4ff", border: "1px solid #cfe0ff", color: "#1b4b8a", whiteSpace: "nowrap" },
+  gTier:      { fontSize: 11.5, color: "#605e5c", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 320 },
+  gBody:      { padding: "4px 10px 10px 24px", background: "#fcfcfc" },
+  disc:       { background: "none", border: "none", padding: "0 0 10px", cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 13, fontWeight: 600, color: "#0f6c3f" },
   th:         { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:         { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "top" },
   delBtn:     { padding: "3px 10px", fontSize: 12, color: "#a4262c", border: "1px solid #a4262c", borderRadius: 4, background: "#fff", cursor: "pointer" },
@@ -199,6 +208,24 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
   // The role reference below is four dense paragraphs. Collapsed by default so the FORM is the
   // first thing on the page — the client's "too complicated" was partly this wall of text.
   const [rolesOpen, setRolesOpen] = useState(false);
+  /**
+   * The group whose people and mappings are open. ONE at a time: the member editor issues a read
+   * per group, and letting several stand open would fire 308 of them on a site this size.
+   */
+  const [openGroupId, setOpenGroupId] = useState<string | undefined>(undefined);
+  /** Free-text filter over group names — 308 rows is not a list you scroll to find Tax. */
+  const [groupFilter, setGroupFilter] = useState("");
+  /**
+   * The add-a-mapping-by-hand form, CLOSED by default (2026-08-18, client: Folder Access should not
+   * let them create mappings at all).
+   *
+   * Kept rather than deleted, because two narrow cases have no other route: a group created with the
+   * advanced free-text name and no persona gets no rows at all, and one group covering two tiers
+   * cannot be expressed anywhere else. Mapping the first by any other means would require deleting
+   * and re-creating the group, which loses its members. A disclosure answers the actual complaint —
+   * the client never meets it — without stranding either case.
+   */
+  const [formOpen, setFormOpen] = useState(false);
 
   // Draft selections
   const [group, setGroup]         = useState<GroupPick | undefined>(undefined);
@@ -848,13 +875,24 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
       return (a.Role ?? "").localeCompare(b.Role ?? "");
     });
 
+  /**
+   * The visible rows collapsed to one entry per GROUP, then filtered by name.
+   *
+   * Filtered AFTER grouping, so a match keeps the whole group rather than a subset of its mappings:
+   * a group showing 2 of its 13 rows would read as half-provisioned, which is the misreading the
+   * mapping count exists to prevent.
+   */
+  const mappingGroups = groupMappingsByGroup(existingForDisplay).filter((g) => {
+    const q = groupFilter.trim().toLowerCase();
+    return q === "" || g.label.toLowerCase().indexOf(q) !== -1;
+  });
+
   // Both keyed on what is VISIBLE. "Select all" reaching rows the admin cannot see, and then
   // deleting them, is the kind of surprise this page must not have.
-  const allSelected = existingForDisplay.length > 0 && selected.size === existingForDisplay.length;
-
-  const toggleAll = (): void => {
-    setSelected(allSelected ? new Set() : new Set(existingForDisplay.map((r) => r.itemId)));
-  };
+  // NO select-all since the list collapsed to one row per group (2026-08-18). There is nothing left
+  // for it to attach to, and a control that selected 790 rows behind 308 collapsed headers would put
+  // "delete every mapping on the site" two clicks away. Per-row checkboxes inside an expanded group
+  // still feed the "Delete selected" button.
 
   // Delete every checked row, then reload once. Reloads even on failure so the list
   // reflects any rows that were removed before the error.
@@ -1136,11 +1174,20 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   return (
     <div style={s.wrap}>
+      {/* REFRAMED 2026-08-18 (client). Creating a group writes its own Group Map rows and a bulk run
+          writes hundreds in one press, so mapping is no longer work done here. What IS done here,
+          weekly and forever, is deciding who belongs in each group. */}
       <p style={s.intro}>
-        Map an <strong>existing SharePoint site group</strong> to a segment, tier and role. This
-        writes a clean row into the <strong>{GROUP_MAP_LIST()}</strong> list. Groups themselves —
-        creating them, changing who is in them, deleting them — live on the{" "}
-        <strong>Group Management</strong> page.
+        Decide <strong>who belongs in each group</strong>, and see what each group reaches. Expand a
+        group to add or remove people. Groups themselves are created and deleted on the{" "}
+        <strong>Group Management</strong> page, which also writes these mappings — so there is
+        normally nothing to add here by hand.
+      </p>
+      <p style={{ ...s.intro, marginTop: -8 }}>
+        Adding someone is a <strong>group</strong> change: they get that group&apos;s folders in every
+        library it is mapped to, immediately. Nothing here needs Folder Reconciliation, and a group
+        with nobody in it is a perfectly valid state — its permissions are already in place and apply
+        the moment someone is added.
       </p>
 
       {/* Collapsed by default. Everything below is reference an admin needs ONCE (when the
@@ -1218,7 +1265,23 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </div>
       )}
 
+      {/* THE FORM IS A DISCLOSURE NOW, closed by default (2026-08-18, client: Folder Access should
+          not let them create mappings). Kept rather than deleted because two narrow cases have no
+          other route — a group made with the advanced free-text name and no persona gets no rows at
+          all, and one group covering two tiers cannot be expressed anywhere else. Mapping the first
+          any other way would mean deleting and re-creating the group, which loses its members. */}
+      <button style={s.disc} onClick={() => setFormOpen((v) => !v)}>
+        {formOpen ? "▾" : "▸"} Add a mapping by hand — not the normal route
+      </button>
+
+      {formOpen && (
       <div style={s.card}>
+        <div style={{ fontSize: 11.5, color: "#8a4b00", background: "#fff8f0", border: "1px solid #f2c9a0", borderRadius: 4, padding: "8px 10px", marginBottom: 12, lineHeight: 1.5 }}>
+          You should not normally need this. Creating a group on <strong>Group Management</strong>
+          {" "}writes its mappings, and <strong>Create all groups for a segment</strong> writes every
+          mapping a segment needs. Use this only for a group that follows no naming convention, or to
+          restore a row that was deleted.
+        </div>
         {/* Library toggle — decides which personas are on offer. Above the group field
             because it frames everything below it: an admin picks the library they are
             granting in, THEN who they are granting to. */}
@@ -1310,6 +1373,7 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           Add mapping
         </button>
       </div>
+      )}
 
       {modesUnreadable && (
         <div style={{ fontSize: 12, color: "#b45309", background: "#fff8e1", border: "1px solid #f0c000", borderRadius: 4, padding: "8px 12px", marginBottom: 12 }}>
@@ -1319,12 +1383,12 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </div>
       )}
 
-      {/* One view now. "Who is in these groups" is answered on the Group Management page,
-          which is where membership is changed — the People tab here could only show it.
-          Counts what is SHOWN: a tally including library and page rows would not match the
-          list beneath it, and a count you cannot reconcile with the rows is worse than none. */}
+      {/* Counts GROUPS now, with the mapping total beside it — the list is one row per group, and a
+          count you cannot reconcile with the rows in front of you is worse than none. Both are of
+          what is SHOWN: library, site and page rows live on their own pages. */}
       <div style={{ fontSize: 13, fontWeight: 600, color: "#0f6c3f", margin: "0 0 12px", paddingBottom: 8, borderBottom: "2px solid #0f6c3f", display: "inline-block" }}>
-        Folder mappings ({existingForDisplay.length})
+        Groups ({mappingGroups.length}) · {existingForDisplay.length} mapping
+        {existingForDisplay.length === 1 ? "" : "s"}
       </div>
 
       {/* Existing rows */}
@@ -1351,111 +1415,172 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           )
         )}
       </div>
-      <table style={s.table}>
-        <thead>
-          <tr>
-            <th style={{ ...s.th, width: 28 }}>
-              <input type="checkbox" checked={allSelected} disabled={busy || existingForDisplay.length === 0} onChange={toggleAll} title="Select all" />
-            </th>
-            <th style={s.th}>Group</th>
-            <th style={s.th}>Segment</th>
-            <th style={s.th}>Tier 1</th>
-            <th style={s.th}>Tier 2</th>
-            <th style={s.th}>Role</th>
-            <th style={s.th} />
-          </tr>
-        </thead>
-        <tbody>
-          {existingForDisplay.length === 0 && (
-            <tr>
-              {/* 7 columns since the Tier split — an empty-state cell that stops short leaves a
-                  ragged edge that reads as a rendering fault. */}
-              <td style={s.td} colSpan={7}>
-                No folder mappings yet.
-                {existing.length > 0 && (
-                  // Says where the rows went. Without this, an admin who can see mappings exist
-                  // elsewhere reads an empty table as the page being broken.
-                  <span style={{ color: "#605e5c" }}>
-                    {" "}This site has {existing.length} mapping(s) for libraries, the site or
-                    pages — those are managed on Site Access, Approval Library Access and Page
-                    Access.
-                  </span>
-                )}
-              </td>
-            </tr>
+      {/* Filter first: 308 groups is not a list you scroll to find Tax. Matches the group NAME,
+          which is what an admin knows — the folder codes are in it (GHO_GF_TAX_UPLOADER). */}
+      <input
+        style={{ ...s.input, marginBottom: 8 }}
+        value={groupFilter}
+        placeholder="Filter by group name, e.g. TAX or _APPROVER&hellip;"
+        onChange={(e) => setGroupFilter(e.target.value)}
+      />
+
+      {mappingGroups.length === 0 && (
+        <div style={{ ...s.td, borderBottom: "none" }}>
+          {existingForDisplay.length === 0 ? (
+            <>
+              No folder mappings yet.
+              {existing.length > 0 && (
+                // Says where the rows went. Without this, an admin who can see mappings exist
+                // elsewhere reads an empty list as the page being broken.
+                <span style={{ color: "#605e5c" }}>
+                  {" "}This site has {existing.length} mapping(s) for libraries, the site or pages
+                  — those are managed on Site Access, Approval Library Access and Page Access.
+                </span>
+              )}
+            </>
+          ) : (
+            <span style={{ color: "#605e5c" }}>No group matches that filter.</span>
           )}
-          {/* Sorted for READING, not stored order. A persona is several rows against one group
-              (Head of Unit is Approver + Delete pending files), and scattered through the list
-              they look unrelated — while adjacent with identical Group/Segment/Tier they looked
-              like a duplicate, and an admin nearly deleted one. Adjacent AND with the role
-              spelled out, the difference is the thing you actually see. */}
-          {existingForDisplay.map((r) => (
-            <tr key={r.itemId}>
-              <td style={s.td}>
-                <input type="checkbox" checked={selected.has(r.itemId)} disabled={busy} onChange={() => toggleSel(r.itemId)} />
-              </td>
-              <td style={s.td}>
-                {r.GroupName || <span style={s.mono}>{r.GroupId}</span>}
-                {isStaleRow(r) && (
-                  <span style={s.staleBadge} title="This mapping points at a term set/term that no longer exists (likely recreated with a new GUID). Delete it and recreate the mapping, then re-run Folder Reconciliation.">stale</span>
+        </div>
+      )}
+
+      {/* ONE ROW PER GROUP, not per mapping (2026-08-18). Membership is a property of the GROUP, and
+          a unit's approver group carries six mapping rows — so a per-mapping member editor would
+          have shown the same people thirteen times per unit, with thirteen Add boxes doing one
+          thing. 790 rows became 308.
+
+          Scroll capped only while nothing is expanded: the people picker inside an open group is
+          absolutely positioned, and a scroll container clips it for any group near the bottom. */}
+      <div
+        style={{
+          ...s.gList,
+          ...(openGroupId === undefined ? { maxHeight: "60vh", overflowY: "auto" as const } : {}),
+        }}
+      >
+        {mappingGroups.map((mg) => {
+          const isOpen = openGroupId === mg.groupId && mg.groupId !== "";
+          // The tiers this group reaches, deduped. Normally one; more than one means somebody mapped
+          // the same group twice deliberately, and the collapsed row should say so, not hide it.
+          const tiers: string[] = [];
+          for (const r of mg.rows) {
+            const c = tierCells(r);
+            const text = c.tier2 ? c.tier1 + " › " + c.tier2 : c.tier1;
+            if (text && tiers.indexOf(text) === -1) tiers.push(text);
+          }
+          const numericId = Number(mg.groupId);
+          return (
+            <div key={mg.groupId || "blank-" + mg.rows[0].itemId}>
+              <div style={s.gRow}>
+                <button
+                  type="button"
+                  style={s.gName}
+                  onClick={() => setOpenGroupId(isOpen ? undefined : mg.groupId)}
+                >
+                  {isOpen ? "▾" : "▸"} {mg.label}
+                </button>
+                {mg.rows.some((r) => isStaleRow(r)) && (
+                  <span style={s.staleBadge} title="A mapping here points at a term set or term that no longer exists (likely recreated with a new GUID). Delete it, map it again, then re-run Folder Reconciliation.">stale</span>
                 )}
-              </td>
-              {/* A blank Segment/Tier is never a MISSING value, so it must not read like one.
-                  Two things arrive here termless and they mean opposite extremes:
-                    GLOBAL      — no term because it reaches EVERY segment. The widest grant in
-                                  the table; "not assigned" would read as broken.
-                    non-Folder  — Site/Library/Page rows have no folder to carry a term. Shown
-                                  as the target instead, which is the fact the row was missing. */}
-              <td style={s.td}>
-                {r.Segment
-                  ? segmentLabelFor(r.Segment)
-                  : r.Role === "GLOBAL"
-                    ? <span title="A C-Level global row carries no term: it reaches every segment.">All segments</span>
-                    : <span style={{ color: "#605e5c" }}>Not applicable</span>}
-              </td>
-              {/* TWO tier cells (client, 2026-08-18). One bare term could not say which department
-                  a unit belonged to, and made a department row look exactly like a unit row — while
-                  the difference between them is the difference between granting one unit and
-                  granting all of them. */}
-              {(() => {
-                const cells = tierCells(r);
-                const known = cells.tier1 !== TIER_UNKNOWN;
-                const first = r.UnitTermGuid
-                  ? (known
-                      ? cells.tier1
-                      : <span
-                          style={{ color: "#8a4b00" }}
-                          title="The segment's term tree could not be read, so this row's tier is not known. The mapping itself is unaffected."
-                        >{TIER_UNKNOWN}</span>)
-                  : r.Role === "GLOBAL"
-                    ? <span title="Reaches every folder in every segment, at Read, in Documents only.">Every folder</span>
-                    : r.Target
-                      ? <span style={s.mono} title="This row grants entry to a library or page, not a folder.">{r.Target}</span>
-                      : <span style={{ color: "#605e5c" }}>Not applicable</span>;
-                return (
-                  <>
-                    <td style={s.td}>{first}</td>
-                    {/* A department-scope row legitimately has no Tier 2, and that emptiness is the
-                        fact that identifies it — so it reads as a dash, not as a missing value. */}
-                    <td style={s.td}>
-                      {cells.tier2 || <span style={{ color: "#605e5c" }}>—</span>}
-                    </td>
-                  </>
-                );
-              })()}
-              {/* The label, not the code. "DELS" told an administrator nothing, and being one
-                  letter from "DEL" — a DIFFERENT role, in the other library — made it worse than
-                  uninformative. The code is still what is stored and what reconciliation reads. */}
-              <td style={s.td}>{roleLabel(r.Role)}</td>
-              <td style={s.td}>
-                {/* Deleting a row now deletes A ROW. Until 2026-08-14 removing a group's last
-                    mapping also destroyed the SharePoint group — see the modal below. */}
-                <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                <span style={s.gTier} title={tiers.join(" · ")}>{tiers.join(" · ")}</span>
+                {/* The count is what tells a fully provisioned unit group (13) from a _HOD (1) at a
+                    glance — the same distinction the Tier columns were added to make. */}
+                <span style={s.gPill}>
+                  {mg.rows.length} mapping{mg.rows.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              {isOpen && (
+                <div style={s.gBody}>
+                  <table style={s.table}>
+                    <thead>
+                      <tr>
+                        <th style={{ ...s.th, width: 28 }} />
+                        <th style={s.th}>Segment</th>
+                        <th style={s.th}>Tier 1</th>
+                        <th style={s.th}>Tier 2</th>
+                        <th style={s.th}>Role</th>
+                        <th style={s.th} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mg.rows.map((r) => (
+                        <tr key={r.itemId}>
+                          <td style={s.td}>
+                            <input type="checkbox" checked={selected.has(r.itemId)} disabled={busy} onChange={() => toggleSel(r.itemId)} />
+                          </td>
+                          {/* A blank Segment/Tier is never a MISSING value, so it must not read like
+                              one. Two things arrive here termless and they mean opposite extremes:
+                                GLOBAL      — no term because it reaches EVERY segment. The widest
+                                              grant here; "not assigned" would read as broken.
+                                non-Folder  — Site/Library/Page rows have no folder to carry a
+                                              term. Shown as the target instead. */}
+                          <td style={s.td}>
+                            {r.Segment
+                              ? segmentLabelFor(r.Segment)
+                              : r.Role === "GLOBAL"
+                                ? <span title="A C-Level global row carries no term: it reaches every segment.">All segments</span>
+                                : <span style={{ color: "#605e5c" }}>Not applicable</span>}
+                          </td>
+                          {(() => {
+                            const cells = tierCells(r);
+                            const known = cells.tier1 !== TIER_UNKNOWN;
+                            const first = r.UnitTermGuid
+                              ? (known
+                                  ? cells.tier1
+                                  : <span
+                                      style={{ color: "#8a4b00" }}
+                                      title="The segment's term tree could not be read, so this row's tier is not known. The mapping itself is unaffected."
+                                    >{TIER_UNKNOWN}</span>)
+                              : r.Role === "GLOBAL"
+                                ? <span title="Reaches every folder in every segment, at Read, in Documents only.">Every folder</span>
+                                : r.Target
+                                  ? <span style={s.mono} title="This row grants entry to a library or page, not a folder.">{r.Target}</span>
+                                  : <span style={{ color: "#605e5c" }}>Not applicable</span>;
+                            return (
+                              <>
+                                <td style={s.td}>{first}</td>
+                                {/* A department-scope row legitimately has no Tier 2, and that
+                                    emptiness is the fact identifying it — a dash, not a blank. */}
+                                <td style={s.td}>
+                                  {cells.tier2 || <span style={{ color: "#605e5c" }}>&mdash;</span>}
+                                </td>
+                              </>
+                            );
+                          })()}
+                          {/* The label, not the code. "DELS" told an administrator nothing, and being
+                              one letter from "DEL" — a DIFFERENT role, in the other library —
+                              made it worse than uninformative. The code is still what is stored. */}
+                          <td style={s.td}>{roleLabel(r.Role)}</td>
+                          <td style={s.td}>
+                            <button style={s.delBtn} disabled={busy} onClick={() => setConfirmDel(r.itemId)}>Delete</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {/* WHO IS IN IT — the job this page exists for since 2026-08-18. Mounted only for
+                      a real group id: a row left behind by a deleted group has nothing to read
+                      members from, and an empty editor there would read as "nobody is in it". */}
+                  {mg.groupId && !isNaN(numericId) ? (
+                    <GroupMembersEditor
+                      context={context}
+                      siteUrl={siteUrl}
+                      group={{ id: numericId, title: mg.groupName || mg.label }}
+                      showToast={showToast}
+                    />
+                  ) : (
+                    <p style={{ fontSize: 11.5, color: "#a4262c", margin: "8px 0 0 24px" }}>
+                      This mapping carries no usable group id, so its members cannot be read. The
+                      group was probably deleted — delete the row above and map it again.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
 
       {/* Delete-mapping confirmation — a modal, not an inline Yes/Cancel in the table cell.
           Between 2026-08-04 and 2026-08-14 removing a group's LAST mapping also deleted the

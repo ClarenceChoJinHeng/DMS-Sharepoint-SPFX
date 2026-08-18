@@ -130,14 +130,28 @@ const ABBREVIATIONS: FlowStep = {
 const GROUPS: FlowStep = {
   id: "groups",
   label: "Group Management",
-  hint: "Create the groups for the unit. If they already exist, there is nothing to do here.",
+  hint:
+    "Create the groups. Creating them also writes their Folder Access mappings, so there is nothing " +
+    "to map by hand afterwards. If they already exist, there is nothing to do here.",
   screen: { kind: "component", id: "groups" },
 };
 
+/**
+ * Adding PEOPLE, since 2026-08-18 — not mapping groups, which the step above now does for you.
+ *
+ * OPTIONAL, and the hint says so outright (client: *"if they don't know who yet to add then we can
+ * allow them to add later"*). It must never join `NEXT_GATED_STEPS`: membership is INTENT, and intent
+ * is not checkable — nothing can tell whether the RIGHT people are in a group, only whether anybody
+ * is. Reconciliation grants to a group and not to its members, so an empty group is a valid end
+ * state: the grant is in place and applies the moment someone is added, with nothing to re-run.
+ */
 const FOLDER_ACCESS: FlowStep = {
   id: "folderAccess",
   label: "Folder Access",
-  hint: "Map each group to its segment, tier and role.",
+  hint:
+    "Add the people. Expand a group to put someone in it — access applies immediately, with no " +
+    "reconciliation needed. Optional: leave it now and come back to the Folder Access page whenever " +
+    "you know who belongs where. An empty group keeps its permissions and works the day it is filled.",
   screen: { kind: "component", id: "folderAccess" },
 };
 
@@ -403,6 +417,10 @@ export function stepState(step: FlowStep, facts: FlowFacts): StepState {
       // Advisory: the naming convention is a suggestion, so a hand-named group reads as absent.
       return f.groupsExist === undefined ? "unknown" : f.groupsExist ? "done" : "todo";
     case "folderAccess":
+      // The fact is "mappings exist", not "the right people are in the groups" — the second is not
+      // checkable, and this step is optional (see FOLDER_ACCESS). Creating the groups writes the
+      // mappings, so this normally reads `done` on arrival, which is correct: there is nothing here
+      // that MUST be done before reconciliation.
       return f.folderAccessRows === undefined ? "unknown" : f.folderAccessRows ? "done" : "todo";
     case "reconcile":
       return f.foldersExist === undefined ? "unknown" : f.foldersExist ? "done" : "todo";

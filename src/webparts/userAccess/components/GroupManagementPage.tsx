@@ -12,7 +12,7 @@ export default function GroupManagementPage({ context }: IAccessProps): React.Re
   return (
     <AccessShell
       title="Group Management"
-      subtitle="Create SharePoint groups and manage who is in them. Which folders a group can reach is set separately, on Folder Access."
+      subtitle="Create the SharePoint groups a segment needs. Creating a group also writes its folder mappings. Who is IN each group is set on Folder Access."
     >
       <GroupManager
         context={context}

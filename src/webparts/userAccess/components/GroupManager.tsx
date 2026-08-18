@@ -30,20 +30,15 @@ import {
   roleLabel,
   suggestGroupName,
   validateGroupName,
-  siteEntryGroupTitle,
-  isSiteEntryGroupTitle,
 } from "../../../shared/groupMapModel";
 import { addMemberWithSiteEntry } from "../../../shared/siteEntryGroup";
 import {
   searchSiteGroups,
   createSiteGroup,
   deleteSiteGroup,
-  getGroupMembers,
-  removeGroupMember,
   searchTenantPeople,
   DUPLICATE_GROUP,
   SpGroup,
-  SpGroupMember,
   PersonPick,
 } from "../../../shared/spGroups";
 import { EVENT } from "../../../shared/auditLog";
@@ -190,11 +185,6 @@ export default function GroupManager({ context, siteUrl, hideCreateForm, refresh
   const [peopleResults, setPeopleResults] = useState<PersonPick[]>([]);
 
   // Members
-  const [openGroup, setOpenGroup] = useState<SpGroup | undefined>(undefined);
-  const [members, setMembers] = useState<SpGroupMember[] | undefined>(undefined);
-  const [memberQuery, setMemberQuery] = useState("");
-  const [memberResults, setMemberResults] = useState<PersonPick[]>([]);
-  const [confirmRemove, setConfirmRemove] = useState<number | undefined>(undefined);
 
   // Delete
   const [deleting, setDeleting] = useState<SpGroup | undefined>(undefined);
@@ -432,15 +422,6 @@ export default function GroupManager({ context, siteUrl, hideCreateForm, refresh
     return () => clearTimeout(t);
   }, [peopleQuery]);
 
-  useEffect(() => {
-    const q = memberQuery.trim();
-    if (q.length < 2) { setMemberResults([]); return; }
-    const t = setTimeout(() => {
-      searchTenantPeople(context.spHttpClient, siteUrl, q).then(setMemberResults).catch(() => setMemberResults([]));
-    }, 350);
-    return () => clearTimeout(t);
-  }, [memberQuery]);
-
   /* ── Audit ─────────────────────────────────────────────────────────────── */
 
   /**
@@ -640,78 +621,6 @@ export default function GroupManager({ context, siteUrl, hideCreateForm, refresh
 
   /* ── Members ───────────────────────────────────────────────────────────── */
 
-  const openMembers = async (g: SpGroup): Promise<void> => {
-    if (openGroup && openGroup.id === g.id) { setOpenGroup(undefined); return; }
-    setOpenGroup(g);
-    setMembers(undefined);
-    setMemberQuery("");
-    setMemberResults([]);
-    setConfirmRemove(undefined);
-    try {
-      setMembers(await getGroupMembers(context.spHttpClient, siteUrl, g.id));
-    } catch {
-      setMembers([]);
-      showToast("Could not read this group's members.", true);
-    }
-  };
-
-  const onAddMember = async (p: PersonPick): Promise<void> => {
-    if (!openGroup) return;
-    setBusy(true);
-    try {
-      const res = await addMemberWithSiteEntry(
-        context.spHttpClient, siteUrl, { id: openGroup.id, title: openGroup.title }, p.loginName,
-      );
-      setMembers(await getGroupMembers(context.spHttpClient, siteUrl, openGroup.id));
-      setMemberQuery("");
-      setMemberResults([]);
-      // res.note is never dropped: it means they ARE in the group but may not be able to open the
-      // site, which neither they nor the admin would discover until they tried.
-      showToast(`${p.displayName} added — access is immediate.${res.note ? ` ${res.note}` : ""}`, !!res.note);
-      log(
-        EVENT.membersChanged,
-        `Member added — ${p.displayName} → ${openGroup.title}`,
-        [
-          `Group: ${openGroup.title}`,
-          `Added: ${p.displayName}${p.email ? ` <${p.email}>` : ""}`,
-          isSiteEntryGroupTitle(openGroup.title)
-            ? "This IS the site-entry group."
-            : res.note || `Also added to ${siteEntryGroupTitle()}.`,
-        ],
-        res.note ? "Failed" : "Success",
-      );
-    } catch (e) {
-      showToast(`Could not add ${p.displayName}: ${(e as Error).message}`, true);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onRemoveMember = async (m: SpGroupMember): Promise<void> => {
-    if (!openGroup) return;
-    setBusy(true);
-    try {
-      await removeGroupMember(context.spHttpClient, siteUrl, openGroup.id, m.id);
-      setMembers(await getGroupMembers(context.spHttpClient, siteUrl, openGroup.id));
-      setConfirmRemove(undefined);
-      showToast(`${m.title} removed — access is revoked immediately.`, false);
-      log(
-        EVENT.membersChanged,
-        `Member removed — ${m.title} from ${openGroup.title}`,
-        [
-          `Group: ${openGroup.title}`,
-          `Removed: ${m.title}${m.email ? ` <${m.email}>` : ""}`,
-          // Removing from one group is not removing from the site. Saying so stops a reader
-          // concluding the person was de-provisioned.
-          `This removes ONE group. Their membership of ${siteEntryGroupTitle()} and any other group is unchanged.`,
-        ],
-      );
-    } catch (e) {
-      showToast(`Could not remove ${m.title}: ${(e as Error).message}`, true);
-    } finally {
-      setBusy(false);
-    }
-  };
 
   /* ── Delete ────────────────────────────────────────────────────────────── */
 
@@ -736,7 +645,6 @@ export default function GroupManager({ context, siteUrl, hideCreateForm, refresh
       }
       await deleteSiteGroup(context.spHttpClient, siteUrl, g.id);
       setDeleting(undefined);
-      if (openGroup && openGroup.id === g.id) setOpenGroup(undefined);
       await reload();
       showToast(
         `"${g.title}" deleted.` +
@@ -1015,7 +923,8 @@ export default function GroupManager({ context, siteUrl, hideCreateForm, refresh
         <div
           style={{
             marginTop: 10,
-            ...(openGroup === undefined ? { maxHeight: "60vh", overflowY: "auto" as const } : {}),
+            maxHeight: "60vh",
+            overflowY: "auto",
           }}
         >
           {loading && <p style={s.hint}>Loading…</p>}
@@ -1026,17 +935,14 @@ export default function GroupManager({ context, siteUrl, hideCreateForm, refresh
           )}
           {visible.map((g) => {
             const rows = rowsFor(g);
-            const isOpen = openGroup !== undefined && openGroup.id === g.id;
             return (
               <div key={g.id}>
                 <div style={s.row}>
-                  <button
-                    type="button"
-                    style={s.groupName}
-                    onClick={() => { openMembers(g).catch(() => undefined); }}
-                  >
-                    {isOpen ? "▾" : "▸"} {g.title}
-                  </button>
+                  {/* PLAIN TEXT, not an expander. Membership moved to Folder Access on 2026-08-18 —
+                      one editor, one mount point, because two lists of the same people drift and
+                      re-merging these pages is what the client called confusing. This page answers
+                      "what groups exist"; who is in them is the other page's question. */}
+                  <span style={{ ...s.groupName, cursor: "default" }}>{g.title}</span>
                   {rows !== undefined && (
                     rows.length === 0
                       ? <span style={s.badge}>not mapped</span>
@@ -1047,53 +953,6 @@ export default function GroupManager({ context, siteUrl, hideCreateForm, refresh
                   </button>
                 </div>
 
-                {isOpen && (
-                  <div style={{ padding: "8px 10px 14px 24px", background: "#fff", borderBottom: "1px solid #f0f0f0" }}>
-                    {members === undefined && <p style={s.hint}>Loading members…</p>}
-                    {members !== undefined && members.length === 0 && (
-                      <p style={s.hint}>Nobody is in this group.</p>
-                    )}
-                    {(members ?? []).map((m) => (
-                      <div key={m.id} style={{ ...s.row, borderBottom: "none", padding: "4px 0" }}>
-                        <span style={{ flex: 1, fontSize: 13 }}>
-                          {m.title} <span style={{ color: "#666", fontSize: 12 }}>{m.email}</span>
-                        </span>
-                        {confirmRemove === m.id ? (
-                          <>
-                            <button type="button" style={s.danger} disabled={busy} onClick={() => { onRemoveMember(m).catch(() => undefined); }}>
-                              Confirm remove
-                            </button>
-                            <button type="button" style={s.ghost} onClick={() => setConfirmRemove(undefined)}>Cancel</button>
-                          </>
-                        ) : (
-                          <button type="button" style={s.ghost} disabled={busy} onClick={() => setConfirmRemove(m.id)}>Remove</button>
-                        )}
-                      </div>
-                    ))}
-
-                    <div style={{ ...s.ddwrap, marginTop: 10 }}>
-                      <input
-                        style={s.input}
-                        value={memberQuery}
-                        placeholder="Add a person…"
-                        onChange={(e) => setMemberQuery(e.target.value)}
-                      />
-                      {memberResults.length > 0 && (
-                        <div style={s.dd}>
-                          {memberResults.map((p) => (
-                            <div key={p.loginName} style={s.ddItem} onClick={() => { onAddMember(p).catch(() => undefined); }}>
-                              {p.displayName} <span style={{ color: "#666" }}>{p.email}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <p style={s.hint}>
-                      Everyone added here also joins <strong>{siteEntryGroupTitle()}</strong>, without
-                      which they cannot open the site at all.
-                    </p>
-                  </div>
-                )}
               </div>
             );
           })}

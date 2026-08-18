@@ -499,7 +499,8 @@ export default function BulkGroupProvisioner({
       <div style={s.okBox}>
         Creating groups grants <strong>nothing</strong>. This writes the groups and their{" "}
         <strong>Folder Access mappings</strong>; folder permissions are applied when you run{" "}
-        <strong>Folder Reconciliation</strong>. Members are added per person, on the form above.
+        <strong>Folder Reconciliation</strong>. Who is IN each group is set on <strong>Folder
+        Access</strong>, per person, whenever you know — an empty group keeps its permissions.
       </div>
 
       <label style={s.label} htmlFor="bg-seg">Segment</label>
