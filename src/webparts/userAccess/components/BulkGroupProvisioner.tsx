@@ -55,7 +55,14 @@ const s: Record<string, React.CSSProperties> = {
   scroll: { maxHeight: 340, overflowY: "auto", border: "1px solid #ececec", borderRadius: 4, background: "#fff" },
   warnBox: { padding: "10px 12px", border: "1px solid #f2c9a0", background: "#fff8f0", borderRadius: 4, fontSize: 12, color: "#8a4b00", lineHeight: 1.5, marginTop: 12 },
   okBox: { padding: "10px 12px", border: "1px solid #b7dcc4", background: "#f3faf5", borderRadius: 4, fontSize: 12, color: "#0f6c3f", lineHeight: 1.5, marginBottom: 12 },
-  logBox: { marginTop: 12, maxHeight: 240, overflowY: "auto", background: "#1b1b1b", color: "#d7d7d7", fontFamily: "Consolas, monospace", fontSize: 11.5, padding: "10px 12px", borderRadius: 4, lineHeight: 1.55 },
+  // Matches reconciliation's log panel (FolderManager `logBox`) rather than a terminal. Two run logs on
+  // adjacent screens should not look like different products — and the dark box read as a developer
+  // console, which is exactly the impression an admin tool should not give.
+  logBox: { marginTop: 16, maxHeight: 260, overflowY: "auto", background: "#f5f5f5", borderRadius: 6, padding: "12px 16px", fontFamily: "Consolas, monospace", fontSize: 11.5, lineHeight: 1.6 },
+  // Colour by outcome, since a 700-line log is scanned for the failures. Same palette as the recon tabs.
+  logOk: { color: "#0f6c3f" },
+  logBad: { color: "#d13438", fontWeight: 600 },
+  logDim: { color: "#605e5c" },
   pill: { fontSize: 11, padding: "1px 7px", borderRadius: 10, background: "#eef4ff", border: "1px solid #cfe0ff", color: "#1b4b8a" },
 };
 
@@ -435,7 +442,16 @@ export default function BulkGroupProvisioner({ context, siteUrl }: Props): React
 
       {log.length > 0 && (
         <div style={s.logBox}>
-          {log.map((l, i) => <div key={i}>{l}</div>)}
+          {log.map((l, i) => (
+            <div
+              key={i}
+              style={
+                l.indexOf("✗") !== -1 ? s.logBad : l.indexOf("+ ") === 0 ? s.logOk : s.logDim
+              }
+            >
+              {l}
+            </div>
+          ))}
         </div>
       )}
 
