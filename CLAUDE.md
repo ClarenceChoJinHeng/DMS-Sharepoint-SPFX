@@ -452,6 +452,11 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
     - **Save writes rows ONLY** — inert and repeatable. Folders change only when someone runs Folder
       Reconciliation, so the order is always: fill in → save → reconcile. An existing row is MERGEd by
       item id; a duplicate row for one term GUID would leave reconciliation choosing between two codes.
+    - **The row list SCROLLS at `58vh`** (client, 2026-08-18): 7 departments plus 60 units is 67 rows,
+      so Save sat far below the fold and the warning banner scrolled out of sight while an admin
+      worked. The warning, the collision banner and Save all stay OUTSIDE the box — only the rows
+      move. Capped unconditionally, unlike Folder Access's group list, because these rows hold text
+      boxes and buttons and nothing absolutely positioned for a scroll container to clip.
     - Below-Unit tiers are **listed but read-only** (they name folders from the term label), so nobody
       goes hunting for Year.
     - **Blanking a code after its folder exists, then setting a new one, shows NO rename warning** —

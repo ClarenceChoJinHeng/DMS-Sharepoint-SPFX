@@ -84,6 +84,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "8px 10px",
     borderBottom: "1px solid #f3f2f1",
   },
+  scrollBox: { maxHeight: "58vh", overflowY: "auto", overflowX: "hidden", border: "1px solid #ececec", borderRadius: 6, padding: "10px 12px", background: "#fff", marginBottom: 14 },
   tierHead: { display: "flex", alignItems: "center", gap: 12, padding: "10px 10px 6px", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", color: "#605e5c", flexWrap: "wrap" },
   // The parent term's name above its children. Deliberately NOT uppercase like `tierHead`: this is a
   // real term label ("Group Legal, Risk ＆ Compliance"), and shouting it loses the casing the client
@@ -580,6 +581,19 @@ export default function AbbreviationManager({
             </div>
           )}
 
+          {/* SCROLLS (client, 2026-08-18): 7 departments plus 60 units is 67 rows, so Save sat far
+              below the fold and the warning banner above scrolled out of sight while an admin worked
+              through the list.
+
+              Everything that must stay visible is OUTSIDE this box — the missing-abbreviation
+              warning, the collision banner and Save — so the only thing scrolling is the rows
+              themselves. Safe to cap unconditionally, unlike the group list on Folder Access: these
+              rows hold text boxes and buttons, and nothing absolutely positioned that a scroll
+              container could clip.
+
+              `overflowX: hidden` because the row is a flex layout that already fits; without it a
+              long term label can raise a horizontal scrollbar under every row. */}
+          <div style={s.scrollBox}>
           {seg.levelNames.map((levelName) => {
             const levelRows = rows.filter((r) => r.level === levelName);
             if (levelRows.length === 0) return null;
@@ -647,6 +661,7 @@ export default function AbbreviationManager({
               </div>
             );
           })}
+          </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
             <button
