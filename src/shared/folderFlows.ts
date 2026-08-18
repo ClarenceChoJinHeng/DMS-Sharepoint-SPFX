@@ -79,6 +79,18 @@ export interface FlowFacts {
    * screen — and must never be read as zero.
    */
   abbreviationsMissing?: number;
+  /**
+   * The abbreviations screen is READING the term store right now.
+   *
+   * A separate fact from the count, and it has to be. The count is `undefined` for the whole read,
+   * `undefined` never gates, and so Next was clickable on a step that said "Reading the term store…"
+   * — an answer seconds away and certainly not yet known (reported on site 2026-08-18).
+   *
+   * **In flight is not unknown**, the same split that made `subjectGiven` right: fail-open exists for
+   * reads that can FAIL, not for reads still running. Gating here strands nobody, because it clears
+   * itself; gating on a failed read would strand everybody.
+   */
+  abbreviationsLoading?: boolean;
   /** The mode row carries a staged chain. */
   pendingLevels?: boolean;
   /** The subject term was found in the tree (flows 2 and 4). */
@@ -342,6 +354,9 @@ export function blocksNext(step: FlowStep, facts: FlowFacts): string {
   const reason = NEXT_GATED_STEPS[step.id];
   if (!reason) return "";
   const f = facts ?? {};
+  if (step.id === "abbreviations" && f.abbreviationsLoading === true) {
+    return "Still reading the term store — the codes are being checked. This clears on its own.";
+  }
   if (step.id === "createSegment") {
     // Already created — nothing to say, whatever else is unknown.
     if (f.segmentExists === true) return "";

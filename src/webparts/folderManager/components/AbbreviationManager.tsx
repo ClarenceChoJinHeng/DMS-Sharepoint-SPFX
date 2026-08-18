@@ -115,6 +115,14 @@ export interface AbbreviationManagerProps {
    * terms — and must never be reported as 0, which would read as "all done".
    */
   onMissingChange?: (missing: number | undefined) => void;
+  /**
+   * True while a read is IN FLIGHT — the segment list or the term tree.
+   *
+   * Separate from the count, because the count is `undefined` for the whole read and a host cannot
+   * tell "still reading" from "read and failed" out of one value. Only the first should hold a Next
+   * button: it clears itself in seconds, while holding on a failure strands the admin for good.
+   */
+  onLoadingChange?: (loading: boolean) => void;
 }
 
 export default function AbbreviationManager({
@@ -122,6 +130,7 @@ export default function AbbreviationManager({
   siteUrl,
   onDirtyChange,
   onMissingChange,
+  onLoadingChange,
 }: AbbreviationManagerProps): React.ReactElement {
   const [segments, setSegments] = useState<SegmentOption[]>([]);
   const [chosen, setChosen] = useState<string>("");
@@ -478,6 +487,15 @@ export default function AbbreviationManager({
     const knowable = !loading && !treeLoading && seg !== undefined && rows.length > 0;
     onMissingChange(knowable ? missing : undefined);
   }, [onMissingChange, loading, treeLoading, seg, rows.length, missing]);
+
+  /* And whether a read is IN FLIGHT, which is not the same fact.
+     Both are reported because neither implies the other: the count is `undefined` while loading AND
+     when the read failed, and only the first should hold the flow's Next button. Under the same
+     unconditional-hook rule as above — never move this below an early return. */
+  useEffect(() => {
+    if (!onLoadingChange) return;
+    onLoadingChange(loading || treeLoading);
+  }, [onLoadingChange, loading, treeLoading]);
 
   /* ── Render ────────────────────────────────────────────────────────────────── */
 

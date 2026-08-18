@@ -166,6 +166,12 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    * covered in "no folder will be created" warnings (client, 2026-08-17).
    */
   const [abbrevMissing, setAbbrevMissing] = useState<number | undefined>(undefined);
+  /**
+   * True while the abbreviations screen is reading. A SEPARATE fact from the count, because the count
+   * is `undefined` both while loading and when the read failed — and only the first should hold Next
+   * (client, on site 2026-08-18: Next was available while the panel said "Reading the term store…").
+   */
+  const [abbrevLoading, setAbbrevLoading] = useState(false);
   /** Which creation control the Group Management step shows. Defaults to the bulk run — see the note there. */
   const [groupMode, setGroupMode] = useState<"all" | "one">("all");
   /**
@@ -342,15 +348,20 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   const effectiveFacts: FlowFacts = React.useMemo(() => {
     // The abbreviations screen's own count wins whenever it has one, in EVERY flow — four of the five
     // include that step. Spread first so the block below still overrides `segmentExists`.
-    const facts: FlowFacts =
-      abbrevMissing === undefined ? baseFacts : { ...baseFacts, abbreviationsMissing: abbrevMissing };
+    const facts: FlowFacts = {
+      ...baseFacts,
+      // `abbreviationsLoading` is carried ALWAYS, count or no count — it is the fact that tells the
+      // gate apart "not read yet" from "read and failed", and only the first holds Next.
+      abbreviationsLoading: abbrevLoading,
+      ...(abbrevMissing === undefined ? {} : { abbreviationsMissing: abbrevMissing }),
+    };
     if (!flow || flow.asksSubject !== "newSegment") return facts;
     // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
     if (segments === undefined) return facts;
     // The list read fine, so "nothing picked" is the admin not having answered — not a failure.
     if (!segment) return { ...facts, subjectGiven: false };
     return { ...facts, subjectGiven: true, segmentExists: true };
-  }, [flow, baseFacts, segments, segment, abbrevMissing]);
+  }, [flow, baseFacts, segments, segment, abbrevMissing, abbrevLoading]);
 
   /** Open a flow on the first thing left to do. */
   const openFlow = (f: Flow): void => {
@@ -613,6 +624,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                walk that produces it, and without it `undefined` gated nothing, so Next was clickable on a
                screen full of "no folder will be created" warnings. */
             onAbbreviationsMissingChange={setAbbrevMissing}
+            onAbbreviationsLoadingChange={setAbbrevLoading}
           />
         )}
         {confirms && (

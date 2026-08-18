@@ -26,7 +26,7 @@ dcistaging's tree is NOT the client's: it lacks Group Corporate Secretarial and 
 So **308 is correct there, and CRS should plan 324** (63 × 5 + 8 + 1). A different number on CRS is a
 real gap, not a repeat of this.
 
-Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.155.0** (all five defects, plus the stale badges found on site), 1063
+Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.156.0** (all five defects, plus two more found on site), 1065
 tests, 15 warnings (the baseline).
 
 ---
@@ -135,6 +135,23 @@ scrolls — **but only while every group is collapsed.** An expanded group's mem
 absolutely-positioned people picker, and a scroll container clips it for any group near the bottom:
 that trades a long page for a control that silently cannot be used. With one group open the admin is
 working inside it rather than scanning the list, so the cap has nothing to do.
+
+### 5c. Next was available while the term store was still being read — **FIXED, 1.0.156.0** (found on site, 2026-08-18)
+
+The abbreviations step showed *"Reading the term store…"* with **Next step** enabled beside it. The
+count is `undefined` for the whole read, and `undefined` never gates — by design, because a throttled
+list must not strand anyone mid-flow.
+
+**In flight is not unknown**, and that is the same split that made `subjectGiven` right: fail-open
+exists for reads that can FAIL, not for reads still running. Gating while loading strands nobody
+because it clears itself in seconds; gating on a failed read would strand everybody. So
+`abbreviationsLoading` is a **separate fact** from the count — one value cannot tell "not read yet"
+from "read and failed", and only the first should hold a button.
+
+Reported up through `onLoadingChange` → `onAbbreviationsLoadingChange` → `FolderAdmin`, the same shape
+as the count beside it. Pinned by tests: it gates the abbreviation step **only** (it is set for the
+whole flow, so any other step reading it would be held whenever the screen was open), and it stops
+gating the moment the read finishes, failure included.
 
 ### 5b. The group list still said "not mapped" after a run — **FIXED, 1.0.155.0** (found on site, 2026-08-18)
 

@@ -20,7 +20,7 @@ Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
 > 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
-> built and part-run on the dcistaging rehearsal site. All five defects are **fixed in 1.0.155.0 and
+> built and part-run on the dcistaging rehearsal site. All five defects are **fixed in 1.0.156.0 and
 > NONE of it site-tested**; deploy and re-run the bulk provisioning before anything else. `CRS Group Map` has been
 > cleared and **reconciliation must not be run** until the row count is right.
 
@@ -912,7 +912,14 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
     progress, while `not mapped` states the run did not do what it just did, and invites the second
     press. `onRunComplete` is a SEPARATE signal from `busy` going false — "the run ended" is the fact
     that makes other screens stale.
-  - **All five defects are fixed in 1.0.155.0, and only the first has been run on a site** — see
+  - **"STILL READING" IS NOT "UNKNOWN", AND THE NEXT GATE CONFLATED THEM** (fixed 1.0.156.0, found on
+    site). The abbreviations step offered **Next** while the panel said *"Reading the term store…"* —
+    the count is `undefined` for the whole read and `undefined` never gates. `abbreviationsLoading` is
+    a SEPARATE fact, because one value cannot distinguish "not read yet" from "read and failed", and
+    only the first should hold a button: it clears itself in seconds, where gating on a failure would
+    strand the admin for good. Same split as `subjectGiven` — **fail-open exists for reads that can
+    FAIL, not for reads still running.** Pinned by test to gate that step alone.
+  - **All five defects are fixed in 1.0.156.0, and only the first has been run on a site** — see
     `docs/2026-08-18-bulk-groups-handoff.md` before running it.
 - **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
   folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.

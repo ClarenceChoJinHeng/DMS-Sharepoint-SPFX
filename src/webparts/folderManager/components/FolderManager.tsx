@@ -715,6 +715,7 @@ export default function FolderManager({
   onSegmentCreated,
   hideSegmentDelete,
   onAbbreviationsMissingChange,
+  onAbbreviationsLoadingChange,
 }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
@@ -4379,6 +4380,7 @@ export default function FolderManager({
             if (!d) setTabBlocked(false);
           }}
           onMissingChange={onAbbreviationsMissingChange}
+          onLoadingChange={onAbbreviationsLoadingChange}
         />
       ) : tab === "Levels" ? (
         <StructureManager

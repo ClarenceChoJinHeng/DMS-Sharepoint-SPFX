@@ -340,11 +340,35 @@ describe("blocksNext", () => {
     expect(blocksNext(st, { abbreviationsMissing: 0 })).toBe("");
   });
 
+  it("holds Next while the term store is STILL BEING READ", () => {
+    // In flight is not unknown. The count is `undefined` for the whole read, and unknown never
+    // gates — so Next was clickable on a step reading "Reading the term store…", which is a step
+    // whose answer is seconds away and definitely not yet known. Reported on site 2026-08-18.
+    //
+    // Gating on it strands nobody, because it clears itself. That is exactly the split that made
+    // `subjectGiven` right: fail-open exists for reads that can FAIL, not for reads still running.
+    const st = step("newSegment", "abbreviations");
+    expect(blocksNext(st, { abbreviationsLoading: true })).toContain("Still reading");
+    expect(blocksNext(st, { abbreviationsLoading: true, abbreviationsMissing: 0 })).toContain("Still reading");
+  });
+
+  it("stops holding Next the moment the read FINISHES", () => {
+    const st = step("newSegment", "abbreviations");
+    expect(blocksNext(st, { abbreviationsLoading: false, abbreviationsMissing: 0 })).toBe("");
+    // A read that finished and failed leaves the count unknown, and unknown must NOT gate — that is
+    // the case a throttled list produces, and holding there traps someone with no way forward.
+    expect(blocksNext(st, { abbreviationsLoading: false })).toBe("");
+  });
+
   it("NEVER blocks on an advisory step, however definite the fact looks", () => {
     // `groupsExist` is read by the NAMING CONVENTION, which suggestGroupName only suggests — so a
     // hand-named group reads as absent. Gating on it would stop an admin who had already done the work,
     // which is the exact failure the whole fail-open design exists to avoid.
     expect(blocksNext(step("newSegment", "groups"), { groupsExist: false })).toBe("");
+    // Loading gates the abbreviation step ONLY. It is set for the whole flow, so any other step
+    // reading it would be held every time an admin opened the abbreviations screen.
+    expect(blocksNext(step("newSegment", "groups"), { abbreviationsLoading: true })).toBe("");
+    expect(blocksNext(step("newSegment", "createSegment"), { abbreviationsLoading: true, segmentExists: true })).toBe("");
     // A typed subject that merely differs in spelling must cost help, never progress.
     expect(blocksNext(step("addUnit", "addTerm"), { subjectFound: false })).toBe("");
     // Mapping groups after building folders is a legitimate order, so ordering is advice here.

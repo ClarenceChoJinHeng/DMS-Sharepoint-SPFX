@@ -47,4 +47,12 @@ export interface IFolderManagerProps {
    * Ignored by `FolderMap`, which shares this interface.
    */
   onAbbreviationsMissingChange?: (missing: number | undefined) => void;
+  /**
+   * True while the abbreviations screen is reading — the segment list or the term tree.
+   *
+   * The count alone cannot answer this: it is `undefined` both while loading and when the read
+   * failed, and only the first should hold the flow's Next button. Ignored by `FolderMap`, which
+   * shares this interface.
+   */
+  onAbbreviationsLoadingChange?: (loading: boolean) => void;
 }
