@@ -547,7 +547,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
             />
           </div>
         )
-        : <GroupMapBuilder context={context} siteUrl={siteUrl} />;
+        : <GroupMapBuilder context={context} siteUrl={siteUrl} show="members" />;
     }
 
     /* THE `key` IS LOAD-BEARING, and its absence was a live bug (2026-08-17): stepping from

@@ -26,7 +26,7 @@ export default function FolderAccessPage({ context }: IAccessProps): React.React
         </>
       }
     >
-      <GroupMapBuilder context={context} siteUrl={context.pageContext.web.absoluteUrl} />
+      <GroupMapBuilder context={context} siteUrl={context.pageContext.web.absoluteUrl} show="members" />
     </AccessShell>
   );
 }

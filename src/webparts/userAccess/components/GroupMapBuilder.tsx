@@ -40,7 +40,27 @@ import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames, permissionLevelNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 
-type Props = { context: WebPartContext; siteUrl: string };
+type Props = {
+  context: WebPartContext;
+  siteUrl: string;
+  /**
+   * Which half of this component to render.
+   *
+   * `members` (Folder Access) is the group list, its mappings and its people. `form` (Group
+   * Management) is ONLY the map-a-group-by-hand card. `all` keeps both, for any caller that has not
+   * chosen — nothing uses it today.
+   *
+   * TWO MOUNT POINTS OF ONE COMPONENT, never a copy. The form and the list share `existing`,
+   * `postRow` and `isDuplicateRow`; splitting them into separate components would give this site two
+   * definitions of what a mapping row is, and the one that drifted would be the rarely-used one.
+   *
+   * The form left Folder Access on the client's instruction (2026-08-18): mapping is not work done
+   * there. It lands on Group Management because that is where BOTH cases needing it originate — a
+   * group created with a free-typed name and no persona gets no rows at all, and a group needing a
+   * second tier is created there too.
+   */
+  show?: "all" | "members" | "form";
+};
 type GroupPick = { id: string; displayName: string };
 /** What a segment-scope row shows where a tier would be — it grants across the whole segment. */
 const SEGMENT_LEVEL = "(segment level)";
@@ -156,7 +176,11 @@ const s: Record<string, React.CSSProperties> = {
   staleBadge: { display: "inline-block", marginLeft: 8, padding: "1px 7px", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3", borderRadius: 10, verticalAlign: "middle" },
 };
 
-export default function GroupMapBuilder({ context, siteUrl }: Props): React.ReactElement {
+export default function GroupMapBuilder({
+  context,
+  siteUrl,
+  show = "all",
+}: Props): React.ReactElement {
   const [modes, setModes]       = useState<ModePick[]>([]);
   // True when DMS Config returned no usable `mode` rows at all — see the mount effect.
   const [modesUnreadable, setModesUnreadable] = useState(false);
@@ -1176,30 +1200,28 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
 
   return (
     <div style={s.wrap}>
-      {/* REFRAMED 2026-08-18 (client). Creating a group writes its own Group Map rows and a bulk run
-          writes hundreds in one press, so mapping is no longer work done here. What IS done here,
-          weekly and forever, is deciding who belongs in each group. */}
-      <p style={s.intro}>
-        Decide <strong>who belongs in each group</strong>, and see what each group reaches. Expand a
-        group to add or remove people. Groups themselves are created and deleted on the{" "}
-        <strong>Group Management</strong> page, which also writes these mappings — so there is
-        normally nothing to add here by hand.
-      </p>
-      <p style={{ ...s.intro, marginTop: -8 }}>
-        Adding someone is a <strong>group</strong> change: they get that group&apos;s folders in every
-        library it is mapped to, immediately. Nothing here needs Folder Reconciliation, and a group
-        with nobody in it is a perfectly valid state — its permissions are already in place and apply
-        the moment someone is added.
-      </p>
+      {/* ONE paragraph. Mounted inside the guided flow this sits directly under the step's own hint,
+          which says the same thing — three stacked paragraphs of near-identical text is what the
+          client saw, and it reads as a page repeating itself. */}
+      {show !== "form" && (
+        <p style={s.intro}>
+          Expand a group to add or remove people — access applies immediately, and nothing here needs
+          Folder Reconciliation. Adding someone is a <strong>group</strong> change: they get that
+          group&apos;s folders in every library it is mapped to. Groups and their mappings are created
+          on the <strong>Group Management</strong> page.
+        </p>
+      )}
 
       {/* Collapsed by default. Everything below is reference an admin needs ONCE (when the
           permission levels are first created, or when choosing between DEL and DELS) and never
           again — but it used to sit above the form on every visit. */}
+      {show !== "members" && (
       <button onClick={() => setRolesOpen((v) => !v)} style={s.disc}>
         {rolesOpen ? "▾" : "▸"} How roles and permission levels work
       </button>
+      )}
 
-      {rolesOpen && (
+      {rolesOpen && show !== "members" && (
         <>
           <p style={s.intro}>
             Member changes take effect <strong>immediately</strong>; new or deleted{" "}
@@ -1261,16 +1283,18 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </div>
       )}
 
-      {/* THE FORM IS A DISCLOSURE NOW, closed by default (2026-08-18, client: Folder Access should
-          not let them create mappings). Kept rather than deleted because two narrow cases have no
-          other route — a group made with the advanced free-text name and no persona gets no rows at
-          all, and one group covering two tiers cannot be expressed anywhere else. Mapping the first
-          any other way would mean deleting and re-creating the group, which loses its members. */}
+      {/* GONE FROM FOLDER ACCESS ENTIRELY (2026-08-18, client, twice). It renders only where
+          `show === "form"`, which is Group Management — the page where both cases that need it
+          originate: a group created with a free-typed name and no persona gets no rows at all, and a
+          group needing a second tier is created there too. Deleting it outright would have left the
+          first case fixable only by deleting and re-creating the group. */}
+      {show !== "members" && (
       <button style={s.disc} onClick={() => setFormOpen((v) => !v)}>
-        {formOpen ? "▾" : "▸"} Add a mapping by hand — not the normal route
+        {formOpen ? "▾" : "▸"} Map a group by hand — rarely needed
       </button>
+      )}
 
-      {formOpen && (
+      {formOpen && show !== "members" && (
       <div style={s.card}>
         <div style={{ fontSize: 11.5, color: "#8a4b00", background: "#fff8f0", border: "1px solid #f2c9a0", borderRadius: 4, padding: "8px 10px", marginBottom: 12, lineHeight: 1.5 }}>
           You should not normally need this. Creating a group on <strong>Group Management</strong>
@@ -1379,6 +1403,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
         </div>
       )}
 
+      {show !== "form" && (
+      <>
       {/* Counts GROUPS now, with the mapping total beside it — the list is one row per group, and a
           count you cannot reconcile with the rows in front of you is worse than none. Both are of
           what is SHOWN: library, site and page rows live on their own pages. */}
@@ -1581,6 +1607,8 @@ export default function GroupMapBuilder({ context, siteUrl }: Props): React.Reac
           );
         })}
       </div>
+      </>
+      )}
 
       {/* Delete-mapping confirmation — a modal, not an inline Yes/Cancel in the table cell.
           Between 2026-08-04 and 2026-08-14 removing a group's LAST mapping also deleted the

@@ -55,10 +55,25 @@ screen renders is testable without a tenant.
   everything else off the screen. Released while a group is expanded, because the people picker inside
   it is absolutely positioned and a scroll container clips it.
 
-### 2.2 Adding a mapping by hand still exists, collapsed
+### 2.2 Adding a mapping by hand LEAVES the page entirely
 
-The form moves behind a disclosure reading **"Add a mapping by hand — not the normal route"**, closed
-by default.
+**Corrected 2026-08-18, same day: the client said twice that Folder Access must not create mappings,
+and a closed disclosure on the page was still on the page.** The form now renders only on **Group
+Management**, collapsed, as *"Map a group by hand — rarely needed"*.
+
+Group Management is the right home rather than a compromise: both cases that need the form originate
+there. A group created with a free-typed name and no persona is created there, and a group that must
+cover a second tier is created there. Mapping either from the page where it was made is the shorter
+path anyway.
+
+Mechanically it is a `show` prop — `"members"` for Folder Access, `"form"` for Group Management —
+**two mount points of one component, never a copy.** The form and the list share `existing`,
+`postRow` and `isDuplicateRow`; separate components would give the site two definitions of a mapping
+row, and the one that drifted would be the rarely-used one.
+
+Deliberately NOT added to the guided flow's Group Management step. That step exists to create groups;
+hand-mapping is rare enough to live on the standalone page, and mounting this component there would
+cost a second 790-row read on a step that does not need it.
 
 **Deleting it outright was considered and rejected**, because two narrow cases have no other route:
 

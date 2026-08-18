@@ -941,11 +941,19 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
     same people drift, and re-merging these pages is what the client called confusing on 2026-08-14.
     Not `accessMemberUi.tsx`, which is removal-only for library/page grants and gains no Add: adding
     someone there would look scoped to that library or page and never is.
-  - **The add-mapping form is a DISCLOSURE, closed** — not deleted. Two narrow cases have no other
-    route: a group made with the advanced free-text name and no persona gets **no rows at all**
-    (`rowsForNewGroup` returns `[]`), and one group covering two tiers cannot be expressed anywhere
-    else. Mapping the first any other way means deleting and re-creating the group, which loses its
-    members.
+  - **The add-mapping form LEFT Folder Access — it is on Group Management, collapsed.** A closed
+    disclosure on the same page was the first attempt and was wrong: the client said twice that Folder
+    Access must not create mappings, and a disclosure was still on the page. It is not DELETED because
+    two narrow cases have no other route — a group made with the advanced free-text name and no
+    persona gets **no rows at all** (`rowsForNewGroup` returns `[]`), and one group covering two tiers
+    cannot be expressed anywhere else; mapping the first any other way means deleting and re-creating
+    the group. **Group Management is where both of those groups are created**, so it is the shorter
+    path, not a compromise.
+    - A `show` prop (`"members"` | `"form"`) gates the two halves — **two mount points of one
+      component, never a copy.** They share `existing`, `postRow` and `isDuplicateRow`; two components
+      would mean two definitions of a mapping row, and the drifting one would be the rare one.
+    - **Not added to the guided flow's group step**, deliberately: that step creates groups, and
+      mounting this there costs a second 790-row read for a rare job.
   - **The select-all checkbox is GONE with the flat table.** Behind 308 collapsed headers it would have
     put "delete every mapping on the site" two clicks away. Per-row checkboxes inside an expanded group
     still feed Delete selected.
