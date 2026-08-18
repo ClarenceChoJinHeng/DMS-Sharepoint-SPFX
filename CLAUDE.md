@@ -3,6 +3,11 @@
 Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
+> 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
+> built and part-run on the dcistaging rehearsal site, with **five open defects listed in build order**;
+> the first is a real bug (the run duplicates Group Map rows on a second press). `CRS Group Map` has been
+> cleared and **reconciliation must not be run** until the row count is right.
+
 > 📍 **Current site state, and what is outstanding: `docs/2026-08-07-project-state.md`.**
 > Read it before acting on anything in this file. THIS file holds the rules; that one holds what
 > is actually true on `/sites/ClarenceDMSTesting` right now — which lists exist, that the library
