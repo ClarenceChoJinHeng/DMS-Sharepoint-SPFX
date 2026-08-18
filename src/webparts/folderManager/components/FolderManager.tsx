@@ -716,6 +716,7 @@ export default function FolderManager({
   hideSegmentDelete,
   onAbbreviationsMissingChange,
   onAbbreviationsLoadingChange,
+  onReconRunningChange,
 }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
@@ -812,6 +813,12 @@ export default function FolderManager({
   // mid-operation. Work already committed survives and a re-run resumes safely, but a
   // folder interrupted between "created" and "inheritance broken" is briefly left
   // INHERITING its parent's permissions until the next run repairs it. Worth a prompt.
+  // Told to the host on every transition, so the guided flow can hold its rail for the duration.
+  // Unconditional hook, above every early return, for the same reason as the abbreviation reports.
+  useEffect(() => {
+    if (onReconRunningChange) onReconRunningChange(reconRunning);
+  }, [onReconRunningChange, reconRunning]);
+
   useEffect(() => {
     if (!reconRunning) return;
     const warn = (e: BeforeUnloadEvent): string => {

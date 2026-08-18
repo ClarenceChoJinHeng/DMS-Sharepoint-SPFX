@@ -55,4 +55,14 @@ export interface IFolderManagerProps {
    * shares this interface.
    */
   onAbbreviationsLoadingChange?: (loading: boolean) => void;
+  /**
+   * True while RECONCILIATION is running, so a host can hold its own navigation.
+   *
+   * The run executes entirely in this page — there is no server-side job — so a step change unmounts
+   * it and stops it mid-operation. `beforeunload` already guards the tab; this guards the guided
+   * flow's rail, which sits right beside a run that takes an hour at the client's scale. Same
+   * report-upward shape as `onBusyChange` on the bulk group provisioner, and it drives the SAME
+   * padlock in FolderAdmin — one reason to hold navigation, one implementation of holding it.
+   */
+  onReconRunningChange?: (running: boolean) => void;
 }

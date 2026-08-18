@@ -428,7 +428,25 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   deleted until reconciliation has re-stamped the `Documents` folders. Three rules: a term with **no abbreviation is SKIPPED**, never
   guessed (no folder → that unit cannot upload); abbreviations must be **unique among siblings**
   or two units merge into one folder with one ACL (reconciliation aborts before creating
-  anything); changing one **renames a live folder** on the next run. Spec
+  anything); changing one **renames a live folder** on the next run.
+  - **⚠ A RENAME AFTER THE GROUPS EXIST DESYNCS THE PLANNER, and that is the non-obvious cost.**
+    Renaming a code renames the FOLDER and touches no group — but `planBulkGroups` derives every group
+    NAME from the abbreviation chain, so after `Trace` → `TRC` the planner looks for
+    `GHO_GS_TRC_UPLOADER`, finds only `GHO_GS_Trace_UPLOADER`, and plans the unit as **unprovisioned**:
+    a later bulk run CREATES five more groups and writes thirteen more rows at the same term.
+    `isDuplicateRow` cannot catch them — a different `GroupId` is a legitimately different row — so the
+    unit ends with ten groups and twenty-six rows, all of which reconciliation grants.
+    - Access stays correct (same term, same folder, same levels); what breaks is idempotence and
+      anyone's ability to read "who has access" off the group list.
+    - The fix is to rename the SharePoint groups too. **A group rename preserves its Id**, and rows
+      store `GroupId`, so every mapping survives — but `GroupName` on those rows goes stale and Folder
+      Access labels them by it. There is no rename control in the UI; it is a manual SharePoint edit.
+    - **So settle abbreviations BEFORE creating groups**, and treat a later rename as a two-part job.
+  - **A CASE-ONLY change is deliberately NOT a rename** (`FolderManager.tsx` ~3233 compares
+    lower-cased, because SharePoint sibling names are case-insensitive and `Trace` → `TRACE` would
+    collide with itself). But `changedRows` compares case-SENSITIVELY, so such an edit saves, shows the
+    `✎ renamed` warning, and then renames nothing — leaving the list and the folder disagreeing. Not
+    harmful (folders resolve by UniqueId), and it reads as the rename being broken when it is not. Spec
   `2026-07-30-folder-abbreviation-naming-design.md`, client guide
   `docs/client/folder-abbreviations-guide.md`.
   - **The list now has an EDITOR — BUILT and SITE-VERIFIED 2026-08-12.** Spec

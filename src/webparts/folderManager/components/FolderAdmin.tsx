@@ -625,6 +625,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                screen full of "no folder will be created" warnings. */
             onAbbreviationsMissingChange={setAbbrevMissing}
             onAbbreviationsLoadingChange={setAbbrevLoading}
+            // Reconciliation gets the SAME padlock as a bulk group run: it lives in the page, has no
+            // resume, and takes an hour at the client's scale — leaving the step stops it mid-folder.
+            onReconRunningChange={setRunBusy}
           />
         )}
         {confirms && (
@@ -759,11 +762,14 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 {!last && blocked.length > 0 && !runBusy && <div style={s.hint}>{blocked}</div>}
                 {/* Beside the greyed buttons, never only in a tooltip — the same rule as the Next
                     gate. A held navigation bar with no stated reason reads as a broken page. */}
+                {/* ONE message for both runs, because it is one padlock. Naming neither specifically
+                    keeps it true for whichever is in flight — a message naming the bulk run while
+                    reconciliation was going would read as the wrong screen. */}
                 {runBusy && (
                   <div style={s.hint}>
-                    A bulk group run is in progress. Moving away from this step would stop it part-way,
-                    so navigation is held until it finishes — press <strong>Stop</strong> above to end
-                    it early. Anything already written stays written.
+                    A run is in progress on this step. Moving away would stop it part-way, so
+                    navigation is held until it finishes. Anything already written stays written, and
+                    re-running picks up what is missing.
                   </div>
                 )}
               </>
