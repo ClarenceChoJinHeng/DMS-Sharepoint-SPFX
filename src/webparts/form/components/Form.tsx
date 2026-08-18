@@ -2003,8 +2003,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
       // Re-derived, never trusted from the checkbox: hiding the control does not clear the state behind
       // it, so a file could otherwise carry a legal marker its confidentiality does not offer.
+      // THE LABEL, not the dropdown's raw value — which is the TERM ID. HC routing already resolves
+      // the label before comparing (`confidentialityLabel`, used by isHcLevel), and this did not, so
+      // `legallyPrivilegedFor` had to hold a term GUID to match anything at all. That is why the row
+      // on the client's site read `87f8481b-…`, why nothing on screen could explain it, and why a
+      // second stray `term_highlyConfidential` GUID row exists that no code reads (2026-08-19).
+      //
+      // One shape for both rules now: the config row holds LEVEL NAMES, which an administrator can
+      // read off the term store and verify by eye.
       const privilegedApplies = offersLegalPrivilege(
-        meta.confidentiality,
+        confidentialityLabel(meta.confidentiality ?? ""),
         settings.legallyPrivilegedFor,
       );
       formValues.push({
@@ -2498,7 +2506,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     A LIST since 2026-08-19 (client: the tick must show for Highly Confidential too),
                     so `Confidential;Highly Confidential` offers it on both. One value behaves exactly
                     as it always did. */}
-                {offersLegalPrivilege(confidentiality, settings.legallyPrivilegedFor) && (
+                {offersLegalPrivilege(confidentialityLabel(confidentiality), settings.legallyPrivilegedFor) && (
                     <>
                       <label className="dms-lp">
                         <input

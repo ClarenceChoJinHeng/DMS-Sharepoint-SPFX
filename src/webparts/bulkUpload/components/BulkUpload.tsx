@@ -1649,8 +1649,11 @@ export default function BulkUpload({
     // Re-derived here rather than trusted from state: hiding the tick does not
     // clear it, so a user who ticks it and then changes the level would otherwise
     // stamp true on a level that never offers it. Mirrors Form.tsx.
+    // THE LABEL, not the dropdown's raw value — which is the TERM ID. The HC check three lines below
+    // already resolves the label; this did not, so `legallyPrivilegedFor` had to hold a term GUID to
+    // match anything (2026-08-19). One shape for both rules: the config row holds LEVEL NAMES.
     const privilegedApplies = offersLegalPrivilege(
-      confidentiality,
+      options.confidentiality.find((o) => o.id === confidentiality)?.label ?? "",
       settings.legallyPrivilegedFor,
     );
     const formValues: Array<{ FieldName: string; FieldValue: string }> = [
@@ -2706,7 +2709,10 @@ export default function BulkUpload({
               means never offered. The value is re-derived at upload time rather
               than trusted from here, because hiding the control does not clear the
               state behind it. */}
-          {offersLegalPrivilege(confidentiality, settings.legallyPrivilegedFor) && (
+          {offersLegalPrivilege(
+            options.confidentiality.find((o) => o.id === confidentiality)?.label ?? "",
+            settings.legallyPrivilegedFor,
+          ) && (
               <>
                 <label className="dms-lp">
                   <input

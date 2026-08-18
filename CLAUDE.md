@@ -594,6 +594,12 @@ Year                       <- plain "Year", NOT Year_x002f_Period (client rename
 DocumentDate               <- DateTime, no space encoding
 Confidentiality_x0020_Level
 LegallyPrivileged          <- Yes/No, written as the STRING "true"/"false"; shown only for the levels
+                              (⚠ THE CONFIG ROW HOLDS LEVEL NAMES, NOT TERM GUIDS, since 2026-08-19 —
+                              on the client site it held `87f8481b-…` because the check compared the
+                              dropdown's RAW VALUE, which is the term ID. HC routing had always resolved
+                              the label first via `confidentialityLabel`; this had not, so the two rules
+                              wanted opposite shapes in config and nothing on screen could explain it.
+                              A stray `term_highlyConfidential` GUID row on that site is read by NO code.)
                               LISTED by the `legallyPrivilegedFor` DMS Config row (blank = never
                               offered). A LIST since 2026-08-19 (client: the tick must show for Highly
                               Confidential too) — `Confidential;Highly Confidential`, semicolon OR comma
