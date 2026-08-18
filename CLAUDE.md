@@ -1242,6 +1242,18 @@ order, which was not enough — five equal doors do not say four of them are ste
 - **It DRIVES `FolderManager` (new props `initialTab`, `hideTabs`) and never dismantles it.**
   Reconciliation is inline in a 4,000-line file and is the most site-verified code here; extracting it to
   make it mountable would risk the wrong thing for a navigation change. Cost: one re-mount per step.
+  - **⚠ `PendingLevels` MUST BE READ IN ITS OWN REQUEST, AND `FolderAdmin` WAS NOT DOING IT** (fixed
+    1.0.163.0, found 2026-08-18 while explaining why the migrate step was locked). That column is
+    created ON DEMAND by `StructureManager` the first time a change is staged, so on any site where
+    that has never happened it does not exist — and one unknown name in a `$select` fails the WHOLE
+    request with HTTP 400 (gotcha #11). It was in the same `$select` as the segment list, so on such a
+    site **every guided flow reported "the segment list could not be read" and offered no segment at
+    all** — on a site that is otherwise perfectly provisioned, and on the one screen every folder job
+    starts from. `StructureManager` and `SubtreeMigrator` both split this read and say why in a comment;
+    this file did not.
+    - The flag is now **three-state**: `undefined` when the column is absent or the read failed, which
+      locks nothing, versus `false` which locks the migrate step. Same rule as everywhere else here.
+    - **Most likely to bite on CRS**, where nothing has ever staged a structure change.
   - **⚠ THE RE-MOUNT NEEDS A `key`, AND ITS ABSENCE WAS A LIVE BUG (found on the client's site
     2026-08-17, first time anyone stepped through a flow).** `FolderManager` resolves `initialTab` in a
     `useState` **initialiser**, which React runs once per mounted instance — so with no key React

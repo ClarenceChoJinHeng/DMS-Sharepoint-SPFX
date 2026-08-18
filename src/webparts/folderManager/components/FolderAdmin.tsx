@@ -66,7 +66,21 @@ function readHash(): { flowId: string; wantsTabs: boolean } {
 }
 
 /** A segment as the picker needs it. */
-type Segment = { key: string; label: string; code: string; termSetGuid: string; pendingLevels: boolean };
+type Segment = {
+  key: string;
+  label: string;
+  code: string;
+  termSetGuid: string;
+  itemId: number;
+  /**
+   * Whether this segment carries a staged structure change.
+   *
+   * `undefined` means NOT KNOWN - the column does not exist yet, or its read failed - and it must
+   * stay distinct from `false`. `false` locks the migrate step; `undefined` locks nothing, which is
+   * this codebase's rule for a fact that could not be read.
+   */
+  pendingLevels?: boolean;
+};
 
 const s: Record<string, React.CSSProperties> = {
   wrap:      { fontFamily: '"Segoe UI", system-ui, sans-serif', color: "#242424" },
@@ -225,9 +239,18 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   useEffect(() => {
     const load = async (): Promise<void> => {
       await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      // PendingLevels IS REQUESTED SEPARATELY, BELOW, AND MUST STAY THAT WAY.
+      //
+      // The column is created ON DEMAND by StructureManager, the first time a structure change is
+      // staged, so on any site where that has never happened it does not exist - and one unknown name
+      // in a $select fails the WHOLE request with HTTP 400 rather than returning null (gotcha #11).
+      // Asked for here, it took the segment list down with it: every guided flow reported "the segment
+      // list could not be read" and offered no segment at all, on a site otherwise perfectly set up.
+      // StructureManager and SubtreeMigrator both split this read for exactly this reason; this file
+      // did not, and it is the one screen every folder job starts from.
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items` +
-          `?$select=Id,Title,ModeLabel,StagingFolder,TermSetGuid,PendingLevels,ConfigType&$top=200`,
+          `?$select=Id,Title,ModeLabel,StagingFolder,TermSetGuid,ConfigType&$top=200`,
         SPHttpClient.configurations.v1,
         { headers: GET },
       );
@@ -240,11 +263,39 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
           label: String(r.ModeLabel ?? r.Title ?? "").trim(),
           code: String(r.StagingFolder ?? "").trim(),
           termSetGuid: String(r.TermSetGuid ?? "").trim(),
-          pendingLevels: String(r.PendingLevels ?? "").trim().length > 0,
+          itemId: Number(r.Id ?? 0),
         }))
         .filter((r) => r.key.length > 0)
         .sort((a, b) => a.label.localeCompare(b.label));
-      setSegments(rows);
+
+      // The staged chains, in their own request. A 400 here means the column has never been created,
+      // which is neither an error nor anything the admin can act on - so the flag is left UNDEFINED
+      // rather than false, and undefined locks nothing.
+      const staged: Record<number, boolean> = {};
+      let stagedKnown = false;
+      try {
+        const p2: SPHttpClientResponse = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items` +
+            `?$select=Id,PendingLevels&$filter=ConfigType eq 'mode'&$top=200`,
+          SPHttpClient.configurations.v1,
+          { headers: GET },
+        );
+        if (p2.ok) {
+          stagedKnown = true;
+          for (const r of ((await p2.json()).value ?? []) as Array<Record<string, unknown>>) {
+            staged[Number(r.Id ?? 0)] = String(r.PendingLevels ?? "").trim().length > 0;
+          }
+        }
+      } catch {
+        // Leave it unknown. A transient failure must not lock the migrate step.
+      }
+      // Merged only when the second read succeeded. Absent column or failed read leaves every
+      // segment `undefined`, which reads as "not checked" and locks nothing.
+      setSegments(
+        stagedKnown
+          ? rows.map((r) => ({ ...r, pendingLevels: staged[r.itemId] === true }))
+          : rows,
+      );
       setLoadError(undefined);
     };
     load().catch((e) => {
