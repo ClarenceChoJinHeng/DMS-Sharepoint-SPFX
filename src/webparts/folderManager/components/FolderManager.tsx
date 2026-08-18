@@ -3583,7 +3583,16 @@ export default function FolderManager({
               // rows, and turning it off must not silently disable a C-Level.
               if (segmentTermSets.has((i.fromTerm ?? "").toLowerCase()) && i.row.role !== "SEGVIEW") {
                 entries.push({
-                  msg: `  ⚠ ${g0(i.row)} sits on the SEGMENT tier and would reach ${folderLabel} — not granted (only SEGVIEW fans down from a segment)`,
+                  // NAMES THE ROLE, not just the group. It used to read "GHO_SEGVIEW ... not granted"
+                  // and the very NEXT line granted GHO_SEGVIEW Read — because what is refused here is
+                  // the group's OTHER roles (clevel_segment is SEGVIEW + DEL + SHARE), never its
+                  // SEGVIEW row. So the log contradicted itself, and printed two identical lines per
+                  // folder that were in fact about two different roles (found 2026-08-18, reading a
+                  // real run's output).
+                  msg:
+                    `  ⚠ ${g0(i.row)} role ${i.row.role} (${permissionForRole(lib, i.row.role)}) not applied on ` +
+                    `${folderLabel} — a segment-tier row fans down for SEGVIEW alone; a SEGVIEW row on ` +
+                    `the same group is still applied`,
                   ok: true,
                 });
                 continue;

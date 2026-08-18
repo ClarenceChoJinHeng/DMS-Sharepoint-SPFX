@@ -177,9 +177,47 @@ own. Now 5000 — a truncated read would have reported an existing segment's gro
 
 ---
 
+## Reconciliation HAS RUN on dcistaging (2026-08-18)
+
+First run completed, then a clean re-run confirmed it: **0 folders created, all folders "already
+there"**, ~2,706 steps, about 40 minutes. **No `SKIPPED (no abbreviation)` lines and no collision
+aborts** — the GHO codes are complete and unique, which is the pair of failures that run had to rule
+out.
+
+Everything else verified from the log: the ten admin pages all report **administrative-only, already
+locked**; `CRS_SITE_MEMBERS` holds Read on `Documents` and **nothing** on the other three libraries;
+departmental fan-out ON; ancestor-browse Read granting; both approval libraries have content approval
+on and provisioned folders are stamped Approved.
+
+### One real item outstanding
+
+```
+HCApprovalDocument: no "CRS Folder" or "DMS Folder" content type
+HCDocuments:        no "CRS Folder" or "DMS Folder" content type
+```
+
+The HC pair never had the content type added, so their folders keep the built-in `Folder` type and the
+details pane will not show **Full Name** — the term's real label behind the abbreviated folder name.
+Harmless to permissions and to routing; it costs the HC libraries the one thing that makes an
+abbreviated tree readable. Add `CRS Folder` to both HC libraries with `Full Name` on it, hide it from
+the New button, then re-run and open one HC folder's details pane to confirm the type was re-stamped.
+
+### The `SEGVIEW` warnings were noise, and the wording was the bug
+
+Two `⚠ GHO_SEGVIEW ... not granted` lines per folder in `Documents`, immediately followed by
+`↳↓ GHO_SEGVIEW → Read (inherited from a parent-tier mapping)` — the log contradicting itself.
+
+Nothing was wrong: `clevel_segment` is **SEGVIEW + DEL + SHARE**, a segment-tier row fans down for the
+**SEGVIEW role alone**, and those two lines were the DEL and SHARE rows being correctly withheld. The
+message named the GROUP and never the ROLE, so it read as the whole group being refused, and printed
+twice identically. Fixed in **1.0.165.0** — it now names the role and the level and says a SEGVIEW row
+on the same group is still applied.
+
+---
+
 ## Then, in this order
 
-0. **Deploy 1.0.154.0 to dcistaging first** — every fix below is code, and none has been run on a site.
+0. ~~Deploy~~ **Deploy 1.0.165.0** — everything from 1.0.159.0 onward is unreleased — every fix below is code, and none has been run on a site.
    Check the INSTALLED version in Site Contents, and remember dcistaging's own site-collection catalog
    takes precedence over the tenant one.
 1. ~~One bulk run~~ **DONE 2026-08-18 on dcistaging: 0 created, 790 written, 0 failed** — all 308
