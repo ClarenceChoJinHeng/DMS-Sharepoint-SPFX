@@ -452,13 +452,16 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       return st.screen.id === "groups"
         ? (
           <div>
-            <GroupManager context={context} siteUrl={siteUrl} />
-            {/* The bulk run belongs HERE most of all: this step is reached while provisioning a whole
-                segment, which is precisely when creating 300 groups by hand is the wrong answer. Mounted
-                from the same component as the standalone page — one model, two mount points, never a copy.
-                Its absence here was reported as "I thought it will auto populate the group": the feature
-                existed, and the one screen that needed it did not show it. */}
+            {/* BULK FIRST, and only in the flow. This step is reached while provisioning a whole segment,
+                so the bulk run is the main event and the single form is the exception — the reverse of the
+                standalone page, where an admin has usually come to make one group.
+
+                Order was the actual bug the second time round: mounted below, it sat under the create form
+                AND the whole "Groups on this site" list, so the client reported the feature missing while
+                looking at the screen that contained it. A feature below the fold on the one screen that
+                needs it is indistinguishable from one that was never built. */}
             <BulkGroupProvisioner context={context} siteUrl={siteUrl} />
+            <GroupManager context={context} siteUrl={siteUrl} />
           </div>
         )
         : <GroupMapBuilder context={context} siteUrl={siteUrl} />;
