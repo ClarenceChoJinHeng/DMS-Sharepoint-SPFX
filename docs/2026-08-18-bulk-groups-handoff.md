@@ -260,12 +260,14 @@ Also confirmed in passing: an approver group reaches the upload form and gets it
 deletion and share request flows, and whether a PIC who is not an admin can actually SEE the approved
 file in `Documents` — see below.
 
-### One thing to check next
+5. **The unit can see it** — chocheetuck4, a NON-ADMIN uploader, opened
+   `Documents/GHO/GF/TAX/2024/Tax Return` and saw the file with every column. This was worth checking
+   separately: the file being visible to an admin proves nothing, because admins see drafts. It
+   confirms `Documents` moderation is not hiding routed files, and that the 2026-08-09 consequence
+   holds in practice — **every PIC reads every approved document in their unit.**
 
-The `Documents` view bar shows a **Show All Files** view, which SharePoint adds when content approval is
-on. The routed file is visible to an ADMIN, which proves nothing — admins see drafts. **Have
-chocheetuck4 open `Documents/GHO/GF/TAX/2024/Tax Return` and confirm they can see it.** If they cannot,
-`Documents` still has moderation on and every routed file is invisible to the unit it belongs to.
+The `Show All Files` view on `Documents` is a leftover from an earlier moderation setting, not an
+active one.
 
 ---
 

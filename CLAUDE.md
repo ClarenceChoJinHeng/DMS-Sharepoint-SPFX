@@ -19,11 +19,13 @@
 Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
-> 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
-> built and part-run on the dcistaging rehearsal site. All five defects are **fixed in 1.0.156.0 and
-> largely not site-tested**. Bulk provisioning and reconciliation HAVE now run on dcistaging;
-> what has never been tested anywhere is upload to approve to route. `CRS Group Map` has been
-> cleared and **reconciliation must not be run** until the row count is right.
+> ✅ **READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** dcistaging is fully provisioned — 308
+> groups, 790 Group Map rows, folders and ACLs in all four libraries — and **UPLOAD → APPROVE → ROUTE
+> IS VERIFIED END TO END there (2026-08-18)** with two guest accounts: `Created By` survives the copy,
+> the metadata survives it, the approval email carries the right path, and a NON-ADMIN uploader sees the
+> routed file in `Documents`. The bulk run is idempotent (second press wrote nothing).
+> Still untested anywhere: **anything HC** (no `CRS Folder` content type on the HC pair, and neither HC
+> Power Automate flow exists) and the **deletion/share request** flows.
 
 > 📍 **Current site state, and what is outstanding: `docs/2026-08-07-project-state.md`.**
 > Read it before acting on anything in this file. THIS file holds the rules; that one holds what
