@@ -178,6 +178,25 @@ Preview (315 groups · 47 already exist · 268 to create)
   - The asymmetry is why nobody caught it: group creation *was* idempotent, so a second press logged
     `= already existed (mapping only)` on every line while doubling the mappings behind them. No screen
     shows a row twice.
+  - **A RENAMED UNIT IS RECOGNISED BY ITS TERM, NOT ITS NAME** (added 1.0.162.0). Group names are
+    derived from the folder code, so renaming a code made the unit look NEW: the planner compared
+    names, found no match, and a run created a second full set of groups plus another thirteen rows on
+    the same term. `isDuplicateRow` cannot catch those (a different group Id is a legitimately
+    different row), so the unit ended with ten groups and twenty-six rows, all granted, for ever.
+    - The term GUID is what a rename never touches, and the Group Map rows carry it. So a unit is
+      provisioned when a group already holds a persona role SET at that term, whatever it is called.
+      The rows were already being loaded for the dedupe, so this costs no request.
+    - **The role SET is compared, never one role.** The tempting shortcut is a naming role: `hou`
+      carries `UPLHC` among its six and `UPLHC` names `pic_hc`, so that shortcut presents an approver
+      group as the HC uploader group and leaves the real one uncreated.
+    - **The NAME check still runs first**, and must: a run stopped part-way leaves a group holding only
+      some of its rows, whose role set matches no persona. Term-only matching would call it new and
+      duplicate the very group the name check exists to reuse.
+    - **A row whose group has been DELETED is ignored.** Rows outlive their group, and treating those
+      as provisioned would report the work as finished while nothing grants anything.
+    - The preview gains a third status, `already there as <old name>`, and the run logs the same. That
+      line is the only place an admin learns the unit is provisioned AND that its group names no longer
+      match the folder code. The tidy-up is now optional rather than mandatory.
   - The read is **paged** (`$top` caps a page, it does not lift the 5,000-item threshold; one segment on
     CRS is ~790 rows) and **fails closed** — an unreadable Group Map holds the run rather than being
     treated as empty, the opposite of this codebase's usual rule and for the usual reason: here the cost

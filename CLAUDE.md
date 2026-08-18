@@ -429,19 +429,25 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   guessed (no folder → that unit cannot upload); abbreviations must be **unique among siblings**
   or two units merge into one folder with one ACL (reconciliation aborts before creating
   anything); changing one **renames a live folder** on the next run.
-  - **⚠ A RENAME AFTER THE GROUPS EXIST DESYNCS THE PLANNER, and that is the non-obvious cost.**
-    Renaming a code renames the FOLDER and touches no group — but `planBulkGroups` derives every group
-    NAME from the abbreviation chain, so after `Trace` → `TRC` the planner looks for
-    `GHO_GS_TRC_UPLOADER`, finds only `GHO_GS_Trace_UPLOADER`, and plans the unit as **unprovisioned**:
-    a later bulk run CREATES five more groups and writes thirteen more rows at the same term.
-    `isDuplicateRow` cannot catch them — a different `GroupId` is a legitimately different row — so the
-    unit ends with ten groups and twenty-six rows, all of which reconciliation grants.
-    - Access stays correct (same term, same folder, same levels); what breaks is idempotence and
-      anyone's ability to read "who has access" off the group list.
-    - The fix is to rename the SharePoint groups too. **A group rename preserves its Id**, and rows
-      store `GroupId`, so every mapping survives — but `GroupName` on those rows goes stale and Folder
-      Access labels them by it. There is no rename control in the UI; it is a manual SharePoint edit.
-    - **So settle abbreviations BEFORE creating groups**, and treat a later rename as a two-part job.
+  - **A RENAME AFTER THE GROUPS EXIST IS SAFE SINCE 1.0.162.0, and it was not before.** Renaming a
+    code renames the FOLDER and touches no group, but `planBulkGroups` derives every group NAME from
+    the abbreviation chain, so `Trace` to `TRC` made the planner look for `GHO_GS_TRC_UPLOADER`, find
+    only `GHO_GS_Trace_UPLOADER`, and plan the unit as **unprovisioned**: a bulk run then created five
+    more groups and thirteen more rows at the same term. `isDuplicateRow` cannot catch those (a
+    different `GroupId` is a legitimately different row), so the unit ended with ten groups and
+    twenty-six rows, all granted, for ever. Access stayed correct throughout; idempotence did not.
+    - **It now matches on the TERM GUID**, which a rename never touches, using the Group Map rows the
+      provisioner already loads for the dedupe. A unit is provisioned when a group holds a persona
+      **role SET** at that term, whatever it is called.
+    - **Never match a naming role alone**: `hou` carries `UPLHC` among its six and `UPLHC` names
+      `pic_hc`, so that shortcut presents an approver group as the HC uploader group.
+    - **The name check still runs FIRST**, because a run stopped part-way leaves a group holding only
+      some of its rows: its role set matches no persona, and term-only matching would duplicate it.
+    - **Rows whose group was deleted are ignored**, or the unit reads as done while nothing grants.
+    - The preview and the log say `already there as <old name>`. **Renaming the groups is now optional
+      tidy-up, not a required repair**: a group rename preserves its Id, so every mapping row survives,
+      though `GroupName` on those rows goes stale and Folder Access labels them by it.
+    - Still the better habit: **settle abbreviations before creating groups.**
   - **A CASE-ONLY change is deliberately NOT a rename** (`FolderManager.tsx` ~3233 compares
     lower-cased, because SharePoint sibling names are case-insensitive and `Trace` → `TRACE` would
     collide with itself). But `changedRows` compares case-SENSITIVELY, so such an edit saves, shows the

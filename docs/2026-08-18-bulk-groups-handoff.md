@@ -205,14 +205,14 @@ rename path. Two things must be known before that test is read as a result:
   sibling names are case-insensitive, so `Trace` → `TRACE` would collide with itself), while the
   abbreviation page compares case-sensitively. So `TRACE` saves, warns `✎ renamed`, and leaves the
   folder called `Trace`. Use a real change — `TRC` — to test the path.
-- **The groups do NOT follow.** `planBulkGroups` derives names from the abbreviation chain, so after a
-  rename the planner sees the unit as unprovisioned and a later bulk run creates five MORE groups and
-  thirteen more rows at the same term. `isDuplicateRow` cannot catch them: a different `GroupId` is a
-  genuinely different row. Access stays correct; idempotence does not.
+- **The groups do NOT follow**, but since **1.0.162.0** that no longer duplicates anything. The planner
+  matches on the TERM GUID, so the unit is recognised under its old group names and the preview reads
+  `already there as GHO_GS_Trace_UPLOADER`. Before that build it planned the unit as new, and a run
+  created five more groups and thirteen more rows on the same term.
 
-So after renaming that code, either rename the five `GHO_GS_Trace_*` groups by hand in SharePoint (a
-rename preserves the group Id, so every mapping row survives) or do not press bulk provisioning for
-that segment again.
+So after renaming that code you MAY rename the five `GHO_GS_Trace_*` groups in SharePoint to match (a
+rename preserves the group Id, so every mapping row survives). That is tidy-up, not a repair. Leaving
+them is now safe, including through a further bulk run.
 
 ---
 

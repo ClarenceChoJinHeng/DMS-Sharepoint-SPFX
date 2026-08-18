@@ -193,3 +193,94 @@ describe("splitPlannedRows", () => {
     expect(splitPlannedRows(existing, [row("7", "UPL", "aaaa-bbbb")]).fresh).toEqual([]);
   });
 });
+
+describe("planBulkGroups recognises a unit whose code was renamed", () => {
+  // One PIC group for Tax, provisioned under the OLD code and still named for it.
+  const picRowsFor = (groupId: string, groupName: string, term: string): GroupMapWriteRow[] =>
+    (["UPL", "DELS"] as GroupMapRole[]).map((r) => ({
+      GroupId: groupId,
+      GroupName: groupName,
+      Segment: SET,
+      UnitTermGuid: term,
+      Role: r,
+      Scope: "Folder",
+      Target: "",
+    }));
+
+  const renamed: AbbrevRowDraft[] = [
+    dept(GF, "Group Finance", "GF"),
+    unit("u1", "Tax", "TRC", GF),
+  ];
+
+  it("matches on the TERM, not the name, so a rename creates nothing", () => {
+    // THE BUG THIS CLOSES: names are derived from the code, so a renamed unit looked new and a bulk
+    // run created a second full set of groups plus another 13 rows on the same term.
+    const plan = planBulkGroups(
+      seg, renamed, ["pic"], ["GHO_GF_TAX_UPLOADER"],
+      picRowsFor("7", "GHO_GF_TAX_UPLOADER", "u1"),
+    );
+    const g = plan.groups.filter((x) => x.personaKey === "pic")[0];
+    expect(g.name).toBe("GHO_GF_TRC_UPLOADER");
+    expect(g.exists).toBe(true);
+    expect(g.existingName).toBe("GHO_GF_TAX_UPLOADER");
+    expect(toCreateCount(plan)).toBe(0);
+  });
+
+  it("still matches on the NAME, so an interrupted run is finished rather than duplicated", () => {
+    // A run stopped part-way leaves the group made with only some of its rows. Its role set does not
+    // equal the persona's, so role matching alone would call it new — the regression this guards.
+    const partial = picRowsFor("7", "GHO_GF_TRC_UPLOADER", "u1").slice(0, 1);
+    const plan = planBulkGroups(
+      seg, renamed, ["pic"], ["GHO_GF_TRC_UPLOADER"], partial,
+    );
+    const g = plan.groups.filter((x) => x.personaKey === "pic")[0];
+    expect(g.exists).toBe(true);
+    expect(g.existingName).toBeUndefined();
+  });
+
+  it("does NOT let a Head of Unit group satisfy the HC PIC", () => {
+    // The tempting shortcut is to match a persona's NAMING role. `hou` carries UPLHC among its six,
+    // and UPLHC is pic_hc's naming role — so that shortcut would present an approver group as the
+    // HC uploader group and leave the real one uncreated.
+    const houRoles = ["APR", "DELS", "DEL", "SHARE", "UPLHC", "DELSHC"] as GroupMapRole[];
+    const houRows: GroupMapWriteRow[] = houRoles.map((r) => ({
+      GroupId: "9", GroupName: "GHO_GF_TAX_APPROVER", Segment: SET,
+      UnitTermGuid: "u1", Role: r, Scope: "Folder", Target: "",
+    }));
+    const plan = planBulkGroups(
+      seg, renamed, ["pic_hc"], ["GHO_GF_TAX_APPROVER"], houRows,
+    );
+    const g = plan.groups.filter((x) => x.personaKey === "pic_hc")[0];
+    expect(g.exists).toBe(false);
+    expect(g.existingName).toBeUndefined();
+  });
+
+  it("ignores rows whose group no longer exists on the site", () => {
+    // Rows outlive a deleted group. Treating those as provisioned would report the unit as done while
+    // nothing grants anything — understating the work, which is the dangerous direction here.
+    const plan = planBulkGroups(
+      seg, renamed, ["pic"], [], picRowsFor("7", "GHO_GF_TAX_UPLOADER", "u1"),
+    );
+    expect(plan.groups.filter((x) => x.personaKey === "pic")[0].exists).toBe(false);
+  });
+
+  it("reads a long-form Role value, which a hand-authored row can carry", () => {
+    const rows: GroupMapWriteRow[] = [
+      { GroupId: "7", GroupName: "GHO_GF_TAX_EMPLOYEE", Segment: SET, UnitTermGuid: "u1",
+        Role: "MEMBER" as GroupMapRole, Scope: "Folder", Target: "" },
+    ];
+    const long = rows.map((r) => ({ ...r, Role: "MEMBER" as GroupMapRole }));
+    const plan = planBulkGroups(
+      seg, renamed, ["employee"], ["GHO_GF_TAX_EMPLOYEE"], long,
+    );
+    expect(plan.groups.filter((x) => x.personaKey === "employee")[0].existingName)
+      .toBe("GHO_GF_TAX_EMPLOYEE");
+  });
+
+  it("plans normally when no rows are supplied at all", () => {
+    // Every existing caller passes four arguments; the fifth defaults to none, and the old
+    // name-only behaviour must be exactly what they still get.
+    const plan = planBulkGroups(seg, rows, ["pic"], []);
+    expect(toCreateCount(plan)).toBe(plan.groups.length);
+  });
+});

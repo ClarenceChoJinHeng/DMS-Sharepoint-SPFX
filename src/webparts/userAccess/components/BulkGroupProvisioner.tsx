@@ -349,8 +349,13 @@ export default function BulkGroupProvisioner({
     }
   };
 
+  // `existingRows` is handed to the planner as well as to the dedupe: it is what lets a unit whose
+  // folder code was RENAMED be recognised by its term instead of by a group name derived from the old
+  // code. Without it a rename reads as a new unit and this run creates a second full set of groups.
   const plan: BulkPlan | undefined =
-    seg && rows ? planBulkGroups(seg, rows, picked, Object.keys(titles)) : undefined;
+    seg && rows
+      ? planBulkGroups(seg, rows, picked, Object.keys(titles), existingRows ?? [])
+      : undefined;
 
   /* ── The run ──────────────────────────────────────────────────────────────── */
 
@@ -413,7 +418,10 @@ export default function BulkGroupProvisioner({
         say(`■ Stopped by you. Everything above is done and stays done — press Run again to finish.`);
         break;
       }
-      let id = titles[g.name.toLowerCase()];
+      // A unit whose code was renamed is already provisioned under its OLD name, so the run maps to
+      // THAT group. Creating `g.name` instead is exactly the duplicate set this closes.
+      const useName = g.existingName ?? g.name;
+      let id = titles[useName.toLowerCase()];
       if (id === undefined) {
         try {
           const created = await withRetry(() => createSiteGroup(context.spHttpClient, siteUrl, g.name));
@@ -427,6 +435,10 @@ export default function BulkGroupProvisioner({
           say(`✗ ${g.name} — ${(e as Error).message}`);
           continue;
         }
+      } else if (g.existingName) {
+        // Named in the log, because the admin will not otherwise understand why a group they did not
+        // ask for is being mapped — and because renaming it is the tidy-up this reports.
+        say(`= ${g.existingName} (already there under its old name; code now says ${g.name})`);
       } else {
         say(`= ${g.name} (already existed — mapping only)`);
       }
@@ -434,7 +446,10 @@ export default function BulkGroupProvisioner({
       // a second press read as safe while it re-wrote every mapping behind it — 642 rows on the
       // rehearsal site. Per row rather than per group, so a run stopped part-way is finished by the
       // next press instead of being skipped as "that group is done".
-      const { fresh, duplicate } = splitPlannedRows(seen, rowsFor(g, String(id)));
+      const { fresh, duplicate } = splitPlannedRows(
+        seen,
+        rowsFor({ ...g, name: useName }, String(id)),
+      );
       if (duplicate.length > 0) {
         already += duplicate.length;
         say(`  = ${duplicate.length} mapping(s) already there (${duplicate.map((r) => r.Role).join(", ")})`);
@@ -482,7 +497,14 @@ export default function BulkGroupProvisioner({
     if (!plan) return;
     const head = "Group name,Persona,Scope,Status";
     const body = plan.groups
-      .map((g) => [g.name, g.personaKey, g.scope, g.exists ? "exists" : "to create"].join(","))
+      .map((g) =>
+        [
+          g.name,
+          g.personaKey,
+          g.scope,
+          g.existingName ? `exists as ${g.existingName}` : g.exists ? "exists" : "to create",
+        ].join(","),
+      )
       .join("\n");
     const blob = new Blob([`${head}\n${body}\n`], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
@@ -576,8 +598,22 @@ export default function BulkGroupProvisioner({
                   <tr key={g.name}>
                     <td style={s.td}>{g.name}</td>
                     <td style={{ ...s.td, fontFamily: "inherit" }}>{g.scope}</td>
-                    <td style={{ ...s.td, fontFamily: "inherit", color: g.exists ? "#605e5c" : "#0f6c3f" }}>
-                      {g.exists ? "already exists — mapping only" : "new"}
+                    {/* THREE statuses. "Already there under its old name" is the one that carries
+                        information the admin cannot get anywhere else: the unit is provisioned, so
+                        nothing will be created — AND its groups no longer match the folder code,
+                        which is the thing they may want to tidy. */}
+                    <td
+                      style={{
+                        ...s.td,
+                        fontFamily: "inherit",
+                        color: g.existingName ? "#8a4b00" : g.exists ? "#605e5c" : "#0f6c3f",
+                      }}
+                    >
+                      {g.existingName
+                        ? `already there as ${g.existingName}`
+                        : g.exists
+                          ? "already exists — mapping only"
+                          : "new"}
                     </td>
                   </tr>
                 ))}

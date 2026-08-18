@@ -18,6 +18,8 @@ import {
   GroupMapWriteRow,
   isDuplicateRow,
   namingRoleFor,
+  normalizeRoleValue,
+  normalizeScope,
   PERSONAS,
   suggestGroupName,
 } from "./groupMapModel";
@@ -40,6 +42,14 @@ export interface PlannedGroup {
   scope: "segment" | "department" | "unit";
   /** True when a site group of this name already exists — it is mapped, never re-created. */
   exists: boolean;
+  /**
+   * The name this persona is ALREADY provisioned under at this term, when it differs from `name`.
+   *
+   * Set only by the term-based match below, which means exactly one thing: the unit's folder code was
+   * renamed and its groups still carry the old one. Present ⇒ nothing to create, and the run must map
+   * to THIS group rather than the planned name.
+   */
+  existingName?: string;
 }
 
 /** A term the run deliberately passes over, and why. */
@@ -100,11 +110,83 @@ function codeChain(
  * Ordering is deliberate: segment-scope groups first, then the rows in the order they arrive, which is the
  * term store's own order. A preview an admin has to scan should read top-down like the tree it mirrors.
  */
+/**
+ * Which groups are already provisioned, keyed by term GUID, as `role-set -> group name`.
+ *
+ * **THIS IS WHAT MAKES A RENAME SAFE.** Group names are derived from the folder code, so a renamed
+ * unit used to look like a NEW one: the planner compared names, found no match, and a bulk run
+ * created a second full set of groups plus another thirteen rows on the same term. `isDuplicateRow`
+ * cannot catch those — a different group Id is a legitimately different row — so the unit ended with
+ * ten groups and twenty-six rows, all of them granted, for ever.
+ *
+ * The term GUID is the thing a rename never touches, and the Group Map rows carry it. So a unit is
+ * provisioned when a group already holds a persona's roles AT THAT TERM, whatever it is called.
+ *
+ * **The role SET is compared, never one role.** The tempting shortcut is a persona's naming role, and
+ * it is wrong: `hou` carries `UPLHC` among its six, and `UPLHC` is `pic_hc`'s naming role — so that
+ * shortcut would present an approver group as the HC uploader group and leave the real one uncreated.
+ *
+ * Only FOLDER-scope rows count. A Library, Site or Page row carries no term and describes entry to a
+ * library or a page, not a unit's folder.
+ */
+function provisionedByTerm(
+  existingRows: GroupMapWriteRow[],
+  existingTitles: string[],
+): Record<string, Record<string, string>> {
+  // Site group titles, so a row whose group has been DELETED cannot report a unit as provisioned.
+  // Rows outlive their group, and treating those as done would say the work was finished while
+  // nothing grants anything — the one direction that must not be guessed.
+  const live: Record<string, true> = {};
+  for (const t of existingTitles ?? []) live[(t ?? "").trim().toLowerCase()] = true;
+
+  // term -> groupId -> { name, roles }
+  const byTerm: Record<string, Record<string, { name: string; roles: string[] }>> = {};
+  for (const r of existingRows ?? []) {
+    if (!r || normalizeScope(r.Scope) !== "Folder") continue;
+    const term = key(r.UnitTermGuid);
+    const gid = (r.GroupId ?? "").trim();
+    const name = (r.GroupName ?? "").trim();
+    // A long-form "UPLOADER" means UPL. Left raw it would never match a persona's role set, and the
+    // rename would go on looking like a new unit.
+    const role = normalizeRoleValue(r.Role ?? "").toUpperCase();
+    if (!term || !gid || !role || !live[name.toLowerCase()]) continue;
+    const groups = byTerm[term] ?? (byTerm[term] = {});
+    const entry = groups[gid] ?? (groups[gid] = { name, roles: [] });
+    if (entry.roles.indexOf(role) === -1) entry.roles.push(role);
+  }
+
+  const out: Record<string, Record<string, string>> = {};
+  for (const term of Object.keys(byTerm)) {
+    const sets: Record<string, string> = {};
+    for (const gid of Object.keys(byTerm[term])) {
+      const g = byTerm[term][gid];
+      sets[roleSetKey(g.roles)] = g.name;
+    }
+    out[term] = sets;
+  }
+  return out;
+}
+
+/** Order- and case-insensitive fingerprint of a role set, so two spellings of one persona agree. */
+function roleSetKey(roles: string[]): string {
+  const seen: string[] = [];
+  for (const r of roles ?? []) {
+    const v = (r ?? "").trim().toUpperCase();
+    if (v && seen.indexOf(v) === -1) seen.push(v);
+  }
+  return seen.sort().join("+");
+}
+
 export function planBulkGroups(
   segment: BulkSegment,
   rows: AbbrevRowDraft[],
   personaKeys: string[],
   existingTitles: string[],
+  /**
+   * Every Group Map row on the site, so a renamed unit is recognised. Defaults to none, which gives
+   * the original name-only behaviour — every existing caller and test relies on that.
+   */
+  existingRows: GroupMapWriteRow[] = [],
 ): BulkPlan {
   const groups: PlannedGroup[] = [];
   const skipped: SkippedTerm[] = [];
@@ -117,6 +199,8 @@ export function planBulkGroups(
   const deepest = (segment.levelNames ?? []).length;
   const planned: Record<string, true> = {};
 
+  const provisioned = provisionedByTerm(existingRows, existingTitles);
+
   const push = (
     name: string,
     personaKey: string,
@@ -128,7 +212,22 @@ export function planBulkGroups(
     const k = name.toLowerCase();
     if (planned[k]) return;
     planned[k] = true;
-    groups.push({ name, personaKey, tierGuid, scope, exists: have[k] === true });
+    const persona = PERSONAS.filter((p) => p.key === personaKey)[0];
+    // NAME FIRST. It is the case that has always worked, and it is the one that covers a run stopped
+    // part-way: such a group holds only some of its rows, so its role set matches no persona, and a
+    // term-only match would call it new and duplicate the group this very check exists to reuse.
+    const byName = have[k] === true;
+    const already = byName
+      ? undefined
+      : provisioned[key(tierGuid)]?.[roleSetKey((persona?.roles ?? []) as string[])];
+    groups.push({
+      name,
+      personaKey,
+      tierGuid,
+      scope,
+      exists: byName || already !== undefined,
+      ...(already === undefined ? {} : { existingName: already }),
+    });
   };
 
   // ── Segment scope: one group per persona, no tier ─────────────────────────────
