@@ -49,7 +49,7 @@ Do not read `docs/2026-08-17-sdg-migration-runbook.md` §10–§12 as done. Re-c
 
 ## Open defects, in build order — ALL FIVE FIXED 2026-08-18, NONE SITE-TESTED
 
-### 1. The bulk run duplicates Group Map rows — ~~THE BUG~~ **FIXED, 1.0.151.0, not yet site-tested**
+### 1. The bulk run duplicates Group Map rows — ~~THE BUG~~ **FIXED and SITE-VERIFIED 2026-08-18**
 
 `BulkGroupProvisioner.rowsFor` wrote rows **unconditionally**. The run was idempotent for *groups* (an
 existing title is mapped, not re-created) and not for *rows*, so a second press wrote every mapping
@@ -78,6 +78,13 @@ before the press rather than discovered after it.
 
 **A single run against an empty Group Map is clean**, which is why the list was cleared rather than
 deduplicated by hand.
+
+**Verified on dcistaging, 2026-08-18.** First run: 0 created (all 308 groups already existed), **790
+mappings written**, 0 failed. Second press: **0 created, 0 written, 790 already there** — and it
+returned instantly, which is the other half of the proof, since a run that writes nothing makes no
+requests at all. `CRS Group Map` held at 790. The log also confirmed the per-persona role counts:
+3 for `_SEGVIEW` (SEGVIEW, DEL, SHARE), 1 for `_HOD` (DEPTVIEW), and 13 per unit
+(APR/DELS/DEL/SHARE/UPLHC/DELSHC = 6, UPL/DELS = 2, UPLHC/DELSHC = 2, MEMBER/MEMBERHC = 2, MEMBER = 1).
 
 ### 2. Navigation during a run kills it, silently — **FIXED, 1.0.152.0, not yet site-tested**
 

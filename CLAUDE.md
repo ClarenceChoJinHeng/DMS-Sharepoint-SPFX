@@ -21,7 +21,8 @@ Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
 > 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
 > built and part-run on the dcistaging rehearsal site. All five defects are **fixed in 1.0.156.0 and
-> NONE of it site-tested**; deploy and re-run the bulk provisioning before anything else. `CRS Group Map` has been
+> largely not site-tested**. Bulk provisioning and reconciliation HAVE now run on dcistaging;
+> what has never been tested anywhere is upload to approve to route. `CRS Group Map` has been
 > cleared and **reconciliation must not be run** until the row count is right.
 
 > 📍 **Current site state, and what is outstanding: `docs/2026-08-07-project-state.md`.**
