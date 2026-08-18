@@ -531,7 +531,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
     if (st.screen.kind === "outside") {
       return (
         <div style={s.outside}>
-          <div>{st.hint}</div>
+          {/* NO HINT HERE. The panel prints `step.hint` immediately above this box, so repeating it
+              rendered the same sentence twice, one under the other — which reads as a rendering fault
+              rather than emphasis. This box carries the part that is NOT the hint. */}
           {active.asksSubject && (st.id === "addTerm" || st.id === "renameTerm") && (
             <div style={{ marginTop: 14 }}>
               <label style={s.label}>
@@ -545,8 +547,21 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               />
               {/* Naming it is what lets the next step point at the right row. OPTIONAL: leaving it blank
                   costs a little help, never progress — the flow must not stop them working. */}
-              <div style={s.hint}>Optional. Naming it lets the next step take you straight to it.</div>
+              {/* WHY, not just "optional" — the client asked "why do I have to type in the term?".
+                  Nothing can check whether someone renamed a term in the term store, so this box is
+                  the only thing that can turn an uncheckable step into a checked one, and it carries
+                  the name into the steps below. Blank costs help, never progress. */}
+              <div style={s.hint}>
+                Optional. Nothing can see into the term store, so typing the name is the only way this
+                step can confirm itself — and it takes you straight to that term on the next step.
+                Leave it blank and everything still works.
+              </div>
             </div>
+          )}
+          {/* A step that asks for nothing has an empty box, which reads as a failed load. Say what the
+              box is for instead: these steps are the ones this tool cannot do for you. */}
+          {!(active.asksSubject && (st.id === "addTerm" || st.id === "renameTerm")) && (
+            <div>This step happens outside this tool. Come back when it is done.</div>
           )}
         </div>
       );
