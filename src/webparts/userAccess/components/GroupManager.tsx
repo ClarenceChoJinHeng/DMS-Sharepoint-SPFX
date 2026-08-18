@@ -15,7 +15,7 @@
 // folder ACLs come from Folder Reconciliation reading the Group Map. That is what makes "create
 // now, assign later" safe rather than a window in which something is half-granted.
 import * as React from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { parseLevels } from "../../../shared/formModel";
 import { abbrevListTitle } from "../../../shared/folderAbbreviation";
@@ -62,6 +62,14 @@ type Props = {
    * unaffected. The list is never hidden — it is how an admin sees what already exists.
    */
   hideCreateForm?: boolean;
+  /**
+   * Bumped by a host when something outside this component has written Group Map rows — a bulk run.
+   *
+   * The mapping badges are read once at mount, so after a run wrote 790 rows every group still read
+   * `not mapped`, which is the reading that makes an admin press Run a second time. Absent means
+   * never refreshed, so the standalone page is unaffected unless it opts in.
+   */
+  refreshKey?: number;
 };
 
 /** Resolved per site — the client renames these to "CRS …" at import. */
@@ -130,7 +138,7 @@ function personaFamilies(): Array<{ family: string; items: typeof PERSONAS }> {
   return out;
 }
 
-export default function GroupManager({ context, siteUrl, hideCreateForm }: Props): React.ReactElement {
+export default function GroupManager({ context, siteUrl, hideCreateForm, refreshKey }: Props): React.ReactElement {
   const [canManage, setCanManage] = useState<boolean | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
@@ -399,6 +407,20 @@ export default function GroupManager({ context, siteUrl, hideCreateForm }: Props
     loadModes().then(setModes).catch(() => undefined);
     loadCodes().then(setCodes).catch(() => undefined);
   }, []);
+
+  /**
+   * Re-read when the host says something outside this component wrote Group Map rows.
+   *
+   * The PREVIOUS value lives in a ref rather than the effect firing on every render: a re-mount
+   * carrying a non-zero key would otherwise repeat the read for nothing, and on mount the effect
+   * above has already done it.
+   */
+  const lastRefresh = useRef(refreshKey);
+  useEffect(() => {
+    if (refreshKey === undefined || refreshKey === lastRefresh.current) return;
+    lastRefresh.current = refreshKey;
+    reload().catch(() => undefined);
+  }, [refreshKey]);
 
   // Debounced people search, the same shape as the other access pages.
   useEffect(() => {

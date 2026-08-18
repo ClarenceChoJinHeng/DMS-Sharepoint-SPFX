@@ -20,7 +20,7 @@ Auto-loaded every session. Keep this up to date whenever decisions change.
 Full requirements: `.claude/requirements.md` | Backlog: `.claude/backlog.md`
 
 > 🔴 **IN PROGRESS — READ FIRST: `docs/2026-08-18-bulk-groups-handoff.md`.** Bulk group provisioning is
-> built and part-run on the dcistaging rehearsal site. All five defects are **fixed in 1.0.154.0 and
+> built and part-run on the dcistaging rehearsal site. All five defects are **fixed in 1.0.155.0 and
 > NONE of it site-tested**; deploy and re-run the bulk provisioning before anything else. `CRS Group Map` has been
 > cleared and **reconciliation must not be run** until the row count is right.
 
@@ -905,7 +905,14 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
     read when the segment was picked, so the step still said *To do* after 300 groups were created. A
     mount-time read reflects nothing a step below it has since written — the same trap as the segment
     picker's Refresh button.
-  - **All five defects are fixed in 1.0.154.0 and NONE is site-tested** — see
+  - **A SCREEN THAT READS A LIST AT MOUNT LIES ABOUT ANY RUN BESIDE IT.** Third instance in this one
+    feature: the rail's tick, `GroupManager`'s mapping badges (every group read `not mapped` right
+    after a run wrote 790 rows — found on site 2026-08-18), and the segment picker's own Refresh
+    button before them. The badges were the dangerous one: an under-reported tick understates
+    progress, while `not mapped` states the run did not do what it just did, and invites the second
+    press. `onRunComplete` is a SEPARATE signal from `busy` going false — "the run ended" is the fact
+    that makes other screens stale.
+  - **All five defects are fixed in 1.0.155.0, and only the first has been run on a site** — see
     `docs/2026-08-18-bulk-groups-handoff.md` before running it.
 - **THE GROUP LIFECYCLE LEFT FOLDER ACCESS (2026-08-14, client: *"the group creation is done in
   folder creation and its confusing"*).** Spec `2026-08-14-group-management-separation-design.md`.

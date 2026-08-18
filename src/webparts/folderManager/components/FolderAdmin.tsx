@@ -21,7 +21,7 @@
 // Access, which it does not host, are mounted straight from userAccess — one component, two mount points,
 // never a second copy.
 import * as React from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import FolderManager from "./FolderManager";
 import { IFolderManagerProps } from "./IFolderManagerProps";
@@ -194,14 +194,12 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    * The same reason the segment list gained an explicit refresh — a mount-time read reflects nothing
    * a step below it has since written.
    */
-  const wasRunBusy = useRef(false);
-  const onRunBusyChange = (b: boolean): void => {
-    // The previous value lives in a REF, not read inside a setState updater: an updater must be
-    // pure, and one that also queued a refresh would fire it twice under StrictMode.
-    if (wasRunBusy.current && !b) setReload((n) => n + 1);
-    wasRunBusy.current = b;
-    setRunBusy(b);
-  };
+  /**
+   * Bumped when a bulk run FINISHES, which re-reads the rail's facts and the group list's mapping
+   * badges. A separate signal from `busy` going false — "the run ended" is the fact that makes other
+   * screens stale, and reading it off the falling edge of a UI flag would tie the two together.
+   */
+  const onRunComplete = (): void => setReload((n) => n + 1);
 
   /** The subject of flows 2 and 4 — what makes their term-store step checkable at all. */
   const [subject, setSubject] = useState("");
@@ -521,7 +519,12 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               </button>
             </div>
             {groupMode === "all" && (
-              <BulkGroupProvisioner context={context} siteUrl={siteUrl} onBusyChange={onRunBusyChange} />
+              <BulkGroupProvisioner
+                context={context}
+                siteUrl={siteUrl}
+                onBusyChange={setRunBusy}
+                onRunComplete={onRunComplete}
+              />
             )}
             {/* The LIST always renders — hiding what already exists is how a group gets created twice. Only
                 the create form follows the switch. */}
@@ -529,6 +532,7 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               context={context}
               siteUrl={siteUrl}
               hideCreateForm={groupMode === "all"}
+              refreshKey={reload}
             />
           </div>
         )

@@ -54,6 +54,16 @@ type Props = {
    * mount this without knowing about flows.
    */
   onBusyChange?: (busy: boolean) => void;
+  /**
+   * Fired once a run has finished and its own lists have been re-read.
+   *
+   * A SEPARATE event from `onBusyChange`, not the falling edge of it, because "the run ended" and
+   * "the button is clickable again" are different facts and only one of them means other screens are
+   * now stale. The group LIST beside this one reads its mappings at mount, so after a run that wrote
+   * 790 rows every group still showed `not mapped` — the same trap as the rail's tick, one screen
+   * over, and the one that invites a needless second press.
+   */
+  onRunComplete?: () => void;
 };
 
 type Seg = BulkSegment & { key: string; label: string };
@@ -117,6 +127,7 @@ export default function BulkGroupProvisioner({
   context,
   siteUrl,
   onBusyChange,
+  onRunComplete,
 }: Props): React.ReactElement {
   const [segments, setSegments] = useState<Seg[] | undefined>(undefined);
   const [chosen, setChosen] = useState("");
@@ -463,6 +474,8 @@ export default function BulkGroupProvisioner({
     // nobody asked to stop.
     // Re-read, so a second press sees what the first made instead of trying to create it again.
     await loadForSegment(seg).catch(() => undefined);
+    // Told LAST, so anything listening re-reads a list this run has finished writing to.
+    if (onRunComplete) onRunComplete();
   };
 
   const exportCsv = (): void => {

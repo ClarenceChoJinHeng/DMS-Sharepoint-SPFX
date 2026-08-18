@@ -17,8 +17,8 @@ Site Contents, not the catalog listing.
 | Term store, GHO | **7 departments, 60 units** (verified by console read) |
 | Abbreviation codes | complete for GHO |
 | `mode_group_head_office` | created |
-| SharePoint groups | **~302 of 308** — the run did not finish |
-| `CRS Group Map` | **cleared** — was 642 rows, with duplicates |
+| SharePoint groups | **308 of 308** — the preview reported 0 to create on 2026-08-18 |
+| `CRS Group Map` | **790 rows**, written by one clean run on 2026-08-18 (was cleared; 642 before that, with duplicates) |
 | `CRS Folder Map` | empty |
 | Reconciliation | **NOT RUN. Hold until the row count looks right.** |
 
@@ -26,7 +26,7 @@ dcistaging's tree is NOT the client's: it lacks Group Corporate Secretarial and 
 So **308 is correct there, and CRS should plan 324** (63 × 5 + 8 + 1). A different number on CRS is a
 real gap, not a repeat of this.
 
-Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.154.0** (all five defects), 1063
+Deployed there: **1.0.150.0**; `feat/folder-abbreviations` is now at **1.0.155.0** (all five defects, plus the stale badges found on site), 1063
 tests, 15 warnings (the baseline).
 
 ---
@@ -136,6 +136,18 @@ absolutely-positioned people picker, and a scroll container clips it for any gro
 that trades a long page for a control that silently cannot be used. With one group open the admin is
 working inside it rather than scanning the list, so the cap has nothing to do.
 
+### 5b. The group list still said "not mapped" after a run — **FIXED, 1.0.155.0** (found on site, 2026-08-18)
+
+The first real bulk run wrote all 790 rows and every group in the list beside it still read **not
+mapped**. `GroupManager` loads its mapping badges at mount and nothing told it to look again — defect 5
+one screen over, and the more dangerous of the two: the rail merely under-reports progress, while this
+says the run did not do what it just did, which invites exactly the needless second press.
+
+`BulkGroupProvisioner` now fires `onRunComplete` after its own post-run re-read, and both hosts pass a
+`refreshKey` down to `GroupManager`. **A separate signal from `busy` going false**, deliberately: "the
+run ended" is the fact that makes other screens stale, and deriving it from the falling edge of a UI
+flag ties two unrelated things together.
+
 ### 5. Step 4's tick does not refresh after a run — **FIXED, 1.0.154.0, not yet site-tested**
 
 `groupsExist` was read when the segment was picked, so the step still said *To do* after a run created
@@ -153,9 +165,11 @@ own. Now 5000 — a truncated read would have reported an existing segment's gro
 0. **Deploy 1.0.154.0 to dcistaging first** — every fix below is code, and none has been run on a site.
    Check the INSTALLED version in Site Contents, and remember dcistaging's own site-collection catalog
    takes precedence over the tenant one.
-1. One bulk run → expect ~6 created, ~790 rows, **0 failed** (the 302 existing groups log as `=`).
-   `CRS Group Map` is empty, so the dedupe has nothing to skip on this run — **press Run a second time
-   to prove it**: the correct result is 0 created, 0 written, ~790 already there.
+1. ~~One bulk run~~ **DONE 2026-08-18 on dcistaging: 0 created, 790 written, 0 failed** — all 308
+   groups already existed, so it was a mapping-only run, and 790 is the exact expected count
+   (60 units × 13 rows + 7 departments × 1 + 1 segment × 3). Navigation was correctly held throughout.
+   **The second press, which is what actually proves the dedupe, has NOT been done**: expect
+   0 created, 0 written, 790 already there. Anything approaching 1,580 rows means stop.
 2. Spot-check `CRS Group Map`: a `_HOD` row must carry the **department** term, a unit row the leaf
 3. Folder Reconciliation — first time at this scale, ~1 hour, single tab, no resume
 4. Two-account verification: upload → approve → route
