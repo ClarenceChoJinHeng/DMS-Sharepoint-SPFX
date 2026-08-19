@@ -346,6 +346,60 @@ are being refused right now.
 
 ---
 
+## THE HC VERTICAL IS VERIFIED END TO END — 2026-08-19, first time on any site
+
+Upload -> HC Approval Document -> approve -> HC Auto Route -> **HC Documents**, with
+`Highly Confidential`, `LegallyPrivileged`, Year, Document Type, Vendor, Project, Remark and
+**`Created By` preserved** as the uploader. (`Modified By` shows the flow's account for a moment and
+then settles to the uploader — the `Editor` stamp is a separate action and lands a beat later.)
+
+Getting there found six faults, and every one is the same shape: **the HC flow is a CLONE of the
+normal Auto-route, and every library reference it inherited was wrong.**
+
+| Action | Was | Should be |
+|---|---|---|
+| `Get item` | `a9342528...` (Approval Document) | `2311cd83...` (HC Approval Document) |
+| `Get source author` | Approval Document | HC Approval Document |
+| the `validateUpdateListItem` stamp | `getbytitle('Documents')` | `getbytitle('HC Documents')` |
+| the delete by item id | `a9342528...` | `2311cd83...` |
+| `Copy file` destination | `/Shared Documents/` | `/HCDocuments/` |
+| a header key | `Accept:` | `Accept` |
+
+**Each fix moved the failure one action further down the branch** — which is the signal that
+repointing is converging rather than guessing. Two of them would NOT have failed loudly:
+
+- **the stamp** — item ids are per-LIST, so pointed at `Documents` it either 404s or finds a
+  DIFFERENT document with that id and writes the metadata onto it (the same bug fixed on the upload
+  side in 1.0.170.0);
+- **the delete** — pointed at the wrong list it removes whatever holds that id there. A data-loss
+  path, not merely a failure.
+
+### `Compose 1` WORKED BY COINCIDENCE, and is now explicit
+
+It splits the source path on the literal `'ApprovalDocument/'`. That happens to work for an HC path
+only because **`HCApprovalDocument/` ends with `ApprovalDocument/`**. Rename the HC library to
+anything that does not and the split silently yields a wrong relative path — no error, wrong
+destination, green run. Changed to `'HCApprovalDocument/'`: byte-identical output today, no
+dependency on one library's name being a suffix of the other's.
+
+### Still open on the HC flow
+
+1. **The approval email links to the SOURCE library** — `/HCApprovalDocument/...` — and the flow's own
+   delete has already removed the file from there, so the link is dead on arrival. `Compose 2` needs
+   `/HCDocuments/`.
+2. **`Created` is stamped about 8 hours early** — the Malaysia offset, and confirmed on BOTH flows, so
+   it is systematic: a UTC value written as `M/d/yyyy h:mm tt`, which SharePoint then reads as local
+   time. A document uploaded before 08:00 local lands stamped on the previous DAY, and `Created` is
+   what My Submissions sorts by. Needs a timezone conversion before the stamp.
+
+### The trigger condition was already correct
+
+`@equals(triggerOutputs()?['body/{IsFolder}'], false)` was present; the 12:17 AM failures predate it.
+**Polarity: `false` on Auto-route, `true` on folder approval** — both mistakes have been made once on
+the normal pair already.
+
+---
+
 ## Then, in this order
 
 0. ~~Deploy~~ **Deploy 1.0.165.0** — everything from 1.0.159.0 onward is unreleased — every fix below is code, and none has been run on a site.
