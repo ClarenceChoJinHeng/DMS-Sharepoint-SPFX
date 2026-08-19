@@ -2472,6 +2472,55 @@ export default function FolderManager({
         entries.push({ msg: `⚠ Library access skipped — ${(e as Error).message}`, ok: false });
       }
 
+      /* ── HC GATING IS CONFIGURED ─────────────────────────────────────────────
+         Asserts, on EVERY run, that a site with HC libraries also has the
+         `hcConfidentialityLevel` config row — because without it the Highly Confidential level is
+         offered to EVERY uploader, cleared or not.
+
+         ⚠ FOUND LIVE 2026-08-19, and the mechanism is worth stating because it inverts.
+         `effectiveHcLevel` falls back to the LIBRARIES when the row is blank, and `hcAvailable()`
+         is answered by resolving those libraries BY TITLE — which SharePoint security-trims. So an
+         uncleared uploader gets `List 'HC Approval Document' does not exist`, HC reads as "not on
+         this site", `isHcLevel` is false for every level, nothing is filtered, and the level they
+         must never see is the one they are shown. A site with no HC at all produces the identical
+         answer from the identical probe, which is why nothing could tell them apart.
+
+         Setting the row fixes it outright: `effectiveHcLevel` returns a configured value regardless
+         of library visibility, so `canOfferHc` then fails on `hcAvailable` and the level is hidden.
+         The row is therefore not decoration — it is the gate — and its absence is invisible from
+         every screen. Hence an assertion rather than a note in a runbook.
+
+         Reported, never repaired: the LABEL must match the client's own term, and guessing it would
+         hide a level that is legitimately selectable on a site whose term is named differently. */
+      try {
+        if (hcAvailable()) {
+          const cfgRes = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items` +
+              `?$select=Title,SettingValue&$filter=Title eq 'hcConfidentialityLevel'&$top=1`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (!cfgRes.ok) {
+            // Fails OPEN on the read: an unreadable config list proves nothing, and a false alarm
+            // here would send an administrator chasing a row that is already there.
+            entries.push({ msg: `⚠ Could not check hcConfidentialityLevel (HTTP ${cfgRes.status}) — HC gating not verified`, ok: false });
+          } else {
+            const rows = ((await cfgRes.json()).value ?? []) as Array<{ SettingValue?: string }>;
+            const value = (rows[0]?.SettingValue ?? "").trim();
+            if (value.length === 0) {
+              entries.push({
+                msg: `⚠ HC libraries exist but the hcConfidentialityLevel config row is ${rows.length === 0 ? "MISSING" : "blank"} — the Highly Confidential level is NOT being gated, and every uploader can see it. Add a DMS Config row: Title "hcConfidentialityLevel", ConfigType "setting", SettingValue = the confidentiality term's label (e.g. "Highly Confidential").`,
+                ok: false,
+              });
+            } else {
+              entries.push({ msg: `✓ HC gating configured — "${value}" is restricted to cleared uploaders`, ok: true });
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({ msg: `⚠ HC gating check skipped — ${(e as Error).message}`, ok: false });
+      }
+
       // ── SITE-ENTRY LIBRARY STATE ──────────────────────────────────────────────
       //
       // Asserts, on EVERY run, that the site-entry group holds Read on the approved-side

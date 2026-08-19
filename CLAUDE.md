@@ -1591,6 +1591,26 @@ the two Power Automate flows do not exist yet.
   returns the KEY for an unresolved HC target, which **404s loudly** rather than resolving to the
   normal library. **Both halves resolve or neither does** — an HC approval library with no HC
   documents library accepts uploads and approvals and then has nowhere to route them.
+- **⚠ THE `hcConfidentialityLevel` ROW IS THE GATE, NOT DECORATION — without it EVERY uploader sees
+  the Highly Confidential level (found live 2026-08-19, fixed by adding the row; asserted in
+  1.0.174.0).** `effectiveHcLevel` falls back to the LIBRARIES when the row is blank, and
+  `hcAvailable()` resolves those libraries **by title** — which SharePoint **security-trims**. So an
+  uncleared uploader gets `List 'HC Approval Document' does not exist`, HC reads as *not on this
+  site*, `isHcLevel` is false for every level, `selectableLevels` filters nothing, and the one person
+  who must not see the level is the one shown it. **A site with no HC at all gives the identical
+  answer from the identical probe**, which is why nothing could tell them apart — `empty ≠ unknown`,
+  in the place where the cost is disclosure.
+  - **Setting the row fixes it outright, with no code change**: `effectiveHcLevel` returns a
+    configured value regardless of library visibility, so `canOfferHc` then fails on `hcAvailable`
+    and the level is hidden. `Title` = `hcConfidentialityLevel`, `ConfigType` = `setting`,
+    `SettingValue` = the confidentiality term's own label.
+  - **Reconciliation now ASSERTS it every run** and reports `⚠ HC libraries exist but the
+    hcConfidentialityLevel config row is MISSING — the Highly Confidential level is NOT being gated`.
+    Reported, never repaired: the label must match the client's own term, and guessing it would hide
+    a level that is legitimately selectable on a site whose term is named differently.
+  - **The exposure is the LABEL, not the documents.** With `hcLevel` blank nothing routes to HC, so
+    an uncleared uploader's file lands in the NORMAL approval library and they gain no HC access.
+    Still wrong: it tells them the classification exists and their unit may hold documents under it.
 - **THE LIBRARIES DECIDE WHETHER ROUTING IS ON; the `hcConfidentialityLevel` config row only RENAMES
   the level** (`effectiveHcLevel`). Both simpler defaults are wrong in opposite directions: defaulting
   to `Highly Confidential` unconditionally **hides** that level on every site without HC, where it is
