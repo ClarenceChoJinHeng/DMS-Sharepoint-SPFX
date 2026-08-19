@@ -958,7 +958,29 @@ export function roleFromGroupName(name: string): GroupMapRole {
  * Checked here rather than left to the server because the server's rejection is an HTTP 500
  * naming none of them, arriving after the admin has typed a name and staged members.
  */
-const ILLEGAL_GROUP_NAME_CHARS = ['"', "#", "%", "&", "*", ":", "<", ">", "?", "\\", "/", "{", "|", "}", "~"];
+/**
+ * Characters SharePoint refuses in a GROUP name.
+ *
+ * ⚠ THIS LIST WAS WRONG UNTIL 2026-08-19, and the gap was a COMMA. It held SharePoint's
+ * FILE/FOLDER illegal set — `" # % & * : < > ? \ / { | } ~` — which omits `, + = ; ' [ ]`. So
+ * `validateGroupName` passed a name SharePoint then refused, and bulk provisioning reported fifteen
+ * individual HTTP 500s that each looked like a one-off:
+ *
+ *   The group name is empty, or you are using one or more of the following invalid characters:
+ *   " / \ [ ] : | < > + = ; , ? * '
+ *
+ * Found by a term called `HR Rewards, Services, and Performance`. Invisible with short codes —
+ * `GHO_GF_TAX_APPROVER` has nothing to strip — so it only appears through the **"Same as term
+ * name"** button, where the folder code IS the term's label, punctuation and all.
+ *
+ * The union of both sets, deliberately: SharePoint's message is the authority for what it refuses,
+ * and the extra file-name characters have never been wanted in a group name either. Being stricter
+ * on a NEW name costs nothing; being lax produces a 500 the admin cannot explain from the screen.
+ */
+const ILLEGAL_GROUP_NAME_CHARS = [
+  '"', "#", "%", "&", "*", ":", "<", ">", "?", "\\", "/", "{", "|", "}", "~",
+  ",", "+", "=", ";", "'", "[", "]",
+];
 
 /** SharePoint's title limit. */
 const GROUP_NAME_MAX = 255;
@@ -1033,13 +1055,47 @@ export function validateDraft(draft: GroupMapDraft): string[] {
  * the prefix had no remaining job. See the 2026-08-04 amendment in
  * docs/superpowers/specs/2026-07-22-role-from-group-name-suffix.md.
  */
+/**
+ * Characters SharePoint refuses in a GROUP name.
+ *
+ * ⚠ THIS IS A DIFFERENT SET FROM THE FOLDER ONE, and that difference is the bug (found live
+ * 2026-08-19). `sanitizeFolderSegment` cleans an abbreviation for use as a FOLDER name; the group
+ * name is then derived from that same abbreviation chain and was never cleaned again. A COMMA is
+ * legal in a folder name and illegal in a group name, so a term called
+ * `HR Rewards, Services, and Performance` produced a folder happily and then failed group creation
+ * with HTTP 500 — fifteen groups on one segment, each reported individually and each looking like a
+ * one-off.
+ *
+ * Invisible with short codes, which is why it took this long: `GHO_GF_TAX_APPROVER` has nothing to
+ * strip. It appears only through the **"Same as term name"** button — a supported feature, and the
+ * client's own idea — where the folder code IS the term's label, punctuation and all.
+ *
+ * Verbatim from SharePoint's own error: `" / \ [ ] : | < > + = ; , ? * '`
+ */
+/**
+ * Clean one part of a group name.
+ *
+ * REMOVES rather than substitutes, matching `sanitizeFolderSegment`. Substituting an underscore
+ * would be worse here than in a folder name: `_` is the SEPARATOR this convention is built on, so
+ * `Health, Safety` becoming `Health__Safety` would read as an extra empty tier to anybody parsing
+ * the name by eye. Runs of whitespace left behind are collapsed, because `Health  Safety` is just
+ * untidy.
+ */
+export function sanitizeGroupNameSegment(raw: string): string {
+  let out = raw ?? "";
+  for (const ch of ILLEGAL_GROUP_NAME_CHARS) out = out.split(ch).join("");
+  return out.replace(/\s+/g, " ").trim();
+}
+
 export function suggestGroupName(
   segmentLabel: string,
   tierLabels: string[],
   role: GroupMapRole | "",
 ): string {
   if (role === "GLOBAL") return "GLOBAL";
-  const parts = [norm(segmentLabel), ...tierLabels.map(norm)].filter(Boolean);
+  const parts = [norm(segmentLabel), ...tierLabels.map(norm)]
+    .map(sanitizeGroupNameSegment)
+    .filter(Boolean);
   // MEMBER is the base group and carries NO suffix — that is the convention
   // roleFromGroupName reads back, so adding one here would make every base group
   // parse as an unknown role. An unpicked role ("") is the same: the admin is

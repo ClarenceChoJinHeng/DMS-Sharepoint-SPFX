@@ -5,6 +5,7 @@ import {
   roleFromGroupName,
   namingRoleFor,
   suggestGroupName,
+  sanitizeGroupNameSegment,
   suffixForRole,
   ROLE_SUFFIXES,
   LIBRARY_ENTRY_ROLE,
@@ -1191,5 +1192,54 @@ describe("roleLabel covers every role a persona can hold", () => {
 
   it("still shows an unrecognised code rather than hiding it", () => {
     expect(roleLabel("WHAT")).toBe("WHAT");
+  });
+});
+
+/**
+ * ⚠ FOUND LIVE 2026-08-19: fifteen groups failed to create on Minamas Head Office, each with its own
+ * HTTP 500 so each looked like a one-off. All three offending terms contained a COMMA:
+ *   `HR Rewards, Services, and Performance` · `Environment, Social ＆ Governance`
+ *   `Health, Safety, and Environment`
+ *
+ * A comma is legal in a FOLDER name and illegal in a GROUP name. The abbreviation is sanitized for
+ * folders, the group name is derived from that same chain, and the group character set was never
+ * applied. `validateGroupName` did not catch it either — its list was SharePoint's file/folder set.
+ *
+ * Invisible with short codes, so it surfaces only through "Same as term name".
+ */
+describe("group names are sanitized for SharePoint's GROUP character set", () => {
+  it("strips the comma that broke fifteen groups on Minamas", () => {
+    expect(sanitizeGroupNameSegment("HR Rewards, Services, and Performance"))
+      .toBe("HR Rewards Services and Performance");
+    expect(sanitizeGroupNameSegment("Health, Safety, and Environment"))
+      .toBe("Health Safety and Environment");
+  });
+
+  it("strips every character SharePoint's own error names", () => {
+    for (const ch of ['"', "/", "\\", "[", "]", ":", "|", "<", ">", "+", "=", ";", ",", "?", "*", "'"]) {
+      expect(sanitizeGroupNameSegment(`Ta${ch}x`)).toBe("Tax");
+    }
+  });
+
+  it("KEEPS the fullwidth ampersand, which is what the term store actually uses", () => {
+    // ＆ (U+FF06) is not & (U+0026) — the client's term labels carry the fullwidth form, and those
+    // groups created successfully on site. Stripping it would rename dozens of working groups.
+    expect(sanitizeGroupNameSegment("Legal ＆ Corporate Secretary")).toBe("Legal ＆ Corporate Secretary");
+  });
+
+  it("collapses the whitespace a removal leaves behind, rather than doubling the separator", () => {
+    // Substituting "_" would be worse than removing: "_" IS the separator this convention is built
+    // on, so "Health__Safety" reads as an extra empty tier to anyone parsing the name by eye.
+    expect(sanitizeGroupNameSegment("Health , Safety")).toBe("Health Safety");
+  });
+
+  it("applies through suggestGroupName, which is what both callers use", () => {
+    expect(suggestGroupName("MHO", ["Sustainability", "Health, Safety, and Environment"], "APR"))
+      .toBe("MHO_Sustainability_Health Safety and Environment_APPROVER");
+  });
+
+  it("rejects the same characters in validateGroupName, so a hand-typed name fails on screen", () => {
+    expect(validateGroupName("MHO_Health, Safety").length).toBeGreaterThan(0);
+    expect(validateGroupName("MHO_Health Safety_APPROVER")).toEqual([]);
   });
 });
