@@ -56,6 +56,24 @@ folders, and the site."* With it on, a member pressing Share does **not** grant 
 a request to a site owner. **We recommend leaving that setting on.** Our page then becomes the route
 that reaches the Head of Unit; the native button reaches an administrator. Neither one leaks.
 
+**One more setting closes the gap you asked about (2026-08-19).** You said approvals should reach the
+Head of Unit rather than a site owner or an email. By default SharePoint turns that blocked Share
+press into an **access request emailed to the site owner** — which is exactly the route you want gone.
+
+> Site Settings → Site Permissions → **Access Requests** → turn OFF
+
+With it off, a person pressing Share is simply told they cannot share this file. No email, no owner
+involved, nothing sitting in an administrator's inbox. The Requests page is then the only route that
+*works* — which is a stronger position than blocking the button, because there is nothing left to go
+around.
+
+Worth being clear about what this does and does not do:
+
+- It does **not** stop someone pressing the button; it makes pressing it do nothing.
+- Nobody loses access they already have. This only affects requests for *new* access.
+- If a person genuinely needs something and there is no request route, they will ask a colleague
+  instead of the system — so the Requests page needs to be somewhere they can find it.
+
 ### 4. External sharing is assumed to be allowed, and can be switched off in one click
 
 You asked for external recipients to be possible for now. Two separate things control it:
@@ -91,9 +109,17 @@ a unit still sees every approved document in that unit — agreed separately, an
 Both are one-time setup on the live site. Until they are done the pages load and do nothing useful:
 
 1. **A `CRS Share` permission level must be created**, containing *Manage Permissions*. Without it, a
-   Head of Unit cannot carry out a share they have approved, and the approval fails.
+   Head of Unit cannot carry out a share they have approved, and the approval fails. ⚠ **Check the
+   contents, not the name** — a level called `CRS Share` that does not actually contain *Manage
+   Permissions* fails at the moment of approval and looks like a bug in the page.
 2. **Folder reconciliation must be re-run after the update is deployed.** That is what actually gives
    Heads of Unit their new delete and share rights on the folders. Nothing takes effect until it runs.
+3. **Access Requests should be turned off** (see point 3 above), or the native Share button keeps
+   sending approvals to a site owner by email — the thing this feature exists to replace.
+
+On the rehearsal site, steps 1 and 2 were completed by the reconciliation run of **2026-08-19**: the
+log shows `→ CRS Delete` and `→ CRS Share` granted to every Head of Unit group, which also proves the
+permission level exists.
 
 The **Requests** list itself is created automatically the first time an administrator opens the
 Requests page.

@@ -464,6 +464,33 @@ on the folder. The user keeps full upload access. Reconciliation only ever *adds
 there is no revoke anywhere in the run. **Removing the user from the SP group is the only real
 revocation.**
 
+### ⚠ Turn OFF Access Requests — or approvals keep going to a site owner by email
+
+**Site Settings → Site Permissions → Access Requests → off.** Added 2026-08-19 on the client's
+instruction that a share should be approved *by the Head of Unit*, not by the owner and not by email.
+
+A PIC holds only **Read** on `Documents` (the `UPL` downgrade on approved-side libraries), so they
+cannot share. Pressing SharePoint's own **Share** button therefore falls through to SharePoint's
+fallback: **an access request emailed to the site owner.** That is the exact route the CRS Requests
+feature exists to replace, and leaving it on means both routes are live and the wrong one is the more
+discoverable.
+
+With it off, the native button simply tells the person they cannot share this file — no email, no
+owner, nothing in an administrator's inbox. **`CRS Requests` then becomes the only route that works**,
+which is a stronger position than intercepting the button (impossible — see
+`2026-07-23-share-guard-retirement.md`, settled and not re-openable): there is nothing left to walk
+around.
+
+Keep *"Only site owners can share files, folders, and the site"* **on** as well. The two settings do
+different jobs: one stops a member's share from granting anything, the other stops the leftover
+request reaching an owner.
+
+**This does not revoke anything already granted**, and it does not stop the button being pressed — it
+makes pressing it inert. Anyone with an existing share keeps it.
+
+Verify after the change: sign in as a PIC, press Share on an approved document, and confirm the
+message is a plain refusal with no "your request has been sent".
+
 ### Items with unique permissions bypass library grants
 
 Check the **People** tab and **Links** tab under Manage access on each page. Pages shared
