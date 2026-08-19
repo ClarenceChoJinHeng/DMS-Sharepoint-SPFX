@@ -773,6 +773,29 @@ Working as of 2026-08-08, verified with a guest uploader and an admin approver:
 > `Author` was unwritable. Read the action's raw **Inputs** — the colon is visible there and
 > nowhere else. And **never** conclude a field is unwritable from a clean response: re-read the item.
 
+## ⚠ DRAFT ISOLATION WAS TURNED OFF ON 2026-08-19, AT THE CLIENT'S REQUEST
+**Draft Item Security on ALL libraries is now *"Any user who can read items"*.** This reverses the
+approval-library half of the 2026-08-08 design below, which is otherwise still the record of how the
+mechanism works — read it for the reasoning, not for the current state.
+
+- **Every uploader in a unit now sees every other uploader's PENDING and REJECTED files.** The
+  peer-isolation behaviour verified on site the same afternoon (a peer PIC saw an empty folder) is
+  deliberately gone.
+- **The boundary the client actually wants is the HC one**, in their words: `GHO_GF_TAX_UPLOADER` must
+  not see HC files or reach the HC libraries; only `GHO_GF_TAX_UPLOADER_HIGHLY_CONFIDENTIAL` can. That
+  boundary is untouched — it is folder ACLs and `LIBRARY_ROLES`, not draft security — and was verified
+  on 2026-08-19.
+- **BOTH folder-approval flows are now unnecessary and are being turned OFF.** Their only purpose was
+  that a pending folder created by one uploader was invisible to everyone else, so the next PIC could
+  not reach their own file inside it. With drafts visible to any reader that cannot happen. ⚠ Turn
+  them off rather than leaving them failing: a flow that errors on every folder creation burns the
+  daily quota, and an exhausted quota means the next real approval is not routed, **silently**.
+- **Exposure is still bounded by the folder ACLs.** Only roles in `LIBRARY_ROLES.Staging` can open an
+  approval library at all, so this widens visibility to the unit's uploaders and approver — nobody
+  else, and nobody outside the unit.
+- **Client-facing doc updated**: `docs/client/document-visibility-within-a-unit.md` no longer says
+  drafts are private. That sentence was the one that landed in meetings, so it must not survive.
+
 ## Per-uploader file isolation — approval library YES, Documents NO (2026-08-08)
 Spec `2026-08-08-auto-route-flow-and-draft-isolation.md`. This **reverses** the 2026-08-06
 "out of scope" decision for the approval library, and **confirms** it for Documents.

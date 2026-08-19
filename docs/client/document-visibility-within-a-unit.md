@@ -10,13 +10,26 @@ Written to be shown or read aloud as-is.
 
 ## The short answer
 
-**Unfinished work is already private. Approved documents are shared within the unit.**
+**Everything is shared within the unit — including work still waiting for approval.**
+
+Changed **2026-08-19** at the client's request. Until then, pending and rejected submissions were
+visible only to their author and the Head of Unit. They are now visible to everyone who can open the
+library for that unit.
 
 |  | Approval Document | Documents |
 |---|---|---|
-| Your **pending** submission | only you and your Head of Unit | — |
-| Your **rejected** submission | only you and your Head of Unit | — |
+| Your **pending** submission | you, your Head of Unit, **and the other uploaders in your unit** | — |
+| Your **rejected** submission | you, your Head of Unit, **and the other uploaders in your unit** | — |
 | An **approved** document | *(removed — it has moved)* | everyone in the unit |
+
+**Nobody outside the unit sees any of it.** The people who can open a unit's approval library are its
+uploaders and its Head of Unit — nobody else, at any stage. And the Highly Confidential libraries stay
+separate: only people in the unit's **Highly Confidential** uploader group can open those at all. A
+plain uploader in the same unit cannot see a Highly Confidential document, or the library it lives in.
+
+Why the change: a folder created by one uploader used to be invisible to their colleagues, so the
+next person could not reach their own file inside it. Making everything visible within the unit fixes
+that directly, and removes two background processes that existed only to work around it.
 
 So a colleague in your unit cannot see what you are still working on, what you submitted
 yesterday, or anything that was sent back to you. They can see what has been **approved** — and an
@@ -76,9 +89,11 @@ always means they are doing genuinely separate work.
 
 ## Summary for a meeting
 
-> Drafts and rejected documents are already private to the person who uploaded them. Approved
-> documents are shared within the unit, because the unit needs to be able to find its own records.
-> Making approved documents private per person is possible, but only by giving every person their
-> own folder inside each unit — which changes the filing structure from unit-based to person-based.
-> If two people must not see each other's work, the supported answer is to put them in separate
-> units.
+> Everything in a unit is shared within that unit — work in progress as well as approved documents —
+> because the unit needs to be able to find its own records. Nobody outside the unit sees any of it,
+> and Highly Confidential documents stay separate: only the people cleared for them can open those
+> libraries at all.
+>
+> Making documents private per person is possible, but only by giving every person their own folder
+> inside each unit — which changes the filing structure from unit-based to person-based. If two people
+> must not see each other's work, the supported answer is to put them in separate units.
