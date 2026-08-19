@@ -222,42 +222,79 @@ on the same group is still applied.
 
 ---
 
-## ⚠ PAGE ACCESS WAS NEVER GRANTED TO 56 OF 60 UNITS — FIXED 1.0.171.0, NOT SITE-TESTED
+## PAGE ACCESS IS DERIVED FROM FOLDER ROLES — 1.0.171.0, NOT SITE-TESTED
 
-Found 2026-08-19, while reading the reconciliation log during the from-scratch rebuild. The
-`Applying page access…` phase reported eight grants:
+⚠ **This entry replaces one written earlier today that was WRONG, and the mistake is the lesson.**
+The `Applying page access…` phase was read off a **progress panel at 0%**, showing eight
+`upload-form.aspx` grants, and that was taken as the complete set — concluding that 56 of 60 units
+were locked out. The finished log showed **~120 grants on `upload-form.aspx`** (every `_UPLOADER` and
+`_APPROVER`) and **~60 on `approvaldocument.aspx`**. Nobody was locked out. **A mid-run progress
+panel is not a result**, and a screenshot of one is evidence of what had happened by then and nothing
+more.
 
-```
-✓ upload-form.aspx → GHO_GCA_EG_APPROVER (Read, page scope)
-✓ upload-form.aspx → GHO_GCA_EG_UPLOADER (Read, page scope)
-… six more, all GCA units
-```
+What is genuinely true, and is why the change is still worth having:
 
-Those eight are the rows **an administrator wrote by hand** while diagnosing an AccessDenied on
-2026-08-18. Nothing else had ever created a `Scope = Page` row, because nothing creates them: bulk
-provisioning writes Folder-scope rows, the guided flows never mention page access, Group Management
-does not offer it. **So every uploader and approver outside those four units was denied the upload
-form**, on a site whose folder ACLs were completely correct.
+- **Only `PageAccess.tsx` writes a `Scope = Page` row.** Bulk provisioning writes Folder rows, the
+  guided flows never mention page access, Group Management does not offer it. Those ~180 rows exist
+  because an administrator went to that screen and selected every group.
+- **So a unit or segment added later gets folders, groups and no page**, with nothing reporting it.
+  That is a future AccessDenied nobody will connect to the unit they onboarded months earlier.
+- **`My-Submissions.aspx` and `Requests.aspx` had no rows at all** and were therefore still
+  inheriting — openable by anyone who can open the site.
 
-Fixed by deriving page access from the roles groups already hold at folder scope — spec
-`docs/superpowers/specs/2026-08-19-derived-page-access-design.md`, rules in `shared/pageGrants.ts`
-(pure, 34 tests). **No list change, no row change:** redeploy and re-run reconciliation.
+Spec: `docs/superpowers/specs/2026-08-19-derived-page-access-design.md`; rules in
+`shared/pageGrants.ts` (pure, 34 tests). No list change, no row change.
 
-**What the next run should show**, and this is the check:
+**⚠ THE FIRST RUN AFTER DEPLOY IS NOT A NO-OP.** Reconciliation will break inheritance on
+`My-Submissions.aspx` and `Requests.aspx` and restrict them — to `UPL`, and to `UPL`+`APR`. Correct
+by policy, and a visible change to announce rather than discover.
 
-- `Page access: 4 page(s) to assert, from 308 group(s) with roles and 8 mapping row(s)`
-- ~120 grants on `upload-form.aspx` (`from UPL` / `from APR`), ~60 on `approvaldocument.aspx`,
-  and the same again for `my-submissions.aspx` and any `requests.aspx`
-- the eight hand-made rows appearing as **derived**, not as `mapping row` — they are now redundant
-  rather than load-bearing, and may be deleted
-- **no `⚠ restricted, but no group holds …`** line. That warning is the state the site was in for
-  two days with nothing reporting it; seeing it now means the Group Map read came back short.
+**What the run should show:**
+
+- `Page access: N page(s) to assert, from 308 group(s) with roles and ~180 mapping row(s)`
+- the existing grants appearing as `from UPL` / `from APR` rather than `mapping row` — they are now
+  redundant and the rows may be deleted
+- **no `⚠ restricted, but no group holds …`** line; that warning means the Group Map read came back
+  short
+- **no `removed …` line** on the upload form or approval queue. One there means a group holds the
+  page without holding the role, which is worth understanding before accepting.
 
 **It also revokes**, at page scope only: a group whose mapping rows are deleted loses the page on the
-next run, each removal named in the log. ⚠ Do **not** extend that to library or folder scope —
-SharePoint's automatic **Limited Access** entries live in those permission lists, and stripping
-"anything not intended" there would take every group's folder access away on a run that reported
-success.
+next run, each removal named. ⚠ Do **not** extend that to library or folder scope — SharePoint's
+automatic **Limited Access** entries live in those permission lists, and stripping "anything not
+intended" there would take every group's folder access away on a run that reported success.
+
+---
+
+## THE FROM-SCRATCH REBUILD PASSED — 2026-08-19
+
+All four libraries built from nothing after the administrator deleted every folder and touched no
+list. **4,552 log lines, 268 warnings, ZERO errors.**
+
+- **The HC pair provisioned correctly for the first time on any site.** `HC Approval Document` grants
+  only `_APPROVER` and `_UPL_HIGHLY_CONFIDENTIAL`; `HC Documents` adds `_VIEWER_HIGHLY_CONFIDENTIAL`,
+  `_HOD` and `_SEGVIEW`. **No plain `_UPLOADER`, no `_EMPLOYEE` in either** — the 2026-08-17
+  clearance model, verified rather than assumed. Both got `CRS Folder` and the approval side got
+  `approved`; the previous run's two content-type warnings are gone.
+- **`COSEC` did not come back**, confirming it was a folder with no term behind it, inheriting the
+  segment browse corridor. Not a permissions bug — a folder the system did not know about. That is
+  register item **#19** and it is unchanged by the rebuild: the next deleted term or re-coded
+  abbreviation makes another one.
+- **Folder Map rows were remapped** (`↻ remapped … stale folder id replaced with …`) for every
+  folder, as expected after a delete-and-rebuild.
+- The 268 warnings are the `GHO_SEGVIEW role DEL / SHARE not applied` pair per folder — correct, and
+  correctly worded since 1.0.165.0.
+
+Two cosmetic things found while reading it, one fixed:
+
+- **`Staging (0)` in the log filter — FIXED 1.0.172.0.** The tab matched the literal `"Staging"`
+  against messages that say `Approval Document`, so a run that built hundreds of folders there
+  reported zero. Gotcha #12 in the one place whose job is telling you what happened, and a `0` reads
+  as "that library was skipped". Tabs are now driven by `reconLibs()` + `libDisplayName()`, so the HC
+  pair gets its own tabs and `Documents` no longer swallows `HC Documents`.
+- **A duplicate `→ Read` line per approver group** on the approved-side libraries — `APR` and
+  `UPLHC` both downgrade to Read there, so the grant is issued twice. Harmless, one wasted request
+  per folder per group, not yet collapsed.
 
 ---
 

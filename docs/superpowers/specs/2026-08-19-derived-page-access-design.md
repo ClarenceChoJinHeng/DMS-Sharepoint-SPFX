@@ -15,11 +15,22 @@
 provisioning writes **Folder**-scope rows; the guided flows never mention page access; Group
 Management does not offer it.
 
-So on dcistaging, after 308 groups and 790 mapping rows, **8 groups could open the upload form** —
-the four GCA units the administrator had unblocked **by hand** while diagnosing an AccessDenied. The
-other 56 units' uploaders and approvers were locked out of the form they exist to use.
+**⚠ THE ORIGINAL FRAMING OF THIS SPEC WAS WRONG, AND THE CORRECTION IS WORTH KEEPING.** It was
+written from a progress screenshot showing eight `upload-form.aspx` grants, read as the complete set;
+the full log showed ~120 — every `_UPLOADER` and `_APPROVER`. The administrator had granted them on
+**Page Access**, selecting all the groups. So nobody was locked out, and **a mid-run progress panel is
+not a result.** The premise was checked only after the code was written.
 
-Nothing reported it. The run log said, correctly, `Page access: 8 mappings applied`.
+What remains true, and is the actual justification:
+
+- **Nothing writes a `Scope = Page` row except `PageAccess.tsx`.** Bulk provisioning writes Folder
+  rows; the guided flows never mention page access; Group Management does not offer it. The rows
+  exist only because a person went to that screen and made them.
+- **A unit or segment added later therefore gets folders, groups and no page.** Nothing reports it,
+  and it appears months later as one person's AccessDenied — exactly how 2026-08-17's hour of
+  diagnosis started.
+- **`My-Submissions.aspx` and `Requests.aspx` had no rows at all**, so they were still inheriting:
+  openable by anyone who can open the site.
 
 **This is the fourth instance of one structural gap**, and the pattern is now unmistakable:
 
@@ -28,7 +39,7 @@ Nothing reported it. The run log said, correctly, `Page access: 8 mappings appli
 | Inverted site-entry library grant (2026-08-16) | library-scope rows | no row |
 | HC libraries inheriting (2026-08-17) | library-scope rows | no row |
 | Admin pages readable by uploaders (2026-08-17) | page rows | no row (`roles: []`) |
-| **Upload form denied to uploaders (2026-08-19)** | **page rows** | **no row** |
+| **A new unit's page access (2026-08-19)** | **page rows** | **no row until someone makes one** |
 
 Every one was fixed the same way: **assert the required state every run** instead of deriving it
 from the presence of a grant row. This does that for the pages that have a role policy.
@@ -48,7 +59,8 @@ intended(page) = { g : roles(g) ∩ derivedRolesForPage(page) ≠ ∅ }
 deliberately ignored: a group holding `UPL` **anywhere** needs the upload form. The page is not
 scoped to a unit and cannot be.
 
-For dcistaging that yields, from the same 790 rows already read:
+For the rehearsal site that yields, from the same 790 rows already read — matching the ~180 grants
+an administrator had made by hand, and adding the two pages that had none:
 
 | Page | Roles | Groups |
 |---|---|---|
@@ -176,7 +188,7 @@ A **warning, not a refusal.** An empty set is correct on a site with no groups y
 still breaks inheritance and restores Owners — the page is simply administrator-only until groups
 exist. Refusing would leave it inheriting, i.e. readable by every site member, which is worse.
 
-This is the exact state dcistaging was in for two days with nothing reporting it.
+Nothing reports this today, on any site.
 
 ---
 
@@ -217,8 +229,13 @@ would under-derive and then strip grants that should stay. Backlog.
 
 **None.** No column, no list, no row change. Redeploy and re-run reconciliation.
 
-The 8 hand-made Page rows on dcistaging may stay or be deleted; the outcome after a run is identical,
-because derivation covers those groups and the merge dedupes on `GroupId`.
+The ~180 hand-made Page rows may stay or be deleted; the outcome after a run is identical, because
+derivation covers those groups and the merge dedupes on `GroupId`.
+
+⚠ **BUT THIS IS NOT A NO-OP ON A LIVE SITE.** `My-Submissions.aspx` and `Requests.aspx` currently
+have no rows and therefore still INHERIT — anyone who can open the site can open them. The first run
+after deploying breaks their inheritance and restricts them to `UPL` and to `UPL`+`APR`. That is the
+policy working as designed, and it is a visible change to announce rather than discover.
 
 ---
 

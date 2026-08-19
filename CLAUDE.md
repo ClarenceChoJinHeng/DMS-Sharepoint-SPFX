@@ -862,11 +862,17 @@ Department view-and-delete only. `PERSONAS` in `groupMapModel.ts` is the source 
     at import, and the list would stop matching silently.
 - **PAGE ACCESS IS DERIVED FROM FOLDER ROLES SINCE 1.0.171.0 — nothing had ever created a Page row.**
   Spec `2026-08-19-derived-page-access-design.md`; rules in `shared/pageGrants.ts` (pure, 34 tests).
-  Reconciliation granted a page only to groups holding a **`Scope = Page`** row, and no tool writes
-  one: bulk provisioning writes FOLDER rows, the guided flows never mention page access, Group
-  Management does not offer it. So on dcistaging, after 308 groups and 790 rows, **8 of ~120
-  uploader/approver groups could open `Upload-Form.aspx`** — the four units an admin had unblocked by
-  hand while diagnosing an AccessDenied. The log said `8 mappings applied`: true, and it told nobody.
+  Reconciliation granted a page only to groups holding a **`Scope = Page`** row, and **only
+  `PageAccess.tsx` writes one**: bulk provisioning writes FOLDER rows, the guided flows never mention
+  page access, Group Management does not offer it. So the rows exist only where a person made them —
+  and **a unit or segment added later gets folders, groups and no page**, with nothing reporting it,
+  surfacing months on as one person's AccessDenied. `My-Submissions.aspx` and `Requests.aspx` had no
+  rows at all on the rehearsal site and were therefore still INHERITING: openable by anyone who could
+  open the site.
+  - **⚠ THIS SECTION FIRST CLAIMED "8 of 120 groups could open the upload form", AND THAT WAS WRONG.**
+    It came from a **progress panel read at 0%** — eight lines of a list of ~120 — taken as the
+    finished result. **A mid-run progress panel is not a result.** Kept here because the premise was
+    verified only after the code was written.
   - **FOURTH INSTANCE OF ONE STRUCTURAL GAP** — the mechanism is driven by grant ROWS and the thing
     needing the grant has none (the others: the inverted site-entry library grant, the HC libraries
     inheriting, the admin pages readable by uploaders). All four fixed the same way: **assert the

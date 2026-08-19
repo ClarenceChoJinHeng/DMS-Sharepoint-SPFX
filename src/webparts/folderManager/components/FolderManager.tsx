@@ -564,7 +564,9 @@ type GroupPick      = { id: string; displayName: string };
 type ExistingAssign = { uid: string; principalId: number; title: string; roleDefId: number; kept: boolean };
 type PendingAssign  = { uid: string; group: GroupPick; roleDefId: number };
 type LogEntry       = { msg: string; ok: boolean };
-type LogTab         = "All" | "Documents" | "Staging" | "Warnings" | "Errors";
+// A library tab is keyed by the LIBRARY TITLE, resolved at run time, because the titles are
+// site-specific ("Approval Document", once "Staging") and the HC pair may not exist at all.
+type LogTab         = string;
 
 // Permission state now lives directly on the folder node so a single "Update"
 // commit can apply renames, new-folder creation, and permission edits together.
@@ -4769,14 +4771,35 @@ export default function FolderManager({
         // An entry naming both libraries belongs to both; one naming neither (the
         // prune, orphan repair and site-entry passes) is reachable only from All,
         // which is why All exists and is the default.
-        const forLib = (lib: string): LogEntry[] => log.filter((e) => e.msg.indexOf(lib) !== -1);
-        const tabs = [
+        /* ⚠ THE TABS WERE HARDCODED "Documents" AND "Staging", AND `Staging` MATCHED NOTHING.
+           Found live 2026-08-19: a from-scratch run that built hundreds of `Approval Document/…`
+           folders reported `Staging (0)`. The library was renamed in 2026-08-06 and this literal
+           silently stopped matching — gotcha #12 again, in the one place whose whole job is telling
+           you what happened. A zero here reads as "that library was skipped", which on a
+           reconciliation report is worse than no tab at all. It also had no HC tabs, so half the
+           libraries were reachable only from All.
+
+           `Documents` is a SUBSTRING of `HC Documents`, so a plain indexOf would file every HC line
+           under Documents as well. An occurrence preceded by "HC " belongs to the HC library and to
+           that one only. */
+        const mentionsLib = (msg: string, name: string): boolean => {
+          const hc = name.indexOf("HC ") === 0;
+          let i = msg.indexOf(name);
+          while (i !== -1) {
+            if (hc || !(i >= 3 && msg.slice(i - 3, i) === "HC ")) return true;
+            i = msg.indexOf(name, i + 1);
+          }
+          return false;
+        };
+        const forLib = (lib: string): LogEntry[] => log.filter((e) => mentionsLib(e.msg, lib));
+        const tabs: Array<{ key: string; rows: LogEntry[] }> = [
           { key: "All", rows: log },
-          { key: "Documents", rows: forLib("Documents") },
-          { key: "Staging", rows: forLib("Staging") },
+          // Driven by reconLibs(), so a site without the HC pair shows two library tabs and a site
+          // with it shows four — never a tab for a library that does not exist.
+          ...reconLibs().map((l) => ({ key: libDisplayName(l), rows: forLib(libDisplayName(l)) })),
           { key: "Warnings", rows: warnings },
           { key: "Errors", rows: errors },
-        ] as const;
+        ];
         const active = tabs.find((t) => t.key === logTab) ?? tabs[0];
         const colourOf = (e: LogEntry): string =>
           isError(e) ? "#d13438" : isWarning(e) ? "#b45309" : "#0f6c3f";
