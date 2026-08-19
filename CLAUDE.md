@@ -132,6 +132,34 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
   2026-07-29 (spec `2026-07-29-leaf-only-upload-authorization-design.md`) after it refused a
   correctly provisioned uploader with "your account isn't fully provisioned to upload".
   See memory `dms-group-model-per-role-per-library`.
+- **⚠ ONE TERM, ONE FOLDER MAP ROW — enforced since 1.0.173.0, and its absence took a whole site's
+  uploads down (2026-08-19).** Reconciliation indexed the map with
+  `mapByTerm.set(r.termGuid.toLowerCase(), r)`, and **`set` OVERWRITES** — so a term with two rows
+  collapsed to the last one. The repair pass repointed THAT row at the rebuilt folder and never saw
+  the other, which went on pointing at a folder the same run had just deleted.
+  - **The symptom is a silent upload REFUSAL, and it names the wrong cause.** `lookupFolderMapping`
+    reads `$top=1` and takes whichever row comes first; when that is the stale one, `GetFolderById`
+    answers 404, `probeFolderUploadAccess` returns `missing` — deliberately CONCLUSIVE, because
+    security trimming answers 404 too — the path is dropped, and the uploader is told *"your unit
+    isn't ready to receive uploads yet… run folder reconciliation"*. Reconciliation is what created
+    the state. **56 of 67 terms were like this and every uploader on the site was refused**, while
+    the folder existed and `EffectiveBasePermissions` on it read `AddListItems` granted.
+  - **`writeFolderMapping` UPSERTS now.** It was an unconditional POST called only when the
+    in-memory index missed, so one missed lookup — a braced GUID, an interrupted run — created a
+    permanent duplicate. **A failed existence check REFUSES rather than creating:** a run that
+    writes nothing is repaired by the next one; a run that writes a second row is repaired by
+    nothing.
+  - **Reconciliation now reports and removes duplicates**, probing each row's folder and deleting
+    only those whose folder is gone — **naming each one**. `chooseKeeper` in
+    `shared/folderMapDuplicates.ts` (pure, 14 tests) **fails CLOSED against this codebase's habit**:
+    if NO row resolves it deletes nothing and says so, because a wrong deletion takes a unit's
+    upload path away and the person who discovers it is an uploader.
+  - **Keys are `normalizeTermGuid`, never `toLowerCase`.** The upload form already normalised
+    (braces and whitespace as well as case); reconciliation did not, so the two halves could
+    disagree about whether a term was mapped — a second route to the same duplication. Not what
+    fired on 2026-08-19, where every stored GUID was already bare.
+  - **DELETE-AND-REBUILD IS A SUPPORTED RECOVERY PATH** — deleting every folder and re-running is
+    how a site is cleaned of strays — so it must not end with an upload form that refuses everyone.
 - **Folder routing:** the deepest **permissioned** level = the **Unit** folder, resolved by
   UniqueId via DMS Folder Map. Everything below it is **ensure-created on demand** and inherits the
   Unit's ACL — nothing below Unit breaks inheritance (client decision, 2026-08-06).

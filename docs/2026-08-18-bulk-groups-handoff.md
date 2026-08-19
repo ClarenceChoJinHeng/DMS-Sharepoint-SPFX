@@ -298,6 +298,54 @@ Two cosmetic things found while reading it, one fixed:
 
 ---
 
+## ⚠ DUPLICATE FOLDER MAP ROWS REFUSED EVERY UPLOAD — FIXED 1.0.173.0, site cleaned 2026-08-19
+
+Found immediately after the rebuild, on the first account tested. An approver opened the upload form
+and got **"Your unit isn't ready to receive uploads yet — your administrator needs to run folder
+reconciliation"**, hours after reconciliation had run twice, cleanly.
+
+It was not permissions. `EffectiveBasePermissions` on their unit folder read `Low = 1006834303` —
+`AddListItems` granted.
+
+**`CRS Folder Map` held 123 rows for 67 terms. 56 terms had two.** One row per pair pointed at the
+rebuilt folder; the other still pointed at the folder deleted before the rebuild. `lookupFolderMapping`
+reads `$top=1`, so each upload was a coin flip: land on the stale row and `GetFolderById` 404s,
+`probeFolderUploadAccess` returns `missing` (conclusive by design — security trimming answers 404
+too), the path is dropped, and the form blames reconciliation for a state reconciliation created.
+
+**Why nothing caught it:** the index was `mapByTerm.set(r.termGuid.toLowerCase(), r)`, and `set`
+overwrites. The duplicates PREDATE the rebuild; the repair pass healed the last row of each pair and
+never saw the other. Evidence: the surviving rows carry etag `2` (created, then remapped), the stale
+ones etag `1` (created, never touched again).
+
+**Site recovery (already done):** a console script grouped rows by term, probed each
+`FolderUniqueId`, and deleted only rows whose folder 404s **and** whose term still had a live row —
+56 deleted, 0 failed. Verified after: `67 rows · 67 terms · 0 duplicated · 0 pointing at a missing
+folder`.
+
+**Code fix, 1.0.173.0** — `shared/folderMapDuplicates.ts` (pure, 14 tests):
+
+- reconciliation **detects duplicates, probes each row, and deletes the dead ones by name**;
+- `chooseKeeper` **fails CLOSED** — if no row resolves it deletes nothing and reports, because a
+  wrong deletion takes a unit's upload path away and an uploader is who finds out;
+- `writeFolderMapping` **upserts**, and **refuses** if it cannot check for an existing row;
+- keys use `normalizeTermGuid`, matching the upload form, closing the braces/whitespace route.
+
+**The rule this establishes: delete-and-rebuild is a supported recovery path.** Deleting every folder
+and re-running is how a site is cleaned of strays, so it must never end with an upload form that
+refuses everyone.
+
+**Worth checking on any site before testing:**
+
+```
+/_api/web/lists/getbytitle('CRS Folder Map')/items?$select=Id,Title,TermGuid,FolderUniqueId&$top=5000
+```
+
+Row count should equal term count. More rows than terms means duplicates, and at least some uploaders
+are being refused right now.
+
+---
+
 ## Then, in this order
 
 0. ~~Deploy~~ **Deploy 1.0.165.0** — everything from 1.0.159.0 onward is unreleased — every fix below is code, and none has been run on a site.

@@ -6,6 +6,8 @@ import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
 import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
 // The SAME policy the admin screens filter with, so a page cannot be admin-only in the UI and wide
 // open in SharePoint. See docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md.
+import { normalizeTermGuid } from "../../../shared/segmentReadiness";
+import { groupDuplicateRows, chooseKeeper } from "../../../shared/folderMapDuplicates";
 import { policyForPage, derivedRolesForPage } from "../../../shared/pageAccessPolicy";
 import { groupRolesById, intendedPageGroups, groupsToRemove } from "../../../shared/pageGrants";
 import { EVENT } from "../../../shared/auditLog";
@@ -3057,9 +3059,77 @@ export default function FolderManager({
       // Full rows, not just term GUIDs: the presence of a row is NOT proof the row is
       // still correct, so each one gets verified below. See the folder-map-integrity spec.
       const mapRows = await loadFolderMapRows(context.spHttpClient, siteUrl);
+      /* ⚠ DUPLICATES USED TO VANISH HERE, and it cost a site (2026-08-19). This was
+         `mapByTerm.set(r.termGuid.toLowerCase(), r)` over every row, and `set` OVERWRITES — so a
+         term with two rows collapsed to the last one. The repair pass below repointed THAT row at
+         the rebuilt folder and never saw the other, which went on pointing at a folder this same
+         run had just deleted. Nothing reported it and nothing could ever fix it.
+
+         The cost is a silent upload REFUSAL: `lookupFolderMapping` reads $top=1, so it takes
+         whichever row comes first; when that is the stale one the probe gets 404, which
+         `probeFolderUploadAccess` treats as conclusive (security trimming answers 404 too), the
+         path is dropped, and the uploader is told their unit is not ready. Their folder exists and
+         their ACL is correct. 56 of 67 terms were in that state and every uploader was refused.
+
+         Normalised with `normalizeTermGuid`, not a bare toLowerCase: the upload form's own filter
+         strips braces and whitespace as well as case, and two halves of the system disagreeing
+         about what a term GUID is would create duplicates by a second route. */
+      const dupeGroups = groupDuplicateRows(mapRows);
+      if (dupeGroups.length > 0) {
+        setReconPhase("Repairing duplicate folder-map rows…");
+        // Probe every candidate ONCE. Only a positive answer counts as alive: a throttle or a
+        // permission error must never put an id in this set, or a good row is deleted on the
+        // strength of a failed request.
+        const liveIds = new Set<string>();
+        for (const g of dupeGroups) {
+          for (const r of g.rows) {
+            if (!r.folderUniqueId) continue;
+            const probe = await probeFolderById(context.spHttpClient, siteUrl, r.folderUniqueId);
+            if (probe.folder) liveIds.add(r.folderUniqueId);
+          }
+        }
+        let removed = 0;
+        for (const g of dupeGroups) {
+          const verdict = chooseKeeper(g.rows, liveIds);
+          if (!verdict) continue;
+          if (!verdict.confident) {
+            /* Nothing resolved, so which row is right is not knowable — REPORTED and left alone.
+               A wrong deletion here takes a unit's upload path away, and the person who finds out
+               is an uploader. The repair pass below repoints the survivor. */
+            entries.push({
+              msg: `  ⚠ ${verdict.keep.title}: ${g.rows.length} folder-map rows and none of their folders could be found — none deleted; the row will be repointed below`,
+              ok: false,
+            });
+            continue;
+          }
+          for (const dead of verdict.remove) {
+            try {
+              await deleteFolderMapRow(context.spHttpClient, siteUrl, dead.itemId);
+              removed++;
+              // NAMED, never counted silently — the same rule as the admin page lockdown.
+              entries.push({
+                msg: `  ↳ ${dead.title}: removed a duplicate folder-map row pointing at a missing folder (${dead.folderUniqueId})`,
+                ok: true,
+              });
+            } catch (e) {
+              entries.push({
+                msg: `  ✗ ${dead.title}: could not remove its duplicate row — uploads to this unit may still be refused (${(e as Error).message})`,
+                ok: false,
+              });
+            }
+          }
+        }
+        entries.push({
+          msg: `Folder map: ${dupeGroups.length} term(s) had more than one row — ${removed} stale row(s) removed`,
+          ok: removed > 0 || dupeGroups.length === 0,
+        });
+        // Re-read, so everything below sees the repaired list rather than the one we just changed.
+        mapRows.length = 0;
+        mapRows.push(...(await loadFolderMapRows(context.spHttpClient, siteUrl)));
+      }
       const mapByTerm = new Map<string, FolderMapRow>();
       for (const r of mapRows) {
-        if (r.termGuid) mapByTerm.set(r.termGuid.toLowerCase(), r);
+        if (r.termGuid) mapByTerm.set(normalizeTermGuid(r.termGuid), r);
       }
       // Each folder's name BEFORE this run, snapshotted once.
       //
@@ -3401,7 +3471,7 @@ export default function FolderManager({
         // UniqueId is untouched by a rename, so the verification step later treats
         // the row as valid and would otherwise leave FolderUrl permanently stale —
         // it self-heals only when the folder is missing.
-        const row = mapByTerm.get(t.termGuid.toLowerCase());
+        const row = mapByTerm.get(normalizeTermGuid(t.termGuid));
         if (newStagingUrl && row) {
           await updateFolderMapping(context.spHttpClient, siteUrl, row.itemId, {
             folderUniqueId: row.folderUniqueId,
@@ -3553,7 +3623,7 @@ export default function FolderManager({
             }
             // Map Staging term folders only (the segment container has no term).
             if (lib === "Staging" && t.termGuid) {
-              const existingRow = mapByTerm.get(t.termGuid.toLowerCase());
+              const existingRow = mapByTerm.get(normalizeTermGuid(t.termGuid));
               if (!existingRow) {
                 // Unmapped term → create the row.
                 const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);

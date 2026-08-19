@@ -213,12 +213,50 @@ export async function resolveFolderByPath(
   return probe.folder;
 }
 
-/** Create one mapping row. */
+/**
+ * Write the mapping row for a term — UPDATING an existing row rather than adding a second.
+ *
+ * ⚠ THIS USED TO BE AN UNCONDITIONAL POST, and that is how a term ends up with two rows. The caller
+ * only calls it when its in-memory index has no entry for the term, so a single missed lookup —
+ * a GUID stored with braces, a row written between the index being built and this call, an
+ * interrupted run — created a permanent duplicate that nothing afterwards reported or repaired.
+ * The consumer reads $top=1, so from then on each upload was a coin flip between the good row and
+ * a 404 that the form reports as "your unit isn't ready to receive uploads yet".
+ *
+ * The lookup here is the same $filter the reader uses, so the two cannot disagree about which row
+ * belongs to a term. A failed lookup does NOT fall back to creating: a duplicate is exactly what
+ * this exists to prevent, and a run that writes nothing is repaired by the next one, while a run
+ * that writes a second row is not repaired by anything.
+ */
 export async function writeFolderMapping(
   spHttpClient: SPHttpClient,
   siteUrl: string,
   m: FolderMapping,
 ): Promise<void> {
+  const list = await mapList(spHttpClient, siteUrl);
+  const existing: SPHttpClientResponse = await spHttpClient.get(
+    `${siteUrl}/_api/web/lists/getbytitle('${list}')/items` +
+      `?$select=Id&$filter=TermGuid eq '${encodeURIComponent(m.termGuid)}'&$top=2`,
+    SPHttpClient.configurations.v1,
+    { headers: { Accept: "application/json;odata=nometadata" } },
+  );
+  if (!existing.ok) {
+    throw new Error(
+      `Write mapping refused: could not check for an existing row (HTTP ${existing.status}). ` +
+        `Creating one blindly risks a duplicate, which shows up later as a refused upload.`,
+    );
+  }
+  const found = ((await existing.json()).value ?? []) as Array<{ Id: number }>;
+  if (found.length > 0) {
+    // Already mapped — repoint it. Anything beyond the first is a pre-existing duplicate, left for
+    // the reconciliation pass that reports and removes them by name.
+    await updateFolderMapping(spHttpClient, siteUrl, found[0].Id, {
+      folderUniqueId: m.folderUniqueId,
+      folderUrl: m.folderUrl,
+      title: m.title,
+    });
+    return;
+  }
   const res: SPHttpClientResponse = await spHttpClient.post(
     `${siteUrl}/_api/web/lists/getbytitle('${await mapList(spHttpClient, siteUrl)}')/items`,
     SPHttpClient.configurations.v1,
