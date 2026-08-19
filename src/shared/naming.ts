@@ -328,6 +328,48 @@ export const HC_DOCUMENTS_CANDIDATES = ["HC Documents", "HCDocuments"];
  */
 export const DOCUMENTS_LIBRARY = "Documents";
 
+/** Its URL segment, which is NOT its title — gotcha #12, and the reason both are named here. */
+export const DOCUMENTS_URL_SEGMENT = "Shared Documents";
+
+/**
+ * The four logical library keys. `Staging` is the approval library — a LOGICAL name kept because it
+ * is also the stored `Target` value on Group Map library-scope rows; the real title is resolved at
+ * the API boundary by `libApiTitle`.
+ */
+export type LibTarget = "Staging" | "Documents" | "StagingHC" | "DocumentsHC";
+
+/** A logical key with the two real names it resolves to. */
+export interface LibraryTarget extends LibraryNames {
+  key: LibTarget;
+}
+
+/**
+ * Every library this site actually has, resolved — TWO without the HC pair, FOUR with it.
+ *
+ * ⚠ EXISTS BECAUSE A TWO-ELEMENT LITERAL WAS THE BUG (register #15, found 2026-08-19).
+ * `SubtreeMigrator` carried `[{ key: "Staging" … }, { key: "Documents" … }]` written on 2026-08-11,
+ * four days before the HC pair existed, and was never revisited. So a structure change migrated the
+ * normal libraries, applied the new chain, and left every HC document in the old shape — reporting
+ * success, because the guard that refuses to apply a pending chain re-scans only the libraries it
+ * knows about, and a scan that never looks at HC always finds no drift there.
+ *
+ * Derived, never literal, and shared so the migrator and reconciliation cannot disagree about which
+ * libraries exist. `hcAvailable()` fails CLOSED by design — `naming.ts` has no HC fallback, so an
+ * unresolved HC library is `undefined` rather than a legacy literal, and a site without HC gets two.
+ */
+export function libraryTargets(): LibraryTarget[] {
+  const base: LibraryTarget[] = [
+    { key: "Staging", title: libraryTitle(), urlSegment: libraryUrlSegment() },
+    { key: "Documents", title: DOCUMENTS_LIBRARY, urlSegment: DOCUMENTS_URL_SEGMENT },
+  ];
+  const hc = cachedHcLibraries();
+  if (!hc) return base;
+  return base.concat([
+    { key: "StagingHC", title: hc.approval.title, urlSegment: hc.approval.urlSegment },
+    { key: "DocumentsHC", title: hc.documents.title, urlSegment: hc.documents.urlSegment },
+  ]);
+}
+
 export interface HcLibraries {
   approval: LibraryNames;
   documents: LibraryNames;

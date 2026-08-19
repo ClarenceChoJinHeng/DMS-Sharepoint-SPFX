@@ -1,7 +1,7 @@
 # Selective reconciliation — run the segments that changed
 
 **Date:** 2026-08-19
-**Status:** design agreed, NOT implemented
+**Status:** HALF A BUILT 1.0.175.0 (the segment picker), NOT site-tested. ⚠ Half B — detecting which segments changed — is deliberately DEFERRED: it needs a per-segment term walk at picker time (~115 requests for GHO), which is the expensive thing this feature exists to avoid. Half A delivers the whole time saving; the marks were advisory.
 **Register:** #18
 **Client's ask, 2026-08-19:** *"if client only added new subunit or new unit under two business
 segment's department and they have 5 Business segment in the future, this will slow them down if

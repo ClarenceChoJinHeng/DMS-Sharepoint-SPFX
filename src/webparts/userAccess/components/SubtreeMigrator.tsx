@@ -18,7 +18,7 @@ import {
   validateRename,
 } from "../../../shared/subtreeMigration";
 import { EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
+import { cachedListTitle, libraryTargets, LibTarget, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import {
@@ -45,9 +45,6 @@ import {
  * Every decision lives in `shared/subtreeMigration.ts` and is unit-tested. This file is the REST
  * calls and the rendering.
  */
-
-const DOCUMENTS_LIST_TITLE = "Documents";
-const DOCUMENTS_URL_SEGMENT = "Shared Documents";
 
 /** Depth guard for the folder walk. The deepest legitimate chain is nowhere near this. */
 const MAX_DEPTH = 8;
@@ -97,7 +94,10 @@ interface SegmentRow {
 
 /** One library, resolved. Both hold the same tree and a unit can be adrift in one only. */
 interface LibCtx {
-  key: "Staging" | "Documents";
+  /* ⚠ WAS `"Staging" | "Documents"`, which is how the HC pair went unmigrated for four days without
+     anything reporting it (register #15). The HC libraries could not even be EXPRESSED here. Retyping
+     this first is what made the rest mechanical: the compiler found every place that assumed two. */
+  key: LibTarget;
   title: string;
   urlSegment: string;
   /** Content approval on. Decides whether folders this tool creates must be stamped Approved. */
@@ -584,10 +584,13 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
       // Only cascading tiers need it; those units are reported as unresolved.
     }
 
-    const libs: LibCtx[] = [
-      { key: "Staging", title: libraryTitle(), urlSegment: libraryUrlSegment(), moderated: false },
-      { key: "Documents", title: DOCUMENTS_LIST_TITLE, urlSegment: DOCUMENTS_URL_SEGMENT, moderated: false },
-    ];
+    /* DERIVED, never a literal — see `libraryTargets`. Two libraries on a site without the HC pair,
+       four with it, and the migrator can no longer silently skip half the site. */
+    const libs: LibCtx[] = libraryTargets().map((t) => ({ ...t, moderated: false }));
+    /* `moderated: false` above is an INITIALISER, not an assumption — every library is asked. Do not
+       "simplify" it to a constant: HC Approval Document moderates and HC Documents does not, and a
+       folder this tool creates in a moderated library must be stamped Approved or every document
+       moved into it is invisible to the whole unit. */
     for (const lib of libs) lib.moderated = await isModerated(lib.title);
 
     // Plain-text tier columns only, so one library read serves collision detection here and the
@@ -1116,7 +1119,9 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
         actorName: context.pageContext.user.displayName,
         actorEmail: context.pageContext.user.email,
         segment: seg.label,
-        library: "Approval Document + Documents",
+        // Names what it ACTUALLY walked. A record saying two libraries on a four-library run reads
+        // as a decision rather than an oversight.
+        library: libraryTargets().map((t) => t.title).join(" + "),
         summary:
           `Folder migration — ${movedFiles} document(s) moved, ${removedFolders} folder(s) tidied, ` +
           `${tags.stamped} tagged` + (failed > 0 ? `, ${failed} problem(s)` : ""),
@@ -1173,7 +1178,9 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
   });
   const conflicts: Array<{ lib: string; collision: Collision }> = [];
   let unresolvedCount = 0;
-  for (const lib of ["Staging", "Documents"]) {
+  /* The SAME derived list as the scan. A literal here would leave HC collisions undetected — and
+     collision handling is the one part of this tool standing between a move and an overwrite. */
+  for (const lib of libraryTargets().map((t) => t.key)) {
     for (const c of collisionsFor(lib)) conflicts.push({ lib, collision: c });
     unresolvedCount += unresolvedFor(lib).length;
   }

@@ -1,7 +1,7 @@
 # The HC libraries are not migrated when the folder structure changes
 
 **Date:** 2026-08-19
-**Status:** design agreed, NOT implemented
+**Status:** BUILT 1.0.175.0, NOT site-tested. `libraryTargets()` in `shared/naming.ts` is the shared, derived list; the migrator's two-element literal is gone.
 **Register:** #15
 **Extends** `2026-08-11-subtree-migration-design.md`, which is otherwise unchanged and still governs.
 

@@ -1,7 +1,7 @@
 # Stray folders inherit the browse corridor — quarantine them
 
 **Date:** 2026-08-19
-**Status:** design agreed, NOT implemented
+**Status:** BUILT 1.0.175.0, NOT site-tested.
 **Register:** #19
 **Extends** `2026-08-02-term-guid-orphan-repair-design.md` §8, which established that a folder whose
 term is gone is reported and **never deleted**. That still stands. This decides what happens to its

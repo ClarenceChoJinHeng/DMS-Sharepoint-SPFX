@@ -7,6 +7,7 @@ import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normali
 // The SAME policy the admin screens filter with, so a page cannot be admin-only in the UI and wide
 // open in SharePoint. See docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md.
 import { normalizeTermGuid } from "../../../shared/segmentReadiness";
+import { resolveRunScope, ScopeSegment } from "../../../shared/reconScope";
 import { groupDuplicateRows, chooseKeeper } from "../../../shared/folderMapDuplicates";
 import { policyForPage, derivedRolesForPage } from "../../../shared/pageAccessPolicy";
 import { groupRolesById, intendedPageGroups, groupsToRemove } from "../../../shared/pageGrants";
@@ -770,6 +771,14 @@ export default function FolderManager({
   // orphan-repair and site-entry passes name neither library, so they are reachable
   // from nowhere else.
   const [logTab,       setLogTab]       = useState<LogTab>("All");
+  /* SELECTIVE RECONCILIATION (register #18). `undefined` means "not chosen yet", which resolves to
+     ALL — the safe default is today's behaviour. A default of "only what changed" would make the
+     first run after an unseen manual edit skip the one segment that needed it. */
+  const [scopeSegs,    setScopeSegs]    = useState<ScopeSegment[] | undefined>(undefined);
+  const [scopePicked,  setScopePicked]  = useState<Set<string> | undefined>(undefined);
+  /** One resolver for the picker, the run and the log, so they cannot disagree about coverage. */
+  const runScope = (): ReturnType<typeof resolveRunScope> =>
+    resolveRunScope(scopeSegs, scopePicked);
   const [toast,        setToast]        = useState<{ message: string; error: boolean } | null>(null);
   const [expandedIds,  setExpandedIds]  = useState<Record<string, boolean>>({});
   // Section collapse state, keyed by section name; sections default to open.
@@ -2044,7 +2053,16 @@ export default function FolderManager({
     const abbrevRows = await loadAbbrevRows();
     const abbrevIndex = abbrevIndexOf(abbrevRows);
     const levelNamesBySet = await loadReconLevelNames();
-    const modes = await loadReconModes();
+    /* SCOPED (register #18). The segment WALK narrows to what the administrator ticked; every
+       site-wide pass — site entry, library state, page access, the admin lockdown, the HC gating
+       check — still runs in FULL, because each asserts state that has no segment. See
+       ALWAYS_FULL_PASSES in shared/reconScope.ts.
+       Keyed on `termSetGuid`: mode rows carry no `key` once parsed, and the term set is what
+       actually identifies a segment. */
+    const modes = runScope().segments.length > 0
+      ? (await loadReconModes()).filter((m) =>
+          runScope().segments.some((x) => x.key === m.termSetGuid))
+      : await loadReconModes();
     for (const mode of modes) {
       // Segment container: not a mapped term, but groups target it via the term-set GUID.
       // Its full name is the TERM SET's name, read live. mode.stagingFolder cannot serve
@@ -3194,6 +3212,19 @@ export default function FolderManager({
         if (r.termGuid && name) oldNameByTerm.set(r.termGuid.toLowerCase(), name);
       }
       const groupMap = await loadGroupMapForAssign();
+      const scope = runScope();
+      if (scope.refused) {
+        // A mis-click, not an instruction to do nothing and report success.
+        entries.push({ msg: `⚠ ${scope.refused}`, ok: false });
+        setLog((prev) => [...prev, ...entries]);
+        setBusy(false);
+        setReconRunning(false);
+        return;
+      }
+      // Named in the log AND in the audit row: a run record that does not say what it covered is
+      // unreadable a month later, and someone will compare a two-segment run with a five-segment
+      // one and conclude something broke.
+      entries.push({ msg: `Folder tree: covering ${scope.label}`, ok: true });
       const { targets, incomplete: incompleteSegments, missingAbbrev, collisions, abbrevRows } = await buildProvisionTargets();
       // The segment tier, identified by term-set GUID. Derived from the targets already in
       // hand — a segment container is the one target with no term of its own — rather than
@@ -4318,10 +4349,75 @@ export default function FolderManager({
               for (const name of names) {
                 if (expected.has(`${t.relPath}/${name}`.toLowerCase())) continue;
                 unclaimed++;
-                entries.push({
-                  msg: `  ⚠ NO TERM: ${libDisplayName(lib)}${t.relPath}/${name} — no live term maps to this folder, but its permissions are unchanged and its documents are still reachable. Review it; nothing was deleted.`,
-                  ok: false,
-                });
+                /* ── QUARANTINE (register #19, spec 2026-08-19) ────────────────────────────
+                   ⚠ THIS USED TO BE REPORT-ONLY, and its own message stated the problem: "its
+                   permissions are unchanged". Unchanged means the folder INHERITS from the segment
+                   folder above it — and that folder deliberately grants Read to every group in the
+                   segment, because it is the ancestor-browse corridor people navigate down. So a
+                   folder nobody was granted was readable by everyone in the segment. Found live
+                   2026-08-18: an HC-cleared uploader could see a `COSEC` folder belonging to a unit
+                   they had no mapping to. Not a permissions failure — a folder the system did not
+                   know about, sitting inside a corridor built for the folders it does.
+
+                   So: break inheritance, put site Owners back, and NAME it with its document count.
+                   Nothing is deleted, ever — the folder may hold the only copy of real documents,
+                   and deleting a term revokes nobody's access. Quarantine removes the accidental
+                   AUDIENCE, never the content. */
+                const strayPath = `${root}${t.relPath}/${name}`;
+                const label = `${libDisplayName(lib)}${t.relPath}/${name}`;
+                /* Counted, and UNKNOWN is not zero. An empty stray is a ten-second tidy-up; one
+                   holding documents is a small migration, and the difference decides what the
+                   administrator does next. Reporting an uncountable folder as empty would invite
+                   somebody to delete it. */
+                let docs = "an unknown number of";
+                try {
+                  const cRes = await withThrottleRetry(() => context.spHttpClient.get(
+                    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?$select=ItemCount&@f='${encodeServerRelativePath(strayPath)}'`,
+                    SPHttpClient.configurations.v1,
+                    { headers: { Accept: "application/json;odata=nometadata" } },
+                  ));
+                  if (cRes.ok) {
+                    const cj = await cRes.json();
+                    if (typeof cj.ItemCount === "number") docs = String(cj.ItemCount);
+                  }
+                } catch { /* count stays unknown — the exposure is real either way */ }
+
+                let already = false;
+                try {
+                  const stRes = await withThrottleRetry(() => context.spHttpClient.get(
+                    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields?$select=HasUniqueRoleAssignments&@f='${encodeServerRelativePath(strayPath)}'`,
+                    SPHttpClient.configurations.v1,
+                    { headers: { Accept: "application/json;odata=nometadata" } },
+                  ));
+                  if (stRes.ok) already = (await stRes.json()).HasUniqueRoleAssignments === true;
+                } catch { /* treated as not yet quarantined; breaking again is harmless */ }
+
+                if (already) {
+                  // Idempotent by construction: the folder's own ACL is the record, so nothing is
+                  // stored anywhere and a later run simply re-reports it.
+                  entries.push({
+                    msg: `  ⚠ ALREADY QUARANTINED: ${label} — no live term maps to this folder. It holds ${docs} item(s). Move them somewhere real, then delete the folder.`,
+                    ok: false,
+                  });
+                  continue;
+                }
+                try {
+                  await breakInheritance(strayPath);
+                  if (fullCtrlId !== undefined && typeof ownerGroupId === "number") {
+                    await addRoleAssignment(strayPath, ownerGroupId, fullCtrlId);
+                  }
+                  entries.push({
+                    msg: `  ⚠ QUARANTINED: ${label} — no live term maps to this folder. Inheritance broken; only site owners can open it now. It holds ${docs} item(s). Nothing was deleted.`,
+                    ok: false,
+                  });
+                } catch (e) {
+                  // Reported as STILL EXPOSED, never as quarantined — the same rule as the admin
+                  // page lockdown. A folder we failed to secure must not read as secured.
+                  entries.push({
+                    msg: `  ✗ STILL EXPOSED: ${label} — no live term maps to it and it could NOT be secured (${(e as Error).message}). Everyone in this segment can still open it.`,
+                    ok: false,
+                  });
+                }
               }
             }
           }
@@ -4331,6 +4427,16 @@ export default function FolderManager({
               ok: false,
             });
           }
+          /* THE LIMIT, STATED. The walk descends only into non-leaf targets, because below a leaf
+             sit the Year / Document Type folders the upload form creates on demand — they have no
+             term BY DESIGN, and reporting them would be hundreds of false positives. So a stray
+             created directly inside a unit is indistinguishable from a legitimate on-demand folder
+             and must stay undetected. Silence here is how "reconciliation checks for stray folders"
+             comes to be read as ALL stray folders. */
+          entries.push({
+            msg: `  Unclaimed-folder check covers segment and department levels only — a folder created directly inside a unit cannot be told apart from the Year / Document Type folders the upload form creates.`,
+            ok: true,
+          });
           if (unclaimed === 0 && unreadable === 0) {
             entries.push({ msg: `Folders: every folder maps to a live term ✓`, ok: true });
           }
@@ -4677,6 +4783,50 @@ export default function FolderManager({
             tier with no group-map rows is flagged in the log. Note: a full run can
             take a minute or two.
           </p>
+          {reconConfirm && scopeSegs !== undefined && scopeSegs.length > 1 && (
+            /* SELECTIVE RECONCILIATION (register #18). Shown only where it can save anything — one
+               segment has nothing to choose between. Every box starts TICKED: the safe default is
+               today's behaviour, and defaulting to a subset would make the first run after an unseen
+               manual edit skip the segment that needed it.
+               ⚠ An unticked segment is NOT "clean" — nothing here inspects the site. It covers less,
+               that is all, and the copy says so. */
+            <div style={{ margin: "4px 0 8px", padding: "10px 12px", background: "#fff", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12 }}>
+              <div style={{ fontWeight: 600, color: "#0f6c3f", marginBottom: 6 }}>
+                Which business segments should this run cover?
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 18px", marginBottom: 8 }}>
+                {scopeSegs.map((seg) => {
+                  const on = scopePicked === undefined || scopePicked.has(seg.key);
+                  return (
+                    <label key={seg.key} style={{ display: "flex", alignItems: "center", gap: 6, cursor: busy ? "default" : "pointer" }}>
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        disabled={busy}
+                        onChange={() => {
+                          const next = new Set(scopePicked ?? scopeSegs.map((x) => x.key));
+                          if (next.has(seg.key)) next.delete(seg.key); else next.add(seg.key);
+                          setScopePicked(next);
+                        }}
+                      />
+                      <span>{seg.stagingFolder}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <button style={s.ghostBtn} disabled={busy} onClick={() => setScopePicked(undefined)}>Select all</button>
+                <span style={{ color: runScope().refused ? "#a4262c" : "#666" }}>
+                  {runScope().refused ?? `This run will cover ${runScope().label}.`}
+                </span>
+              </div>
+              <div style={{ color: "#666", marginTop: 6, lineHeight: 1.45 }}>
+                Leaving a segment out only means this run does not look at it — it does not mean that
+                segment is up to date. Site-wide checks (site entry, library permissions, page access,
+                administrator pages) always run in full.
+              </div>
+            </div>
+          )}
           {reconConfirm ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>
               <span>
@@ -4684,14 +4834,21 @@ export default function FolderManager({
                 <br />
                 <strong>Keep this tab open until it finishes.</strong> The run happens in your browser — refreshing, closing the tab or navigating away stops it partway. Nothing is lost and you can simply run it again, but do re-run before letting users in: a folder interrupted at the wrong moment stays unlocked until the next run.
               </span>
-              <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: "#0f6c3f", color: "#fff", border: "none", flexShrink: 0 }} disabled={busy} onClick={() => { runReconciliation().catch(() => undefined); }}>
+              <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: "#0f6c3f", color: "#fff", border: "none", flexShrink: 0 }} disabled={busy || runScope().refused !== undefined} onClick={() => { runReconciliation().catch(() => undefined); }}>
                 {busy ? "Running…" : "Yes, run reconciliation"}
               </button>
               <button style={s.ghostBtn} disabled={busy} onClick={() => setReconConfirm(false)}>Cancel</button>
             </div>
           ) : (
             <button
-              onClick={() => setReconConfirm(true)}
+              onClick={() => {
+                setReconConfirm(true);
+                // Read once, when the bar opens. Cheap — the mode rows are one list read, and the
+                // expensive per-segment term walk is deliberately NOT done here (spec §4.1).
+                loadReconModes()
+                  .then((m) => setScopeSegs(m.map((x) => ({ key: x.termSetGuid, stagingFolder: x.stagingFolder }))))
+                  .catch(() => setScopeSegs(undefined));
+              }}
               disabled={busy}
               style={{ ...s.btn, background: "#0f6c3f", color: "#fff", border: "none" }}
             >
