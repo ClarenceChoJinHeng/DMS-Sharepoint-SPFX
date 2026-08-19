@@ -1,7 +1,7 @@
 # Visibility Scope + Per-Family View Groups — Design
 
 **Date:** 2026-08-03
-**Status:** DRAFT — five decisions open (§7). Nothing implemented.
+**Status:** ⚠ SUPERSEDED, do not implement. Never built, and the role model has moved twice since — see `2026-08-07-role-model-simplification-design.md` (twelve personas to six) and `2026-08-17-hc-clearance-and-role-revision-design.md`. Kept for the reasoning in §3-§5 only.
 **Branch:** `feat/folder-abbreviations`
 **Parent:** `2026-08-03-role-personas-and-department-fanout-design.md` (the role model this
 revises), `2026-08-03-access-scope-mapping-design.md`

@@ -1,7 +1,7 @@
 # Separating group creation from Folder Access
 
 **Date:** 2026-08-14
-**Status:** Agreed, not yet built
+**Status:** BUILT 2026-08-14 — web part `Group Management` (`3f81c6d2-…`). ⚠ The membership half is SUPERSEDED by `2026-08-18-folder-access-membership-design.md`: the member editor moved to Folder Access and the add-mapping form moved here. Header corrected 2026-08-19.
 **Supersedes:** the inline create-group flow in `GroupMapBuilder.tsx` (`onCreateAndMap`), added with
 the persona work of `2026-08-09-persona-driven-folder-access-design.md`
 **Related:** `2026-08-07-access-webpart-split-design.md`, `2026-07-22-group-map-builder-design.md`

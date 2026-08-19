@@ -1,6 +1,6 @@
 # Deletion and share requests — design
 
-**Status:** DESIGN — not yet built.
+**Status:** BUILT — web part `CRS Requests` (`7a4f1e93-…`). **NOT site-tested**, and nothing works until the prerequisites exist: the folder-scope grants and the `CRS Share` permission level, then a reconciliation re-run. Header corrected 2026-08-19.
 **Date:** 2026-08-15
 **Supersedes:** `2026-08-04-deletion-request-approval-design.md` (DRAFT). Its premise was that a PIC
 loses `Delete Items` on **Staging**; the client reversed that on 2026-08-15 — a PIC *does* delete in

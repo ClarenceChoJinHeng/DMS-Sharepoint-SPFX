@@ -1,7 +1,7 @@
 # Group creation: personas, derived names, and bulk provisioning
 
 **Date:** 2026-08-18
-**Status:** Agreed in conversation. NOT built.
+**Status:** BUILT and SITE-VERIFIED 2026-08-18 — 308 groups and 790 mapping rows on the rehearsal site, and a second press wrote nothing. Header corrected 2026-08-19.
 **Revises:** `2026-08-14-group-management-separation-design.md` (partially reverses it — see §7),
 `2026-07-22-role-from-group-name-suffix.md`, `2026-08-17-hc-clearance-and-role-revision-design.md`.
 

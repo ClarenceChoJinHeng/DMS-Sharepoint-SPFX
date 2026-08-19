@@ -1,7 +1,7 @@
 # Deleting a segment
 
 **Date:** 2026-08-14
-**Status:** Agreed, not yet built
+**Status:** BUILT 2026-08-14 — `shared/segmentDeletion.ts` (pure, 23 tests), on the Segments tab. NOT site-tested. Header corrected 2026-08-19.
 **Completes:** `2026-08-12-add-segment-design.md` §6, which excluded this as having "no safe meaning"
 **Related:** `2026-08-11-subtree-migration-design.md` (moving the files out first),
 `2026-08-14-group-management-separation-design.md` (the delete-confirmation pattern this follows)

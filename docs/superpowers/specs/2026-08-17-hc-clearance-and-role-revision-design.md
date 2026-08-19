@@ -1,7 +1,7 @@
 # HC clearance narrowed to two roles, and Head of Department made view-only
 
 **Date:** 2026-08-17
-**Status:** Agreed with the client. Not yet built.
+**Status:** BUILT — `PERSONAS` and `LIBRARY_ROLES` carry it. Partially site-verified 2026-08-19: the from-scratch run granted only `_APPROVER` and `_UPL_HIGHLY_CONFIDENTIAL` on `HC Approval Document`, with no plain uploader or employee on either HC library. An HC upload has still not been tested end to end. Header corrected 2026-08-19.
 **Revises:** `2026-08-15-highly-confidential-library-design.md` (the library-pair architecture is
 UNCHANGED and still governs), `2026-08-07-role-model-simplification-design.md`,
 `2026-08-09-persona-driven-folder-access-design.md`.

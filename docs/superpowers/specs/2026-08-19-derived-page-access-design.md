@@ -1,7 +1,7 @@
 # Derived page access — reconciliation grants the pages a role implies
 
 **Date:** 2026-08-19
-**Status:** design agreed, implementing
+**Status:** BUILT 1.0.171.0, NOT site-tested. ⚠ §1's original premise was wrong and is corrected in place — read it before citing this spec.
 **Supersedes nothing.** Extends the page pass of the 2026-08-05 page-access work and sits alongside
 `2026-08-17-admin-page-lockdown-design.md`.
 

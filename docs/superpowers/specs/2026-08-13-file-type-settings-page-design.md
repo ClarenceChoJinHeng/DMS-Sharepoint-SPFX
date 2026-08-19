@@ -1,7 +1,7 @@
 # File type settings — a page for the allowed-extensions policy
 
 **Date:** 2026-08-13
-**Status:** designed, not yet built
+**Status:** BUILT — `crsConfiguration/components/FileTypeSettings.tsx`. Site-test state not recorded here; CLAUDE.md is the live record. Header corrected 2026-08-19.
 
 Builds an admin UI for the data specced in
 [2026-07-30-allowed-file-types-dropdown-design.md](2026-07-30-allowed-file-types-dropdown-design.md),

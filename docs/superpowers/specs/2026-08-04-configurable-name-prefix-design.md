@@ -1,7 +1,7 @@
 # Configurable Name Prefix (DMS → CRS) — Design
 
 **Date:** 2026-08-04
-**Status:** DRAFT — agreed in principle 2026-08-04 ("everything, config-driven"). Not implemented.
+**Status:** BUILT — `src/shared/naming.ts`, which cites this spec at line 12. Per-suffix probing, `CRS` before `DMS`. Header corrected 2026-08-19.
 **Branch:** `feat/folder-abbreviations`
 **Related:** memory `dms-to-crs-rename-pending`, `2026-07-28-client-site-migration-runbook.md`,
 `2026-07-27-site-entry-access-layer-design.md`

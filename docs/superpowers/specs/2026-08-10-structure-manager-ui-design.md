@@ -1,7 +1,7 @@
 # Structure Manager — client-editable folder structure
 
 **Date:** 2026-08-10
-**Status:** Design agreed, not implemented
+**Status:** BUILT and SITE-VERIFIED 2026-08-11 on NBPOL — a level added above Year, columns created in both libraries, `Levels` rewritten, upload landed at the new path. Header corrected 2026-08-19.
 **Scope:** Piece 2 of 3. Depends on piece 1
 ([2026-08-06-configurable-folder-structure-chain-design.md](2026-08-06-configurable-folder-structure-chain-design.md),
 built 2026-08-09).

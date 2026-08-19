@@ -1,6 +1,6 @@
 # Highly Confidential — a separate library pair
 
-**Status:** design, agreed 2026-08-15. Supersedes `2026-07-16-highly-confidential-securing-design.md`.
+**Status:** BUILT, not site-tested end to end. Supersedes `2026-07-16-highly-confidential-securing-design.md`. ⚠ The role/clearance half is REVISED by `2026-08-17-hc-clearance-and-role-revision-design.md`; the library-pair architecture here still governs. The libraries exist and were **provisioned from nothing on 2026-08-19** — folders, ACLs, content types and approval stamps all correct. The two Power Automate flows still do not exist. Header corrected 2026-08-19.
 
 ---
 

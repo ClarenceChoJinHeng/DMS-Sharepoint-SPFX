@@ -1,7 +1,7 @@
 # My Submissions — an uploader's view of their own files
 
 **Date:** 2026-08-14
-**Status:** Agreed, not yet built
+**Status:** BUILT and SITE-TESTED 2026-08-14 — five bugs found on site and fixed (see §11). Header corrected 2026-08-19.
 **Depends on:** `2026-08-08-auto-route-flow-and-draft-isolation.md` (what an uploader can already see)
 **Related:** `docs/client/document-visibility-within-a-unit.md` (why "only their own" has a limit),
 `2026-07-31-approval-queue-navigation-design.md` (the APPROVER's equivalent)

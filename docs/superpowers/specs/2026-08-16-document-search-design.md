@@ -1,7 +1,7 @@
 # CRS Search — searching the repository by metadata
 
 **Date:** 2026-08-16
-**Status:** Design agreed. Not yet built.
+**Status:** BUILT — `documentSearch/components/DocumentSearch.tsx`, 72 tests. NOT site-tested, and §6's `OWSTEXT` managed-property assumption is still UNVERIFIED on a live site. Header corrected 2026-08-19.
 **Web part:** `CRS Search` — `8b2f4a95-7c31-4d68-9e04-1a6b3f8c25d7`, own bundle, homepage.
 **Rules module:** `src/shared/documentSearch.ts` (pure, tested).
 

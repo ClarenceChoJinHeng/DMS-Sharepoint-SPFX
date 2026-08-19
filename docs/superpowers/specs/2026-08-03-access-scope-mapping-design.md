@@ -1,7 +1,7 @@
 # Access Scope Mapping — Site, Library, Folder, Page — Design
 
 **Date:** 2026-08-03
-**Status:** Agreed in outline, not yet implemented
+**Status:** BUILT. `Scope`/`Target` are live — reconciliation reads them (`FolderManager.tsx` library and page passes) and `PageAccess.tsx` writes `Scope: "Page"` rows. Header corrected 2026-08-19; it had said "not yet implemented" long after shipping.
 **Related:** `2026-07-27-site-entry-access-layer-design.md` (why a site-entry layer exists at
 all — this spec automates its manual step), `2026-07-22-group-map-builder.md`, and the Phase 1b
 notes in `2026-07-28-client-site-migration-runbook.md`
