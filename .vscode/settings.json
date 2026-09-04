@@ -14,5 +14,6 @@
   "github.copilot.enable": {
     "*": false
   },
-  "editor.inlineSuggest.enabled": false
+  "editor.inlineSuggest.enabled": false,
+  "js/ts.tsdk.path": ".\\node_modules\\typescript\\lib"
 }

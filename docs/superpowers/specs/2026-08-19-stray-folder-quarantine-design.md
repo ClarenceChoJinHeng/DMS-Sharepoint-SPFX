@@ -1,7 +1,15 @@
 # Stray folders inherit the browse corridor — quarantine them
 
 **Date:** 2026-08-19
-**Status:** BUILT 1.0.175.0, NOT site-tested.
+**Status:** BUILT 1.0.175.0, **SITE-VERIFIED 2026-08-20** on a SCOPED run (GHO only) — a hand-made
+`Approval Document/GHO/GF/OLDUNIT` holding one document was quarantined, named, and left intact.
+
+⚠ It was briefly unreachable: the 1.0.179.0 fix for the selective-reconciliation data loss gated the
+whole orphan-cleanup branch, and this pass sat inside it — so a scoped run reported no strays at all,
+and scoped runs are now the normal way to work. Moved out in 1.0.186.0. **The two passes ask different
+questions:** the prune asks *"was this row's term in THIS RUN's targets"* (false for every uncovered
+segment); this one **descends FROM `targets`** and can only ever see inside the segments walked.
+Scope-safety is a property of the question, not of the block a pass sits in.
 **Register:** #19
 **Extends** `2026-08-02-term-guid-orphan-repair-design.md` §8, which established that a folder whose
 term is gone is reported and **never deleted**. That still stands. This decides what happens to its
@@ -147,3 +155,26 @@ they were using will come looking; a group quietly reading another unit's docume
 |---|---|
 | `src/webparts/folderManager/components/FolderManager.tsx` (~4175-4215) | quarantine inside the existing unclaimed-folder pass; document count; the scope caveat line |
 | `src/shared/` | none — the rule is "no term ⇒ break inheritance", with no branching worth extracting |
+
+## 9. The idempotence report was wrong for three runs (fixed and VERIFIED 1.0.187.0)
+
+`ALREADY QUARANTINED` never appeared. A folder quarantined on run 1 was reported as newly
+quarantined on runs 2 and 3, on a site where its permissions were visibly already unique.
+
+**Cause: a second implementation of a question that was already answered elsewhere.** The pass asked
+`ListItemAllFields?$select=HasUniqueRoleAssignments` with `Accept: application/json;odata=nometadata`
+and read the property off the result; `getHasUniquePerms`, twenty lines up the same file, asks the
+same URL with `Accept: application/json`. The shared helper is proven by every `already locked,
+skipped` line in the run — the copy silently answered false.
+
+**No harm was done**, which is why it survived three runs: breaking inheritance on a folder that
+already has unique permissions is a no-op and Owners are re-added to the same state. Only the report
+was wrong — and the report is the whole point, because `ALREADY QUARANTINED` is how an admin tells a
+known stray from a new one.
+
+**The rule, again:** one question, one implementation. The second copy is the one that goes wrong,
+because nothing else depends on it and nothing else exercises it.
+
+Confirmed on site immediately after deploying 1.0.187.0: the fourth run of the same segment reported
+`⚠ ALREADY QUARANTINED`, with the document count intact and nothing changed. #19 is verified end to
+end — detect, quarantine, report, and stay idempotent — on a **scoped** run.

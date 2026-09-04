@@ -5,6 +5,7 @@ import StructureManager from "./StructureManager";
 import SubtreeMigrator from "./SubtreeMigrator";
 import SegmentCreator from "./SegmentCreator";
 import { IAccessProps } from "./IAccessProps";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
 /**
  * Three tabs, deliberately on ONE page: changing the structure and migrating what is already
@@ -90,9 +91,7 @@ export default function FolderStructurePage({ context }: IAccessProps): React.Re
             borderRadius: 6,
             marginBottom: 16,
             lineHeight: 1.5,
-            background: "#fff4e5",
-            border: "1px solid #f0d9b5",
-            color: "#7a4f00",
+            ...NOTICE_ATTENTION,
           }}
         >
           Finish or clear what you are editing first — leaving this tab would lose it.

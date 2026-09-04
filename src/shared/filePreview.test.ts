@@ -73,6 +73,39 @@ describe("encodePath", () => {
   });
 });
 
+describe("openUrl — the link that must not download", () => {
+  /* ⚠ THE BUG THIS PINS, reported live 2026-08-30 on two screens: "Open in a new tab" pointed at
+     the file's own URL, and SharePoint SERVES that — which for an Office document is a download.
+     The link said one thing and did another. */
+  it("sends an Office document through WopiFrame in VIEW mode, not to the file", () => {
+    const t = previewTarget("f.docx", "/sites/Ex/Staging/f.docx", ROOT, WEB);
+    expect(t.openUrl.indexOf("WopiFrame.aspx")).toBeGreaterThan(-1);
+    expect(t.openUrl.indexOf("action=view")).toBeGreaterThan(-1);
+    // embedview is for the IFRAME; in a tab of its own the reader wants the full viewer.
+    expect(t.openUrl.indexOf("action=embedview")).toBe(-1);
+  });
+
+  it("asks SharePoint to render a PDF rather than hand it over", () => {
+    const t = previewTarget("f.pdf", "/sites/Ex/Staging/f.pdf", ROOT, WEB);
+    expect(t.openUrl.indexOf("?web=1")).toBeGreaterThan(-1);
+    // The fit-to-width fragment belongs to the IFRAME url only — a fragment after a query would
+    // be carried into the tab and is meaningless there.
+    expect(t.openUrl.indexOf("#view=FitH")).toBe(-1);
+  });
+
+  it("still offers a route for a file with no preview at all", () => {
+    const t = previewTarget("archive.zip", "/sites/Ex/Staging/archive.zip", ROOT, WEB);
+    expect(t.kind).toBe("none");
+    expect(t.openUrl.length).toBeGreaterThan(0);
+  });
+
+  it("keeps `fileUrl` as the raw file — it is the DOWNLOAD route and callers rely on it", () => {
+    const t = previewTarget("f.docx", "/sites/Ex/Staging/f.docx", ROOT, WEB);
+    expect(t.fileUrl.indexOf("?web=1")).toBe(-1);
+    expect(t.fileUrl.indexOf("WopiFrame")).toBe(-1);
+  });
+});
+
 describe("previewTarget", () => {
   it("appends the PDF fit parameter", () => {
     const t = previewTarget("f.pdf", `${PATH}.pdf`, ROOT, WEB);

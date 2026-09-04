@@ -5,9 +5,16 @@ import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, sanitizeFolderSegment } from "../../../shared/formModel";
 import { effectiveOnDemandTiers } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
-// libraryUrlSegment, NOT libraryTitle, for anything that builds a PATH: the two differ
-// ("Approval Document" vs "/ApprovalDocument") and the title fails silently in a URL — gotcha #12.
-import { allLibraryTitles, cachedListTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
+// `libraryTargets()` carries BOTH names per library. Use `.urlSegment` for anything that builds a
+// PATH and `.title` only for display: the two differ ("Approval Document" vs "/ApprovalDocument",
+// "Documents" vs "/Shared Documents") and a title in a URL fails SILENTLY — gotcha #12.
+import {
+  allLibraryTitles,
+  archiveAvailable,
+  cachedListTitle,
+  libraryTargets,
+  LIST_SUFFIX,
+} from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
@@ -34,6 +41,7 @@ import {
   normalizeGuid,
   validateNewSegment,
 } from "../../../shared/newSegment";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
 /**
  * Add a whole business segment — slice B of `2026-08-10-structure-manager-ui-design.md`,
@@ -50,7 +58,6 @@ import {
  * things a segment needs, and the abbreviation step silently creates nothing when it is missed.
  */
 
-const DOCUMENTS_LIST_TITLE = "Documents";
 
 /** How many term-store requests the depth walk may spend before giving up. See measureDepth. */
 const DEPTH_REQUEST_CAP = 400;
@@ -68,7 +75,7 @@ type SetCheck =
 const s: Record<string, React.CSSProperties> = {
   msg: { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err: { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
-  warn: { background: "#fff4e5", border: "1px solid #f0d9b5", color: "#7a4f00" },
+  warn: { ...NOTICE_ATTENTION },
   ok: { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
   card: { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
   label: { display: "block", fontSize: 12, fontWeight: 600, color: "#323130", margin: "14px 0 4px" },
@@ -147,6 +154,15 @@ export interface SegmentCreatorProps {
    * creating it twice.
    */
   allowDelete?: boolean;
+  /**
+   * Mirror of `allowDelete`, same reasoning inverted. The Retire flow mounts this exact screen for
+   * step 2 ("Segments -> Delete"), and that flow has no use for the create form below the segments
+   * list — client, 2026-08-26: *"Retiring a segment is just to delete, not to create."* DEFAULTS TO
+   * SHOWN, so the standalone Segments tab and the "Add a new segment" flow are both untouched; only
+   * Retire opts out. The segments list itself always stays — seeing what already exists, and being
+   * able to delete it, is the whole point of this screen for that flow.
+   */
+  allowCreate?: boolean;
 }
 
 export default function SegmentCreator({
@@ -155,6 +171,7 @@ export default function SegmentCreator({
   onDirtyChange,
   onCreated,
   allowDelete,
+  allowCreate,
 }: SegmentCreatorProps): React.ReactElement {
   const [existing, setExisting] = useState<ExistingSegment[]>([]);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
@@ -186,6 +203,15 @@ export default function SegmentCreator({
   const [delFolders, setDelFolders] = useState(false);
   const [delTyped, setDelTyped] = useState("");
   const [delLog, setDelLog] = useState<string[]>([]);
+  /**
+   * Deleting a segment is up to ~1,000+ sequential row deletes (one HTTP call each, since a bulk
+   * delete endpoint does not exist) — genuinely slow, not stuck. Found live 2026-08-26, retiring GHO's
+   * 1157 mappings: a static "Deleting…" label with no count gives an admin nothing to judge whether it
+   * is working or hung, over a run that can run for minutes. `undefined` before the row count is known.
+   */
+  const [delProgress, setDelProgress] = useState<{ done: number; total: number } | undefined>(
+    undefined,
+  );
 
   const [check, setCheck] = useState<SetCheck>({ state: "blank" });
   const [busy, setBusy] = useState(false);
@@ -599,6 +625,34 @@ export default function SegmentCreator({
      the failure here is not a wrong number on screen: it is an archive nobody could confirm was
      empty being deleted. */
 
+  /**
+   * The libraries a retire actually touches — ONE definition, read by BOTH the count and the delete.
+   *
+   * ⚠ THIS REPLACED A TWO-ELEMENT LITERAL, AND THAT LITERAL WAS TWO BUGS AT ONCE (found live
+   * 2026-08-26, client: *"I deleted all the GHO but it only delete approval document"*):
+   *
+   *  1. **Register #15, third instance.** The literal was `[libraryUrlSegment(), "Documents"]`,
+   *     written before the HC pair and the archive existed and never revisited — so HC Approval
+   *     Document and HC Documents were never counted and never deleted. `libraryTargets()` is
+   *     derived, so a library added later is picked up here for free: that is why it exists.
+   *  2. **Gotcha #12.** That second element was the library's TITLE (`Documents`), while every URL
+   *     below is built from a URL SEGMENT — and that library's segment is `Shared Documents`. So the
+   *     normal Documents library resolved to a path that does not exist, `walkFolders` took its
+   *     deliberate 404-means-absent branch, and it counted as zero folders and zero documents:
+   *     silently, for as long as this screen has existed. ALWAYS `.urlSegment`, never `.title`.
+   *
+   * **The archive pair is excluded deliberately** (client's decision, 2026-08-26): 7-year retained
+   * records outlive the segment that produced them. Filtered by KEY rather than by taking a slice, so
+   * a future non-archive library still arrives automatically and cannot be dropped by accident.
+   *
+   * ⚠ THE COUNT AND THE DELETE MUST READ THE SAME SET. The count decides both the "(they are empty)"
+   * claim and whether the folder-delete box is pre-ticked, so a count covering more libraries than
+   * the delete warns about files nothing will touch, and a count covering FEWER pre-ticks "empty"
+   * over documents that are then recycled. That is why this is one function and not two lists.
+   */
+  const retireLibraries = (): { key: string; title: string; urlSegment: string }[] =>
+    libraryTargets().filter((t) => t.key !== "Archive" && t.key !== "ArchiveHC");
+
   /** Every subfolder path beneath `root`, depth-first. Throws — the caller reports `unknown`. */
   const walkFolders = async (lib: string, root: string): Promise<string[]> => {
     const found: string[] = [];
@@ -674,7 +728,8 @@ export default function SegmentCreator({
     let folders = 0;
     let documents = 0;
     try {
-      for (const lib of [libraryUrlSegment(), DOCUMENTS_LIST_TITLE]) {
+      for (const target of retireLibraries()) {
+        const lib = target.urlSegment;
         const rootUrl = `${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`;
         documents += await countFiles(rootUrl);
         const subs = await walkFolders(lib, root);
@@ -732,8 +787,30 @@ export default function SegmentCreator({
     setDelFolders(false);
     setDelTyped("");
     setDelLog([]);
+    setDelProgress(undefined);
     countSegment(seg)
-      .then(setDelCounts)
+      .then((c) => {
+        setDelCounts(c);
+        /**
+         * PRE-TICKED ONLY FOR AN EMPTY SHELL (client, 2026-08-26: *"the whole point of retiring a
+         * segment is to delete everything"* — they had left GHO's folders behind by not ticking it).
+         *
+         * ⚠ TIED TO THE DOCUMENT COUNT, NEVER FLAT-ON. The checkbox's own label is conditional: with
+         * documents present it reads "including N documents", so a flat default would point the
+         * default action at recycling real files. Retiring usually happens AFTER the migrator has
+         * moved documents out, which is exactly the `documents === 0` case — so this gives the
+         * intended behaviour where it is harmless and withholds it where it is not.
+         *
+         * `state === "counted"` is required as well: an UNKNOWN count means `canOfferFolderDelete`
+         * refuses to render the checkbox at all, and a hidden-but-true flag would be a deletion the
+         * admin was never shown. `alsoFolders` in `onDelete` re-checks the same guard, so this is
+         * belt-and-braces rather than the only thing standing in the way.
+         *
+         * The typed confirmation is unaffected — `needsTypedConfirmation` returns true whenever
+         * `deleteFolders` is true, so pre-ticking never removes a gate.
+         */
+        setDelFolders(c.state === "counted" && c.documents === 0);
+      })
       .catch((e) => setDelCounts(unknownCounts((e as Error).message)));
   };
 
@@ -755,17 +832,20 @@ export default function SegmentCreator({
         lines.push(`Could not read the folder-access mappings (${(e as Error).message}) — none were removed.`);
         ok = false;
       }
-      for (const id of rowIds) {
+      setDelProgress(rowIds.length > 0 ? { done: 0, total: rowIds.length } : undefined);
+      for (let i = 0; i < rowIds.length; i++) {
         try {
-          await deleteItem(cachedListTitle(LIST_SUFFIX.groupMap), id);
+          await deleteItem(cachedListTitle(LIST_SUFFIX.groupMap), rowIds[i]);
           rowsRemoved++;
         } catch {
           ok = false;
         }
+        setDelProgress({ done: i + 1, total: rowIds.length });
       }
       if (rowIds.length > 0) {
         lines.push(`Folder-access mappings removed: ${rowsRemoved} of ${rowIds.length}.`);
       }
+      setDelProgress(undefined);
 
       // 2. The mode row. If THIS fails, stop: a run that removed the grants but left the segment
       //    live is a segment whose uploaders have quietly lost their access.
@@ -776,12 +856,17 @@ export default function SegmentCreator({
       // 3. Folders, only if asked. After the row, never before — see the spec's D6.
       if (alsoFolders) {
         const root = (seg.stagingFolder ?? "").trim();
-        for (const lib of [libraryUrlSegment(), DOCUMENTS_LIST_TITLE]) {
+        for (const target of retireLibraries()) {
           try {
-            const went = await recycleFolder(lib, root);
-            lines.push(went ? `${lib}/${root} moved to the recycle bin.` : `${lib}/${root} did not exist.`);
+            // urlSegment builds the request; title is what the admin recognises in the log.
+            const went = await recycleFolder(target.urlSegment, root);
+            lines.push(
+              went
+                ? `${target.title}/${root} moved to the recycle bin.`
+                : `${target.title}/${root} did not exist.`,
+            );
           } catch (e) {
-            lines.push(`Could not delete ${lib}/${root} — ${(e as Error).message}`);
+            lines.push(`Could not delete ${target.title}/${root} — ${(e as Error).message}`);
             ok = false;
           }
         }
@@ -811,7 +896,7 @@ export default function SegmentCreator({
         }
       }
 
-      lines.push(...survivorLines(alsoFolders));
+      lines.push(...survivorLines(alsoFolders, archiveAvailable()));
       if (rowsRemoved > 0) {
         lines.push("Folder permissions stay in place until Folder Reconciliation runs.");
       }
@@ -846,6 +931,7 @@ export default function SegmentCreator({
       setDeleting(undefined);
       await reload();
     } catch (e) {
+      setDelProgress(undefined);
       setDelLog([...lines, `Stopped: ${(e as Error).message}`]);
       setResult({ ok: false, text: `"${seg.label}" was NOT deleted — ${(e as Error).message}` });
     } finally {
@@ -958,7 +1044,13 @@ export default function SegmentCreator({
                     It currently holds <strong>{delCounts.folders}</strong> folder
                     {delCounts.folders === 1 ? "" : "s"} and{" "}
                     <strong>{delCounts.documents}</strong> document
-                    {delCounts.documents === 1 ? "" : "s"} across both libraries, and{" "}
+                    {delCounts.documents === 1 ? "" : "s"} across{" "}
+                    {/* DERIVED, never "both": this counts four libraries on an HC site and two
+                        without one, and it said "both" while silently reading only the approval
+                        library until 2026-08-26. A number that cannot disagree with the loop that
+                        produced it. */}
+                    <strong>{retireLibraries().length}</strong> librar
+                    {retireLibraries().length === 1 ? "y" : "ies"}, and{" "}
                     <strong>{delCounts.groupMapRows}</strong> folder-access mapping
                     {delCounts.groupMapRows === 1 ? "" : "s"}.
                   </p>
@@ -990,7 +1082,7 @@ export default function SegmentCreator({
 
                 <div style={{ ...s.msg, ...s.ok, marginBottom: 10 }}>
                   <strong>What survives</strong>
-                  {survivorLines(delFolders && canOfferFolderDelete(delCounts)).map((line, i) => (
+                  {survivorLines(delFolders && canOfferFolderDelete(delCounts), archiveAvailable()).map((line, i) => (
                     <div key={i} style={{ marginTop: 4 }}>{line}</div>
                   ))}
                 </div>
@@ -1025,12 +1117,35 @@ export default function SegmentCreator({
                     disabled={!typedOk || busy}
                     onClick={() => { onDelete().catch(() => undefined); }}
                   >
-                    {busy ? "Deleting…" : "Delete segment"}
+                    {busy && delProgress
+                      ? `Deleting… (${delProgress.done} of ${delProgress.total})`
+                      : busy
+                      ? "Deleting…"
+                      : "Delete segment"}
                   </button>
                   <button style={s.ghost} disabled={busy} onClick={() => setDeleting(undefined)}>
                     Cancel
                   </button>
                 </div>
+                {busy && delProgress && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ height: 6, borderRadius: 3, background: "#edebe9", overflow: "hidden" }}>
+                      <div
+                        style={{
+                          height: "100%",
+                          borderRadius: 3,
+                          background: "#0f6c3f",
+                          width: `${Math.round((delProgress.done / delProgress.total) * 100)}%`,
+                          transition: "width 120ms linear",
+                        }}
+                      />
+                    </div>
+                    <p style={{ fontSize: 12, color: "#605e5c", margin: "6px 0 0" }}>
+                      Removing folder-access mappings — {delProgress.done} of {delProgress.total}. This
+                      is one request per row; do not close this tab until it finishes.
+                    </p>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1068,6 +1183,8 @@ export default function SegmentCreator({
         </div>
       )}
 
+      {allowCreate !== false && (
+      <>
       <div style={{ ...s.msg, ...s.warn }}>
         The segment&apos;s <strong>term set must already exist</strong> in the term store, with its
         full structure of terms. This page does not create terms — reconciliation builds one folder
@@ -1075,16 +1192,23 @@ export default function SegmentCreator({
       </div>
 
       <div style={s.card}>
-        <label style={s.label}>Segment name</label>
+        {/* "Project name" under Group Project, matching the term this project already uses
+            elsewhere for that family's top-level identifier (CLAUDE.md: "Project Name" is what
+            "Business Segment" is for a Head Office — the client-facing gotcha this label exists
+            to head off is counting it as one of the two permissioned LEVELS below). Placeholder
+            and hint follow the same split so an admin never sees a Business-Segment-shaped
+            example while filling in a Project. The stored field and its behaviour are unchanged —
+            this is display only. */}
+        <label style={s.label}>{family === "Project" ? "Project name" : "Segment name"}</label>
         <input
           style={conflicts.label ? { ...s.input, ...s.inputBad } : s.input}
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder="Upstream Operations"
+          placeholder={family === "Project" ? "Group Led Project" : "Upstream Operations"}
         />
         {conflicts.label ? <div style={s.fieldErr}>{conflicts.label}</div> : undefined}
         <div style={s.hint}>
-          What uploaders pick from the Segment dropdown.
+          What uploaders pick from the {family === "Project" ? "Project" : "Segment"} dropdown.
           {key ? ` Its configuration key will be ${key}.` : ""}
         </div>
 
@@ -1098,7 +1222,10 @@ export default function SegmentCreator({
               onChange={() => setFamily(f)}
               style={{ marginRight: 6 }}
             />
-            {f === "BusinessSegment" ? "Business Segment" : "Project"}
+            {/* LABEL only. The stored `Category` value stays `Project` — it is data that the
+                upload form and reconciliation read, and renaming it would orphan every existing
+                project segment. */}
+            {f === "BusinessSegment" ? "Business Segment" : "Group Project"}
           </label>
         ))}
 
@@ -1232,6 +1359,8 @@ export default function SegmentCreator({
         )}
         {progress && <span style={{ fontSize: 12, color: "#605e5c" }}>{progress}</span>}
       </div>
+      </>
+      )}
     </div>
   );
 }

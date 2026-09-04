@@ -65,12 +65,12 @@ export function toCsv(rows: GroupExportRow[]): string {
   return lines.join("\r\n");
 }
 
-/** `DMS-group-members-2026-07-31.csv` */
+/** `CRS-group-members-2026-07-31.csv` — the client's prefix; a downloaded file is user-facing. */
 export function exportFileName(now: Date): string {
   // No String.padStart — the SPFx tsconfig doesn't target a lib that has it
   // (same constraint as Promise.allSettled).
   const p = (n: number): string => (n < 10 ? `0${n}` : String(n));
-  return `DMS-group-members-${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}.csv`;
+  return `CRS-group-members-${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}.csv`;
 }
 
 /**

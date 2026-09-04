@@ -30,6 +30,14 @@ The 2026-08-07 six-persona model had two rules backwards. Corrected:
 people's pending and rejected files from a PIC, so "delete what you can see" *is* "delete your own".
 The permission and the visibility are the same boundary — there is nothing extra to enforce.
 
+> ⚠ **SUPERSEDED 2026-08-19**, when draft security was opened to *"Any user who can read items"*. A PIC
+> deletes any pending or rejected file in their unit, not only their own. Still confined to the approval
+> library and to the unit.
+
+> ⚠ **THE HoD ROW ABOVE IS SUPERSEDED 2026-08-17.** Head of Department is **view-only** (client: *"HOD
+> no need deletion power, he only view"*). C-Level's row stands, and since 2026-08-19 its delete and
+> share reach every folder in the segment rather than the segment folder alone.
+
 **A Head of Unit approves their own uploads** (client's choice, asked explicitly). Recorded because it
 is a real control gap: the one person who most often files documents can skip the approval step. The
 alternatives were a deadlock in any single-HoU unit, or giving Heads of Department read access to every
@@ -164,6 +172,11 @@ where per-file ACLs would have been universal, so it is workable — but it is t
 
 Without a way back out, the count only ever grows.
 
+> ✅ **BUILT 2026-08-28** — see `2026-08-28-requests-page-redesign-and-share-revoke-design.md`. Note
+> the correction it carries: only **"Revoke all"** (`resetroleinheritance`) reclaims the scope;
+> per-recipient revocation removes the person and leaves the scope in place, so it does not on its own
+> solve the problem this paragraph is about.
+
 ---
 
 ## 6. What changes in code
@@ -201,7 +214,8 @@ Without a way back out, the count only ever grows.
 
 ## 9. Test plan
 
-1. PIC deletes their own pending file in the approval library; cannot see a peer's.
+1. PIC deletes a pending file in the approval library. ⚠ Since 2026-08-19 they CAN see a peer's and
+   can delete it — the old expectation ("cannot see a peer's") tested draft security, which is now off.
 2. HoU uploads; their own document appears in their own queue and they approve it.
 3. PIC has no Delete in `Documents` — the native command is absent, not merely refused.
 4. PIC requests deletion → HoU approves → the file is in the **recycle bin**, not purged.

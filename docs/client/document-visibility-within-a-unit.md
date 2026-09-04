@@ -10,26 +10,31 @@ Written to be shown or read aloud as-is.
 
 ## The short answer
 
-**Everything is shared within the unit — including work still waiting for approval.**
-
-Changed **2026-08-19** at the client's request. Until then, pending and rejected submissions were
-visible only to their author and the Head of Unit. They are now visible to everyone who can open the
-library for that unit.
+**Work waiting for approval is private to you and your Head of Unit. Approved documents are shared
+with your whole unit.**
 
 |  | Approval Document | Documents |
 |---|---|---|
-| Your **pending** submission | you, your Head of Unit, **and the other uploaders in your unit** | — |
-| Your **rejected** submission | you, your Head of Unit, **and the other uploaders in your unit** | — |
+| Your **pending** submission | **you and your Head of Unit only** | — |
+| Your **rejected** submission | **you and your Head of Unit only** | — |
 | An **approved** document | *(removed — it has moved)* | everyone in the unit |
+
+> ⚠ **This page said the opposite between 2026-08-19 and 2026-08-22, and that was wrong.** A change to
+> make pending work visible unit-wide was agreed and written up, but checking the libraries on
+> 2026-08-22 found **Draft Item Security still set to "Only users who can approve items (and the
+> author)" on BOTH `Approval Document` and `HC Approval Document`** — so the setting was never applied,
+> or was applied and reverted. The table above describes what the system actually does today. If the
+> unit-wide behaviour is still wanted, it is one setting per library and it has not been made.
 
 **Nobody outside the unit sees any of it.** The people who can open a unit's approval library are its
 uploaders and its Head of Unit — nobody else, at any stage. And the Highly Confidential libraries stay
 separate: only people in the unit's **Highly Confidential** uploader group can open those at all. A
 plain uploader in the same unit cannot see a Highly Confidential document, or the library it lives in.
 
-Why the change: a folder created by one uploader used to be invisible to their colleagues, so the
-next person could not reach their own file inside it. Making everything visible within the unit fixes
-that directly, and removes two background processes that existed only to work around it.
+One consequence worth knowing: because pending work is private, a *folder* created by one uploader is
+also invisible to their colleagues — so a background process approves those folders automatically, and
+the next person can reach their own file inside. That is why both approval libraries have a folder
+approval flow running.
 
 So a colleague in your unit cannot see what you are still working on, what you submitted
 yesterday, or anything that was sent back to you. They can see what has been **approved** — and an

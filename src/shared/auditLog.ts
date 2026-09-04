@@ -25,6 +25,23 @@ export const EVENT = {
   rejected: "Rejected",
   routed: "Routed",
   deleted: "Deleted",
+  // The seven-year archive mover (Power Automate, 2026-09-02). Written by the two archive flows
+  // (`CRS — Archive after seven years` / its HC clone) via their own "Create item" action against
+  // this list — not through this module, since a flow cannot call TypeScript. Registered here
+  // anyway so the viewer's Action dropdown can filter on it, the same reason `routed`/`deleted` are
+  // registered rather than left as bare strings only a flow ever writes.
+  archived: "Archived",
+  /* ⚠⚠ WRITTEN BY THE FLOWS AND MISSING FROM HERE UNTIL 2026-09-03, WHICH IS WHY NEITHER COULD BE
+     FILTERED. Client: *"the Audit log is missing some filter such as the File Replace filter"*.
+     `EventType` is a **Text** column — deliberately, so a value absent from a Choice column's
+     `Choices` can never fail a write — so `Auto-route` / `HC Auto Route` have been writing `Replaced`
+     rows and `CRS — Audit request activity` `ShareRevoked` rows for days, correctly stored and
+     invisible to the Action dropdown, which is built from `ALL_EVENT_TYPES`.
+     ⚠ THE STANDING LESSON: a flow can introduce an event type without touching this file, and
+     nothing fails when it does. Whenever a flow gains a `Create item` with a new `EventType`, it must
+     be added here in the same breath — the row is written either way, and only the FILTER is lost. */
+  replaced: "Replaced",
+  shareRevoked: "ShareRevoked",
   uploadRefused: "UploadRefused",
   accessGranted: "AccessGranted",
   accessRevoked: "AccessRevoked",
@@ -66,6 +83,11 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.rejected]: "Rejected",
   [EVENT.routed]: "Moved to Documents",
   [EVENT.deleted]: "Deleted",
+  [EVENT.archived]: "Archived",
+  // "Replaced by a newer upload", not "Replaced": the row records that THIS document was superseded,
+  // and the bare word reads as though it did the replacing.
+  [EVENT.replaced]: "Replaced by a newer upload",
+  [EVENT.shareRevoked]: "Share access revoked",
   [EVENT.uploadRefused]: "Upload refused",
   [EVENT.accessGranted]: "Access granted",
   [EVENT.accessRevoked]: "Access revoked",
@@ -86,14 +108,35 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.requestRejected]: "Request rejected",
 };
 
+/**
+ * The label for ONE ROW, which for a routing event depends on where it went.
+ *
+ * Client, 2026-08-24: *"event is showing Moved to Documents for HC Documents"*. `EVENT_LABEL` is keyed
+ * on the event TYPE, and there is one `Routed` type for both verticals — so an HC document's routing
+ * row read *"Moved to Documents"* while the `Library` beside it said `HC Documents`. A row that
+ * contradicts itself is read as a bug, and here it also understates the sensitivity of what moved.
+ *
+ * Only `routed` is library-dependent: every other event happens IN a library rather than BETWEEN two,
+ * so its label needs no destination. Falls back to the static label whenever the library is blank —
+ * every row written before `LibraryName` existed, and any row whose flow could not resolve it.
+ */
+export function eventLabelForRow(eventType: string, libraryName?: string): string {
+  const type = (eventType ?? "").trim();
+  const lib = (libraryName ?? "").trim();
+  if (type === EVENT.routed && lib.length > 0) return `Moved to ${lib}`;
+  return EVENT_LABEL[type] ?? type;
+}
+
 /** Every type, in the order the viewer offers them. */
 export const ALL_EVENT_TYPES: string[] = [
-  EVENT.uploaded, EVENT.approved, EVENT.rejected, EVENT.routed, EVENT.deleted,
+  EVENT.uploaded, EVENT.approved, EVENT.rejected, EVENT.routed, EVENT.replaced, EVENT.deleted,
+  EVENT.archived,
   EVENT.uploadRefused, EVENT.accessGranted, EVENT.accessRevoked,
   EVENT.reconciliationRun, EVENT.structureChanged, EVENT.migrationRun,
   EVENT.segmentCreated, EVENT.segmentDeleted, EVENT.abbreviationChanged, EVENT.policyChanged,
   EVENT.groupMapChanged, EVENT.groupCreated, EVENT.groupDeleted, EVENT.membersChanged,
   EVENT.deletionRequested, EVENT.shareRequested, EVENT.requestApproved, EVENT.requestRejected,
+  EVENT.shareRevoked,
 ];
 
 /**

@@ -1,32 +1,76 @@
 import * as React from "react";
-import { useEffect, useState } from "react";
 import AccessShell from "./AccessShell";
-import StagingAccess from "./StagingAccess";
 import { IAccessProps } from "./IAccessProps";
-import { primeNames } from "../../../shared/spNaming";
-import { libraryTitle } from "../../../shared/naming";
+import { resolveLink, CARDS } from "../../../shared/adminPages";
+import { readSitePages } from "../../../shared/backToSettings";
 
+/**
+ * RETIRED (2026-09-02), same treatment as `FolderAccessPage.tsx` — read that file's comment for the
+ * full reasoning; this is the identical pattern applied to a second page the same day.
+ *
+ * Client: *"Approval Library Access, Site Access is not needed, its confusing them as they already
+ * know that adding a user in the group from Group Management it will automatically allow them have
+ * access to site and library. Just keep Page access."*
+ *
+ * ⚠ IT IS A SIGNPOST, NOT A DELETION. The web part stays registered and the
+ * `Approval-Library-Access.aspx` page stays on the site — removing a component from `componentIds`
+ * is the change that has already bitten this project twice (CRS Requests undeployable for weeks,
+ * the `+ New Folder` customizer inert for months, both silently), and an admin may have this URL
+ * bookmarked or in site navigation. `pageAccessPolicy` still locks it, so nothing is newly exposed.
+ * `StagingAccess.tsx` itself is untouched — this page simply stops mounting it.
+ */
 export default function ApprovalLibraryAccessPage({ context }: IAccessProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
-  // The heading is the LIVE library title ("Approval Document"), never the logical key.
-  // Hardcoding "Staging" here would be the one place a client still sees the retired name.
-  const [libLabel, setLibLabel] = useState<string>(libraryTitle());
+  const [href, setHref] = React.useState<string | undefined>(undefined);
 
-  useEffect(() => {
-    primeNames(context.spHttpClient, siteUrl)
-      .catch(() => undefined)
-      .then(() => setLibLabel(libraryTitle()))
+  /**
+   * The Group Management address is RESOLVED from Site Pages, never hardcoded — the client renames
+   * every page at import, so a literal `Group-Management.aspx` would fail as a DEAD LINK on the one
+   * page whose only job is saying where to go. Same rule, and the same `resolveLink`, as
+   * `FolderAccessPage.tsx` and the CRS Settings landing page.
+   *
+   * A failed read leaves the link out rather than guessing: the text below still names the page.
+   */
+  React.useEffect(() => {
+    const link = CARDS
+      .filter((c) => c.key === "access")[0]
+      ?.links.filter((l) => l.key === "groups")[0];
+    if (!link) return;
+    readSitePages(context, siteUrl)
+      .then((pages) => {
+        const t = resolveLink(link, pages);
+        if (t.state !== "missing") setHref(t.url);
+      })
       .catch(() => undefined);
   }, []);
 
   return (
     <AccessShell
-      title={`${libLabel} Access`}
-      subtitle={`Who may open the ${libLabel} library at all. Uploaders and approvers need this on top of their folder grant.`}
+      title="Approval Library Access has moved"
+      subtitle="Who may open the approval library is now decided entirely by Group Management."
     >
-      {/* "Staging" is the LOGICAL LibTarget key, mapped to the live title at the API
-          boundary by libApiTitle — not the library's name. */}
-      <StagingAccess context={context} siteUrl={siteUrl} library="Staging" />
+      <div style={{ fontSize: 13, lineHeight: 1.6, maxWidth: 760 }}>
+        <p>
+          Adding a person to a unit&rsquo;s uploader or approver group already gives them everything
+          they need — the library entry that used to be shown here, and the folder itself. There is
+          nothing to configure separately.
+        </p>
+        <p>
+          Nothing has changed about who can reach what. Access is still applied by a{" "}
+          <strong>Folder Reconciliation</strong> run, from the Folder Administration page.
+        </p>
+        {href !== undefined
+          ? (
+            <p>
+              <a href={href} style={{ fontWeight: 600 }}>Go to Group Management</a>
+            </p>
+          )
+          : (
+            <p style={{ color: "#666" }}>
+              Open the <strong>Group Management</strong> page from CRS Settings.
+            </p>
+          )}
+      </div>
     </AccessShell>
   );
 }

@@ -28,12 +28,22 @@ export async function ensureColumn(
   listTitle: string,
   internalName: string,
   displayName: string,
-  kind: "Text" | "Note" | "DateTime" = "Text",
+  kind: "Text" | "Note" | "DateTime" | "Boolean" = "Text",
 ): Promise<boolean> {
   const listBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')`;
 
+  /* ⚠ FILTERED SERVER-SIDE. This read was `$select=InternalName&$top=500` and searched the result —
+     the third instance of one defect in two days (`fetchAllSiteGroups` at 585 groups, then the
+     submission stamp's own column check). A document library carries hundreds of fields and the cap
+     is a number nobody controls, so **a truncated read is indistinguishable from an absent column**.
+     Here that means concluding a column is missing and trying to CREATE it: SharePoint refuses a
+     duplicate internal name, so this throws and reconciliation reports a column it cannot create on a
+     library that already has it — a failure nobody could act on. `$filter` returns at most one row.
+     Memory `sp-capped-read-reads-as-absent`. */
   const check: SPHttpClientResponse = await spHttpClient.get(
-    `${listBase}/fields?$select=InternalName&$top=500`,
+    `${listBase}/fields?$select=InternalName&$filter=${encodeURIComponent(
+      `InternalName eq '${internalName.replace(/'/g, "''")}'`,
+    )}`,
     SPHttpClient.configurations.v1,
     { headers: { Accept: "application/json;odata=nometadata" } },
   );
@@ -51,7 +61,12 @@ export async function ensureColumn(
   // which would collapse every event in a day to the same instant and destroy the ordering an
   // audit feed exists to show — while still looking like a working date column.
   const xml =
-    kind === "Note"
+    /* A Yes/No column. `Default="0"` so an existing document is unticked rather than null — the
+       auto-approve flow's trigger condition compares to true, and a null would be neither. */
+    kind === "Boolean"
+      ? `<Field Type="Boolean" DisplayName="${internalName}" Name="${internalName}" ` +
+        `StaticName="${internalName}"><Default>0</Default></Field>`
+      : kind === "Note"
       ? `<Field Type="Note" DisplayName="${internalName}" Name="${internalName}" ` +
         `StaticName="${internalName}" NumLines="6" RichText="FALSE" />`
       : kind === "DateTime"

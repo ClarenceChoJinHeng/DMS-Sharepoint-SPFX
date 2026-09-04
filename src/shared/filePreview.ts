@@ -60,8 +60,24 @@ export interface PreviewTarget {
   kind: PreviewKind;
   /** The URL to render. Empty for `none`. */
   url: string;
-  /** Always populated: the file itself, for "Open in a new tab" and as the fallback route. */
+  /**
+   * The file itself. **The download route** — keep it for a Download control, never for "open".
+   */
   fileUrl: string;
+  /**
+   * Where "Open in a new tab" should actually go.
+   *
+   * ⚠ NOT `fileUrl`. Navigating to a document's own URL makes SharePoint SERVE it, and for an
+   * Office file that means a DOWNLOAD — reported by the client 2026-08-30 on both the approval
+   * preview and My Submissions: *"the system download the uploaded file, instead of opening it in
+   * a new tab."* The link said one thing and did another.
+   *
+   * Office goes through WopiFrame in `view` mode, which opens the document in the browser editor.
+   * Everything else gets `?web=1`, the flag that tells SharePoint to RENDER a file rather than
+   * hand it over — without it a PDF downloads on some tenants too, which is the same complaint
+   * waiting to happen on a different file type.
+   */
+  openUrl: string;
 }
 
 /** Percent-encode each path segment, leaving the separators intact. */
@@ -90,18 +106,26 @@ export function previewTarget(
 ): PreviewTarget {
   const kind = previewKind(fileName);
   const fileUrl = `${tenantRoot}${encodePath(serverRelativeUrl)}`;
+  /* `?web=1` asks SharePoint to render rather than serve. Appended with `?` because `fileUrl` is a
+     bare path with no query of its own — and BEFORE any fragment, which is why the PDF branch
+     builds its own rather than concatenating onto this. */
+  const webOpen = `${fileUrl}?web=1`;
+  if (kind === "office") {
+    const wopi = `${webUrl}/_layouts/15/WopiFrame.aspx?sourcedoc=${encodeURIComponent(serverRelativeUrl)}`;
+    return {
+      kind,
+      url: `${wopi}&action=embedview`,
+      fileUrl,
+      // `view`, not `embedview`: the embedded chrome is right inside an iframe and wrong in a tab
+      // of its own, where the reader expects the full viewer.
+      openUrl: `${wopi}&action=view`,
+    };
+  }
   if (kind === "pdf") {
     // #view=FitH is a PDF Open Parameter the browser's native viewer honours — fits the page to
     // the iframe's width rather than its height, which otherwise leaves gutters on portrait pages.
-    return { kind, url: `${fileUrl}#view=FitH`, fileUrl };
+    return { kind, url: `${fileUrl}#view=FitH`, fileUrl, openUrl: webOpen };
   }
-  if (kind === "office") {
-    return {
-      kind,
-      url: `${webUrl}/_layouts/15/WopiFrame.aspx?sourcedoc=${encodeURIComponent(serverRelativeUrl)}&action=embedview`,
-      fileUrl,
-    };
-  }
-  if (kind === "image" || kind === "text") return { kind, url: fileUrl, fileUrl };
-  return { kind: "none", url: "", fileUrl };
+  if (kind === "image" || kind === "text") return { kind, url: fileUrl, fileUrl, openUrl: webOpen };
+  return { kind: "none", url: "", fileUrl, openUrl: webOpen };
 }

@@ -4,7 +4,6 @@ import { Version } from "@microsoft/sp-core-library";
 import { type IPropertyPaneConfiguration } from "@microsoft/sp-property-pane";
 import { BaseClientSideWebPart } from "@microsoft/sp-webpart-base";
 
-import { withBackToSettings } from "../../shared/backToSettings";
 
 import Requests from "./components/Requests";
 import { IRequestsProps } from "./components/IRequestsProps";
@@ -27,8 +26,16 @@ export default class RequestsWebPart extends BaseClientSideWebPart<Record<string
     const element: React.ReactElement<IRequestsProps> = React.createElement(Requests, {
       context: this.context,
     });
-    // Wrapped at the web part boundary — see withBackToSettings.
-    ReactDom.render(withBackToSettings(this.context, element), this.domElement);
+
+    /* NO "Back to CRS Settings" band, deliberately — removed 2026-08-20 when the client asked
+       "why is Request webpart inside CRS Settings? HOU don't have access to CRS Settings".
+
+       They are right, and it was a real dead end: `pageAccessPolicy` classifies any page whose name
+       matches /setting/ as `adminOnly`, so a Head of Unit following that link gets AccessDenied — on
+       the one page they are meant to work from. This belongs with the other uploader/approver pages
+       (Upload Form, Approval Document, My Submissions), none of which carry the band, and NOT with
+       the admin screens the CRS Settings directory actually lists. */
+    ReactDom.render(element, this.domElement);
   }
 
   protected onDispose(): void {

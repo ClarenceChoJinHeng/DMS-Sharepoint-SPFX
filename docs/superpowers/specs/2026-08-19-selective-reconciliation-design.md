@@ -1,7 +1,7 @@
 # Selective reconciliation — run the segments that changed
 
 **Date:** 2026-08-19
-**Status:** HALF A BUILT 1.0.175.0 (the segment picker), NOT site-tested. ⚠ Half B — detecting which segments changed — is deliberately DEFERRED: it needs a per-segment term walk at picker time (~115 requests for GHO), which is the expensive thing this feature exists to avoid. Half A delivers the whole time saving; the marks were advisory.
+**Status:** HALF A BUILT 1.0.175.0 (the segment picker), site-tested 2026-08-19. ⚠ It shipped with a DATA-LOSS defect — the orphan passes were not scope-aware and pruned an uncovered segment's Folder Map rows; fixed 1.0.179.0, see §5. ⚠ Half B — detecting which segments changed — is deliberately DEFERRED: it needs a per-segment term walk at picker time (~115 requests for GHO), which is the expensive thing this feature exists to avoid. Half A delivers the whole time saving; the marks were advisory.
 **Register:** #18
 **Client's ask, 2026-08-19:** *"if client only added new subunit or new unit under two business
 segment's department and they have 5 Business segment in the future, this will slow them down if
@@ -105,6 +105,25 @@ A term tree read to 90% is indistinguishable from a segment with fewer units.
 
 - **The run itself is untouched.** Every pass, failure rule and log line stays; only the set of
   segments entering the loop narrows.
+- **⚠ THE ORPHAN PASSES MUST BE SKIPPED ENTIRELY ON A SCOPED RUN — THIS SPEC MISSED IT AND IT
+  DELETED LIVE DATA (2026-08-19).** The Folder Map prune and the term-GUID orphan repair decide a row
+  is dead by asking *"is its term among the terms this run enumerated"*. Scope the run, and every row
+  of every UNCOVERED segment answers no. An MHO-only run pruned **all 67 of GHO's Folder Map rows**,
+  and every GHO uploader was refused with *"your unit isn't ready to receive uploads yet — run folder
+  reconciliation"*: the message reconciliation itself tells them to act on, produced by
+  reconciliation.
+  - **This is the MIRROR of the rule below**, and the reason to state both together: site-wide passes
+    must never be NARROWED by scope; orphan passes must never be WIDENED beyond it. §5 wrote down one
+    direction, and **the direction nobody wrote down was the destructive one**.
+  - **Skipped ENTIRELY, not filtered to the covered segments.** Filtering needs every row to declare
+    its segment reliably, and a row whose segment could not be determined would then be deleted by the
+    very rule meant to protect it. Orphan cleanup is maintenance: a full run does it, and doing
+    nothing is always recoverable.
+  - `coversEverySegment` in `shared/reconScope.ts` fails **CLOSED** — an empty, refused or unreadable
+    scope answers false, so an unknown scope never licenses a deletion. Pinned by regression tests.
+  - **Recovery is a full run:** reconciliation rebuilds Folder Map rows from the term tree and the
+    folders, which were never touched. Nothing was lost permanently — but uploads were down for the
+    whole segment until someone noticed.
 - **⚠ THE SITE-WIDE PASSES STILL RUN IN FULL, EVERY TIME.** Site entry, library state, page access and
   the admin-page lockdown assert state that **has no segment**. Scoping them to the ticked segments
   would recreate precisely the class of bug this codebase has now found four times — a mechanism

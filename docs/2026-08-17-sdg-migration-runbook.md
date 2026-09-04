@@ -1,7 +1,7 @@
 # CRS — migration runbook for SD Guthrie's tenant
 
-**Date:** 2026-08-17
-**Package:** 1.0.128.0
+**Date:** 2026-08-17, **amended 2026-08-24 — read §0.5 FIRST**
+**Package:** 1.0.231.0+ (bump the version before packaging)
 **Target:** SDG tenant, one site collection. Site collection app catalog **already exists**.
 **Flow identity:** an SDG-issued ("Guthrie") account, never the Trinergy one.
 
@@ -23,6 +23,51 @@
 **Naming.** This client uses the **`CRS`** prefix. `naming.ts` probes `CRS <suffix>` before
 `DMS <suffix>` per list, so a partial rename degrades gracefully — but provision everything as `CRS`
 from the start and each probe costs one request instead of two.
+
+---
+
+## 0.5 What changed since 2026-08-17 — amendments, 2026-08-24
+
+A week of building sits between the original and today. **The body below is still correct except where
+this section overrides it.** Two numbers first, because they decide how the day is planned:
+
+| | Cost | Why |
+|---|---|---|
+| **Reconciliation, per segment** | **~60–75 min** | MHO's first run: 71 minutes, 2,441 folders, ~980 grants. Two live segments, so **2+ hours**. It runs IN THE BROWSER — the tab must stay open, and there is no resume. |
+| **The flows** | **~2–3 hours** | §13 says *two flows*. **There are now twelve.** |
+
+**Plan it as: start reconciliation as early as the data allows, and build flows in a second window
+while it runs.** Everything before §12 is setup that gates it.
+
+### New since 2026-08-17
+
+| Step | Goes with | If skipped |
+|---|---|---|
+| **`Archive` + `HC Archive` libraries**, content approval **OFF** | §5 | Nothing archives until 2033, so this is safe to defer — but **check for a name collision first**: the titles `Archive` / `CRSArchive` / `HC Archive` / `HCArchive` were **verified absent on SDG 2026-08-23**. A pre-existing `Archive` would be adopted as ours and filled with ~140 CRS folders. |
+| **`CRS Request` permission level** — copy Contribute, untick **Delete Items** AND **Delete Versions** | §6 | Every deletion and share request returns **403** and the whole feature is inert. |
+| **Grant `CRS_SITE_MEMBERS` the `CRS Request` level ON the `CRS Requests` list** | after §7 | Same 403. The list is created inheriting site permissions, where that group holds Read — and Read cannot add items. |
+| **Grant the flow account Contribute ON the `CRS Audit Log` list** | after §7 | Every flow row fails to write. `writeAudit` never blocks the action it logs, so **the log simply stops filling, with nothing anywhere to say why.** |
+| **`hcConfidentialityLevel` config row** = the confidentiality term's own label | §9 | **EVERY uploader is offered the Highly Confidential level.** The fallback probes the HC libraries by title, SharePoint security-trims them for an uncleared user, HC then reads as *not on this site*, and the level is shown to exactly the person who must not see it. Reconciliation reports the missing row but cannot repair it — the label must match the client's own term. |
+| **`legallyPrivilegedFor`** (e.g. `Confidential;Highly Confidential`), **`allowExternalSharing`**, **`tenantDomains`**, **`uploadsPaused` = `no`** | §9 | A blank `legallyPrivilegedFor` never offers the tick. Sharing fails CLOSED without the other two — and **no domains supplied means every recipient reads as external.** |
+| **Confirm the Site Pages LIST has no ACL of its own** | §8 | On our test site it did, and **every non-admin was denied the home page** while group membership, the page ACL and the user's own session all read correct. The tell is the asymmetry — pages with their own ACL work, inheriting pages do not. Fix = grant `CRS_SITE_MEMBERS` Read on the **list**, and **UNTICK "Share everything in this folder, even items with unique permissions"**, which is on by default and would unlock all ten locked admin pages. |
+| **Delete `Home.aspx`** — WARN: **ONLY IF `CollabHome.aspx` ALSO EXISTS** | §8 | On the TEST site `Home.aspx` was a System Account stray - never published, linked from nothing, answering AccessDenied - and `CollabHome.aspx` was the real home page. **SDG HAS NO `CollabHome.aspx`: `Home.aspx` IS its home page, and following this line literally would delete it** (checked 2026-08-26). List Site Pages first; delete only the stray, never the only home page. |
+| **`Bulk Upload` is now an UPLOADER page**, not an admin one | §8, §8.1 | It moved out of `MUST_LOCK`. Locking it fights the derived page pass, which now grants it — one granting and one stripping, every run, for ever. It is also deliberately **off** the CRS Settings landing page. |
+| **`SubUnit` IS built** | §15 gap #8 | Authored under each unit, no term-set id needed. That gap row is stale. |
+
+### Corrections to the body
+
+- **§6's open question is resolved.** `CRS Approve` does **not** need Add Items. The Head of Unit
+  persona carries `UPLHC`, which `LIBRARY_ROLES.Staging` lists on the normal approval library too, so
+  the upload right arrives with the persona's own role. Use the persona, never a hand-made group.
+- **§13 is the big one — see the amendment inside it.**
+- **§15: the audit log now records the FILE LIFECYCLE**, not admin activity only — verified end to end
+  on both verticals, 2026-08-23/24. That gap row stops applying once the six audit flows exist.
+- **§15: CRS Search's metadata filters are PROVEN BROKEN, not an unverified assumption.**
+  `DepartmentOWSTEXT` and its siblings exist but come back **null on real documents**, so a tier
+  filter matches nothing — which reads to a user as *"there are no such documents"*. The fix is a
+  Search Schema mapping to `RefinableStringNN` plus an **asynchronous re-index**, routinely hours.
+  **Do not attempt it on migration day, and do not describe those filters as working.** Free-text
+  search and the approval-library half are unaffected.
 
 ---
 
@@ -307,6 +352,7 @@ On ClarenceDMSTesting the HC pair was missed and reconciliation warned on every 
 | `CRS Approve` | **Approve Items** — draft-item security and the whole approval flow key off this |
 | `CRS Delete` | Read + Delete Items |
 | `CRS Share` | per the deletion-and-share spec |
+| `CRS Request` | copy Contribute, untick **Delete Items** AND **Delete Versions** (added 2026-08-24) |
 
 **Verify `CRS Approve` actually contains Approve Items** — never infer it from the name. Note that
 Approve Items cannot be separated from Edit Items; that is a SharePoint constraint, not a mistake.
@@ -467,7 +513,63 @@ reachable.
 
 ---
 
-## 13. Power Automate — two flows, both as the SDG account
+## 13. Power Automate — **FOURTEEN** flows, all as the SDG account
+
+> **AMENDED 2026-08-24. This section was written when there were two.** The two described below are
+> still the first two to build, and the rest depend on nothing but themselves, so what follows is
+> additive rather than a rewrite.
+>
+> | # | Flow | Runbook |
+> |---|---|---|
+> | 1 | Auto-route | `2026-08-08-auto-route-flow-and-draft-isolation.md` |
+> | 2 | Folder approval | same |
+> | 3 | HC Auto Route | same, pointed at the HC pair |
+> | 4 | HC folder approval | same |
+> | 5 | `CRS — Auto-approve bulk imports` | `2026-08-22-bulk-import-auto-approve-flow-runbook.md` |
+> | 6 | `HC auto-approve` | same |
+> | 7–12 | The six audit flows (3 normal, 3 HC) | `2026-08-23-audit-log-flows-runbook.md`; §7 covers the HC clones |
+> | 13 | `CRS — Notify approvers` | `2026-08-25-approver-notification-flow-runbook.md` — build from §11, not §5 alone |
+> | 14 | `CRS — Notify HC approvers` | same; filter `Role eq 'APRHC'`, NOT `APR` — see below |
+> | — | `CRS — Archive after seven years` | `2026-08-22-seven-year-archive-mover-runbook.md` — safe to defer, nothing archives until 2033 |
+>
+> **BOTH FOLDER-APPROVAL FLOWS MUST STAY ON.** Draft Item Security reads *"Only users who can approve
+> items (and the author)"* on both approval libraries, so a below-Unit folder created by one PIC is
+> invisible to the next — who then cannot reach their own file inside it and cannot self-fix, because
+> that needs ApproveItems.
+>
+> **The auto-approve trigger needs THREE clauses:** `{IsFolder} = false` AND `BulkImport = true` AND
+> `{ModerationStatus} != Approved`. **Drop the marker clause and it approves every file in the
+> approval library on touch — abolishing approval site-wide, silently, on a flow that reports success
+> every time.**
+>
+> **Do NOT set `Hidden: true` on `BulkImport`** on either approval library. A hidden field is absent
+> from the trigger payload, so the write succeeds, the trigger reads null, the flow never fires — and
+> leaves **no run history** at either end to inspect.
+>
+> **After pasting any expression into a flow field, press End and check for a stray line break.** A
+> trailing newline in `ItemUniqueId` silently breaks "History of this file"; the tell is
+> `xml:space="preserve"` in the REST response, invisible in the list view, the web part and the flow
+> designer. Hit twice on 2026-08-23.
+>
+> **`{ModerationStatus}` from the connector is a STRING, and rejection reads `"Denied"`** — not the
+> integers every REST call in this codebase uses, and not `"Rejected"`. Comparing wrongly logs every
+> approval as an upload, or writes nothing at all.
+>
+> **⚠ THE HC NOTIFICATION FLOW'S GROUP MAP FILTER IS A DISCLOSURE BOUNDARY.** `Role eq 'APRHC'`, never
+> `APR`. `APR` is held by the plain `hou` persona and `APRHC` only by `hou_hc`, so filtering the HC
+> flow on `APR` emails **every ordinary Head of Unit** the filename and unit of a Highly Confidential
+> document — the exact disclosure the HC split exists to prevent. It fails in the safe-LOOKING
+> direction: the flow runs green and the emails themselves look correct.
+>
+> **⚠ BOTH NOTIFICATION FLOWS READ THE GROUP MAP BY TITLE**, not by GUID:
+> `_api/web/lists/getbytitle('CRS Group Map')/items`. So they need no entry in the §13.5 replacement
+> map — but **confirm that list's title on SDG before importing**. A wrong title 404s loudly, which is
+> the safe direction, but it stops every notification with nothing else to explain it.
+>
+> **⚠ AN EMPTY APPROVER GROUP FAILS THE RUN UNLESS `HasRecipients` IS PRESENT.** Built from §5 of that
+> runbook alone, the flow returns *"To Field cannot be null or empty"* on any unit whose approver group
+> has nobody in it — which is the normal state of a freshly provisioned segment, i.e. most of SDG on
+> migration day. §11 of the runbook carries the fix. Import rather than rebuild and it comes with it.
 
 **Sign in as the SDG account before creating the first action.** The connection is created implicitly
 by that action and the identity is then permanent.
@@ -499,6 +601,109 @@ come back `odata=verbose` so every `body('X')?['Field']` is null; `validateUpdat
 
 If HC is in scope, build the **two HC equivalents** with the same polarity. Nothing HC works without
 them.
+
+---
+
+## 13.5 Migrating the flows by EXPORT / IMPORT (2026-08-24) - VERIFIED 2026-08-26
+
+> **ALL THIRTEEN FLOWS WERE EXPORTED, REPOINTED AND IMPORTED INTO SDG ON 2026-08-26**, and the five
+> SDG list GUIDs in the table below were re-read off the live site and **match this table exactly**.
+> The route works. Three things learned doing it:
+>
+> **WARN: IMPORTING THE RAW EXPORT FAILS, AND THE ERROR NAMES THE WRONG THING.** It returns
+> *"Flow save failed ... 'sharepointonline' operation 'GetTable' failed with status code
+> 'Unauthorized'"*. That is not a permissions problem: the import validates every list reference USING
+> THE CONNECTION YOU SELECTED, and `crs@sdguthrie.com` cannot resolve a list on the TEST tenant. The
+> package must be repointed BEFORE importing.
+>
+> **SET "Create as new" AT EXPORT.** The default is *Update*, which looks for an existing flow with
+> the same id; on a different tenant there is none, and the import ends with *"To import this flow
+> you'll need to save it as a new flow first"*.
+>
+> **WARN: THE SAFETY THAT MATTERS IS REFUSING UNKNOWN LISTS.** Repoint by script, not by hand, and
+> have it find every `lists(guid'...')` in the package and ABORT if one is not in the map. A wrong
+> site URL or list TITLE fails loudly; a wrong list GUID does not - item ids are per-LIST, so a stamp
+> writes onto a different document and a delete removes whatever holds that id there. Occurrence
+> counts differ per flow, so validate by REFERENCE, never by count.
+>
+> Only `definition.json` needs editing, and on these flows the site URL appears in one plain form
+> only - no `%2f`-encoded variants. Two connections are remapped at import (SharePoint AND Office 365
+> Outlook); some flows carry only the first.
+
+
+Rebuilding twelve flows by hand is 2–3 hours and every field is a chance to mistype an expression.
+Exporting each flow as a **package (.zip)** from the test tenant and importing it on SDG's carries the
+structure, the expressions, the trigger conditions and the run-after wiring intact — which is the part
+that is slow and error-prone to retype.
+
+**On the test tenant:** each flow → `⋯` → **Export** → **Package (.zip)**.
+**On SDG, signed in AS `crs@sdguthrie.com`:** My flows → **Import** → Package. The import asks which
+connection to use — **that is the moment the identity is baked in**, so being signed in as the service
+account here satisfies the rule in §13. Flows arrive turned OFF.
+
+⚠ **IMPORT DOES NOT REWRITE SITE OR LIST REFERENCES.** Every action still points at the test site.
+Fastest safe route: unzip the package, find/replace in `definition.json`, re-zip, then import.
+
+### The replacement map
+
+| | test (from) | SDG (to) |
+|---|---|---|
+| Site URL | `https://dcidigitalcom.sharepoint.com/sites/ClarenceDMSTesting` | `https://sdguthrie.sharepoint.com/sites/CRS` |
+| Approval Document | `a9342528-66be-458c-ba70-a6e3248a5133` | `eeb1bb19-ec53-4c41-8dc9-ecf255979c9b` |
+| Documents | `e322e3a5-3687-4da3-94f8-e0b06c01dd7e` | `fbc062dd-fcd0-4458-9161-2bfc19c917fa` |
+| HC Approval Document | `2311cd83-90aa-4077-a647-65d251a5f426` | `d935aa6d-dc48-4832-ba7e-eca485ecdff3` |
+| HC Documents | `e4fb3b2c-6f20-4bbb-a4f2-e9a5301d4080` | `122a4aa9-65fb-479a-90a7-3866d19f51b4` |
+| CRS Audit Log | `84ed065f-14e2-49b2-8b37-d40324587825` | `4ac219e5-b855-46a3-be4b-4e96bba546c5` |
+
+`CRS Requests` is deliberately absent: no flow touches it.
+
+### ⚠ The GUIDs are the dangerous half
+
+A wrong **site URL** or list **title** fails loudly — 403 or 404. A wrong **list GUID** does not.
+**Item ids are per-LIST**, so a GUID that resolves to the wrong list makes a stamp write onto a
+different document and a delete remove whatever holds that id there. That is data loss on a run
+reporting success, and it is exactly the class of fault that produced six wrong references in the HC
+clone of 2026-08-19. Replace every `lists(guid'…')` inside an HTTP action's Uri and every `table`
+field on a SharePoint action.
+
+### After importing each flow
+
+1. **Re-select the connection** if the import did not.
+2. **Verify the trigger condition by eye.** `{IsFolder} = false` on the routing and audit flows;
+   `true` on the two folder-approval flows. **The polarity produces no error either way** — wrong on a
+   routing flow means nothing is ever routed, silently, and a flow that never fires leaves no run
+   history to inspect.
+3. **Check the email actions.** `Send an email from a shared mailbox` names a mailbox that exists on
+   OUR tenant, not SDG's. Repoint it or the action fails at the end of an otherwise correct run.
+4. **Turn it on deliberately**, one flow at a time, and test before importing the next.
+5. **WARN: TURN THE HAND-MADE EQUIVALENT OFF FIRST, AND RENAME IT `Old - ...`.** Import always creates
+   a NEW flow, so you end with two flows of the same name watching one library, both firing - the
+   second one's action hits state the first already changed. Renaming removes the ambiguity at the
+   moment someone switches one on at 1am. Keep the old one until the imported one is proven; it is
+   the rollback.
+6. **WARN: NO SDG SHARED MAILBOX EXISTS.** Both routing flows use `Send an email from a shared mailbox
+   (V2)` pointed at `dms-noreply@trinergydigital.com`, which is on OUR tenant. Replace both actions
+   with plain **`Send an email (V2)`**, which sends as the connection owner (`crs@sdguthrie.com`).
+   Swapping the action BLANKS To, Subject and Body - the originals are in
+   `2026-08-25-approver-notification-flow-runbook.md`. Then DELETE the shared-mailbox action, or
+   every approval sends two emails and one of them fails.
+   - **WARN: WRAP THE `To` IN `trim()`.** A stray newline makes the runtime value end in a line break
+     and the action rejects it as not `string/email`. The original rejection email already used
+     `trim()` for exactly this reason. **Third instance of the invisible-newline trap on this
+     project.**
+   - **WARN: THE REJECTION EMAIL'S `File link` MUST STAY THE RAW `{Link}`.** A rejected file is never
+     routed - it stays in the approval library - so it must NOT get the routed-path swap the approval
+     email uses. The two actions look nearly identical; the body is the half that says which branch
+     you are in.
+7. **WARN: `HC Auto Route` REACHES ITS DESTINATION BY PATH, NOT BY GUID.** `Copy file`'s destination
+   is the literal string `/HCDocuments/...`, so neither the GUID swap nor the site-URL swap touches
+   it. Confirm SDG's HC Documents URL segment really is `HCDocuments` before turning that flow on.
+
+Suggested order: Auto-route, HC Auto Route, the two folder-approval flows, then the six audit flows,
+then bulk auto-approve, then the **two notification flows**, then the archive mover. That way approval
+works end to end before anything optional is added — and the notification flows go last among the
+live ones because they are the only flows that email people, so a mistake there reaches humans
+rather than a log.
 
 ---
 

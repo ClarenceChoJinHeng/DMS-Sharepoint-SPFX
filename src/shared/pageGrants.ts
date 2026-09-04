@@ -106,6 +106,50 @@ export function groupRolesById(rows: GroupMapReadRow[]): GroupRoles[] {
 }
 
 /**
+ * The roles that earn access to the REQUEST and SUBMISSION lists (2026-08-27).
+ * Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md §5
+ *
+ * The client chose "option 2": scope both lists to the groups that actually need them, rather than
+ * granting the site-entry group and letting every site member read every row.
+ *
+ * ⚠ THE ROLES, NOT THE NAME SUFFIXES. The agreed wording was "the `_UPLOADER` / `_APPROVER` /
+ * `_HOD` groups", and matching on the suffix would be wrong three ways this project has already paid
+ * for: names carry OLD spellings (`_APR_HIGHLY_CONFIDENTIAL`, `_EMPLOYEE`), a group can be RENAMED
+ * while its id and every mapping row survive (1.0.162.0), and `roleFromGroupName` FALLS THROUGH TO
+ * MEMBER for anything unrecognised — so a suffix rule would silently miss real approver groups and
+ * could sweep in hand-named ones. The role is the fact; the name is a label on it.
+ *
+ * `DEPTVIEW` is here because a Head of Department decides approved-stage requests (2026-08-21), and
+ * `APRHC`/`UPLHC` because those are the HC personas' own roles — `hou_hc` holds no plain `APR` at
+ * all, so omitting it would leave every HC unit unable to raise or decide anything.
+ *
+ * MEMBER is deliberately absent: an SDG Employee cannot upload, so has nothing to raise a request
+ * about, and including them would re-create the read exposure option 2 exists to remove.
+ */
+export const REQUEST_LIST_ROLES: GroupMapRole[] =
+  ["UPL", "UPLHC", "APR", "APRHC", "DEPTVIEW"] as GroupMapRole[];
+
+/**
+ * Which groups should be able to add and edit rows on the request / submission lists.
+ *
+ * Lives beside the page derivation because it is the same shape of question — derive access to a
+ * NON-folder scope from the folder roles a group already holds — and reuses `GroupRoles` so there
+ * is one definition of "what roles does this group hold".
+ *
+ * TIER IGNORED, as with pages: a group holding `UPL` anywhere needs to be able to raise a request.
+ * What they may raise one ABOUT is decided by the document they can see, not by this grant.
+ */
+export function groupsForRequestLists(groups: GroupRoles[]): IntendedPageGroup[] {
+  const out: IntendedPageGroup[] = [];
+  for (const g of groups ?? []) {
+    const hit = g.roles.filter((r) => REQUEST_LIST_ROLES.indexOf(r) !== -1);
+    if (hit.length === 0) continue;
+    out.push({ groupId: g.groupId, groupName: g.groupName, source: "derived", via: hit.join(", ") });
+  }
+  return out;
+}
+
+/**
  * The complete set of groups that should hold Read on one page.
  *
  * Derived groups, then hand-made `Scope = Page` rows merged on top. Rows are NOT replaced by

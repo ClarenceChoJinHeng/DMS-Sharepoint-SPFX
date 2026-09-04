@@ -1,7 +1,7 @@
 # The HC libraries are not migrated when the folder structure changes
 
 **Date:** 2026-08-19
-**Status:** BUILT 1.0.175.0, NOT site-tested. `libraryTargets()` in `shared/naming.ts` is the shared, derived list; the migrator's two-element literal is gone.
+**Status:** BUILT 1.0.175.0, **SITE-VERIFIED 2026-08-20** on GHO — add-at-bottom across all four libraries, 9 documents moved, approval status and `Created By` preserved, `Levels` applied only after a fresh scan found the HC pair clean. See §8. `libraryTargets()` in `shared/naming.ts` is the shared, derived list; the migrator's two-element literal is gone.
 **Register:** #15
 **Extends** `2026-08-11-subtree-migration-design.md`, which is otherwise unchanged and still governs.
 
@@ -123,3 +123,27 @@ So the test is not "does it move HC files" but "does every position still behave
 |---|---|
 | `src/webparts/userAccess/components/SubtreeMigrator.tsx` | `LibCtx.key` → `LibTarget`; derive the library list; the loop at 1176; the audit row |
 | `src/shared/subtreeMigration.ts` | none expected — it is library-agnostic, which is why the fix is contained |
+
+## 8. Site verification, 2026-08-20
+
+Ran the position that broke last time — **add a level at the bottom** — on GHO with documents on both
+sides of the HC boundary.
+
+| Check | Result |
+|---|---|
+| All four libraries scanned | `Approval Document`, `Documents`, `HC Approval Document`, `HC Documents` all listed |
+| Files moved | **9**: 1 + 1 approval-side, 2 + 2 in Documents, **3 in HC Documents** |
+| Empty folders | 14 tidied, including `HC Approval Document/GHO/GF/TAX/2024/Agreement` — empty because its file had been approved and routed |
+| Approval status | both pending files still **Waiting for Approval** after moving |
+| Uploader | `Created By` still the original uploader; only `Modified By` becomes the migrator |
+| `Levels` applied | last, and only because a fresh scan found no drift **including the HC pair** — the guard this spec exists to make honest |
+
+**The empty HC approval folder is the case worth keeping.** Before this change the HC pair was never
+scanned, so that folder would have been left behind AND the fresh-scan guard would have reported the
+migration complete — confirming a clean state because it was not looking. It is now tidied like any
+other, and the run says so.
+
+Three UI defects surfaced on the same run and are fixed in 1.0.184-185: the scan listed folders in a
+way that read as files, a tier's dropdown unmounted the moment it was used, and **Next was live before
+Rebuild** — which would have ended the flow with a half-applied structure and uploads turned back on
+over it.

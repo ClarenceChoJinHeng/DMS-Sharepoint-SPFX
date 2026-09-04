@@ -1,4 +1,5 @@
 import {
+  stepUsesSegment,
   FLOWS,
   Flow,
   FlowFacts,
@@ -12,6 +13,7 @@ import {
   nearMatches,
   normaliseLabel,
   remainingCount,
+  scopeFactsToFlow,
   stepState,
 } from "./folderFlows";
 
@@ -27,10 +29,14 @@ function step(flowId: string, stepId: string): FlowStep {
   return s;
 }
 
-describe("the five flows", () => {
-  it("offers exactly the five agreed flows", () => {
+describe("the flows", () => {
+  /**
+   * `runRecon` was added 2026-08-20 when "All tools" left the picker: reconciliation was the only
+   * screen with no flow of its own, and it is a job an admin genuinely needs to start on its own.
+   */
+  it("offers exactly the agreed flows, in the agreed order", () => {
     expect(FLOWS.map((f) => f.id)).toEqual([
-      "newSegment", "addUnit", "structure", "rename", "retire",
+      "newSegment", "addUnit", "structure", "rename", "runRecon", "retire",
     ]);
   });
 
@@ -72,12 +78,15 @@ describe("the five flows", () => {
     }
   });
 
-  it("puts creating groups before mapping them", () => {
-    // Mapping a group that does not exist yet is the ordering bug the landing page already had.
+  // The `folderAccess` step was removed on 2026-08-23 — Group Management adds the people itself — so
+  // "groups before mapping them" no longer describes two steps. Pinned in the only form that still
+  // means something: no flow may offer a step whose screen is the retired component id.
+  it("offers no folderAccess step, on any flow", () => {
     for (const f of FLOWS) {
-      const ids = f.steps.map((s) => s.id);
-      if (ids.indexOf("groups") === -1 || ids.indexOf("folderAccess") === -1) continue;
-      expect(ids.indexOf("groups")).toBeLessThan(ids.indexOf("folderAccess"));
+      for (const st of f.steps) {
+        expect(st.id).not.toBe("folderAccess");
+        expect(JSON.stringify(st.screen)).not.toContain("folderAccess");
+      }
     }
   });
 
@@ -145,9 +154,13 @@ describe("isLocked — THE client's rule: never stop them doing the work", () =>
     for (const f of FLOWS) {
       for (const s of f.steps) if (s.lock) locked.push(`${f.id}.${s.id}`);
     }
+    // `runRecon.reconcile` carries the same lock because it is the SAME step object — one definition,
+    // not a lock-free copy. It can never fire there: the flow has no abbreviations screen, so the count
+    // stays `undefined`, and unknown never gates.
     expect(locked).toEqual([
       "newSegment.abbreviations", "newSegment.reconcile",
-      "addUnit.reconcile", "structure.migrate", "rename.reconcile", "retire.delete",
+      "addUnit.reconcile", "structure.migrate", "rename.reconcile",
+      "runRecon.reconcile", "retire.delete",
     ]);
   });
 
@@ -212,7 +225,7 @@ describe("firstIncompleteStep — resuming", () => {
     const f = flow("addUnit");
     const all: FlowFacts = {
       segmentExists: true, subjectFound: true, abbreviationsMissing: 0,
-      groupsExist: true, folderAccessRows: true, foldersExist: true,
+      groupsExist: true, foldersExist: true,
     };
     expect(firstIncompleteStep(f, all)).toBe(f.steps.length - 1);
   });
@@ -233,7 +246,7 @@ describe("remainingCount", () => {
   it("reaches zero only when every step is done", () => {
     const all: FlowFacts = {
       segmentExists: true, subjectFound: true, abbreviationsMissing: 0,
-      groupsExist: true, folderAccessRows: true, foldersExist: true,
+      groupsExist: true, foldersExist: true,
     };
     expect(remainingCount(flow("addUnit"), all)).toBe(0);
   });
@@ -371,8 +384,9 @@ describe("blocksNext", () => {
     expect(blocksNext(step("newSegment", "createSegment"), { abbreviationsLoading: true, segmentExists: true })).toBe("");
     // A typed subject that merely differs in spelling must cost help, never progress.
     expect(blocksNext(step("addUnit", "addTerm"), { subjectFound: false })).toBe("");
-    // Mapping groups after building folders is a legitimate order, so ordering is advice here.
-    expect(blocksNext(step("newSegment", "folderAccess"), { folderAccessRows: false })).toBe("");
+    // Creating the groups is advisory too: the naming convention is only a SUGGESTION, so a
+    // hand-named group reads as absent and gating it would trap someone who did the work.
+    expect(blocksNext(step("newSegment", "groups"), { groupsExist: false })).toBe("");
   });
 
   it("gates exactly two step ids, across every flow — pinned so a new gate must be deliberate", () => {
@@ -381,7 +395,7 @@ describe("blocksNext", () => {
       for (const st of f.steps) {
         // Every fact false at once: anything gateable will gate.
         const all: FlowFacts = {
-          segmentExists: false, groupsExist: false, folderAccessRows: false,
+          segmentExists: false, groupsExist: false,
           foldersExist: false, abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
         };
         if (blocksNext(st, all).length > 0 && gated.indexOf(st.id) === -1) gated.push(st.id);
@@ -411,9 +425,14 @@ describe("blocksNext — the blank name", () => {
     // Segment yet...". The first build treated "not answered" as UNKNOWN and therefore gated nothing.
     const msg = blocksNext(st(), { subjectGiven: false });
     expect(msg).toContain("Create the segment above");
-    // Names the way out, because the gate can legitimately be wrong after a page refresh — the rail
-    // stays clickable, and the message has to say so or a correct gate reads as a dead end.
-    expect(msg).toContain("list of steps");
+    /* ⚠ IT MUST NAME A WAY OUT, because the gate can legitimately be wrong after a page refresh —
+       the segment list is read at MOUNT and Create happens after it. Until 2026-08-30 the way out
+       was the rail ("jump straight on from the list of steps"); the client then asked for the rail
+       to be locked forward, which made that sentence FALSE. It now names Refresh list, which is the
+       escape that still exists. **A gate pointing at a control that no longer works is worse than a
+       gate with no advice**: they try it, nothing happens, and the page reads as broken. */
+    expect(msg).toContain("Refresh list");
+    expect(msg).not.toContain("list of steps");
   });
 
   it("still does NOT block when the segment list could not be read", () => {
@@ -450,5 +469,105 @@ describe("blocksNext — the blank name", () => {
     expect(blocksNext(step("newSegment", "abbreviations"), { subjectGiven: false })).toBe("");
     expect(blocksNext(step("newSegment", "groups"), { subjectGiven: false })).toBe("");
     expect(blocksNext(step("addUnit", "addTerm"), { subjectGiven: false })).toBe("");
+  });
+});
+
+describe("stepUsesSegment", () => {
+  const stepsOf = (flowId: string): FlowStep[] =>
+    (FLOWS.filter((f) => f.id === flowId)[0] ?? { steps: [] }).steps;
+
+  /** Instruction-only steps: the client reported the picker standing in front of one. */
+  it("is false for an outside step", () => {
+    for (const st of stepsOf("structure")) {
+      if (st.screen.kind === "outside") expect(stepUsesSegment(st)).toBe(false);
+    }
+  });
+
+  /**
+   * ⚠ REGRESSION GUARD. The upload pause is SITE-WIDE, and it is a `component` step — so the old
+   * `kind !== "outside"` literal put a segment picker in front of it the day it was added.
+   */
+  it("is false for both upload-pause steps, which are site-wide", () => {
+    const pause = stepsOf("structure").filter(
+      (st) => st.screen.kind === "component" && st.screen.id === "pauseUploads",
+    );
+    expect(pause.length).toBe(2);
+    for (const st of pause) expect(stepUsesSegment(st)).toBe(false);
+  });
+
+  /** The Folder levels screen lists every segment itself, so a picker in front of it asks twice. */
+  it("is false for the Folder levels step, which lists every segment on its own", () => {
+    for (const st of stepsOf("structure")) {
+      if (st.id === "levels") expect(stepUsesSegment(st)).toBe(false);
+    }
+  });
+
+  it("is true for the migrate step, which acts on one chosen segment", () => {
+    for (const st of stepsOf("structure")) {
+      if (st.id === "migrate") expect(stepUsesSegment(st)).toBe(true);
+    }
+  });
+});
+
+describe("scopeFactsToFlow — segment facts must not tick a subject-scoped flow", () => {
+  const pick = (id: string): Flow => FLOWS.filter((f) => f.id === id)[0];
+  // Found on site 2026-08-20: "Add a department or unit" on GHO showed Group Management, Folder
+  // Access and Folder Reconciliation all Done before anything had been added, because each fact asks
+  // "does the SEGMENT have any at all" and GHO has 308 groups / 790 rows / 67 folder rows.
+  const provisioned: FlowFacts = {
+    segmentExists: true,
+    groupsExist: true,
+    foldersExist: true,
+    abbreviationsMissing: 2,
+  };
+
+
+  it("drops the segment-scoped facts for addUnit", () => {
+    const out = scopeFactsToFlow(pick("addUnit"), provisioned);
+    expect(out.groupsExist).toBeUndefined();
+    expect(out.foldersExist).toBeUndefined();
+  });
+
+  it("drops them for rename too", () => {
+    const out = scopeFactsToFlow(pick("rename"), provisioned);
+    expect(out.groupsExist).toBeUndefined();
+    expect(out.foldersExist).toBeUndefined();
+  });
+
+  it("KEEPS them for newSegment, where the segment IS the subject", () => {
+    const out = scopeFactsToFlow(pick("newSegment"), provisioned);
+    expect(out.groupsExist).toBe(true);
+    expect(out.foldersExist).toBe(true);
+  });
+
+  it("keeps them for runRecon and structure, which are about the segment", () => {
+    expect(scopeFactsToFlow(pick("runRecon"), provisioned).foldersExist).toBe(true);
+    expect(scopeFactsToFlow(pick("structure"), provisioned).foldersExist).toBe(true);
+  });
+
+  it("keeps abbreviationsMissing — it is reported live and IS subject-aware", () => {
+    expect(scopeFactsToFlow(pick("addUnit"), provisioned).abbreviationsMissing).toBe(2);
+  });
+
+  it("keeps segmentExists — the segment genuinely does exist and step 1 says so", () => {
+    expect(scopeFactsToFlow(pick("addUnit"), provisioned).segmentExists).toBe(true);
+  });
+
+  it("those steps then read `unknown`, never `done`", () => {
+    const out = scopeFactsToFlow(pick("addUnit"), provisioned);
+    const byId = (id: string): FlowStep => pick("addUnit").steps.filter((x) => x.id === id)[0];
+    expect(stepState(byId("groups"), out)).toBe("unknown");
+    expect(stepState(byId("reconcile"), out)).toBe("unknown");
+  });
+
+  it("does not mutate the facts it was given", () => {
+    const input = { ...provisioned };
+    scopeFactsToFlow(pick("addUnit"), input);
+    expect(input.groupsExist).toBe(true);
+  });
+
+  it("survives an undefined flow and undefined facts", () => {
+    expect(scopeFactsToFlow(undefined, provisioned).groupsExist).toBe(true);
+    expect(scopeFactsToFlow(pick("addUnit"), {} as FlowFacts)).toEqual({});
   });
 });

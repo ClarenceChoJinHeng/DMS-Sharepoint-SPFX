@@ -104,7 +104,7 @@ export function readAllowedFileTypesField(
  * click, and a vague message would send them to us instead.
  */
 export const NO_TYPES_MESSAGE =
-  "No file types are configured for upload. Ask your DMS administrator to set Allowed File Types in DMS Config.";
+  "No file types are configured for upload. Ask your CRS administrator to set Allowed File Types in CRS Config.";
 
 /**
  * Shown when `DMS Config` could not be read at all. Deliberately different from
@@ -112,7 +112,7 @@ export const NO_TYPES_MESSAGE =
  * continue on built-in defaults rather than stopping.
  */
 export const CONFIG_UNREADABLE_MESSAGE =
-  "Could not load the upload configuration — using built-in file types. Ask your DMS administrator to check DMS Config.";
+  "Could not load the upload configuration — using built-in file types. Ask your CRS administrator to check CRS Config.";
 
 /**
  * Turns the raw `AllowedFileTypes` value into one of the three states.

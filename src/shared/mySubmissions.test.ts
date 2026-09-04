@@ -4,12 +4,16 @@ import {
   filterByTab,
   folderTrail,
   formatSubmittedOn,
+  canActDirectly,
+  formatSubmittedAt,
   pickField,
   sortNewestFirst,
   statusToDecision,
   submissionKey,
   textOf,
   trailText,
+  isHcRow,
+  isArchivedRow,
 } from "./mySubmissions";
 
 const LIBS = ["ApprovalDocument", "Documents"];
@@ -255,15 +259,154 @@ describe("sortNewestFirst", () => {
 
 describe("formatSubmittedOn", () => {
   it("is DD/MMM/YYYY, the agreed client format", () => {
-    expect(formatSubmittedOn(new Date(2035, 0, 8))).toBe("08/Jan/2035");
+    expect(formatSubmittedOn(new Date(2035, 0, 8))).toBe("8 Jan 2035");
   });
 
   it("pads the day", () => {
-    expect(formatSubmittedOn(new Date(2026, 11, 1))).toBe("01/Dec/2026");
+    expect(formatSubmittedOn(new Date(2026, 11, 1))).toBe("1 Dec 2026");
   });
 
   it("shows a dash rather than 'Invalid Date' when there is nothing to show", () => {
     expect(formatSubmittedOn(undefined)).toBe("—");
     expect(formatSubmittedOn(new Date("nonsense"))).toBe("—");
+  });
+});
+
+describe("formatSubmittedAt", () => {
+  it("appends HH:mm in 24-hour form, matching the audit log viewer", () => {
+    expect(formatSubmittedAt(new Date(2026, 7, 27, 21, 50))).toBe("27 Aug 2026 21:50");
+  });
+
+  it("pads both the hour and the minute", () => {
+    expect(formatSubmittedAt(new Date(2026, 7, 27, 9, 5))).toBe("27 Aug 2026 09:05");
+    expect(formatSubmittedAt(new Date(2026, 7, 27, 0, 0))).toBe("27 Aug 2026 00:00");
+  });
+
+  it("keeps the date half identical to formatSubmittedOn", () => {
+    // One definition of the date, reused - so the two screens cannot disagree about it.
+    const d = new Date(2035, 0, 8, 13, 7);
+    expect(formatSubmittedAt(d).indexOf(formatSubmittedOn(d))).toBe(0);
+  });
+
+  it("distinguishes two uploads on the same day", () => {
+    // The whole reason it exists: date alone made every row of a busy day look identical.
+    const a = formatSubmittedAt(new Date(2026, 7, 27, 21, 50));
+    const b = formatSubmittedAt(new Date(2026, 7, 27, 22, 4));
+    expect(a).not.toBe(b);
+  });
+
+  it("shows a dash rather than 'Invalid Date' when there is nothing to show", () => {
+    expect(formatSubmittedAt(undefined)).toBe("—");
+    expect(formatSubmittedAt(new Date("nonsense"))).toBe("—");
+  });
+});
+
+/* ── isHcRow (2026-08-21) ────────────────────────────────────────────────────
+   The uploader could not tell an HC document from a same-named ordinary one on My Submissions, so
+   a deletion request was a coin-toss from their side. Found on site. */
+describe("isHcRow", () => {
+  const hc = { approval: "HCApprovalDocument", documents: "HCDocuments" };
+
+  it("recognises both HC libraries", () => {
+    expect(isHcRow("HCApprovalDocument", hc)).toBe(true);
+    expect(isHcRow("HCDocuments", hc)).toBe(true);
+  });
+
+  it("matches case-insensitively — SharePoint URLs are", () => {
+    expect(isHcRow("hcapprovaldocument", hc)).toBe(true);
+    expect(isHcRow("  HCDOCUMENTS  ", hc)).toBe(true);
+  });
+
+  it("does NOT tag the ordinary libraries", () => {
+    expect(isHcRow("ApprovalDocument", hc)).toBe(false);
+    expect(isHcRow("Shared Documents", hc)).toBe(false);
+  });
+
+  it("returns false when the HC pair is unresolved, rather than guessing from the name", () => {
+    // A wrong `true` brands an ordinary document as confidential. And it cannot hide a tag that was
+    // needed: an uncleared uploader cannot see the HC libraries, so they have no HC rows.
+    expect(isHcRow("HCApprovalDocument", undefined)).toBe(false);
+    expect(isHcRow("HCApprovalDocument", {})).toBe(false);
+  });
+
+  it("survives a blank segment", () => {
+    expect(isHcRow("", hc)).toBe(false);
+    expect(isHcRow(undefined as unknown as string, hc)).toBe(false);
+  });
+});
+
+/* -- isArchivedRow (2026-08-22) ---------------------------------------------
+ * Spec: docs/superpowers/specs/2026-08-22-seven-year-archive-design.md */
+describe("isArchivedRow", () => {
+  const arc = { normal: "Archive", hc: "HCArchive" };
+
+  it("tags a row from either archive library", () => {
+    expect(isArchivedRow("Archive", arc)).toBe(true);
+    expect(isArchivedRow("HCArchive", arc)).toBe(true);
+  });
+
+  it("leaves the working libraries alone", () => {
+    expect(isArchivedRow("Shared Documents", arc)).toBe(false);
+    expect(isArchivedRow("ApprovalDocument", arc)).toBe(false);
+  });
+
+  it("compares case-insensitively and ignores stray whitespace", () => {
+    // SharePoint URLs are case-insensitive, and the segment is split out of a path.
+    expect(isArchivedRow("  archive  ", arc)).toBe(true);
+  });
+
+  it("returns FALSE when the archive is unresolved, rather than guessing from the name", () => {
+    // A wrong `true` would tell an uploader their live document is frozen and refuse a request they
+    // are entitled to make. A site with no archive has no archived rows to mislabel.
+    expect(isArchivedRow("Archive", undefined)).toBe(false);
+    expect(isArchivedRow("Archive", {})).toBe(false);
+  });
+
+  it("never tags a blank segment", () => {
+    expect(isArchivedRow("", arc)).toBe(false);
+    expect(isArchivedRow(undefined as unknown as string, arc)).toBe(false);
+  });
+
+  it("handles a non-HC site, where only the normal archive exists", () => {
+    expect(isArchivedRow("Archive", { normal: "Archive" })).toBe(true);
+    expect(isArchivedRow("HCArchive", { normal: "Archive" })).toBe(false);
+  });
+});
+
+describe("canActDirectly — no request where the viewer can already act", () => {
+  const DEPT = "11111111-1111-1111-1111-111111111111";
+  const UNIT = "22222222-2222-2222-2222-222222222222";
+  const OTHER = "33333333-3333-3333-3333-333333333333";
+
+  it("matches a Head of UNIT on the unit term", () => {
+    expect(canActDirectly([DEPT, UNIT], [UNIT])).toBe(true);
+  });
+
+  /* ⚠ THE CASE THAT DECIDED THE DESIGN. A Head of Department holds DEL/SHARE on the DEPARTMENT
+     term, and it fans down to every unit beneath. Comparing the document's unit alone would have
+     answered false for every HoD — and needed a term-store expansion to fix. */
+  it("matches a Head of DEPARTMENT on the department term in the chain", () => {
+    expect(canActDirectly([DEPT, UNIT], [DEPT])).toBe(true);
+  });
+
+  it("does NOT match a grant on some other unit", () => {
+    expect(canActDirectly([DEPT, UNIT], [OTHER])).toBe(false);
+  });
+
+  it("FAILS OPEN: nothing held means the request stays offered", () => {
+    expect(canActDirectly([DEPT, UNIT], [])).toBe(false);
+  });
+
+  it("FAILS OPEN: an unread tier chain means the request stays offered", () => {
+    expect(canActDirectly([], [UNIT])).toBe(false);
+  });
+
+  it("tolerates braces and case, because the two sources disagree about both", () => {
+    expect(canActDirectly([`{${UNIT.toUpperCase()}}`], [UNIT])).toBe(true);
+    expect(canActDirectly([UNIT], [` {${UNIT.toUpperCase()}} `])).toBe(true);
+  });
+
+  it("ignores blanks on either side rather than matching them together", () => {
+    expect(canActDirectly(["", "  "], ["", "  "])).toBe(false);
   });
 });

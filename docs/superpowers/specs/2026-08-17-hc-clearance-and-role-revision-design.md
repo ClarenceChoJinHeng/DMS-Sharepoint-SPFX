@@ -139,6 +139,10 @@ Unchanged from 2026-08-15, restated because the client asked directly.
 boundary, so there is nothing extra to enforce and nothing that can drift apart. `DELSHC` inherits the
 property for free.
 
+> ⚠ **SUPERSEDED 2026-08-19**, and `DELSHC` inherits that too: a cleared PIC deletes any pending HC file
+> in their unit, not only their own. The HC boundary is untouched — an uncleared uploader still reaches
+> no HC library at all.
+
 The exception, in both libraries: an **approved** file is visible to every reader until Auto-route moves
 it. That window is why the delete inside Auto-route is load-bearing for security rather than
 housekeeping.

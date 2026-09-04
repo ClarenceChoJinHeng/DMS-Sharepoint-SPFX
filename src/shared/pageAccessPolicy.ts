@@ -38,6 +38,10 @@ export const VIEW_ONLY_ROLES: GroupMapRole[] = ["MEMBER", "GLOBAL", "SEGVIEW"];
 
 /** Roles that act on documents — the default for a page with no specific rule. */
 export const ACTION_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS"];
+// APRHC joined every people-facing rule on 2026-08-24: the HC Head of Unit (`hou_hc`) holds APRHC
+// INSTEAD of APR, so any rule keyed on APR alone would AccessDeny the exact person the HC vertical
+// exists for — the fourth instance of "a page keyed on a role its audience does not literally hold"
+// (upload form → APR, Requests → DEPTVIEW, My Submissions → UPLHC, and this).
 
 /**
  * File-name rules, FIRST MATCH WINS, and the order is load-bearing.
@@ -52,11 +56,28 @@ export const ACTION_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS"];
  */
 const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
   {
+    /* ⚠ NO LONGER ADMIN-ONLY (2026-08-22, client: "Bulk upload is now allowed for all uploaders to be
+       used, client doesnt want admin to do the job"). Spec
+       `2026-08-22-bulk-upload-for-uploaders-design.md`.
+
+       The SAME three roles as the upload form, and for the same two reasons that were learned there:
+       `hou` and `pic_hc` carry no literal `UPL` — `UPLHC` is a superset that `LIBRARY_ROLES.Staging`
+       lists on the normal approval library too — and a Head of Unit group mapped before the
+       2026-08-15 persona correction holds only `APR` and `DELS`, so keying on the upload roles alone
+       would strand every already-provisioned HoU.
+
+       Widening this cannot grant anyone a new place to file. The page grant opens the FORM; the
+       folder ACL decides what can be written, and Bulk Upload now probes `AddListItems` on the
+       destination exactly as the upload form does. A role listed here that cannot write sees an
+       empty cascade — the safe direction.
+
+       This rule must STILL be tested before /upload/i: "bulk-upload" contains "upload". Pinned by
+       test, as is the fact that it is no longer adminOnly. */
     match: /bulk/i,
     policy: {
-      roles: [],
-      adminOnly: true,
-      reason: "Bulk upload is an administrator tool. Site owners and site collection administrators keep access automatically — no group needs to be added.",
+      roles: ["UPL", "UPLHC", "APR", "APRHC"],
+      adminOnly: false,
+      reason: "Bulk upload files historical documents that were already approved elsewhere, so uploaders and their Head of Unit reach it.",
     },
   },
   {
@@ -88,23 +109,38 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     },
   },
   {
-    // BEFORE the approver rule, deliberately. This page has TWO audiences — uploaders raise a
-    // deletion or share request, the Head of Unit decides it — so landing on the APR-only rule (via a
-    // name like "Approval-Requests.aspx") would leave the people who raise requests unable to open the
-    // page their own requests are listed on. It would otherwise fall to DEFAULT_POLICY, which is the
-    // same set plus DELS; explicit and narrow beats right-by-accident.
-    // Spec: docs/superpowers/specs/2026-08-15-deletion-and-share-requests-design.md
+    // BEFORE the approver rule, deliberately: a name like "Approval-Requests.aspx" would otherwise
+    // land on /approv/i, and this page's audience is wider than that rule's by one role. It would
+    // otherwise fall to DEFAULT_POLICY, which is APR + UPL + DELS; explicit and narrow beats
+    // right-by-accident.
+    //
+    // ⚠ `UPL` WAS HERE UNTIL 2026-08-21 AND ITS REMOVAL IS THE POINT. The 2026-08-15 design gave this
+    // page two audiences — the uploader raising a request and the Head of Unit deciding it — and that
+    // reasoning went stale on 2026-08-20, when the requester's own view moved to My Submissions →
+    // Requests (with Cancel). A PIC opening this page now gets a screen filtered to units where they
+    // hold APR, i.e. none: an empty page on their menu.
+    //
+    // `DEPTVIEW` joins because a Head of Department holds DEL and SHARE since 1.0.197.0 and can
+    // therefore carry out an approved-document deletion or share outright (client, 2026-08-21: *"I
+    // also include HOD is because they literally have Share and Deletion power"*). They see their
+    // department's APPROVED-stage requests only — see `ViewerScope` in shared/requests.ts for why
+    // pending ones are hidden rather than merely disabled.
+    //
+    // Widening this list cannot grant anyone a new place to act: the page grant opens the SCREEN,
+    // while `canDecide` decides each row, and the approval itself runs in the viewer's own session
+    // and fails loudly if their permissions do not cover it.
+    // Spec: docs/superpowers/specs/2026-08-21-requests-page-hod-access-design.md
     match: /request/i,
     policy: {
-      roles: ["UPL", "APR"],
+      roles: ["APR", "APRHC", "DEPTVIEW"],
       adminOnly: false,
-      reason: "Uploader and approver groups are listed — uploaders raise deletion and share requests here, and the Head of Unit decides them.",
+      reason: "Approver and Head of Department groups are listed — the Head of Unit decides deletion and share requests, and a Head of Department can carry out those on approved documents. Uploaders raise requests on My Submissions, not here.",
     },
   },
   {
     match: /approv/i,
     policy: {
-      roles: ["APR"],
+      roles: ["APR", "APRHC"],
       adminOnly: false,
       reason: "Only approver groups are listed — this page is where pending documents are approved.",
     },
@@ -118,9 +154,26 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     // Spec: docs/superpowers/specs/2026-08-14-my-submissions-design.md §3 D3.
     match: /submission|my.?upload|my.?file/i,
     policy: {
-      roles: ["UPL"],
+      /* ⚠ `UPLHC` AND `APR` ADDED 2026-08-21 — WITHOUT THEM A HEAD OF UNIT COULD UPLOAD AND THEN NOT
+         SEE WHAT THEY HAD UPLOADED.
+         `hou` is `APR, DELS, DEL, SHARE, UPLHC, DELSHC` — it carries **no literal `UPL`**, because
+         `UPLHC` is a superset and `LIBRARY_ROLES.Staging` lists it on the NORMAL approval library too.
+         So a HoU holds CRS Upload on Approval Document and reaches the upload form (via APR), files a
+         document, and was then denied the only page that lists it — and with it the only route to a
+         deletion or share request about their own file. Third page keyed on a role its intended
+         audience does not literally hold (upload form → APR, 2026-08-17; Requests → DEPTVIEW, and
+         this).
+         `APR` as well as `UPLHC`, for the same reason the upload form lists it: a HoU group mapped
+         before the 2026-08-15 persona correction carries `APR` + `DELS` and no upload role at all, so
+         keying on the upload roles alone would strand every already-provisioned Head of Unit.
+         ⚠ WIDENING THIS CANNOT EXPOSE ANYONE'S FILES TO ANYONE ELSE. The page reads both libraries
+         `AuthorId eq <me>`, so every role listed here sees only their OWN submissions — the grant
+         opens the page, and authorship decides the rows. The earlier comment here claimed approvers
+         were "the people it is private from", which was wrong: it is private from them for everyone
+         else's files whether or not they can open it. */
+      roles: ["UPL", "UPLHC", "APR", "APRHC"],
       adminOnly: false,
-      reason: "Only uploader groups are listed — this page shows a person their own submissions.",
+      reason: "Uploader and Head of Unit groups are listed — this page shows a person their own submissions, and a Head of Unit uploads too.",
     },
   },
   {
@@ -141,9 +194,22 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     // empty state where that fails. So a role listed here that cannot write sees an empty
     // cascade rather than an upload that fails at the end — the safe direction, and the reason
     // widening this list cannot grant anyone the ability to upload somewhere new.
+    // ⚠ `UPLHC` ADDED 2026-08-31, AND ITS ABSENCE LOCKED EVERY HC-CLEARED PIC OUT OF THIS PAGE.
+    // `pic_hc` is `["UPLHC"]` — no literal `UPL`, because `UPLHC` is a superset that
+    // `LIBRARY_ROLES.Staging` lists on the NORMAL approval library too. So an HC uploader held no
+    // qualifying role here: never granted the page, and REMOVED by the page pass if they ever were.
+    // Found live — a guest in `GHO_GCA_GCBC_UPLOADER_HIGHLY_CONFIDENTIAL` got AccessDenied on
+    // Upload-Form.aspx while the page's ACL, its publish state and the plain uploader group's Read
+    // binding all read back perfectly correct.
+    //
+    // ⚠ FOURTH PAGE KEYED ON A ROLE ITS AUDIENCE DOES NOT LITERALLY HOLD (upload form needed `APR`
+    // 2026-08-17, Requests needed `DEPTVIEW` 2026-08-21, My Submissions needed `UPLHC` 2026-08-21).
+    // Both SIBLING rules in this same file — bulk upload and my-submissions — already listed
+    // `UPLHC`; it was added to them when `APRHC` arrived on 2026-08-24 and missed here. **When a role
+    // is added to one page rule, check every rule whose audience overlaps.**
     match: /upload/i,
     policy: {
-      roles: ["UPL", "APR"],
+      roles: ["UPL", "UPLHC", "APR", "APRHC"],
       adminOnly: false,
       reason: "Uploader and approver groups are listed — this page is where documents are submitted, and a Head of Unit uploads as well as approves.",
     },

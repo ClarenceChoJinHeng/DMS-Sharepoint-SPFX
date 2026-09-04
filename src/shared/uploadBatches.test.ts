@@ -15,8 +15,10 @@ import {
   batchesNeedingRepick,
   canSaveBatch,
   collisionsWithin,
+  decideClash,
   duplicateAcrossBatches,
   inheritDefaults,
+  nextAvailableName,
   nextId,
   resetIds,
   resolveUploadName,
@@ -44,6 +46,92 @@ const batch = (id: string, files: StagedFile[], over: Partial<Batch> = {}): Batc
   destination: {},
   files,
   ...over,
+});
+
+describe("nextAvailableName", () => {
+  it("leaves a free name alone", () => {
+    expect(nextAvailableName("TEST.pdf", [])).toBe("TEST.pdf");
+    expect(nextAvailableName("TEST.pdf", ["OTHER.pdf"])).toBe("TEST.pdf");
+  });
+
+  it("appends the copy suffix before the extension", () => {
+    expect(nextAvailableName("TEST.pdf", ["TEST.pdf"])).toBe("TEST - Copy.pdf");
+  });
+
+  it("walks past taken suffixes rather than appending blindly", () => {
+    expect(nextAvailableName("TEST.pdf", ["TEST.pdf", "TEST - Copy.pdf"])).toBe(
+      "TEST - Copy (2).pdf",
+    );
+    expect(
+      nextAvailableName("TEST.pdf", ["TEST.pdf", "TEST - Copy.pdf", "TEST - Copy (2).pdf"]),
+    ).toBe("TEST - Copy (3).pdf");
+  });
+
+  it("takes the first gap", () => {
+    expect(nextAvailableName("TEST.pdf", ["TEST.pdf", "TEST - Copy (2).pdf"])).toBe(
+      "TEST - Copy.pdf",
+    );
+  });
+
+  it("compares case-insensitively, as SharePoint does", () => {
+    expect(nextAvailableName("TEST.pdf", ["test.pdf"])).toBe("TEST - Copy.pdf");
+    expect(nextAvailableName("TEST.pdf", ["TEST.pdf", "test - copy.PDF"])).toBe(
+      "TEST - Copy (2).pdf",
+    );
+  });
+
+  it("splits on the LAST dot", () => {
+    expect(nextAvailableName("report.final.docx", ["report.final.docx"])).toBe(
+      "report.final - Copy.docx",
+    );
+  });
+
+  it("handles a name with no extension", () => {
+    expect(nextAvailableName("README", ["README"])).toBe("README - Copy");
+  });
+
+  it("treats a leading dot as part of the stem, not an extension", () => {
+    expect(nextAvailableName(".gitignore", [".gitignore"])).toBe(".gitignore - Copy");
+  });
+
+  it("returns blank for a blank request rather than inventing a name", () => {
+    expect(nextAvailableName("", ["TEST.pdf"])).toBe("");
+    expect(nextAvailableName("   ", [])).toBe("");
+  });
+
+  it("preserves the composed convention this form actually uploads under", () => {
+    // Real shape: [Project] - [Vendor] - [Document Name] - [Date].pdf
+    expect(
+      nextAvailableName("TEST - TEST - TEST - 26-08-26.pdf", ["TEST - TEST - TEST - 26-08-26.pdf"]),
+    ).toBe("TEST - TEST - TEST - 26-08-26 - Copy.pdf");
+  });
+
+  /* THE REGRESSION THIS SCHEME EXISTS FOR (client, 2026-08-27). 1.0.273.0 stripped a trailing ` (n)`
+     and resumed counting, which merged the numbering space of `X` and `X (2)` and offered BOTH files
+     in one run the same name. Appending cannot do that: the suffix goes on the whole original. */
+  it("never offers two DIFFERENT originals the same name", () => {
+    const taken = ["TEST.pdf", "TEST (2).pdf"];
+    const a = nextAvailableName("TEST (2).pdf", taken);
+    const b = nextAvailableName("TEST.pdf", taken);
+    expect(a).toBe("TEST (2) - Copy.pdf");
+    expect(b).toBe("TEST - Copy.pdf");
+    expect(a).not.toBe(b);
+  });
+
+  it("does not strip a trailing (n) — it is part of the name", () => {
+    expect(nextAvailableName("TEST (2).pdf", ["TEST (2).pdf"])).toBe("TEST (2) - Copy.pdf");
+    expect(
+      nextAvailableName("TEST - TEST - TEST - 26-08-26 (2).pdf", [
+        "TEST - TEST - TEST - 26-08-26 (2).pdf",
+      ]),
+    ).toBe("TEST - TEST - TEST - 26-08-26 (2) - Copy.pdf");
+  });
+
+  it("suffixes an already-copied name again rather than renumbering it", () => {
+    expect(nextAvailableName("TEST - Copy.pdf", ["TEST - Copy.pdf"])).toBe(
+      "TEST - Copy - Copy.pdf",
+    );
+  });
 });
 
 describe("resolveUploadName", () => {
@@ -365,5 +453,131 @@ describe("nextId", () => {
     expect(ids[0]).toBe("f_1");
     expect(ids[1]).toBe("f_2");
     expect(ids[2]).toBe("b_3");
+  });
+});
+
+/**
+ * The replacement decision (client, 2026-08-28).
+ *
+ * ⚠ THE POINT OF THESE TESTS IS THE ASYMMETRY BETWEEN THE TWO UPLOAD SCREENS. The upload form may
+ * replace a pending draft; Bulk Upload may never. A future reader seeing the two screens differ will
+ * reasonably assume it is a bug — these are what stop them "fixing" Bulk Upload into being able to
+ * destroy somebody's unreviewed work.
+ */
+describe("decideClash", () => {
+  const base = {
+    inStaging: false,
+    inApproved: false,
+    replaceStaging: false,
+    replaceApproved: false,
+  };
+
+  it("lets a free name straight through, with no overwrite", () => {
+    expect(decideClash(base)).toEqual({ consented: true, overwrite: false });
+  });
+
+  it("refuses a staging clash until the uploader consents", () => {
+    const d = decideClash({ ...base, inStaging: true });
+    expect(d.where).toBe("staging");
+    expect(d.consented).toBe(false);
+    expect(d.overwrite).toBe(false);
+  });
+
+  it("overwrites a pending draft once the uploader consents", () => {
+    const d = decideClash({ ...base, inStaging: true, replaceStaging: true });
+    expect(d).toEqual({ where: "staging", consented: true, overwrite: true });
+  });
+
+  it("refuses an approved-side clash until the uploader consents", () => {
+    const d = decideClash({ ...base, inApproved: true });
+    expect(d.where).toBe("approved");
+    expect(d.consented).toBe(false);
+  });
+
+  /* The heart of "send for approval as a replacement": it is an ORDINARY upload. The name is free in
+     the approval library, so nothing is destroyed now — Auto-route replaces the filed copy later, and
+     only if an approver approves. An overwrite here would destroy a filed record at upload time. */
+  it("NEVER overwrites for an approved-side clash, even when consented", () => {
+    const d = decideClash({ ...base, inApproved: true, replaceApproved: true });
+    expect(d).toEqual({ where: "approved", consented: true, overwrite: false });
+  });
+
+  it("reports both libraries as one case", () => {
+    const d = decideClash({ ...base, inStaging: true, inApproved: true });
+    expect(d.where).toBe("both");
+    expect(d.consented).toBe(false);
+  });
+
+  /* ⚠ `both` IS UNLOCKED BY THE STAGING CONSENT AND NOTHING ELSE. Replacing the pending draft is the
+     single action that also causes the filed copy to be replaced at approval, so the dialog offers
+     ONE button. If the approved consent could unlock it, that one button would come apart. */
+  it("unlocks `both` with the staging consent, never the approved one", () => {
+    const viaApproved = decideClash({
+      ...base, inStaging: true, inApproved: true, replaceApproved: true,
+    });
+    expect(viaApproved.consented).toBe(false);
+    expect(viaApproved.overwrite).toBe(false);
+
+    const viaStaging = decideClash({
+      ...base, inStaging: true, inApproved: true, replaceStaging: true,
+    });
+    expect(viaStaging).toEqual({ where: "both", consented: true, overwrite: true });
+  });
+
+  /* ── Bulk Upload ─────────────────────────────────────────────────────────── */
+
+  it("never lets Bulk Upload overwrite a pending draft, however it consents", () => {
+    for (const extra of [
+      { replaceStaging: true },
+      { replaceApproved: true },
+      { replaceStaging: true, replaceApproved: true },
+    ]) {
+      const d = decideClash({
+        ...base, inStaging: true, allowStagingReplace: false, ...extra,
+      });
+      expect(d.consented).toBe(false);
+      expect(d.overwrite).toBe(false);
+    }
+  });
+
+  it("never lets Bulk Upload past a `both` clash", () => {
+    const d = decideClash({
+      ...base, inStaging: true, inApproved: true, replaceStaging: true, allowStagingReplace: false,
+    });
+    expect(d.where).toBe("both");
+    expect(d.consented).toBe(false);
+    expect(d.overwrite).toBe(false);
+  });
+
+  /* Bulk Upload keeps the approved-side offer — that path overwrites nothing, so the reason to
+     withhold it does not apply. Its clash table differs from the form's in exactly one row. */
+  it("still lets Bulk Upload send an approved-side replacement", () => {
+    const d = decideClash({
+      ...base, inApproved: true, replaceApproved: true, allowStagingReplace: false,
+    });
+    expect(d).toEqual({ where: "approved", consented: true, overwrite: false });
+  });
+
+  it("treats a missing allowStagingReplace as permitted, so the form needs no flag", () => {
+    const d = decideClash({ ...base, inStaging: true, replaceStaging: true });
+    expect(d.overwrite).toBe(true);
+  });
+
+  /* An overwrite is only ever produced by a staging clash. Pinned as an invariant rather than a case,
+     because it is the property that makes every other path non-destructive. */
+  it("produces overwrite=true only when a pending draft is actually in the way", () => {
+    for (const inStaging of [true, false]) {
+      for (const inApproved of [true, false]) {
+        for (const replaceStaging of [true, false]) {
+          for (const replaceApproved of [true, false]) {
+            const d = decideClash({ inStaging, inApproved, replaceStaging, replaceApproved });
+            if (d.overwrite) {
+              expect(inStaging).toBe(true);
+              expect(replaceStaging).toBe(true);
+            }
+          }
+        }
+      }
+    }
   });
 });

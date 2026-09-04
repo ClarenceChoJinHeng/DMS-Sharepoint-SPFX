@@ -1,4 +1,4 @@
-import { resolveRunScope, ALWAYS_FULL_PASSES, ScopeSegment } from "./reconScope";
+import { resolveRunScope, coversEverySegment, ALWAYS_FULL_PASSES, ScopeSegment } from "./reconScope";
 
 const seg = (key: string, stagingFolder: string, label?: string): ScopeSegment =>
   ({ key, stagingFolder, label });
@@ -96,5 +96,36 @@ describe("ALWAYS_FULL_PASSES", () => {
       "admin page lockdown",
       "HC gating check",
     ]);
+  });
+});
+
+describe("coversEverySegment", () => {
+  /**
+   * ⚠ REGRESSION GUARD. An MHO-only run on 2026-08-19 pruned all 67 of GHO's Folder Map rows,
+   * because the orphan passes judged every row against only the terms that run had walked.
+   */
+  it("is FALSE for a scoped run — the condition that must block orphan pruning", () => {
+    expect(coversEverySegment(ALL, resolveRunScope(ALL, new Set(["mode_gho"])))).toBe(false);
+    expect(coversEverySegment(ALL, resolveRunScope(ALL, new Set(["mode_gho", "mode_minamas_ho"])))).toBe(false);
+  });
+
+  it("is TRUE only when every segment was walked", () => {
+    expect(coversEverySegment(ALL, resolveRunScope(ALL, undefined))).toBe(true);
+    expect(
+      coversEverySegment(ALL, resolveRunScope(ALL, new Set(["mode_gho", "mode_minamas_ho", "mode_nbpol_ho"]))),
+    ).toBe(true);
+  });
+
+  /** Fails CLOSED: an unknown or refused scope never licenses a deletion. */
+  it("is FALSE when the scope is refused, empty or unreadable", () => {
+    expect(coversEverySegment(ALL, resolveRunScope(ALL, new Set([])))).toBe(false);
+    expect(coversEverySegment([], resolveRunScope([], undefined))).toBe(false);
+    expect(coversEverySegment(undefined, undefined)).toBe(false);
+    expect(coversEverySegment(ALL, undefined)).toBe(false);
+  });
+
+  /** A retired segment dropped from the tick list still leaves the run short of full coverage. */
+  it("is FALSE when a ticked key matched nothing, so fewer segments ran", () => {
+    expect(coversEverySegment(ALL, resolveRunScope(ALL, new Set(["mode_gho", "mode_gone"])))).toBe(false);
   });
 });

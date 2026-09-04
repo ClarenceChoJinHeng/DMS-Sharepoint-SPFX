@@ -13,11 +13,19 @@ import {
   folderContentTypeName,
   siteEntryGroupName,
   setSiteEntryName,
+  SITE_ENTRY_CANDIDATES,
   LIBRARY_CANDIDATES,
   setLibraryNames,
   HC_APPROVAL_CANDIDATES,
   HC_DOCUMENTS_CANDIDATES,
+  DOCUMENTS_CANDIDATES,
+  setDocumentsLibraryName,
   setHcLibraryNames,
+  hcAvailable,
+  ARCHIVE_CANDIDATES,
+  ARCHIVE_HC_CANDIDATES,
+  setArchiveLibraryNames,
+  PRIMED_SUFFIXES,
 } from "./naming";
 
 /**
@@ -71,14 +79,43 @@ async function primeSiteEntry(sp: SPHttpClient, siteUrl: string): Promise<void> 
   if (!siteEntryLookup) {
     siteEntryLookup = (async () => {
       try {
+        /* WARN: FILTERED SERVER-SIDE, NOT PAGED-THEN-SEARCHED. This read was `$top=500` on a site
+           that holds 684 groups, and `setSiteEntryName` leaves the LEGACY `DMS_SITE_MEMBERS` when it
+           finds no candidate - so a truncated read is indistinguishable from the group being absent,
+           and every consumer of `siteEntryGroupTitle()` then names a group that does not exist. That
+           includes reconciliation's "NOBODY CAN OPEN THE SITE HOME PAGE" warning, which would tell an
+           admin to grant Read to `DMS_SITE_MEMBERS` on a site whose group is `CRS_SITE_MEMBERS`.
+
+           FIFTH instance of the capped-read trap (memory `sp-capped-read-reads-as-absent`), after
+           `fetchAllSiteGroups`, `libraryHasRefColumns`, `ensureColumn` and `BulkGroupProvisioner`.
+           At most two rows come back, so this one cannot be truncated at all. */
+        const clauses = SITE_ENTRY_CANDIDATES.map(
+          (c) => `Title eq '${c.replace(/'/g, "''")}'`,
+        ).join(" or ");
+        let titles: string[] | undefined;
         const res: SPHttpClientResponse = await sp.get(
-          `${siteUrl}/_api/web/sitegroups?$select=Title&$top=500`,
+          `${siteUrl}/_api/web/sitegroups?$select=Title&$filter=${encodeURIComponent(clauses)}`,
           SPHttpClient.configurations.v1,
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
-        if (!res.ok) return;
-        const data = await res.json();
-        setSiteEntryName(((data.value ?? []) as Array<{ Title?: string }>).map((g) => g.Title ?? ""));
+        if (res.ok) {
+          const data = await res.json();
+          titles = ((data.value ?? []) as Array<{ Title?: string }>).map((g) => g.Title ?? "");
+        }
+        if (titles === undefined) {
+          /* Insurance against the FIX. If `$filter` on Title were ever rejected, falling through to
+             a capped read would restore the original silent failure - so the fallback is 5000, and
+             `undefined` (not read) is kept distinct from `[]` (read, no candidate). */
+          const all: SPHttpClientResponse = await sp.get(
+            `${siteUrl}/_api/web/sitegroups?$select=Title&$top=5000`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (!all.ok) return;
+          const data = await all.json();
+          titles = ((data.value ?? []) as Array<{ Title?: string }>).map((g) => g.Title ?? "");
+        }
+        setSiteEntryName(titles);
       } catch {
         // Leave the legacy name; a failed probe must not stop a web part loading.
       }
@@ -139,31 +176,72 @@ async function primeLibrary(sp: SPHttpClient, siteUrl: string): Promise<void> {
  * matters enough to be visible here too: an HC approval library with no HC documents library accepts
  * uploads and approvals and then has nowhere to route them.
  */
+/**
+ * Try each candidate title in turn; return the first that answers, with its title AND url from the
+ * SAME response.
+ *
+ * That pairing is the point: a resolved title must never be matched with a stale segment, because a
+ * wrong title 404s loudly while a wrong URL segment fails SILENTLY (gotcha #12).
+ *
+ * ONE implementation, shared by the HC pair and the archive pair. It began as a closure inside
+ * `primeHcLibraries`; the archive needed exactly the same probe, and a second copy is how the two
+ * would come to disagree about what "resolved" means.
+ */
+async function probeLibrary(
+  sp: SPHttpClient,
+  siteUrl: string,
+  candidates: string[],
+): Promise<{ title: string; url: string } | undefined> {
+  for (const candidate of candidates) {
+    try {
+      const res: SPHttpClientResponse = await sp.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(candidate)}')` +
+          `?$select=Title,RootFolder/ServerRelativeUrl&$expand=RootFolder`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) continue; // not under this title; try the next
+      const data = await res.json();
+      return { title: data?.Title ?? candidate, url: data?.RootFolder?.ServerRelativeUrl ?? "" };
+    } catch {
+      // A network failure on one candidate must not stop the others being tried.
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The normal approved-side library's TITLE.
+ *
+ * ⚠ ITS URL SEGMENT IS NOT PROBED, AND MUST NOT BE. `Shared Documents` is fixed by SharePoint at
+ * creation and a rename never changes it (gotcha #12) — verified again on 2026-08-28, when the
+ * title became `Restricted & Confidential Document` while the URL stayed put. Thirteen call sites
+ * use `DOCUMENTS_URL_SEGMENT` and every one of them is still correct.
+ *
+ * ⚠ UNLIKE THE HC AND ARCHIVE PROBES, FAILURE IS NOT A NORMAL OUTCOME. Those may legitimately find
+ * nothing; this library always exists, so a failed probe leaves the legacy `Documents` literal and
+ * the next `getbytitle` 404s loudly. That is the right way round — silently dropping the approved
+ * side would take reconciliation, the migrator and CRS Search with it.
+ */
+let documentsLookup: Promise<void> | undefined;
+
+async function primeDocumentsLibrary(sp: SPHttpClient, siteUrl: string): Promise<void> {
+  if (!documentsLookup) {
+    documentsLookup = (async () => {
+      const found = await probeLibrary(sp, siteUrl, DOCUMENTS_CANDIDATES);
+      if (found) setDocumentsLibraryName(found.title);
+    })();
+  }
+  return documentsLookup;
+}
+
 let hcLookup: Promise<void> | undefined;
 
 async function primeHcLibraries(sp: SPHttpClient, siteUrl: string): Promise<void> {
   if (!hcLookup) {
     hcLookup = (async () => {
-      const probe = async (candidates: string[]): Promise<{ title: string; url: string } | undefined> => {
-        for (const candidate of candidates) {
-          try {
-            const res: SPHttpClientResponse = await sp.get(
-              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(candidate)}')` +
-                `?$select=Title,RootFolder/ServerRelativeUrl&$expand=RootFolder`,
-              SPHttpClient.configurations.v1,
-              { headers: { Accept: "application/json;odata=nometadata" } },
-            );
-            if (!res.ok) continue; // not under this title; try the next
-            const data = await res.json();
-            // Title and URL from ONE response, so a resolved title is never paired with a stale
-            // segment — the rule the normal library pair already follows.
-            return { title: data?.Title ?? candidate, url: data?.RootFolder?.ServerRelativeUrl ?? "" };
-          } catch {
-            // A network failure on one candidate must not stop the others being tried.
-          }
-        }
-        return undefined;
-      };
+      const probe = (candidates: string[]): Promise<{ title: string; url: string } | undefined> =>
+        probeLibrary(sp, siteUrl, candidates);
       const approval = await probe(HC_APPROVAL_CANDIDATES);
       // Short-circuit: with no approval library there is nothing to pair, and the second probe would
       // spend two requests on every page load of every site that has no HC at all.
@@ -176,19 +254,46 @@ async function primeHcLibraries(sp: SPHttpClient, siteUrl: string): Promise<void
   return hcLookup;
 }
 
+/**
+ * The seven-year archive pair, if this site has one.
+ *
+ * Spec: docs/superpowers/specs/2026-08-22-seven-year-archive-design.md
+ *
+ * Like the HC probe, absence is a normal outcome: a site with no archive libraries simply never
+ * archives, and `archiveAvailable()` false is the whole answer.
+ *
+ * ⚠ MUST RUN AFTER `primeHcLibraries`, and the ordering is load-bearing. The archive's pairing rule
+ * mirrors the site's HC state — an HC site needs BOTH archive libraries, a non-HC site needs only
+ * `Archive` — so reading `hcAvailable()` before the HC probe has settled would classify an HC site
+ * as non-HC and accept a half-provisioned archive, leaving HC documents silently never archived.
+ */
+let archiveLookup: Promise<void> | undefined;
+
+async function primeArchiveLibraries(sp: SPHttpClient, siteUrl: string): Promise<void> {
+  if (!archiveLookup) {
+    archiveLookup = (async () => {
+      const normal = await probeLibrary(sp, siteUrl, ARCHIVE_CANDIDATES);
+      // Short-circuit: with no normal archive there is nothing to pair, and the second probe would
+      // spend requests on every page load of every site that has no archive at all.
+      if (!normal) return;
+      const needsHc = hcAvailable();
+      const hc = needsHc ? await probeLibrary(sp, siteUrl, ARCHIVE_HC_CANDIDATES) : undefined;
+      setArchiveLibraryNames(normal.title, normal.url, needsHc, hc?.title, hc?.url);
+    })();
+  }
+  return archiveLookup;
+}
+
 export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<void> {
   await primeSiteEntry(sp, siteUrl);
   await primeLibrary(sp, siteUrl);
+  // Independent of the HC and archive probes — no ordering constraint, unlike those two.
+  await primeDocumentsLibrary(sp, siteUrl);
   await primeHcLibraries(sp, siteUrl);
+  // AFTER the HC probe — see primeArchiveLibraries. Not concurrent with it, deliberately.
+  await primeArchiveLibraries(sp, siteUrl);
   const probe = makeListProbe(sp, siteUrl);
-  for (const suffix of [
-    LIST_SUFFIX.config,
-    LIST_SUFFIX.groupMap,
-    LIST_SUFFIX.folderMap,
-    LIST_SUFFIX.abbreviation,
-    LIST_SUFFIX.deletionLog,
-    LIST_SUFFIX.auditLog,
-  ]) {
+  for (const suffix of PRIMED_SUFFIXES) {
     try {
       await resolveListTitle(suffix, probe);
     } catch {

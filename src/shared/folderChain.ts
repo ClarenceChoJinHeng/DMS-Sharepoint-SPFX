@@ -147,6 +147,20 @@ export function effectiveOnDemandTiers(
 ): Level[] {
   const { onDemand } = splitChain(levels ?? []);
   if (onDemand.length > 0) return onDemand;
+  return builtInOnDemandTiers(legacyYearTermSet, legacyDocTypeTermSet);
+}
+
+/**
+ * The two below-Unit tiers every segment runs on before anyone edits its structure.
+ *
+ * ONE definition, because their shape is load-bearing in a way that is invisible when
+ * wrong: neither carries a `tidCol`, and `Document Type`'s real internal name is the
+ * ENCODED `Document_x0020_Type`, not the `DocumentType` a name-sanitizer would derive.
+ */
+export function builtInOnDemandTiers(
+  legacyYearTermSet: string,
+  legacyDocTypeTermSet: string,
+): Level[] {
   return [
     { label: "Year", column: "Year", labelCol: "Year", termSet: legacyYearTermSet, permissioned: false },
     {
@@ -154,6 +168,41 @@ export function effectiveOnDemandTiers(
       termSet: legacyDocTypeTermSet, permissioned: false,
     },
   ];
+}
+
+/**
+ * The built-in tier an admin has just re-created BY NAME, or undefined for a genuinely new one.
+ *
+ * **Removing `Year` or `Document Type` and adding it back must not produce an ordinary level**,
+ * and before 2026-08-20 it did. The add form derives `tidCol: "<Column>Tid"` for every tier it
+ * creates, but these two are MANAGED METADATA columns that already exist:
+ *   - A `tidCol` is what tells every writer the column is plain text. With one attached, the
+ *     migrator's backfill and the upload form both write the bare label `2024` into the taxonomy
+ *     `Year` column, which SharePoint rejects with *"The data returned from the tagging UI was not
+ *     formatted correctly"*. Seen live on 18 of 18 documents.
+ *   - `Document Type` is worse: the derived column `DocumentType` does not exist, and ONE unknown
+ *     field name fails the WHOLE `validateUpdateListItem` call (gotcha #4) — so a single re-added
+ *     tier silently costs every other tier's metadata too.
+ *
+ * The admin's own term set still wins when they supplied one: that drives which options the
+ * dropdown offers, and is theirs to choose. What they may NOT choose is the column shape, because
+ * the column already exists and its type is not a matter of opinion.
+ */
+export function builtInTierFor(
+  label: string,
+  legacyYearTermSet: string,
+  legacyDocTypeTermSet: string,
+): Level | undefined {
+  const key = (label ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!key) return undefined;
+  for (const tier of builtInOnDemandTiers(legacyYearTermSet, legacyDocTypeTermSet)) {
+    const byLabel = tier.label.toLowerCase();
+    // `documenttype` as well as `document type` — the sanitized column name is what an admin
+    // reading the old chain in a list view would most likely retype.
+    const byColumn = (tier.column ?? "").toLowerCase();
+    if (key === byLabel || key === byColumn) return { ...tier };
+  }
+  return undefined;
 }
 
 /** Whether a below-Unit tier applies to the path currently being built. */

@@ -105,3 +105,31 @@ export const ALWAYS_FULL_PASSES: string[] = [
   "admin page lockdown",
   "HC gating check",
 ];
+
+/**
+ * Did this run walk EVERY segment on the site?
+ *
+ * ⚠ THE ONLY SAFE CONDITION FOR THE ORPHAN PASSES, and its absence deleted live data. Those passes
+ * decide a row is dead by asking "is its term among the terms this run enumerated" — so on a scoped
+ * run, every row of every UNCOVERED segment answers no. On 2026-08-19 an MHO-only run pruned all 67
+ * of GHO's Folder Map rows and refused every GHO uploader with *"your unit isn't ready to receive
+ * uploads yet — run folder reconciliation"*, the message reconciliation itself tells them to act on.
+ *
+ * This is the MIRROR of `ALWAYS_FULL_PASSES`: those passes must never be narrowed by scope, and the
+ * orphan passes must never be widened beyond it. The selective-reconciliation spec wrote down one
+ * direction and not the other, and the untested direction was the destructive one.
+ *
+ * Answers **false** when the segment list is empty or unreadable, so an unknown scope never licenses
+ * a deletion. Unlike almost everything else here, this fails CLOSED — the cost is an orphan surviving
+ * until the next full run, against deleting the rows a whole segment's uploads resolve through.
+ */
+export function coversEverySegment(
+  all: ScopeSegment[] | null | undefined,
+  scope: RunScope | null | undefined,
+): boolean {
+  const every = (all ?? []).filter((s) => ((s ?? {}) as ScopeSegment).key !== undefined)
+    .filter((s) => (s.key ?? "").trim().length > 0);
+  if (every.length === 0) return false;
+  if (!scope || scope.refused) return false;
+  return scope.segments.length === every.length;
+}

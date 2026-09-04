@@ -1,6 +1,8 @@
 import { Level, parseLevels } from "./formModel";
 import {
   buildOnDemandSegments,
+  builtInOnDemandTiers,
+  builtInTierFor,
   decideTier,
   effectiveOnDemandTiers,
   gridPlan,
@@ -287,5 +289,61 @@ describe("buildOnDemandSegments", () => {
     const r = buildOnDemandSegments([year], { Year: { id: "y1", label: "   " } });
     expect(r.missing).toEqual(["Year"]);
     expect(r.segments).toEqual([]);
+  });
+});
+
+describe("builtInTierFor — re-adding Year or Document Type restores the built-in shape", () => {
+  /**
+   * The live defect, 2026-08-20: `Year` was removed and re-added through the add form, which
+   * derives `tidCol` for every tier. That flag is what tells the migrator and the upload form
+   * the column is plain text, so both wrote the bare label `2024` into the taxonomy column and
+   * SharePoint rejected all 18 documents with "The data returned from the tagging UI was not
+   * formatted correctly".
+   */
+  it("gives a re-added Year NO tidCol", () => {
+    const t = builtInTierFor("Year", YEAR_SET, DOCTYPE_SET);
+    expect(t).toBeDefined();
+    expect(t?.tidCol).toBeUndefined();
+    expect(t?.labelCol).toBe("Year");
+    expect(t?.permissioned).toBe(false);
+  });
+
+  it("gives a re-added Document Type the ENCODED internal name, not the sanitized one", () => {
+    // `DocumentType` does not exist as a column, and one unknown field name fails the WHOLE
+    // validateUpdateListItem call — taking every other tier's metadata with it.
+    const t = builtInTierFor("Document Type", YEAR_SET, DOCTYPE_SET);
+    expect(t?.labelCol).toBe("Document_x0020_Type");
+    expect(t?.tidCol).toBeUndefined();
+  });
+
+  it("matches case, padding and the sanitized column name an admin might retype", () => {
+    expect(builtInTierFor("  year  ", YEAR_SET, DOCTYPE_SET)?.label).toBe("Year");
+    expect(builtInTierFor("DOCUMENT  TYPE", YEAR_SET, DOCTYPE_SET)?.label).toBe("Document Type");
+    expect(builtInTierFor("DocumentType", YEAR_SET, DOCTYPE_SET)?.label).toBe("Document Type");
+  });
+
+  it("leaves a genuinely new tier alone, so it still gets its derived tidCol", () => {
+    expect(builtInTierFor("Category", YEAR_SET, DOCTYPE_SET)).toBeUndefined();
+    expect(builtInTierFor("SubUnit", YEAR_SET, DOCTYPE_SET)).toBeUndefined();
+    expect(builtInTierFor("", YEAR_SET, DOCTYPE_SET)).toBeUndefined();
+  });
+
+  it("returns a COPY, so an edit to the draft cannot mutate the shared definition", () => {
+    const a = builtInTierFor("Year", YEAR_SET, DOCTYPE_SET) as Level;
+    a.tidCol = "YearTid";
+    expect(builtInTierFor("Year", YEAR_SET, DOCTYPE_SET)?.tidCol).toBeUndefined();
+  });
+
+  it("is the SAME definition effectiveOnDemandTiers seeds from", () => {
+    // One definition, or the seeded pair and the re-added one drift — and the drifting copy
+    // would be the rare one nobody looks at.
+    const seeded = effectiveOnDemandTiers([dept, unit], YEAR_SET, DOCTYPE_SET);
+    expect(seeded).toEqual(builtInOnDemandTiers(YEAR_SET, DOCTYPE_SET));
+    expect(builtInTierFor("Year", YEAR_SET, DOCTYPE_SET)).toEqual(seeded[0]);
+    expect(builtInTierFor("Document Type", YEAR_SET, DOCTYPE_SET)).toEqual(seeded[1]);
+  });
+
+  it("keeps NO tidCol on either built-in tier", () => {
+    for (const t of builtInOnDemandTiers(YEAR_SET, DOCTYPE_SET)) expect(t.tidCol).toBeUndefined();
   });
 });

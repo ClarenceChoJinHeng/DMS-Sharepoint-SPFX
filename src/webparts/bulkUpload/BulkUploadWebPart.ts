@@ -7,7 +7,6 @@ import {
 } from "@microsoft/sp-property-pane";
 import { BaseClientSideWebPart } from "@microsoft/sp-webpart-base";
 
-import { withBackToSettings } from "../../shared/backToSettings";
 import { IReadonlyTheme } from "@microsoft/sp-component-base";
 
 import * as strings from "BulkUploadWebPartStrings";
@@ -38,7 +37,14 @@ export default class BulkUploadWebPart extends BaseClientSideWebPart<IBulkUpload
     // Wrapped at the WEB PART boundary, not inside the component: several of these components are
     // also mounted as steps of a Folder Management guided flow, where a band offering the way OUT
     // would look like part of the flow. render() is the one place an embedded mount cannot reach.
-    ReactDom.render(withBackToSettings(this.context, element), this.domElement);
+    /* ⚠ NO "Back to CRS Settings" BAND SINCE 2026-08-22. It was here because Bulk Upload was an
+       admin tool listed on that page. It is an uploader tool now, and CRS Settings is admin-only — so
+       the band would offer every uploader a link to a page that answers AccessDenied, which reads as
+       a broken system rather than as a page not meant for them.
+
+       Deliberately matching the upload form, the approval queue and My Submissions, none of which
+       carry the band: a back link asserts where the user came from, and these are reached directly. */
+    ReactDom.render(element, this.domElement);
   }
 
   protected onInit(): Promise<void> {

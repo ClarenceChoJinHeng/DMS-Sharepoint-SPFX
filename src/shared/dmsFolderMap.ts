@@ -401,7 +401,16 @@ export async function probeFolderUploadAccess(
     `/ListItemAllFields/EffectiveBasePermissions`;
   const get = async (): Promise<SPHttpClientResponse> =>
     spHttpClient.get(url, SPHttpClient.configurations.v1, {
-      headers: { Accept: "application/json;odata=nometadata" },
+      // ⚠ NO-CACHE, same reason as the Requests/My Submissions fix (2026-08-30): this URL is keyed
+      // only on the folder's UniqueId, not on who is asking, so a cached "granted" from one
+      // person's session (e.g. an approver's own probe against this exact folder) can be served
+      // back to a completely different person's identical request in the same browser profile.
+      // Stale here is not cosmetic — it decides whether an upload or a self-approve is allowed.
+      headers: {
+        Accept: "application/json;odata=nometadata",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
     });
 
   // Fewer retries and a shorter ceiling than probeFolderById: this runs on the upload
@@ -438,6 +447,75 @@ export async function probeFolderUploadAccess(
 }
 
 /**
+ * Bit position of ApproveItems in the same enum: viewListItems = 1, addListItems = 2,
+ * editListItems = 3, deleteListItems = 4, approveItems = 5 — so bit index 4 (`5 - 1`).
+ */
+const APPROVE_ITEMS_BIT = 4;
+
+/**
+ * Does THIS user hold Approve on this folder — the question behind self-approving an upload.
+ *
+ * Built for the 2026-08-24 auto-approve-own-upload feature: a Head of Unit's own upload is
+ * flipped straight to Approved only when they demonstrably hold Approve on the exact folder it
+ * landed in. This is a REAL ACL READ, not a role lookup — a role table can drift from what
+ * reconciliation actually granted (a group renamed, a grant not yet applied), and the cost of a
+ * wrong "yes" here is publishing a document nobody reviewed. `hasPermissionBit`/`ADD_LIST_ITEMS_BIT`
+ * above already exist for exactly this reason (arithmetic, never `&` — Full Control returns
+ * `Low = "4294967295"`, and JS bitwise coerces that to a signed 32-bit int).
+ *
+ * Every non-"granted" answer — denied, missing, unknown — means the caller must NOT self-approve
+ * and must leave the item Pending, the existing behaviour. A PIC's probe always lands here too and
+ * always reads "denied": they hold no Approve role on any folder, so this can never fire for them.
+ */
+export async function probeFolderApproveAccess(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  uniqueId: string,
+): Promise<UploadAccess> {
+  const url =
+    `${siteUrl}/_api/web/GetFolderById(guid'${encodeURIComponent(uniqueId)}')` +
+    `/ListItemAllFields/EffectiveBasePermissions`;
+  const get = async (): Promise<SPHttpClientResponse> =>
+    spHttpClient.get(url, SPHttpClient.configurations.v1, {
+      // ⚠ NO-CACHE — see the identical comment on `probeFolderUploadAccess` above. This is the
+      // self-approve gate: a stale "granted" served from an APPROVER's earlier probe against this
+      // exact folder self-approves a document for somebody who holds no approve role at all.
+      headers: {
+        Accept: "application/json;odata=nometadata",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
+    });
+
+  // Same short retry budget as the upload probe: this runs once per file, right after tagging, and
+  // holding the upload result on a spinner is worse than an inconclusive answer that just skips
+  // self-approval — the item still uploads and tags correctly either way.
+  let res: SPHttpClientResponse = await get();
+  for (
+    let attempt = 0;
+    (res.status === 429 || res.status === 503) && attempt < 3;
+    attempt++
+  ) {
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(8000, 500 * 2 ** attempt);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    res = await get();
+  }
+
+  if (res.status === 401 || res.status === 403) return "denied";
+  if (res.status === 404) return "missing";
+  if (!res.ok) {
+    console.warn(
+      `Approve-access probe was inconclusive (HTTP ${res.status}) for folder ${uniqueId} — leaving item Pending.`,
+    );
+    return "unknown";
+  }
+  const d = await res.json().catch(() => null);
+  if (!d || d.Low === undefined) return "unknown";
+  return hasPermissionBit(Number(d.Low), APPROVE_ITEMS_BIT) ? "granted" : "denied";
+}
+
+/**
  * The same question, asked by PATH instead of by UniqueId.
  *
  * Exists for the Highly Confidential libraries, whose folders are NOT in the Folder Map: that list
@@ -468,7 +546,12 @@ export async function probeFolderUploadAccessByPath(
     `?@f='${encodeServerRelativePath(path)}'`;
   const get = async (): Promise<SPHttpClientResponse> =>
     spHttpClient.get(url, SPHttpClient.configurations.v1, {
-      headers: { Accept: "application/json;odata=nometadata" },
+      // ⚠ NO-CACHE — see the identical comment on `probeFolderUploadAccess` above.
+      headers: {
+        Accept: "application/json;odata=nometadata",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
     });
 
   // The same short retry budget as the UniqueId probe: this runs on the upload form's interaction

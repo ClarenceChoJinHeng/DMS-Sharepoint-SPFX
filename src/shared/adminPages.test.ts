@@ -45,7 +45,11 @@ describe("the page as designed", () => {
     const titles = CARDS.map((c) => c.title);
     expect(titles).toContain("Folder Management");
     expect(titles).toContain("User Access Management");
-    expect(titles).toContain("CRS Configuration");
+    /* Retitled 2026-08-30 at the client's request. The CARD is named for what it does; the page it
+       opens is still called "CRS Configuration", which is why `self.label` and `match` were left
+       alone — see the comment on that entry. */
+    expect(titles).toContain("File Type Management");
+    expect(titles).toContain("Audit Log");
     // Dropped deliberately: term abbreviations moved under Folder Management.
     expect(titles).not.toContain("CRS Mapping");
   });
@@ -61,10 +65,19 @@ describe("the page as designed", () => {
   });
 
   it("lists Group Management under User Access, FIRST", () => {
-    // Not on the mockup, and required: Folder Access maps an EXISTING group, so an admin who starts
-    // there has nothing to pick.
+    // Not on the mockup, and required: it is the page that creates the groups, writes their
+    // mappings and adds the people, so every other access screen presupposes it.
     const access = CARDS.filter((c) => c.key === "access")[0];
     expect(access.links[0].label).toBe("Group Management");
+  });
+
+  // Removed 2026-08-23: its mapping half moved into group creation and its membership half into
+  // Group Management's group list, so the card would point at a screen with nothing left to do.
+  it("no longer offers Folder Access anywhere on the landing page", () => {
+    for (const c of CARDS) {
+      for (const l of c.links) expect(l.key).not.toBe("folderAccess");
+      if (c.self) expect(c.self.key).not.toBe("folderAccess");
+    }
   });
 
   it("splits the grid into two columns, both populated", () => {
@@ -100,28 +113,20 @@ describe("resolveLink — the collisions that would send an admin to the wrong p
     }
   });
 
-  it("sends Folder Access to Folder Access", () => {
-    const t = resolveLink(linkFor("folderAccess"), SITE);
+  it("sends Page Access to Page Access, not to another access screen", () => {
+    const t = resolveLink(linkFor("pageAccess"), SITE);
     expect(t.state).toBe("resolved");
-    if (t.state !== "missing") expect(t.url).toContain("Folder-Access.aspx");
+    if (t.state !== "missing") expect(t.url).toContain("Page-Access.aspx");
   });
 
-  it("does NOT confuse Approval Library Access with the ApprovalDocument page", () => {
-    // /approv/i would match both; the approver's queue is not an access screen.
-    const t = resolveLink(linkFor("libraryAccess"), SITE);
-    expect(t.state).toBe("resolved");
-    if (t.state !== "missing") {
-      expect(t.url).toContain("Approval-Library-Access.aspx");
-      expect(t.url).not.toContain("ApprovalDocument");
-    }
-  });
+  // "libraryAccess" and "siteAccess" are GONE (2026-09-02) — Approval Library Access and Site
+  // Access retired as signposts, and the "access" card's links no longer name them. See
+  // `ApprovalLibraryAccessPage.tsx` / `SiteAccessPage.tsx` for the retirement itself.
 
-  it("does not confuse Page Access with Site Access or Group Management", () => {
+  it("does not confuse Page Access with Group Management", () => {
     const p = resolveLink(linkFor("pageAccess"), SITE);
-    const s = resolveLink(linkFor("siteAccess"), SITE);
     const g = resolveLink(linkFor("groups"), SITE);
     if (p.state !== "missing") expect(p.url).toContain("Page-Access.aspx");
-    if (s.state !== "missing") expect(s.url).toContain("Site-Access.aspx");
     if (g.state !== "missing") expect(g.url).toContain("Group-Management.aspx");
   });
 
@@ -224,7 +229,7 @@ describe("the tab hash", () => {
   });
 
   it("is absent for a link that does not", () => {
-    const t = resolveLink(linkFor("folderAccess"), SITE);
+    const t = resolveLink(linkFor("pageAccess"), SITE);
     if (t.state !== "missing") expect(t.url).not.toContain("#tab=");
   });
 
@@ -292,5 +297,16 @@ describe("suggestedPageName", () => {
       const suggested = suggestedPageName(l);
       expect(resolveLink(l, [page(suggested)]).state).not.toBe("missing");
     }
+  });
+});
+
+/* ⚠ REMOVED 2026-08-22, and pinned so it cannot drift back in unnoticed. Bulk Upload was listed here
+   as an ADMIN tool; the client handed it to uploaders, and this page is admin-only — so a card here
+   would point administrators at a screen that is no longer theirs while staying invisible to everyone
+   who now uses it. */
+describe("Bulk Upload is not an admin card", () => {
+  it("has no bulk card, and no bulk link to resolve", () => {
+    expect(CARDS.filter((c) => c.key === "bulk")).toEqual([]);
+    expect(allLinks().filter((l) => l.key === "bulk")).toEqual([]);
   });
 });

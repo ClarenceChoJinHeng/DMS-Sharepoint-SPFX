@@ -293,6 +293,75 @@ function odataEquals(field: string, value: string): string {
   return `${field} eq '${v}'`;
 }
 
+/* ── Which Advanced Filters REST can narrow, and which it cannot ───────────────
+ *
+ * ⚠⚠ THIS HAS NOW FAILED TWICE, IN OPPOSITE DIRECTIONS, AND BOTH FIXES WERE INFERRED FROM ONE
+ * COMBINED FAILURE. On 2026-09-02 all four Advanced Filters were set at once, every library answered
+ * **HTTP 400**, and the conclusion drawn was that all four columns are term-set-bound. The fix sent
+ * every one of them through `substringof('v',TaxCatchAllLabel)` — and on 2026-09-03 all four
+ * libraries answered **HTTP 500** instead, because `TaxCatchAllLabel` is a hidden **Note** field and
+ * SharePoint cannot filter a Note field at all. A 400 was traded for a 500.
+ *
+ * ⚠ THE ORIGINAL DIAGNOSIS WAS WRONG, AND THE EVIDENCE THAT SETTLES IT WAS ALREADY IN THIS REPO.
+ * With four clauses in one `$filter`, ONE bad clause fails the whole request — so that test could
+ * never say WHICH column was at fault, and "all four" was a guess fitted to a single measurement.
+ * The archive-column work of 2026-09-02 had already checked the libraries directly, via
+ * `SP.Taxonomy.TaxonomyField` on their `/fields`, and found **only three of the five are taxonomy**:
+ * `Document Type`, `Year` and `Confidentiality Level`. Business Segment, Department and Unit are
+ * PLAIN TEXT — which is exactly why `ensureColumn` gives each of them a text `<Base>Tid` twin rather
+ * than relying on a taxonomy field's hidden note field. Direct inspection beats inference from a
+ * combined failure.
+ *
+ * So the split is:
+ *   • Business Segment and every tier → plain TEXT columns → `eq`, indexable, provably fine.
+ *   • Document Type / Year / Confidentiality Level → genuine `TaxonomyFieldType` → **cannot be
+ *     filtered server-side**, by `eq` (400) or through `TaxCatchAllLabel` (500).
+ *
+ * ⚠ THE THREE ARE THEREFORE NARROWED CLIENT-SIDE, over the rows the read returns — see
+ * `metadataFilterMatches`. Selecting a taxonomy column is well supported (it is `$filter` that is
+ * not), so the labels come back with the row and no third syntax has to be guessed at. A third blind
+ * attempt at server-side syntax is exactly what produced the 500.
+ */
+
+/** The three genuine managed-metadata columns, by verified internal name. */
+export const METADATA_FILTER_FIELDS = {
+  documentType: "Document_x0020_Type",
+  year: "Year",
+  confidentiality: "Confidentiality_x0020_Level",
+} as const;
+
+/** Is any filter set that REST cannot narrow, and that therefore has to be applied to the rows? */
+export function hasMetadataFilter(c: SearchCriteria): boolean {
+  return clean(c.documentType).length > 0
+    || clean(c.year).length > 0
+    || clean(c.confidentiality).length > 0;
+}
+
+/**
+ * Does one row satisfy the three filters REST could not apply?
+ *
+ * Compared trimmed and case-insensitively, because these are labels a person picked from a dropdown
+ * and SharePoint's own casing is not guaranteed to match the term store's.
+ *
+ * ⚠ A BLANK ROW VALUE FAILS A SET FILTER, and that is deliberate: a document with no Document Type
+ * cannot be shown to be a `Letters with Counterparties`. It is NOT the "could not read" case — that
+ * one never reaches here, because the caller reports the whole library as un-narrowed instead. Empty
+ * ≠ unknown, kept apart by WHERE the two are handled rather than by a value.
+ */
+export function metadataFilterMatches(
+  c: Pick<SearchCriteria, "documentType" | "year" | "confidentiality">,
+  row: { documentType: string; year: string; confidentiality: string },
+): boolean {
+  const same = (want: string, got: string): boolean => {
+    const w = clean(want);
+    if (w.length === 0) return true;
+    return clean(got).toLowerCase() === w.toLowerCase();
+  };
+  return same(c.documentType, row.documentType)
+    && same(c.year, row.year)
+    && same(c.confidentiality, row.confidentiality);
+}
+
 /**
  * `YYYY-MM-DDTHH:MM:SSZ` for a `YYYY-MM-DD` input, or blank.
  *
@@ -315,7 +384,7 @@ export function odataDate(value: string, endOfDay?: boolean): string {
  * Free text is matched on the metadata columns and the filename only — there is no document-contents
  * search here, and that is the accepted cost of being instant on the library where instant matters.
  */
-export function buildListFilter(c: SearchCriteria): string {
+export function buildListFilter(c: SearchCriteria, hasKeyword: boolean = false): string {
   const parts: string[] = ["FSObjType eq 0"];
 
   for (const word of searchWords(c.text)) {
@@ -324,21 +393,34 @@ export function buildListFilter(c: SearchCriteria): string {
       odataContains("ProjectName", word),
       odataContains("Vendor_x002f_CustomerName", word),
       odataContains("Remark", word),
+      /* ⚠ THE UPLOADER'S OWN SEARCH WORDS, AND ONLY WHERE THE COLUMN IS CONFIRMED TO EXIST
+         (2026-09-04). `Keyword` is a plain TEXT column reconciliation creates, so `substringof` works
+         on it — unlike the three taxonomy fields the comment below excludes.
+
+         ⚠ IT MUST BE CONDITIONAL, and this is the trap: a `$filter` naming a column the library does
+         not have returns 400 and fails the WHOLE request. The `$select` retry added on 2026-09-03
+         does NOT cover the filter, so including this unconditionally would take FREE-TEXT SEARCH
+         DOWN ENTIRELY on any library not yet reconciled — the feature working everywhere except
+         where it is needed. Defaults to `false`, so an un-probed caller degrades to yesterday's
+         behaviour rather than to a broken page. */
+      hasKeyword ? odataContains("Keyword", word) : "",
     ].filter((p) => p.length > 0);
     // Every word must match SOMEWHERE, but may match a different field than its neighbour.
     if (anyField.length > 0) parts.push(`(${anyField.join(" or ")})`);
   }
 
-  const exact = [
-    odataEquals("Business_x0020_Segment", c.segment),
-    odataEquals("Year", c.year),
-    odataEquals("Confidentiality_x0020_Level", c.confidentiality),
-    odataEquals("Document_x0020_Type", c.documentType),
-  ];
-  for (const clause of exact) {
-    if (clause.length > 0) parts.push(clause);
-  }
+  /* ⚠ ONLY THE TEXT COLUMNS. Document Type, Year and Confidentiality Level are genuine taxonomy and
+     are narrowed on the rows instead — see the block above `METADATA_FILTER_FIELDS` for why, and for
+     the two failures that establish it. Sending them here 400s (as `eq`) or 500s (through
+     `TaxCatchAllLabel`), and either one fails the WHOLE request, taking the filters that do work
+     down with it. */
+  const segmentClause = odataEquals("Business_x0020_Segment", c.segment);
+  if (segmentClause.length > 0) parts.push(segmentClause);
 
+  /* Tier columns are PLAIN TEXT, each with a text `<Base>Tid` twin — verified live via
+     `SP.Taxonomy.TaxonomyField` on the libraries' own `/fields`, not inferred. So a per-column `eq`
+     is correct here and is indexable. The 2026-09-02 comment claiming they were managed metadata was
+     wrong, and it is what routed them through the Note field that then 500'd. */
   for (const tier of c.tiers ?? []) {
     const clause = odataEquals(clean(tier?.column), clean(tier?.value));
     if (clause.length > 0) parts.push(clause);
@@ -374,9 +456,15 @@ export function buildListFilter(c: SearchCriteria): string {
  * document, not per query, so a search with plenty of results can still be missing the specific
  * recent one somebody is looking for.
  */
-export function buildRecentFilter(c: SearchCriteria, sinceIso: string): string {
+export function buildRecentFilter(
+  c: SearchCriteria,
+  sinceIso: string,
+  /* Passed straight through — see `buildListFilter`. Defaults to `false` so an un-probed caller
+     cannot emit a clause naming a column the library may not have. */
+  hasKeyword: boolean = false,
+): string {
   const since = clean(sinceIso);
-  const base = buildListFilter(c);
+  const base = buildListFilter(c, hasKeyword);
   if (since.length === 0) return base;
   return `${base} and Modified ge datetime'${since}'`;
 }
@@ -468,6 +556,13 @@ export interface LibraryResult {
   /** HTTP status when the read failed. Named on screen: a 404 and a 403 have opposite fixes. */
   status?: number;
   hits: SearchHit[];
+  /**
+   * The read succeeded, but the three taxonomy filters could NOT be applied to it — this library's
+   * `$select` of those columns was rejected, so their labels never arrived and the rows could not be
+   * narrowed. Reported rather than silently over- or under-counted: the hits shown may include
+   * documents that do not match those filters, and saying so is the only honest option.
+   */
+  unnarrowed?: boolean;
 }
 
 /** The three empty states, kept distinct as everywhere else in this codebase. */

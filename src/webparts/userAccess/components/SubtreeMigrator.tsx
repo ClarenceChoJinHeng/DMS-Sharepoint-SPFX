@@ -28,6 +28,7 @@ import {
   loadFolderMapRows,
   moveFileTo,
 } from "../../../shared/dmsFolderMap";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
 /**
  * Subtree Migration — bring documents already filed into the shape the structure now describes.
@@ -55,11 +56,24 @@ const CONFLICT_LIMIT = 50;
 const s: Record<string, React.CSSProperties> = {
   msg:      { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err:      { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
-  warn:     { background: "#fff4e5", border: "1px solid #f0d9b5", color: "#7a4f00" },
+  warn:     { ...NOTICE_ATTENTION },
   ok:       { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
   card:     { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
   unitName: { fontSize: 14, fontWeight: 600, color: "#1b1b1b", fontFamily: "Consolas, monospace" },
-  move:     { fontSize: 12, color: "#605e5c", fontFamily: "Consolas, monospace", wordBreak: "break-all", padding: "2px 0" },
+  move:     { fontSize: 12, color: "#605e5c", fontFamily: "Consolas, monospace", wordBreak: "break-all", padding: "4px 0" },
+  // The full server-relative path, under the summary line. Quieter than the line above it because it
+  // is for confirming WHICH folder, not for reading at a glance.
+  // The folder's full path, and the FIRST thing on each entry (client, 2026-08-19: *"give the full
+  // Path of the folder and then give the file list under that path"*). It leads because it is the
+  // only unambiguous identifier — the tier segments alone repeat across units and libraries.
+  pathLine: { fontSize: 12, color: "#323130", fontFamily: "Consolas, monospace", wordBreak: "break-all" },
+  // What will happen to it, under the path.
+  action:   { fontSize: 12, color: "#605e5c", paddingLeft: 12 },
+  // The documents inside. Present only when there ARE some — an empty folder already says "empty" on
+  // the line above, and a blank list under it would read as a failed load.
+  fileList: { fontSize: 11, color: "#0f6c3f", wordBreak: "break-word", paddingLeft: 24 },
+  // One folder = one block, separated so the path/action/files grouping is visible at a glance.
+  entry:    { padding: "6px 0", borderTop: "1px solid #f0f0f0" },
   btn:      { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   ghost:    { background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   off:      { background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "not-allowed" },
@@ -141,14 +155,61 @@ interface UnitScan {
 export interface SubtreeMigratorProps {
   context: WebPartContext;
   siteUrl: string;
+  /**
+   * True while this screen is SCANNING or MOVING, so a host can hold its own navigation.
+   *
+   * Both phases run entirely in this page, so unmounting the component stops them part-way. The
+   * scan is the case that bit on site (2026-08-19): the guided flow's Next stayed live while the
+   * button read "Checking…", and pressing it would have thrown the scan away with nothing said.
+   * Same report-upward shape as `onReconRunningChange`.
+   */
+  onRunningChange?: (running: boolean) => void;
+  /**
+   * True when a scan has found folders to rebuild and the run has NOT happened yet.
+   *
+   * Walking past this step with moves outstanding leaves the segment half-changed: `PendingLevels`
+   * still set, folders still in the old shape, and the next step turns uploads back on over it.
+   * False when the scan found nothing — a segment with no work is a legitimate end state and must
+   * not trap the flow.
+   */
+  onPendingChange?: (pending: boolean) => void;
+  /**
+   * The segment the HOST has already chosen, pre-selecting this screen's own picker.
+   *
+   * ⚠ WHY (client, 2026-08-20): *"After selecting I got to select again which is weird."* The guided
+   * flow asks for the segment once and prints it in the header, then this screen asked again with an
+   * empty box — so the admin picks Group Head Office, sees "Segment: Group Head Office" at the top,
+   * and is asked for it a second time. Same family as the segment picker standing in front of steps
+   * that make no use of one (`stepUsesSegment`): the flow already knows, so it should not ask.
+   *
+   * ⚠ APPLIED WHEN THE SEGMENTS ARRIVE, NOT AT MOUNT. The list is loaded async, so a `useState`
+   * initialiser would run before there is anything to match against — the `initialX`-is-read-once
+   * trap that cost a live bug in `FolderManager`. It also only fills a picker the admin has not
+   * touched, so it can never override a deliberate choice.
+   */
+  initialSegmentKey?: string;
 }
 
-export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorProps): React.ReactElement {
+export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, initialSegmentKey }: SubtreeMigratorProps): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [segments, setSegments] = useState<SegmentRow[]>([]);
   const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
   const [chosen, setChosen] = useState<string>("");
+  /**
+   * Pre-select the host's segment once the list has loaded.
+   *
+   * Guarded on `chosen` being empty so it fills a picker nobody has touched and never overrides a
+   * deliberate choice — including the admin deliberately picking a DIFFERENT segment here. Matching
+   * on `key`, the same value the option elements carry, so a segment absent from the list (a
+   * different site, a retired segment) simply leaves the picker empty rather than selecting nothing
+   * and looking broken.
+   */
+  useEffect(() => {
+    if (!initialSegmentKey || chosen !== "") return;
+    if (segments.filter((x) => x.key === initialSegmentKey).length === 0) return;
+    setChosen(initialSegmentKey);
+  }, [segments, initialSegmentKey]);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState<string | undefined>(undefined);
   const [scans, setScans] = useState<UnitScan[] | undefined>(undefined);
@@ -160,6 +221,14 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<Array<{ text: string; ok: boolean }>>([]);
   const [done, setDone] = useState<string | undefined>(undefined);
+
+  // ONE effect covering BOTH phases, rather than a call beside every setScanning/setRunning: those
+  // are set in several places each, and the one that got forgotten would be the failure path — which
+  // is exactly when a host must be released rather than left padlocked for ever.
+  useEffect(() => {
+    if (onRunningChange) onRunningChange(scanning || running);
+  }, [scanning, running]);
+
   const [confirm, setConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
 
@@ -689,6 +758,20 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
   const movesOf = (row: UnitScan): LeafPlan[] =>
     plansFor(row).filter((p) => p.to !== undefined && p.to !== p.leaf.path);
 
+  // Work SCANNED BUT NOT YET RUN, reported so a guided flow can hold its Next.
+  //
+  // Declared HERE, not with the other state: `movesOf` must already exist, and it must stay above the
+  // `loading` / `loadError` early returns below — a hook after a conditional return breaks the rules
+  // of hooks the first time the component loads slowly.
+  //
+  // ⚠ ONLY WHEN A SCAN ACTUALLY FOUND MOVES. A segment with nothing to migrate is a legitimate end
+  // state and must not trap the flow. It reports false again the moment the run finishes, so the gate
+  // releases itself rather than needing anyone to clear it.
+  const pendingNow = (scans ?? []).reduce((n, r) => n + movesOf(r).length, 0);
+  useEffect(() => {
+    if (onPendingChange) onPendingChange(scans !== undefined && pendingNow > 0 && done === undefined);
+  }, [scans, pendingNow, done]);
+
   /**
    * Collisions as they stand BEFORE any rename — the stable list the form renders.
    *
@@ -798,7 +881,7 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
   const backfillMetadata = async (
     seg: SegmentRow,
     rows: UnitScan[],
-  ): Promise<{ stamped: number; failed: number }> => {
+  ): Promise<{ stamped: number; failed: number; checkable: boolean }> => {
     const tiers = belowUnit(seg);
     let stamped = 0;
     let failed = 0;
@@ -826,7 +909,11 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
       const col = colFor(i);
       if (col && allCols.indexOf(col) < 0) allCols.push(col);
     }
-    if (allCols.length === 0) return { stamped, failed };
+    // NO checkable tier is not the same as every tier agreeing, and the caller must be able to
+    // tell them apart. A segment whose only below-Unit tiers are Year and Document Type has
+    // nothing this pass may touch, so it returns 0/0 having looked at nothing — and reporting
+    // that as "already match" asserts a check that never ran. Empty is not unknown.
+    if (allCols.length === 0) return { stamped, failed, checkable: false };
 
     const byLib: Record<string, Array<{ id: number; path: string; values: Record<string, string> }>> = {};
     for (const lib of rows.map((r) => r.lib)) {
@@ -895,7 +982,7 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
         say(`${label}: ${(e as Error).message}`, false);
       }
     }
-    return { stamped, failed };
+    return { stamped, failed, checkable: true };
   };
 
   const activatePending = async (seg: SegmentRow): Promise<void> => {
@@ -1154,7 +1241,11 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
     try {
       const tags = await backfillMetadata(seg, scans);
       setDone(
-        tags.stamped === 0 && tags.failed === 0
+        !tags.checkable
+          ? "Nothing to check here. This segment's only below-Unit levels are Year and Document " +
+            "Type, which are managed metadata — this tool never writes them, so it cannot confirm " +
+            "them either. If a document's Year looks wrong, set it on the document itself."
+          : tags.stamped === 0 && tags.failed === 0
           ? "Every document's folder columns already match where it sits — nothing to change."
           : `Tagged ${tags.stamped} document(s).` +
             (tags.failed > 0 ? ` ${tags.failed} problem(s) listed above; running this again is safe.` : ""),
@@ -1215,27 +1306,41 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
         real one becomes hard to spot. Turn them back on afterwards.
       </div>
 
-      <label style={s.label} htmlFor="mig-seg">Business segment</label>
-      <select
-        id="mig-seg"
-        style={s.input}
-        value={chosen}
-        disabled={scanning || running}
-        onChange={(e) => {
-          setChosen(e.target.value);
-          setScans(undefined);
-          setDest({});
-          setRenames({});
-          setLog([]);
-          setDone(undefined);
-          setScanError(undefined);
-        }}
-      >
-        <option value="">Choose a segment…</option>
-        {segments.map((x) => (
-          <option key={x.key} value={x.key}>{x.label}</option>
-        ))}
-      </select>
+      {/* An editable dropdown here is only right when THIS screen is picking the segment — when a
+          guided flow already asked and pre-selected it (`initialSegmentKey`), an interactive select
+          invites re-choosing a value the flow itself decided, which reads as being asked twice (client,
+          2026-08-26, on the Retire flow's identical dropdown: "just put a message indicator, that's
+          enough"). Same rule already applied elsewhere in this file's own header text — the flow
+          printing the segment is not enough on its own if the control below it still looks choosable. */}
+      {initialSegmentKey ? (
+        <p style={s.label}>
+          Segment: <strong>{seg ? seg.label : initialSegmentKey}</strong>
+        </p>
+      ) : (
+        <>
+          <label style={s.label} htmlFor="mig-seg">Business segment</label>
+          <select
+            id="mig-seg"
+            style={s.input}
+            value={chosen}
+            disabled={scanning || running}
+            onChange={(e) => {
+              setChosen(e.target.value);
+              setScans(undefined);
+              setDest({});
+              setRenames({});
+              setLog([]);
+              setDone(undefined);
+              setScanError(undefined);
+            }}
+          >
+            <option value="">Choose a segment…</option>
+            {segments.map((x) => (
+              <option key={x.key} value={x.key}>{x.label}</option>
+            ))}
+          </select>
+        </>
+      )}
       {seg && (
         <p style={s.hint}>
           {seg.pending === undefined ? (
@@ -1265,7 +1370,7 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
           disabled={!chosen || scanning || running}
           onClick={scan}
         >
-          {scanning ? "Checking…" : "Check for folders in the old shape"}
+          {scanning ? "Checking…" : "Check for existing files in the old folder structure"}
         </button>
       </div>
 
@@ -1354,8 +1459,20 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
                 for (const t of p.missingTiers) missingCount[t] = (missingCount[t] ?? 0) + 1;
               }
             }
+            // ⚠ TIERS ALREADY CHOSEN STAY IN THIS LIST, and leaving them out was a live bug (client,
+            // 2026-08-19: *"the moment I select Archive 1 I cannot select Archive 2 no more. I have to
+            // go back and come back"*). `missingCount` counts folders with NO value — so choosing one
+            // resolves every plan, empties the map, and the `<select>` unmounts with it. The control
+            // that sets a value disappeared the instant it was used, and the only way to change your
+            // mind was to re-scan. A chosen tier is exactly the one an admin is most likely to want to
+            // revisit, so it must keep its dropdown.
+            const chosenTiers = Object.keys(chosenDest)
+              .map((k) => Number(k))
+              .filter((k) => chosenDest[k] !== undefined);
             const needed = Object.keys(missingCount)
               .map((k) => Number(k))
+              .concat(chosenTiers)
+              .filter((k, i, all) => all.indexOf(k) === i)
               .sort((a, b) => a - b);
             return (
               <div key={group.tail} style={s.card}>
@@ -1367,8 +1484,12 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
                   return (
                     <div key={chainIndex}>
                       <label style={s.label} htmlFor={`mig-d-${group.tail}-${chainIndex}`}>
-                        {level ? level.label : `Level ${chainIndex + 1}`} — for the{" "}
-                        {missingCount[chainIndex]} folder(s) below that have no value for it
+                        {level ? level.label : `Level ${chainIndex + 1}`}
+                        {missingCount[chainIndex]
+                          ? ` — for the ${missingCount[chainIndex]} folder(s) below that have no value for it`
+                          /* Every folder now has a value, so the count would read "0 folder(s)". Say
+                             what the control now does — it is still live, and changing it re-plans. */
+                          : " — chosen; change it to re-plan the folders below"}
                       </label>
                       <select
                         id={`mig-d-${group.tail}-${chainIndex}`}
@@ -1403,27 +1524,57 @@ export default function SubtreeMigrator({ context, siteUrl }: SubtreeMigratorPro
                         </span>
                       )}
                     </div>
+                    {/* ⚠ EVERY LINE HERE IS A FOLDER, NOT A FILE, and the client read them as files
+                        (2026-08-19: *"IT shows two files from GHO Approval Document but I only see
+                        one"*). Two things caused that: the count was appended only when non-zero, so
+                        an EMPTY folder showed no count at all and looked like a phantom entry; and
+                        nothing on the line said "folder". An empty leaf is completely normal — its
+                        documents were approved and routed away, leaving the folder behind — and
+                        whether a line holds documents is exactly what decides if it matters. */}
                     {plansFor(row).map((p) => {
+                      // Stated on EVERY line, including zero. `empty` is the common, harmless case
+                      // and must read as such rather than as a missing number.
+                      const count = p.leaf.files.length;
+                      const holds = count === 0
+                        ? "empty"
+                        : `${count} document${count === 1 ? "" : "s"}`;
+                      // `files` holds names already, but take the tail defensively: a full path here
+                      // would wrap over several lines and bury the folder line it belongs to.
+                      // One entry per line, not comma-joined: this is a LIST of what is in the
+                      // folder, and a joined string of four long composed names wraps into a block
+                      // nobody reads (client, 2026-08-19).
+                      const names = p.leaf.files.map((f) => f.split("/").pop() ?? f);
                       if (p.strays.length > 0) {
                         return (
-                          <div key={p.leaf.path} style={{ ...s.move, color: "#7a4f00" }}>
-                            {p.leaf.segments.join(" / ")} — &quot;{p.strays.join(", ")}&quot; matches no
-                            folder level, will be left alone
+                          <div key={p.leaf.path} style={s.entry}>
+                            <div style={s.pathLine}>{p.leaf.path}</div>
+                            <div style={{ ...s.action, color: "#7a4f00" }}>
+                              {holds} — &quot;{p.strays.join(", ")}&quot; matches no folder level, will
+                              be left alone
+                            </div>
+                            {names.map((n) => <div key={n} style={s.fileList}>{n}</div>)}
                           </div>
                         );
                       }
                       if (p.to === undefined) {
                         return (
-                          <div key={p.leaf.path} style={{ ...s.move, color: "#7a4f00" }}>
-                            {p.leaf.segments.join(" / ")} — needs a value chosen above
+                          <div key={p.leaf.path} style={s.entry}>
+                            <div style={s.pathLine}>{p.leaf.path}</div>
+                            <div style={{ ...s.action, color: "#7a4f00" }}>
+                              {holds} — needs a value chosen above
+                            </div>
+                            {names.map((n) => <div key={n} style={s.fileList}>{n}</div>)}
                           </div>
                         );
                       }
                       if (p.to === p.leaf.path) return null;
                       return (
-                        <div key={p.leaf.path} style={s.move}>
-                          {p.leaf.segments.join(" / ")} &rarr; {p.to.slice(row.unitPath.length + 1)}
-                          {p.leaf.files.length > 0 && ` (${p.leaf.files.length} document(s))`}
+                        <div key={p.leaf.path} style={s.entry}>
+                          <div style={s.pathLine}>{p.leaf.path}</div>
+                          <div style={s.action}>
+                            {holds} &rarr; {p.to.slice(row.unitPath.length + 1)}
+                          </div>
+                          {names.map((n) => <div key={n} style={s.fileList}>{n}</div>)}
                         </div>
                       );
                     })}

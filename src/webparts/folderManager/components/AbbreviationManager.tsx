@@ -20,6 +20,7 @@ import {
   RowProblem,
   validateRows,
 } from "../../../shared/abbreviationDraft";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
 /**
  * Term Abbreviations — name the folders a segment's terms produce.
@@ -60,7 +61,7 @@ interface TermNode {
 const s: Record<string, React.CSSProperties> = {
   msg: { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err: { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
-  warn: { background: "#fff4e5", border: "1px solid #f0d9b5", color: "#7a4f00" },
+  warn: { ...NOTICE_ATTENTION },
   ok: { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
   info: { background: "#f3f2f1", border: "1px solid #e1dfdd", color: "#323130" },
   label: { display: "block", fontSize: 12, fontWeight: 600, color: "#323130", margin: "0 0 4px" },
@@ -124,6 +125,14 @@ export interface AbbreviationManagerProps {
    * button: it clears itself in seconds, while holding on a failure strands the admin for good.
    */
   onLoadingChange?: (loading: boolean) => void;
+  /**
+   * Pre-selects the segment picker below, so a guided flow that already asked which segment does not
+   * ask a second time. Same pattern as `SubtreeMigrator`'s `initialSegmentKey` — matches on the mode
+   * row's `Title`, the key both screens build their options from. Found missing live 2026-08-26: the
+   * "Rename or re-code a folder" flow already names the segment in its own header, then this screen
+   * opened on a blank "Select a segment..." anyway.
+   */
+  initialSegmentKey?: string;
 }
 
 export default function AbbreviationManager({
@@ -132,6 +141,7 @@ export default function AbbreviationManager({
   onDirtyChange,
   onMissingChange,
   onLoadingChange,
+  initialSegmentKey,
 }: AbbreviationManagerProps): React.ReactElement {
   const [segments, setSegments] = useState<SegmentOption[]>([]);
   const [chosen, setChosen] = useState<string>("");
@@ -204,7 +214,19 @@ export default function AbbreviationManager({
         })
         .sort((a, b) => a.label.localeCompare(b.label));
       setSegments(opts);
-      if (opts.length > 0) setChosen(opts[0].key);
+      // ⚠ MUST decide the pre-select HERE, in the SAME pass that sets `segments` — not in a separate
+      // effect keyed on `chosen !== ""`. `setSegments` and this selection both fire from one load, so
+      // a second effect guarding on "has anything already been chosen" cannot tell "the admin picked
+      // one" apart from "this effect already auto-picked the first one a moment ago" — it always loses
+      // that race, because by the time it runs, `chosen` is no longer "". Found live 2026-08-26: a flow
+      // that already named the segment in its header still opened this screen on a blank picker.
+      const preselect =
+        initialSegmentKey && opts.filter((o) => o.key === initialSegmentKey).length > 0
+          ? initialSegmentKey
+          : opts.length > 0
+          ? opts[0].key
+          : undefined;
+      if (preselect) setChosen(preselect);
       setLoading(false);
     };
     load().catch((e) => {
@@ -647,7 +669,18 @@ export default function AbbreviationManager({
                       <button style={s.ghost} onClick={() => sameAsName(r.termGuid)}>
                         Same as term name
                       </button>
-                      <span style={s.pathHint}>{name ? `/${name}` : ""}</span>
+                      <span style={s.pathHint}>
+                        {name ? `/${name}` : ""}
+                        {/* The row's own rename marker. The footer counts renames and names none of
+                            them, and the `was X → Y` detail only ever appeared in the save summary,
+                            i.e. after committing — so this is the only place the admin can find the
+                            changed row BEFORE the folder moves. */}
+                        {p && p.note ? (
+                          <span style={{ display: "block", color: "#7a4f00", fontWeight: 600 }}>
+                            ✎ {p.note}
+                          </span>
+                        ) : undefined}
+                      </span>
                       {p && (p.error || p.warn) && (
                         <div style={{ ...s.problem, color: p.error ? "#a4262c" : "#7a4f00" }}>
                           {p.error ?? p.warn}

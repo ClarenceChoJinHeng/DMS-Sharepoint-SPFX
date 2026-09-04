@@ -79,6 +79,18 @@ export interface AdminCard {
  */
 const FOLDER_ADMIN = /folder.?admin|folder.?manage|folder.?structure/i;
 
+/**
+ * ⚠ `SITE_ACCESS_LINK`/`LIBRARY_ACCESS_LINK` ARE GONE (2026-09-02, client: *"Approval Library
+ * Access, Site Access is not needed, its confusing them as they already know that adding a user in
+ * the group from Group Management it will automatically allow them have access to site and
+ * library."*) — both pages became signposts pointing back at Group Management the same day, so a
+ * link to either from Group Management would be circular. Matches the earlier retirement of the
+ * Folder Access card entry — see `FolderAccessPage.tsx`/`ApprovalLibraryAccessPage.tsx`/
+ * `SiteAccessPage.tsx` for the "kept, not deleted" reasoning; the web parts stay registered, only
+ * the destinations changed.
+ */
+export const PAGE_ACCESS_LINK: AdminLink = { key: "pageAccess", label: "Page Access", match: /page.?access/i };
+
 export const CARDS: AdminCard[] = [
   {
     key: "folders",
@@ -100,23 +112,38 @@ export const CARDS: AdminCard[] = [
   {
     key: "access",
     title: "User Access Management",
-    blurb: "Manage who can access sites, approval libraries, pages and folders.",
+    blurb: "Create groups, add people to them, and control which pages they can open.",
     icon: "access",
     column: 1,
     links: [
-      // Group Management leads, and is not on the client's mockup. It has to be here: Folder Access
-      // maps an EXISTING group, so an admin starting there has nothing to pick.
+      /* Group Management leads, and is not on the client's mockup. It has to be here — and since
+         2026-08-23 it is the only page on this card that does routine work: it creates the groups,
+         writes their mappings, adds the people and answers "what can this person reach".
+
+         ⚠ FOLDER ACCESS IS GONE FROM THIS CARD (client: *"that makes Folder Access redundant"*).
+         Its two jobs both moved — mappings are written when a group is created, and membership is
+         edited in Group Management's own group list. The `Folder-Access.aspx` page still EXISTS and
+         is still locked by `pageAccessPolicy`; it simply stops being somewhere we send anyone, and
+         its web part now says where the work moved to.
+
+         ⚠ SITE ACCESS AND APPROVAL LIBRARY ACCESS ARE GONE FROM THIS CARD TOO (2026-09-02, client:
+         *"Approval Library Access, Site Access is not needed, its confusing them as they already
+         know that adding a user in the group from Group Management it will automatically allow
+         them have access to site and library"*). Same reasoning, same treatment as Folder Access:
+         both pages still exist, still locked by `pageAccessPolicy`, and now say where to go instead
+         of showing what used to be here. */
       { key: "groups", label: "Group Management", match: /group.?manage/i },
-      { key: "siteAccess", label: "Site Access", match: /site.?access/i },
-      { key: "libraryAccess", label: "Approval Library Access", match: /approval.?library|library.?access/i },
-      { key: "pageAccess", label: "Page Access", match: /page.?access/i },
-      { key: "folderAccess", label: "Folder Access", match: /folder.?access/i },
+      PAGE_ACCESS_LINK,
     ],
   },
   {
     key: "config",
-    title: "CRS Configuration",
-    blurb: "Review and update the central repository settings and defaults.",
+    /* ⚠ THE CARD TITLE IS THE CLIENT'S WORDING (2026-08-30); `self.label` and `match` below are
+       NOT renamed with it. Those resolve the real page, which is still called "CRS Configuration"
+       on the site, and `match` is what finds it in Site Pages — renaming either turns this row into
+       a dead link, which is the one failure a directory page must never have. */
+    title: "File Type Management",
+    blurb: "Control which file types can be uploaded to the repository.",
     icon: "config",
     column: 2,
     links: [],
@@ -124,22 +151,27 @@ export const CARDS: AdminCard[] = [
   },
   {
     key: "audit",
-    title: "CRS Audit Log",
-    blurb: "See who changed what, and when — access, structure and folder runs.",
+    /* Title is the client's wording; `self.label`/`match` still name the real page. */
+    title: "Audit Log",
+    blurb: "Track user activities and changes made across the repository.",
     icon: "audit",
     column: 2,
     links: [],
     self: { key: "audit", label: "CRS Audit Log", match: /audit/i },
   },
-  {
-    key: "bulk",
-    title: "Bulk Upload",
-    blurb: "Upload many documents at once into an existing folder.",
-    icon: "bulk",
-    column: 2,
-    links: [],
-    self: { key: "bulk", label: "Bulk Upload", match: /bulk/i },
-  },
+  /* ⚠ BULK UPLOAD WAS A CARD HERE UNTIL 2026-08-22, AND ITS REMOVAL IS NOT TIDYING.
+     It was listed because it was an ADMIN tool — `pageAccessPolicy` made it `adminOnly` and nobody
+     else could open it. The client then handed it to uploaders ("client doesnt want admin to do the
+     job"), so it belongs with the upload form and My Submissions, not on a directory of admin tools.
+
+     This page is itself admin-only (a page called "CRS Settings" matches the `setting` keyword), so
+     leaving the card would point administrators at a screen that is no longer theirs while remaining
+     invisible to every person who now uses it — the worst of both. Put the link where uploaders
+     already go: the home page, beside CRS Search.
+
+     The `bulk` icon and its `AdminIcon` case are deliberately KEPT. They cost nothing, and the client
+     may yet want an admin-facing import card; deleting them makes restoring one a wider change than
+     adding a card back. */
 ];
 
 /** Every link on the page, flattened — for resolution and for the property-pane overrides. */

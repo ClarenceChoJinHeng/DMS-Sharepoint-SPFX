@@ -6,7 +6,9 @@ import {
   emptyCriteria,
   failedLibraries,
   hasCriteria,
+  hasMetadataFilter,
   isHcLibrary,
+  metadataFilterMatches,
   kqlDate,
   kqlPathScope,
   kqlPhrase,
@@ -300,16 +302,47 @@ describe("buildListFilter", () => {
     expect(buildListFilter(criteria({ text: "O'Brien" }))).toContain("substringof('O''Brien',FileLeafRef)");
   });
 
-  it("uses internal names, not managed properties", () => {
-    const f = buildListFilter(criteria({ segment: "Group Head Office", year: "2024" }));
+  /* ⚠ TWO FAILURES, IN OPPOSITE DIRECTIONS, BOTH FROM ONE COMBINED TEST.
+     2026-09-02: all four Advanced Filters were set at once, every library answered HTTP 400, and the
+     conclusion drawn was that all four columns are taxonomy — so every one went through
+     `substringof('v',TaxCatchAllLabel)`. 2026-09-03: all four answered HTTP **500**, because
+     `TaxCatchAllLabel` is a hidden NOTE field and SharePoint cannot filter one at all.
+     With four clauses in one `$filter`, ONE bad clause fails the whole request, so that first test
+     could never say WHICH column was at fault. Direct inspection had already answered it:
+     `SP.Taxonomy.TaxonomyField` on the libraries' own `/fields` shows only THREE of the five are
+     taxonomy. These tests pin the split so a third guess cannot be made. */
+  it("filters Business Segment with a plain eq — it is a TEXT column, not taxonomy", () => {
+    const f = buildListFilter(criteria({ segment: "Group Head Office" }));
     expect(f).toContain("Business_x0020_Segment eq 'Group Head Office'");
-    expect(f).toContain("Year eq '2024'");
-    expect(f).not.toContain("OWSTEXT");
+    expect(f).not.toContain("TaxCatchAll");
   });
 
-  it("filters on a segment's own tier columns", () => {
+  it("filters a tier on its own COLUMN — tier columns are text, each with a text Tid twin", () => {
     const f = buildListFilter(criteria({ tiers: [{ column: "EstateMill", value: "Bukit Benut" }] }));
     expect(f).toContain("EstateMill eq 'Bukit Benut'");
+    expect(f).not.toContain("TaxCatchAll");
+  });
+
+  it("NEVER sends the three real taxonomy filters to $filter — that is the 400 and the 500", () => {
+    // They are narrowed on the rows instead (`metadataFilterMatches`). One bad clause fails the
+    // WHOLE request, so leaking any of them here would take the filters that DO work down with it.
+    const f = buildListFilter(criteria({
+      documentType: "Letters with Counterparties",
+      year: "2024",
+      confidentiality: "Confidential",
+    }));
+    expect(f).not.toContain("Letters with Counterparties");
+    expect(f).not.toContain("2024");
+    expect(f).not.toContain("Confidential");
+    expect(f).not.toContain("TaxCatchAll");
+    // Still a valid filter — the folder/file predicate survives on its own.
+    expect(f).toContain("FSObjType eq 0");
+  });
+
+  it("keeps the text filters when a taxonomy filter is set alongside them", () => {
+    const f = buildListFilter(criteria({ segment: "Group Head Office", year: "2024" }));
+    expect(f).toContain("Business_x0020_Segment eq 'Group Head Office'");
+    expect(f).not.toContain("2024");
   });
 
   it("builds datetime literals for both date ranges", () => {
@@ -466,5 +499,93 @@ describe("failedLibraries", () => {
 
   it("survives a missing list", () => {
     expect(failedLibraries(undefined as unknown as LibraryResult[]).length).toBe(0);
+  });
+});
+
+/* ── The three filters REST cannot apply ───────────────────────────────────────
+ *
+ * Narrowed on the rows, because `$filter` answers 400 (`eq`) or 500 (`TaxCatchAllLabel`) for a
+ * genuine taxonomy column. Selecting them is a different operation and is supported, so the labels
+ * arrive with the row.
+ */
+describe("metadataFilterMatches / hasMetadataFilter", () => {
+  type Labels = { documentType: string; year: string; confidentiality: string };
+  const row = (over: Partial<Labels>): Labels => ({
+    documentType: "", year: "", confidentiality: "", ...over,
+  });
+
+  it("passes a row that matches every set filter", () => {
+    expect(metadataFilterMatches(
+      { documentType: "Tax Return", year: "2024", confidentiality: "Confidential" },
+      row({ documentType: "Tax Return", year: "2024", confidentiality: "Confidential" }),
+    )).toBe(true);
+  });
+
+  it("ignores a filter that is not set", () => {
+    expect(metadataFilterMatches(
+      { documentType: "", year: "2024", confidentiality: "" },
+      row({ documentType: "anything", year: "2024" }),
+    )).toBe(true);
+  });
+
+  it("rejects a row that misses one of several set filters", () => {
+    expect(metadataFilterMatches(
+      { documentType: "Tax Return", year: "2024", confidentiality: "" },
+      row({ documentType: "Tax Return", year: "2023" }),
+    )).toBe(false);
+  });
+
+  it("compares trimmed and case-insensitively — these are picked labels, not keys", () => {
+    expect(metadataFilterMatches(
+      { documentType: "tax return", year: "", confidentiality: "" },
+      row({ documentType: "  Tax Return  " }),
+    )).toBe(true);
+  });
+
+  it("fails a set filter on a row with no value — a blank cannot be shown to match", () => {
+    expect(metadataFilterMatches(
+      { documentType: "Tax Return", year: "", confidentiality: "" },
+      row({}),
+    )).toBe(false);
+  });
+
+  it("hasMetadataFilter is true only for the three it cannot filter server-side", () => {
+    expect(hasMetadataFilter(emptyCriteria())).toBe(false);
+    // Business Segment IS filtered server-side, so it must not arm the client-side narrowing.
+    expect(hasMetadataFilter({ ...emptyCriteria(), segment: "Group Head Office" })).toBe(false);
+    expect(hasMetadataFilter({ ...emptyCriteria(), year: "2024" })).toBe(true);
+    expect(hasMetadataFilter({ ...emptyCriteria(), documentType: "Tax Return" })).toBe(true);
+    expect(hasMetadataFilter({ ...emptyCriteria(), confidentiality: "Confidential" })).toBe(true);
+  });
+});
+
+describe("buildListFilter - the Keyword column", () => {
+  const words = { ...emptyCriteria(), text: "audit" };
+
+  /* ⚠ THE DEFAULT IS OFF, AND THAT IS THE SAFETY. `Keyword` is created by reconciliation, so a
+     library provisioned earlier does not have it - and a $filter naming an absent column returns 400
+     and fails the WHOLE read, which would take free-text search down entirely rather than just
+     losing one field. */
+  it("is absent unless the caller confirms the column", () => {
+    expect(buildListFilter(words).indexOf("Keyword")).toBe(-1);
+    expect(buildListFilter(words, false).indexOf("Keyword")).toBe(-1);
+  });
+
+  it("is matched when the column is confirmed", () => {
+    expect(buildListFilter(words, true)).toContain("substringof('audit',Keyword)");
+  });
+
+  /* It joins the OR-group rather than adding a clause of its own: a word may match the filename OR
+     the keyword OR any other text field, and requiring all of them would match nothing. */
+  it("joins the same OR-group as the other text fields", () => {
+    const f = buildListFilter(words, true);
+    expect(f).toContain("substringof('audit',FileLeafRef) or");
+    expect(f).toContain("or substringof('audit',Keyword)");
+  });
+
+  it("carries through the recency top-up filter, and defaults off there too", () => {
+    const since = "2026-09-01T00:00:00Z";
+    expect(buildRecentFilter(words, since).indexOf("Keyword")).toBe(-1);
+    expect(buildRecentFilter(words, since, true)).toContain("substringof('audit',Keyword)");
   });
 });

@@ -212,3 +212,63 @@ describe("groupRowsByParent", () => {
     expect(groupRowsByParent([], all)).toEqual([]);
   });
 });
+
+describe("clearing a saved code is a REMOVAL, not a rename", () => {
+  // Found on site 2026-08-20: the footer counted a cleared code among "existing codes changed —
+  // live folders will be renamed", which sends someone looking for a folder that never moved.
+  const row = (over: Partial<AbbrevRowDraft>): AbbrevRowDraft => ({
+    termGuid: "t1", label: "Group Test Something", level: "Department", parentGuid: "p1", abbreviation: "", original: "", ...over,
+  });
+
+  it("says REMOVES, and names the stranded folder, when a saved code is cleared", () => {
+    const p = validateRows([row({ abbreviation: "", original: "GTS" })]).t1;
+    expect(p.warn).toContain("REMOVES");
+    expect(p.warn).toContain("GTS");
+    // It DOES say "nothing is renamed" — the point is that it never claims a rename WILL happen.
+    expect(p.warn).toContain("nothing is renamed");
+    expect(p.warn).not.toContain("will RENAME");
+    expect(p.error).toBeUndefined(); // never blocks — clearing is a legitimate thing to do
+  });
+
+  it("keeps the first-time-fill wording when there was never a code", () => {
+    const p = validateRows([row({ abbreviation: "", original: "" })]).t1;
+    expect(p.warn).toContain("No folder will be created");
+    expect(p.warn).not.toContain("REMOVES");
+  });
+});
+
+describe("the inline rename marker", () => {
+  const row = (over: Partial<AbbrevRowDraft>): AbbrevRowDraft => ({
+    termGuid: "t1", label: "Tax", level: "Unit", parentGuid: "p1", abbreviation: "TAX", original: "TAX", ...over,
+  });
+
+  it("notes the old code on a row whose saved code changed", () => {
+    const p = validateRows([row({ abbreviation: "TX", original: "TAX" })]).t1;
+    expect(p.note).toContain("was TAX");
+    expect(p.note).toContain("TX");
+  });
+
+  it("says nothing on an unchanged row", () => {
+    expect(validateRows([row({})]).t1?.note).toBeUndefined();
+  });
+
+  it("says nothing on a FIRST-TIME fill — nothing is being renamed", () => {
+    expect(validateRows([row({ abbreviation: "TAX", original: "" })]).t1?.note).toBeUndefined();
+  });
+
+  it("MERGES onto an existing warning rather than replacing it", () => {
+    const long = "A".repeat(60);
+    const p = validateRows([row({ abbreviation: long, original: "TAX" })]).t1;
+    expect(p.note).toContain("was TAX");
+    expect(p.warn).toBeDefined(); // the long-name warning survives
+  });
+
+  it("never appears on a row that is blocked — the error still wins the message slot", () => {
+    const p = validateRows([
+      { termGuid: "a", label: "Tax", level: "Unit", parentGuid: "p1", abbreviation: "X", original: "TAX" },
+      { termGuid: "b", label: "Legal", level: "Unit", parentGuid: "p1", abbreviation: "X", original: "LEG" },
+    ]);
+    expect(p.a.error).toBeDefined();
+    expect(p.a.note).toContain("was TAX"); // shown separately, so the admin sees BOTH facts
+  });
+});

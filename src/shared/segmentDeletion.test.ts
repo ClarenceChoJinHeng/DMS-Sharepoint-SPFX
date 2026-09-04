@@ -105,6 +105,26 @@ describe("survivorLines", () => {
     expect(survivorLines(true).join(" ")).toContain("recycle bin");
   });
 
+  // The archive line: said only when the folders are actually going AND this site has an archive.
+  // Client's decision 2026-08-26 — 7-year retained records outlive the segment that produced them,
+  // so the retire skips those two libraries and has to SAY so, or an admin who ticked "delete the
+  // folders" finds Archive/<SEG> still standing in the next reconciliation log.
+  it("warns that the archive survives when the folders go on an archive site", () => {
+    expect(survivorLines(true, true).join(" ")).toContain("archive folders are NOT deleted");
+  });
+
+  it("says nothing about an archive the site does not have", () => {
+    expect(survivorLines(true, false).join(" ")).not.toContain("archive");
+    // Omitted is the same as absent: no caller should have to pass `false` to stay quiet.
+    expect(survivorLines(true).join(" ")).not.toContain("archive");
+  });
+
+  it("does not mention the archive when no folder is being deleted at all", () => {
+    // Nothing is going, so naming what survives among the folders would be noise — and it would
+    // imply the OTHER folders are not surviving, which is the opposite of the truth here.
+    expect(survivorLines(false, true).join(" ")).not.toContain("archive");
+  });
+
   it("keeps the columns and abbreviations promise even when the folders go", () => {
     // The documents may have been MOVED elsewhere, which is exactly this workflow — so their
     // metadata columns must survive the folders.

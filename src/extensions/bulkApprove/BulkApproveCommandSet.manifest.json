@@ -1,0 +1,19 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/command-set-extension-manifest.schema.json",
+  "id": "6d1a9f47-3c82-4e15-b7a0-9f2e5c8d4136",
+  "alias": "BulkApproveCommandSet",
+  "componentType": "Extension",
+  "extensionType": "ListViewCommandSet",
+  "version": "*",
+  "manifestVersion": 2,
+  "requiresCustomScript": false,
+  "items": {
+    "CRS_BULK_APPROVE": {
+      "title": {
+        "default": "Approve or reject"
+      },
+      "type": "command",
+      "iconImageUrl": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiIgdmlld0JveD0iMCAwIDE2IDE2Ij48cGF0aCBmaWxsPSIjMzIzMTMwIiBkPSJNOS41IDFIMy41QTEuNSAxLjUgMCAwIDAgMiAyLjV2MTFBMS41IDEuNSAwIDAgMCAzLjUgMTVoNS4yYTUuNSA1LjUgMCAwIDEtLjg2LTFIMy41YS41LjUgMCAwIDEtLjUtLjV2LTExYS41LjUgMCAwIDEgLjUtLjVIOXYyLjVBMS41IDEuNSAwIDAgMCAxMC41IDZIMTN2MS43Yy4zNi4xLjY5LjI1IDEgLjQzVjUuNUw5LjUgMVptLjUgMS43TDEyLjMgNUgxMC41YS41LjUgMCAwIDEtLjUtLjVWMi43WiIvPjxwYXRoIGZpbGw9IiMwZjZjM2YiIGQ9Ik0xMiA4LjVhNCA0IDAgMSAwIDAgOCA0IDQgMCAwIDAgMC04Wm0yLjA1IDIuOS0yLjQgMi45YS41LjUgMCAwIDEtLjczLjA0bC0xLjItMS4xNWEuNS41IDAgMSAxIC42OS0uNzJsLjgxLjc4IDIuMDYtMi40OWEuNS41IDAgMCAxIC43Ny42NFoiLz48L3N2Zz4="
+    }
+  }
+}

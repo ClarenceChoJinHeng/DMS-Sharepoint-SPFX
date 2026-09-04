@@ -13,7 +13,7 @@ import * as React from "react";
  */
 const s: Record<string, React.CSSProperties> = {
   wrap:     { maxWidth: 880, margin: "32px auto", padding: "0 24px 48px", fontFamily: "'Segoe UI', sans-serif" },
-  h2:       { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
+  h2:       { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   subtitle: { fontSize: 13, color: "#666", margin: "0 0 24px" },
   note:     { fontSize: 12, color: "#605e5c", lineHeight: 1.5, margin: "0 0 20px", padding: "10px 12px", background: "#f6f8f6", border: "1px solid #e1e8e3", borderRadius: 6 },
 };

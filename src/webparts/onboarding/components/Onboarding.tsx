@@ -6,6 +6,7 @@ import { searchSiteGroups } from "../../../shared/spGroups";
 import { libraryTitle as resolvedLibraryTitle } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { IOnboardingProps } from "./IOnboardingProps";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
 // Logical keys, not live titles — same split as FolderManager's LibTarget. These drive the UI
 // toggle and the log lines; resolveLibTitle() maps to what SharePoint actually answers to.
@@ -53,7 +54,7 @@ const uid = (): string => Math.random().toString(36).slice(2, 9);
 
 const styles: Record<string, React.CSSProperties> = {
   wrap: { maxWidth: 880, margin: "32px auto", padding: "0 24px 48px", fontFamily: "'Segoe UI', sans-serif" },
-  h2: { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
+  h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   subtitle: { fontSize: 13, color: "#666", margin: "0 0 24px" },
   label: { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", color: "#0f6c3f", margin: "0 0 8px" },
   block: { marginBottom: 24 },
@@ -77,7 +78,7 @@ const styles: Record<string, React.CSSProperties> = {
   dropdownItem: { padding: "8px 10px", cursor: "pointer", borderBottom: "1px solid #f2f2f2", fontSize: 13 },
   actions: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 },
   btn: { padding: "9px 26px", borderRadius: 4, cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 13 },
-  note: { fontSize: 11, color: "#a07b00", background: "#fff8e1", border: "1px solid #ffe2a8", borderRadius: 4, padding: "8px 12px", margin: "0 0 20px" },
+  note: { fontSize: 11, ...NOTICE_ATTENTION, borderRadius: 4, padding: "8px 12px", margin: "0 0 20px" },
   logBox: { marginTop: 20, background: "#f5f5f5", borderRadius: 6, padding: "12px 16px" },
   logTitle: { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", color: "#555", margin: "0 0 8px" },
   toast: { position: "fixed", top: 24, right: 24, color: "#fff", padding: "14px 44px 14px 16px", borderRadius: 6, fontSize: 13, zIndex: 9999, minWidth: 280, maxWidth: 440, boxShadow: "0 4px 16px rgba(0,0,0,.18)" },

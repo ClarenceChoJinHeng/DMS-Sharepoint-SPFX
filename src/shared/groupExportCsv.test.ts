@@ -90,6 +90,6 @@ describe("toCsv", () => {
 
 describe("exportFileName", () => {
   it("pads month and day", () => {
-    expect(exportFileName(new Date(2026, 6, 5))).toBe("DMS-group-members-2026-07-05.csv");
+    expect(exportFileName(new Date(2026, 6, 5))).toBe("CRS-group-members-2026-07-05.csv");
   });
 });

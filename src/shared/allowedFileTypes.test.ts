@@ -120,12 +120,12 @@ describe("FALLBACK_FILE_TYPES", () => {
 describe("messages", () => {
   it("tells the client which column and list to fix", () => {
     expect(NO_TYPES_MESSAGE).toContain("Allowed File Types");
-    expect(NO_TYPES_MESSAGE).toContain("DMS Config");
+    expect(NO_TYPES_MESSAGE).toContain("CRS Config");
   });
 
   it("uses a different message for an unreadable config", () => {
     expect(CONFIG_UNREADABLE_MESSAGE).not.toBe(NO_TYPES_MESSAGE);
-    expect(CONFIG_UNREADABLE_MESSAGE).toContain("DMS Config");
+    expect(CONFIG_UNREADABLE_MESSAGE).toContain("CRS Config");
     expect(CONFIG_UNREADABLE_MESSAGE).toContain("built-in");
   });
 });

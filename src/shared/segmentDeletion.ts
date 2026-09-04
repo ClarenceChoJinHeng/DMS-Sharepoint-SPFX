@@ -90,14 +90,24 @@ export function confirmationMatches(typed: string, label: string): boolean {
  * documents are gone when they are not — and then reporting a data-loss incident, or worse, not
  * reporting one.
  */
-export function survivorLines(deleteFolders: boolean): string[] {
-  return [
+export function survivorLines(deleteFolders: boolean, hasArchive?: boolean): string[] {
+  const lines = [
     "The tier columns stay, with every document's metadata intact.",
     "The folder abbreviations stay, so re-creating this segment keeps the same folder names.",
     deleteFolders
       ? "The folders go to the recycle bin and can be restored for 93 days."
       : "Every folder and every document stays exactly where it is.",
   ];
+  /* Said ONLY when the folders are actually going and this site HAS an archive (client's decision,
+     2026-08-26: 7-year retained records outlive the segment that produced them). Stating it
+     unconditionally would name a library that does not exist on most sites — and saying nothing at
+     all leaves an admin who ticked "delete the folders" believing everything went, then finding
+     Archive/<SEG> still standing in the next reconciliation log. `hasArchive` is optional so every
+     existing caller and test is unchanged. */
+  if (deleteFolders && hasArchive) {
+    lines.push("The archive folders are NOT deleted — archived records outlive the segment.");
+  }
+  return lines;
 }
 
 /**

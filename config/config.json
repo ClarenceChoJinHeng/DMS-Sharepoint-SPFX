@@ -125,6 +125,14 @@
           "manifest": "./src/webparts/requests/RequestsWebPart.manifest.json"
         }
       ]
+    },
+    "bulk-approve-extension": {
+      "components": [
+        {
+          "entrypoint": "./lib/extensions/bulkApprove/BulkApproveCommandSet.js",
+          "manifest": "./src/extensions/bulkApprove/BulkApproveCommandSet.manifest.json"
+        }
+      ]
     }
   },
   "externals": {},

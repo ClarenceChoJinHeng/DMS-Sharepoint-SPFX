@@ -167,8 +167,14 @@ function provisionedByTerm(
   return out;
 }
 
-/** Order- and case-insensitive fingerprint of a role set, so two spellings of one persona agree. */
-function roleSetKey(roles: string[]): string {
+/**
+ * Order- and case-insensitive fingerprint of a role set, so two spellings of one persona agree.
+ *
+ * EXPORTED since 2026-08-23 for `userAccess.ts`, which answers "what does this person reach" and so
+ * has to decide whether a group's roles ARE a persona. Two definitions of "the same role set" is how
+ * that page and this provisioner would come to disagree about what a group is.
+ */
+export function roleSetKey(roles: string[]): string {
   const seen: string[] = [];
   for (const r of roles ?? []) {
     const v = (r ?? "").trim().toUpperCase();

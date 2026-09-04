@@ -63,6 +63,16 @@ export interface RowProblem {
   error?: string;
   /** Does not block. A missing code and a long name are legitimate, deliberate states. */
   warn?: string;
+  /**
+   * What this row is about to CHANGE, shown beside the box before saving.
+   *
+   * ⚠ The footer has always said "N existing codes changed — live folders will be renamed", and named
+   * no row. The rename detail (`BE → BNG`) appeared only in the save summary, i.e. AFTER committing.
+   * So an admin was warned that a live folder would be renamed and given no way to find which one.
+   * Reported on site 2026-08-20, where the changed row turned out to be a code the admin had cleared
+   * themselves several minutes earlier and forgotten.
+   */
+  note?: string;
 }
 
 /**
@@ -109,9 +119,21 @@ export function validateRows(rows: AbbrevRowDraft[]): Record<string, RowProblem>
     const typed = (r.abbreviation ?? "").trim();
     const name = folderNameFor(typed);
 
+    const was = (r.original ?? "").trim();
+
     if (!typed) {
+      // ⚠ CLEARING A SAVED CODE IS A REMOVAL, NOT A RENAME, and the footer counts it among the
+      // renames because `changedRows` only asks whether the value moved. The consequences are
+      // opposite: a rename moves a live folder to a new name, while clearing leaves the folder
+      // where it is and stops reconciliation managing it — so the folder is stranded and the unit
+      // silently loses its upload path. Saying "renamed" here sends someone looking for a folder
+      // that never moved.
       out[r.termGuid] = {
-        warn: `No folder will be created for "${r.label}" — that unit cannot upload until this has a name.`,
+        warn: was
+          ? `Clearing the code REMOVES "${r.label}" from reconciliation. The existing "${was}" folder ` +
+            `is left where it is and stops being managed — nothing is renamed and nothing is deleted, ` +
+            `but nobody can upload into it any more. Put the code back if that is not what you meant.`
+          : `No folder will be created for "${r.label}" — that unit cannot upload until this has a name.`,
       };
       continue;
     }
@@ -143,6 +165,23 @@ export function validateRows(rows: AbbrevRowDraft[]): Record<string, RowProblem>
           `deep paths that SharePoint can reject — short codes are what abbreviations are for.`,
       };
     }
+  }
+
+  // ⚠ A SEPARATE PASS, because every branch above `continue`s. Attached inside the loop the marker
+  // was skipped for a blank, an unusable and — worst — a COLLIDING row, which is exactly the row an
+  // admin is staring at when they need to know it also renames a live folder. Merged onto whatever
+  // problem the row already carries, never replacing it: the error still has to block the save.
+  for (const r of rows) {
+    const was = (r.original ?? "").trim();
+    const typed = (r.abbreviation ?? "").trim();
+    // A cleared code is a REMOVAL and says so in its own warning; calling it a rename here would
+    // reintroduce the wrong noun one line below the message that corrects it.
+    if (!was || was === typed || !typed) continue;
+    const name = folderNameFor(typed);
+    out[r.termGuid] = {
+      ...(out[r.termGuid] ?? {}),
+      note: `was ${was} — reconciliation will RENAME the live folder to ${name || typed}`,
+    };
   }
 
   return out;

@@ -1,18 +1,47 @@
 import * as React from "react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
+import { swapLibrarySegment } from "../../../shared/hcRouting";
+import { markRecordReplaced } from "../../../shared/spSubmissionRecords";
+import { documentsLibraryTitle } from "../../../shared/naming";
+import { libraryHasColumns, APPROVED_BY_COLUMN } from "../../../shared/optionalColumns";
 import { IApprovalDocumentProps } from "./IApprovalDocumentProps";
 import {
   buildQueue,
   nextUndecidedIndex,
   statusToDecision,
+  decisionFromLink,
   swapState,
   Decision,
   QueueEntry as QueueEntryOf,
 } from "../../../shared/approvalQueue";
 import { previewTarget } from "../../../shared/filePreview";
 import { cachedHcLibraries, hcAvailable, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
-import { primeNames } from "../../../shared/spNaming";
+import { primeNames, listTitleEncoded, LIST_SUFFIX } from "../../../shared/spNaming";
+import { permissionedTierCount } from "../../../shared/approvalDestination";
+// ⚠ THE CHECKS THEMSELVES LIVE IN shared/approvalGuards.ts, shared with the bulk approve command
+// set. Two implementations of "is it safe to approve this" is how a bulk route ends up weaker
+// than the page it copies. Do not re-inline them here.
+import {
+  checkUnitFolderReady,
+  checkDestinationClash,
+  checkApproveRight,
+  GuardResult,
+} from "../../../shared/approvalGuards";
+
+/**
+ * A permissions-and-approvals screen must never render a cached answer: the destination guard's
+ * mode-row read decides whether Approve is allowed to fire at all, and the SAME shape of bug
+ * (a `304 Not Modified` silently replaying a stale body) already broke the Requests page and My
+ * Submissions (2026-08-30) before it broke this guard too. `Cache-Control`/`Pragma` alone can be
+ * ignored by a proxy or service worker; `bust()` — a unique query string on every call — cannot.
+ */
+const GET_FRESH = {
+  Accept: "application/json;odata=nometadata",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+};
+const bust = (): string => `&_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,7 +110,13 @@ function formatSize(bytes: string): string {
 // ── Styles ───────────────────────────────────────────────────────────────────
 
 const s = {
-  root:        { fontFamily: "'Segoe UI', Tahoma, sans-serif", color: "#323130", background: "#fff", padding: "0 0 40px" } as React.CSSProperties,
+  /* The Upload Form's page shell — see the note in AuditLog.tsx. This page had a BOTTOM padding and
+     no horizontal one, so the preview and the approval panel both ran into the window edge.
+     ⚠ `maxWidth` 1180 rather than the Upload Form's 960: the layout here is a two-column grid whose
+     right column reserves a fixed 280px for the approval panel, so a narrow cap squeezes the document
+     PREVIEW — the one thing an approver is on this page to read. Its own 40px bottom padding is kept
+     rather than replaced by the shell's 48. */
+  root:        { fontFamily: "'Segoe UI', Tahoma, sans-serif", color: "#323130", background: "#fff", maxWidth: 1180, margin: "32px auto", padding: "0 24px 40px" } as React.CSSProperties,
   // A full-width band, tinted from the same green as the link so the two read as
   // one control. The tint is an alpha of the brand green rather than a second
   // hex value — one colour to change if the brand shifts.
@@ -158,6 +193,24 @@ const s = {
 
 const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const [item, setItem]           = useState<IFileItem | null>(null);
+  /**
+   * Whether THIS user may approve THIS document — asked of the item itself, not inferred from a role.
+   *
+   * WHY (2026-08-25, client: "is there no way to like to ensure the uploader for that group dont see
+   * that page?"). The page grant on ApprovalDocument.aspx is per PAGE, not per unit — holding `APR`
+   * in ANY unit opens it, and a page cannot be scoped to a unit. So a Head of Unit for one unit who
+   * is also an uploader in another could open this page on their OWN upload in that second unit, see
+   * a fully live Approval panel, and only discover at submit that they hold nothing there — via a raw
+   * `UnauthorizedAccessException`.
+   *
+   * Not a leak: the folder ACL and Draft Item Security decide what is READABLE, and what they saw was
+   * their own document. It is a missing pre-check, and the same one the upload form already makes
+   * before offering a destination.
+   *
+   * FAILS OPEN. `unknown` shows the panel, because the 403 at submit is still the real backstop and a
+   * transient read must never take the approval queue out of service for a genuine approver.
+   */
+  const [approveRight, setApproveRight] = useState<"granted" | "denied" | "unknown">("unknown");
   const [loading, setLoading]     = useState(true);
   const [decision, setDecision]   = useState<Decision>("Approved");
   const [comments, setComments]   = useState("");
@@ -166,6 +219,30 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const [fetchError, setFetchError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [fieldText, setFieldText]   = useState<IFieldText>({});
+  /**
+   * The existing-document check, run PROACTIVELY as soon as the document loads rather than only at
+   * the moment Approve is clicked (client, 2026-09-02: *"there is no need for two popup as the one we
+   * made is enough … precheck the file against the Document Library and then show the text to them
+   * under the comment box"*). `undefined` means not yet checked, or no item; a `GuardResult` with
+   * `ok: true` means no clash — nothing to show. Displayed under the comment box; `submitDecision`
+   * re-checks fresh immediately before approving (its own long-standing rule, unrelated to display)
+   * rather than trusting this snapshot, so a clash appearing in the gap is still caught.
+   */
+  const [clashCheck, setClashCheck] = useState<GuardResult | undefined>(undefined);
+
+  /**
+   * Permissioned tier count per segment folder — `{ gho: 2, upopsmy: 2 }`, keyed lower-cased.
+   *
+   * The approval guard needs it to locate the unit folder, and nothing else on this page does. It is
+   * NOT derivable from the document's own fields: every tier column has a `<Base>Tid` twin, so a
+   * below-Unit tier such as SubUnit is indistinguishable from a permissioned one there (see
+   * `documentDetails.documentUnit`). Only the mode row's `Levels` knows.
+   *
+   * `undefined` means the read has not finished or FAILED — never "no segments". The guard refuses on
+   * undefined and names it, which is the same direction the rest of that guard already fails in: a
+   * refused approval costs a retry, a wrong pass publishes a unit's documents to everyone.
+   */
+  const [tierCounts, setTierCounts] = useState<Record<string, number> | undefined>(undefined);
 
   /**
    * The approver's queue: the pending documents they can see, oldest first.
@@ -208,6 +285,36 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     new URLSearchParams(window.location.search).get("lib") === "hc" ? "hc" : "normal";
   const [lib, setLib] = useState<ApprovalLib>(initialLib);
 
+  /* ---------- ?decision=approve|reject, from Crystal's [Approve]/[Reject] email links ----------
+     Spec: docs/superpowers/specs/2026-08-28-email-bundling-and-templates-design.md §6.1.
+
+     The link PRE-TICKS a radio. It never decides anything: `submitDecision` is still reached only
+     by pressing the button, so the destination-folder guard, the name-clash check and the
+     `ApproveItems` probe all still run. A link that decided from the inbox would skip all three,
+     and would need a bearer trigger URL sitting in up to ten mailboxes.
+
+     ⚠ A REF, READ ONCE. Three things depend on that:
+       - the effect below STRIPS the parameter from the address bar, so the value must already be
+         captured by the time it runs;
+       - the queue rewrites `?itemId=` with replaceState as the approver moves through it, and a
+         parameter that survived would pre-tick a decision from an email about a DIFFERENT
+         document — the one failure here that could actually mislead someone;
+       - a refresh would otherwise re-apply it after the approver had deliberately changed it.
+     `useRef`'s initialiser runs on every render and only the first result is kept, which is exactly
+     the once-per-mount semantics wanted. */
+  const linkDecision = useRef<Decision | undefined>(
+    decisionFromLink(new URLSearchParams(window.location.search).get("decision") ?? undefined),
+  );
+
+  useEffect(() => {
+    if (!linkDecision.current) return;
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("decision");
+      window.history.replaceState(undefined, "", u.toString());
+    } catch { /* cosmetic — the radio is already set, and the value is held in the ref regardless */ }
+  }, []);
+
   /* Plain state, no ref. `loadItem` is the only place that needs the resolved value before a render
      happens, and it passes it explicitly to the two loads it makes — so nothing here has to be
      mutated mid-pass, and every later render and callback reads the settled state. */
@@ -223,8 +330,25 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const libSeg = (): string => libSegOf(lib);
   const libTitleEnc = (): string => encodeURIComponent(libTitle());
   /** Where an approved document lands — the OTHER half of whichever pair this one belongs to. */
+  /* Display only — it names the destination library in the two clash warnings. `documentsLibraryTitle()`
+     rather than the literal since 2026-08-28: the client retitled it to `Restricted & Confidential
+     Document`, and a warning naming a library the approver cannot find on their own site is worse
+     than no warning. Still falls back to the literal when unresolved, which is the loud direction. */
   const approvedLibTitle = (): string =>
-    lib === "hc" ? cachedHcLibraries()?.documents.title ?? "Documents" : "Documents";
+    lib === "hc"
+      ? cachedHcLibraries()?.documents.title ?? documentsLibraryTitle()
+      : documentsLibraryTitle();
+  /**
+   * The destination library's URL SEGMENT, for building a path.
+   *
+   * Deliberately UNLIKE `approvedLibTitle` above, which falls back to the normal library when the HC
+   * pair is unresolved. That fallback is harmless for a display string and is the worst thing this
+   * one could do: it would point an HC document's readiness check — and the message an approver acts
+   * on — at the open library, where the whole unit can read. Blank instead, which `unitFolderPath`
+   * refuses by name. Same reasoning as `hcRouting.ts` returning undefined rather than falling back.
+   */
+  const approvedLibSeg = (): string =>
+    lib === "hc" ? cachedHcLibraries()?.documents.urlSegment ?? "" : DOCUMENTS_URL_SEGMENT;
 
   const getItemId = (): number | null => {
     const p = new URLSearchParams(window.location.search);
@@ -327,7 +451,13 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       }
       const data: IFileItem = await res.json();
       setItem(data);
-      setDecision(statusToDecision(data.OData__ModerationStatus));
+      /* ⚠ THE LINK ONLY SPEAKS FOR A DOCUMENT THAT IS STILL PENDING. An already-decided one must
+         show what actually happened to it — pre-ticking "Reject" on a document somebody approved
+         an hour ago states something false on the one screen that is the record of the decision.
+         The submit button is disabled for a decided document anyway, so this is about what the
+         approver is TOLD, not about what they can do. */
+      const current = statusToDecision(data.OData__ModerationStatus);
+      setDecision(current === "Pending" ? linkDecision.current ?? current : current);
       await loadFieldText(itemId, where);
       // After the document, never before: a queue failure must not stop the page loading, and
       // the current item has to be known so it can be placed in the queue.
@@ -382,6 +512,50 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       .catch(() => undefined);
   }, []);
 
+  /**
+   * Each segment's permissioned tier count, for the approval guard.
+   *
+   * A SEPARATE effect from the one above, deliberately: it is not on the path to rendering the
+   * document, so chaining it would delay the preview behind a read the approver only needs at the
+   * moment they press Approve. It awaits `primeNames` INSIDE itself rather than relying on the other
+   * effect having got there first — `cachedListTitle` answers the legacy `DMS Config` until priming
+   * settles, which 404s on a renamed site, and that race emptied reconciliation's segment picker on
+   * 2026-08-21. Priming is idempotent and cached, so awaiting it twice costs nothing.
+   *
+   * `SortOrder` is NOT selected: one unknown field name fails the whole request (gotcha #11) and
+   * nothing here needs the order.
+   */
+  useEffect(() => {
+    (async (): Promise<void> => {
+      try {
+        await primeNames(context.spHttpClient, webUrl).catch(() => undefined);
+        const config = await listTitleEncoded(context.spHttpClient, webUrl, LIST_SUFFIX.config);
+        const res: SPHttpClientResponse = await context.spHttpClient.get(
+          `${webUrl}/_api/web/lists/getbytitle('${config}')/items` +
+            `?$select=StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200${bust()}`,
+          SPHttpClient.configurations.v1,
+          { headers: GET_FRESH },
+        );
+        if (!res.ok) {
+          console.error("Approval guard: could not read the mode rows:", res.status);
+          return;   // stays undefined — the guard refuses and says why
+        }
+        const rows = ((await res.json()).value ?? []) as Array<{ StagingFolder?: string; Levels?: string }>;
+        const map: Record<string, number> = {};
+        for (const r of rows) {
+          const key = (r.StagingFolder ?? "").trim().toLowerCase();
+          const n = permissionedTierCount(r.Levels);
+          // A segment whose Levels could not be parsed is LEFT OUT rather than stored as 0: absent
+          // reads as "unknown" downstream, which refuses; a stored 0 would claim we know it is flat.
+          if (key.length > 0 && n !== undefined) map[key] = n;
+        }
+        setTierCounts(map);
+      } catch (e) {
+        console.error("Approval guard: mode rows unavailable", e);
+      }
+    })().catch(() => undefined);
+  }, []);
+
   const getDigest = async (): Promise<string> => {
     const res = await context.spHttpClient.post(
       `${webUrl}/_api/contextinfo`,
@@ -410,89 +584,79 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     stagingFileUrl: string,
   ): Promise<{ ok: boolean; reason?: string }> => {
     const webSru = context.pageContext.web.serverRelativeUrl;
-    // …/Unit/Year/Document Type/file.ext → walk up three levels to the unit folder.
-    // Position-based, so it holds for segments with a deeper Levels chain too.
-    const parts = stagingFileUrl.split("/");
-    if (parts.length < 4) return { ok: false, reason: "unexpected file path" };
-    const unitStaging = parts.slice(0, parts.length - 3).join("/");
-
-    // Swap the library segment, anchored on the web-relative prefix so a folder that
-    // happens to be named "Staging" deeper in the tree is not mangled.
-    const prefix = `${webSru}/${libSeg()}/`;
-    if (unitStaging.toLowerCase().indexOf(prefix.toLowerCase()) !== 0) {
-      return { ok: false, reason: "could not work out the Documents path" };
-    }
-    const unitDocs = `${webSru}/${DOCUMENTS_URL_SEGMENT}/${unitStaging.slice(prefix.length)}`;
-    // Per-segment encoding (no %2F flood) with OData quote doubling — see pathEncoding.ts.
-    const encoded = unitDocs.split("/").map(encodeURIComponent).join("/").replace(/'/g, "''");
-
-    const res = await context.spHttpClient.get(
-      `${webUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields?$select=HasUniqueRoleAssignments&@f='${encoded}'`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    // 404 covers two cases and SharePoint does not separate them: the folder is
-    // not there, or the caller cannot even resolve it — which for an approver
-    // means they lack library-level Read on Documents (the DMS_SITE_MEMBERS
-    // grant). Both refuse, but they have different fixes, so name both.
-    if (res.status === 404) {
-      return { ok: false, reason: "it does not exist yet, or your account has no access to the Documents library at all" };
-    }
-    if (!res.ok) {
-      console.error("Approval destination check failed:", res.status, unitDocs);
-      return { ok: false, reason: `it could not be verified (HTTP ${res.status})` };
-    }
-    const d = await res.json();
-
-    // Three distinct outcomes that this once collapsed into one message.
-    //
-    // `{"odata.null": true}` — the folder RESOLVED (or we would be in the 404
-    // branch above) but its list item was security-trimmed away. This is a PASS,
-    // and the reasoning is worth spelling out because the obvious reading is the
-    // opposite one.
-    //
-    // An approver holds `_APR`, which is Staging-only by the isolation rule
-    // (LIBRARY_ROLES in FolderManager.tsx). Their Documents access comes from
-    // DMS_SITE_MEMBERS, which holds Read at LIBRARY level. So:
-    //
-    //   • Locked properly — reconciliation broke inheritance with
-    //     copyRoleAssignments=false and granted only site Owners + the unit's
-    //     MEMBER group. The library grant does not reach it, the approver is not
-    //     on it, the item is trimmed → null. SAFE.
-    //   • Created by Auto-route and still INHERITING — the library-level Read
-    //     flows straight down, so the item IS readable and returns
-    //     HasUniqueRoleAssignments: false. DANGEROUS, caught below.
-    //   • Missing — GetFolderByServerRelativeUrl 404s. DANGEROUS, caught above.
-    //
-    // The dangerous state is the VISIBLE one, because inheritance is precisely
-    // what makes it visible. So a trimmed item on a folder that resolved is
-    // positive evidence of unique permissions excluding the caller — proof of
-    // locking, not absence of proof.
-    //
-    // Previous versions got this backwards twice: first reporting "not locked
-    // down" (a false claim about a correctly locked folder), then "missing or
-    // invisible" — which blocked every correctly provisioned approver and implied
-    // the fix was to add them to the unit's MEMBER group. That would have widened
-    // Documents access for every approver on the site to work around a bug here.
-    //
-    // Rests on one assumption: the caller can resolve the folder at all, which
-    // needs library-level Read from DMS_SITE_MEMBERS. Without it they 404 and are
-    // refused — safe, and the 404 message names that cause.
-    if (d === null || d["odata.null"] === true) {
-      return { ok: true };
-    }
-    // Property genuinely absent, as opposed to false: the permissions could not be
-    // evaluated from this account. Still refuses — a guard that cannot see must
-    // not wave things through — but it must not claim to know what it did not read.
-    if (typeof d.HasUniqueRoleAssignments !== "boolean") {
-      console.error("Approval destination check: HasUniqueRoleAssignments not readable", d);
-      return { ok: false, reason: "its permissions could not be read from your account" };
-    }
-    if (d.HasUniqueRoleAssignments !== true) {
-      return { ok: false, reason: "it is not locked down — it would be readable by every DMS user" };
-    }
-    return { ok: true };
+    // Keyed on the segment FOLDER name, which IS the mode row's StagingFolder — so no term lookup is
+    // needed and renaming a segment's LABEL cannot break the match.
+    const segmentFolder = (() => {
+      const prefix = `${webSru}/${libSeg()}/`.toLowerCase();
+      if (stagingFileUrl.toLowerCase().indexOf(prefix) !== 0) return "";
+      return stagingFileUrl.slice(prefix.length).split("/")[0] ?? "";
+    })();
+    // TEMPORARY DIAGNOSTIC (2026-09-01) — remove once the live refusal is explained. Every value
+    // this guard's verdict depends on, in one line, so a live failure can be read off the console
+    // instead of guessed at from the message alone.
+    console.error("Approval guard diagnostic:", {
+      stagingFileUrl,
+      webSru,
+      libSeg: libSeg(),
+      prefix: `${webSru}/${libSeg()}/`.toLowerCase(),
+      segmentFolder,
+      lookupKey: segmentFolder.toLowerCase(),
+      tierCounts,
+      resolvedTierCount: tierCounts?.[segmentFolder.toLowerCase()],
+    });
+    return checkUnitFolderReady({
+      sp: context.spHttpClient,
+      webUrl,
+      webSru,
+      fileSru: stagingFileUrl,
+      sourceSegment: libSeg(),
+      destSegment: approvedLibSeg(),
+      destLibTitle: approvedLibTitle(),
+      permissionedTiers: tierCounts?.[segmentFolder.toLowerCase()],
+    });
   };
+
+  /**
+   * Would approving this document REPLACE an existing one already in the destination library?
+   *
+   * Auto-route's `Copy file` step is configured to replace on a name clash (confirmed in the flow's
+   * own Code view, 2026-08-24: `nameConflictBehavior: 1`) — so if a same-named file was filed into
+   * the approved-side library after this one was uploaded, approving here silently overwrites it.
+   * No error, no warning, a green run.
+   *
+   * `Form.tsx` already refuses a clash at UPLOAD time (`approvedClash`), but that check runs once,
+   * before this document even exists in the approval library — it cannot see a name that lands in
+   * Documents AFTER this upload and BEFORE this approval (a bulk import, or a second uploader).
+   * This is the second half of that same protection, checked at the only other moment that matters:
+   * immediately before the copy actually happens.
+   *
+   * ⚠ FAILS CLOSED, the OPPOSITE direction from `Form.tsx`'s upload-time check. That check runs on
+   * every upload site-wide, so an unanswerable read there would take the WHOLE FORM out of service —
+   * Form.tsx accepts a small risk of a missed clash to avoid that. This check runs once, at one
+   * approval, and its neighbour `documentsUnitFolderReady` above already fails closed for the
+   * identical reason: a retry costs the approver seconds, a wrong "proceed" overwrites a document
+   * and nobody finds out. An inconclusive read must refuse here, not guess.
+   *
+   * The destination is the FULL file path with only the library segment swapped — NOT the unit
+   * folder `documentsUnitFolderReady` computes, which deliberately stops at Unit. Everything below
+   * Unit (Year/Document Type/Archive…) must be preserved exactly, because that is what Auto-route's
+   * own `Compose_1` expression preserves when it builds the copy destination.
+   */
+  const documentsFileClash = async (
+    stagingFileUrl: string,
+    fileName: string,
+    /* `GuardResult`, not a narrower literal. The local type used to spell out `{ ok, reason }`, which
+       silently dropped `clash` - the flag that tells a confirmed collision apart from an unanswerable
+       check, and therefore which of the two warnings the approver sees. */
+  ): Promise<GuardResult> =>
+    checkDestinationClash({
+      sp: context.spHttpClient,
+      webUrl,
+      fileSru: stagingFileUrl,
+      fileName,
+      sourceSegment: libSeg(),
+      destSegment: approvedLibSeg(),
+    });
 
   const submitDecision = async (action: Decision): Promise<void> => {
     if (!item || submitting) return;
@@ -505,13 +669,98 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         const ready = await documentsUnitFolderReady(item.File.ServerRelativeUrl);
         if (!ready.ok) {
           setSubmitError(
-            `This unit's folder is not ready in the Documents library, so the document was NOT approved (${ready.reason}). ` +
+            `This unit's folder is not ready in the ${approvedLibTitle()} library, so the document was NOT approved (${ready.reason}). ` +
             `Ask an administrator to run Folder Reconciliation, then approve again.`,
           );
           // Leave `decision` as the approver chose it — the selection is still valid, it is
           // the destination that is not ready.
           setSubmitting(false);
           return;
+        }
+        // Second, SEPARATE check — the folder can be ready and still hold a same-named file that
+        // this approval would silently replace. See `documentsFileClash` for why this cannot be
+        // folded into the check above: it asks about a different folder (below-Unit, ensure-created
+        // on demand) and fails closed for a different reason.
+        const clash = await documentsFileClash(item.File.ServerRelativeUrl, item.FileLeafRef);
+        if (!clash.ok) {
+          /* ⚠ THIS NO LONGER REFUSES (client, 2026-08-28: *"just drop the guard and let them
+             override … crosscheck and notify them its going to be overwritten and let them do it,
+             because the overwritten is needed"*), AND NO LONGER ASKS A SECOND TIME EITHER
+             (client, 2026-09-02: *"there is no need for two popup as the one we made is enough"*).
+
+             The warning is shown BEFORE this point — under the comment box, from the `clashCheck`
+             effect above, computed the moment the document loaded. By the time an approver reaches
+             Approve they have already seen it; asking again here with a native `window.confirm()`
+             was the redundant second popup. This re-check still runs (the same reasoning as before:
+             a name that landed AFTER the page loaded and BEFORE this click must still be caught), it
+             just no longer interrupts — it proceeds and, on a confirmed clash, does the bookkeeping
+             below.
+
+             ⚠ TWO DIFFERENT MEANINGS, because `ok: false` carries two of them. `clash.clash` marks a
+             CONFIRMED collision, where approving really does replace a document. Every other refusal
+             means the check could not be answered. Only the confirmed case marks a record replaced,
+             below — the other lets the approval proceed with no consequence-tracking to fake.
+
+             ⚠ THE PREVIOUS CONTENT DOES NOT SURVIVE AS A VERSION, AND THIS COMMENT SAID IT DID
+             UNTIL 2026-08-31. Auto-route's `Copy file` with `nameConflictBehavior: 1` DELETES the
+             destination item and creates a new one, so the filed document comes back as a fresh
+             `1.0` holding the new content — proven on site: a 227.3 KB document by one uploader
+             came back as a 117.4 KB one by another, with a single 1.0 in version history. Both
+             approved-side libraries keep 500 major versions and it makes no difference, because
+             version history is never reached. What DOES survive is the recycle bin — the deleted
+             item sits there for 93 days with the ORIGINAL uploader still in Created By. */
+
+          /* ── The record this approval is about to displace (2026-08-28) ──────
+             Client: *"The older submission under My Submission will change to Cancelled status if
+             replaced."* The upload form marks its own overwrites; this is the OTHER replacement
+             path, and without it a document replaced by an approval reads as **deleted** to whoever
+             filed it — the same false "your work was destroyed" the record feature exists to avoid.
+
+             ⚠ MARKED BEFORE THE REPLACEMENT ACTUALLY HAPPENS, and that is safe ONLY because of the
+             precedence in `mergeRecords`: a record that still RESOLVES wins as `live` regardless of
+             `replacedAt`. Auto-route does the copy minutes later, so until it runs the old file is
+             still there, still carries its stamp, and still reads live. The moment it is replaced,
+             the stamp is gone and the row turns Cancelled. It self-corrects, and it also means an
+             approval that Auto-route never completes leaves nothing wrongly marked.
+
+             ⚠ CONFIRMED CLASHES ONLY (`clash.clash === true`). The other branch of this warning is
+             "the check could not be answered" — marking a record replaced on the strength of a
+             check that found nothing would assert a replacement that may never happen.
+
+             Non-blocking and non-throwing throughout: the approval is the thing that matters, and
+             `markRecordReplaced` logs its own failures. */
+          if (clash.clash === true) {
+            try {
+              const destSeg = approvedLibSeg();
+              const destFull = destSeg
+                ? swapLibrarySegment(item.File.ServerRelativeUrl, libSeg(), destSeg)
+                : undefined;
+              if (destFull) {
+                const priorRes = await context.spHttpClient.get(
+                  `${webUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields` +
+                    `?$select=SubmissionFileId&@f='${destFull.split("/").map(encodeURIComponent).join("/").replace(/'/g, "''")}'`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                );
+                if (priorRes.ok) {
+                  const prior = await priorRes.json();
+                  const stamp =
+                    typeof prior?.SubmissionFileId === "string" ? prior.SubmissionFileId.trim() : "";
+                  if (stamp.length > 0) {
+                    await markRecordReplaced(
+                      context.spHttpClient,
+                      webUrl,
+                      stamp,
+                      (context.pageContext.user.email ?? "").toLowerCase(),
+                    );
+                  }
+                }
+              }
+            } catch {
+              /* A bookkeeping read must never be why an approval fails. Worst case the displaced
+                 record reads `deleted`, which is exactly what it did before this existed. */
+            }
+          }
         }
       }
       const digest      = await getDigest();
@@ -531,6 +780,49 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           { headers },
         );
         if (!res.ok) throw new Error(`Approve returned ${res.status}: ${await res.text().catch(() => "")}`);
+        /* ⚠ `File.approve()` DOES NOT RESTAMP `Editor` — proven live 2026-09-01: after
+           clarencechojinheng approved a document uploaded by chocheetuck4, `Editor` still read
+           chocheetuck4. Approving is a moderation-status change, not an edit, so SharePoint has no
+           built-in "approved by" field and `Editor` is not a stand-in for one. Without this, the
+           audit flow names the uploader as the approver, and Auto-route's self-approval suppression
+           (which compares Author to Editor) matches on EVERY approval, silencing the notification
+           email for everyone.
+           A SEPARATE write, after the approval has already succeeded: a failure here must never make
+           an approver believe their decision did not go through, the same reasoning as the
+           `markRecordReplaced` call above. Guarded by `libraryHasColumns` so a site where
+           reconciliation has not yet created the column degrades to today's behaviour — wrong actor,
+           no email — rather than a failed approval. */
+        try {
+          if (await libraryHasColumns(context.spHttpClient, webUrl, libTitle(), [APPROVED_BY_COLUMN])) {
+            const approverEmail = (context.pageContext.user.email ?? "").toLowerCase();
+            // ⚠ SHAREPOINT REJECTS A MERGE THAT SETS OData__ModerationStatus ALONGSIDE ANY OTHER
+            // FIELD — proven live 2026-09-01 via a 500 reading "You cannot change moderation status
+            // and set other item properties at that same time." The earlier "fix" that combined them
+            // into one MERGE could therefore never succeed; it 500'd silently on every approval, so
+            // ApprovedBy was never written while approval/routing kept working (approve() below had
+            // already set the status independently).
+            //
+            // So the two writes must stay SEPARATE: this MERGE sets ApprovedBy alone (an ordinary
+            // field edit, no moderation status touched, so it does not hit the restriction above) —
+            // and because ANY edit to a moderated item reverts its status to Pending unless that same
+            // write re-asserts it, we then call approve() again immediately after to restore Approved.
+            // approve() is a dedicated method, not a field MERGE, so IT doesn't hit the restriction
+            // either. Net effect: ApprovedBy lands, and the item ends up Approved regardless of order.
+            await context.spHttpClient.fetch(itemBase, SPHttpClient.configurations.v1, {
+              method: "POST",
+              headers: { ...headers, "X-HTTP-Method": "MERGE", "IF-MATCH": "*", "Content-Type": "application/json;odata=nometadata" },
+              body: JSON.stringify({ ApprovedBy: approverEmail }),
+            });
+            await context.spHttpClient.post(
+              `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)/approve(comment='${safeComment}')?@f='${safeUrl}'`,
+              SPHttpClient.configurations.v1,
+              { headers },
+            );
+          }
+        } catch {
+          /* Same rule as the record-replacement bookkeeping above: the approval already succeeded,
+             so a failed stamp must never be reported as a failed approval. */
+        }
       } else if (action === "Rejected") {
         // /reject() fails when the item is already Approved; MERGE works regardless of current state.
         const rejectRes = await context.spHttpClient.fetch(itemBase, SPHttpClient.configurations.v1, {
@@ -605,6 +897,47 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     }
   };
 
+  /* ⚠ THIS HOOK MUST STAY ABOVE THE RENDER GUARDS BELOW.
+     Placed after them (as it was on 2026-08-25, for about an hour) the component returns early
+     while `loading` is true, the hook never runs on that render, and the moment loading finishes
+     React sees more hooks than last time and throws "Rendered more hooks than during the previous
+     render". The component then renders NOTHING — a blank web part, no error state, which is the
+     one outcome this file's guards exist to prevent. Same rule the share-recipient picker follows
+     in MySubmissions. */
+  /**
+   * May this user approve THIS document? Answered by `checkApproveRight` in shared/approvalGuards,
+   * the same call the bulk approve command set makes — so the panel here and the command's
+   * visibility there can never disagree about who may approve what.
+   */
+  useEffect(() => {
+    if (!item) { setApproveRight("unknown"); return undefined; }
+    let cancelled = false;
+    checkApproveRight({
+      sp: context.spHttpClient,
+      webUrl,
+      listTitle: libTitle(),
+      itemId: item.ID,
+    })
+      .then((v) => { if (!cancelled) setApproveRight(v); })
+      .catch(() => { if (!cancelled) setApproveRight("unknown"); });
+    return () => { cancelled = true; };
+  }, [item === null ? 0 : item.ID, lib]);
+
+  /**
+   * Precheck the existing-document clash as soon as the document loads, so the comment box already
+   * carries the warning before Approve is ever clicked — see `clashCheck`'s own comment above for why.
+   * MUST stay above the render guards below, same reason as the `approveRight` effect immediately
+   * above it.
+   */
+  useEffect(() => {
+    if (!item) { setClashCheck(undefined); return undefined; }
+    let cancelled = false;
+    documentsFileClash(item.File.ServerRelativeUrl, item.FileLeafRef)
+      .then((r) => { if (!cancelled) setClashCheck(r); })
+      .catch(() => { if (!cancelled) setClashCheck(undefined); });
+    return () => { cancelled = true; };
+  }, [item === null ? 0 : item.ID, lib]);
+
   // ── Loading ────────────────────────────────────────────────────────────────
 
   if (loading) {
@@ -619,7 +952,27 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     return <div style={{ padding: 32, color: "#a4262c", fontSize: 14 }}>{fetchError}</div>;
   }
 
-  if (!item) return null;
+  /* ⚠ NEVER `return null` HERE — that rendered a BLANK PAGE, reported on site 2026-08-20.
+     Approving the last document in the queue is the ordinary way to reach this state: Auto-route
+     copies the file to Documents and DELETES it from the approval library, so the `?itemId=` the
+     approver came in on no longer resolves. Loading has finished, no request errored, and there is
+     simply no item — and an approver pressing Back after every approval met an empty screen with
+     nothing on it to explain itself or to click.
+     A page that renders nothing is the worst of both states this codebase distinguishes everywhere
+     else: it says neither "could not read" nor "nothing here". */
+  if (!item) {
+    return (
+      <div style={{ padding: 32, fontSize: 14, color: "#323130", maxWidth: 640, lineHeight: 1.6 }}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>This document is no longer in the approval queue.</div>
+        <div style={{ color: "#605e5c" }}>
+          If you have just approved it, that is expected — approved documents are moved into the
+          Documents library and no longer appear here. A rejected document stays in the approval
+          library, so you would still see it.
+          {" "}Otherwise the link may point at a document that has since been moved or deleted.
+        </div>
+      </div>
+    );
+  }
 
   // ── Success ────────────────────────────────────────────────────────────────
 
@@ -740,6 +1093,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     return "—";
   };
 
+
   // Location = the org folder path (Segment › … › Unit), derived from the file's live
   // Staging path so it is segment-agnostic (GHO, Upstream, Projects — any depth). Drops
   // the deepest three path segments — Year, Document Type, and the filename — which are
@@ -787,9 +1141,14 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   ];
 
   // Pending is a system state only — approvers pick Approved or Rejected.
+  /* ⚠ THE LABEL IS THE ACTION; THE `val` IS THE STORED DECISION, and they are deliberately
+     different since 2026-08-30. The client asked for "Approve"/"Reject" — an imperative, which is
+     what a control the approver is about to press should say. `Decision` is still `Approved` /
+     `Rejected`, because that is what is written to the item and read back everywhere else; renaming
+     the value would be a data change dressed as a copy change. */
   const radioOptions: { val: Decision; label: string }[] = [
-    { val: "Approved", label: "Approved" },
-    { val: "Rejected", label: "Rejected" },
+    { val: "Approved", label: "Approve" },
+    { val: "Rejected", label: "Reject" },
   ];
 
   return (
@@ -814,7 +1173,18 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         <span>Uploaded on {formatDate(item.Created)}</span>
       </div>
 
-      <div style={s.grid}>
+      {/* The third track is DROPPED, not just emptied, when the approval panel is hidden.
+          `s.grid` reserves 280px for it, so leaving the template alone left a blank column and a
+          preview that stopped short of the page (client, 2026-08-25: "can you extend the preview, so
+          empty on the right"). Overridden here rather than in `s.grid` because the style object is
+          shared and static; this is the one thing about the layout that depends on state. */}
+      <div
+        style={{
+          ...s.grid,
+          gridTemplateColumns:
+            approveRight === "denied" ? "196px minmax(0, 1fr)" : "196px minmax(0, 1fr) 280px",
+        }}
+      >
 
         {/* Left — Uploaded by + Details */}
         <div>
@@ -897,14 +1267,11 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
                   style={{ maxWidth: "100%", height: "auto", display: "block" }}
                 />
               </div>
-              {/* Offered here too, not just on the iframe branch. Fit-to-width answers the common
-                  case; a very large scan still needs the browser's own zoom, and that lives in a
-                  tab of its own. */}
-              <div style={{ marginTop: 6, textAlign: "right" }}>
-                <a href={preview.fileUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
-                  Open in a new tab
-                </a>
-              </div>
+              {/* ⚠ "Open in a new tab" REMOVED HERE (client, 2026-09-03: "Just remove this"), on the
+                  IMAGE branch only — the preview already renders the whole document, so this was a
+                  supplementary fallback link, never the only way to see the file. The "none" branch's
+                  link below is untouched: there the preview genuinely could not render anything and
+                  the link is the sole route to the document, not decoration. */}
             </div>
           ) : preview.kind === "none" ? (
             // Say so, and offer the file. A blank pane reads as a broken page, and an approver
@@ -913,7 +1280,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
               <div>
                 No preview is available for <strong>{item.FileLeafRef}</strong>.
               </div>
-              <a href={preview.fileUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
+              <a href={preview.openUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
                 Open the file in a new tab
               </a>
             </div>
@@ -925,100 +1292,143 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
                 title={`Preview of ${item.FileLeafRef}`}
                 allowFullScreen
               />
-              {/* Always offered, whatever the kind. Office Online occasionally refuses a file it
-                  cannot render — a macro-enabled workbook, a document open for editing elsewhere —
-                  and the approver needs a way through that does not involve leaving the queue. */}
-              <div style={{ marginTop: 6, textAlign: "right" }}>
-                <a href={preview.fileUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
-                  Open in a new tab
-                </a>
-              </div>
+              {/* ⚠ "Open in a new tab" REMOVED HERE TOO (client, 2026-09-03: "Just remove this"),
+                  same reasoning as the image branch above. COST, STATED PLAINLY: this used to be the
+                  approver's way through when Office Online refuses to render a file (a macro-enabled
+                  workbook, a document open for editing elsewhere) without leaving the queue — that
+                  fallback route is now gone. If Office Online preview failures start being reported,
+                  this is why. */}
             </div>
           )}
         </div>
 
-        {/* Right — Approval panel */}
+        {/* Right — Approval panel.
+            HIDDEN ENTIRELY when this user cannot approve this document (client, 2026-08-25: "I think
+            its best to remove the card"). An explanatory card was built first and rejected on sight:
+            for someone who is only ever an uploader here, a panel headed "Approval" is a control they
+            can never use, and explaining that on every visit is noise rather than help. What they
+            came for — the document, its metadata, its status — is all on the left.
+
+            `denied` ONLY. `unknown` keeps the panel, because a failed probe must never take the
+            approval controls away from a real approver; the 403 at submit is still the backstop. */}
+        {approveRight !== "denied" && (
         <div style={s.panel}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span style={s.panelTitle}>Approval</span>
           </div>
-          <p style={s.panelHint}>Please review the document and its details.</p>
+          {/* ⚠ A DECIDED DOCUMENT GETS A READ-ONLY SUMMARY, NOT THE SAME FORM DISABLED (client's
+              mockup, 2026-09-03: "having clickable radio buttons and CTA buttons ... displayed out
+              in the layout is really confusing"). Before this, the panel kept showing live-looking
+              radio buttons, a comment box and Approve/Cancel buttons after a decision had already
+              been made in this session — every control merely `disabled`, which still READS as an
+              interactive form. Status / Comment / who-and-when is the whole story once a decision
+              exists; nothing below it can be acted on again. */}
+          {currentDecided ? (
+            <>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#605e5c", marginBottom: 4 }}>STATUS</div>
+                <span style={{ ...s.navBadge, ...(currentDecided === "Approved" ? s.navBadgeOk : s.navBadgeNo) }}>
+                  {currentDecided === "Approved" ? "Approved" : "Rejected"}
+                </span>
+              </div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: "#605e5c", marginBottom: 4 }}>COMMENT</div>
+                <div style={{ fontSize: 13 }}>{comments.trim() || <em style={{ color: "#a19f9d" }}>No comment was given.</em>}</div>
+              </div>
+              <div style={{ borderTop: "1px solid #edebe9", paddingTop: 10, fontSize: 12, color: "#605e5c" }}>
+                Reviewed by <strong>{context.pageContext.user.displayName}</strong> on{" "}
+                {formatDate(new Date().toISOString())} &mdash; no further action is needed.
+              </div>
+            </>
+          ) : (
+            <>
+              <p style={s.panelHint}>Please review the document and its details.</p>
 
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Approval status</div>
-            {radioOptions.map(({ val, label }) => (
-              <label key={val} style={{ display: "block", marginBottom: 10, cursor: "pointer" }}>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <input
-                    type="radio"
-                    name="decision"
-                    value={val}
-                    checked={decision === val}
-                    onChange={() => setDecision(val)}
-                    style={{ flexShrink: 0 }}
-                  />
-                  <div style={{ fontSize: 13, fontWeight: decision === val ? 600 : 400 }}>{label}</div>
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Approval status</div>
+                {radioOptions.map(({ val, label }) => (
+                  <label key={val} style={{ display: "block", marginBottom: 10, cursor: "pointer" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <input
+                        type="radio"
+                        name="decision"
+                        value={val}
+                        checked={decision === val}
+                        onChange={() => setDecision(val)}
+                        style={{ flexShrink: 0 }}
+                      />
+                      <div style={{ fontSize: 13, fontWeight: decision === val ? 600 : 400 }}>{label}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Comment</div>
+                <textarea
+                  value={comments}
+                  onChange={e => setComments(e.target.value.slice(0, 500))}
+                  placeholder="Use this field to enter any comments about why the item was approved or rejected."
+                  style={s.textarea}
+                />
+                <div style={s.charCount}>{comments.length}/500</div>
+                {/* ⚠ REPLACES A NATIVE `window.confirm()` THAT USED TO FIRE ON APPROVE (client,
+                    2026-09-02: *"the native one is annoying to client … its best to just add a text
+                    under the comment box, precheck the file against the Document Library"*). Same
+                    two messages the confirm used to carry — confirmed clash vs. an unanswerable check —
+                    shown here instead, so Approve is a single click with nothing left to ask again. */}
+                {clashCheck && !clashCheck.ok && (
+                  <div style={{ ...s.charCount, textAlign: "left" as const, color: "#8a4b00", marginTop: 6 }}>
+                    {clashCheck.clash === true
+                      ? `A document called "${item.FileLeafRef}" is already filed in ${approvedLibTitle()} ` +
+                        `for this folder. Approving REPLACES it — the document it replaces moves to the ` +
+                        `site recycle bin, restorable for 93 days.`
+                      : `The existing-document check could not be completed: ${clashCheck.reason}. ` +
+                        `Approving may replace a document already filed in ${approvedLibTitle()}, or may ` +
+                        `not — that could not be established.`}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ marginBottom: 20 }}>
+                <div style={s.publishLabel}>Publish to</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" as const }}>
+                  {(() => {
+                    // Segment › … › Unit, from the live Staging path (segment-agnostic).
+                    const after = item.File.ServerRelativeUrl.split(`/${libSeg()}/`)[1];
+                    const parts = after ? after.split('/') : [];
+                    const crumbs = parts.slice(0, Math.max(0, parts.length - 3));
+                    return crumbs.map((crumb, i) => (
+                      <React.Fragment key={crumb}>
+                        {i > 0 && <span style={{ color: "#c8c6c4", fontSize: 12 }}>›</span>}
+                        <span style={{ color: i === crumbs.length - 1 ? "#0f6cbd" : "#605e5c", fontSize: 13 }}>{crumb}</span>
+                      </React.Fragment>
+                    ));
+                  })()}
                 </div>
-              </label>
-            ))}
-          </div>
+              </div>
 
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Comment</div>
-            <textarea
-              value={comments}
-              onChange={e => setComments(e.target.value.slice(0, 500))}
-              placeholder="Use this field to enter any comments about why the item was approved or rejected."
-              style={s.textarea}
-            />
-            <div style={s.charCount}>{comments.length}/500</div>
-          </div>
+              {submitError && <div style={s.errText}>{submitError}</div>}
 
-          <div style={{ marginBottom: 20 }}>
-            <div style={s.publishLabel}>Publish to</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" as const }}>
-              {(() => {
-                // Segment › … › Unit, from the live Staging path (segment-agnostic).
-                const after = item.File.ServerRelativeUrl.split(`/${libSeg()}/`)[1];
-                const parts = after ? after.split('/') : [];
-                const crumbs = parts.slice(0, Math.max(0, parts.length - 3));
-                return crumbs.map((crumb, i) => (
-                  <React.Fragment key={crumb}>
-                    {i > 0 && <span style={{ color: "#c8c6c4", fontSize: 12 }}>›</span>}
-                    <span style={{ color: i === crumbs.length - 1 ? "#0f6cbd" : "#605e5c", fontSize: 13 }}>{crumb}</span>
-                  </React.Fragment>
-                ));
-              })()}
-            </div>
-          </div>
-
-          {submitError && <div style={s.errText}>{submitError}</div>}
-
-          {/* Already decided in this session: the record exists, and resubmitting would fire the
-              moderation and copy calls a second time. An approver can step back to confirm what
-              they did — not to redo it. */}
-          {currentDecided && (
-            <div style={{ fontSize: 12, color: "#605e5c", marginBottom: 8 }}>
-              You {currentDecided === "Approved" ? "approved" : "rejected"} this document in this
-              session. Use Next to continue.
-            </div>
+              {/* Pending is no longer selectable — require an explicit Approved/Rejected choice. */}
+              <button
+                onClick={() => { submitDecision(decision).catch(() => undefined); }}
+                disabled={submitting || swapping || decision === "Pending"}
+                style={{
+                  ...s.btnApprove,
+                  opacity: submitting || swapping || decision === "Pending" ? 0.7 : 1,
+                  cursor: decision === "Pending" ? "not-allowed" : "pointer",
+                }}
+              >
+                {submitting ? "Saving…" : "Proceed"}
+              </button>
+              <button onClick={() => { window.location.href = backUrl(); }} disabled={submitting} style={{ ...s.btnSendBack, opacity: submitting ? 0.7 : 1 }}>
+                Cancel
+              </button>
+            </>
           )}
-          {/* Pending is no longer selectable — require an explicit Approved/Rejected choice. */}
-          <button
-            onClick={() => { submitDecision(decision).catch(() => undefined); }}
-            disabled={submitting || swapping || decision === "Pending" || currentDecided !== null}
-            style={{
-              ...s.btnApprove,
-              opacity: submitting || swapping || decision === "Pending" || currentDecided !== null ? 0.7 : 1,
-              cursor: decision === "Pending" || currentDecided !== null ? "not-allowed" : "pointer",
-            }}
-          >
-            {submitting ? "Saving…" : currentDecided ? "Already decided" : "Ok"}
-          </button>
-          <button onClick={() => { window.location.href = backUrl(); }} disabled={submitting} style={{ ...s.btnSendBack, opacity: submitting ? 0.7 : 1 }}>
-            Cancel
-          </button>
         </div>
+        )}
 
       </div>
     </div>

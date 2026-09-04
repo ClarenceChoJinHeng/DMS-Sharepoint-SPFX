@@ -2,6 +2,8 @@ import {
   groupRolesById,
   intendedPageGroups,
   groupsToRemove,
+  groupsForRequestLists,
+  REQUEST_LIST_ROLES,
   GroupMapReadRow,
   CurrentAssignment,
 } from "./pageGrants";
@@ -74,16 +76,27 @@ describe("groupRolesById — collapsing folder rows", () => {
 });
 
 describe("derivedRolesForPage — the gate that stops a site-wide lockout", () => {
-  it("derives UPL and APR for the upload form", () => {
-    expect(derivedRolesForPage("Upload-Form.aspx").slice().sort()).toEqual(["APR", "UPL"]);
+  it("derives UPL, UPLHC, APR and APRHC for the upload form", () => {
+    // APRHC joined 2026-08-24: it is the HC Head of Unit's approver role, held INSTEAD of APR, so
+    // omitting it here would AccessDeny the exact persona the HC vertical exists for.
+    // UPLHC joined 2026-08-31: `pic_hc` is `["UPLHC"]` with no literal `UPL`, so without it every
+    // HC-cleared PIC was denied this page — and the page pass would REMOVE their group if it had
+    // ever been granted. Found live, with the page ACL and publish state both reading correct.
+    expect(derivedRolesForPage("Upload-Form.aspx").slice().sort()).toEqual(["APR", "APRHC", "UPL", "UPLHC"]);
   });
 
-  it("derives APR only for the approval queue — an uploader must never reach it", () => {
-    expect(derivedRolesForPage("ApprovalDocument.aspx")).toEqual(["APR"]);
+  it("derives APR and APRHC for the approval queue — an uploader must never reach it", () => {
+    expect(derivedRolesForPage("ApprovalDocument.aspx")).toEqual(["APR", "APRHC"]);
   });
 
-  it("derives UPL for My Submissions", () => {
-    expect(derivedRolesForPage("My-Submissions.aspx")).toEqual(["UPL"]);
+  it("derives every uploading role for My Submissions, Head of Unit included", () => {
+    // UPLHC and APR joined UPL on 2026-08-21: `hou` carries no literal UPL (UPLHC is a superset that
+    // LIBRARY_ROLES lists on the normal approval library too), so a Head of Unit could upload and
+    // then not open the page listing what they had uploaded. Safe to widen — the page reads
+    // `AuthorId eq <me>`, so a granted role sees only its own rows.
+    // APRHC joined 2026-08-24, same reason as APR: the HC Head of Unit uploads and must see their
+    // own submissions too.
+    expect(derivedRolesForPage("My-Submissions.aspx")).toEqual(["UPL", "UPLHC", "APR", "APRHC"]);
   });
 
   /**
@@ -103,10 +116,17 @@ describe("derivedRolesForPage — the gate that stops a site-wide lockout", () =
     for (const name of [
       "Folder-Administration.aspx", "Group-Management.aspx", "Folder-Access.aspx",
       "Page-Access.aspx", "Site-Access.aspx", "CRS-Settings.aspx", "CRS-Audit-Log.aspx",
-      "Bulk-Upload.aspx", "Approval-Library-Access.aspx", "DMS-Config.aspx",
+      "Approval-Library-Access.aspx", "DMS-Config.aspx",
     ]) {
       expect(derivedRolesForPage(name)).toEqual([]);
     }
+  });
+
+  /* ⚠ Bulk-Upload LEFT the list above on 2026-08-22. It is an uploader tool now, so the derived pass
+     owns it and the lockdown pass must not — otherwise the two fight on every run, one granting and
+     the other stripping. Asserted positively here so the change cannot be reverted silently. */
+  it("derives the uploader roles for Bulk-Upload, which is no longer an admin page", () => {
+    expect(derivedRolesForPage("Bulk-Upload.aspx")).toEqual(["UPL", "UPLHC", "APR", "APRHC"]);
   });
 
   it("never derives a view-only role", () => {
@@ -253,5 +273,82 @@ describe("groupsToRemove", () => {
       undefined as unknown as CurrentAssignment[],
       undefined as unknown as number[],
     )).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * Access to the request and submission LISTS — option 2, 2026-08-27.
+ * Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md §5
+ * ------------------------------------------------------------------------- */
+describe("groupsForRequestLists", () => {
+  it("includes an uploader, an approver and a Head of Department", () => {
+    const out = groupsForRequestLists(groupRolesById([
+      folder("1", "GHO_GF_TAX_UPLOADER", "UPL"),
+      folder("2", "GHO_GF_TAX_APPROVER", "APR"),
+      folder("3", "GHO_GF_HOD", "DEPTVIEW"),
+    ]));
+    expect(out.map((g) => g.groupId).sort()).toEqual(["1", "2", "3"]);
+  });
+
+  it("includes the HC personas' own roles", () => {
+    // `hou_hc` holds APRHC and no plain APR, and `pic_hc` holds UPLHC and no plain UPL. Matching
+    // only the plain roles would leave every HC unit unable to raise or decide a request.
+    const out = groupsForRequestLists(groupRolesById([
+      folder("4", "GHO_GF_TAX_APPROVER_HIGHLY_CONFIDENTIAL", "APRHC"),
+      folder("5", "GHO_GF_TAX_UPLOADER_HIGHLY_CONFIDENTIAL", "UPLHC"),
+    ]));
+    expect(out.map((g) => g.groupId).sort()).toEqual(["4", "5"]);
+  });
+
+  it("excludes a plain viewer", () => {
+    // MEMBER cannot upload, so has nothing to raise a request about. Including them would
+    // re-create the site-wide read exposure option 2 exists to remove.
+    expect(groupsForRequestLists(groupRolesById([
+      folder("6", "GHO_GF_TAX_VIEWER", "MEMBER"),
+    ]))).toEqual([]);
+  });
+
+  it("excludes C-Level, who hold nothing in either approval library", () => {
+    expect(groupsForRequestLists(groupRolesById([
+      folder("7", "GHO_SEGVIEW", "SEGVIEW"),
+      folder("8", "CRS_GLOBAL", "GLOBAL"),
+    ]))).toEqual([]);
+  });
+
+  it("names the role that earned it, for the run log", () => {
+    const out = groupsForRequestLists(groupRolesById([
+      folder("9", "G", "APR"),
+      folder("9", "G", "DELS"),
+    ]));
+    // DELS is not a qualifying role, so it must not appear as the reason.
+    expect(out[0].via).toBe("APR");
+  });
+
+  it("counts a group once however many qualifying roles it holds", () => {
+    const out = groupsForRequestLists(groupRolesById([
+      folder("10", "G", "APR"),
+      folder("10", "G", "UPL"),
+    ]));
+    expect(out).toHaveLength(1);
+  });
+
+  it("ignores Page and Library rows, as the folder derivation does", () => {
+    expect(groupsForRequestLists(groupRolesById([
+      { GroupId: "11", Role: "UPL", Scope: "Page", Target: "Upload-Form.aspx" },
+      { GroupId: "12", Role: "UPL", Scope: "Library", Target: "Staging" },
+    ]))).toEqual([]);
+  });
+
+  it("answers empty for no groups — the caller must NOT revoke on that", () => {
+    // An empty intended set on a site with no Group Map is legitimate. The reconciliation pass is
+    // required to leave the site-entry grant alone in that case, or it locks everybody out.
+    expect(groupsForRequestLists([])).toEqual([]);
+    expect(groupsForRequestLists(undefined as unknown as [])).toEqual([]);
+  });
+
+  it("carries no upload-or-approve role it should not", () => {
+    // Pinned so a later edit cannot widen this to a role that would expose the lists further.
+    expect(REQUEST_LIST_ROLES.slice().sort())
+      .toEqual(["APR", "APRHC", "DEPTVIEW", "UPL", "UPLHC"]);
   });
 });

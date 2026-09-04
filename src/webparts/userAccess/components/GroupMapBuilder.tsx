@@ -37,7 +37,8 @@ import { groupMappingsByGroup } from "../../../shared/groupMappings";
 import GroupMembersEditor from "./GroupMembersEditor";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
-import { primeNames, permissionLevelNames } from "../../../shared/spNaming";
+import { primeNames } from "../../../shared/spNaming";
+import { RolesReference } from "../../../shared/rolesReference";
 import { writeAudit } from "../../../shared/spAuditLog";
 
 type Props = {
@@ -228,12 +229,6 @@ export default function GroupMapBuilder({
   // failure. Group Management keeps the check, because creating a group genuinely needs it.
   // The three custom permission levels, named for THIS site. Hardcoding "DMS Upload" here while
   // reconciliation grants "CRS Upload" tells an admin to create a level nothing will ever use.
-  const [levels, setLevels] = useState<{ upload: string; approve: string; del: string }>({
-    upload: "Upload", approve: "Approve", del: "Delete",
-  });
-  // The role reference below is four dense paragraphs. Collapsed by default so the FORM is the
-  // first thing on the page — the client's "too complicated" was partly this wall of text.
-  const [rolesOpen, setRolesOpen] = useState(false);
   /**
    * The group whose people and mappings are open. ONE at a time: the member editor issues a read
    * per group, and letting several stand open would fire 308 of them on a site this size.
@@ -523,9 +518,9 @@ export default function GroupMapBuilder({
     // could not be read" rather than "the list is called something else".
     primeNames(context.spHttpClient, siteUrl)
       .catch(() => undefined)
-      .then(() => permissionLevelNames(context.spHttpClient, siteUrl))
-      .then((n) => setLevels(n))
-      .catch(() => undefined)
+      /* The permission-level names are no longer read here — `RolesReference` resolves them itself,
+         which is what lets it be mounted on two screens without either one having to fetch on its
+         behalf. */
       .then(() => {
         // An empty mode list is not a neutral state: every Segment cell falls back to a
         // raw GUID and the segment picker offers nothing, which reads as "the data is
@@ -851,7 +846,10 @@ export default function GroupMapBuilder({
         details: [
           `Row: ${row?.GroupName ?? `item ${itemId}`}, role ${row?.Role ?? "(unknown)"}, scope ${row?.Scope ?? "(unknown)"}, target ${row?.Target ?? "(unknown)"}`,
           `The SharePoint group is KEPT. ${siblings.length} other mapping(s) remain.`,
-          "The folder grant from this row stays in place until Folder Reconciliation runs.",
+          // Recorded accurately, because the row is the only record anyone will find later:
+          // reconciliation does not revoke folder grants, so this deletion withdrew nothing.
+          "The folder grant from this row REMAINS. Reconciliation does not remove folder grants — " +
+            "reset the folder's permissions and reconcile, or delete the group, to withdraw it.",
         ],
       }).catch(() => undefined);
     } catch (e) {
@@ -1212,62 +1210,21 @@ export default function GroupMapBuilder({
         </p>
       )}
 
-      {/* Collapsed by default. Everything below is reference an admin needs ONCE (when the
-          permission levels are first created, or when choosing between DEL and DELS) and never
-          again — but it used to sit above the form on every visit. */}
+      {/* ⚠ THE ROLES REFERENCE MOVED TO `shared/rolesReference.tsx` (2026-08-30) and is RENDERED
+          here rather than duplicated. It had been unreachable since this component's `show="form"`
+          mount was retired, and it is now also mounted on the guided flows' Group Management step —
+          two copies of a reference nobody reads often are exactly the pair that drifts, and the
+          drifting one is always the rarely-seen one.
+
+          Still collapsed here: on this screen it is reference an admin needs ONCE, when the
+          permission levels are first created or when choosing between DEL and DELS. The flow step
+          opens it, because there it is the point of the step. */}
       {show !== "members" && (
-      <button onClick={() => setRolesOpen((v) => !v)} style={s.disc}>
-        {rolesOpen ? "▾" : "▸"} How roles and permission levels work
-      </button>
-      )}
-
-      {rolesOpen && show !== "members" && (
-        <>
-          <p style={s.intro}>
-            Member changes take effect <strong>immediately</strong>; new or deleted{" "}
-            <em>rows</em> need a <strong>Folder Reconciliation</strong> run to apply folder
-            permissions (MEMBER → Read, UPL → {levels.upload}, APR → {levels.approve},
-            DEL → {levels.del} on Documents, DELS → {levels.del} on the approval library).
-          </p>
-          {/* Named on the screen because the failure is quiet: reconciliation warns and
-              skips the assignment, so an approver simply never gains the level and the
-              run still reports success overall.
-
-              Upload is called out separately from the other two because its failure
-              mode is worse. APR and DEL previously had no level at all, so a missing one
-              only meant "not yet in effect". UPL used to point at Contribute, which always
-              exists — so once it points at the custom level, a site without that level gives
-              every NEWLY provisioned unit no uploader grant whatsoever. Existing uploaders
-              keep the Contribute grant already on their folder (nothing revokes), which is
-              exactly why nobody notices until a new unit is onboarded.
-
-              The names are RESOLVED, not hardcoded: telling an admin to create "DMS Upload"
-              on a site where reconciliation grants "CRS Upload" sends them to build a level
-              nothing will ever use, and the resulting log line looks identical. */}
-          <p style={s.intro}>
-            <strong>{levels.upload}</strong>, <strong>{levels.approve}</strong> and{" "}
-            <strong>{levels.del}</strong> are custom permission levels an administrator creates
-            once per site (Site settings → Site permissions → Permission levels): copy{" "}
-            <em>Contribute</em> and untick Delete Items; copy <em>Contribute</em>, tick Approve
-            Items and untick Add Items, Delete Items and Delete Versions; copy <em>Read</em> and
-            tick Delete Items. Until they exist, reconciliation reports{" "}
-            <em>no &quot;{levels.approve}&quot; role definition on site</em> and skips those
-            grants — nobody loses access, but approve-only and delete do not take effect, and a
-            newly provisioned unit gets no uploader grant at all.
-          </p>
-          {/* DEL vs DELS is one letter for two different libraries, so it is spelled out
-              here as well as in the role tooltips. An admin who picks DEL intending
-              "can clear out junk in the approval library" grants delete over APPROVED
-              documents instead, and the run log looks identical either way. */}
-          <p style={s.intro}>
-            <strong>DEL</strong> deletes <em>approved</em> documents in the Documents library.{" "}
-            <strong>DELS</strong> deletes <em>pending</em> files in the approval library. They
-            share one permission level and differ only in which library they are allowed to
-            reach, so picking the wrong one grants delete over the wrong set of documents.
-            Uploaders (<strong>UPL</strong>) cannot delete at all — that is deliberate, so a PIC
-            must ask a head of unit.
-          </p>
-        </>
+        <RolesReference
+          spHttpClient={context.spHttpClient}
+          siteUrl={siteUrl}
+          defaultOpen={false}
+        />
       )}
 
       {/* The half of the safeguard that was missing until 2026-08-09 — the detection ran, the
@@ -1283,11 +1240,15 @@ export default function GroupMapBuilder({
         </div>
       )}
 
-      {/* GONE FROM FOLDER ACCESS ENTIRELY (2026-08-18, client, twice). It renders only where
-          `show === "form"`, which is Group Management — the page where both cases that need it
-          originate: a group created with a free-typed name and no persona gets no rows at all, and a
-          group needing a second tier is created there too. Deleting it outright would have left the
-          first case fixable only by deleting and re-creating the group. */}
+      {/* ⚠ NOT MOUNTED ANYWHERE AS OF 2026-08-23 (client: "I think you can remove map a group by
+          hand"). It left Folder Access on 2026-08-18 and Group Management today, so nothing passes
+          `show="form"` and this whole branch is unreachable.
+
+          KEPT rather than deleted, because it is still the only route for the two cases bulk
+          provisioning cannot express: a group created with the advanced free-text name and no
+          persona gets NO Group Map rows at all (`rowsForNewGroup` returns []), and one group covering
+          two tiers cannot be stated anywhere else. Both are now fixed only by deleting and
+          re-creating the group. Re-mount by passing show="form" if that bites. */}
       {show !== "members" && (
       <button style={s.disc} onClick={() => setFormOpen((v) => !v)}>
         {formOpen ? "▾" : "▸"} Map a group by hand — rarely needed
@@ -1638,14 +1599,24 @@ export default function GroupMapBuilder({
                     ? ` — it still has ${others.length} other mapping${others.length === 1 ? "" : "s"}.`
                     : ", with no mappings left. Delete it on the Group Management page if it is no longer needed."}
                 </p>
-                {/* Stated because it is the one thing that surprises people: removing a row does
-                    not remove the permission it created. Nothing in this tool revokes a role
-                    assignment, so the group keeps this grant on the folder until reconciliation
-                    strips it — and the list will no longer show that it exists. */}
+                {/* ⚠ THIS SAID RECONCILIATION WOULD REMOVE THE GRANT. IT DOES NOT (corrected
+                    2026-08-21, while an admin was following it to take CRS Delete off a PIC group).
+                    `groupsToRemove` asserts a full ACL at PAGE scope ONLY — at folder scope a
+                    library root also carries SharePoint's automatic Limited Access entries for every
+                    principal granted below it, so asserting there would strip every group's access
+                    on a run that reported success.
+
+                    So deleting a row removes the row and NOTHING else, for ever. The old wording
+                    would have led someone to delete a mapping, run reconciliation, and believe an
+                    access had been withdrawn while the group still held it — with the list no longer
+                    showing that it exists. A silent gap, produced by following the instructions. */}
                 <p style={{ margin: 0, color: "#8a6d00" }}>
-                  Note: the folder permission this row created stays in place until Folder
-                  Reconciliation runs. Deleting the row stops it being re-applied; it does not
-                  take the access away.
+                  Note: this removes the row, <strong>not the permission</strong>. The group keeps
+                  this access on the folder, and Folder Reconciliation will <strong>not</strong> take
+                  it away — it only adds grants. To actually withdraw it, open the folder in
+                  SharePoint, choose <strong>Manage Access → Advanced → Delete unique permissions</strong>,
+                  then run Folder Reconciliation to rebuild the folder from the rows that remain.
+                  Deleting the group instead removes all of its access at once.
                 </p>
               </div>
               <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", padding: 12 }}>

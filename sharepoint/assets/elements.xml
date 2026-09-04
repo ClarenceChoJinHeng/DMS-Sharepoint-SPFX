@@ -25,4 +25,20 @@
       ClientSideComponentId="c1d2e3f4-a5b6-47c8-d9e0-f1a2b3c4d5e6"
       ClientSideComponentProperties="{}">
   </CustomAction>
+  <!--
+    Bulk approve/reject, in the library command bar.
+
+    RegistrationId 101 is the DOCUMENT LIBRARY template, so this registers against every document
+    library on the site — there is no per-library registration for a command set. The command itself
+    then hides everywhere except the two approval libraries (see onListViewUpdated), which is why
+    that check lives in code rather than here.
+  -->
+  <CustomAction
+      Title="CRS Bulk Approve"
+      RegistrationId="101"
+      RegistrationType="List"
+      Location="ClientSideExtension.ListViewCommandSet.CommandBar"
+      ClientSideComponentId="6d1a9f47-3c82-4e15-b7a0-9f2e5c8d4136"
+      ClientSideComponentProperties="{}">
+  </CustomAction>
 </Elements>

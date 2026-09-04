@@ -104,3 +104,33 @@ export function swapState<T extends QueueItemLike>(entry: QueueEntry<T>): SwapSt
     fieldText: {},
   };
 }
+
+/**
+ * The decision a `?decision=` link asks the page to pre-select.
+ *
+ * Crystal's email templates 2 and 3 (spec `2026-08-28-email-bundling-and-templates-design.md` §5)
+ * carry `[Approve]` and `[Reject]` links. A link that ACTUALLY approves needs a bearer trigger URL
+ * inside the message — rejected for HC, and worse on the reminder, which goes to up to ten
+ * mailboxes. So the links open this page with the radio already ticked and the approver still
+ * presses the button.
+ *
+ * ⚠ PRE-SELECTING IS NOT DECIDING, and nothing here may ever become an auto-submit. Everything the
+ * page does at the moment of submitting — the destination-folder guard, the name-clash check, the
+ * `ApproveItems` probe — runs on that button press. A link that skipped it would skip all three.
+ *
+ * ⚠ ANYTHING UNRECOGNISED IS `undefined`, never a guess. A mangled parameter must leave the page
+ * exactly as it behaves with no parameter at all: nothing ticked, the button disabled until the
+ * approver chooses. Guessing would put a decision in front of them that nobody asked for.
+ *
+ * `Pending` is deliberately unreachable from a link — it is a system state, not something an
+ * approver can pick, and the submit button is disabled while it is selected.
+ */
+/* `URLSearchParams.get` answers `null`, converted to `undefined` at the call site rather than
+   widened here — the house lint rule bans `null` in new signatures. The `?? ""` below still
+   absorbs one at runtime, because a defensive parameter reader should not depend on that. */
+export function decisionFromLink(raw: string | undefined): Decision | undefined {
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "approve" || v === "approved") return "Approved";
+  if (v === "reject" || v === "rejected") return "Rejected";
+  return undefined;
+}

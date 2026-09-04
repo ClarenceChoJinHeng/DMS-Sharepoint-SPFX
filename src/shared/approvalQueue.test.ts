@@ -2,6 +2,7 @@ import {
   buildQueue,
   nextUndecidedIndex,
   statusToDecision,
+  decisionFromLink,
   swapState,
   QueueEntry,
   QueueItemLike,
@@ -117,5 +118,38 @@ describe("swapState", () => {
   it("prefers the local decision over a stale server status", () => {
     expect(swapState({ item: doc(1, PENDING), decided: "Approved" }).decision).toBe("Approved");
     expect(swapState({ item: doc(1, PENDING), decided: "Rejected" }).decision).toBe("Rejected");
+  });
+});
+
+describe("decisionFromLink", () => {
+  it("reads the two values the email templates use", () => {
+    expect(decisionFromLink("approve")).toBe("Approved");
+    expect(decisionFromLink("reject")).toBe("Rejected");
+  });
+
+  // The link is written by hand into a Power Automate email body, so it will be typed both ways
+  // eventually. Both are unambiguous, so both are accepted.
+  it("accepts the past tense and ignores case and padding", () => {
+    expect(decisionFromLink("Approved")).toBe("Approved");
+    expect(decisionFromLink("REJECTED")).toBe("Rejected");
+    expect(decisionFromLink("  Approve  ")).toBe("Approved");
+  });
+
+  /* ⚠ THE POINT OF THE WHOLE FUNCTION. A mangled parameter must leave the page exactly as it
+     behaves with no parameter: nothing ticked, the button disabled until the approver chooses.
+     Anything that guessed here would put a decision in front of somebody that nobody asked for. */
+  it("answers undefined for anything it does not recognise", () => {
+    expect(decisionFromLink(undefined)).toBeUndefined();
+    expect(decisionFromLink("")).toBeUndefined();
+    expect(decisionFromLink("   ")).toBeUndefined();
+    expect(decisionFromLink("yes")).toBeUndefined();
+    expect(decisionFromLink("approve me")).toBeUndefined();
+    expect(decisionFromLink("appr")).toBeUndefined();
+  });
+
+  // Pending is a system state, never something an approver picks — and the submit button is
+  // disabled while it is selected, so a link that produced it would render a dead page.
+  it("cannot be asked for Pending", () => {
+    expect(decisionFromLink("pending")).toBeUndefined();
   });
 });

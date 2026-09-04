@@ -5,6 +5,7 @@ import {
   DETAILS_MAX,
   EVENT,
   EVENT_LABEL,
+  eventLabelForRow,
   formatEventTime,
   joinDetails,
   segmentFromUnitPath,
@@ -200,5 +201,61 @@ describe("the event catalogue", () => {
   it("offers every type defined in EVENT — a type absent here is unfilterable in the viewer", () => {
     const defined = Object.keys(EVENT).map((k) => (EVENT as unknown as Record<string, string>)[k]);
     expect(ALL_EVENT_TYPES.slice().sort()).toEqual(defined.slice().sort());
+  });
+});
+
+describe("eventLabelForRow", () => {
+  // Client, 2026-08-24: an HC routing row read "Moved to Documents" while the Library column beside
+  // it said HC Documents. A row that contradicts itself reads as a bug.
+  it("names the destination library on a routing event", () => {
+    expect(eventLabelForRow(EVENT.routed, "HC Documents")).toBe("Moved to HC Documents");
+    expect(eventLabelForRow(EVENT.routed, "Documents")).toBe("Moved to Documents");
+  });
+
+  // Every row written before LibraryName existed, and any row whose flow could not resolve it.
+  it("falls back to the static label when the library is unknown", () => {
+    expect(eventLabelForRow(EVENT.routed, "")).toBe(EVENT_LABEL[EVENT.routed]);
+    expect(eventLabelForRow(EVENT.routed, undefined)).toBe(EVENT_LABEL[EVENT.routed]);
+    expect(eventLabelForRow(EVENT.routed, "   ")).toBe(EVENT_LABEL[EVENT.routed]);
+  });
+
+  // ONLY routing is library-dependent: everything else happens IN a library, not BETWEEN two, so a
+  // destination in the label would be wrong rather than merely redundant.
+  it("leaves every other event type alone, library or not", () => {
+    for (const t of ALL_EVENT_TYPES) {
+      if (t === EVENT.routed) continue;
+      expect(eventLabelForRow(t, "HC Documents")).toBe(EVENT_LABEL[t] ?? t);
+    }
+  });
+
+  it("never renders blank for an unknown type", () => {
+    expect(eventLabelForRow("SomethingNew", "HC Documents")).toBe("SomethingNew");
+  });
+});
+
+/* ── Event types written by POWER AUTOMATE, not by this codebase ───────────────
+ *
+ * ⚠ NO TEST CAN CATCH THE GAP THESE CLOSE, and that is why they are pinned by name. A flow can add a
+ * `Create item` with any `EventType` string — the column is TEXT, so the row is written and stored
+ * correctly — and nothing in this repo fails. The only symptom is that the viewer's Action dropdown,
+ * built from `ALL_EVENT_TYPES`, cannot offer it: the events are in the log and unfilterable. That is
+ * how `Replaced` (Auto-route / HC Auto Route) and `ShareRevoked` (CRS — Audit request activity) went
+ * missing until the client noticed on 2026-09-03.
+ *
+ * The existing consistency test proves EVENT and ALL_EVENT_TYPES agree; these prove the two
+ * flow-written types are in EVENT at all.
+ */
+describe("event types the flows write", () => {
+  it("offers Replaced as a filter — Auto-route and HC Auto Route both write it", () => {
+    expect(ALL_EVENT_TYPES.indexOf("Replaced")).toBeGreaterThan(-1);
+  });
+
+  it("offers ShareRevoked as a filter — the request-activity flow writes it on a revoke", () => {
+    expect(ALL_EVENT_TYPES.indexOf("ShareRevoked")).toBeGreaterThan(-1);
+  });
+
+  it("labels Replaced as what happened to THIS document, not what it did", () => {
+    // The bare word reads as though this row's file did the replacing.
+    expect(EVENT_LABEL.Replaced).toContain("newer upload");
   });
 });

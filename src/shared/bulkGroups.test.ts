@@ -30,11 +30,13 @@ describe("planBulkGroups", () => {
   it("plans the client's five personas for every unit", () => {
     const plan = planBulkGroups(seg, rows, ["pic", "hou", "employee", "pic_hc", "employee_hc"], []);
     const tax = plan.groups.filter((g) => g.name.indexOf("_TAX") !== -1).map((g) => g.name).sort();
+    // Spellings standardised 2026-08-26: the HC uploader spells out `_UPLOADER_…` to match the plain
+    // group, and the base group is `_VIEWER` rather than `_EMPLOYEE` so it matches its own HC twin.
     expect(tax).toEqual([
       "GHO_GF_TAX_APPROVER",
-      "GHO_GF_TAX_EMPLOYEE",
       "GHO_GF_TAX_UPLOADER",
-      "GHO_GF_TAX_UPL_HIGHLY_CONFIDENTIAL",
+      "GHO_GF_TAX_UPLOADER_HIGHLY_CONFIDENTIAL",
+      "GHO_GF_TAX_VIEWER",
       "GHO_GF_TAX_VIEWER_HIGHLY_CONFIDENTIAL",
     ]);
     // 3 units x 5 = 15, and nothing else, since no department or segment persona was ticked.
@@ -46,7 +48,7 @@ describe("planBulkGroups", () => {
     // the way this system always fails: nothing errors, and a HoD later opens a department folder that
     // looks empty.
     const plan = planBulkGroups(seg, rows, ["hod", "clevel_segment"], []);
-    expect(plan.groups.map((g) => g.name)).toEqual(["GHO_SEGVIEW", "GHO_GF_HOD", "GHO_GHR_HOD"]);
+    expect(plan.groups.map((g) => g.name)).toEqual(["GHO_C_LEVEL", "GHO_GF_HOD", "GHO_GHR_HOD"]);
     expect(plan.groups[0].scope).toBe("segment");
     expect(plan.groups[0].tierGuid).toBe(SET); // the segment IS the tier
     expect(plan.groups[1].scope).toBe("department");
@@ -116,7 +118,7 @@ describe("planBulkGroups", () => {
   });
 
   it("survives empty rows and a segment with no levels", () => {
-    expect(planBulkGroups(seg, [], ALL, []).groups.map((g) => g.name)).toEqual(["GHO_SEGVIEW"]);
+    expect(planBulkGroups(seg, [], ALL, []).groups.map((g) => g.name)).toEqual(["GHO_C_LEVEL"]);
     // No levelNames means no tier is the "unit" tier, so every row reads as a department tier. Better a
     // department-scope group than a crash — and the depth check on the New segment form is what stops this
     // state existing in the first place.
@@ -196,8 +198,10 @@ describe("splitPlannedRows", () => {
 
 describe("planBulkGroups recognises a unit whose code was renamed", () => {
   // One PIC group for Tax, provisioned under the OLD code and still named for it.
+  // The persona's CURRENT role set. `roleSetKey` is an exact fingerprint, so this must track
+  // PERSONAS — see the note on the second test for what happens when a live site's rows do not.
   const picRowsFor = (groupId: string, groupName: string, term: string): GroupMapWriteRow[] =>
-    (["UPL", "DELS"] as GroupMapRole[]).map((r) => ({
+    (["UPL"] as GroupMapRole[]).map((r) => ({
       GroupId: groupId,
       GroupName: groupName,
       Segment: SET,
@@ -224,6 +228,30 @@ describe("planBulkGroups recognises a unit whose code was renamed", () => {
     expect(g.exists).toBe(true);
     expect(g.existingName).toBe("GHO_GF_TAX_UPLOADER");
     expect(toCreateCount(plan)).toBe(0);
+  });
+
+  it("does NOT recognise a renamed unit whose rows predate a persona's role change", () => {
+    /**
+     * ⚠ PINS A KNOWN LIMIT, not a desired behaviour. `roleSetKey` is an EXACT fingerprint, so when
+     * a persona sheds a role — PIC lost DELS on 2026-08-20 — every group provisioned before that
+     * still carries the old set and no longer matches. Only the RENAME path is affected: the name
+     * check runs first, so an un-renamed group is still recognised.
+     *
+     * Subset matching was considered and REJECTED: `employee` is ["MEMBER"] and `employee_hc` is
+     * ["MEMBER","MEMBERHC"], so a subset rule would let a cleared viewer group answer for the plain
+     * one — a false match that reuses the wrong group, which is worse than a duplicate.
+     *
+     * The operational answer is the one the persona change needs anyway: re-create the affected
+     * mappings, which rewrites the rows to the new set.
+     */
+    const stale = (["UPL", "DELS"] as GroupMapRole[]).map((r) => ({
+      GroupId: "7", GroupName: "GHO_GF_TAX_UPLOADER", Segment: SET,
+      UnitTermGuid: "u1", Role: r, Scope: "Folder", Target: "",
+    })) as GroupMapWriteRow[];
+    const plan = planBulkGroups(seg, renamed, ["pic"], ["GHO_GF_TAX_UPLOADER"], stale);
+    const g = plan.groups.filter((x) => x.personaKey === "pic")[0];
+    expect(g.exists).toBe(false);
+    expect(toCreateCount(plan)).toBe(1);
   });
 
   it("still matches on the NAME, so an interrupted run is finished rather than duplicated", () => {

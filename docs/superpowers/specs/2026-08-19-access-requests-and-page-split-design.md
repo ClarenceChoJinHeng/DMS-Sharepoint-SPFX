@@ -1,7 +1,7 @@
 # Access requests — the Head of Unit approves, not the site owner
 
 **Date:** 2026-08-19
-**Status:** design agreed, NOT implemented
+**Status:** design agreed, NOT implemented. Page split settled 2026-08-20 — see §4.0: access requests get their OWN queue page and `Requests.aspx` is left as built.
 **Extends** `2026-08-15-deletion-and-share-requests-design.md` — the request list, the routing and the
 approve-in-the-approver's-session mechanism all come from there, unchanged.
 **Depends on** `2026-08-19-derived-page-access-design.md`: the page grants below are derived from
@@ -131,9 +131,26 @@ boundary, rather than a filter inside the page.**
 
 | Page | Policy | Audience |
 |---|---|---|
-| `Requests.aspx` | `["APR"]` | the approver queue — Heads of Unit |
+| `Requests.aspx` | `["APR"]` | deletion + share queue — **unchanged, as built** |
+| `Access-Requests.aspx` | `["APR"]` | the ACCESS queue — its own page |
 | `Request-Access.aspx` | **open to everyone with site access** | the request form |
 | `My-Submissions.aspx` | `["UPL"]`, unchanged | where a PIC tracks their own requests |
+
+### 4.0 ⚠ ACCESS REQUESTS GET THEIR OWN QUEUE PAGE — decided 2026-08-20
+
+An earlier draft folded access requests into the existing `Requests.aspx`. The client's decision is to
+leave that page exactly as built — deletion and share — and give access requests a page of their own.
+
+**The reason it is right, rather than merely tidier:** the three request types share a list and a
+routing rule, but **the approve action has nothing in common**. Approving a deletion recycles a
+document; approving a share creates a unique permission scope on one file; approving an access request
+adds a person to a unit group, which changes what they can see **everywhere that group is granted**.
+The last is the widest consequence in the set and the least visible from the row — so it should not sit
+one keystroke away from two narrower actions in the same list.
+
+Three separate pages was rejected in the same conversation: splitting delete from share would leave a
+Head of Unit with three queues and no single answer to *"is anything waiting for me"*, which is how
+requests get missed. Two queues, split on **consequence** rather than on request type, is the line.
 
 ### 4.1 ⚠ Key the queue on `APR`, never on `SHARE`
 

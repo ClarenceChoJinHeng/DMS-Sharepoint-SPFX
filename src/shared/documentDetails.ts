@@ -147,9 +147,29 @@ export function tierRows(fieldText: Record<string, string>): DetailRow[] {
  * twin, and the rest are plain columns. Listed by INTERNAL NAME only — the spelling variants are
  * derived, so there is nothing here to mistype.
  */
-export const FIXED_FIELDS: Array<{ label: string; field: string }> = [
+/**
+ * The fixed fields that describe the DESTINATION rather than the document.
+ *
+ * `Year` and `Document Type` are folder tiers — the built-in below-Unit pair — so on the upload form
+ * they belong to the BATCH, alongside the permissioned tiers, and are chosen once for every file
+ * going to that folder. Kept separate from the per-file fields for exactly that reason: the read-only
+ * batch view in My Submissions renders them under the destination, where the uploader set them.
+ *
+ * They have no Tid twin (they are managed metadata), which is why `discoverTierFields` cannot find
+ * them and they must be listed. That absence is load-bearing, not an oversight.
+ */
+export const BATCH_FIXED_FIELDS: Array<{ label: string; field: string }> = [
   { label: "Document Type", field: "Document_x0020_Type" },
   { label: "Year", field: "Year" },
+];
+
+/**
+ * The fixed fields the uploader fills in PER FILE, in the order the client's own library views use
+ * (memory `dms-staging-column-order`): what it is for, then how sensitive, then free text.
+ *
+ * Listed by INTERNAL NAME only — the spelling variants are derived, so there is nothing to mistype.
+ */
+export const FILE_FIXED_FIELDS: Array<{ label: string; field: string }> = [
   { label: "Document Date", field: "DocumentDate" },
   { label: "Confidentiality", field: "Confidentiality_x0020_Level" },
   { label: "Legally Privileged", field: "LegallyPrivileged" },
@@ -159,6 +179,15 @@ export const FIXED_FIELDS: Array<{ label: string; field: string }> = [
   { label: "Remark", field: "Remark" },
 ];
 
+/**
+ * Every fixed field, destination first — the order the single-document panel has always used.
+ *
+ * ⚠ DERIVED from the two halves, never listed again. A second copy is how the batch view and the
+ * detail panel would come to disagree about what a document carries, and the drifting one would be
+ * whichever is looked at less.
+ */
+export const FIXED_FIELDS: Array<{ label: string; field: string }> =
+  BATCH_FIXED_FIELDS.concat(FILE_FIXED_FIELDS);
 /**
  * Every metadata row for one document, in reading order: where it lives, then what it is.
  *
@@ -281,4 +310,45 @@ export function formatBytes(raw: string | number | undefined): string {
   while (v >= 1024 && i < units.length - 1) { v = v / 1024; i++; }
   // One decimal below 10, none above: "1.4 MB" is useful, "847 KB" is, "847.3 KB" is noise.
   return `${v < 10 ? Math.round(v * 10) / 10 : Math.round(v)} ${units[i]}`;
+}
+
+
+/**
+ * The rows that describe a BATCH's destination: the permissioned tiers, then Year and Document Type.
+ *
+ * Client, 2026-08-22: opening a batch in My Submissions should look like the upload form they filled
+ * in — the folder chosen once at the top, then each file's own details beneath it. This is the top
+ * half. Blanks are dropped for the same reason as everywhere else here: a library serving twelve
+ * segments leaves most tier columns empty on any given document.
+ *
+ * Taken from ONE file in the batch, which is sound because a batch IS one destination folder — every
+ * file in it was filed under the same tiers by construction.
+ */
+export function buildBatchRows(fieldText: Record<string, string>): DetailRow[] {
+  const ft = fieldText ?? {};
+  return [
+    ...tierRows(ft),
+    ...BATCH_FIXED_FIELDS
+      .map((f) => ({ label: f.label, value: readField(ft, f.field) }))
+      .filter((r) => r.value.length > 0),
+  ];
+}
+
+/**
+ * The rows an uploader filled in for ONE file — everything the batch does not decide.
+ *
+ * The lower half of the read-only batch view. `trailing` carries rows only the calling screen knows
+ * (file size, last updated) and passes through blank-or-not, as in `buildDetailRows`.
+ */
+export function buildFileRows(args: {
+  fieldText: Record<string, string>;
+  trailing?: DetailRow[];
+}): DetailRow[] {
+  const ft = args.fieldText ?? {};
+  return [
+    ...FILE_FIXED_FIELDS
+      .map((f) => ({ label: f.label, value: readField(ft, f.field) }))
+      .filter((r) => r.value.length > 0),
+    ...(args.trailing ?? []),
+  ];
 }

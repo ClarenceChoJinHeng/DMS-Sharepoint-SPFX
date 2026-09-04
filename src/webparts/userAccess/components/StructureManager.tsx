@@ -3,12 +3,15 @@ import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
-import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
+import {
+  builtInTierFor, effectiveOnDemandTiers, splitChain, validateChain,
+} from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
-import { allLibraryTitles, cachedHcLibraries, cachedListTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
+import { allLibraryTitles, cachedHcLibraries, cachedListTitle, documentsLibraryTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
 /**
  * Folder Structure — add, reorder and remove the folder levels BENEATH Unit.
@@ -26,7 +29,11 @@ import { ensureColumn } from "../../../shared/spColumns";
  * is a config edit, so they render locked.
  */
 
-const DOCUMENTS_LIST_TITLE = "Documents";
+/* ⚠ RESOLVED, NOT LITERAL (2026-08-28). This screen creates the tier columns in BOTH libraries, so
+   a 404 here means the approved side silently never gets them — and a MOVE carries over only the
+   columns that EXIST at the destination. That is the `Remark`/`LegallyPrivileged` gap of
+   2026-08-10 exactly, arriving through a renamed library. */
+const documentsListTitle = (): string => documentsLibraryTitle();
 /** Documents' URL segment differs from its title, like the approval library's does. */
 const DOCUMENTS_URL_SEGMENT = "Shared Documents";
 
@@ -167,26 +174,37 @@ function canAddTier(adding: DraftTier, check: SetCheck): boolean {
 const s: Record<string, React.CSSProperties> = {
   msg:       { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err:       { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
-  warn:      { background: "#fff4e5", border: "1px solid #f0d9b5", color: "#7a4f00" },
+  warn: { ...NOTICE_ATTENTION },
   ok:        { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
-  card:      { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
+  card:      { border: "1px solid #e6e6e6", borderRadius: 12, padding: "18px 20px", marginBottom: 14, background: "#fff" },
   radioRow:  { display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, lineHeight: 1.5, cursor: "pointer" },
   radioHint: { fontSize: 12, color: "#605e5c" },
   segRow:    { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, flexWrap: "wrap" },
-  segName:   { fontSize: 15, fontWeight: 600, color: "#1b1b1b" },
-  path:      { fontSize: 12, color: "#605e5c", fontFamily: "Consolas, monospace", marginTop: 4, wordBreak: "break-all" },
-  badge:     { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", padding: "2px 8px", borderRadius: 10 },
+  segName:   { fontSize: 16, fontWeight: 600, color: "#242424" },
+  /* ⚠ NOT MONOSPACE ANY MORE (client design, 2026-08-30). The chain reads as a BREADCRUMB —
+     `GHO › [Department] › [Unit]` — which is how it is drawn and how people read a path; the fixed
+     pitch made it look like a stored value rather than a shape. `wordBreak` stays: a deep chain on a
+     narrow screen must wrap rather than widen the card. */
+  path:      { fontSize: 12.5, color: "#605e5c", marginTop: 6, wordBreak: "break-word", lineHeight: 1.6 },
+  badge:     { fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", padding: "4px 10px", borderRadius: 999, whiteSpace: "nowrap" },
   badgeUsed: { background: "#fff4e5", color: "#7a4f00" },
   badgeFree: { background: "#f1f8f4", color: "#0f6c3f" },
+  /* ⚠ ITS OWN TONE, not `badgeUsed`. "In use" and "Change pending" appear TOGETHER on a staged
+     segment, and two identical amber pills side by side read as one repeated badge rather than two
+     different facts. */
+  badgePending: { background: "#fdf1e7", color: "#8a4b00", border: "1px solid #f0d5a8" },
   btn:       { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   ghost:     { background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   danger:    { background: "#fff", color: "#a4262c", border: "1px solid #e6b3b5", borderRadius: 4, padding: "4px 9px", fontSize: 12, cursor: "pointer" },
   iconBtn:   { background: "#fff", border: "1px solid #c8c8c8", borderRadius: 4, padding: "3px 8px", fontSize: 12, cursor: "pointer", marginRight: 4 },
   off:       { background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "not-allowed" },
-  tierRow:   { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 6, background: "#fafafa", marginBottom: 6, fontSize: 13, flexWrap: "wrap" },
+  tierRow:   { display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 8, background: "#fafafa", marginBottom: 8, fontSize: 13, flexWrap: "wrap" },
+  /* A LOCKED row is visibly a different KIND of row, not a disabled version of an editable one:
+     the two lists sit one above the other, and the client's design distinguishes them by weight
+     rather than by the absence of buttons alone. */
   tierLock:  { background: "#f3f2f1", color: "#605e5c" },
-  tierName:  { fontWeight: 600, flex: "0 0 150px" },
-  tierMeta:  { fontSize: 11, color: "#8a8886", flex: "1 1 160px" },
+  tierName:  { fontWeight: 600, flex: "0 0 170px", color: "#242424" },
+  tierMeta:  { fontSize: 11.5, color: "#8a8886", flex: "1 1 160px" },
   label:     { display: "block", fontSize: 12, fontWeight: 600, color: "#323130", margin: "14px 0 4px" },
   input:     { width: "100%", boxSizing: "border-box", padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4 },
   hint:      { fontSize: 11, color: "#8a8886", marginTop: 3, lineHeight: 1.5 },
@@ -380,7 +398,7 @@ export default function StructureManager({
     const webPath = new URL(siteUrl).pathname.replace(/\/$/, "");
     const libs: Array<[string, string]> = [
       [libraryTitle(), libraryUrlSegment()],
-      [DOCUMENTS_LIST_TITLE, DOCUMENTS_URL_SEGMENT],
+      [documentsListTitle(), DOCUMENTS_URL_SEGMENT],
     ];
     // The HC pair counts as "in use" too. A segment whose only documents are Highly Confidential
     // would otherwise read as empty and activate a structure change immediately — stranding exactly
@@ -594,7 +612,12 @@ export default function StructureManager({
     const label = adding.label.trim();
     const col = columnNameFor(label);
     if (!label || !col) return;
-    const tier: Level = {
+    // Re-adding `Year` or `Document Type` restores the BUILT-IN shape, never a derived one.
+    // Those columns already exist as managed metadata, and a derived `tidCol` makes every
+    // writer treat them as plain text — which fails the tagging call on every document.
+    // See builtInTierFor.
+    const builtIn = builtInTierFor(label, legacySets.year, legacySets.docType);
+    const tier: Level = builtIn ?? {
       label,
       column: col,
       labelCol: col,
@@ -836,7 +859,14 @@ export default function StructureManager({
         <p style={s.label}>Fixed levels — these carry folder permissions and cannot be changed here</p>
         {draft.slice(0, first).map((l, i) => (
           <div style={{ ...s.tierRow, ...s.tierLock }} key={`p${i}`}>
-            <span style={{ flex: "0 0 16px" }} aria-hidden="true">&#128274;</span>
+            {/* Drawn, not the padlock EMOJI it replaced: an emoji renders in the platform's own
+                colour and style, which beside flat green line-art reads as a stray character. */}
+            <span style={{ flex: "0 0 16px", color: "#8a8886", display: "flex" }} aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+                <path d="M5.8 7V5.2a2.2 2.2 0 0 1 4.4 0V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+              </svg>
+            </span>
             <span style={s.tierName}>{l.label}</span>
             <span style={s.tierMeta}>
               column: {l.labelCol ?? l.column}
@@ -1065,8 +1095,11 @@ export default function StructureManager({
                 // Show the live shape AND the staged one. A single line could only show one,
                 // and either choice misleads: the live path hides that a change is waiting,
                 // the staged path claims a shape uploads are not using.
-                <div style={{ ...s.path, color: "#7a4f00" }}>
-                  waiting to be applied: {pathPreview(row, row.pending)}
+                /* The staged chain, in the same shape as the live one directly above it — the two
+                   are meant to be COMPARED, and a sentence in front of one of them makes that
+                   harder. The `change pending` badge beside the name is what says which is which. */
+                <div style={{ ...s.path, color: "#8a4b00", marginTop: 2 }}>
+                  {pathPreview(row, row.pending)}
                 </div>
               )}
             </div>
@@ -1077,10 +1110,10 @@ export default function StructureManager({
                   ...(row.hasDocuments === undefined ? {} : row.hasDocuments ? s.badgeUsed : s.badgeFree),
                 }}
               >
-                {row.hasDocuments === undefined ? "checking…" : row.hasDocuments ? "in use" : "empty"}
+                {row.hasDocuments === undefined ? "checking…" : row.hasDocuments ? "In use" : "Empty"}
               </span>
               {row.pending !== undefined && (
-                <span style={{ ...s.badge, ...s.badgeUsed }}>change pending</span>
+                <span style={{ ...s.badge, ...s.badgePending }}>Change pending</span>
               )}
               <button
                 style={row.chainError === undefined ? s.ghost : s.off}

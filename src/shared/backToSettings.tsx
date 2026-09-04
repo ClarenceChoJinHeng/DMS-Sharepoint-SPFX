@@ -118,7 +118,10 @@ export function BackBand({
  * `FileRef`, not a path assembled from the library title — a list's URL is independent of its title
  * (gotcha #12) and `SitePages` is not guaranteed to be the segment on every site.
  */
-async function readSitePages(context: WebPartContext, siteUrl: string): Promise<SitePage[]> {
+/* EXPORTED 2026-08-23 for the retired Folder Access signpost, which resolves the Group
+   Management address the same way. One reader, so there is one definition of "the site's
+   pages" — a second copy would drift on the `.aspx` filter or the FileRef fallback. */
+export async function readSitePages(context: WebPartContext, siteUrl: string): Promise<SitePage[]> {
   const res: SPHttpClientResponse = await context.spHttpClient.get(
     `${siteUrl}/_api/web/lists/getbytitle('Site%20Pages')/items` +
       `?$select=Id,FileLeafRef,Title,FileRef&$top=500`,

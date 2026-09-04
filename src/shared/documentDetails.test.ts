@@ -1,5 +1,9 @@
 import {
   FIXED_FIELDS,
+  BATCH_FIXED_FIELDS,
+  FILE_FIXED_FIELDS,
+  buildBatchRows,
+  buildFileRows,
   buildDetailRows,
   discoverTierFields,
   documentUnit,
@@ -364,5 +368,52 @@ describe("routeToApprover", () => {
     expect(routeToApprover(documentUnit(WITH_SUBUNIT), ["someone-else"])).toBeUndefined();
     // An unreadable Group Map arrives here as an empty set and must look identical.
     expect(routeToApprover(documentUnit(WITH_SUBUNIT), [])).toBeUndefined();
+  });
+});
+
+/* ── The batch / file split (2026-08-22) ───────────────────────────────────────
+   The read-only batch view renders the destination once and each file's own details beneath it, so
+   the two halves must partition the fixed fields exactly — no field lost, none shown twice. */
+describe("batch and file field split", () => {
+  it("partitions FIXED_FIELDS with nothing lost or duplicated", () => {
+    const halves = BATCH_FIXED_FIELDS.concat(FILE_FIXED_FIELDS).map((f) => f.field);
+    expect(halves).toEqual(FIXED_FIELDS.map((f) => f.field));
+    expect(halves.length).toBe(new Set(halves).size);
+  });
+
+  it("puts Year and Document Type on the BATCH — they are folder tiers, chosen once", () => {
+    const names = BATCH_FIXED_FIELDS.map((f) => f.field);
+    expect(names).toContain("Year");
+    expect(names).toContain("Document_x0020_Type");
+    expect(FILE_FIXED_FIELDS.map((f) => f.field)).not.toContain("Year");
+  });
+
+  it("buildBatchRows carries the tiers and the built-in pair, and no per-file field", () => {
+    const ft = {
+      Business_x005f_x0020_x005f_Segment: "Group Head Office",
+      BusinessSegmentTid: "g-1",
+      Unit: "Tax",
+      UnitTid: "g-2",
+      Year: "2024",
+      Document_x005f_x0020_x005f_Type: "Agreement",
+      Remark: "please review",
+    };
+    const labels = buildBatchRows(ft).map((r) => r.label);
+    expect(labels).toEqual(["Business Segment", "Unit", "Document Type", "Year"]);
+    expect(labels).not.toContain("Remark");
+  });
+
+  it("buildFileRows carries the per-file fields and no destination field", () => {
+    const rows = buildFileRows({
+      fieldText: { Year: "2024", Remark: "please review", ProjectName: "Alpha" },
+      trailing: [{ label: "File size", value: "1.4 MB" }],
+    });
+    expect(rows.map((r) => r.label)).toEqual(["Project Name", "Remark", "File size"]);
+  });
+
+  it("drops blanks in both halves but never a caller's trailing row", () => {
+    expect(buildBatchRows({ Year: "  " })).toEqual([]);
+    expect(buildFileRows({ fieldText: {}, trailing: [{ label: "File size", value: "" }] }))
+      .toEqual([{ label: "File size", value: "" }]);
   });
 });

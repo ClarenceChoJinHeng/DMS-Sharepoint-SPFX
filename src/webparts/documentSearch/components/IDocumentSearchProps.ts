@@ -10,4 +10,8 @@ export interface IDocumentSearchProps {
    * should not. One placement should not have to inherit the other's shape.
    */
   pageSize: number;
+  /** Empty is supported — the hero falls back to a gradient. See the web part for why this is a
+   *  property and not a packaged asset. */
+  heroImageUrl: string;
+  heroTitle: string;
 }
