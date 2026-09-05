@@ -890,7 +890,17 @@ export default function FolderManager({
      ALL — the safe default is today's behaviour. A default of "only what changed" would make the
      first run after an unseen manual edit skip the one segment that needed it. */
   const [scopeSegs,    setScopeSegs]    = useState<ScopeSegment[] | undefined>(undefined);
-  const [scopePicked,  setScopePicked]  = useState<Set<string> | undefined>(undefined);
+  /* ⚠ STARTS EMPTY, NOT "everything" (client, 2026-09-04: *"Remmeber when I said auto select the
+     segment? This time let them select instead."*). It was `undefined`, which `resolveRunScope` reads
+     as EVERY segment — so opening the screen and pressing Run reconciled the whole site, and on this
+     site that is five segments and tens of minutes.
+     ⚠ `undefined` STILL MEANS ALL, and the "Select all" button still sets it — the meaning of the
+     value is unchanged, only what it starts as. That matters: `resolveRunScope` and the
+     `coversEverySegment` guard behind the Folder Map prune both key on it, and re-defining
+     `undefined` would have quietly changed which runs are allowed to delete orphaned rows.
+     ⚠ AN EMPTY SET IS REFUSED, not treated as all — `resolveRunScope` already fails closed, so the
+     screen says what to do instead of running something nobody chose. */
+  const [scopePicked,  setScopePicked]  = useState<Set<string> | undefined>(new Set<string>());
   /** One resolver for the picker, the run and the log, so they cannot disagree about coverage. */
   const runScope = (): ReturnType<typeof resolveRunScope> =>
     resolveRunScope(scopeSegs, scopePicked);

@@ -1,5 +1,13 @@
 # SDG DMS — Claude Code Project Context
 
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-04:
+> `docs/2026-09-04-open-questions-handoff.md`.** The six client questions are all **answered** now
+> (the table records what was decided and what must therefore NOT be "tidied" back); five things
+> removed on request, with the diagnosis kept for each; the Power Automate work still outstanding
+> (including a flow that logs a CANCELLED request as REJECTED with no actor); and the deployment
+> steps code cannot do. ⚠ **Builds `1.0.397.0`–`1.0.416.0` have never run on a site** — all of it was checked by
+> compile, unit test and bundle grep only, and nothing is committed.
+
 > ⛔ **BEFORE YOU CHANGE ANYTHING: READ THE CURRENT SOURCE, AND CONFIRM THE LIVE STATE.** Standing rule
 > from the client, 2026-08-18 — *"always check the code and current situation first before we make a
 > changes or not due to old file or old comments new session claude will destroy the progress."*
@@ -8941,6 +8949,10 @@ placeholder data), segment created through `SegmentCreator`, uploaded, approved,
   to Group Led Project"* — overriding the more scalable option (deriving the label from whichever
   Project-category segment exists). **This WILL need revisiting the day a second Project-category
   segment is onboarded**, since the radio can only ever say one thing.
+- **⚠ PARTLY BUILT 2026-09-04 (1.0.413.0) — `ApprovalDocument.tsx` IS DONE; the other two screens are
+  not.** See *"THE APPROVER'S SCREEN NO LONGER CALLS EVERY SEGMENT A BUSINESS SEGMENT"* at the end of
+  this file for how, and for the two that remain (`MySubmissions.tsx`'s detail view and
+  `DocumentSearch.tsx:1395`). The original note follows.
 - **⚠ FLAGGED BY THE CLIENT, NOT YET BUILT: the "Business Segment" label in `ApprovalDocument.tsx`
   and `MySubmissions.tsx`'s detail views is still HARDCODED, unlike the upload forms.** Client's own
   words: *"I notice that the label is not dynamic such as the one showing in ApprovalDocument.aspx or
@@ -9688,3 +9700,190 @@ was the right call.
   shipped bundles were grepped and carry `Replace Existing File` with **zero** occurrences of
   `Upload with the new name`, the accordion, `padding-right: 18px` on both upload forms, the new
   delete copy, and **zero** occurrences of `Access Audit`. **NOT yet site-tested.**
+
+## THE AUDIT LOG SHOWS A REAL TOTAL NOW, AND IT IS COUNTED (2026-09-04, 1.0.412.0)
+Client, on their pagination mockup's `Showing 1 to 5 of 235 events`: *"Add it, just follow what the
+mockup would want."* `countAudit` in `shared/spAuditLog.ts`.
+- **⚠ IT DOES NOT USE `ItemCount`, AND MUST NEVER BE CHANGED TO.** That aggregate is CACHED and lags
+  in both directions — it read **2,419 for a list whose view was empty** (2026-08-24) — and it cannot
+  answer a FILTERED question at all, which is what this line is about. A number known to be wrong, on
+  the one screen whose whole value is being trusted, is worse than no number; *"and more"* is what
+  stood there for a reason.
+- **⚠ NOR `$inlinecount` / `$count`** — SharePoint's list-item endpoint does not answer them reliably,
+  and a silently ignored query option returns a page shaped exactly like a working one. It walks
+  `$select=Id&$top=5000` pages and adds them up: **one extra request** per load for any result set
+  under 5,000, which is every ordinary filtered view. No `$orderby` — the rows are never rendered.
+- **THREE DISPLAY STATES, AND THEY MUST STAY APART.** A counted total; a **floor** (`25,000+`) when
+  the walk hits its five-page cap, because a floor presented as a total is precisely what this screen
+  must not do; and the original *"and more"* when the count could not be made. `undefined` is never
+  read as zero.
+- **Fails open and never throws.** The count runs in PARALLEL and is not awaited, so the rows never
+  wait on it, and a failed count costs the number and nothing else.
+- **⚠ THE QUERY IS BUILT ONCE AND SHARED with the row read.** Calling `currentQuery` twice would read
+  the same state twice, and with `overrides` in play (Reset, Refresh) the two can differ — giving a
+  total that describes a query nobody ran.
+- **THREE PAGE SIZES ARE NOW THE CLIENT'S OWN NUMBERS:** Audit Log 10, My Submissions 6, both
+  Requests lists 3 (*"The Approver page show 3 list card per dropdown as well"*). None is the shared
+  `PAGE_SIZE` default of 20 — these rows are several lines tall.
+- **⚠ SWITCHING A TAB ON MY SUBMISSIONS RESETS EVERY LIST TO PAGE 1** (`goTab`), because **the five
+  status tabs share one page key** — they are one list under five filters, so leaving page 2 set
+  carried it from All into Pending, where the reader has no idea they are looking at the middle of a
+  list they just opened. Clears EVERY key, not just the departing one, or the arriving tab is
+  wherever it was last and the surprise simply moves.
+- **Verified**: `tsc` clean, lint clean of new warnings, **1655/0**, and the shipped bundles grepped
+  for the count URL, `toLocaleString`, the size-3 pager and the tab reset. **NOT site-tested.**
+
+## THE APPROVER'S SCREEN NO LONGER CALLS EVERY SEGMENT A "BUSINESS SEGMENT" (2026-09-04, 1.0.413.0)
+Client, 2026-09-02: *"I notice that the label is not dynamic such as the one showing in
+ApprovalDocument.aspx or My Submission… in the future they might be different structure naming so it
+needs to be updated as well."* Built for `ApprovalDocument.tsx` first, on their instruction.
+- **⚠ THE DOCUMENT'S OWN FIELDS CANNOT ANSWER WHICH FAMILY IT IS.** Both categories write the SAME
+  physical column, `Business_x0020_Segment` — there is no separate Project column — so the value
+  reads `Group-led Projects` either way and nothing on the item distinguishes them. **Only the mode
+  row's `Category` knows**, which is why this rides along with the tier-count read the approval guard
+  already makes.
+- **Keyed on the segment FOLDER (`StagingFolder`), derived from the PATH**, not from the metadata —
+  the same key the guard uses, and one a segment LABEL rename cannot break.
+- **⚠ `Category` IS ASKED FOR WITH A 400 RETRY, AND THAT IS NOT OPTIONAL.** One unknown field name
+  fails the WHOLE request (gotcha #11), and **that request is what gates Approve** — so on a site
+  whose mode rows predate `SegmentCreator` (which creates the column) asking unconditionally would
+  **refuse every approval, to relabel one row.** Retried on **400 only**: a 404 is the config list
+  missing and a 403 is permissions on it, and retrying either asks the same unanswerable question
+  twice while hiding the real status.
+- **UNKNOWN READS AS `Business Segment`**, never a blank label — right for twelve of the thirteen
+  segments, and it is exactly what the row said before this existed. `segmentSides` stays `undefined`
+  rather than `{}` when the column was absent: two different facts.
+- **The wording matches the upload form VERBATIM** (`Group-led Project`, hyphenated, settled
+  2026-09-04) and uses the same `Category === "Project"` rule as `Form.tsx:1155`, so the label an
+  approver reads can never disagree with the one the uploader filed it under.
+- **✅ `MySubmissions.tsx` FOLLOWED THE SAME DAY (1.0.414.0).** `tierRows`/`buildDetailRows` in
+  `shared/documentDetails.ts` take an OPTIONAL `segmentLabel`; omitted keeps `Business Segment`, so
+  every other caller is unchanged. The family is keyed on `folderTrail(...)[0]` — that helper has
+  already stripped every library segment, so element 0 IS the `StagingFolder`. **Its own effect**,
+  never folded into `load`: that function reads up to six libraries and IS the page, so a label
+  lookup must not sit on that path nor be able to reach the *"could not read your submissions"*
+  state. Two tests pin the rename and the fallback, because the column is
+  `Business_x0020_Segment` for a project too — **nothing in the data could catch a regression here.**
+- **THE WORDING IS `Group-Led Project`, CAPITALISED, EVERYWHERE (client, 2026-09-04, 1.0.415.0).**
+  It has now been settled TWICE in two days — `Group Led Project` → `Group-led Project` → this — so
+  do not "correct" the capital L. Five user-facing strings, and they must move together: the *Upload
+  to* radio and the saved-set card in `Form.tsx`, Bulk Upload's radio, and the detail-panel labels on
+  the approver's screen and My Submissions. Segment Creator's *Appears under* radio, which read
+  `Group Project`, moved with them.
+- **⚠⚠ THE STORED `Category` VALUE STAYS THE LITERAL `Project`, AND RENAMING IT BREAKS THE FEATURE
+  SILENTLY.** Every consumer tests `Category === "Project"` — the upload form's own tab
+  (`Form.tsx:1155`) and both detail-panel labels. Edit that cell in `CRS Config` to match the new
+  wording and the comparison stops matching: **the segment moves under the Business Segment tab and
+  both panels revert to saying "Business Segment"**, with nothing erroring and nothing logged. The
+  client asked directly whether to rename it; the warning now sits at `SegmentCreator.tsx` beside the
+  radio, which is where somebody about to do it will be looking.
+- **⚠ AND THE OTHER "PROJECT" IS A DIFFERENT THING ENTIRELY.** `ProjectName` is the FREE-TEXT
+  per-document field that forms part of `[Project] - [Vendor] - [Name] - [Date]` — nothing to do with
+  the segment family. That collision is why the Group-led tier column was renamed `GroupProjectName`
+  on 2026-07-28, and why a tier must never be named *"Project Name"*: `columnNameFor` derives
+  `ProjectName`, `ensureTextColumn` SKIPS a column that already exists **whatever its type**, and the
+  tier would bind silently to the free-text field with two writers in one column. Client's own words,
+  2026-09-04: *"we got another column call Project Name which is to fill in the file details."*
+- **⚠ STILL OPEN, SAME LABEL, ONE SCREEN:** `DocumentSearch.tsx:1395`'s *"Business segment"* filter.
+  It derives its TIERS correctly; only this word is wrong. Harder than the other two — a search
+  filter spans EVERY segment at once, so there is no single family to name it by until a segment is
+  chosen.
+- **⚠ AND THE BIGGER DEFECT IN THIS FILE IS UNTOUCHED: the metadata list still hardcodes
+  `Department` and `Unit`.** On **Upstream Ops** (Region / Estate·Mill) or **SDGI** (Refinery /
+  Department) those rows come back blank and the segment's REAL tiers are not shown at all — on the
+  screen where an approver decides which unit they are publishing into. `shared/documentDetails.ts`
+  already solves this by deriving tiers from their `Tid` twins (My Submissions uses it); this file
+  keeps a hand-copied list. Deliberately deferred: it touches the most site-verified screen in the
+  project days before a demo.
+- **Verified**: `tsc` clean, `eslint` clean, **1655/0**, shipped bundle grepped for `Group-led
+  Project` and both `$select` variants. **NOT site-tested** — the test is one approval on a
+  Group-led Project document, and one on GHO to confirm nothing else moved.
+
+
+## KEYWORD SEARCH WAS INERT ON THE APPROVED SIDE — ONE MISSING ARRAY ENTRY (2026-09-05, 1.0.416.0)
+Client filed a document with the keyword `2X`, searched `2X`, and got *"No documents matched"* — while
+the library view showed the value plainly in the `Keyword` column.
+- **THE CAUSE IS ONE OMISSION: `TEXT_COLUMNS` NEVER NAMED `Keyword`.** That array is what a typed word
+  is compared against beyond filename and file contents (`ProjectName`, `Vendor/CustomerName`,
+  `Remark`), and `kqlWordClause` builds an OR from it. So on the two Documents and two Archive
+  libraries — the KQL half — nothing ever looked at the field.
+- **⚠ EVERY OTHER PART WAS CORRECT, WHICH IS WHY IT LOOKED LIKE A DATA PROBLEM.** Reconciliation had
+  created the column on all six libraries (verified by REST), both upload forms wrote it, and the
+  value was visible in the view. The one list that decides what a word is compared against was the
+  only thing missing, and it names no library and throws no error.
+- **⚠ THE TWO HALVES OF THAT PAGE FAIL DIFFERENTLY, AND THAT IS THE REAL LESSON.** The approval
+  libraries go through REST, where `buildListFilter` has covered `Keyword` since the day it was added
+  — so searching a keyword on a PENDING document worked and only the APPROVED side was blind. **A
+  feature that works for the file you just uploaded and stops the moment it is approved is the
+  hardest kind to report**, and both halves must be tested whenever this page changes.
+- **Adding a column there cannot break an existing search**: each clause sits in an OR with the bare
+  term, and a KQL clause naming a nonexistent property matches nothing rather than erroring. That same
+  forgiveness is what hides the `<Name>OWSTEXT` caveat below.
+- **⚠ STILL GATED ON THE UNVERIFIED MANAGED PROPERTY.** `managedProperty` assumes SharePoint
+  auto-creates a queryable `KeywordOWSTEXT`, and that assumption was verified NOT to hold on this
+  tenant for the tier columns on 2026-08-23. **If `2X` still returns nothing after 1.0.416.0, the fix
+  is Site Settings -> Search Schema -> map `ows_Keyword` to a `RefinableString`, then re-index** —
+  asynchronous, hours, and a site-collection admin can do it without tenant access.
+- Pinned by a test asserting `KeywordOWSTEXT:<word>*` is emitted.
+
+## MY SUBMISSIONS' "All" TAB COUNTED LIVE ROWS AND LISTED EVERY ROW (2026-09-05, 1.0.416.0)
+The tab read **All (14)** above a pager reading **44 documents**. `counts` comes from
+`countByStatus(liveRowsOnly(rows))` — right for Pending/Approved/Rejected, since a destroyed or
+archived document has no approval outcome — while the All tab deliberately renders
+`filterByTab(rows, "All")`, every row included. `All` now comes from the same expression the tab
+renders.
+- **⚠ THE MISMATCH IS OLDER THAN THE PAGER; THE PAGER ONLY MADE IT VISIBLE.** Until 2026-09-04 the tab
+  was the only number on screen and nothing contradicted it. **A control that states a total is worth
+  more than the total** — it turns an invisible disagreement into a reported one.
+- It is CORRECT for `All` to exceed Pending + Approved + Rejected. Those three are approval outcomes;
+  deleted, replaced, archived and unchecked records legitimately have none.
+
+
+## THE 8-HOUR `Created` SKEW ON BOTH ROUTING FLOWS IS FIXED (2026-09-05)
+Recorded here because Power Automate is not in source control and this file is its only record.
+- **MEASURED, NOT INFERRED.** A document uploaded minutes earlier read `Created 2026-09-05T02:48:00Z`
+  against `Modified 2026-09-05T10:49:35Z` — **exactly 8 hours**, on a site whose Regional Settings
+  read `(UTC+08:00) Kuala Lumpur, Singapore` (verified on the settings page, not assumed).
+- **THE MECHANISM:** the stamp read
+  `formatDateTime(body('Get_item')?['Created'],'M/d/yyyy h:mm tt')`. `Get_item` answers in **UTC**,
+  `formatDateTime` converts nothing, and `validateUpdateListItem` parses the result in the **SITE'S**
+  timezone — so a UTC value is read as local and stored 8 hours early. `10:48Z` rendered as
+  `10:48 AM`, parsed as `10:48 +08`, stored `02:48Z`. The arithmetic closes exactly.
+- **THE FIX, applied to `Auto-route` AND `HC Auto Route`:**
+  `@{formatDateTime(convertFromUtc(body('Get_item')?['Created'], 'Singapore Standard Time'), 'M/d/yyyy h:mm tt')}`
+  Only that value changed; `Author` and `Editor` are claims strings and were not touched.
+- **⚠ IT REPAIRS NOTHING ALREADY FILED.** Every document routed before this keeps its 8-hour-early
+  stamp, and there is no sweep. Three surfaces read `Created`: My Submissions SORTS by it, CRS Search
+  now DISPLAYS it (1.0.420.0), and anything uploaded before 08:00 local lands on the previous DAY.
+- **⚠ A SITE IN ANOTHER TIMEZONE NEEDS ANOTHER STRING.** `'Singapore Standard Time'` is correct for
+  both current sites; check Regional Settings before deploying either flow anywhere else, because the
+  wrong zone over-corrects just as silently as no conversion under-corrects.
+
+## SEARCH RESULTS SHOWED THE FILE'S OWN DATE, NOT THE DOCUMENT'S (2026-09-05, 1.0.420.0)
+A result row read `01/Oct/2024` for a file uploaded minutes earlier.
+- **⚠ NO SEARCH PROPERTY RETURNS THE ITEM'S `Modified`.** Both `LastModifiedTime` AND `Write` came
+  back `2024-10-01T06:12:13Z` while SharePoint's own `Modified` for that item was
+  `2026-09-05T10:49:35Z`. **The tell: six different documents shared that timestamp to the second** —
+  they are re-uploads of one test PDF, so the index is carrying the FILE'S embedded date.
+- **So both engines now show `Created`** — when the document was FILED, which is the more useful
+  answer for a document search and matches what My Submissions labels *Uploaded*. The REST half kept
+  `Modified` in its `$select` because `$orderby` still uses it.
+- **⚠ THE TWO HALVES MUST SHOW THE SAME KIND OF DATE.** KQL hits rendered `LastModifiedTime` and REST
+  hits the item's `Modified`, so one result list mixed two meanings — and only the KQL half was
+  visibly wrong, which is why it read as a stale index rather than a wrong field.
+
+## KEYWORD SEARCH IS PROVEN END TO END — THE INDEX, NOT THE CODE, IS BEHIND (2026-09-05)
+- **`Chucky` PROVES THE WHOLE CHAIN.** That word is in no filename and no file content — only the
+  `Keyword` column — and searching it returned the document. So the column is written, the value
+  reaches the index, the bare term matches it and the row renders.
+- **⚠ IT MATCHES THROUGH THE FULL-TEXT INDEX, NOT A MANAGED PROPERTY.** `KeywordOWSTEXT` is `null` on
+  every row and `KeywordOWSTEXT:2X*` returns zero, yet the bare term works — SharePoint indexes text
+  column VALUES whether or not a queryable property exists. **So no Search Schema work is needed**,
+  and the `<Name>OWSTEXT` clauses sit harmlessly in an OR, starting to work for free if those
+  properties are ever mapped.
+- **THE REAL GAP IS COVERAGE: 23 documents indexed against a library holding 264 items.** A keyword on
+  an unindexed document cannot be found by any means. The lever is **Library settings → Advanced →
+  Reindex Document Library**, with the reason **"Library content is missing from search results"** —
+  the permissions reason queues an ACL-only re-crawl that does not help. It marks items for the NEXT
+  SCHEDULED crawl; it does not run on demand.
+- **Progress is measured by the COUNT climbing past 23, never by whether one file appears.**

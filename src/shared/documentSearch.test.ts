@@ -189,6 +189,14 @@ describe("buildKql", () => {
     expect(q).toContain("RemarkOWSTEXT:tax*");
   });
 
+  /* Pinned because its absence was invisible from every side: the column existed on all six
+     libraries, both upload forms wrote it, and only the APPROVED half of the page was blind (the
+     REST half has covered Keyword since it was added). Found live 2026-09-05 — a document filed
+     with the keyword `2X` was not returned by a search for `2X`. */
+  it("matches a word against Keyword — the whole point of that field", () => {
+    expect(buildKql(criteria({ text: "tax" }), scope)).toContain("KeywordOWSTEXT:tax*");
+  });
+
   it("ANDs multiple words as separate clauses", () => {
     const q = buildKql(criteria({ text: "tax return" }), scope);
     expect(q).toContain("(tax* OR");

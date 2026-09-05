@@ -527,13 +527,21 @@ export default function GroupMembersEditor({
       {members === undefined && !failed && (
         <p style={s.hint}>Loading members&hellip;</p>
       )}
-      {failed && (
-        <p style={s.err}>
-          Could not read this group&apos;s members — so this is{" "}
-          <strong>not</strong> a statement that nobody is in it. Adding someone
-          still works.
-        </p>
-      )}
+      {/* ⚠ THE FAILED-READ MESSAGE IS GONE (client, 2026-09-04: *"if it sthere pls remove it"*), and
+          `failed` IS STILL USED — by the loading guard directly above. Without that `!failed`, a read
+          that fails would sit on *"Loading members…"* for ever, which is a worse lie than the sentence
+          just removed.
+
+          ⚠ REMOVING IT IS SAFE ONLY BECAUSE THE THREE STATES STILL RENDER DIFFERENTLY, which is the
+          whole reason the block existed. The rule behind it: an admin told a group is EMPTY stops
+          looking for the person they came for, and on this page then adds a second copy of somebody
+          already in it. After this change:
+            • empty group  -> "Nobody is in this group yet."
+            • failed read  -> nothing at all
+          So a failure is now SILENT rather than MISLABELLED. It never claims the group is empty, which
+          is the property that mattered; what is lost is that an admin must infer it from a blank panel
+          instead of being told. If duplicate adds ever start appearing, this is where the warning was,
+          and it is one block to restore. */}
       {members !== undefined && members.length === 0 && (
         <p style={s.hint}>
           Nobody is in this group yet. Its folder permissions exist and apply

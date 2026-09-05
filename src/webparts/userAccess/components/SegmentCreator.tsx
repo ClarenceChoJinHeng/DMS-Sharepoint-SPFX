@@ -1204,7 +1204,7 @@ export default function SegmentCreator({
           style={conflicts.label ? { ...s.input, ...s.inputBad } : s.input}
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder={family === "Project" ? "Group Led Project" : "Upstream Operations"}
+          placeholder={family === "Project" ? "Group-Led Project" : "Upstream Operations"}
         />
         {conflicts.label ? <div style={s.fieldErr}>{conflicts.label}</div> : undefined}
         <div style={s.hint}>
@@ -1222,10 +1222,14 @@ export default function SegmentCreator({
               onChange={() => setFamily(f)}
               style={{ marginRight: 6 }}
             />
-            {/* LABEL only. The stored `Category` value stays `Project` — it is data that the
-                upload form and reconciliation read, and renaming it would orphan every existing
-                project segment. */}
-            {f === "BusinessSegment" ? "Business Segment" : "Group Project"}
+            {/* ⚠ LABEL ONLY, AND THE STORED `Category` VALUE STAYS THE LITERAL `Project`.
+                Every consumer tests `Category === "Project"` — the upload form's own tab
+                (`Form.tsx`), and the detail-panel labels on the approver's screen and My
+                Submissions. Edit that cell in CRS Config to match this wording and the comparison
+                stops matching: the segment moves under the Business Segment tab and both panels
+                revert to saying "Business Segment", with nothing erroring and nothing logged.
+                Wording is the client's, settled 2026-09-04: "Group-Led Project", capitalised. */}
+            {f === "BusinessSegment" ? "Business Segment" : "Group-Led Project"}
           </label>
         ))}
 

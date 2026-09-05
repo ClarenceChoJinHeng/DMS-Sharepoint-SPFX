@@ -196,6 +196,7 @@ export function memberCountLabel(load: MemberLoad): string {
   if (load.state === "loading") return "loading…";
   if (load.state === "error") return "could not read members";
   const n = load.members.length;
-  if (n === 0) return "no members";
+  // Capitalised (client, 2026-09-04). It is a standalone label in its own cell, not mid-sentence.
+  if (n === 0) return "No members";
   return `${n} member${n === 1 ? "" : "s"}`;
 }

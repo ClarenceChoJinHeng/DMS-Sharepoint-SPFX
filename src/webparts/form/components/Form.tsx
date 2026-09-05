@@ -1,9 +1,22 @@
 import * as React from "react";
-import { UPLOAD_PAUSE_SETTING, UPLOAD_PAUSE_MESSAGE, uploadsArePaused } from "../../../shared/uploadPause";
-import { libraryHasColumns, REF_COLUMNS, SUBMISSION_FILE_COLUMN, APPROVED_BY_COLUMN, KEYWORD_COLUMN } from "../../../shared/optionalColumns";
+import {
+  UPLOAD_PAUSE_SETTING,
+  UPLOAD_PAUSE_MESSAGE,
+  uploadsArePaused,
+} from "../../../shared/uploadPause";
+import {
+  libraryHasColumns,
+  REF_COLUMNS,
+  SUBMISSION_FILE_COLUMN,
+  APPROVED_BY_COLUMN,
+  KEYWORD_COLUMN,
+} from "../../../shared/optionalColumns";
 // Records the upload so My Submissions can still show the file after it is deleted (2026-08-27).
 // Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md
-import { writeSubmissionRecord, markRecordReplaced } from "../../../shared/spSubmissionRecords";
+import {
+  writeSubmissionRecord,
+  markRecordReplaced,
+} from "../../../shared/spSubmissionRecords";
 import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFormProps } from "./IFormProps";
@@ -21,7 +34,10 @@ import {
 import { shouldAttemptSelfApprove } from "../../../shared/selfApprove";
 import { isSystemAdmin } from "../../../shared/spGroups";
 import { friendlyUploadError } from "../../../shared/networkErrors";
-import { stripBlockedChars, blockedCharsMessage } from "../../../shared/inputSanitize";
+import {
+  stripBlockedChars,
+  blockedCharsMessage,
+} from "../../../shared/inputSanitize";
 // Highly Confidential routing. Every rule lives in the shared module under test, because each has a
 // wrong version that looks identical on screen: the file uploads, the toast is green, and the
 // mistake surfaces when the wrong person opens the document weeks later.
@@ -143,7 +159,10 @@ import {
   readAllowedFileTypesField,
   resolveAllowedFileTypes,
 } from "../../../shared/allowedFileTypes";
-import { NOTICE_ATTENTION, NOTICE_ATTENTION_CSS } from "../../../shared/noticeStyles";
+import {
+  NOTICE_ATTENTION,
+  NOTICE_ATTENTION_CSS,
+} from "../../../shared/noticeStyles";
 
 /* ----------------------------------------------------------------------------
  * CONFIG — hardcoded values are fallbacks only; live values load from DMS Config SP list
@@ -153,7 +172,7 @@ const FIELDS = {
   // Document Type column — internal name Document_x0020_Type (migrated from the old
   // frozen "Department_x0020_Type"; see 2026-07-24-document-type-internal-name-migration-design).
   documentType: "Document_x0020_Type",
-  yearPeriod: "Year",            // site column internal name (client kept plain "Year")
+  yearPeriod: "Year", // site column internal name (client kept plain "Year")
   documentDate: "DocumentDate",
   confidentiality: "Confidentiality_x0020_Level",
   // "Vendor/CustomerName" — the "/" encodes to _x002f_ in the internal name.
@@ -182,7 +201,10 @@ const FIELDS = {
 // level), so it must stay here. Add the other segments' verified names too if
 // you want them to work from the offline DEFAULT_MODES fallback.
 const LEVEL_COLUMNS: Record<string, ColumnPair> = {
-  BusinessSegment: { label: "Business_x0020_Segment", tid: "BusinessSegmentTid" },
+  BusinessSegment: {
+    label: "Business_x0020_Segment",
+    tid: "BusinessSegmentTid",
+  },
   Department: { label: "Department", tid: "DepartmentTid" },
   Unit: { label: "Unit", tid: "UnitTid" },
 };
@@ -227,7 +249,20 @@ const buildUploadName = (originalName: string, typed: string): string => {
  * numeric day/month is read the other way round by half the audience, and this string exists to be
  * glanced at. Display only - nothing parses it back.
  */
-const STAGE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const STAGE_MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 const stagedAtLabel = (ms: number | undefined): string => {
   if (!ms) return "";
   const d = new Date(ms);
@@ -580,7 +615,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   // failure produced that same empty list, a transient error would file a document one tier
   // too shallow, into a folder that exists and looks right. Failures stay unresolved and
   // block the upload instead.
-  const [childCache, setChildCache] = useState<Record<string, { terms: TermOption[]; ok: boolean }>>({});
+  const [childCache, setChildCache] = useState<
+    Record<string, { terms: TermOption[]; ok: boolean }>
+  >({});
   const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [vendor, setVendor] = useState<string>("");
@@ -635,7 +672,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [showErrors, setShowErrors] = useState<boolean>(false);
   const [draftFiles, setDraftFiles] = useState<StagedFile[]>([]);
   const [activeFileId, setActiveFileId] = useState<string>("");
-  const [lastRun, setLastRun] = useState<{ ok: number; failed: number } | undefined>(undefined);
+  const [lastRun, setLastRun] = useState<
+    { ok: number; failed: number } | undefined
+  >(undefined);
   // Which staged files failed the last save attempt. Held so the ROWS can say so — a list of every
   // missing field of every file belongs on the rows, not in one toast.
   const [incompleteIds, setIncompleteIds] = useState<string[]>([]);
@@ -709,7 +748,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   /** The deepest permissioned selection — the Unit, in every configured segment so far. */
   const permissionedLeafTerm = (): string => {
     const perm = activeMode()?.levels ?? [];
-    return perm.length > 0 ? levelValues[perm.length - 1] ?? "" : "";
+    return perm.length > 0 ? (levelValues[perm.length - 1] ?? "") : "";
   };
 
   /* ---------- Highly Confidential clearance -------------------------------
@@ -731,9 +770,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   useEffect(() => {
     let live = true;
     primeNames(context.spHttpClient, siteUrl)
-      .then(() => { if (live) setHcReady(hcAvailable()); })
+      .then(() => {
+        if (live) setHcReady(hcAvailable());
+      })
       .catch(() => undefined);
-    return () => { live = false; };
+    return () => {
+      live = false;
+    };
   }, [context.spHttpClient, siteUrl]);
   /* Attempts per leaf, not a boolean. A single flag stranded a unit for the life of the page the
      moment ANY step bailed — see the effect below for why that reads to the uploader as "you are not
@@ -743,7 +786,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      re-render trigger on 2026-08-22 and Bulk did not, so the Highly Confidential level appeared
      intermittently on one and for the wrong reason on the other. One implementation now. */
   const hcWrite = useHcClearance(
-    context.spHttpClient, siteUrl, permissionedLeafTerm(), hcReady,
+    context.spHttpClient,
+    siteUrl,
+    permissionedLeafTerm(),
+    hcReady,
   );
 
   /**
@@ -778,7 +824,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * Those must block the upload: treating "unknown" as "does not apply" would quietly
    * file the document a level too shallow.
    */
-  const tierPlan = (): { tiers: Level[]; parents: string[]; unresolved: string[] } => {
+  const tierPlan = (): {
+    tiers: Level[];
+    parents: string[];
+    unresolved: string[];
+  } => {
     const tiers: Level[] = [];
     const parents: string[] = [];
     const unresolved: string[] = [];
@@ -799,7 +849,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // blank and already required, so the upload is blocked by that instead.
       if (!parent) continue;
       const entry = childCache[parent.trim().toLowerCase()];
-      const decision = decideTier(t, entry !== undefined && entry.ok ? entry.terms.length : undefined);
+      const decision = decideTier(
+        t,
+        entry !== undefined && entry.ok ? entry.terms.length : undefined,
+      );
       if (decision === "skip") continue;
       tiers.push(t);
       parents.push(parent);
@@ -818,7 +871,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const set = (t.termSet ?? "").trim().toLowerCase();
     if (set) return termCache[set] ?? [];
     const key = parent.trim().toLowerCase();
-    return key ? childCache[key]?.terms ?? [] : [];
+    return key ? (childCache[key]?.terms ?? []) : [];
   };
 
   /**
@@ -887,7 +940,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     return () => {
       cancelled = true;
     };
-  }, [uploadMode, modes, settings.termSets.yearPeriod, settings.termSets.documentType]);
+  }, [
+    uploadMode,
+    modes,
+    settings.termSets.yearPeriod,
+    settings.termSets.documentType,
+  ]);
 
   const loadTermChildrenRef = useRef<
     ((termSetId: string, termId: string) => Promise<TermOption[]>) | undefined
@@ -918,7 +976,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         // ok:false on failure, NOT an empty list. An empty list is a real answer that
         // skips the tier, so a failure recorded as empty would silently shorten the path.
         try {
-          loaded[parent.toLowerCase()] = { terms: await load(md.termSetGuid, parent), ok: true };
+          loaded[parent.toLowerCase()] = {
+            terms: await load(md.termSetGuid, parent),
+            ok: true,
+          };
         } catch {
           loaded[parent.toLowerCase()] = { terms: [], ok: false };
         }
@@ -1028,7 +1089,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (!res.ok) return undefined;
-      const rows = ((await res.json()).value ?? []) as Array<{ Levels?: string }>;
+      const rows = ((await res.json()).value ?? []) as Array<{
+        Levels?: string;
+      }>;
       if (rows.length === 0) return undefined;
       const parsed = parseLevels(rows[0].Levels ?? "");
       return parsed.length > 0 ? parsed : undefined;
@@ -1058,7 +1121,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (!res.ok) return false;
-      const rows = ((await res.json()).value ?? []) as Array<{ SettingValue?: string }>;
+      const rows = ((await res.json()).value ?? []) as Array<{
+        SettingValue?: string;
+      }>;
       return rows.length > 0 && uploadsArePaused(rows[0].SettingValue);
     } catch {
       return false;
@@ -1072,7 +1137,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
-    if (!res.ok) throw new Error(`${decodeURIComponent(config)} list not found`);
+    if (!res.ok)
+      throw new Error(`${decodeURIComponent(config)} list not found`);
     const data = await res.json();
     return (data.value ?? []).map(
       (item: {
@@ -1106,7 +1172,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
-    if (!res.ok) throw new Error(`${decodeURIComponent(groupMap)} list not found`);
+    if (!res.ok)
+      throw new Error(`${decodeURIComponent(groupMap)} list not found`);
     const data = await res.json();
     return (data.value ?? []).map(
       (r: {
@@ -1189,20 +1256,28 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           DEFAULT_SETTINGS.termSets.confidentiality,
       },
       columns: {
-        documentType: get("col_documentType") ?? DEFAULT_SETTINGS.columns.documentType,
-        yearPeriod: get("col_yearPeriod") ?? DEFAULT_SETTINGS.columns.yearPeriod,
-        documentDate: get("col_documentDate") ?? DEFAULT_SETTINGS.columns.documentDate,
+        documentType:
+          get("col_documentType") ?? DEFAULT_SETTINGS.columns.documentType,
+        yearPeriod:
+          get("col_yearPeriod") ?? DEFAULT_SETTINGS.columns.yearPeriod,
+        documentDate:
+          get("col_documentDate") ?? DEFAULT_SETTINGS.columns.documentDate,
         confidentiality:
-          get("col_confidentiality") ?? DEFAULT_SETTINGS.columns.confidentiality,
+          get("col_confidentiality") ??
+          DEFAULT_SETTINGS.columns.confidentiality,
         vendor: get("col_vendor") ?? DEFAULT_SETTINGS.columns.vendor,
-        projectName: get("col_projectName") ?? DEFAULT_SETTINGS.columns.projectName,
+        projectName:
+          get("col_projectName") ?? DEFAULT_SETTINGS.columns.projectName,
         remark: get("col_remark") ?? DEFAULT_SETTINGS.columns.remark,
         legallyPrivileged:
-          get("col_legallyPrivileged") ?? DEFAULT_SETTINGS.columns.legallyPrivileged,
+          get("col_legallyPrivileged") ??
+          DEFAULT_SETTINGS.columns.legallyPrivileged,
         businessSegmentLabel:
-          get("col_businessSegment") ?? DEFAULT_SETTINGS.columns.businessSegmentLabel,
+          get("col_businessSegment") ??
+          DEFAULT_SETTINGS.columns.businessSegmentLabel,
         businessSegmentTid:
-          get("col_businessSegmentTid") ?? DEFAULT_SETTINGS.columns.businessSegmentTid,
+          get("col_businessSegmentTid") ??
+          DEFAULT_SETTINGS.columns.businessSegmentTid,
       },
       // The library's LIVE title wins over the config row. That row predates the rename and
       // still reads "Staging" on a migrated site, which now 404s — honouring it would break
@@ -1210,12 +1285,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // some other name still wins; only the stale legacy literal is ignored.
       stagingLibrary: ((): string => {
         const configured = (get("stagingLibrary") ?? "").trim();
-        return configured.length > 0 && configured !== "Staging" ? configured : libraryTitle();
+        return configured.length > 0 && configured !== "Staging"
+          ? configured
+          : libraryTitle();
       })(),
       legallyPrivilegedFor:
         get("legallyPrivilegedFor") ?? DEFAULT_SETTINGS.legallyPrivilegedFor,
       hcConfidentialityLevel:
-        get("hcConfidentialityLevel") ?? DEFAULT_SETTINGS.hcConfidentialityLevel,
+        get("hcConfidentialityLevel") ??
+        DEFAULT_SETTINGS.hcConfidentialityLevel,
       autoApproveOwnUpload:
         get("autoApproveOwnUpload") ?? DEFAULT_SETTINGS.autoApproveOwnUpload,
       // SettingValue is deliberately NOT consulted for file types any more —
@@ -1239,12 +1317,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       );
       if (!res.ok) return [];
       const d = await res.json();
-      return ((d.value ?? []) as Array<{ Id?: number }>)
-        // Both branches spelled out. `!= null` meant "neither null nor undefined" — correct,
-        // but invisible, and "fixing" it to `!== null` would let undefined through and turn a
-        // missing id into the string "undefined".
-        .map((g) => (g.Id !== null && g.Id !== undefined ? String(g.Id) : ""))
-        .filter(Boolean);
+      return (
+        ((d.value ?? []) as Array<{ Id?: number }>)
+          // Both branches spelled out. `!= null` meant "neither null nor undefined" — correct,
+          // but invisible, and "fixing" it to `!== null` would let undefined through and turn a
+          // missing id into the string "undefined".
+          .map((g) => (g.Id !== null && g.Id !== undefined ? String(g.Id) : ""))
+          .filter(Boolean)
+      );
     } catch {
       return [];
     }
@@ -1302,7 +1382,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       const chain = await loadTermPath(mode.termSetGuid, leaf.termGuid).catch(
         () => [] as TermOption[],
       );
-      if (!isLeafChainValid(chain.map((c) => c.id), leaf.termGuid)) continue;
+      if (
+        !isLeafChainValid(
+          chain.map((c) => c.id),
+          leaf.termGuid,
+        )
+      )
+        continue;
 
       // A row on a NON-LEAF term (a department) authorises every unit beneath it —
       // the upload-side mirror of reconciliation's departmental fan-out. Without
@@ -1370,7 +1456,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         }
       }
       choices[i] = opts;
-      if (opts.length === 1) values[i] = opts[0].id; // auto-lock
+      if (opts.length === 1)
+        values[i] = opts[0].id; // auto-lock
       else {
         const prior = current[i] ?? "";
         values[i] = opts.some((o) => o.id === prior) ? prior : "";
@@ -1405,43 +1492,43 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         admin,
         folderMapRows,
       ] = await Promise.all([
-          // Log the real failure. A silent fallback here is indistinguishable from
-          // success and cost four rounds of diagnosis on 2026-07-30. Gotcha #9.
-          loadSettings().catch((err) => {
-            console.error(
-              "CRS Config settings read failed — using built-in defaults.",
-              err,
-            );
-            return DEFAULT_SETTINGS;
-          }),
-          loadModes().catch((err) => {
-            console.error(
-              "CRS Config mode rows read failed — using built-in modes.",
-              err,
-            );
-            return DEFAULT_MODES;
-          }),
-          loadGroupMap().catch((err) => {
-            console.error(
-              "CRS Group Map read failed — no authorised upload paths.",
-              err,
-            );
-            return [] as GroupMapRow[];
-          }),
-          loadUserGroupIds(),
-          loadIsAdmin(),
-          // Which folders EXIST. `null` on failure means "unknown", and unknown must
-          // offer everything — an unreadable list proves nothing, and silently
-          // emptying every dropdown takes the form down for the whole site. Same rule
-          // as the stale-chain guard and AllowedFileTypes: empty is not unknown.
-          loadFolderMapRows(context.spHttpClient, siteUrl).catch((err) => {
-            console.error(
-              "CRS Folder Map read failed — cannot tell which folders exist, so every authorised path will be offered.",
-              err,
-            );
-            return null as FolderMapRow[] | null;
-          }),
-        ]);
+        // Log the real failure. A silent fallback here is indistinguishable from
+        // success and cost four rounds of diagnosis on 2026-07-30. Gotcha #9.
+        loadSettings().catch((err) => {
+          console.error(
+            "CRS Config settings read failed — using built-in defaults.",
+            err,
+          );
+          return DEFAULT_SETTINGS;
+        }),
+        loadModes().catch((err) => {
+          console.error(
+            "CRS Config mode rows read failed — using built-in modes.",
+            err,
+          );
+          return DEFAULT_MODES;
+        }),
+        loadGroupMap().catch((err) => {
+          console.error(
+            "CRS Group Map read failed — no authorised upload paths.",
+            err,
+          );
+          return [] as GroupMapRow[];
+        }),
+        loadUserGroupIds(),
+        loadIsAdmin(),
+        // Which folders EXIST. `null` on failure means "unknown", and unknown must
+        // offer everything — an unreadable list proves nothing, and silently
+        // emptying every dropdown takes the form down for the whole site. Same rule
+        // as the stale-chain guard and AllowedFileTypes: empty is not unknown.
+        loadFolderMapRows(context.spHttpClient, siteUrl).catch((err) => {
+          console.error(
+            "CRS Folder Map read failed — cannot tell which folders exist, so every authorised path will be offered.",
+            err,
+          );
+          return null as FolderMapRow[] | null;
+        }),
+      ]);
       setSettings(loadedSettings);
       // Ignore config rows that predate the Side/Levels schema (empty Levels) —
       // fall back to the built-in modes so the form never renders a broken cascade.
@@ -1455,7 +1542,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // including the privileged branch below which resolves no paths — that branch is
       // exactly the one the marker exists for.
       setMapSections(
-        folderMapRows ? folderMapRows.map((r) => ({ section: r.section })) : null,
+        folderMapRows
+          ? folderMapRows.map((r) => ({ section: r.section }))
+          : null,
       );
 
       const membership = collectMembership(groupMap, userGroupIds);
@@ -1549,7 +1638,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             provisioned.paths.map(async (p): Promise<AccessVerdict> => {
               const leaf = p.chain[p.chain.length - 1];
               const row = (folderMapRows ?? []).find(
-                (r) => normalizeTermGuid(r.termGuid) === normalizeTermGuid(leaf?.id),
+                (r) =>
+                  normalizeTermGuid(r.termGuid) === normalizeTermGuid(leaf?.id),
               );
               if (!row?.folderUniqueId) return "missing";
               return probeFolderUploadAccess(
@@ -1644,7 +1734,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      STRIPPED, and the removal is ANNOUNCED. Silently dropping a character somebody typed is how a
      field comes to feel broken; `blockedChar` puts the offending character under the box while they
      still remember typing it. The note is cleared by the next clean keystroke. */
-  const [blockedChar, setBlockedChar] = useState<Record<string, string | undefined>>({});
+  const [blockedChar, setBlockedChar] = useState<
+    Record<string, string | undefined>
+  >({});
   const guard = (field: string, v: string, set: (x: string) => void): void => {
     const clean = stripBlockedChars(v);
     if (clean !== v) {
@@ -1654,7 +1746,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     }
     set(clean);
   };
-  const onProjectNameChange = (v: string): void => guard("projectName", v, setProjectName);
+  const onProjectNameChange = (v: string): void =>
+    guard("projectName", v, setProjectName);
   const onVendorChange = (v: string): void => guard("vendor", v, setVendor);
   const onDocumentDateChange = (iso: string): void => setDocumentDate(iso);
   const onDocNameChange = (v: string): void => guard("docName", v, setDocName);
@@ -1719,7 +1812,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const finalNameFor = (f: File, m: FileMeta): string =>
     buildUploadName(
       f.name,
-      composeUploadBase(m.projectName ?? "", m.vendor ?? "", m.docName ?? "", m.documentDate ?? ""),
+      composeUploadBase(
+        m.projectName ?? "",
+        m.vendor ?? "",
+        m.docName ?? "",
+        m.documentDate ?? "",
+      ),
     );
 
   /** Fold the editor back into the file it belongs to. Returns the updated list. */
@@ -1728,7 +1826,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const meta = captureEditor();
     return files.map((f) =>
       f.id === activeFileId
-        ? { ...f, typedName: meta.docName ?? "", meta, finalName: finalNameFor(f.file, meta) }
+        ? {
+            ...f,
+            typedName: meta.docName ?? "",
+            meta,
+            finalName: finalNameFor(f.file, meta),
+          }
         : f,
     );
   };
@@ -1749,7 +1852,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
   const stagedNow = stagedTotals([
     ...batches,
-    { id: "draft", segmentKey: "", chainSignature: "", pathLabels: [], destination: {}, files: draftFiles },
+    {
+      id: "draft",
+      segmentKey: "",
+      chainSignature: "",
+      pathLabels: [],
+      destination: {},
+      files: draftFiles,
+    },
   ]);
   /**
    * ⚠ ONLY FILES WHOSE NAME IS ACTUALLY SETTLED ARE JUDGED FOR A CLASH (client, 2026-08-26: *"it
@@ -1780,11 +1890,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const nameSettled = (sf: StagedFile): boolean => {
     const meta = sf.meta;
     return (
-      (meta.docName ?? "").trim().length > 0 && (meta.documentDate ?? "").length > 0
+      (meta.docName ?? "").trim().length > 0 &&
+      (meta.documentDate ?? "").length > 0
     );
   };
   const draftCollisions = collisionsWithin({
-    id: "draft", segmentKey: "", chainSignature: "", pathLabels: [], destination: {},
+    id: "draft",
+    segmentKey: "",
+    chainSignature: "",
+    pathLabels: [],
+    destination: {},
     files: commitEditor(draftFiles).filter(nameSettled),
   });
   const crossBatchDupes = duplicateAcrossBatches(batches);
@@ -1891,8 +2006,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const room = Math.max(0, MAX_FILES_PER_BATCH - acc.length);
     if (room === 0) {
       showToast(
-        `This batch already holds the maximum of ${MAX_FILES_PER_BATCH} documents. ` +
-          `Save it and add another batch for the rest.`,
+        `This set already holds the maximum of ${MAX_FILES_PER_BATCH} documents. ` +
+          `Save it and add another set for the rest.`,
         "error",
       );
       if (fileRef.current) fileRef.current.value = "";
@@ -1901,8 +2016,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (picked.length > room) {
       const left = picked.length - room;
       showToast(
-        `A batch holds at most ${MAX_FILES_PER_BATCH} documents — ${room} added, ` +
-          `${left} not added. Save this batch and add another for the rest.`,
+        `A set holds at most ${MAX_FILES_PER_BATCH} documents — ${room} added, ` +
+          `${left} not added. Save this set and add another for the rest.`,
         "error",
       );
       picked.length = room;
@@ -1928,7 +2043,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
        * restoring it later is a small change rather than a rewrite.
        */
       const meta: FileMeta = {};
-      lastAdded = { id: nextId("f"), file: f, typedName: "", meta, finalName: finalNameFor(f, meta) };
+      lastAdded = {
+        id: nextId("f"),
+        file: f,
+        typedName: "",
+        meta,
+        finalName: finalNameFor(f, meta),
+      };
       acc = [...acc, lastAdded];
     }
     setDraftFiles(acc);
@@ -2020,7 +2141,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       meta: { ...f.meta, remark },
     }));
     if (files.length === 0) {
-      showToast("Add at least one document to this batch.", "error");
+      showToast("Add at least one document to this set.", "error");
       return false;
     }
 
@@ -2038,7 +2159,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     (m?.levels ?? []).forEach((lvl, i) => {
       if (!levelValues[i]) destMissing.push(lvl.label);
     });
-    destMissing.push(...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing);
+    destMissing.push(
+      ...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing,
+    );
 
     const short = files.filter((sf) => missingForFile(sf).length > 0);
     if (destMissing.length > 0 || short.length > 0) {
@@ -2050,7 +2173,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         setActiveFileId(short[0].id);
       }
       const parts: string[] = [];
-      if (destMissing.length > 0) parts.push(`choose ${listPhrase(destMissing)}`);
+      if (destMissing.length > 0)
+        parts.push(`choose ${listPhrase(destMissing)}`);
       if (short.length > 0) {
         parts.push(
           short.length === files.length && files.length > 1
@@ -2063,8 +2187,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // to touch looked identical to the fields they had already filled in.
       setShowErrors(true);
       showToast(
-        `Before saving this batch, ${parts.join(" and ")}.` +
-          (short.length > 0 ? " The fields that need attention are marked in red below." : ""),
+        `Before saving this set, ${parts.join(" and ")}.` +
+          (short.length > 0
+            ? " The fields that need attention are marked in red below."
+            : ""),
         "error",
       );
       return false;
@@ -2082,7 +2208,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     for (const sf of files) {
       const fn = sf.finalName ?? sf.file.name;
       if (!allowed.types.some((ext) => fn.toLowerCase().endsWith(ext))) {
-        showToast(`${fn}: file type not allowed. Allowed: ${allowed.types.join(", ")}`, "error");
+        showToast(
+          `${fn}: file type not allowed. Allowed: ${allowed.types.join(", ")}`,
+          "error",
+        );
         return false;
       }
     }
@@ -2105,7 +2234,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (plan.unresolved.length > 0) {
       showToast(
         `Still checking ${plan.unresolved.join(" and ")} for this unit. ` +
-          `If this does not clear, reload the page before saving this batch.`,
+          `If this does not clear, reload the page before saving this set.`,
         "error",
       );
       return false;
@@ -2113,9 +2242,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const { segments } = buildOnDemandSegments(plan.tiers, tierSelections());
 
     const leafIdx = m.levels.length - 1;
-    const leafTerm = (levelChoices[leafIdx] ?? []).find((o) => o.id === levelValues[leafIdx]);
+    const leafTerm = (levelChoices[leafIdx] ?? []).find(
+      (o) => o.id === levelValues[leafIdx],
+    );
     if (!leafTerm) {
-      showToast("Please choose all folder levels before saving this batch.", "error");
+      showToast(
+        "Please choose all folder levels before saving this set.",
+        "error",
+      );
       return false;
     }
 
@@ -2151,7 +2285,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         tierFormValues.push({ FieldName: col, FieldValue: opt.label });
         tierFormValues.push({ FieldName: t.tidCol, FieldValue: opt.id });
       } else {
-        tierFormValues.push({ FieldName: col, FieldValue: toTaxValue(opts, id) });
+        tierFormValues.push({
+          FieldName: col,
+          FieldValue: toTaxValue(opts, id),
+        });
       }
     });
 
@@ -2167,7 +2304,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       id: nextId("b"),
       segmentKey: m.key,
       chainSignature: chainSignature(m.chain ?? m.levels ?? []),
-      pathLabels: [...levelSelections.slice(1).map((l) => l.label), ...segments],
+      pathLabels: [
+        ...levelSelections.slice(1).map((l) => l.label),
+        ...segments,
+      ],
       destination,
       files,
       createdAt: Date.now(),
@@ -2182,7 +2322,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     };
     if (!canSaveBatch(b)) {
       // The only remaining reason is an internal name clash, which the rows already flag.
-      showToast("Two documents in this batch would be saved under the same name.", "error");
+      showToast(
+        "Two documents in this set would be saved under the same name.",
+        "error",
+      );
       return false;
     }
 
@@ -2205,7 +2348,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     resetForm();
     // `notice`, never `success`: nothing has been sent, and the success modal says "awaiting approval".
     showToast(
-      `Batch saved — ${b.files.length} document${b.files.length === 1 ? "" : "s"} ready to upload.`,
+      `Set saved — ${b.files.length} document${b.files.length === 1 ? "" : "s"} ready to upload.`,
       "notice",
     );
     return true;
@@ -2227,18 +2370,24 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * restored, so the uploader sees what was chosen and can re-pick. Losing the options is
    * recoverable; silently dropping the value is how a batch comes back filed somewhere else.
    */
-  const restoreCascade = async (mode: UploadMode, values: string[]): Promise<void> => {
+  const restoreCascade = async (
+    mode: UploadMode,
+    values: string[],
+  ): Promise<void> => {
     if (!privileged) {
       applyRestrictedMode(validPaths, mode, values);
       return;
     }
     const choices: TermOption[][] = [];
-    choices[0] = await loadTermSet(mode.termSetGuid).catch(() => [] as TermOption[]);
+    choices[0] = await loadTermSet(mode.termSetGuid).catch(
+      () => [] as TermOption[],
+    );
     for (let i = 0; i + 1 < mode.levels.length; i++) {
       if (!values[i]) break;
-      choices[i + 1] = await loadTermChildren(mode.termSetGuid, values[i]).catch(
-        () => [] as TermOption[],
-      );
+      choices[i + 1] = await loadTermChildren(
+        mode.termSetGuid,
+        values[i],
+      ).catch(() => [] as TermOption[]);
     }
     setLevelChoices(choices);
     setLevelValues(values);
@@ -2260,7 +2409,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const beginEditBatch = (b: Batch, index: number): void => {
     if (draftOpen) {
       showToast(
-        "Save or discard the batch you are working on before editing another one.",
+        "Save or discard the set you are working on before editing another one.",
         "error",
       );
       return;
@@ -2277,7 +2426,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const m = modes.find((x) => x.key === (es.uploadMode ?? b.segmentKey));
     if (!m) {
       showToast(
-        "This batch cannot be re-opened — its segment is no longer configured. Remove it and add it again.",
+        "This set cannot be re-opened — its segment is no longer configured. Remove it and add it again.",
         "error",
       );
       return;
@@ -2337,7 +2486,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * no row at all.
    */
   const libraryHasRecordColumn = (libraryTitle: string): Promise<boolean> =>
-    libraryHasColumns(context.spHttpClient, siteUrl, libraryTitle, [SUBMISSION_FILE_COLUMN]);
+    libraryHasColumns(context.spHttpClient, siteUrl, libraryTitle, [
+      SUBMISSION_FILE_COLUMN,
+    ]);
 
   const uploadStagedFile = async (
     b: Batch,
@@ -2361,8 +2512,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      * The submission this file belongs to, and the batch within it. Blank when the target library has
      * no reference columns — see `libraryHasRefColumns` for why that must degrade silently.
      */
-    refs: { submissionId: string; batchId: string; fileId: string } =
-      { submissionId: "", batchId: "", fileId: "" },
+    refs: { submissionId: string; batchId: string; fileId: string } = {
+      submissionId: "",
+      batchId: "",
+      fileId: "",
+    },
     /**
      * The names already in the destination folder, fetched LAZILY and only on a clash.
      *
@@ -2412,7 +2566,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const meta = sf.meta;
     const finalName = sf.finalName ?? sf.file.name;
     const dest = b.destination as {
-      levelSelections: Array<{ column: string; label: string; id: string; labelCol?: string; tidCol?: string }>;
+      levelSelections: Array<{
+        column: string;
+        label: string;
+        id: string;
+        labelCol?: string;
+        tidCol?: string;
+      }>;
       tierFormValues: Array<{ FieldName: string; FieldValue: string }>;
     };
 
@@ -2444,7 +2604,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      * suggestion needs. Still FAILS OPEN (`clash: false`) on any failure: a 403, a throttle or a
      * missing folder must never become a new way to be blocked, since this is an extra guard.
      */
-    const approvedClashInfo = async (): Promise<{ clash: boolean; taken?: string[] }> => {
+    const approvedClashInfo = async (): Promise<{
+      clash: boolean;
+      taken?: string[];
+    }> => {
       try {
         const here: SPHttpClientResponse = await context.spHttpClient.get(
           `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')?$select=ServerRelativeUrl`,
@@ -2454,7 +2617,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         if (!here.ok) return { clash: false };
         const hc = cachedHcLibraries();
         const mirrored = swapLibrarySegment(
-          ((await here.json()) as { ServerRelativeUrl?: string }).ServerRelativeUrl,
+          ((await here.json()) as { ServerRelativeUrl?: string })
+            .ServerRelativeUrl,
           isHc ? hc?.approval.urlSegment : libraryUrlSegment(),
           isHc ? hc?.documents.urlSegment : DOCUMENTS_URL_SEGMENT,
         );
@@ -2465,10 +2629,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
         if (!res.ok) return { clash: false };
-        const rows = ((await res.json()).value ?? []) as Array<{ Name?: string }>;
+        const rows = ((await res.json()).value ?? []) as Array<{
+          Name?: string;
+        }>;
         const names = rows.map((r) => r.Name ?? "").filter((n) => n.length > 0);
         const lower = finalName.toLowerCase();
-        return { clash: names.some((n) => n.toLowerCase() === lower), taken: names };
+        return {
+          clash: names.some((n) => n.toLowerCase() === lower),
+          taken: names,
+        };
       } catch {
         return { clash: false };
       }
@@ -2527,7 +2696,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          decision with `allowStagingReplace: false`, and a hand-written second copy is how the
          stricter of the two drifts - the copy nobody exercises being the one that rots. The table
          and the reasoning for `both` are documented on `decideClash`. */
-      const decision = decideClash({ inStaging, inApproved, replaceStaging, replaceApproved });
+      const decision = decideClash({
+        inStaging,
+        inApproved,
+        replaceStaging,
+        replaceApproved,
+      });
       const where = decision.where;
       const consented = decision.consented;
       /* Identical to the pre-emptive assignment above for this screen; that one exists only so a
@@ -2552,7 +2726,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           );
           if (priorRes.ok) {
             const prior = await priorRes.json();
-            const raw = typeof prior?.SubmissionFileId === "string" ? prior.SubmissionFileId.trim() : "";
+            const raw =
+              typeof prior?.SubmissionFileId === "string"
+                ? prior.SubmissionFileId.trim()
+                : "";
             if (raw.length > 0) displacedFileId = raw;
           }
         } catch {
@@ -2584,7 +2761,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           }
           const free = nextAvailableName(finalName, taken);
           // Never offer a "free" name identical to the one that just failed.
-          if (free && free.toLowerCase() !== finalName.toLowerCase()) suggestedName = free;
+          if (free && free.toLowerCase() !== finalName.toLowerCase())
+            suggestedName = free;
         } catch {
           // No suggestion; the refusal stands on its own and is still actionable.
         }
@@ -2604,7 +2782,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   `for this folder. Check whether it is the same document before uploading another copy.`,
         };
       }
-
     } catch {
       // Network error on the existence check — proceed; the upload will surface the real error.
     }
@@ -2621,8 +2798,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           const bodyText = await uploadRes.text();
           try {
             const errJson = JSON.parse(bodyText);
-            const spMsg = errJson?.error?.message?.value ?? errJson?.error?.message;
-            detail += spMsg ? ` — ${spMsg}` : bodyText ? ` — ${bodyText.slice(0, 300)}` : "";
+            const spMsg =
+              errJson?.error?.message?.value ?? errJson?.error?.message;
+            detail += spMsg
+              ? ` — ${spMsg}`
+              : bodyText
+                ? ` — ${bodyText.slice(0, 300)}`
+                : "";
           } catch {
             if (bodyText) detail += ` — ${bodyText.slice(0, 300)}`;
           }
@@ -2684,7 +2866,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               `A document called "${finalName}" already exists in this folder. It may be a pending ` +
               `upload from someone else that you cannot see until it is approved.`,
             suggestedName:
-              free && free.toLowerCase() !== finalName.toLowerCase() ? free : undefined,
+              free && free.toLowerCase() !== finalName.toLowerCase()
+                ? free
+                : undefined,
             /* HIDDEN, not `staging`, even though the file is physically in the same library. The
                pre-check listed the folder and saw nothing, so this is almost certainly a colleague's
                draft that draft security hides. The dialog needs the distinction: replacing here
@@ -2709,13 +2893,21 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       const itemUrl = (select: string): string =>
         `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=${select}&@f='${encodeServerRelativePath(uploadedServerRelativeUrl)}'`;
       let itemRes: SPHttpClientResponse = await context.spHttpClient.get(
-        itemUrl("Id,UniqueId"), SPHttpClient.configurations.v1,
+        itemUrl("Id,UniqueId"),
+        SPHttpClient.configurations.v1,
       );
       if (!itemRes.ok) {
-        itemRes = await context.spHttpClient.get(itemUrl("Id"), SPHttpClient.configurations.v1);
+        itemRes = await context.spHttpClient.get(
+          itemUrl("Id"),
+          SPHttpClient.configurations.v1,
+        );
       }
       if (!itemRes.ok) {
-        return { fileId: sf.id, ok: false, error: "Uploaded, but could not retrieve the item to tag." };
+        return {
+          fileId: sf.id,
+          ok: false,
+          error: "Uploaded, but could not retrieve the item to tag.",
+        };
       }
       const item = await itemRes.json();
 
@@ -2731,7 +2923,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         ...dest.tierFormValues,
         {
           FieldName: settings.columns.confidentiality,
-          FieldValue: toTaxValue(options.confidentiality, meta.confidentiality ?? ""),
+          FieldValue: toTaxValue(
+            options.confidentiality,
+            meta.confidentiality ?? "",
+          ),
         },
         ...buildLevelFormValues(levelCols, dest.levelSelections),
       ];
@@ -2747,9 +2942,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
       // Written UNCONDITIONALLY, blanks included — a Text column set to "" is cleared rather than left
       // holding a value from somewhere else.
-      formValues.push({ FieldName: settings.columns.projectName, FieldValue: (meta.projectName ?? "").trim() });
-      formValues.push({ FieldName: settings.columns.vendor, FieldValue: (meta.vendor ?? "").trim() });
-      formValues.push({ FieldName: settings.columns.remark, FieldValue: (meta.remark ?? "").trim() });
+      formValues.push({
+        FieldName: settings.columns.projectName,
+        FieldValue: (meta.projectName ?? "").trim(),
+      });
+      formValues.push({
+        FieldName: settings.columns.vendor,
+        FieldValue: (meta.vendor ?? "").trim(),
+      });
+      formValues.push({
+        FieldName: settings.columns.remark,
+        FieldValue: (meta.remark ?? "").trim(),
+      });
 
       // Re-derived, never trusted from the checkbox: hiding the control does not clear the state behind
       // it, so a file could otherwise carry a legal marker its confidentiality does not offer.
@@ -2767,14 +2971,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       );
       formValues.push({
         FieldName: settings.columns.legallyPrivileged,
-        FieldValue: privilegedApplies && (meta.legallyPrivileged ?? "") !== "" ? "true" : "false",
+        FieldValue:
+          privilegedApplies && (meta.legallyPrivileged ?? "") !== ""
+            ? "true"
+            : "false",
       });
 
       /* Written ONLY when the caller confirmed the columns exist. Blank means the library has not been
          reconciled since these were introduced, and pushing the field anyway would fail the whole
          call and cost this document every other value it was about to carry. */
       if (refs.submissionId.length > 0 && refs.batchId.length > 0) {
-        formValues.push({ FieldName: "SubmissionId", FieldValue: refs.submissionId });
+        formValues.push({
+          FieldName: "SubmissionId",
+          FieldValue: refs.submissionId,
+        });
         formValues.push({ FieldName: "BatchId", FieldValue: refs.batchId });
       }
       /* The per-file stamp, checked SEPARATELY from the pair above — see `libraryHasRecordColumn`.
@@ -2782,7 +2992,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          inferred because `UniqueId` does NOT survive Auto-route: the routed copy gets a new one and
          the source carrying the old one is deleted. A stamped column travels with the copy. */
       if (refs.fileId.length > 0) {
-        formValues.push({ FieldName: SUBMISSION_FILE_COLUMN, FieldValue: refs.fileId });
+        formValues.push({
+          FieldName: SUBMISSION_FILE_COLUMN,
+          FieldValue: refs.fileId,
+        });
       }
       /* ⚠ THE KEYWORD IS ASKED FOR SEPARATELY TOO, and for the reason spelled out on
          `SUBMISSION_FILE_COLUMN`: `libraryHasColumns` demands EVERY name it is given, so folding
@@ -2798,10 +3011,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          `libraryHasColumns` caches per library, so a batch of twenty files costs one read.
          A FAILED read answers false, so the field is skipped rather than risking the whole call. */
       const hasKeywordColumn = await libraryHasColumns(
-        context.spHttpClient, siteUrl, libraryTitleForTagging, [KEYWORD_COLUMN],
+        context.spHttpClient,
+        siteUrl,
+        libraryTitleForTagging,
+        [KEYWORD_COLUMN],
       );
       if (hasKeywordColumn) {
-        formValues.push({ FieldName: KEYWORD_COLUMN, FieldValue: (meta.keyword ?? "").trim() });
+        formValues.push({
+          FieldName: KEYWORD_COLUMN,
+          FieldValue: (meta.keyword ?? "").trim(),
+        });
       }
 
       const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
@@ -2818,7 +3037,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         // mismatch above hid for so long), a 403 is permissions on that list, a 400 is a malformed
         // payload. An hour went into distinguishing them by hand on 2026-08-19.
         const body = await metaRes.text().catch(() => "");
-        console.error("Tagging failed:", metaRes.status, libraryTitleForTagging, body);
+        console.error(
+          "Tagging failed:",
+          metaRes.status,
+          libraryTitleForTagging,
+          body,
+        );
         return {
           fileId: sf.id,
           ok: false,
@@ -2829,7 +3053,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }
       const metaJson = await metaRes.json();
       // HTTP 200 even on field errors (gotcha #4) — the exception is per result, not per response.
-      const fieldError = (metaJson.value ?? []).find((v: { HasException?: boolean }) => v.HasException);
+      const fieldError = (metaJson.value ?? []).find(
+        (v: { HasException?: boolean }) => v.HasException,
+      );
       if (fieldError) {
         console.error("Field update error:", fieldError);
         return {
@@ -2858,7 +3084,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          person, possibly years later. */
       if (refs.fileId.length > 0) {
         const snapshot: Record<string, string> = {};
-        for (const l of dest.levelSelections ?? []) snapshot[l.column] = l.label;
+        for (const l of dest.levelSelections ?? [])
+          snapshot[l.column] = l.label;
         for (const [k, v] of [
           ["Document name", meta.documentName ?? ""],
           ["Project name", meta.projectName ?? ""],
@@ -2868,7 +3095,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           ["Remark", meta.remark ?? ""],
           // The derived value, not the checkbox — the same re-derivation the write above uses, so the
           // record cannot claim a legal marker the document does not carry.
-          ["Legally privileged", privilegedApplies && (meta.legallyPrivileged ?? "") !== "" ? "Yes" : ""],
+          [
+            "Legally privileged",
+            privilegedApplies && (meta.legallyPrivileged ?? "") !== ""
+              ? "Yes"
+              : "",
+          ],
         ] as Array<[string, string]>) {
           snapshot[k] = v;
         }
@@ -2876,7 +3108,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           submissionRef: refs.submissionId,
           batchRef: refs.batchId,
           fileId: refs.fileId,
-          uniqueId: typeof item.UniqueId === "string" ? item.UniqueId : undefined,
+          uniqueId:
+            typeof item.UniqueId === "string" ? item.UniqueId : undefined,
           fileName: finalName,
           itemPath: uploadedServerRelativeUrl,
           libraryTitle: libraryTitleForTagging,
@@ -2942,12 +3175,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           // has no meaning here: self-approve either fires or does not, and nothing is being renamed.
           const clashNow = (await approvedClashInfo()).clash;
           if (clashNow) {
-            console.warn("Self-approve skipped: a same-named document already exists on the approved side.");
+            console.warn(
+              "Self-approve skipped: a same-named document already exists on the approved side.",
+            );
           } else {
-            const approveAccess = await probeFolderApproveAccess(context.spHttpClient, siteUrl, folderId);
+            const approveAccess = await probeFolderApproveAccess(
+              context.spHttpClient,
+              siteUrl,
+              folderId,
+            );
             if (approveAccess === "granted") {
-              const itemUrl =
-                `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitleForTagging)}')/items(${item.Id})`;
+              const itemUrl = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitleForTagging)}')/items(${item.Id})`;
               const mergeHeaders = {
                 Accept: "application/json;odata=nometadata",
                 "Content-Type": "application/json;odata=nometadata",
@@ -2961,24 +3199,47 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               // BulkApprovePanel.tsx) and the approver here IS the uploader, so ApprovedBy is
               // stamped with their own email before the status flip. Best-effort: a failure here
               // must never leave the moderation MERGE below unattempted.
-              if (await libraryHasColumns(context.spHttpClient, siteUrl, libraryTitleForTagging, [APPROVED_BY_COLUMN])) {
+              if (
+                await libraryHasColumns(
+                  context.spHttpClient,
+                  siteUrl,
+                  libraryTitleForTagging,
+                  [APPROVED_BY_COLUMN],
+                )
+              ) {
                 try {
-                  await context.spHttpClient.post(itemUrl, SPHttpClient.configurations.v1, {
-                    headers: mergeHeaders,
-                    body: JSON.stringify({ ApprovedBy: (context.pageContext.user.email ?? "").toLowerCase() }),
-                  });
+                  await context.spHttpClient.post(
+                    itemUrl,
+                    SPHttpClient.configurations.v1,
+                    {
+                      headers: mergeHeaders,
+                      body: JSON.stringify({
+                        ApprovedBy: (
+                          context.pageContext.user.email ?? ""
+                        ).toLowerCase(),
+                      }),
+                    },
+                  );
                 } catch {
                   // Swallowed — a missing stamp leaves ApprovedBy blank, which the audit/notification
                   // flows already treat as "send", never as an error to surface to the uploader.
                 }
               }
-              const approveRes: SPHttpClientResponse = await context.spHttpClient.post(itemUrl, SPHttpClient.configurations.v1, {
-                headers: mergeHeaders,
-                body: JSON.stringify({ OData__ModerationStatus: 0 }),
-              });
+              const approveRes: SPHttpClientResponse =
+                await context.spHttpClient.post(
+                  itemUrl,
+                  SPHttpClient.configurations.v1,
+                  {
+                    headers: mergeHeaders,
+                    body: JSON.stringify({ OData__ModerationStatus: 0 }),
+                  },
+                );
               if (!approveRes.ok) {
                 // Left Pending — the upload itself already succeeded and is reported as such below.
-                console.warn("Self-approve MERGE failed, item left Pending:", approveRes.status);
+                console.warn(
+                  "Self-approve MERGE failed, item left Pending:",
+                  approveRes.status,
+                );
               }
             }
           }
@@ -2995,7 +3256,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // not a document, permissions or DMS problem, and the raw string tells an uploader none of
       // that. console.error keeps the original for whoever actually has to debug it.
       console.error("Upload failed:", err);
-      return { fileId: sf.id, ok: false, error: friendlyUploadError(err, "Upload failed.") };
+      return {
+        fileId: sf.id,
+        ok: false,
+        error: friendlyUploadError(err, "Upload failed."),
+      };
     }
   };
 
@@ -3041,11 +3306,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     // click, versus uploading a batch list that does not include what is on screen.
     if (draftFiles.length > 0) {
       if (!saveBatch()) return;
-      showToast("Saved the open batch — press Upload again to send everything.", "notice");
+      showToast(
+        "Saved the open set — press Upload again to send everything.",
+        "notice",
+      );
       return;
     }
     if (source.length === 0) {
-      showToast("Nothing to upload yet. Add documents and save a batch first.", "error");
+      showToast(
+        "Nothing to upload yet. Add documents and save a set first.",
+        "error",
+      );
       return;
     }
 
@@ -3067,7 +3338,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     // One read per distinct segment. `undefined` for a segment whose chain could not be read.
     const freshBySegment: Record<string, string | undefined> = {};
     const segmentKeys: string[] = [];
-    for (const b of source) if (segmentKeys.indexOf(b.segmentKey) === -1) segmentKeys.push(b.segmentKey);
+    for (const b of source)
+      if (segmentKeys.indexOf(b.segmentKey) === -1)
+        segmentKeys.push(b.segmentKey);
     for (const key of segmentKeys) {
       const fresh = await freshChainFor(key);
       freshBySegment[key] = fresh ? chainSignature(fresh) : undefined;
@@ -3079,7 +3352,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (stale.length > 0) {
       setBatches(marked);
       showToast(
-        `The folder structure changed for ${stale.length} batch${stale.length === 1 ? "" : "es"} while ` +
+        `The folder structure changed for ${stale.length} set${stale.length === 1 ? "" : "s"} while ` +
           `this page was open. Choose ${stale.length === 1 ? "its" : "their"} destination again — nothing has been lost.`,
         "error",
       );
@@ -3129,15 +3402,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           fileId: hasStamp ? newReference("SFI", new Date()) : "",
         };
       };
-      const dest = b.destination as { leafTermId: string; leafLabel: string; segments: string[] };
+      const dest = b.destination as {
+        leafTermId: string;
+        leafLabel: string;
+        segments: string[];
+      };
 
-      setStatus(`Batch ${batchNo} of ${runnable.length} — locating destination folder…`);
-      const mapping = await lookupFolderMapping(context.spHttpClient, siteUrl, dest.leafTermId).catch(
-        (e: unknown) => {
-          console.error("Folder map lookup error:", e);
-          return null;
-        },
+      setStatus(
+        `Set ${batchNo} of ${runnable.length} — locating destination folder…`,
       );
+      const mapping = await lookupFolderMapping(
+        context.spHttpClient,
+        siteUrl,
+        dest.leafTermId,
+      ).catch((e: unknown) => {
+        console.error("Folder map lookup error:", e);
+        return null;
+      });
       if (!mapping || !mapping.folderUniqueId) {
         // Names BOTH causes: folder names come from DMS Term Abbreviation, so a unit with no
         // abbreviation row is skipped by every run and re-running reconciliation changes nothing.
@@ -3163,17 +3444,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         const why = unitFolder.confirmedMissing
           ? "The mapped unit folder no longer exists. Ask an administrator to re-run reconciliation."
           : `Your folder could not be opened (HTTP ${unitFolder.status}). That is usually a permissions problem — ask an administrator to check your access.`;
-        for (const sf of b.files) results.push({ fileId: sf.id, ok: false, error: why });
+        for (const sf of b.files)
+          results.push({ fileId: sf.id, ok: false, error: why });
         continue;
       }
 
       // Ensure-created ONCE per batch, not per file. Everything below Unit inherits the Unit's ACL.
-      setStatus(`Batch ${batchNo} of ${runnable.length} — preparing folders…`);
+      setStatus(`Set ${batchNo} of ${runnable.length} — preparing folders…`);
       let parentSru = unitSru;
       let destFolder: Awaited<ReturnType<typeof ensureFolder>> | undefined;
       let folderError = "";
       for (const name of dest.segments) {
-        const made = await ensureFolder(context.spHttpClient, siteUrl, parentSru, name);
+        const made = await ensureFolder(
+          context.spHttpClient,
+          siteUrl,
+          parentSru,
+          name,
+        );
         if (!made) {
           folderError = `Could not create the "${name}" folder.`;
           break;
@@ -3182,8 +3469,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         destFolder = made;
       }
       if (folderError || !destFolder) {
-        const why = folderError || "No destination folder could be resolved for this batch.";
-        for (const sf of b.files) results.push({ fileId: sf.id, ok: false, error: why });
+        const why =
+          folderError ||
+          "No destination folder could be resolved for this set.";
+        for (const sf of b.files)
+          results.push({ fileId: sf.id, ok: false, error: why });
         continue;
       }
 
@@ -3209,7 +3499,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
        * `undefined` on any failure, which means "no suggestion" rather than "no names": an unreadable
        * folder must never turn a rename offer into a blocked upload.
        */
-      const fetchTaken = async (folderId: string): Promise<string[] | undefined> => {
+      const fetchTaken = async (
+        folderId: string,
+      ): Promise<string[] | undefined> => {
         try {
           const res: SPHttpClientResponse = await context.spHttpClient.get(
             `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files?$select=Name&$top=5000`,
@@ -3217,7 +3509,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             { headers: { Accept: "application/json;odata=nometadata" } },
           );
           if (!res.ok) return undefined;
-          const rows = ((await res.json()).value ?? []) as Array<{ Name?: string }>;
+          const rows = ((await res.json()).value ?? []) as Array<{
+            Name?: string;
+          }>;
           return rows.map((r) => r.Name ?? "").filter((n) => n.length > 0);
         } catch {
           return undefined;
@@ -3230,20 +3524,35 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          way. Caching the promise has no await between check and assign, and concurrent callers share
          one request. */
       const takenCache: Record<string, Promise<string[] | undefined>> = {};
-      const takenFor = (folderId: string) => (): Promise<string[] | undefined> => {
-        if (!takenCache[folderId]) takenCache[folderId] = fetchTaken(folderId);
-        return takenCache[folderId];
-      };
-      const resolveHcFolder = async (): Promise<{ id?: string; error?: string }> => {
+      const takenFor =
+        (folderId: string) => (): Promise<string[] | undefined> => {
+          if (!takenCache[folderId])
+            takenCache[folderId] = fetchTaken(folderId);
+          return takenCache[folderId];
+        };
+      const resolveHcFolder = async (): Promise<{
+        id?: string;
+        error?: string;
+      }> => {
         const hcUnit = swapLibrarySegment(
-          unitSru, libraryUrlSegment(), cachedHcLibraries()?.approval.urlSegment,
+          unitSru,
+          libraryUrlSegment(),
+          cachedHcLibraries()?.approval.urlSegment,
         );
-        if (!hcUnit) return { error: "The Highly Confidential library could not be resolved on this site." };
+        if (!hcUnit)
+          return {
+            error:
+              "The Highly Confidential library could not be resolved on this site.",
+          };
         // THE UNIT FOLDER IS RESOLVED, NEVER CREATED. One created by an uploader would inherit the
         // LIBRARY root's permissions instead of carrying the unit's — which is exactly how a Highly
         // Confidential document becomes readable by the people the unit ACL exists to exclude. If it
         // is absent, reconciliation is the fix and the upload refuses until then.
-        const unitHere = await resolveFolderByPath(context.spHttpClient, siteUrl, hcUnit);
+        const unitHere = await resolveFolderByPath(
+          context.spHttpClient,
+          siteUrl,
+          hcUnit,
+        );
         if (!unitHere) {
           return {
             error:
@@ -3256,11 +3565,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         let parent = unitHere.serverRelativeUrl;
         let folderId = unitHere.uniqueId;
         for (const name of dest.segments) {
-          const made = await ensureFolder(context.spHttpClient, siteUrl, parent, name);
+          const made = await ensureFolder(
+            context.spHttpClient,
+            siteUrl,
+            parent,
+            name,
+          );
           if (!made) {
             return {
-              error:
-                `Could not create the "${name}" folder in the Highly Confidential library.`,
+              error: `Could not create the "${name}" folder in the Highly Confidential library.`,
             };
           }
           parent = made.serverRelativeUrl;
@@ -3273,7 +3586,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       for (const sf of b.files) {
         fileNo++;
         setStatus(
-          `Batch ${batchNo} of ${runnable.length} · file ${fileNo} of ${b.files.length} — ${sf.finalName ?? sf.file.name}`,
+          `Set ${batchNo} of ${runnable.length} · file ${fileNo} of ${b.files.length} — ${sf.finalName ?? sf.file.name}`,
         );
         const level = confidentialityLabel(sf.meta.confidentiality ?? "");
         if (isHcLevel(level, hcCtx)) {
@@ -3291,7 +3604,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             results.push({
               fileId: sf.id,
               ok: false,
-              error: hcDest.error ?? "No Highly Confidential destination could be resolved.",
+              error:
+                hcDest.error ??
+                "No Highly Confidential destination could be resolved.",
             });
             continue;
           }
@@ -3300,16 +3615,30 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           // back to the normal library, which is the one outcome that must never happen quietly.
           const hcTitle = libApiTitle("StagingHC");
           const hcRes = await uploadStagedFile(
-            b, hcDest.id, sf, hcTitle, await refsFor(hcTitle), takenFor(hcDest.id), reserved,
-            replaceApprovedIds, replaceStagingIds,
+            b,
+            hcDest.id,
+            sf,
+            hcTitle,
+            await refsFor(hcTitle),
+            takenFor(hcDest.id),
+            reserved,
+            replaceApprovedIds,
+            replaceStagingIds,
           );
           if (hcRes.suggestedName) reserved.push(hcRes.suggestedName);
           results.push(hcRes);
           continue;
         }
         const res = await uploadStagedFile(
-          b, destFolder.uniqueId, sf, settings.stagingLibrary, await refsFor(settings.stagingLibrary),
-          takenFor(destFolder.uniqueId), reserved, replaceApprovedIds, replaceStagingIds,
+          b,
+          destFolder.uniqueId,
+          sf,
+          settings.stagingLibrary,
+          await refsFor(settings.stagingLibrary),
+          takenFor(destFolder.uniqueId),
+          reserved,
+          replaceApprovedIds,
+          replaceStagingIds,
         );
         if (res.suggestedName) reserved.push(res.suggestedName);
         results.push(res);
@@ -3336,7 +3665,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      */
     const failedOpen: Record<string, boolean> = {};
     for (const b of remaining) {
-      if ((b.files ?? []).some((f) => (f.error ?? "").trim().length > 0)) failedOpen[b.id] = true;
+      if ((b.files ?? []).some((f) => (f.error ?? "").trim().length > 0))
+        failedOpen[b.id] = true;
     }
     if (Object.keys(failedOpen).length > 0) {
       setOpenBatches((prev) => ({ ...prev, ...failedOpen }));
@@ -3354,7 +3684,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
        Driven from the BATCHES, not the results, so the rows come out in card order and each one can
        carry its batch number and folder path (client, 2026-08-28). */
     const stagedIds: Record<string, true> = {};
-    for (const b of remaining) for (const f of b.files ?? []) stagedIds[f.id] = true;
+    for (const b of remaining)
+      for (const f of b.files ?? []) stagedIds[f.id] = true;
     const rows: ClashRow[] = [];
     remaining.forEach((b, i) => {
       for (const f of b.files ?? []) {
@@ -3366,7 +3697,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           to: r.suggestedName,
           where: r.clashWhere,
           // Numbered exactly as the cards are, so "Batch 2" in the dialog is the card headed "Batch 2".
-          batchLabel: `Batch ${i + 1}`,
+          batchLabel: `Set ${i + 1}`,
           pathLabel: (b.pathLabels ?? []).join(" / "),
         });
       }
@@ -3394,13 +3725,19 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setStatus("");
     setBusy(false);
     if (counts.failed === 0) {
-      showToast(`${counts.ok} document${counts.ok === 1 ? "" : "s"} uploaded and pending review.`, "success");
+      showToast(
+        `${counts.ok} document${counts.ok === 1 ? "" : "s"} uploaded and pending review.`,
+        "success",
+      );
     } else {
       /* ⚠ THE COUNTS TOAST CAME OFF 2026-08-30 at the client's request — it duplicated the message
          under the batch list, which says the same thing and stays on screen instead of fading. The
          toast is still RAISED, because a failure that announces itself nowhere is worse than one
          announced twice; it just no longer recites the arithmetic. */
-      showToast("Some documents could not be uploaded — see the reasons below.", "error");
+      showToast(
+        "Some documents could not be uploaded — see the reasons below.",
+        "error",
+      );
     }
   };
 
@@ -3442,7 +3779,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             </option>
           ))}
         </select>
-        {invalid && <small className="dms-err">Choose a {label.toLowerCase()}</small>}
+        {invalid && (
+          <small className="dms-err">Choose a {label.toLowerCase()}</small>
+        )}
       </label>
     );
   };
@@ -3463,8 +3802,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    */
   const metaEditor = (
     <>
-              <div className="dms-grid" style={{ marginTop: 16 }}>
-                {/* Free-text Project Name — distinct from the Group-led Projects
+      <div className="dms-grid" style={{ marginTop: 16 }}>
+        {/* Free-text Project Name — distinct from the Group-led Projects
                     "Group Project Name" folder level in the card below.
 
                     ⚠ THE ORDER OF THESE THREE IS THE ORDER OF THE COMPOSED FILENAME
@@ -3474,80 +3813,84 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     the middle of a string whose start they had not filled in yet. Reordering
                     is the whole fix; `composeUploadBase` is untouched. Keep them in step: if
                     the convention ever changes, this layout has to move with it. */}
-                {/* OPTIONAL since 2026-08-27 (client's request) — no `*`, no invalid state, and no
+        {/* OPTIONAL since 2026-08-27 (client's request) — no `*`, no invalid state, and no
                     error line. `composeUploadBase` drops a blank part, so omitting both simply yields
                     the shorter `[Document Name] - [Date]`. See `missingForFile` for the trade. */}
-                <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-                  <span>Project Name</span>
-                  <input
-                    type="text"
-                    value={projectName}
-                    maxLength={50}
-                    onChange={(e) => onProjectNameChange(e.target.value)}
-                  />
-                  {blockedChar.projectName ? (
-                    <small className="dms-err">{blockedChar.projectName}</small>
-                  ) : (
-                    <small>Optional · max. 50 characters</small>
-                  )}
-                </label>
+        <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
+          <span>Project Name</span>
+          <input
+            type="text"
+            value={projectName}
+            maxLength={50}
+            onChange={(e) => onProjectNameChange(e.target.value)}
+          />
+          {blockedChar.projectName ? (
+            <small className="dms-err">{blockedChar.projectName}</small>
+          ) : (
+            <small>Max. 50 characters</small>
+          )}
+        </label>
 
-                {/* Vendor is free text. It also feeds the auto-composed document name. Optional. */}
-                <label className="dms-field">
-                  <span>Vendor/Customer Name</span>
-                  <input
-                    type="text"
-                    value={vendor}
-                    maxLength={50}
-                    onChange={(e) => onVendorChange(e.target.value)}
-                  />
-                  {blockedChar.vendor ? (
-                    <small className="dms-err">{blockedChar.vendor}</small>
-                  ) : (
-                    <small>Optional · max. 50 characters</small>
-                  )}
-                </label>
+        {/* Vendor is free text. It also feeds the auto-composed document name. Optional. */}
+        <label className="dms-field">
+          <span>Vendor/Customer Name</span>
+          <input
+            type="text"
+            value={vendor}
+            maxLength={50}
+            onChange={(e) => onVendorChange(e.target.value)}
+          />
+          {blockedChar.vendor ? (
+            <small className="dms-err">{blockedChar.vendor}</small>
+          ) : (
+            <small>Max. 50 characters</small>
+          )}
+        </label>
 
-                <label className={`dms-field${showErrors && !docName.trim() ? " invalid" : ""}`}>
-                  <span>
-                    Document Name <em className="req">*</em>
-                  </span>
-                  {/* Typeable before a file is picked: the name is only read at upload
+        <label
+          className={`dms-field${showErrors && !docName.trim() ? " invalid" : ""}`}
+        >
+          <span>
+            Document Name <em className="req">*</em>
+          </span>
+          {/* Typeable before a file is picked: the name is only read at upload
                       time, and leaving it enabled avoids a greyed-out first field. */}
-                  <input
-                    type="text"
-                    value={docName}
-                    maxLength={50}
-                    aria-invalid={(showErrors && !docName.trim()) || undefined}
-                    onChange={(e) => onDocNameChange(e.target.value)}
-                  />
-                  {/* The "Saves as" preview MOVED to the staged file row above (client, 2026-08-23).
+          <input
+            type="text"
+            value={docName}
+            maxLength={50}
+            aria-invalid={(showErrors && !docName.trim()) || undefined}
+            onChange={(e) => onDocNameChange(e.target.value)}
+          />
+          {/* The "Saves as" preview MOVED to the staged file row above (client, 2026-08-23).
                       It is assembled from four fields, so anchoring it to one of them read as a
                       preview of that box; on the row it reads as what that file will be called,
                       which is what it is. */}
-                  {showErrors && !docName.trim() ? (
-                    <small className="dms-err">Document Name is required</small>
-                  ) : blockedChar.docName ? (
-                    <small className="dms-err">{blockedChar.docName}</small>
-                  ) : (
-                    <small>Max. 50 characters</small>
-                  )}
-                </label>
-                {/* Document Type used to sit here. It moved into the folder card below:
+          {showErrors && !docName.trim() ? (
+            <small className="dms-err">Document Name is required</small>
+          ) : blockedChar.docName ? (
+            <small className="dms-err">{blockedChar.docName}</small>
+          ) : (
+            <small>Max. 50 characters</small>
+          )}
+        </label>
+        {/* Document Type used to sit here. It moved into the folder card below:
                     it is part of the destination path (Unit → Year → Document Type), not a
                     property of the document, and grouping it with Unit and Year is what the
                     client's mockup shows. */}
 
-                {/* Remark lives in the folder card above, per the mockup. */}
-              </div>
+        {/* Remark lives in the folder card above, per the mockup. */}
+      </div>
 
-              {/* Document Date | Confidential Level | Legally Privileged — one line. */}
-              <div className="dms-detail-row">
-                <label className={`dms-field${showErrors && !documentDate ? " invalid" : ""}`}>
-                  <span>
-                    Document Date <em className="req">*</em>
-                  </span>
-                  {/* Back to the native picker (client, 2026-08-15: "lets just go back to default").
+      {/* Document Date | Confidential Level | Legally Privileged — one line. */}
+      <div className="dms-detail-row">
+        <label
+          className={`dms-field${showErrors && !documentDate ? " invalid" : ""}`}
+        >
+          <span>
+            Document Date <em className="req">*</em>
+          </span>
+          {/* Back to the native picker (client, 2026-08-15: "lets just go back to default").
 
                       Three attempts to hold Fluent's DatePicker in line with the select beside it
                       failed intermittently, and the reason is structural: Fluent injects its styles
@@ -3561,40 +3904,48 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                       does deliver is a calendar with no typing, correct alignment, and 53KB off the
                       bundle. If dd-mm-yyyy is required, the route is a hand-built calendar, not
                       another pass at styling somebody else's. */}
-                  <input
-                    type="date"
-                    value={documentDate}
-                    max={(() => {
-                      const d = new Date();
-                      const mm = d.getMonth() + 1;
-                      const day = d.getDate();
-                      return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
-                    })()}
-                    aria-invalid={(showErrors && !documentDate) || undefined}
-                    onChange={(e) => onDocumentDateChange(e.target.value)}
-                  />
-                  {showErrors && !documentDate && (
-                    <small className="dms-err">Document Date is required</small>
-                  )}
-                </label>
+          <input
+            type="date"
+            value={documentDate}
+            max={(() => {
+              const d = new Date();
+              const mm = d.getMonth() + 1;
+              const day = d.getDate();
+              return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
+            })()}
+            aria-invalid={(showErrors && !documentDate) || undefined}
+            onChange={(e) => onDocumentDateChange(e.target.value)}
+          />
+          {showErrors && !documentDate && (
+            <small className="dms-err">Document Date is required</small>
+          )}
+        </label>
 
-                {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
+        {/* Not renderSelect: the info icon belongs on the LABEL, and the label is
                     a <span> holding a real <label htmlFor> so clicking the icon does not
                     fall through and focus the select. */}
-                <div className={`dms-field${showErrors && !confidentiality ? " invalid" : ""}`}>
-                  <span className="dms-labelrow">
-                    <label htmlFor="dms-form-conf">
-                      Confidential Level <em className="req">*</em>
-                    </label>
-                    <em
-                      className="dms-info"
-                      tabIndex={0}
-                      role="button"
-                      aria-label="What the confidentiality levels mean"
-                    >
-                      i
-                      <span className="dms-info-panel" role="tooltip">
-                        {/* Legally Privileged is NOT defined here any more — it has its own
+        <div
+          className={`dms-field${showErrors && !confidentiality ? " invalid" : ""}`}
+        >
+          <span className="dms-labelrow">
+            <label htmlFor="dms-form-conf">
+              Confidential Level <em className="req">*</em>
+            </label>
+            <em
+              className="dms-info"
+              tabIndex={0}
+              role="button"
+              aria-label="What the confidentiality levels mean"
+            >
+              <img
+                src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAOdEVYdFNvZnR3YXJlAEZpZ21hnrGWYwAAAcRJREFUeAGVUztPAkEQ/uYwiliIv0A0Gk0s8JFYa+ejEP+BnVpJZylUtmd3paWd2PiooKSABEoDxrO08mzg1HDrt0t4CVGZZPf2Zma/eew3gp9ytLUBSIKnPX5jRicoQXEhSMO5d7vdpX1KbkRRnziDqCSdPVoy1L4Ym0Kc+mUDqJSN8Xoads7rAOjLH5EsHemENMI1u+XQm91OivuZyWistql9QsYQXzrnnmCUfTh3DvKub/SH2ydYX1hEoVI2/4VKDqtzZYgk8TUSRrH6IKw5BljPJrJzm+qJeLj7Bgk8gs4MzATBpsUq+KPcvsumwMYKGrLfp/dHbSjxdLMtHuIEKGOQhH0PoaC/F5cZNjm4IcCexYawcVZpIIA/fs3dHmiDuNxiFv4UmfzNqgFcrmkMK0JuKFViD3DDlTBcGEY0Z0QIIEGGaFH4keS/Lx/t8AkR09QOoVB1sTY/RZBTrM2WUHx6bDuuzr8z0isJk2/rjrc5J+IwhQvOxVWTygeJKMY+s80XQYqcSPdF1SX6kRNj76JyZ5iaINqonVzSmhMoLX5M86ypHjWRw/VU7zD11KepTXZqgjUzgmEq2GyoDNPOdbt/AzwMpB1p2C+YAAAAAElFTkSuQmCC"
+                width={16}
+                height={16}
+                alt=""
+                aria-hidden="true"
+              />
+              <span className="dms-info-panel" role="tooltip">
+                {/* Legally Privileged is NOT defined here any more — it has its own
                             control and its own icon beside it, and defining it in two places
                             invites the two texts to drift apart.
                             Highly Confidential is deliberately absent too. Its term is
@@ -3602,59 +3953,60 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                             offer it, and describing a level nobody can pick reads as a bug
                             in UAT. The definition returns with the HC libraries in Phase 2 —
                             see the highly-confidential-securing design on feat/hc-libraries. */}
-                        <dl>
-                          <dt>Confidential</dt>
-                          <dd>
-                            This applies to sensitive business information that is
-                            intended strictly for use within the Group, on a need-to-know
-                            basis.
-                          </dd>
-                          <dt>Restricted</dt>
-                          <dd>
-                            This applies to business information that may be disclosed to
-                            external parties only if a non-disclosure agreement has been
-                            signed.
-                          </dd>
-                        </dl>
-                      </span>
-                    </em>
-                  </span>
-                  <select
-                    id="dms-form-conf"
-                    value={confidentiality}
-                    title={
-                      options.confidentiality.find((o) => o.id === confidentiality)
-                        ?.label ?? ""
-                    }
-                    onChange={(e) => setConfidentiality(e.target.value)}
-                  >
-                    <option value="">--</option>
-                    {/* HIDDEN, NOT DISABLED. A greyed-out "Highly Confidential" tells an uncleared
+                <dl>
+                  <dt>Confidential</dt>
+                  <dd>
+                    This applies to sensitive business information that is
+                    intended strictly for use within the Group, on a
+                    need-to-know basis.
+                  </dd>
+                  <dt>Restricted</dt>
+                  <dd>
+                    This applies to business information that may be disclosed
+                    to external parties only if a non-disclosure agreement has
+                    been signed.
+                  </dd>
+                </dl>
+              </span>
+            </em>
+          </span>
+          <select
+            id="dms-form-conf"
+            value={confidentiality}
+            title={
+              options.confidentiality.find((o) => o.id === confidentiality)
+                ?.label ?? ""
+            }
+            onChange={(e) => setConfidentiality(e.target.value)}
+          >
+            <option value="">--</option>
+            {/* HIDDEN, NOT DISABLED. A greyed-out "Highly Confidential" tells an uncleared
                         uploader that the level exists and that some of their unit's documents are
                         filed under it — information they have no need for. The client chose hidden.
                         On a site with no HC libraries nothing is filtered: the level stays the
                         ordinary metadata label it has always been. */}
-                    {(() => {
-                      const ctx = hcContext();
-                      const allowed = selectableLevels(
-                        options.confidentiality.map((o) => o.label), ctx,
-                      );
-                      const keep = new Set(allowed.map((l) => l.trim().toLowerCase()));
-                      return options.confidentiality
-                        .filter((o) => keep.has((o.label ?? "").trim().toLowerCase()))
-                        .map((o) => (
-                          <option key={o.id} value={o.id} title={o.label}>
-                            {o.label}
-                          </option>
-                        ));
-                    })()}
-                  </select>
-                  {showErrors && !confidentiality && (
-                    <small className="dms-err">Confidential Level is required</small>
-                  )}
-                </div>
+            {(() => {
+              const ctx = hcContext();
+              const allowed = selectableLevels(
+                options.confidentiality.map((o) => o.label),
+                ctx,
+              );
+              const keep = new Set(allowed.map((l) => l.trim().toLowerCase()));
+              return options.confidentiality
+                .filter((o) => keep.has((o.label ?? "").trim().toLowerCase()))
+                .map((o) => (
+                  <option key={o.id} value={o.id} title={o.label}>
+                    {o.label}
+                  </option>
+                ));
+            })()}
+          </select>
+          {showErrors && !confidentiality && (
+            <small className="dms-err">Confidential Level is required</small>
+          )}
+        </div>
 
-                {/* Offered only for the level named by `legallyPrivilegedFor` in CRS Config.
+        {/* Offered only for the level named by `legallyPrivilegedFor` in CRS Config.
                     Unset means never offered — see the setting's note. The value is re-derived
                     at upload time rather than trusted from here, because hiding the control
                     does not clear the state behind it.
@@ -3662,35 +4014,44 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     A LIST since 2026-08-19 (client: the tick must show for Highly Confidential too),
                     so `Confidential;Highly Confidential` offers it on both. One value behaves exactly
                     as it always did. */}
-                {offersLegalPrivilege(confidentialityLabel(confidentiality), settings.legallyPrivilegedFor) && (
-                    <div className="dms-lp-wrap">
-                      <label className="dms-lp">
-                        <input
-                          type="checkbox"
-                          checked={legallyPrivileged}
-                          onChange={(e) => setLegallyPrivileged(e.target.checked)}
-                        />
-                        <span>Legally Privileged</span>
-                      </label>
-                      <em
-                        className="dms-info align-right"
-                        tabIndex={0}
-                        role="button"
-                        aria-label="What Legally Privileged means"
-                      >
-                        i
-                        <span className="dms-info-panel" role="tooltip">
-                          This applies to confidential communications (email, advice,
-                          documents, conversations) between client and lawyer that are
-                          protected by law from being disclosed in a court of law or
-                          during legal proceedings.
-                        </span>
-                      </em>
-                    </div>
-                  )}
-              </div>
+        {offersLegalPrivilege(
+          confidentialityLabel(confidentiality),
+          settings.legallyPrivilegedFor,
+        ) && (
+          <div className="dms-lp-wrap">
+            <label className="dms-lp">
+              <input
+                type="checkbox"
+                checked={legallyPrivileged}
+                onChange={(e) => setLegallyPrivileged(e.target.checked)}
+              />
+              <span>Legally Privileged</span>
+            </label>
+            <em
+              className="dms-info align-right"
+              tabIndex={0}
+              role="button"
+              aria-label="What Legally Privileged means"
+            >
+              <img
+                src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAOdEVYdFNvZnR3YXJlAEZpZ21hnrGWYwAAAcRJREFUeAGVUztPAkEQ/uYwiliIv0A0Gk0s8JFYa+ejEP+BnVpJZylUtmd3paWd2PiooKSABEoDxrO08mzg1HDrt0t4CVGZZPf2Zma/eew3gp9ytLUBSIKnPX5jRicoQXEhSMO5d7vdpX1KbkRRnziDqCSdPVoy1L4Ym0Kc+mUDqJSN8Xoads7rAOjLH5EsHemENMI1u+XQm91OivuZyWistql9QsYQXzrnnmCUfTh3DvKub/SH2ydYX1hEoVI2/4VKDqtzZYgk8TUSRrH6IKw5BljPJrJzm+qJeLj7Bgk8gs4MzATBpsUq+KPcvsumwMYKGrLfp/dHbSjxdLMtHuIEKGOQhH0PoaC/F5cZNjm4IcCexYawcVZpIIA/fs3dHmiDuNxiFv4UmfzNqgFcrmkMK0JuKFViD3DDlTBcGEY0Z0QIIEGGaFH4keS/Lx/t8AkR09QOoVB1sTY/RZBTrM2WUHx6bDuuzr8z0isJk2/rjrc5J+IwhQvOxVWTygeJKMY+s80XQYqcSPdF1SX6kRNj76JyZ5iaINqonVzSmhMoLX5M86ypHjWRw/VU7zD11KepTXZqgjUzgmEq2GyoDNPOdbt/AzwMpB1p2C+YAAAAAElFTkSuQmCC"
+                width={16}
+                height={16}
+                alt=""
+                aria-hidden="true"
+              />
+              <span className="dms-info-panel" role="tooltip">
+                This applies to confidential communications (email, advice,
+                documents, conversations) between client and lawyer that are
+                protected by law from being disclosed in a court of law or
+                during legal proceedings.
+              </span>
+            </em>
+          </div>
+        )}
+      </div>
 
-              {/* ── Keyword (client, 2026-09-04) ────────────────────────────────────────────────
+      {/* ── Keyword (client, 2026-09-04) ────────────────────────────────────────────────
                   *"Add a new field call Keyword add it in upload form and bulk upload - free text
                   field, it will be used to search throough the home page."*
 
@@ -3703,28 +4064,87 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
                   It goes through the SAME `guard` as every other free-text box, so a character
                   SharePoint refuses is refused here rather than at the write. */}
-              <label className="dms-field">
-                <span>Keyword</span>
-                <input
-                  type="text"
-                  maxLength={255}
-                  value={keyword}
-                  placeholder="Words to help find this document later"
-                  onChange={(e) => guard("keyword", e.target.value, setKeyword)}
-                />
-                {blockedChar.keyword ? (
-                  <small className="dms-err">{blockedChar.keyword}</small>
-                ) : (
-                  <small>Optional &middot; searchable from the home page</small>
-                )}
-              </label>
+      <label className="dms-field">
+        <span>Keyword</span>
+        {/* ⚠ 50, DOWN FROM 255 (client, 2026-09-04). The cap follows the hint rather than
+                    the other way round: a box saying "Maximum 50 characters" that accepts 200 is a
+                    promise the form breaks, and the number the client chose is the one on screen.
+                    Existing longer values are untouched — this bounds new input only. */}
+        <input
+          type="text"
+          maxLength={50}
+          value={keyword}
+          placeholder="Words to help find this document later"
+          onChange={(e) => guard("keyword", e.target.value, setKeyword)}
+        />
+        {blockedChar.keyword ? (
+          <small className="dms-err">{blockedChar.keyword}</small>
+        ) : (
+          /* The "searchable from the home page" half went with it (client's instruction). It
+                     was the only thing on screen saying WHY the field exists, so an uploader now has
+                     to infer that from the name — their call, and one line to restore. */
+          <small>Max. 50 characters</small>
+        )}
+      </label>
+
+      {/* ── Delete File (client, 2026-09-04) ────────────────────────────────────────────────────
+          Replaces the per-row "✕". It is LAST in the editor, under the fields, as their screenshot
+          shows — and it removes the file this editor is open on, which is what makes a text button
+          unambiguous where a row-level icon needed the filename in its tooltip.
+
+          ⚠ IT CONFIRMS ONLY WHEN THERE IS SOMETHING TO LOSE. A `File` handle cannot be recovered
+          once dropped — the uploader has to find it on disk again — but a row where nothing has been
+          typed costs a re-pick and nothing else, and confirming that trains people to click through
+          the dialog that matters.
+
+          ⚠ THE EDITOR MUST FOLLOW THE LIST. Removing the open row leaves `activeFileId` pointing at
+          a file that is gone, and the editor would then be writing into nothing. It moves to the last
+          remaining row and loads ITS values — without the `applyEditor`, the new row would show the
+          deleted file's text. */}
+      <button
+        type="button"
+        className="dms-delfile"
+        disabled={busy}
+        onClick={() => {
+          const me = draftFiles.filter((x) => x.id === activeFileId)[0];
+          if (!me) return;
+          const typedAnything =
+            (docName || "").trim().length > 0 ||
+            (projectName || "").trim().length > 0 ||
+            (vendor || "").trim().length > 0;
+          if (
+            typedAnything &&
+            !window.confirm(
+              `Delete ${me.file.name}? It has not been uploaded, and you will have to choose it again.`,
+            )
+          ) {
+            return;
+          }
+          const left = draftFiles.filter((x) => x.id !== me.id);
+          setDraftFiles(left);
+          setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
+          if (left.length > 0) applyEditor(left[left.length - 1].meta);
+        }}
+      >
+        <img
+          src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABIAAAAWCAYAAADNX8xBAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAOdEVYdFNvZnR3YXJlAEZpZ21hnrGWYwAAAW1JREFUeAHdlV1OwkAQx2eGHoAjwAnUG+AJoPoIBKqNiU/iCdATGJ5MBFIs+igrJ9AbyA3kBuAzsutM+UgotJZgYsI/2d3OdueXmUl3ihChdlfVDUIBDByyOeYxADQdt3TyuOk8btpsddUbLzmGjPnEYL6dmzvcnJft27APrUXy3K/PnHQjNYWsW7aPZUy+IcvgoWFQs6tyv4KM1lVxcMunNcexx4v9S8cecqrOLCpdCPshp/HJawZ2kDH62uIU+hzYVageSRXUEckaBRZHZeYF3kri1/R7r/JMsKMQcBQLkto1/ZdalB1WXEQZRMrH2IlBW+n/QfeeyvwJKKw9BlnBbILGlV59pRuA1keUnVqcR/0VLDItGpkmOLoo2okuLt+xDiJWiKhwVsz3aRYQBB2PNKjWU68SB/A8lW776k4g0rcEsoxI9OCrKiF4kFQGBpMp2NLwVkAi+cgs0lUkOoC1mi0BQyB6d0v5lZ/ADw75iaduaQgFAAAAAElFTkSuQmCC"
+          width={14}
+          height={14}
+          alt=""
+          aria-hidden="true"
+        />
+        Delete File
+      </button>
     </>
   );
 
   return (
     <section className="dms-form">
       <style>{`
-        .dms-form { max-width: 960px; margin: 32px auto; padding: 0 24px 48px; font-family: 'Segoe UI', sans-serif; }
+        /* Plain sans-serif (client, 2026-09-04: "change the all font family to sans-serif"). It was
+           'Segoe UI', sans-serif - so on Windows this changes nothing visible, and elsewhere it now
+           takes the reader's own default rather than falling back through a font they may not have. */
+        .dms-form { max-width: 960px; margin: 32px auto; padding: 0 24px 48px; font-family: sans-serif; }
         .dms-form h2 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: #1b1b1b; }
         .dms-subtitle { margin: 0 0 28px; font-size: 14px; color: #666; }
         /* ⚠ THE PAGE TITLE IS RENDERED BY THE WEB PART AGAIN (client, 2026-09-03: "client wants the
@@ -3740,25 +4160,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            and one backtick in a CSS comment ends it. That has broken this file three times.) */
         .dms-batch-intro { margin: 4px 0 10px; font-size: 14px; color: #666; line-height: 1.5; }
         .dms-section { background: #fff; border: 1px solid #e1e1e1; border-radius: 8px; padding: 24px; margin-bottom: 20px; }
-        .dms-section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #0f6c3f; margin: 0 0 16px; }
+        .dms-section-title { font-size: 14px; font-weight: 700; text-transform: uppercase; color: rgba(0, 104, 74, 1); margin: 0 0 16px; letter-spacing: 0.5px; }
         /* Drop zone. Stacked and centred while empty so the icon and prompt read as
            one target; switches to a single centred row once a file is chosen, where
            READY / name / size / action belong on one line. */
         .dms-dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center;
           gap: 8px; text-align: center; border: 1px dashed #9bbfaa; border-radius: 10px;
-          background: #f2f8f4; padding: 24px 16px; cursor: pointer; font-size: 13px;
+          background: rgba(235, 244, 231, 1); padding: 24px 16px; cursor: pointer; font-size: 13px;
           transition: background .12s, border-color .12s; }
         .dms-dropzone:hover, .dms-dropzone:focus-visible { border-color: #0f6c3f; background: #eaf4ee; }
         /* .over fires on dragover — without a visible change there is no confirmation
            the browser will accept the drop, and users let go over the wrong element. */
         .dms-dropzone.over { border-color: #0f6c3f; border-style: solid; background: #e2efe7; }
-        .dms-dropzone.has-file { flex-direction: row; gap: 16px; padding: 16px; }
+        .dms-dropzone.has-file { flex-direction: row; gap: 16px; padding: 16px; background: rgba(235, 244, 231, 1); border: 1px dashed rgba(0, 104, 74, 1); }
         .dms-dropzone-icon { width: 32px; height: 32px; color: #0f6c3f; }
-        .dms-dropzone .name { font-weight: 600; }
-        .dms-dropzone .size { color: #666; font-size: 12px; }
+        .dms-dropzone .name { font-weight: 600; color: black; }
+        .dms-dropzone .size { color: black; font-size: 12px; }
         /* READY badge and the trailing action. margin-left:auto pushes "Change
            Document" to the far edge so the row reads name-first, action-last. */
-        .dms-filecard-ready { color: #0f6c3f; font-size: 11px; font-weight: 700;
+        .dms-filecard-ready { color: rgba(0, 104, 74, 1); font-size: 11px; font-weight: 700;
           letter-spacing: .06em; }
         .dms-filecard-action { margin-left: auto; }
         /* Textarea inherits the input styling so Remark matches the fields around it —
@@ -3768,7 +4188,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-field textarea:focus { outline: 2px solid #0f6c3f; outline-offset: -1px; }
         .dms-link { background: none; border: none; color: #0f6c3f; cursor: pointer; font-weight: 600; padding: 0; font-size: 13px; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
-        .dms-field > span { font-weight: 600; }
+        .dms-field > span { font-weight: 600; color: black; font-size: 14px; }
         .dms-field .req { color: #d13438; font-style: normal; }
         .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
         /* Client, 2026-09-04: *"the icon arrow for each dropdown is too close to the border, move it
@@ -3824,7 +4244,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            reads as belonging to the NEXT control along, which on this row is a different
            field entirely. */
         .dms-labelrow { display: flex; align-items: center; gap: 3px; }
-        .dms-info { position: relative; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
+        /* The client's own information mark (2026-09-04), supplied as a PNG. The circle and the
+           letter "i" used to be DRAWN here in CSS - both are in the image now, so the border, the
+           background and the font rules are gone or they would ring the artwork a second time.
+           Size stays 18px so the label rows beside it do not move. */
+        .dms-info { position: relative; flex: 0 0 auto; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; font-style: normal; }
         .dms-info-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; font-weight: 400; }
         /* The rightmost icon on the row would push its panel past the card edge. */
         .dms-info.align-right .dms-info-panel { left: auto; right: 0; }
@@ -3844,7 +4268,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            four characters and needs almost none. */
         .dms-grid-3 { grid-template-columns: 1.8fr 0.9fr 1.3fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; }
-        .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; color: #1b1b1b; }
+        .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; cursor: pointer; color: black; }
         .dms-radio-group input[type="radio"] { accent-color: #0f6c3f; width: 16px; height: 16px; cursor: pointer; }
         .dms-dept-badge { display: inline-flex; align-items: center; gap: 8px; background: #e8f5ee; border: 1px solid #b3d9c4; border-radius: 20px; padding: 5px 14px; font-size: 13px; margin-bottom: 20px; }
         .dms-dept-badge .dept-label { font-weight: 400; color: #555; }
@@ -3857,7 +4281,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-admin-row { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
         .dms-admin-badge { display: inline-flex; align-items: center; background: #fff4e5; border: 1px solid #f0c070; border-radius: 20px; padding: 5px 14px; font-size: 13px; font-weight: 700; color: #7a4f00; white-space: nowrap; }
         .dms-admin-row select { padding: 6px 10px; border: 1px solid #c8c8c8; border-radius: 4px; font: inherit; font-size: 13px; }
+        /* "Add another set" now shares this row (client, 2026-09-04), and it sits at the LEFT while
+           Cancel and Upload stay right - margin-right auto on the first child does that without
+           changing the justification the other two rely on.
+           No backticks anywhere in this block: this whole style body is a JS template literal and one
+           backtick in a comment ends it. That has broken this file five times. */
         .dms-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px; flex-wrap: wrap; }
+        .dms-actions > .ghost:first-child { margin-right: auto; }
 
         /* Batches and staged files (2026-08-15). Plain and quiet: this list sits above the fields and
            must not compete with them for attention. */
@@ -3869,8 +4299,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-batch-no { font-weight: 600; font-size: 12.5px; }
         .dms-batch-path { font-size: 12px; color: #4a5a50; flex: 1 1 200px; word-break: break-word; }
         .dms-batch-count { font-size: 11.5px; color: #6b7a71; }
-        .dms-batch-files { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: #4a5a50; }
-        .dms-batch-files li { margin-bottom: 3px; }
+        .dms-batch-files { margin: 8px 0 0; padding-left: 18px; background: rgba(243, 242, 241, 1); font-size: 12px; color: rgba(50, 49, 48, 1); border-radius: 6px;}
+        .dms-batch-files p { margin-bottom: 10px; font-size: 14px; color: rgba(50, 49, 48, 1);  }
         .dms-batch-err { display: block; color: #a4262c; font-style: normal; font-size: 11.5px; }
         .dms-batch-warn { margin: 8px 0 0; font-size: 11.5px; color: #8a4b00; line-height: 1.5; }
         .dms-batch-note { margin: 8px 0 0; font-size: 11.5px; color: #5f6f80; line-height: 1.5; }
@@ -3883,50 +4313,64 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-btn.ghost:disabled { color: #9aa8a0; border-color: #e6ebe8; cursor: default; }
         .dms-batchcard { border: 1px solid #e1e1e1; border-radius: 8px; background: #fff; margin-bottom: 16px; padding: 16px 18px; }
         .dms-batchcard.needs-repick { border-color: #f2c9a0; background: #fff8f0; }
-        .dms-batchcard-head { display: flex; align-items: center; gap: 10px; }
+        .dms-batchcard-head { display: flex; align-items: center; gap: 10px; margin-bottom: 20px; }
         .dms-batchcard-no { flex: 0 0 auto; width: 20px; height: 20px; border-radius: 50%; background: #0f6c3f;
           color: #fff; font-size: 11.5px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
-        .dms-batchcard-title { flex: 1 1 auto; font-size: 14px; font-weight: 600; color: #1b1b1b; }
+        .dms-batchcard-title { flex: 1 1 auto; font-size: 20px; font-weight: 600; color: #1b1b1b; }
         .dms-batchcard-icon { flex: 0 0 auto; background: none; border: none; cursor: pointer; padding: 4px 6px;
           color: #5f6f80; line-height: 0; border-radius: 4px; }
         .dms-batchcard-icon:hover:enabled { background: #f2f5f3; color: #1b1b1b; }
         .dms-batchcard-icon.danger:hover:enabled { color: #a4262c; background: #fdf3f4; }
         .dms-batchcard-icon:disabled { opacity: .4; cursor: not-allowed; }
-        .dms-batchcard-meta { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; font-size: 12px; color: #6b7a71; }
-        .dms-batchcard-path { color: #4a5a50; word-break: break-word; }
+        /* One row, left content and right metadata (client's design, 2026-09-04). It was
+           flex-wrap with a gap, so three items reflowed in whatever order the width allowed. */
+        .dms-batchcard-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-top: 8px; font-size: 12px; color: #6b7a71; }
+        .dms-batchcard-meta + .dms-batchcard-meta { margin-top: 4px; }
+        .dms-batchcard-side { color: #0f6c3f; }
+        /* The path is the line a reader scans for, so it takes the weight in the design. */
+        .dms-batchcard-path { color: #1b1b1b; font-weight: 600; word-break: break-word; }
         /* Numbered steps inside the open card. Plain dark text, not the green section
            caps: the green belongs to the panel headings INSIDE each step, and two
            levels of green reads as two levels of the same thing. */
         .dms-step { margin: 18px 0 8px; font-size: 13.5px; font-weight: 600; color: #1b1b1b; }
-        .dms-step-sub { margin: -4px 0 10px; font-size: 12px; color: #6b7a71; }
+        .dms-step-sub { margin: -4px 0 10px 19px; font-size: 12px; color: #6b7a71; }
         /* Save sits inside the card it acts on, right-aligned, clear of the page footer which
            acts on ALL batches. */
         .dms-cardactions { display: flex; justify-content: flex-end; padding: 4px 0 8px; }
         .dms-btn.secondary:disabled { border-color: #cfd8d3; color: #9aa8a0; cursor: default; }
 
         .dms-staged { margin-top: 16px; }
-        .dms-staged-head { margin: 0 0 8px; font-size: 12.5px; font-weight: 600; }
+        .dms-staged-head { font-size: 12.5px; font-weight: 600;   }
         /* ⚠ NO overflow-hidden HERE — and note this comment lives inside a template literal, so it
            must never contain a backtick. The per-file editor renders inside this row, and the
            Confidential Level and Legally Privileged info panels are absolutely positioned children
            of it — clipping the row cut the tooltip off at the row's edge, so the definitions the
            icon exists to show were unreadable. The rounded corners come from .dms-staged-head,
            which sets its own radius, so nothing is lost by removing it. */
-        .dms-staged-row { border: none; border-radius: 6px; margin-bottom: 6px; background: #fff; }
+        .dms-staged-row { border: 1px solid rgba(107, 114, 128, 1); border-radius: 6px; margin-bottom: 6px; background: #fff; }
         /* A CLASH keeps its tint. It is the one state on this row that must be visible without
            opening it — two files heading for the same saved name, which SharePoint would not warn
            about. With the borders gone the background is all that is left to carry it. */
         .dms-staged-row.clash { background: #fff8f0; }
         /* The tinted row is the padding box. Everything inside it — the header, the clash warning and
            the open editor — is inset by the same 12px, so nothing sits flush against the tint. */
-        .dms-staged-head { display: flex; align-items: stretch; background: rgba(250, 250, 250, 1); border-radius: 6px; }
+        .dms-staged-head { display: flex; align-items: stretch; background: rgba(250, 250, 250, 1); border-radius: 6px; padding: 3px 7px;  }
         .dms-staged-row.clash .dms-staged-head { background: transparent; }
         .dms-staged-row.short .dms-staged-head { background: #fff8f0; }
         .dms-staged-badge { flex: 0 1 auto; min-width: 0; font-size: 11px; color: #8a4b00; background: #ffeed9; border-radius: 10px; padding: 2px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .dms-staged-btn { display: flex; flex: 1 1 auto; min-width: 0; gap: 10px; align-items: center; background: none; border: none; font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
         .dms-staged-btn .name { flex: 1 1 auto; font-size: 13px; word-break: break-word; }
         .dms-staged-btn .size { font-size: 11.5px; color: #6b7a71; }
-        .dms-staged-btn .chev { font-size: 10px; color: #6b7a71; }
+        /* A bordered rounded box, per the client's screenshot (2026-09-04) - it was a bare glyph, so
+           nothing said the row could be opened. flex 0 0 auto keeps it square as the filename
+           grows; without it the box is squeezed thinner on a long name. */
+        .dms-staged-btn .chev { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 1px solid #e1e1e1; border-radius: 6px; background: #fff; font-size: 9px; color: #6b7a71; }
+        /* Delete File - the bin plus the words, quiet, bottom-left of the open editor. It is a
+           destructive control, so it is deliberately NOT red until hovered: a permanently red button
+           sitting under every file reads as an error state. */
+        .dms-delfile { display: inline-flex; align-items: center; gap: 8px; margin-top: 4px; padding: 6px 0; background: none; border: none; font: inherit; font-size: 13px; color: #6b7a71; cursor: pointer; }
+        .dms-delfile:hover:enabled { color: #a4262c; }
+        .dms-delfile:disabled { cursor: not-allowed; opacity: .5; }
         .dms-staged-x { flex: 0 0 auto; background: none; border: none; cursor: pointer; padding: 0 12px; font-size: 13px; line-height: 1; color: #8a8886; }
         .dms-staged-x:hover:enabled { color: #a4262c; }
         .dms-staged-x:disabled { cursor: not-allowed; opacity: .5; }
@@ -3940,7 +4384,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-btn.primary:disabled { background: #9bbfaa; cursor: default; }
         .dms-btn.secondary { background: #fff; border-color: #0f6c3f; color: #0f6c3f; }
         .dms-status { margin-top: 16px; font-size: 13px; }
-        .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
+        .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
         .dms-toast.error { background: #d13438; color: #fff; }
         .dms-toast.notice { background: #0f6c3f; color: #fff; }
         /* Deliberately NO .ms-* overrides here. They raced Fluent's runtime-injected styles and lost
@@ -3994,42 +4438,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         <div
           role="status"
           style={{
-            margin: "0 0 16px", padding: "10px 14px", borderRadius: 4,
+            margin: "0 0 16px",
+            padding: "10px 14px",
+            borderRadius: 4,
             ...NOTICE_ATTENTION,
-            fontSize: 13, lineHeight: 1.5,
+            fontSize: 13,
+            lineHeight: 1.5,
           }}
         >
-          <strong>Uploads are paused.</strong> {UPLOAD_PAUSE_MESSAGE.replace("Uploads are paused while an administrator reorganises the document folders. ", "")}
+          <strong>Uploads are paused.</strong>{" "}
+          {UPLOAD_PAUSE_MESSAGE.replace(
+            "Uploads are paused while an administrator reorganises the document folders. ",
+            "",
+          )}
         </div>
       ) : undefined}
 
-      {/* Add another batch — ABOVE every card, which is where the client put it. It OPENS an empty
-          form and nothing else; saving is a separate act on the card itself. Those were one button
-          until 2026-08-23, and combining them is what made a new batch appear unbidden after every
-          save.
-
-          Disabled while a batch is open, because there is one set of pickers: a second open form
-          would have to share them. The title says which of the two states you are in, since a
-          disabled button with no reason reads as a broken page. */}
-      <div className="dms-batchbar">
-        <button
-          type="button"
-          className="dms-btn ghost"
-          disabled={busy || deptLoading || draftOpen}
-          title={
-            draftOpen
-              ? "Finish the batch below first — save it, or discard it if you do not want it"
-              : "Start another batch"
-          }
-          onClick={() => {
-            setEditingAt(undefined);
-            setDraftOpen(true);
-            resetForm();
-          }}
-        >
-          + Add another batch
-        </button>
-      </div>
+      {/* ⚠ THE "Add another set" BAR MOVED TO THE BOTTOM ACTION ROW (client, 2026-09-04: *"Move the
+          Add Another Batch below around the Cancel button and Upload all batches"*). It used to sit
+          ABOVE every card — also at their request, on 2026-08-23 — so this reverses that placement,
+          not the behaviour. See `dms-actions` below. */}
 
       {/* Saved batches. One card per destination folder. NOTHING here has been uploaded - said
           plainly, because the one belief a user must never form is that saving a batch sent it.
@@ -4053,7 +4481,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               >
                 <div className="dms-batchcard-head">
                   <span className="dms-batchcard-no">{i + 1}</span>
-                  <span className="dms-batchcard-title">Batch {i + 1}</span>
+                  <span className="dms-batchcard-title">Set {i + 1}</span>
                   {/* Edit. Re-opens this batch as the draft — pickers, remark and files restored —
                       and takes it out of the saved list until it is saved again, so a half-changed
                       batch can never be uploaded. Disabled while another batch is open, because the
@@ -4062,19 +4490,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     type="button"
                     className="dms-batchcard-icon"
                     disabled={busy || draftOpen}
-                    aria-label={`Edit batch ${i + 1}`}
+                    aria-label={`Edit set ${i + 1}`}
                     title={
                       draftOpen
-                        ? "Save or discard the batch you are working on first"
-                        : `Edit batch ${i + 1}`
+                        ? "Save or discard the set you are working on first"
+                        : `Edit set ${i + 1}`
                     }
                     onClick={() => beginEditBatch(b, i)}
                   >
-                    <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 16 16"
+                      aria-hidden="true"
+                    >
                       <path
                         d="M11.2 2.3l2.5 2.5M2.5 11.5l8.1-8.1 2.5 2.5-8.1 8.1-3.2.7z"
-                        fill="none" stroke="currentColor" strokeWidth="1.3"
-                        strokeLinecap="round" strokeLinejoin="round"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.3"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
                       />
                     </svg>
                   </button>
@@ -4082,16 +4518,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     type="button"
                     className="dms-batchcard-icon"
                     aria-expanded={open}
-                    aria-label={`${open ? "Collapse" : "Expand"} batch ${i + 1}`}
-                    onClick={() => setOpenBatches((prev) => ({ ...prev, [b.id]: !open }))}
+                    aria-label={`${open ? "Collapse" : "Expand"} set ${i + 1}`}
+                    onClick={() =>
+                      setOpenBatches((prev) => ({ ...prev, [b.id]: !open }))
+                    }
                   >
                     {/* Inline SVG, not a glyph: a unicode chevron renders at a different weight in
                         every font on the estate, and in one of them it is an emoji. */}
-                    <svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true">
+                    <svg
+                      width="11"
+                      height="11"
+                      viewBox="0 0 12 12"
+                      aria-hidden="true"
+                    >
                       <path
                         d={open ? "M2 8 L6 4 L10 8" : "M2 4 L6 8 L10 4"}
-                        fill="none" stroke="currentColor" strokeWidth="1.8"
-                        strokeLinecap="round" strokeLinejoin="round"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.8"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
                       />
                     </svg>
                   </button>
@@ -4102,12 +4548,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     type="button"
                     className="dms-batchcard-icon danger"
                     disabled={busy}
-                    aria-label={`Remove batch ${i + 1}`}
+                    aria-label={`Remove set ${i + 1}`}
                     onClick={() => {
                       if (
                         b.files.length > 0 &&
-                                !window.confirm(
-                          `Remove batch ${i + 1}? Its ${b.files.length} document` +
+                        !window.confirm(
+                          `Remove set ${i + 1}? Its ${b.files.length} document` +
                             `${b.files.length === 1 ? "" : "s"} will have to be chosen again - ` +
                             `nothing has been uploaded yet.`,
                         )
@@ -4126,45 +4572,106 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                       }
                     }}
                   >
-                    <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-                      <path
-                        d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.6 9h5.8l.6-9"
-                        fill="none" stroke="currentColor" strokeWidth="1.4"
-                        strokeLinecap="round" strokeLinejoin="round"
-                      />
-                    </svg>
+                    {/* The client's own bin, supplied as Icon.png on 2026-09-04, replacing the
+                        hand-drawn SVG that was here.
+
+                        WARN: A BASE64 DATA URI, NOT A PACKAGED FILE. Shipping an image asset in this
+                        package has failed to provision on this tenant TWICE, both times silently -
+                        the New Folder customizer, then the bulk-approve command set - so a
+                        src-referenced PNG would render as a broken box with nothing explaining it.
+                        The bulk-approve command set carries its icon the same way, and the warning
+                        banner's mark is inlined as SVG for the same reason.
+
+                        WARN: IT IS A PNG, so unlike the SVG it replaces it CANNOT take its colour
+                        from currentColor. The button's hover and disabled states no longer tint it -
+                        opacity is what carries "disabled" now. A coloured variant would have to come
+                        from the client as another file.
+
+                        498 bytes on disk, small enough that inlining costs nothing measurable. The
+                        root Icon.png is the design source and is not built or copied anywhere. */}
+                    <img
+                      src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABIAAAAWCAYAAADNX8xBAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAOdEVYdFNvZnR3YXJlAEZpZ21hnrGWYwAAAW1JREFUeAHdlV1OwkAQx2eGHoAjwAnUG+AJoPoIBKqNiU/iCdATGJ5MBFIs+igrJ9AbyA3kBuAzsutM+UgotJZgYsI/2d3OdueXmUl3ihChdlfVDUIBDByyOeYxADQdt3TyuOk8btpsddUbLzmGjPnEYL6dmzvcnJft27APrUXy3K/PnHQjNYWsW7aPZUy+IcvgoWFQs6tyv4KM1lVxcMunNcexx4v9S8cecqrOLCpdCPshp/HJawZ2kDH62uIU+hzYVageSRXUEckaBRZHZeYF3kri1/R7r/JMsKMQcBQLkto1/ZdalB1WXEQZRMrH2IlBW+n/QfeeyvwJKKw9BlnBbILGlV59pRuA1keUnVqcR/0VLDItGpkmOLoo2okuLt+xDiJWiKhwVsz3aRYQBB2PNKjWU68SB/A8lW776k4g0rcEsoxI9OCrKiF4kFQGBpMp2NLwVkAi+cgs0lUkOoC1mi0BQyB6d0v5lZ/ADw75iaduaQgFAAAAAElFTkSuQmCC"
+                      width={14}
+                      height={14}
+                      alt=""
+                      aria-hidden="true"
+                      style={{ display: "block", opacity: busy ? 0.4 : 1 }}
+                    />
                   </button>
                 </div>
 
                 {/* The summary line the mockup shows: where it goes, how much, and when it was
                     staged. Readable while collapsed, which is the state it is normally in. */}
+                {/* ⚠ TWO JUSTIFIED ROWS, to the client's design (2026-09-04). It was ONE wrapping
+                    flex row holding path, file count and date together, so on a long path the three
+                    reflowed into an order nobody chose. The design puts what the set IS on the left
+                    of each row and its metadata hard right.
+
+                    Row 1: where it goes. Row 2: the folder path, and how many documents.
+
+                    ⚠ THE SIDE LABEL IS RESOLVED FROM `modes`, NOT STORED ON THE BATCH. `Batch` holds
+                    `segmentKey` and deliberately knows nothing about business segments — that module
+                    must not learn what a term GUID or a category is. Falling back to blank rather
+                    than guessing: a segment removed from config while a set was staged would
+                    otherwise be labelled as the wrong category. */}
                 <div className="dms-batchcard-meta">
-                  <span className="dms-batchcard-path">{b.pathLabels.join(" / ")}</span>
                   <span>
-                    {b.files.length} file{b.files.length === 1 ? "" : "s"}
+                    Upload to{" "}
+                    <strong className="dms-batchcard-side">
+                      {(() => {
+                        const m = modes.filter(
+                          (x) => x.key === b.segmentKey,
+                        )[0];
+                        if (!m) return "";
+                        /* The SAME wording as the radio above, deliberately. The two disagreed for
+                           a day - the design said "Group-led Project", the radio "Group Led Project"; the client
+                           settled on "Group-Led Project" on 2026-09-04 -
+                           and the client settled it on 2026-09-04: hyphenated, everywhere. */
+                        return m.side === "Project"
+                          ? "Group-Led Project"
+                          : "Business Segment";
+                      })()}
+                    </strong>
                   </span>
-                  {b.createdAt ? <span>Created on {stagedAtLabel(b.createdAt)}</span> : null}
+                  {b.createdAt ? (
+                    <span>Created on {stagedAtLabel(b.createdAt)}</span>
+                  ) : (
+                    <span />
+                  )}
+                </div>
+                <div className="dms-batchcard-meta">
+                  {/* " > " rather than " / ", per the design - it reads as a path down a tree. */}
+                  <span className="dms-batchcard-path">
+                    {b.pathLabels.join(" > ")}
+                  </span>
+                  {/* "docs", not "files": the design's word, and the one the count actually means. */}
+                  <span>
+                    {b.files.length} doc{b.files.length === 1 ? "" : "s"}
+                  </span>
                 </div>
 
                 {/* A repick warning is NEVER hidden behind the collapse - it is the one thing on a
                     saved batch that needs acting on, and a warning nobody scrolls to is not one. */}
                 {b.needsRepick && (
                   <p className="dms-batch-warn">
-                    The folder structure for this segment changed while this page was open. Remove this
-                    batch and add it again with the current destination - its files are still listed
-                    here, and nothing has been lost.
+                    The folder structure for this segment changed while this
+                    page was open. Remove this batch and add it again with the
+                    current destination - its files are still listed here, and
+                    nothing has been lost.
                   </p>
                 )}
 
                 {open && (
-                  <ul className="dms-batch-files">
+                  <div className="dms-batch-files">
                     {b.files.map((sf) => (
-                      <li key={sf.id}>
+                      <p key={sf.id}>
                         <span>{sf.finalName ?? sf.file.name}</span>
-                        {sf.error && <em className="dms-batch-err">{sf.error}</em>}
-                      </li>
+                        {sf.error && (
+                          <em className="dms-batch-err">{sf.error}</em>
+                        )}
+                      </p>
                     ))}
-                  </ul>
+                  </div>
                 )}
               </div>
             );
@@ -4175,20 +4682,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   is unchanged and is what makes a second press safe: a successful file leaves the
                   list, so what remains is exactly what still needs doing. Only the sentence is
                   gone. */}
-              Uploaded {lastRun.ok}. The {lastRun.failed} still listed above could not be uploaded -
-              fix the reason shown and press Upload again.
+              Uploaded {lastRun.ok}. The {lastRun.failed} still listed above
+              could not be uploaded - fix the reason shown and press Upload
+              again.
             </p>
           )}
           {crossBatchDupes.length > 0 && (
             <p className="dms-batch-note">
-              The same document appears in more than one batch: {crossBatchDupes.join(", ")}. That is
-              allowed - it will be filed in each place.
+              The same document appears in more than one batch:{" "}
+              {crossBatchDupes.join(", ")}. That is allowed - it will be filed
+              in each place.
             </p>
           )}
           {(stagedNow.overCount || stagedNow.overBytes) && (
             <p className="dms-batch-warn">
-              {stagedNow.files} documents are waiting in this browser and none of them have been sent
-              yet. Uploading now is safer than staging more - if this tab closes, they are lost.
+              {stagedNow.files} documents are waiting in this browser and none
+              of them have been sent yet. Uploading now is safer than staging
+              more - if this tab closes, they are lost.
             </p>
           )}
         </>
@@ -4214,23 +4724,29 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           immediately above the card and must move with it. */}
       {draftOpen && (
         <p className="dms-batch-intro">
-          Add folder information, upload documents and provide details for each document.
+          Add folder information, upload documents and provide details for each
+          document.
           <br />
           All fields marked <strong>*</strong> are mandatory.
         </p>
       )}
 
       {draftOpen && (
-      <div className="dms-batchcard open">
-        <div className="dms-batchcard-head">
-          <span className="dms-batchcard-no">
-            {editingAt === undefined ? batches.length + 1 : editingAt + 1}
-          </span>
-          <span className="dms-batchcard-title">
-            Batch {editingAt === undefined ? batches.length + 1 : editingAt + 1}
-            {editingAt === undefined ? "" : " (editing)"}
-          </span>
-          {/* Discard.
+        <div className="dms-batchcard open">
+          <div className="dms-batchcard-head">
+            <span className="dms-batchcard-no">
+              {editingAt === undefined ? batches.length + 1 : editingAt + 1}
+            </span>
+            {/* "(editing)" REMOVED (client, 2026-09-04). It marked a re-opened card, but the card
+                being open IS that state, and the suffix only appeared for a re-open — so the same
+                card read differently depending on how it got there.
+                "Set" here completes the 2026-09-04 rename: this and the collapsed card's title were
+                JSX TEXT rather than string literals, so the earlier pass over quoted strings did not
+                reach them. */}
+            <span className="dms-batchcard-title">
+              Set {editingAt === undefined ? batches.length + 1 : editingAt + 1}
+            </span>
+            {/* Discard.
               ⚠ THERE IS ALWAYS A FORM ON THE PAGE (client, 2026-08-23: "ensure that there is always
               one upload form"). So this CLEARS the card and only CLOSES it when a saved batch is
               left behind to work from. Closing the last one stranded the uploader on a page with
@@ -4239,61 +4755,70 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               An empty card clears without a dialog — there is nothing to lose, and confirming
               nothing trains people to click through the dialog that matters. With files staged it
               confirms, because a File handle cannot be recovered once dropped. */}
-          <button
-            type="button"
-            className="dms-batchcard-icon danger"
-            disabled={busy}
-            aria-label={batches.length > 0 ? "Discard this batch" : "Clear this batch"}
-            title={
-              batches.length > 0
-                ? "Discard this batch"
-                : "Clear this batch — the form stays, there is always one"
-            }
-            onClick={() => {
-              const n = draftFiles.length;
-              if (
-                n > 0 &&
-                !window.confirm(
-                  `${batches.length > 0 ? "Discard" : "Clear"} this batch? Its ${n} document` +
-                    `${n === 1 ? "" : "s"} will have to be chosen again — nothing has been ` +
-                    `uploaded yet.`,
-                )
-              ) {
-                return;
+            <button
+              type="button"
+              className="dms-batchcard-icon danger"
+              disabled={busy}
+              aria-label={
+                batches.length > 0 ? "Discard this set" : "Clear this set"
               }
-              setDraftFiles([]);
-              setActiveFileId("");
-              setFile(undefined);
-              setEditingAt(undefined);
-              // Close only if there is something else on the page. Otherwise the card stays, empty.
-              if (batches.length > 0) setDraftOpen(false);
-              resetForm();
-            }}
-          >
-            <svg width="12" height="12" viewBox="0 0 16 16" aria-hidden="true">
-              <path
-                d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.6 9h5.8l.6-9"
-                fill="none" stroke="currentColor" strokeWidth="1.4"
-                strokeLinecap="round" strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-        </div>
+              title={
+                batches.length > 0
+                  ? "Discard this set"
+                  : "Clear this set — the form stays, there is always one"
+              }
+              onClick={() => {
+                const n = draftFiles.length;
+                if (
+                  n > 0 &&
+                  !window.confirm(
+                    `${batches.length > 0 ? "Discard" : "Clear"} this batch? Its ${n} document` +
+                      `${n === 1 ? "" : "s"} will have to be chosen again — nothing has been ` +
+                      `uploaded yet.`,
+                  )
+                ) {
+                  return;
+                }
+                setDraftFiles([]);
+                setActiveFileId("");
+                setFile(undefined);
+                setEditingAt(undefined);
+                // Close only if there is something else on the page. Otherwise the card stays, empty.
+                if (batches.length > 0) setDraftOpen(false);
+                resetForm();
+              }}
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+              >
+                <path
+                  d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.6 9h5.8l.6-9"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
 
-      <p className="dms-step">1. Document folder information</p>
-      {/* ── Document Folder Information ──────────────────────────────────── */}
-      {/* Deliberately BEFORE Document Details in SOURCE order, not reordered with
+          {/* ── Document Folder Information ──────────────────────────────────── */}
+          {/* Deliberately BEFORE Document Details in SOURCE order, not reordered with
           CSS: tab order follows the DOM, so a visual-only swap would have keyboard
           users moving through the form in a different sequence from what they see. */}
-      <div className="dms-section">
-        <p className="dms-section-title">Document Folder Information</p>
+          <div className="dms-section">
+            <p className="dms-section-title">1. Document Folder Information</p>
 
-        {deptLoading ? (
-          <p className="dms-dept-loading">Loading your access&hellip;</p>
-        ) : !privileged && validPaths.length === 0 ? (
-          <div className="dms-dept-error">
-            {awaitingFolders ? (
-              /* The user's GROUPS are correct — the folder side is not. Two different
+            {deptLoading ? (
+              <p className="dms-dept-loading">Loading your access&hellip;</p>
+            ) : !privileged && validPaths.length === 0 ? (
+              <div className="dms-dept-error">
+                {awaitingFolders ? (
+                  /* The user's GROUPS are correct — the folder side is not. Two different
                  causes with one fix: either the folder does not exist, or it exists and
                  this user's group was never granted access to it (the far more common
                  case, since creating a group grants nothing until reconciliation runs).
@@ -4302,310 +4827,362 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                  reconciliation alone would silently change nothing for it.
                  The membership message below must not be shown here — it would send the
                  administrator to check groups that are already right. */
-              <>
-                Your unit isn&apos;t ready to receive uploads yet. Your
-                administrator needs to run folder reconciliation — and if the unit
-                has no folder at all, give it an abbreviation in the CRS Term
-                Abbreviation list first.
-              </>
-            ) : (
-              <>
-                Your account isn&apos;t fully provisioned to upload — you need
-                membership at every level plus the unit uploader role. Contact
-                your administrator.
-              </>
-            )}
-          </div>
-        ) : null}
+                  <>
+                    Your unit isn&apos;t ready to receive uploads yet. Your
+                    administrator needs to run folder reconciliation — and if
+                    the unit has no folder at all, give it an abbreviation in
+                    the CRS Term Abbreviation list first.
+                  </>
+                ) : (
+                  <>
+                    Your account isn&apos;t fully provisioned to upload — you
+                    need membership at every level plus the unit uploader role.
+                    Contact your administrator.
+                  </>
+                )}
+              </div>
+            ) : null}
 
-        {/* Business Segment | Project toggle — a side shows only if the user can
+            {/* Business Segment | Project toggle — a side shows only if the user can
             actually upload there (privileged users see every configured side). */}
-        <div className="dms-radio-group">
-          <p>Upload to</p>
-          {(["BusinessSegment", "Project"] as const).map((side) => {
-            const sideModes = modes.filter((m) => m.side === side);
-            const offerable = privileged
-              ? sideModes
-              : sideModes.filter((m) =>
-                  validPaths.some((p) => p.modeKey === m.key),
-                );
-            if (offerable.length === 0) return null;
-            const active = activeMode()?.side === side;
-            return (
-              <label key={side}>
-                <input
-                  type="radio"
-                  name="sideToggle"
-                  checked={active}
-                  onChange={() => switchMode(offerable[0].key)}
-                />
-                {/* ⚠ HARDCODED to "Group Led Project", client's explicit instruction
+            <div className="dms-radio-group">
+              <p style={{ fontSize: 14, color: "black", fontWeight: 600 }}>
+                Upload to
+              </p>
+              {(["BusinessSegment", "Project"] as const).map((side) => {
+                const sideModes = modes.filter((m) => m.side === side);
+                const offerable = privileged
+                  ? sideModes
+                  : sideModes.filter((m) =>
+                      validPaths.some((p) => p.modeKey === m.key),
+                    );
+                if (offerable.length === 0) return null;
+                const active = activeMode()?.side === side;
+                return (
+                  <label key={side}>
+                    <input
+                      type="radio"
+                      name="sideToggle"
+                      checked={active}
+                      onChange={() => switchMode(offerable[0].key)}
+                    />
+                    {/* ⚠ HARDCODED to "Group-Led Project" (capitalised on 2026-09-04), client's instruction
                     (2026-09-02) — the pilot has exactly one Project-category segment today.
                     This label answers the whole CATEGORY radio, not one segment, so it will
                     need revisiting the day a second Project-category segment is onboarded
                     (the generic "Project" wording this replaces was correct for that case and
                     wrong for this one; there is no label that is right for both). */}
-                {side === "BusinessSegment" ? "Business Segment" : "Group Led Project"}
-              </label>
-            );
-          })}
-        </div>
+                    {side === "BusinessSegment"
+                      ? "Business Segment"
+                      : "Group-Led Project"}
+                  </label>
+                );
+              })}
+            </div>
 
-        {/* Segment picker. Shown whenever a segment is offered, even if there is
+            {/* Segment picker. Shown whenever a segment is offered, even if there is
             only one: the mockup includes it, and hiding it made the form open on
             "Department" with no indication of which segment those departments
             belonged to. A single-option select still answers "where am I". */}
-        {(() => {
-          const side = activeMode()?.side;
-          const sideModes = modes.filter((m) => m.side === side);
-          const offerable = privileged
-            ? sideModes
-            : sideModes.filter((m) =>
-                validPaths.some((p) => p.modeKey === m.key),
-              );
-          if (offerable.length === 0) return null;
-          return (
-            <label className="dms-field">
-              <span>
-                {/* Same split as SegmentCreator's "Project name" vs "Segment name" — this
+            {(() => {
+              const side = activeMode()?.side;
+              const sideModes = modes.filter((m) => m.side === side);
+              const offerable = privileged
+                ? sideModes
+                : sideModes.filter((m) =>
+                    validPaths.some((p) => p.modeKey === m.key),
+                  );
+              if (offerable.length === 0) return null;
+              return (
+                <label className="dms-field">
+                  <span>
+                    {/* Same split as SegmentCreator's "Project name" vs "Segment name" — this
                     field is genuinely a category-scoped picker (unlike the radio above it),
                     so "Project" is correct here even once a second Project-category segment
                     exists. */}
-                {side === "Project" ? "Project" : "Segment"} <em className="req">*</em>
-              </span>
-              <select
-                value={uploadMode}
-                onChange={(e) => switchMode(e.target.value)}
-              >
-                {offerable.map((m) => (
-                  <option key={m.key} value={m.key}>
-                    {m.label}
-                    {/* Admins see every segment, including half-built ones, so that they
+                    {side === "Project" ? "Project" : "Segment"}{" "}
+                    <em className="req">*</em>
+                  </span>
+                  <select
+                    value={uploadMode}
+                    onChange={(e) => switchMode(e.target.value)}
+                  >
+                    {offerable.map((m) => (
+                      <option key={m.key} value={m.key}>
+                        {m.label}
+                        {/* Admins see every segment, including half-built ones, so that they
                         CAN test one — which means an unbuilt segment otherwise looks
                         identical to a live one here. Labelled, never disabled: disabling
                         it would remove the only reason for the exemption. Spec §9. */}
-                    {privileged &&
-                    segmentProvisionState(m.stagingFolder, mapSections) ===
-                      "unprovisioned"
-                      ? " — not fully set up yet"
-                      : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-          );
-        })()}
+                        {privileged &&
+                        segmentProvisionState(m.stagingFolder, mapSections) ===
+                          "unprovisioned"
+                          ? " — not fully set up yet"
+                          : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })()}
 
-        {/* What "not fully set up yet" means, and what to do about it. Admin-only, and shown only
+            {/* What "not fully set up yet" means, and what to do about it. Admin-only, and shown only
             when we actually KNOW the segment has no folders — `unknown` says nothing. */}
-        {privileged &&
-          segmentProvisionState(activeMode()?.stagingFolder, mapSections) ===
-            "unprovisioned" && (
-            <div className="dms-setup-warn">
-              <strong>This segment isn&apos;t ready to receive uploads.</strong> No folders
-              exist for it yet, so filing here will not work — and{" "}
-              <strong>uploaders cannot see it at all</strong> until it is finished. On the
-              Folder Administration page: give every term an{" "}
-              <strong>abbreviation</strong> (a term without one is skipped, and gets no
-              folder), add the groups and their Folder Access rows, then run{" "}
-              <strong>Folder Reconciliation</strong>. You are seeing it because you are an
-              administrator.
-            </div>
-          )}
+            {privileged &&
+              segmentProvisionState(
+                activeMode()?.stagingFolder,
+                mapSections,
+              ) === "unprovisioned" && (
+                <div className="dms-setup-warn">
+                  <strong>
+                    This segment isn&apos;t ready to receive uploads.
+                  </strong>{" "}
+                  No folders exist for it yet, so filing here will not work —
+                  and <strong>uploaders cannot see it at all</strong> until it
+                  is finished. On the Folder Administration page: give every
+                  term an <strong>abbreviation</strong> (a term without one is
+                  skipped, and gets no folder), add the groups and their Folder
+                  Access rows, then run <strong>Folder Reconciliation</strong>.
+                  You are seeing it because you are an administrator.
+                </div>
+              )}
 
-        {/* Restricted users: read-only breadcrumb of the resolved location. */}
-        {!privileged && activeMode() && (
-          <div className="dms-dept-badge">
-            <span className="dept-label">Uploading to:</span>
-            <span className="dept-name">
-              {[
-                activeMode()?.label,
-                ...(activeMode()?.levels ?? []).map(
-                  (_lvl, i) =>
-                    (levelChoices[i] ?? []).find(
-                      (o) => o.id === levelValues[i],
-                    )?.label,
-                ),
-              ]
-                .filter(Boolean)
-                .join(" › ")}
-            </span>
-          </div>
-        )}
+            {/* Restricted users: read-only breadcrumb of the resolved location. */}
+            {!privileged && activeMode() && (
+              <div className="dms-dept-badge">
+                <span className="dept-label">Uploading to:</span>
+                <span className="dept-name">
+                  {[
+                    activeMode()?.label,
+                    ...(activeMode()?.levels ?? []).map(
+                      (_lvl, i) =>
+                        (levelChoices[i] ?? []).find(
+                          (o) => o.id === levelValues[i],
+                        )?.label,
+                    ),
+                  ]
+                    .filter(Boolean)
+                    .join(" › ")}
+                </span>
+              </div>
+            )}
 
-        <div className="dms-grid dms-grid-3">
-          {/* --- File-path fields, in folder order: Segment (above) -> level(s)
+            <div className="dms-grid dms-grid-3">
+              {/* --- File-path fields, in folder order: Segment (above) -> level(s)
                  -> Year -> Document Type. Intermediate levels span the full row;
                  the deepest one shares a row of three with Year and Document Type,
                  which is the set that identifies a single destination folder. --- */}
-          {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
-            renderSelect(
-              lvl.label,
-              true,
-              levelValues[i] ?? "",
-              (v) => {
-                const md = activeMode();
-                if (md) handleLevelChange(md, i, v);
-              },
-              levelChoices[i] ?? [],
-              deptLoading ||
-                isLevelLocked(i) ||
-                (i > 0 && !levelValues[i - 1]),
-              `Select ${lvl.label}`,
-              i < arr.length - 1,
-            ),
-          )}
+              {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
+                renderSelect(
+                  lvl.label,
+                  true,
+                  levelValues[i] ?? "",
+                  (v) => {
+                    const md = activeMode();
+                    if (md) handleLevelChange(md, i, v);
+                  },
+                  levelChoices[i] ?? [],
+                  deptLoading ||
+                    isLevelLocked(i) ||
+                    (i > 0 && !levelValues[i - 1]),
+                  `Select ${lvl.label}`,
+                  i < arr.length - 1,
+                ),
+              )}
 
-          {/* The below-Unit chain, in path order. Each tier is a third-width select,
+              {/* The below-Unit chain, in path order. Each tier is a third-width select,
               so it flows onto the row the deepest permissioned level started —
               [Unit][Year][Document Type] today, [Unit][Function][Year] then
               [Document Type] once a tier is added. Nothing changes on a site that
               has not configured one. */}
-          {/* Only the tiers that apply to the chosen path. A unit with no subunits shows
+              {/* Only the tiers that apply to the chosen path. A unit with no subunits shows
               no SubUnit dropdown at all, rather than an empty required one it can never
               satisfy — which is what "not every unit has subunits" means on screen. */}
-          {tierPlan().tiers.map((t, i) => {
-            const parent = tierPlan().parents[i];
-            return renderSelect(
-              t.label,
-              true,
-              tierValues[t.column] ?? "",
-              (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
-              tierOptions(t, parent),
-              // A cascading tier is dead until the tier above it is chosen — the same rule
-              // the permissioned cascade uses, so it greys out rather than offering nothing.
-              !(t.termSet ?? "").trim() && !parent,
-            );
-          })}
+              {tierPlan().tiers.map((t, i) => {
+                const parent = tierPlan().parents[i];
+                return renderSelect(
+                  t.label,
+                  true,
+                  tierValues[t.column] ?? "",
+                  (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
+                  tierOptions(t, parent),
+                  // A cascading tier is dead until the tier above it is chosen — the same rule
+                  // the permissioned cascade uses, so it greys out rather than offering nothing.
+                  !(t.termSet ?? "").trim() && !parent,
+                );
+              })}
 
-          {/* Graceful empty-state: a segment whose term set has no child terms yet
+              {/* Graceful empty-state: a segment whose term set has no child terms yet
               (e.g. the non-GHO Head Offices before their Department/Unit trees are
               added) would otherwise show a dropdown with nothing but its
               "Select …" placeholder. Name the missing level instead. */}
-          {(() => {
-            const md = activeMode();
-            if (!md || md.levels.length === 0 || deptLoading || levelChoices.length === 0) return null;
-            for (let i = 0; i < md.levels.length; i++) {
-              const parentChosen = i === 0 || !!levelValues[i - 1];
-              if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
-                return (
-                  <div
-                    key="dms-empty-level"
-                    style={{ gridColumn: "1 / -1", padding: "8px 12px", ...NOTICE_ATTENTION, borderRadius: 4, fontSize: 13 }}
-                  >
-                    No {md.levels[i].label.toLowerCase()} options are configured for this segment yet — ask your administrator to add them in the term store before uploading here.
-                  </div>
-                );
-              }
-            }
-            return null;
-          })()}
+              {(() => {
+                const md = activeMode();
+                if (
+                  !md ||
+                  md.levels.length === 0 ||
+                  deptLoading ||
+                  levelChoices.length === 0
+                )
+                  return null;
+                for (let i = 0; i < md.levels.length; i++) {
+                  const parentChosen = i === 0 || !!levelValues[i - 1];
+                  if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
+                    return (
+                      <div
+                        key="dms-empty-level"
+                        style={{
+                          gridColumn: "1 / -1",
+                          padding: "8px 12px",
+                          ...NOTICE_ATTENTION,
+                          borderRadius: 4,
+                          fontSize: 13,
+                        }}
+                      >
+                        No {md.levels[i].label.toLowerCase()} options are
+                        configured for this segment yet — ask your administrator
+                        to add them in the term store before uploading here.
+                      </div>
+                    );
+                  }
+                }
+                return null;
+              })()}
 
-          {/* Spans the row. Single-line rather than a textarea, matching the
+              {/* Spans the row. Single-line rather than a textarea, matching the
               mockup — 250 characters is a sentence, not a paragraph, and a tall
               box invites people to write one. */}
-          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-            <span>Remark</span>
-            <input
-              type="text"
-              value={remark}
-              maxLength={250}
-              onChange={(e) => guard("remark", e.target.value, setRemark)}
-            />
-            {blockedChar.remark ? (
-              <small className="dms-err">{blockedChar.remark}</small>
-            ) : (
-              <small>Max. 250 characters</small>
-            )}
-          </label>
-        </div>
-      </div>
+              <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Remark</span>
+                <input
+                  type="text"
+                  value={remark}
+                  maxLength={250}
+                  onChange={(e) => guard("remark", e.target.value, setRemark)}
+                />
+                {blockedChar.remark ? (
+                  <small className="dms-err">{blockedChar.remark}</small>
+                ) : (
+                  <small>Max. 250 characters</small>
+                )}
+              </label>
+            </div>
+          </div>
 
-      <p className="dms-step">2. Upload documents</p>
-      <div className="dms-section">
-        {/* An empty AllowedFileTypes selection is a hard block, not a silent
+          <div className="dms-section">
+            <p className="dms-section-title">2. Upload documents</p>
+            {/* An empty AllowedFileTypes selection is a hard block, not a silent
             fallback — spec 2026-07-30 §3. The message names the column and the
             list because the client is the one who fixes it, in one click. */}
-        {settings.allowedFileTypes.kind === "none" ? (
-          <div className="dms-dropzone" style={{ opacity: 0.6 }}>
-            <span>{NO_TYPES_MESSAGE}</span>
-          </div>
-        ) : (
-          /* Click anywhere to open the picker, or drop a file on it. The card
+            {settings.allowedFileTypes.kind === "none" ? (
+              <div className="dms-dropzone" style={{ opacity: 0.6 }}>
+                <span>{NO_TYPES_MESSAGE}</span>
+              </div>
+            ) : (
+              /* Click anywhere to open the picker, or drop a file on it. The card
              leads the section because choosing the document is the first thing
              anyone does, and the fields below describe what was chosen. */
-          <div
-            // ⚠ Keyed on the STAGED LIST, not `file`. `file` holds only the last document ADDED, so
-            // a batch re-opened for editing has files but no `file` — and the zone fell back to its
-            // empty stacked layout while saying "1 document in this batch". The count and the
-            // layout now read the same thing.
-            className={`dms-dropzone${dragOver ? " over" : ""}${draftFiles.length > 0 ? " has-file" : ""}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => fileRef.current?.click()}
-            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") fileRef.current?.click(); }}
-            // preventDefault on dragOver is what makes the element a valid drop
-            // target; without it the browser navigates to the file instead.
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              acceptFiles(e.dataTransfer?.files);
-            }}
-          >
-            {/* Counts the batch, not one file. It used to name the single chosen document and offer
+              <div
+                // ⚠ Keyed on the STAGED LIST, not `file`. `file` holds only the last document ADDED, so
+                // a batch re-opened for editing has files but no `file` — and the zone fell back to its
+                // empty stacked layout while saying "1 document in this set". The count and the
+                // layout now read the same thing.
+                className={`dms-dropzone${dragOver ? " over" : ""}${draftFiles.length > 0 ? " has-file" : ""}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => fileRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ")
+                    fileRef.current?.click();
+                }}
+                // preventDefault on dragOver is what makes the element a valid drop
+                // target; without it the browser navigates to the file instead.
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  acceptFiles(e.dataTransfer?.files);
+                }}
+              >
+                {/* Counts the batch, not one file. It used to name the single chosen document and offer
                 "Change Document" — with several staged, that named whichever was added last and
                 invited the client to swap it, when what they want is to add another. */}
-            {draftFiles.length > 0 ? (
-              <>
-                <span className="dms-filecard-ready">READY</span>
-                <span className="name">
-                  {draftFiles.length} document{draftFiles.length === 1 ? "" : "s"} in this batch
-                </span>
-                <span className="size">{formatFileSize(draftFiles.reduce((n, x) => n + x.file.size, 0))}</span>
-                <span className="dms-link dms-filecard-action">Add more documents</span>
-              </>
-            ) : (
-              <>
-                {/* Inlined rather than imported: an <img> would need an asset
+                {draftFiles.length > 0 ? (
+                  <>
+                    <span className="dms-filecard-ready">READY</span>
+                    <span className="name">
+                      {draftFiles.length} document
+                      {draftFiles.length === 1 ? "" : "s"} in this batch
+                    </span>
+                    <span className="size">
+                      {formatFileSize(
+                        draftFiles.reduce((n, x) => n + x.file.size, 0),
+                      )}
+                    </span>
+                    <span className="dms-link dms-filecard-action">
+                      Add more documents
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    {/* Inlined rather than imported: an <img> would need an asset
                     loader and a second network request for a 20-line glyph. */}
-                <svg className="dms-dropzone-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 3v10m0 0 4-4m-4 4-4-4" fill="none" stroke="currentColor"
-                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none"
-                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <span>
-                  <span className="dms-link">Choose a document</span> or drop it here
-                </span>
-              </>
+                    <svg
+                      className="dms-dropzone-icon"
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M12 3v10m0 0 4-4m-4 4-4-4"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <span>
+                      <span className="dms-link">Choose a document</span> or
+                      drop it here
+                    </span>
+                  </>
+                )}
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  accept={settings.allowedFileTypes.types.join(",")}
+                  style={{ display: "none" }}
+                  onChange={(e) => acceptFiles(e.target.files)}
+                />
+              </div>
             )}
-            <input
-              ref={fileRef}
-              type="file"
-              multiple
-              accept={settings.allowedFileTypes.types.join(",")}
-              style={{ display: "none" }}
-              onChange={(e) => acceptFiles(e.target.files)}
-            />
           </div>
-        )}
 
-      </div>
-
-      <p className="dms-step">3. Document information for each file</p>
-      <p className="dms-step-sub">Provide document information for each uploaded file.</p>
-      <div className="dms-section">
-
-        {/* ── The batch being built ───────────────────────────────────────────
-            One row per staged file; the fields below edit whichever row is open. */}
-        {draftFiles.length > 0 && (
-          <div className="dms-staged">
-            <p className="dms-staged-head">
-              {draftFiles.length} document{draftFiles.length === 1 ? "" : "s"} selected
+          <div className="dms-section">
+            <p className="dms-section-title">
+              3. Document information for each file
             </p>
-            {/* WARN: CAPPED ONLY WHILE EVERY ROW IS COLLAPSED, and that condition is load-bearing.
+            <p className="dms-step-sub">
+              Provide document information for each uploaded file.
+            </p>
+
+            {/* ── The batch being built ───────────────────────────────────────────
+            One row per staged file; the fields below edit whichever row is open. */}
+            {draftFiles.length > 0 && (
+              <div className="dms-staged">
+                {/* WARN: CAPPED ONLY WHILE EVERY ROW IS COLLAPSED, and that condition is load-bearing.
                 Client, 2026-08-27: *"if the file have 30 files it will be too long to scroll"* - true
                 once MAX_FILES_PER_BATCH arrived. The cap was lowered to 20 later the same day, which
                 shortens the list but does not remove the need for this: 20 collapsed rows still runs
@@ -4620,27 +5197,41 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
                 The header stays OUTSIDE the box so the count does not scroll away, matching the
                 abbreviation editor's warning and Save. */}
-            <div
-              className="dms-staged-scroll"
-              style={
-                activeFileId
-                  ? undefined
-                  : { maxHeight: "55vh", overflowY: "auto", paddingRight: 4 }
-              }
-            >
-            {draftFiles.map((sf) => {
-              const open = sf.id === activeFileId;
-              const clash = draftCollisions.indexOf(sf.id) !== -1;
-              // Recomputed live, so the badge clears as the fields are filled rather than lingering
-              // until the next save attempt — a marker that outlives its cause is worse than none.
-              const short = incompleteIds.indexOf(sf.id) !== -1 ? missingForFile(sf) : [];
-              return (
-                <div key={sf.id} className={`dms-staged-row${open ? " open" : ""}${clash ? " clash" : ""}${short.length > 0 ? " short" : ""}`}>
-                  {/* The remove control is a SIBLING of the toggle, not inside it: a button nested in a
+                <div
+                  className="dms-staged-scroll"
+                  style={
+                    activeFileId
+                      ? undefined
+                      : {
+                          maxHeight: "55vh",
+                          overflowY: "auto",
+                          paddingRight: 4,
+                        }
+                  }
+                >
+                  {draftFiles.map((sf) => {
+                    const open = sf.id === activeFileId;
+                    const clash = draftCollisions.indexOf(sf.id) !== -1;
+                    // Recomputed live, so the badge clears as the fields are filled rather than lingering
+                    // until the next save attempt — a marker that outlives its cause is worse than none.
+                    const short =
+                      incompleteIds.indexOf(sf.id) !== -1
+                        ? missingForFile(sf)
+                        : [];
+                    return (
+                      <div
+                        key={sf.id}
+                        className={`dms-staged-row${open ? " open" : ""}${clash ? " clash" : ""}${short.length > 0 ? " short" : ""}`}
+                      >
+                        {/* The remove control is a SIBLING of the toggle, not inside it: a button nested in a
                       button is invalid HTML, and browsers resolve it by dropping one of the two. */}
-                  <div className="dms-staged-head">
-                    <button type="button" className="dms-staged-btn" onClick={() => selectFile(sf.id)}>
-                      {/* ⚠ THE ORIGINAL FILENAME UNTIL THE COMPOSED NAME IS REAL (client, 2026-08-26:
+                        <div className="dms-staged-head">
+                          <button
+                            type="button"
+                            className="dms-staged-btn"
+                            onClick={() => selectFile(sf.id)}
+                          >
+                            {/* ⚠ THE ORIGINAL FILENAME UNTIL THE COMPOSED NAME IS REAL (client, 2026-08-26:
                           *"I select one file and prefill the file name. Then I select more files with
                           different name and suddenly it name the three more files test test test"*).
 
@@ -4659,107 +5250,123 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                           So the row shows WHICH FILE THIS IS until the name is settled, and what it
                           BECOMES only once that is true. The open row's "Saves as" line already shows
                           the composed preview throughout, which is where that belongs. */}
-                      <span className="name">
-                        {nameSettled(sf) ? (sf.finalName ?? sf.file.name) : sf.file.name}
-                      </span>
-                      {short.length > 0 && (
-                        // Names the fields on the row itself. The count alone would send someone
-                        // opening five documents to find the one thing each is missing.
-                        <span className="dms-staged-badge" title={`Still needed: ${listPhrase(short)}`}>
-                          Needs {listPhrase(short)}
-                        </span>
-                      )}
-                      <span className="size">{formatFileSize(sf.file.size)}</span>
-                      <span className="chev">{open ? "▲" : "▼"}</span>
-                    </button>
-                    {/* On EVERY row, not just the open one. Each row names its own file, so there is no
-                        ambiguity about what this removes — and requiring a file to be opened before it
-                        can be dropped is friction on the commonest correction: picked the wrong file. */}
-                    <button
-                      type="button"
-                      className="dms-staged-x"
-                      title={`Remove ${sf.file.name} from this batch`}
-                      aria-label={`Remove ${sf.file.name} from this batch`}
-                      disabled={busy}
-                      onClick={() => {
-                        const left = draftFiles.filter((x) => x.id !== sf.id);
-                        setDraftFiles(left);
-                        // Only move the editor if the row being removed was the one open in it.
-                        if (open) {
-                          setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
-                          if (left.length > 0) applyEditor(left[left.length - 1].meta);
-                        }
-                      }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  {/* The composed name, directly under the file it applies to (client, 2026-08-23).
+                            <span className="name">
+                              {nameSettled(sf)
+                                ? (sf.finalName ?? sf.file.name)
+                                : sf.file.name}
+                            </span>
+                            {short.length > 0 && (
+                              // Names the fields on the row itself. The count alone would send someone
+                              // opening five documents to find the one thing each is missing.
+                              <span
+                                className="dms-staged-badge"
+                                title={`Still needed: ${listPhrase(short)}`}
+                              >
+                                Needs {listPhrase(short)}
+                              </span>
+                            )}
+                            <span className="size">
+                              {formatFileSize(sf.file.size)}
+                            </span>
+                            <span className="chev">{open ? "▲" : "▼"}</span>
+                          </button>
+                          {/* ⚠ THE ROW-LEVEL "✕" IS GONE (client, 2026-09-04) - removal now lives on
+                              a "Delete File" button INSIDE the open editor, per their screenshot.
+
+                              ⚠ WHAT THAT COSTS, and the old comment here argued the other way: the ✕
+                              sat on EVERY row, so the commonest correction - picked the wrong file -
+                              took one click from the list. It now takes two: open the row, then
+                              delete. Their design, and the trade is real rather than imagined. */}
+                        </div>
+                        {/* The composed name, directly under the file it applies to (client, 2026-08-23).
                       It used to sit under Document Name, which is only ONE of the four parts that
                       make it — so it read as a preview of that box rather than of the file.
 
                       Only on the OPEN row: it is built from the live editor values, which describe
                       whichever row is open. Rendering it on every row would show that one name
                       against all of them. */}
-                  {open && (
-                    <p className="dms-staged-saveas">
-                      Saves as:{" "}
-                      {buildUploadName(
-                        sf.file.name,
-                        composeUploadBase(projectName, vendor, docName, documentDate),
-                      )}
-                    </p>
-                  )}
-                  {clash && (
-                    <p className="dms-batch-warn">
-                      Another document in this batch would be saved under this same name. The saved name
-                      is built from Project, Vendor, Document Name and Date, so change one of those.
-                    </p>
-                  )}
-                  {/* The editor belongs to the OPEN row. Only one row is open, so this renders once. */}
-                  {open && <div className="dms-staged-body">{metaEditor}</div>}
+                        {clash && (
+                          <p className="dms-batch-warn">
+                            Another document in this batch would be saved under
+                            this same name. The saved name is built from
+                            Project, Vendor, Document Name and Date, so change
+                            one of those.
+                          </p>
+                        )}
+                        {/* The editor belongs to the OPEN row. Only one row is open, so this renders once. */}
+                        {open && (
+                          <div className="dms-staged-body">{metaEditor}</div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-            </div>
+              </div>
+            )}
           </div>
-        )}
 
-      </div>
-
-      {/* Save belongs to the CARD, not the page footer: it acts on this batch, and the footer acts
+          {/* Save belongs to the CARD, not the page footer: it acts on this batch, and the footer acts
           on all of them. Nothing can be uploaded until every batch is saved, so this is the step
           that moves the work forward and it should sit where the work is. */}
-      <div className="dms-cardactions">
-        <button
-          type="button"
-          className="dms-btn secondary"
-          disabled={busy || deptLoading || draftFiles.length === 0}
-          title={
-            draftFiles.length === 0
-              ? "Add at least one document to this batch first"
-              : "Save this batch"
-          }
-          onClick={() => { saveBatch(); }}
-        >
-          Save batch
-        </button>
-      </div>
-
-      </div>
+          <div className="dms-cardactions">
+            <button
+              type="button"
+              className="dms-btn secondary"
+              disabled={busy || deptLoading || draftFiles.length === 0}
+              title={
+                draftFiles.length === 0
+                  ? "Add at least one document to this set first"
+                  : "Save this set"
+              }
+              onClick={() => {
+                saveBatch();
+              }}
+            >
+              Save batch
+            </button>
+          </div>
+        </div>
       )}
 
       {/* ── Actions ───────────────────────────────────────────────────────────
           Cancel CONFIRMS when anything is staged: the work exists only in this browser, so discarding
           it is unrecoverable — and it sits beside the button that sends everything. */}
       <div className="dms-actions">
+        {/* ⚠ MOVED HERE FROM ABOVE THE CARDS (client, 2026-09-04). It still OPENS an empty form and
+            nothing else — saving is a separate act on the card itself. Those were ONE button until
+            2026-08-23, and combining them is what made a new set appear unbidden after every save;
+            moving the button must not quietly merge them again.
+
+            Disabled while a set is open, because there is ONE set of pickers and a second open form
+            would have to share them. The title says which of the two states you are in — a disabled
+            button with no reason reads as a broken page.
+
+            FIRST in the row, so the two buttons that END the upload (Cancel, Upload) stay together
+            at the right where they were. */}
+        <button
+          type="button"
+          className="dms-btn ghost"
+          disabled={busy || deptLoading || draftOpen}
+          title={
+            draftOpen
+              ? "Finish the set below first — save it, or discard it if you do not want it"
+              : "Start another set"
+          }
+          onClick={() => {
+            setEditingAt(undefined);
+            setDraftOpen(true);
+            resetForm();
+          }}
+        >
+          + Add another set
+        </button>
         <button
           type="button"
           className="dms-btn secondary"
           onClick={() => {
             if (stagedNow.files > 0) {
               const n = stagedNow.files;
-                const sure = window.confirm(
+              const sure = window.confirm(
                 `Discard ${n} document${n === 1 ? "" : "s"}? ${n === 1 ? "It has" : "They have"} not been uploaded, and this cannot be undone.`,
               );
               if (!sure) return;
@@ -4803,9 +5410,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           className="dms-btn primary"
           onClick={() => {
             if (draftOpen && batches.length > 0) {
-              const which = editingAt === undefined ? batches.length + 1 : editingAt + 1;
+              const which =
+                editingAt === undefined ? batches.length + 1 : editingAt + 1;
               showToast(
-                `Batch ${which} has not been saved yet. Press Save batch on it — or remove it with ` +
+                `Set ${which} has not been saved yet. Press Save set on it — or remove it with ` +
                   `the bin icon — before uploading.`,
                 "error",
               );
@@ -4813,7 +5421,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             }
             if (batches.length === 0) {
               showToast(
-                "Nothing to upload yet. Fill in the batch and press Save batch first.",
+                "Nothing to upload yet. Fill in the set and press Save set first.",
                 "error",
               );
               return;
@@ -4825,7 +5433,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           {busy
             ? "Uploading…"
             : stagedNow.files > 0
-              ? "Upload all batches"
+              ? "Upload all sets"
               : "Upload"}
         </button>
       </div>
@@ -4844,7 +5452,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           </button>
         </div>
       )}
-
 
       {/* ── The rename offer ─────────────────────────────────────────────────────
           Client, 2026-08-26: *"it will show that popup warning saying the existing file exist your
@@ -4873,8 +5480,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 fill="none"
                 xmlns="http://www.w3.org/2000/svg"
               >
-                <circle opacity="0.3" cx="91.9999" cy="92" r="75.4872" fill="#FF4646" />
-                <circle cx="92" cy="92" r="92" fill="#FF4646" fillOpacity="0.2" />
+                <circle
+                  opacity="0.3"
+                  cx="91.9999"
+                  cy="92"
+                  r="75.4872"
+                  fill="#FF4646"
+                />
+                <circle
+                  cx="92"
+                  cy="92"
+                  r="92"
+                  fill="#FF4646"
+                  fillOpacity="0.2"
+                />
                 <circle
                   cx="92.0003"
                   cy="91.9998"
@@ -4883,12 +5502,24 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   stroke="#FF4646"
                   strokeWidth="3"
                 />
-                <path d="M93 66L93 100" stroke="#FF4646" strokeWidth="10" strokeLinecap="round" />
-                <path d="M93 116.804L93 118" stroke="#FF4646" strokeWidth="10" strokeLinecap="round" />
+                <path
+                  d="M93 66L93 100"
+                  stroke="#FF4646"
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M93 116.804L93 118"
+                  stroke="#FF4646"
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                />
               </svg>
             </div>
             <p className="dms-popup-title" style={{ color: "#a4262c" }}>
-              {clashRows.length === 1 ? "Replace Existing File" : "Replace Existing Files"}
+              {clashRows.length === 1
+                ? "Replace Existing File"
+                : "Replace Existing Files"}
             </p>
             {/* ⚠ THE HEADER SUBCOPY IS GONE (client, 2026-08-28). It read *"nothing already filed
                 will be changed or replaced"*, which stopped being true the moment replacement was
@@ -4901,8 +5532,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 editor already follows. */}
             <div
               style={{
-                background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 8,
-                padding: "12px 14px", margin: "14px 0", maxHeight: "38vh", overflowY: "auto",
+                background: "#faf9f8",
+                border: "1px solid #edebe9",
+                borderRadius: 8,
+                padding: "12px 14px",
+                margin: "14px 0",
+                maxHeight: "38vh",
+                overflowY: "auto",
                 textAlign: "left",
               }}
             >
@@ -4910,14 +5546,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 <div
                   key={r.fileId}
                   style={{
-                    fontSize: 13, lineHeight: 1.6, wordBreak: "break-word",
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                    wordBreak: "break-word",
                     paddingTop: i === 0 ? 0 : 10,
                     marginTop: i === 0 ? 0 : 10,
                     borderTop: i === 0 ? "none" : "1px solid #edebe9",
                   }}
                 >
-                  <div style={{ fontSize: 11, color: "#6b7a71", marginBottom: 3 }}>
-                    {r.pathLabel ? `${r.batchLabel} · ${r.pathLabel}` : r.batchLabel}
+                  <div
+                    style={{ fontSize: 11, color: "#6b7a71", marginBottom: 3 }}
+                  >
+                    {r.pathLabel
+                      ? `${r.batchLabel} · ${r.pathLabel}`
+                      : r.batchLabel}
                   </div>
                   {/* ONE plain filename (client, 2026-09-04: *"Just display which file name. No need
                       to cross off"*). The struck-through original with the suggested ` - Copy` name
@@ -4953,11 +5595,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 stop two files in one run being offered the same name), it simply has no button here
                 any more. An uploader who does not want to replace presses No and renames the file
                 themselves. */}
-            <p style={{ fontSize: 13, color: "#605e5c", textAlign: "left", margin: "0 0 14px", lineHeight: 1.55 }}>
-              There is already an existing file with the same name. Please confirm if you would like
-              to proceed to overwrite {clashRows.length === 1 ? "this file" : "these files"}
+            <p
+              style={{
+                fontSize: 13,
+                color: "#605e5c",
+                textAlign: "left",
+                margin: "0 0 14px",
+                lineHeight: 1.55,
+              }}
+            >
+              There is already an existing file with the same name. Please
+              confirm if you would like to proceed to overwrite{" "}
+              {clashRows.length === 1 ? "this file" : "these files"}
             </p>
-            <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                justifyContent: "center",
+                flexWrap: "wrap",
+              }}
+            >
               {/* ⚠ YES REPLACES EACH ROW BY WHICHEVER MECHANISM THAT ROW NEEDS, and the two are not
                   the same thing — which is why both id sets are passed in one call:
                     • `approved` → the file goes to the approver like any other upload and NOTHING is
@@ -4973,10 +5631,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 className="dms-popup-btn confirm"
                 onClick={() => {
                   const approved = new Set<string>(
-                    clashRows.filter((r) => r.where === "approved").map((r) => r.fileId),
+                    clashRows
+                      .filter((r) => r.where === "approved")
+                      .map((r) => r.fileId),
                   );
                   const pending = new Set<string>(
-                    clashRows.filter((r) => r.where !== "approved").map((r) => r.fileId),
+                    clashRows
+                      .filter((r) => r.where !== "approved")
+                      .map((r) => r.fileId),
                   );
                   /* Clear any earlier per-file error so a retried file is not shown as failed while
                      it is being re-sent, and send the batches EXPLICITLY — `setBatches` has not
@@ -4985,7 +5647,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                      this tsconfig targets ES5 (the same constraint that makes `Promise.allSettled`
                      unavailable, gotcha #3). Every clash row is being sent, so build it from the
                      rows directly. */
-                  const touched = new Set<string>(clashRows.map((r) => r.fileId));
+                  const touched = new Set<string>(
+                    clashRows.map((r) => r.fileId),
+                  );
                   const cleared = batches.map((b) => ({
                     ...b,
                     files: (b.files ?? []).map((f) =>

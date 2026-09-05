@@ -132,10 +132,30 @@ export function discoverTierFields(fieldText: Record<string, string>): string[] 
   return out.filter(isSegment).concat(out.filter((n) => !isSegment(n)));
 }
 
-/** The tier rows, blanks dropped. A tier with no value does not apply to this document. */
-export function tierRows(fieldText: Record<string, string>): DetailRow[] {
+/**
+ * The tier rows, blanks dropped. A tier with no value does not apply to this document.
+ *
+ * `segmentLabel` renames the TOP row only — `Group-Led Project` in place of `Business Segment`
+ * (client, 2026-09-02: the label *"is not dynamic"*).
+ *
+ * ⚠ IT HAS TO BE PASSED IN; IT CANNOT BE DERIVED HERE. Both families write the SAME physical column,
+ * `Business_x0020_Segment`, so the field name AND its value are identical for a business segment and
+ * for a project. Only the mode row's `Category` distinguishes them, and this module is pure — it
+ * never reads a list. Omitted keeps today's wording, which is right for twelve of the thirteen
+ * segments and can never leave the row unlabelled.
+ */
+export function tierRows(
+  fieldText: Record<string, string>,
+  segmentLabel?: string,
+): DetailRow[] {
   return discoverTierFields(fieldText)
-    .map((name) => ({ label: labelFromInternalName(name), value: readField(fieldText, name) }))
+    .map((name) => ({
+      label:
+        segmentLabel !== undefined && tidBase(name) === "BusinessSegment"
+          ? segmentLabel
+          : labelFromInternalName(name),
+      value: readField(fieldText, name),
+    }))
     .filter((r) => r.value.length > 0);
 }
 
@@ -204,12 +224,19 @@ export function buildDetailRows(args: {
   fieldText: Record<string, string>;
   leading?: DetailRow[];
   trailing?: DetailRow[];
+  /** See `tierRows` — renames the top tier row. Omitted means `Business Segment`. */
+  segmentLabel?: string;
 }): DetailRow[] {
   const ft = args.fieldText ?? {};
   const fixed = FIXED_FIELDS
     .map((f) => ({ label: f.label, value: readField(ft, f.field) }))
     .filter((r) => r.value.length > 0);
-  return [...(args.leading ?? []), ...tierRows(ft), ...fixed, ...(args.trailing ?? [])];
+  return [
+    ...(args.leading ?? []),
+    ...tierRows(ft, args.segmentLabel),
+    ...fixed,
+    ...(args.trailing ?? []),
+  ];
 }
 
 /** One tier of a document's path, with the term GUID behind the label. */
@@ -324,10 +351,19 @@ export function formatBytes(raw: string | number | undefined): string {
  * Taken from ONE file in the batch, which is sound because a batch IS one destination folder — every
  * file in it was filed under the same tiers by construction.
  */
-export function buildBatchRows(fieldText: Record<string, string>): DetailRow[] {
+/* ⚠ `segmentLabel` BELONGS HERE TOO, AND WAS MISSED ON 2026-09-05. It was wired into
+   `buildDetailRows` — the SINGLE-FILE panel — while this function renders the BATCH card ("Document
+   folder information"), which is what an uploader meets FIRST when they open a submission. So it
+   went on reading `Business Segment` for a Group-Led Project while the panel one level down read
+   correctly: the same page disagreeing with itself, which is worse than being uniformly wrong.
+   Two builders sit over one `tierRows` — change one and check the other. */
+export function buildBatchRows(
+  fieldText: Record<string, string>,
+  segmentLabel?: string,
+): DetailRow[] {
   const ft = fieldText ?? {};
   return [
-    ...tierRows(ft),
+    ...tierRows(ft, segmentLabel),
     ...BATCH_FIXED_FIELDS
       .map((f) => ({ label: f.label, value: readField(ft, f.field) }))
       .filter((r) => r.value.length > 0),

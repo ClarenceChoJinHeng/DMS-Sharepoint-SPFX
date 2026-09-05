@@ -209,8 +209,11 @@ describe("sortMembers", () => {
 });
 
 describe("memberCountLabel", () => {
-  it("says 'no members' ONLY about a list that was read", () => {
-    expect(memberCountLabel(loaded([]))).toBe("no members");
+  /* Capitalised on the client's instruction (2026-09-04) — it is a standalone label in its own cell,
+     not mid-sentence. The THREE-STATE rule it guards is unchanged and is the reason this test exists:
+     "No members" may only ever be said about a list that was actually READ. */
+  it("says 'No members' ONLY about a list that was read", () => {
+    expect(memberCountLabel(loaded([]))).toBe("No members");
     expect(memberCountLabel({ state: "error", message: "x" })).toBe("could not read members");
     expect(memberCountLabel({ state: "loading" })).toBe("loading…");
   });

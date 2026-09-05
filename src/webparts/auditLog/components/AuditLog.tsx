@@ -1,8 +1,16 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
+// The Action list is 26 entries and grows with every new flow event — too long for a native menu.
+import { FilterSelect } from "../../../shared/filterSelect";
+// The Event column prints a SHORT library name - see `shortLibrary`.
+import { documentsLibraryTitle } from "../../../shared/naming";
 import { SPHttpClient } from "@microsoft/sp-http";
 
-import { ALL_EVENT_TYPES, EVENT_LABEL, eventLabelForRow } from "../../../shared/auditLog";
+import {
+  ALL_EVENT_TYPES,
+  EVENT_LABEL,
+  eventLabelForRow,
+} from "../../../shared/auditLog";
 import { csvCell, downloadCsv } from "../../../shared/groupExportCsv";
 import { primeNames } from "../../../shared/spNaming";
 import { isSystemAdmin } from "../../../shared/spGroups";
@@ -10,7 +18,9 @@ import {
   AuditListState,
   auditListState,
   auditListTitle,
+  AuditCount,
   AuditRecord,
+  countAudit,
   plannedAuditListTitle,
   provisionAuditList,
   ProvisionReport,
@@ -34,7 +44,34 @@ import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
  * seeing a confusing half-page, and it gates the provisioning control.
  */
 
-const PAGE_SIZE = 100;
+/* 10 (client, 2026-09-04: *"Audit log - show 10 list per page, then the next"*). It was 100, then 30
+   earlier the same day, then this. An audit row is three lines tall once its path is shown, so ten is
+   about a screen. The pager below handles the rest; this only changes how much arrives at once. */
+const PAGE_SIZE = 10;
+
+/**
+ * The library name as the Event column should PRINT it (client, 2026-09-04: *"For this Restricted &
+ * Confidential Document, change to Document only."*).
+ *
+ * "Moved to Restricted & Confidential Document" wrapped onto two lines in a 150px column and pushed
+ * every row taller. The stored `LibraryName` is UNTOUCHED — the row, the CSV and every filter still
+ * carry the real title; this shortens the LABEL only.
+ *
+ * ⚠ MATCHED AGAINST THE LIVE TITLE, NEVER A HARDCODED STRING. This client renames libraries
+ * routinely — three times in two days at one point — and a literal "Restricted & Confidential
+ * Document" here would silently stop matching on the next rename, putting the long name back on
+ * screen with nothing to explain it.
+ *
+ * ⚠ THE HC LIBRARY IS DELIBERATELY LEFT ALONE. "Moved to Highly Confidential Document" is short
+ * enough AND load-bearing: it is the one word in that column telling a reader the document went to
+ * the restricted vertical, and collapsing it to "Document" would make an HC routing
+ * indistinguishable from an ordinary one.
+ */
+function shortLibrary(libraryName?: string): string | undefined {
+  const raw = (libraryName ?? "").trim();
+  if (raw.length === 0) return libraryName;
+  return raw.toLowerCase() === documentsLibraryTitle().trim().toLowerCase() ? "Document" : raw;
+}
 
 /** Preset windows. Every query keeps a date bound, so the filter stays on an indexed column. */
 const s: Record<string, React.CSSProperties> = {
@@ -43,93 +80,270 @@ const s: Record<string, React.CSSProperties> = {
      `padding: 0 24px 48px` is the pattern the Upload Form, My Submissions and the access pages
      already share; this page had the centring and NO padding, so its content met the window edge.
      The max-width is left alone deliberately - each page's is sized for its own content. */
-  wrap: { maxWidth: 1180, margin: "32px auto", padding: "0 24px 48px", fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b" },
-  h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
-  subtitle: { fontSize: 13, color: "#605e5c", margin: "0 0 18px", lineHeight: 1.5 },
-  card: { border: "1px solid #e1dfdd", borderRadius: 8, padding: "16px 18px", marginBottom: 16 },
-  cardTitle: {
-    fontSize: 12, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
-    color: "#0f6c3f", margin: "0 0 10px",
+  wrap: {
+    maxWidth: 1180,
+    margin: "32px auto",
+    padding: "0 24px 48px",
+    fontFamily: "'Segoe UI', sans-serif",
+    color: "#1b1b1b",
   },
-  msg: { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.55 },
+  h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
+  subtitle: {
+    fontSize: 13,
+    color: "#605e5c",
+    margin: "0 0 18px",
+    lineHeight: 1.5,
+  },
+  card: {
+    border: "1px solid #e1dfdd",
+    borderRadius: 8,
+    padding: "18px 22px",
+    marginBottom: 16,
+  },
+  cardTitle: {
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: ".06em",
+    textTransform: "uppercase",
+    color: "#0f6c3f",
+    margin: "0 0 10px",
+  },
+  msg: {
+    fontSize: 13,
+    padding: "10px 12px",
+    borderRadius: 6,
+    marginBottom: 16,
+    lineHeight: 1.55,
+  },
   err: { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
   warn: { ...NOTICE_ATTENTION },
   ok: { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
-  info: { background: "#f3f2f1", border: "1px solid #e1dfdd", color: "#323130" },
+  info: {
+    background: "#f3f2f1",
+    border: "1px solid #e1dfdd",
+    color: "#323130",
+  },
   /* THE FILTER PANEL (client design, 2026-08-30). Fields on the left in a two-column grid, the three
      buttons stacked on the right — which is what keeps Apply beside the fields it applies to instead
      of below a wrapping row where it reads as unrelated. */
-  pager: { paddingTop: 14, display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", justifyContent: "space-between" },
+  pager: {
+    paddingTop: 14,
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 12,
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   pagerNote: { fontSize: 11.5, color: "#605e5c" },
   pagerBtns: { display: "flex", gap: 4, alignItems: "center" },
-  pageBtn: { minWidth: 30, height: 30, padding: "0 8px", border: "1px solid #e1dfdd", borderRadius: 6, background: "#fff", color: "#242424", fontSize: 12.5, cursor: "pointer" },
+  pageBtn: {
+    minWidth: 30,
+    height: 30,
+    padding: "0 8px",
+    border: "1px solid #e1dfdd",
+    borderRadius: 6,
+    background: "#fff",
+    color: "#242424",
+    fontSize: 12.5,
+    cursor: "pointer",
+  },
   pageBtnOn: { borderColor: "#0f6c3f", color: "#0f6c3f", fontWeight: 700 },
-  filterGrid: { display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" },
-  filterFields: { flex: "1 1 520px", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 },
-  filterActions: { flex: "0 0 auto", display: "flex", flexDirection: "column", gap: 8, minWidth: 130 },
+  filterGrid: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 20,
+    alignItems: "flex-start",
+  },
+  filterFields: {
+    flex: "1 1 520px",
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: 14,
+  },
+  filterActions: {
+    flex: "0 0 auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    minWidth: 130,
+  },
   actionsNote: { fontSize: 10.5, color: "#8a8886", textAlign: "center" },
-  fieldPair: { display: "flex", flexDirection: "column", gap: 4, gridColumn: "1 / -1" },
+  fieldPair: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    gridColumn: "1 / -1",
+  },
   pairRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
   pairTag: { fontSize: 11.5, color: "#605e5c", flexShrink: 0 },
   /* The intro card. Icon left, heading and one line of explanation right — the same shape the CRS
      Settings cards use, so the two pages read as one system. */
-  intro: { display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 18 },
-  introIcon: { flexShrink: 0, width: 54, height: 54, borderRadius: 10, background: "#D5EBD2", display: "flex", alignItems: "center", justifyContent: "center", color: "#00684A" },
-  introHead: { fontSize: 14, fontWeight: 700, margin: "2px 0 4px", color: "#242424" },
+  intro: {
+    display: "flex",
+    gap: 14,
+    alignItems: "flex-start",
+    marginBottom: 18,
+  },
+  introIcon: {
+    flexShrink: 0,
+    width: 54,
+    height: 54,
+    borderRadius: 10,
+    background: "#D5EBD2",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    color: "#00684A",
+  },
+  introHead: {
+    fontSize: 14,
+    fontWeight: 700,
+    margin: "2px 0 4px",
+    color: "#242424",
+  },
   introBody: { fontSize: 12.5, color: "#605e5c", margin: 0, lineHeight: 1.55 },
-  filters: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 14 },
+  filters: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+    alignItems: "flex-end",
+    marginBottom: 14,
+  },
   field: { display: "flex", flexDirection: "column", gap: 4 },
   label: { fontSize: 11, fontWeight: 600, color: "#605e5c" },
   input: {
-    padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4,
-    boxSizing: "border-box", minWidth: 180,
+    padding: "7px 9px",
+    fontSize: 13,
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    boxSizing: "border-box",
+    minWidth: 180,
   },
-  select: { padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4 },
+  select: {
+    padding: "7px 9px",
+    fontSize: 13,
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+  },
   btn: {
-    background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px",
-    fontSize: 13, cursor: "pointer",
+    background: "#0f6c3f",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    padding: "8px 16px",
+    fontSize: 13,
+    cursor: "pointer",
   },
   ghost: {
-    background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4,
-    padding: "7px 14px", fontSize: 13, cursor: "pointer",
+    background: "#fff",
+    color: "#1b1b1b",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    padding: "7px 14px",
+    fontSize: 13,
+    cursor: "pointer",
   },
   chipRow: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 },
   chip: {
-    fontSize: 11, borderRadius: 12, padding: "4px 10px", cursor: "pointer",
-    border: "1px solid #c8c8c8", background: "#fff", color: "#323130",
+    fontSize: 11,
+    borderRadius: 12,
+    padding: "4px 10px",
+    cursor: "pointer",
+    border: "1px solid #c8c8c8",
+    background: "#fff",
+    color: "#323130",
   },
   chipOn: { border: "1px solid #0f6c3f", background: "#0f6c3f", color: "#fff" },
   head: {
-    display: "grid", gridTemplateColumns: "150px 150px minmax(0,1fr) 160px", columnGap: 12,
-    padding: "0 10px 8px", fontSize: 12, fontWeight: 600, color: "#605e5c",
+    display: "grid",
+    /* ⚠ THE GAP BEFORE "Who" IS ITS OWN COLUMN, not a bigger `columnGap` (client, 2026-09-04:
+       *"add more gaps for the Who part ... space out more away from What"*). `columnGap` applies
+       between EVERY pair, so widening it would also push "When" away from "Event", which are meant to
+       read together. An empty 40px track separates only the pair that needed it.
+       The head and the row MUST carry the same template — they are separate grids, and a column added
+       to one and not the other misaligns every heading from its column. */
+    gridTemplateColumns: "150px 150px minmax(0,1fr) 40px 160px",
+    columnGap: 12,
+    padding: "0 10px 8px",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#605e5c",
     borderBottom: "1px solid #edebe9",
   },
   row: {
-    display: "grid", gridTemplateColumns: "150px 150px minmax(0,1fr) 160px", columnGap: 12,
-    padding: "10px", borderBottom: "1px solid #f3f2f1", alignItems: "start",
+    display: "grid",
+    gridTemplateColumns: "150px 150px minmax(0,1fr) 40px 160px",
+    columnGap: 12,
+    padding: "10px",
+    borderBottom: "1px solid #f3f2f1",
+    alignItems: "start",
   },
-  headWho: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 },
+  /* The only clickable heading. Underlined on purpose: a heading that does something must not look
+     exactly like the three beside it that do not. */
+  sortHead: {
+    cursor: "pointer", userSelect: "none", textDecoration: "underline",
+    textDecorationStyle: "dotted", color: "#0f6c3f",
+  },
+  headWho: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  /* Bigger, and LABELLED (client, 2026-09-04: *"Make the refresh button bigger"*). It was a 13px
+     glyph in 2px of padding — a hit target smaller than the text beside it, on the control an admin
+     presses repeatedly while waiting for a flow to write a row. The word is added because the button
+     now RESETS as well as re-reads, and a bare glyph cannot say that. */
   headRefresh: {
-    border: "1px solid #c7c7c7", background: "#fff", borderRadius: 4, cursor: "pointer",
-    fontSize: 13, lineHeight: 1, padding: "2px 7px", color: "#0f6c3f",
+    border: "1px solid #c7c7c7",
+    background: "#fff",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontSize: 13,
+    lineHeight: 1.2,
+    padding: "6px 12px",
+    color: "#0f6c3f",
+    fontWeight: 600,
+    whiteSpace: "nowrap",
   },
   when: { fontSize: 12, color: "#323130", fontFamily: "Consolas, monospace" },
   type: { fontSize: 12, fontWeight: 600, color: "#0f6c3f" },
   title: { fontSize: 13, color: "#1b1b1b", wordBreak: "break-word" },
-  path: { fontSize: 11, color: "#605e5c", wordBreak: "break-all", marginTop: 3 },
+  path: {
+    fontSize: 11,
+    color: "#605e5c",
+    wordBreak: "break-all",
+    marginTop: 3,
+  },
   who: { fontSize: 12, color: "#323130", wordBreak: "break-word" },
   details: {
-    fontSize: 11, color: "#323130", background: "#faf9f8", border: "1px solid #edebe9",
-    borderRadius: 4, padding: "8px 10px", marginTop: 6, whiteSpace: "pre-wrap",
+    fontSize: 11,
+    color: "#323130",
+    background: "#faf9f8",
+    border: "1px solid #edebe9",
+    borderRadius: 4,
+    padding: "8px 10px",
+    marginTop: 6,
+    whiteSpace: "pre-wrap",
     fontFamily: "Consolas, monospace",
   },
   link: {
-    background: "none", border: "none", padding: 0, color: "#0f6c3f", fontSize: 11,
-    cursor: "pointer", textDecoration: "underline",
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: "#0f6c3f",
+    fontSize: 11,
+    cursor: "pointer",
+    textDecoration: "underline",
   },
   disclose: {
-    background: "none", border: "none", padding: 0, color: "#605e5c", fontSize: 11,
-    cursor: "pointer", textAlign: "left",
+    background: "none",
+    border: "none",
+    padding: 0,
+    color: "#605e5c",
+    fontSize: 11,
+    cursor: "pointer",
+    textAlign: "left",
   },
 };
 
@@ -143,7 +357,20 @@ function formatWhen(iso: string): string {
   if (!iso) return "";
   const d = new Date(iso);
   if (isNaN(d.getTime())) return iso;
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
   const p = (n: number): string => (n < 10 ? `0${n}` : String(n));
   return `${p(d.getDate())}/${months[d.getMonth()]}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
@@ -153,18 +380,44 @@ function formatWhen(iso: string): string {
    also where the To bound is pushed to the END of its day, so picking a date includes it. */
 
 const CSV_HEADERS = [
-  "Event time", "Event type", "Outcome", "Actor", "Actor email", "Source", "Library",
-  "Item", "Path", "Segment", "Unit path", "Summary", "Details",
+  "Event time",
+  "Event type",
+  "Outcome",
+  "Actor",
+  "Actor email",
+  "Source",
+  "Library",
+  "Item",
+  "Path",
+  "Segment",
+  "Unit path",
+  "Summary",
+  "Details",
 ];
 
 /** Reuses csvCell, which handles quoting AND Excel formula injection — folder names are client text. */
 function toAuditCsv(rows: AuditRecord[]): string {
   const lines = [CSV_HEADERS.map(csvCell).join(",")];
   for (const r of rows) {
-    lines.push([
-      formatWhen(r.EventTime), r.EventType, r.Outcome, r.ActorName, r.ActorEmail, r.Source,
-      r.LibraryName, r.ItemName, r.ItemPath, r.Segment, r.UnitPath, r.Title, r.Details,
-    ].map((v) => csvCell(v ?? "")).join(","));
+    lines.push(
+      [
+        formatWhen(r.EventTime),
+        r.EventType,
+        r.Outcome,
+        r.ActorName,
+        r.ActorEmail,
+        r.Source,
+        r.LibraryName,
+        r.ItemName,
+        r.ItemPath,
+        r.Segment,
+        r.UnitPath,
+        r.Title,
+        r.Details,
+      ]
+        .map((v) => csvCell(v ?? ""))
+        .join(","),
+    );
   }
   return lines.join("\r\n");
 }
@@ -178,6 +431,9 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
   const sp: SPHttpClient = context.spHttpClient;
 
   const [booting, setBooting] = useState(true);
+  /* Newest first by default — an audit log is read for what just happened. The toggle is on the
+     "When" heading, where the thing it sorts is. */
+  const [oldestFirst, setOldestFirst] = useState(false);
   const [admin, setAdmin] = useState(false);
   const [listState, setListState] = useState<AuditListState>("unknown");
 
@@ -197,6 +453,10 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
      `tokens[i]` is the token that FETCHES page i. `tokens[0]` is undefined — page one needs none. */
   const [tokens, setTokens] = useState<Array<string | undefined>>([undefined]);
   const [pageIdx, setPageIdx] = useState(0);
+  /* How many rows the CURRENT query matches, counted rather than taken from `ItemCount` — see
+     `countAudit`. `undefined` means the count has not landed or could not be made, and the line then
+     falls back to the honest "and more" this page showed before. */
+  const [total, setTotal] = useState<AuditCount | undefined>(undefined);
   const [readFailed, setReadFailed] = useState(false);
   const [readStatus, setReadStatus] = useState<number | undefined>(undefined);
   const [loading, setLoading] = useState(false);
@@ -211,7 +471,9 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
   const [actor, setActor] = useState("");
   const [text, setText] = useState("");
   /** Set when the user pivots to one file's history. */
-  const [focus, setFocus] = useState<{ id: string; name: string } | undefined>(undefined);
+  const [focus, setFocus] = useState<{ id: string; name: string } | undefined>(
+    undefined,
+  );
 
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
   const [showLimits, setShowLimits] = useState(false);
@@ -228,7 +490,21 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
    * set as you move through it — which reads as the log being wrong rather than the query being two
    * different queries.
    */
-  const currentQuery = (focusId?: string): AuditQuery => {
+  /**
+   * ⚠ `overrides` EXISTS BECAUSE `setState` HAS NOT LANDED INSIDE THE HANDLER THAT CALLS THIS.
+   *
+   * Every field below is read from React state, so a handler that clears the boxes and then calls
+   * `load` in the same tick builds its query from the values that were there BEFORE the clear — the
+   * screen shows empty filters and the rows come back filtered. That is precisely the state the Reset
+   * button's own comment says it exists to avoid, and Reset had the defect too.
+   *
+   * Passing the cleared values explicitly is what actually drops them from the query; the setters
+   * only keep the controls agreeing with it on the next render.
+   */
+  const currentQuery = (
+    focusId?: string,
+    overrides?: Partial<AuditQuery>,
+  ): AuditQuery => {
     /* ⚠ AN UNPARSEABLE DATE IS NO BOUND, never today's. A half-typed `2026-08-` in a date input
        yields an Invalid Date, and passing that into the query would filter on NaN and return
        nothing at all — which reads as "there are no events" rather than "that date is incomplete". */
@@ -247,12 +523,28 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
       text: text.trim(),
       itemUniqueId: focusId ?? focus?.id,
       top: PAGE_SIZE,
+      oldestFirst,
+      ...(overrides ?? {}),
     };
   };
 
-  const load = async (focusId?: string): Promise<void> => {
+  const load = async (
+    focusId?: string,
+    overrides?: Partial<AuditQuery>,
+  ): Promise<void> => {
     setLoading(true);
-    const page = await readAudit(sp, siteUrl, currentQuery(focusId));
+    const q = currentQuery(focusId, overrides);
+    /* ⚠ THE QUERY IS BUILT ONCE AND SHARED. Calling `currentQuery` a second time for the count would
+       be a second reading of the same state — and with `overrides` in play (Reset, Refresh) the two
+       could differ, giving a total that describes a query nobody ran. */
+    setTotal(undefined);
+    /* Counted in parallel, and deliberately NOT awaited: the rows must not wait on it. The line
+       reads "and more" for the moment it is in flight, which is what it said permanently until
+       today. `countAudit` never throws; the catch is belt and braces. */
+    countAudit(sp, siteUrl, q)
+      .then((c) => setTotal(c))
+      .catch(() => setTotal(undefined));
+    const page = await readAudit(sp, siteUrl, q);
     setRows(page.rows);
     setNext(page.next);
     /* ⚠ A NEW QUERY INVALIDATES EVERY TOKEN. A continuation token belongs to the query that
@@ -303,9 +595,10 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
     const token = idx === 0 ? undefined : tokens[idx];
     if (idx > 0 && token === undefined) return;
     setLoading(true);
-    const page = token === undefined
-      ? await readAudit(sp, siteUrl, currentQuery())
-      : await readAuditPage(sp, token);
+    const page =
+      token === undefined
+        ? await readAudit(sp, siteUrl, currentQuery())
+        : await readAuditPage(sp, token);
     setRows(page.rows);
     setPageIdx(idx);
     setNext(page.next);
@@ -332,6 +625,18 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
 
   /** Pivot to one file's history. Applies immediately — a filter nobody applied is a filter nobody
    * trusts, and this one is a single click from a row they are already reading. */
+  /* What "no filters" means, in ONE place. Refresh and Reset both clear, and two literals would be
+     two chances for one of them to keep a field the other drops. `itemUniqueId` is NOT here: Reset
+     keeps the focus (it is a filter-card control, sitting with the fields it clears) while Refresh
+     drops it, so that difference is passed at the call site rather than buried in here. */
+  const CLEARED: Partial<AuditQuery> = {
+    from: undefined,
+    to: undefined,
+    eventTypes: [],
+    actorEmail: "",
+    text: "",
+  };
+
   const focusOn = (id: string, name: string): void => {
     setFocus({ id, name });
     load(id).catch(() => undefined);
@@ -365,20 +670,40 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
       <div style={s.intro}>
         <span style={s.introIcon} aria-hidden="true">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-            <circle cx="9" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.6" />
-            <path d="M3 19c0-3.2 2.7-5.3 6-5.3 1.4 0 2.7.4 3.7 1.1" stroke="currentColor"
-              strokeWidth="1.6" strokeLinecap="round" />
-            <circle cx="17" cy="15" r="3.2" stroke="currentColor" strokeWidth="1.6" />
-            <path d="M13.5 21c.5-1.6 1.9-2.6 3.5-2.6s3 1 3.5 2.6" stroke="currentColor"
-              strokeWidth="1.6" strokeLinecap="round" />
+            <circle
+              cx="9"
+              cy="8"
+              r="3.2"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+            <path
+              d="M3 19c0-3.2 2.7-5.3 6-5.3 1.4 0 2.7.4 3.7 1.1"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+            />
+            <circle
+              cx="17"
+              cy="15"
+              r="3.2"
+              stroke="currentColor"
+              strokeWidth="1.6"
+            />
+            <path
+              d="M13.5 21c.5-1.6 1.9-2.6 3.5-2.6s3 1 3.5 2.6"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+            />
           </svg>
         </span>
         <div>
           <p style={s.introHead}>What can you do with the Audit Log?</p>
           <p style={s.introBody}>
-            Track activities and changes across the system, including document actions, access
-            changes, and folder updates. Records are written automatically, and cannot be edited or
-            deleted from this page.
+            Track activities and changes across the system, including document
+            actions, access changes, and folder updates. Records are written
+            automatically, and cannot be edited or deleted from this page.
           </p>
         </div>
       </div>
@@ -391,35 +716,52 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
         {showLimits ? "▾" : "▸"} What this log cannot tell you
       </button>
       {showLimits && (
-        <div style={{ fontSize: 12, color: "#323130", lineHeight: 1.6, marginTop: 10 }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: "#323130",
+            lineHeight: 1.6,
+            marginTop: 10,
+          }}
+        >
           <p style={{ margin: "0 0 8px" }}>
-            A log that looks complete but is not would be worse than none, so these gaps are stated
-            rather than left to be discovered:
+            A log that looks complete but is not would be worse than none, so
+            these gaps are stated rather than left to be discovered:
           </p>
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             <li>
-              <strong>Who viewed or downloaded a file.</strong> Nothing tells this system that a file
-              was read. That record exists only in Microsoft Purview, which needs a tenant-wide
-              administrator consent this site-scoped solution cannot request. Ask your Microsoft 365
+              <strong>Who viewed or downloaded a file.</strong> Nothing tells
+              this system that a file was read. That record exists only in
+              Microsoft Purview, which needs a tenant-wide administrator consent
+              this site-scoped solution cannot request. Ask your Microsoft 365
               administrator for a Purview audit report.
             </li>
-            <li><strong>Failed access attempts.</strong> A denied request never reaches this system.</li>
             <li>
-              <strong>Anything from before this log was switched on.</strong> It starts from that day
-              and cannot be filled in backwards.
+              <strong>Failed access attempts.</strong> A denied request never
+              reaches this system.
             </li>
             <li>
-              <strong>Permission changes made in SharePoint&apos;s own “Manage access” dialog</strong>{" "}
-              instead of on the Folder Access page. Use the Folder Access page and they are recorded.
+              <strong>Anything from before this log was switched on.</strong> It
+              starts from that day and cannot be filled in backwards.
             </li>
             <li>
-              <strong>Term store edits.</strong> Adding, renaming or deleting a term is not reported to
-              this system. The consequence is recorded instead — the folder rename, or the orphaned
-              term that reconciliation found.
+              <strong>
+                Permission changes made in SharePoint&apos;s own “Manage access”
+                dialog
+              </strong>{" "}
+              instead of on the Folder Access page. Use the Folder Access page
+              and they are recorded.
             </li>
             <li>
-              <strong>Rows changed directly in the list.</strong> The list&apos;s version history is
-              the only trace, which is why it is switched on.
+              <strong>Term store edits.</strong> Adding, renaming or deleting a
+              term is not reported to this system. The consequence is recorded
+              instead — the folder rename, or the orphaned term that
+              reconciliation found.
+            </li>
+            <li>
+              <strong>Rows changed directly in the list.</strong> The
+              list&apos;s version history is the only trace, which is why it is
+              switched on.
             </li>
           </ul>
         </div>
@@ -441,28 +783,44 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
         {admin && (
           <div style={s.card}>
             <p style={s.cardTitle}>Set up</p>
-            <p style={{ fontSize: 13, color: "#323130", lineHeight: 1.6, margin: "0 0 12px" }}>
+            <p
+              style={{
+                fontSize: 13,
+                color: "#323130",
+                lineHeight: 1.6,
+                margin: "0 0 12px",
+              }}
+            >
               {/* plannedAuditListTitle, NOT auditListTitle: while the list is absent the latter has
                   fallen back to the legacy `DMS …` name, so this panel offered to create a list that
                   the button would not create. Both now come from one derivation. */}
-              This creates the <strong>{plannedAuditListTitle()}</strong> list, its columns and its
-              indexes, and turns on version history. It changes nothing else, and is safe to run again.
+              This creates the <strong>{plannedAuditListTitle()}</strong> list,
+              its columns and its indexes, and turns on version history. It
+              changes nothing else, and is safe to run again.
             </p>
             <p style={{ ...s.msg, ...s.warn, marginBottom: 12 }}>
-              <strong>One step is left to you afterwards.</strong> In the new list&apos;s permission
-              settings, stop inheriting permissions and give <em>Contribute</em> to the service account
-              the Power Automate flows run as — keeping Full Control for owners, and removing everyone
-              else. This is not automated on purpose: the code does not know which account that is, and
-              a wrong guess would lock the flows out of the list they write to.
+              <strong>One step is left to you afterwards.</strong> In the new
+              list&apos;s permission settings, stop inheriting permissions and
+              give <em>Contribute</em> to the service account the Power Automate
+              flows run as — keeping Full Control for owners, and removing
+              everyone else. This is not automated on purpose: the code does not
+              know which account that is, and a wrong guess would lock the flows
+              out of the list they write to.
             </p>
-            <button style={s.btn} disabled={provisioning} onClick={() => provision().catch(() => undefined)}>
+            <button
+              style={s.btn}
+              disabled={provisioning}
+              onClick={() => provision().catch(() => undefined)}
+            >
               {provisioning ? "Setting up…" : "Set up the audit log"}
             </button>
           </div>
         )}
         {report && report.problems.length > 0 && (
           <div style={{ ...s.msg, ...s.err }}>
-            {report.problems.map((p, i) => <div key={i}>{p}</div>)}
+            {report.problems.map((p, i) => (
+              <div key={i}>{p}</div>
+            ))}
           </div>
         )}
         {limitsPanel}
@@ -476,9 +834,10 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
       <div style={s.wrap}>
         {header}
         <div style={{ ...s.msg, ...s.err }}>
-          <strong>The audit log could not be read.</strong> This is a permissions or connection
-          problem, not an empty log — events may well have been recorded. Reload the page, and if it
-          persists, check that you have access to the <strong>{auditListTitle()}</strong> list.
+          <strong>The audit log could not be read.</strong> This is a
+          permissions or connection problem, not an empty log — events may well
+          have been recorded. Reload the page, and if it persists, check that
+          you have access to the <strong>{auditListTitle()}</strong> list.
         </div>
         {limitsPanel}
       </div>
@@ -490,8 +849,9 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
       <div style={s.wrap}>
         {header}
         <div style={{ ...s.msg, ...s.info }}>
-          This page is for administrators. Audit records name files and folder paths across every
-          business segment, so they are not shown more widely.
+          This page is for administrators. Audit records name files and folder
+          paths across every business segment, so they are not shown more
+          widely.
         </div>
       </div>
     );
@@ -502,20 +862,32 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
       {header}
 
       {report && (
-        <div style={{ ...s.msg, ...(report.problems.length > 0 ? s.warn : s.ok) }}>
-          {report.createdList && <div>Created the {auditListTitle()} list.</div>}
+        <div
+          style={{ ...s.msg, ...(report.problems.length > 0 ? s.warn : s.ok) }}
+        >
+          {report.createdList && (
+            <div>Created the {auditListTitle()} list.</div>
+          )}
           {report.createdColumns.length > 0 && (
             <div>Added {report.createdColumns.length} columns.</div>
           )}
-          {report.problems.map((p, i) => <div key={i}>{p}</div>)}
+          {report.problems.map((p, i) => (
+            <div key={i}>{p}</div>
+          ))}
         </div>
       )}
 
       {focus && (
         <div style={{ ...s.msg, ...s.info }}>
-          Showing the whole history of <strong>{focus.name || "this item"}</strong>, including any time
-          it was moved or renamed.{" "}
-          <button style={s.link} onClick={clearFocus}>Show everything again</button>
+          {/* Named for the control that opens it (client, 2026-09-04) — a banner that calls this
+              "the whole history" while the button says "File Activity Log" leaves the reader working
+              out whether they are two different things. */}
+          <strong>File Activity Log</strong> for{" "}
+          <strong>{focus.name || "this item"}</strong> — every event, including
+          any time it was moved or renamed.{" "}
+          <button style={s.link} onClick={clearFocus}>
+            Show everything again
+          </button>
         </div>
       )}
 
@@ -558,16 +930,31 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                   standing instruction is fewer inputs (*"don't give client too many features or
                   inputs, it will make them scared"*) — but `types` is still an ARRAY all the way into
                   `readAudit`, so restoring multi-select is a control swap, not a query change. */}
-              <select
-                style={s.select}
+              {/* ⚠ A CUSTOM CONTROL, NOT A NATIVE `<select>` (client, 2026-09-04: *"can you use a
+                  customize dropdown? Is so long"*). `ALL_EVENT_TYPES` is 26 entries and grows every
+                  time a flow learns a new event, so the native menu had become a wall.
+
+                  ⚠ THE VALUE CONTRACT IS UNCHANGED: `types` is still a `string[]` into `readAudit`,
+                  still holding at most one entry. So this is a CONTROL swap, not a query change — and
+                  restoring multi-select later remains the same one-line possibility the old comment
+                  described.
+
+                  The label falls back to the raw stored value for an event type with no `EVENT_LABEL`
+                  entry, which is the same fallback the rows use. That matters: a flow can introduce a
+                  type this codebase has never heard of, and a filter that silently omitted it would
+                  make those rows unfindable — the exact gap `Replaced` and `ShareRevoked` sat in
+                  until today. */}
+              <FilterSelect
                 value={types[0] ?? ""}
-                onChange={(e) => setTypes(e.target.value ? [e.target.value] : [])}
-              >
-                <option value="">Select action</option>
-                {ALL_EVENT_TYPES.map((t) => (
-                  <option key={t} value={t}>{EVENT_LABEL[t] ?? t}</option>
-                ))}
-              </select>
+                onChange={(v) => setTypes(v ? [v] : [])}
+                anyLabel="Select action"
+                placeholder="Select action"
+                searchPlaceholder="Type to filter actions…"
+                options={ALL_EVENT_TYPES.map((t) => ({
+                  value: t,
+                  label: EVENT_LABEL[t] ?? t,
+                }))}
+              />
             </div>
 
             <div style={s.field}>
@@ -592,7 +979,11 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
           </div>
 
           <div style={s.filterActions}>
-            <button style={s.btn} disabled={loading} onClick={() => load(focus?.id).catch(() => undefined)}>
+            <button
+              style={s.btn}
+              disabled={loading}
+              onClick={() => load(focus?.id).catch(() => undefined)}
+            >
               {loading ? "Loading…" : "Apply"}
             </button>
             {/* ⚠ RESET CLEARS AND RE-READS. Clearing the boxes without running the query leaves the
@@ -607,7 +998,10 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 setTypes([]);
                 setActor("");
                 setText("");
-                load(focus?.id).catch(() => undefined);
+                /* ⚠ THE CLEARED VALUES ARE PASSED, not left to state — see `currentQuery`. Without
+                   this, Reset emptied the boxes and re-read with the OLD filters, which is exactly
+                   the "old result under empty filters" the comment above says it avoids. */
+                load(focus?.id, CLEARED).catch(() => undefined);
               }}
             >
               ↻ Reset
@@ -629,15 +1023,19 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
 
       {readFailed && (
         <div style={{ ...s.msg, ...s.err }}>
-          <strong>The log could not be read{readStatus ? ` (HTTP ${readStatus})` : ""}.</strong>{" "}
+          <strong>
+            The log could not be read{readStatus ? ` (HTTP ${readStatus})` : ""}
+            .
+          </strong>{" "}
           This is not an empty result — do not read it as “nothing happened”.
         </div>
       )}
 
       {!readFailed && rows.length === 0 && (
         <div style={{ ...s.msg, ...s.info }}>
-          <strong>No events match these filters.</strong> The log was read successfully and this
-          filter simply found nothing — try a longer period, or clear the event types.
+          <strong>No events match these filters.</strong> The log was read
+          successfully and this filter simply found nothing — try a longer
+          period, or clear the event types.
         </div>
       )}
 
@@ -654,18 +1052,71 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               enough to read would push "Who" out of alignment, and the glyph is unambiguous next to
               a table. Runs the identical `load` call, focus included. */}
           <div style={s.head}>
-            <span>When</span><span>Event</span><span>What</span>
+            {/* ⚠ CHANGING THE SORT RE-READS FROM THE SERVER, and passes the new direction
+                EXPLICITLY — `setState` has not landed when `load` runs in this handler, so relying on
+                state would sort by the PREVIOUS direction while the arrow showed the new one. Same
+                trap as the cleared filters a few lines below.
+                It also returns to page 1: a continuation token belongs to the query that produced it,
+                and reversing the order makes every token meaningless. `load` already resets them. */}
+            <span
+              role="button"
+              tabIndex={0}
+              style={s.sortHead}
+              title={oldestFirst ? "Showing oldest first — click for newest" : "Showing newest first — click for oldest"}
+              onClick={() => {
+                const next = !oldestFirst;
+                setOldestFirst(next);
+                load(focus?.id, { oldestFirst: next }).catch(() => undefined);
+              }}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                const next = !oldestFirst;
+                setOldestFirst(next);
+                load(focus?.id, { oldestFirst: next }).catch(() => undefined);
+              }}
+            >
+              When <span aria-hidden="true">{oldestFirst ? "↑" : "↓"}</span>
+            </span>
+            <span>Event</span>
+            <span>What</span>
+            {/* The empty 40px track that holds "Who" away from "What" — see `s.head`. */}
+            <span aria-hidden="true" />
             <span style={s.headWho}>
               Who
+              {/* ⚠ REFRESH NOW CLEARS THE FILTERS AND THE FOCUS (client, 2026-09-04: *"ensure if it
+                  refreshes it reset and show everything again"*). It used to re-read with whatever
+                  was set, focus included.
+
+                  ⚠ THIS MAKES IT BEHAVE LIKE THE "Reset" BUTTON IN THE FILTER CARD, which does the
+                  same clearing but does NOT drop the focus. They are no longer distinct enough to
+                  need both; Reset is left in place because it sits with the fields it clears, where
+                  an admin looks for it. Say the word and one of them goes.
+
+                  Clearing STATE and passing `undefined` both matter: `load` builds its query from
+                  `currentQuery`, which reads the state — but `setState` has not landed inside this
+                  handler, so the explicit `undefined` is what actually drops the focus for THIS
+                  read. The setters are what keep the boxes on screen agreeing with it. */}
               <button
                 type="button"
                 style={s.headRefresh}
                 disabled={loading}
-                title="Re-read the log with the same filters"
-                aria-label="Refresh"
-                onClick={() => load(focus?.id).catch(() => undefined)}
+                title="Clear the filters and re-read the whole log"
+                aria-label="Refresh and show everything"
+                onClick={() => {
+                  setDateFrom("");
+                  setDateTo("");
+                  setTypes([]);
+                  setActor("");
+                  setText("");
+                  setFocus(undefined);
+                  load(undefined, {
+                    ...CLEARED,
+                    itemUniqueId: undefined,
+                  }).catch(() => undefined);
+                }}
               >
-                {loading ? "…" : "↻"}
+                {loading ? "…" : "↻ Refresh"}
               </button>
             </span>
           </div>
@@ -675,7 +1126,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               <div key={r.Id} style={s.row}>
                 <span style={s.when}>{formatWhen(r.EventTime)}</span>
                 <span style={s.type}>
-                  {eventLabelForRow(r.EventType, r.LibraryName)}
+                  {eventLabelForRow(r.EventType, shortLibrary(r.LibraryName))}
                   {r.Outcome && r.Outcome !== "Success" && (
                     <span style={{ color: "#a4262c" }}> · {r.Outcome}</span>
                   )}
@@ -683,22 +1134,47 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 <div>
                   <div style={s.title}>{r.Title}</div>
                   {r.ItemPath && <div style={s.path}>{r.ItemPath}</div>}
-                  <div style={{ display: "flex", gap: 12, marginTop: 4, flexWrap: "wrap" }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 12,
+                      marginTop: 4,
+                      flexWrap: "wrap",
+                    }}
+                  >
                     {r.Details && (
                       <button
                         style={s.disclose}
-                        onClick={() => setExpanded({ ...expanded, [r.Id]: !open })}
+                        onClick={() =>
+                          setExpanded({ ...expanded, [r.Id]: !open })
+                        }
                       >
                         {open ? "▾ Hide details" : "▸ Details"}
                       </button>
                     )}
-                    {r.ItemUniqueId && (
-                      <button style={s.link} onClick={() => focusOn(r.ItemUniqueId, r.ItemName)}>
-                        History of this file
+                    {/* ⚠ HIDDEN ONCE ALREADY FOCUSED, and that is a real bug fix rather than
+                        tidying (client, 2026-09-04: *"the list is showing HIstory of file which when
+                        I click it doesnt do anything"*). Inside one file's log EVERY row is that same
+                        file, so `focusOn` was being handed the id it is already focused on: same
+                        query, same rows, nothing observable. A control that does nothing reads as
+                        broken, and an admin clicks it repeatedly before concluding the page is at
+                        fault.
+
+                        Gated on `focus === undefined` rather than on `r.ItemUniqueId !== focus.id` —
+                        every row in a focused view carries that id by definition, so the narrower
+                        test is the same test with more ways to go wrong. */}
+                    {r.ItemUniqueId && focus === undefined && (
+                      <button
+                        style={s.link}
+                        onClick={() => focusOn(r.ItemUniqueId, r.ItemName)}
+                      >
+                        File Activity Log
                       </button>
                     )}
                   </div>
-                  {open && r.Details && <div style={s.details}>{r.Details}</div>}
+                  {open && r.Details && (
+                    <div style={s.details}>{r.Details}</div>
+                  )}
                 </div>
                 {/* ⚠ `Source` IS NO LONGER SHOWN UNDER THE NAME (client, 2026-08-30). It is still
                     STORED on every row and still EXPORTED in the CSV — only the column is gone.
@@ -707,6 +1183,9 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                     (`Flow:DocumentsDeletions`), which is the difference between "somebody did this"
                     and "the system did this". If that question ever comes up in an investigation,
                     the CSV still answers it. */}
+                {/* The empty 40px track — see `s.head`. It sits in BOTH grids or the headings stop
+                    lining up with their columns. */}
+                <span aria-hidden="true" />
                 <div style={s.who}>
                   <div>{r.ActorName || r.ActorEmail || "—"}</div>
                 </div>
@@ -719,12 +1198,24 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
           <div style={s.pager}>
             <span style={s.pagerNote}>
               Showing {rows.length === 0 ? 0 : pageIdx * PAGE_SIZE + 1} to{" "}
-              {pageIdx * PAGE_SIZE + rows.length} event{rows.length === 1 ? "" : "s"}
-              {/* ⚠ NO TOTAL. The list's `ItemCount` is a cached aggregate that lags in BOTH
-                  directions — it read 2,419 for a list whose view was empty (2026-08-24) — so a
-                  number here would be wrong often enough to mislead. "and more" is what we can
-                  actually stand behind. */}
-              {next !== undefined ? " and more" : ""}
+              {pageIdx * PAGE_SIZE + rows.length}
+              {/* THE TOTAL (client, 2026-09-04, on their mock's `Showing 1 to 5 of 235 events`:
+                  *"Add it, just follow what the mockup would want."*).
+
+                  ⚠ IT IS COUNTED, NOT `ItemCount`. That aggregate is cached and lags in BOTH
+                  directions — it read 2,419 for a list whose view was empty (2026-08-24) — and it
+                  cannot answer a filtered question at all. `countAudit` walks Ids instead.
+
+                  ⚠ THREE STATES, and they must stay apart. A counted total; a floor (`25,000+`)
+                  when the walk hit its cap, because a floor shown as a total is the one thing this
+                  page must never do; and `and more` when the count could not be made, which is
+                  exactly what this line said before today. */}
+              {total === undefined
+                ? ""
+                : ` of ${total.total.toLocaleString()}${total.exact ? "" : "+"}`}{" "}
+              event
+              {(total !== undefined ? total.total : rows.length) === 1 ? "" : "s"}
+              {total === undefined && next !== undefined ? " and more" : ""}
             </span>
             <div style={s.pagerBtns}>
               <button
@@ -738,7 +1229,9 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               {tokens.map((_, i) => (
                 <button
                   key={i}
-                  style={i === pageIdx ? { ...s.pageBtn, ...s.pageBtnOn } : s.pageBtn}
+                  style={
+                    i === pageIdx ? { ...s.pageBtn, ...s.pageBtnOn } : s.pageBtn
+                  }
                   disabled={loading}
                   onClick={() => goToPage(i).catch(() => undefined)}
                 >

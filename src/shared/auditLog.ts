@@ -84,9 +84,11 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.routed]: "Moved to Documents",
   [EVENT.deleted]: "Deleted",
   [EVENT.archived]: "Archived",
-  // "Replaced by a newer upload", not "Replaced": the row records that THIS document was superseded,
-  // and the bare word reads as though it did the replacing.
-  [EVENT.replaced]: "Replaced by a newer upload",
+  /* Shortened to "Replaced" (client, 2026-09-04). It previously read "Replaced by a newer upload"
+     to make clear the row records that THIS document was SUPERSEDED rather than that it did the
+     replacing — a distinction the bare word does lose. Their call: the event column is a label, not a
+     sentence, and the row's `Details` and `What` both name the file. */
+  [EVENT.replaced]: "Replaced",
   [EVENT.shareRevoked]: "Share access revoked",
   [EVENT.uploadRefused]: "Upload refused",
   [EVENT.accessGranted]: "Access granted",

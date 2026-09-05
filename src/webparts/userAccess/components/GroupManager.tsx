@@ -2211,7 +2211,7 @@ export default function GroupManager({
             background: "#fdf3f4",
           }}
         >
-          <h1 style={{ ...s.head, marginTop: 0 }}>System administrators</h1>
+          <h1 style={{ ...s.head, marginTop: 0 }}>System Administrators</h1>
           {owners === undefined ? (
             <p style={s.hint}>
               The site&apos;s owners group could not be read, so administrators

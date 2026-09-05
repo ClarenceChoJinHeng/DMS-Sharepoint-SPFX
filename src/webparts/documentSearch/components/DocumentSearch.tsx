@@ -60,7 +60,10 @@ import {
 import { primeNames } from "../../../shared/spNaming";
 // The `Keyword` column is created by reconciliation, so a library provisioned earlier may not have
 // it — and a $filter naming an absent column 400s the whole read. Probed, never assumed.
-import { libraryHasColumns, KEYWORD_COLUMN } from "../../../shared/optionalColumns";
+import {
+  libraryHasColumns,
+  KEYWORD_COLUMN,
+} from "../../../shared/optionalColumns";
 // Admin-only, for the banner diagnostic below: owners-group membership counts, not just IsSiteAdmin.
 import { isSystemAdmin } from "../../../shared/spGroups";
 // One palette for every attention banner — the client asked for the Retire-a-segment colour.
@@ -133,7 +136,20 @@ function textOf(v: unknown): string {
 }
 
 /** `DD/MMM/YYYY` — the agreed client format. Display only; sort and filter use the stored value. */
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 function formatDate(iso: string): string {
   const raw = (iso ?? "").trim();
   if (raw.length === 0) return "";
@@ -163,7 +179,9 @@ const s: Record<string, React.CSSProperties> = {
      renders UNSTYLED with a completely green build. Four screens in this project have been caught
      by that. */
   hero: {
-    position: "relative", padding: "48px 20px 28px", textAlign: "center",
+    position: "relative",
+    padding: "48px 20px 28px",
+    textAlign: "center",
     /* ⚠⚠ NO FULL-BLEED. This was `width: 100vw` with `marginLeft/Right: calc(50% - 50vw)` so the
        banner could escape its column and reach the page edges. It did - and it also pushed the
        heading and search bar visibly LEFT of the banner's centre, on every screen size and in both
@@ -178,8 +196,11 @@ const s: Record<string, React.CSSProperties> = {
        up the page's ~30px padding, which is correct rather than broken - but it is a page setting, so
        if the banner ever stops touching the edges, check the section before the code. */
     width: "100%",
-    backgroundSize: "cover", backgroundPosition: "center", backgroundRepeat: "no-repeat",
-    marginBottom: 20, overflow: "hidden",
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+    marginBottom: 20,
+    overflow: "hidden",
     /* Client's own values, arrived at in DevTools on 2026-09-03.
        ⚠ `minHeight` GIVES THE PHOTO ROOM TO BE SEEN. The hero's height was whatever its content
        needed, so with the filter panel COLLAPSED the banner shrank to about the height of the title
@@ -192,7 +213,9 @@ const s: Record<string, React.CSSProperties> = {
        `width: 100%` that keeps the content full width once this becomes a flex container — a flex
        item shrinks to its content by default, so removing one without the other narrows the search
        bar to the width of the words in it. */
-    minHeight: 275, display: "flex", alignItems: "center",
+    minHeight: 275,
+    display: "flex",
+    alignItems: "center",
   },
   /* ⚠ THE DARKENING OVERLAY IS GONE (client, 2026-09-01): `rgba(6, 42, 26, .55)` over the banner.
      It existed so white text stayed legible whatever photo was chosen — a `text-shadow` fails against
@@ -216,31 +239,70 @@ const s: Record<string, React.CSSProperties> = {
      flex item this div sizes to its content without it, so the title and the search bar collapse to
      their text width and the banner reads as broken. `maxWidth` still caps it; the two work
      together. */
-  heroInner: { position: "relative", zIndex: 1, maxWidth: 1100, width: "100%", margin: "0 auto" },
+  heroInner: {
+    position: "relative",
+    zIndex: 1,
+    maxWidth: 1100,
+    width: "100%",
+    margin: "0 auto",
+  },
   heroTitle: {
-    color: "#fff", fontSize: 26, fontWeight: 700, letterSpacing: 3, textTransform: "uppercase",
-    margin: "0 0 22px", lineHeight: 1.3,
+    color: "#fff",
+    fontSize: 26,
+    fontWeight: 700,
+    letterSpacing: 3,
+    textTransform: "uppercase",
+    margin: "0 0 22px",
+    lineHeight: 1.3,
   },
   /* The pill. `overflow: hidden` is what clips the button's square corners to the rounded end. */
   heroBar: {
-    display: "flex", alignItems: "center", background: "#fff", borderRadius: 6,
-    overflow: "hidden", boxShadow: "0 2px 10px rgba(0,0,0,.18)",
+    display: "flex",
+    alignItems: "center",
+    background: "#fff",
+    borderRadius: 6,
+    overflow: "hidden",
+    boxShadow: "0 2px 10px rgba(0,0,0,.18)",
   },
-  heroIcon: { flexShrink: 0, padding: "0 10px 0 14px", color: "#8a8886", display: "flex", alignItems: "center" },
+  heroIcon: {
+    flexShrink: 0,
+    padding: "0 10px 0 14px",
+    color: "#8a8886",
+    display: "flex",
+    alignItems: "center",
+  },
   heroInput: {
-    flex: "1 1 auto", minWidth: 0, height: 44, border: "none", outline: "none",
-    fontSize: 14, color: "#242424", background: "transparent",
+    flex: "1 1 auto",
+    minWidth: 0,
+    height: 44,
+    border: "none",
+    outline: "none",
+    fontSize: 14,
+    color: "#242424",
+    background: "transparent",
   },
   /* 36 high inside a 44 bar, with its own radius and right margin, so it reads as a button SITTING
      IN the field rather than as the field's end cap — the client's spec, 2026-09-01. */
   heroBtn: {
-    flexShrink: 0, height: 36, padding: "0 26px", border: "none", borderRadius: 3,
-    marginRight: 10, background: "#0f6c3f",
-    color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer",
+    flexShrink: 0,
+    height: 36,
+    padding: "0 26px",
+    border: "none",
+    borderRadius: 3,
+    marginRight: 10,
+    background: "#0f6c3f",
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
   },
   /* On the dark banner, so white — an amber or red would vanish against the green. */
   heroWarn: {
-    color: "#ffd9a0", fontSize: 13, fontWeight: 600, margin: "10px 0 0", textAlign: "left",
+    color: "#ffd9a0",
+    fontSize: 13,
+    fontWeight: 600,
+    margin: "10px 0 0",
+    textAlign: "left",
   },
   /* A button, not a link: it toggles state on this page rather than navigating. Styled flat so it
      reads as the disclosure the design shows. */
@@ -250,47 +312,114 @@ const s: Record<string, React.CSSProperties> = {
      `alignSelf`, because the parent is not a flex container. */
   advToggleWrap: { textAlign: "left" },
   advToggle: {
-    display: "inline-flex", alignItems: "center", gap: 6, marginTop: 12, padding: 0,
-    background: "none", border: "none", color: "#fff", fontSize: 13, fontWeight: 600,
-    cursor: "pointer", fontFamily: "inherit",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 12,
+    padding: 0,
+    background: "none",
+    border: "none",
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: "inherit",
   },
   advPanel: {
-    display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-    gap: 14, marginTop: 16, textAlign: "left",
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+    gap: 14,
+    marginTop: 16,
+    textAlign: "left",
   },
-  advLabel: { display: "block", color: "#fff", fontSize: 12, fontWeight: 600, marginBottom: 6 },
+  advLabel: {
+    display: "block",
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: 600,
+    marginBottom: 6,
+  },
   advSelect: {
-    width: "100%", height: 38, padding: "0 10px", fontSize: 13, borderRadius: 6,
-    border: "none", background: "#fff", color: "#242424", boxSizing: "border-box",
+    width: "100%",
+    height: 38,
+    padding: "0 10px",
+    fontSize: 13,
+    borderRadius: 6,
+    border: "none",
+    background: "#fff",
+    color: "#242424",
+    boxSizing: "border-box",
   },
-  advActions: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14, marginTop: 16 },
+  advActions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 14,
+    marginTop: 16,
+  },
   advReset: {
-    background: "none", border: "none", color: "#fff", fontSize: 13, cursor: "pointer",
-    padding: 0, fontFamily: "inherit",
+    background: "none",
+    border: "none",
+    color: "#fff",
+    fontSize: 13,
+    cursor: "pointer",
+    padding: 0,
+    fontFamily: "inherit",
   },
   advApply: {
-    height: 36, padding: "0 20px", border: "none", borderRadius: 6, background: "#0f6c3f",
-    color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer",
+    height: 36,
+    padding: "0 20px",
+    border: "none",
+    borderRadius: 6,
+    background: "#0f6c3f",
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
   },
   h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   sub: { fontSize: 13, color: "#616161", margin: "0 0 16px" },
   bar: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" },
   box: {
-    flex: "1 1 260px", minWidth: 0, height: 36, padding: "0 12px", fontSize: 14,
-    border: "1px solid #d1d1d1", borderRadius: 4, boxSizing: "border-box",
+    flex: "1 1 260px",
+    minWidth: 0,
+    height: 36,
+    padding: "0 12px",
+    fontSize: 14,
+    border: "1px solid #d1d1d1",
+    borderRadius: 4,
+    boxSizing: "border-box",
   },
   btn: {
-    height: 36, padding: "0 18px", fontSize: 14, fontWeight: 600, border: "none",
-    borderRadius: 4, background: "#107c10", color: "#fff", cursor: "pointer",
+    height: 36,
+    padding: "0 18px",
+    fontSize: 14,
+    fontWeight: 600,
+    border: "none",
+    borderRadius: 4,
+    background: "#107c10",
+    color: "#fff",
+    cursor: "pointer",
   },
   btnGhost: {
-    height: 36, padding: "0 14px", fontSize: 14, border: "1px solid #d1d1d1",
-    borderRadius: 4, background: "#fff", color: "#242424", cursor: "pointer",
+    height: 36,
+    padding: "0 14px",
+    fontSize: 14,
+    border: "1px solid #d1d1d1",
+    borderRadius: 4,
+    background: "#fff",
+    color: "#242424",
+    cursor: "pointer",
   },
   filters: {
-    display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-    gap: 10, padding: 14, background: "#faf9f8", border: "1px solid #edebe9",
-    borderRadius: 6, marginBottom: 14,
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+    gap: 10,
+    padding: 14,
+    background: "#faf9f8",
+    border: "1px solid #edebe9",
+    borderRadius: 6,
+    marginBottom: 14,
   },
   field: { display: "flex", flexDirection: "column", gap: 4, minWidth: 0 },
   /* ⚠ THESE TWO NOW SIT ON THE DARK HERO, so the label is WHITE and the control has no border of
@@ -299,39 +428,98 @@ const s: Record<string, React.CSSProperties> = {
      either is ever reused on a light background it needs its own key rather than an override. */
   label: { fontSize: 12, fontWeight: 600, color: "#fff" },
   input: {
-    height: 38, padding: "0 10px", fontSize: 13, border: "none",
-    borderRadius: 6, background: "#fff", boxSizing: "border-box", maxWidth: "100%", width: "100%",
+    height: 38,
+    padding: "0 10px",
+    fontSize: 13,
+    border: "none",
+    borderRadius: 6,
+    background: "#fff",
+    boxSizing: "border-box",
+    maxWidth: "100%",
+    width: "100%",
   },
   row: {
-    display: "flex", gap: 12, alignItems: "flex-start", padding: "12px 10px",
-    borderBottom: "1px solid #f0f0f0", cursor: "pointer", textAlign: "left",
-    background: "none", border: "none", width: "100%", font: "inherit",
+    display: "flex",
+    gap: 12,
+    alignItems: "flex-start",
+    padding: "12px 10px",
+    borderBottom: "1px solid #f0f0f0",
+    cursor: "pointer",
+    textAlign: "left",
+    background: "none",
+    border: "none",
+    width: "100%",
+    font: "inherit",
   },
-  name: { fontSize: 14, fontWeight: 600, color: "#0f548c", wordBreak: "break-word" },
-  meta: { fontSize: 12, color: "#616161", marginTop: 2, wordBreak: "break-word" },
+  name: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#0f548c",
+    wordBreak: "break-word",
+  },
+  meta: {
+    fontSize: 12,
+    color: "#616161",
+    marginTop: 2,
+    wordBreak: "break-word",
+  },
   chip: {
-    display: "inline-block", fontSize: 11, fontWeight: 600, padding: "1px 7px",
-    borderRadius: 10, marginLeft: 8, verticalAlign: "middle",
+    display: "inline-block",
+    fontSize: 11,
+    fontWeight: 600,
+    padding: "1px 7px",
+    borderRadius: 10,
+    marginLeft: 8,
+    verticalAlign: "middle",
   },
   chipHc: { background: "#fde7e9", color: "#a4262c" },
   chipPending: { background: "#fff4ce", color: "#8a6100" },
-  note: { fontSize: 13, padding: "10px 12px", borderRadius: 4, marginBottom: 12 },
+  note: {
+    fontSize: 13,
+    padding: "10px 12px",
+    borderRadius: 4,
+    marginBottom: 12,
+  },
   /* One palette for every banner — see shared/noticeStyles.ts. */
   noteWarn: { ...NOTICE_ATTENTION },
-  empty: { padding: "28px 12px", textAlign: "center", color: "#616161", fontSize: 14 },
-  detailWrap: { display: "flex", gap: 20, flexWrap: "wrap", alignItems: "flex-start" },
-  preview: { flex: "1 1 420px", minWidth: 0, border: "1px solid #edebe9", borderRadius: 6 },
+  empty: {
+    padding: "28px 12px",
+    textAlign: "center",
+    color: "#616161",
+    fontSize: 14,
+  },
+  detailWrap: {
+    display: "flex",
+    gap: 20,
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+  },
+  preview: {
+    flex: "1 1 420px",
+    minWidth: 0,
+    border: "1px solid #edebe9",
+    borderRadius: 6,
+  },
   panel: { flex: "0 1 340px", minWidth: 260 },
-  dRow: { display: "flex", gap: 10, padding: "6px 0", borderBottom: "1px solid #f5f5f5", fontSize: 13 },
+  dRow: {
+    display: "flex",
+    gap: 10,
+    padding: "6px 0",
+    borderBottom: "1px solid #f5f5f5",
+    fontSize: 13,
+  },
   dLabel: { flex: "0 0 130px", color: "#616161" },
   dValue: { flex: "1 1 auto", minWidth: 0, wordBreak: "break-word" },
 };
 
 /* ─────────────────────────────── Component ─────────────────────────────── */
 
-export default function DocumentSearch(
-  { context, pageSize, heroImageUrl, heroTitle }: IDocumentSearchProps,
-): React.ReactElement {
+export default function DocumentSearch({
+  context,
+  pageSize,
+  heroImageUrl,
+  heroTitle,
+}: IDocumentSearchProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
   // Origin with no /sites/… — a server-relative path already carries the site, so previewTarget
   // needs the bare host to build an absolute file URL.
@@ -340,7 +528,9 @@ export default function DocumentSearch(
 
   const [criteria, setCriteria] = useState<SearchCriteria>(emptyCriteria());
   const [segments, setSegments] = useState<Segment[]>([]);
-  const [fixedOptions, setFixedOptions] = useState<Record<string, TermOption[]>>({});
+  const [fixedOptions, setFixedOptions] = useState<
+    Record<string, TermOption[]>
+  >({});
 
   const [results, setResults] = useState<LibraryResult[]>([]);
   const [searched, setSearched] = useState(false);
@@ -357,7 +547,9 @@ export default function DocumentSearch(
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [shown, setShown] = useState(pageSize);
   const [open, setOpen] = useState<SearchHit | undefined>(undefined);
-  const [fieldText, setFieldText] = useState<Record<string, string> | undefined>(undefined);
+  const [fieldText, setFieldText] = useState<
+    Record<string, string> | undefined
+  >(undefined);
   /** The Documents library's real URL segment — `Shared Documents`, not `Documents` (gotcha #12).
       ⚠ SEEDED WITH THE SEGMENT, NOT THE TITLE. It held `DOCUMENTS_LIBRARY` until 2026-08-28, which
       was the wrong string for a URL even when the two matched — and once the client retitled the
@@ -377,11 +569,19 @@ export default function DocumentSearch(
     headers?: Record<string, string>,
   ): Promise<{ ok: boolean; status: number; body: RawRow }> => {
     try {
-      const res: SPHttpClientResponse = await sp.get(url, SPHttpClient.configurations.v1, {
-        headers: headers ?? { Accept: "application/json;odata=nometadata" },
-      });
+      const res: SPHttpClientResponse = await sp.get(
+        url,
+        SPHttpClient.configurations.v1,
+        {
+          headers: headers ?? { Accept: "application/json;odata=nometadata" },
+        },
+      );
       if (!res.ok) return { ok: false, status: res.status, body: {} };
-      return { ok: true, status: res.status, body: (await res.json()) as RawRow };
+      return {
+        ok: true,
+        status: res.status,
+        body: (await res.json()) as RawRow,
+      };
     } catch {
       // 0 = the request never completed. Kept distinct from a real status on screen, because a
       // network failure and a 403 share nothing except the word "failed".
@@ -494,7 +694,9 @@ export default function DocumentSearch(
           `/RootFolder?$select=ServerRelativeUrl`,
       );
       if (!cancelled && docs.ok) {
-        const parts = textOf(docs.body.ServerRelativeUrl).split("/").filter((p) => p.length > 0);
+        const parts = textOf(docs.body.ServerRelativeUrl)
+          .split("/")
+          .filter((p) => p.length > 0);
         const seg = parts.length > 0 ? parts[parts.length - 1] : "";
         if (seg.length > 0) setDocsSegment(seg);
       }
@@ -525,7 +727,8 @@ export default function DocumentSearch(
           if (label.length === 0) continue;
           const levels: Level[] = [];
           try {
-            const parsed = (JSON.parse(textOf(row.Levels) || "[]") as RawRow[]) ?? [];
+            const parsed =
+              (JSON.parse(textOf(row.Levels) || "[]") as RawRow[]) ?? [];
             for (const lv of parsed) {
               const column = textOf(lv.column);
               if (column.length === 0) continue;
@@ -542,7 +745,12 @@ export default function DocumentSearch(
             // A malformed chain costs this one segment its tier filters, never the whole panel.
             levels.length = 0;
           }
-          list.push({ key: textOf(row.Title), label, termSetGuid: textOf(row.TermSetGuid), levels });
+          list.push({
+            key: textOf(row.Title),
+            label,
+            termSetGuid: textOf(row.TermSetGuid),
+            levels,
+          });
         }
         if (!cancelled) setSegments(list);
       }
@@ -563,12 +771,22 @@ export default function DocumentSearch(
       };
       const base = `${siteUrl}/_api/v2.1/termStore/sets`;
       const loaded = await Promise.all([
-        readTerms(`${base}/${setFor("documentType", FALLBACK_TERM_SETS.documentType)}/children`),
-        readTerms(`${base}/${setFor("yearPeriod", FALLBACK_TERM_SETS.year)}/children`),
-        readTerms(`${base}/${setFor("confidentiality", FALLBACK_TERM_SETS.confidentiality)}/children`),
+        readTerms(
+          `${base}/${setFor("documentType", FALLBACK_TERM_SETS.documentType)}/children`,
+        ),
+        readTerms(
+          `${base}/${setFor("yearPeriod", FALLBACK_TERM_SETS.year)}/children`,
+        ),
+        readTerms(
+          `${base}/${setFor("confidentiality", FALLBACK_TERM_SETS.confidentiality)}/children`,
+        ),
       ]);
       if (!cancelled) {
-        setFixedOptions({ documentType: loaded[0], year: loaded[1], confidentiality: loaded[2] });
+        setFixedOptions({
+          documentType: loaded[0],
+          year: loaded[1],
+          confidentiality: loaded[2],
+        });
       }
     };
 
@@ -580,8 +798,6 @@ export default function DocumentSearch(
   }, []);
 
   /* ── The business segment filter ──────────────────────────────────────────────────── */
-
-
 
   const chooseSegment = (label: string): void => {
     // `tiers: []` still cleared: a segment change must not leave a tier value from the previous one
@@ -605,7 +821,8 @@ export default function DocumentSearch(
     if (lib === "Documents") return documentsLibraryTitle();
     if (lib === "Staging") return libraryTitle();
     if (lib === "DocumentsHC") return hc ? hc.documents.title : "HC Documents";
-    if (lib === "StagingHC") return hc ? hc.approval.title : "HC Approval Document";
+    if (lib === "StagingHC")
+      return hc ? hc.approval.title : "HC Approval Document";
     return lib;
   };
 
@@ -613,7 +830,8 @@ export default function DocumentSearch(
   const libraryOfPath = (path: string): SearchLibrary => {
     const hc = cachedHcLibraries();
     const p = (path ?? "").toLowerCase();
-    if (hc && p.indexOf(`/${hc.documents.urlSegment.toLowerCase()}/`) !== -1) return "DocumentsHC";
+    if (hc && p.indexOf(`/${hc.documents.urlSegment.toLowerCase()}/`) !== -1)
+      return "DocumentsHC";
     return "Documents";
   };
 
@@ -645,13 +863,17 @@ export default function DocumentSearch(
     // tenant, which would show documents from sites this system has nothing to do with.
     if (query.length === 0) return [];
 
-    const props = "Path,Filename,Title,LastModifiedTime,Author,Size,UniqueId,ListItemID";
+    const props =
+      "Path,Filename,Title,Created,Author,Size,UniqueId,ListItemID";
     const r = await jsonGet(
       `${siteUrl}/_api/search/query?querytext='${encodeURIComponent(query)}'` +
         `&rowlimit=200&trimduplicates=false&selectproperties='${encodeURIComponent(props)}'`,
       SEARCH_HEADERS,
     );
-    if (!r.ok) return [{ library: "Documents", outcome: "failed", status: r.status, hits: [] }];
+    if (!r.ok)
+      return [
+        { library: "Documents", outcome: "failed", status: r.status, hits: [] },
+      ];
 
     const primary = (r.body.PrimaryQueryResult as RawRow) ?? {};
     const relevant = (primary.RelevantResults as RawRow) ?? {};
@@ -659,7 +881,8 @@ export default function DocumentSearch(
     const hits: SearchHit[] = [];
     for (const row of (table.Rows as RawRow[]) ?? []) {
       const map: Record<string, string> = {};
-      for (const cell of (row.Cells as RawRow[]) ?? []) map[textOf(cell.Key)] = textOf(cell.Value);
+      for (const cell of (row.Cells as RawRow[]) ?? [])
+        map[textOf(cell.Key)] = textOf(cell.Value);
       const path = map.Path ?? "";
       if (path.length === 0) continue;
       const name = map.Filename || map.Title || "";
@@ -669,10 +892,26 @@ export default function DocumentSearch(
         uniqueId: (map.UniqueId ?? "").replace(/[{}]/g, ""),
         itemId: Number(map.ListItemID ?? "0") || 0,
         library: libraryOfPath(path),
-        name: name.length > 0 ? name : path.split("/").filter((p) => p.length > 0).pop() ?? "",
+        name:
+          name.length > 0
+            ? name
+            : (path
+                .split("/")
+                .filter((p) => p.length > 0)
+                .pop() ?? ""),
         // Reduced to server-relative, so the trail and the preview agree with the live reads.
         path: path.replace(/^https?:\/\/[^/]+/, ""),
-        modified: map.LastModifiedTime ?? "",
+        /* ⚠ `Created`, NOT `LastModifiedTime` — AND NOT `Write` EITHER (2026-09-05). Both of
+           those come back as the FILE'S OWN embedded date rather than the item's: six different
+           documents shared `2024-10-01T06:12:13Z` to the second, because they are re-uploads of one
+           test PDF. Proven against the item itself — the index said `2024-10-01T06:12:13Z` while
+           SharePoint's own `Modified` for that row was `2026-09-05T10:49:35Z`. So a result row was
+           dated two years before the document existed here.
+           No search property returns the item's true `Modified`, so this shows when it was FILED,
+           which is the more useful answer for a document search anyway — and it is the same value
+           My Submissions labels "Uploaded". Matched by the REST half below so one list cannot mix
+           two kinds of date. */
+        modified: map.Created ?? "",
         author: map.Author ?? "",
         size: map.Size ?? "",
       });
@@ -681,9 +920,12 @@ export default function DocumentSearch(
   };
 
   /** One live list read — used for the approval libraries and for the recency top-up. */
-  const runListRead = async (lib: SearchLibrary, filter: string): Promise<LibraryResult> => {
+  const runListRead = async (
+    lib: SearchLibrary,
+    filter: string,
+  ): Promise<LibraryResult> => {
     const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/items`;
-    const core = `Id,FileLeafRef,FileRef,Modified,Author/Title,File/Length,File/UniqueId`;
+    const core = `Id,FileLeafRef,FileRef,Created,Modified,Author/Title,File/Length,File/UniqueId`;
     /* ⚠ THE THREE TAXONOMY COLUMNS ARE SELECTED, NEVER FILTERED. `$filter` cannot touch them — `eq`
        answers 400 and the `TaxCatchAllLabel` workaround answers 500, both failing the WHOLE request
        (see `METADATA_FILTER_FIELDS` in shared/documentSearch.ts for the two live failures that
@@ -712,15 +954,24 @@ export default function DocumentSearch(
       /* A 403 is an uncleared user meeting an HC library, and that is the CORRECT answer to their
          query — not an error. Counting it as one would put a permanent warning in front of everyone
          who is not HC-cleared, and train them to ignore the banner on the day it means something. */
-      const refused = isHcLibrary(lib) && (r.status === 403 || r.status === 401);
+      const refused =
+        isHcLibrary(lib) && (r.status === 403 || r.status === 401);
       /* ⚠ THE SERVER'S OWN MESSAGE, TO THE CONSOLE. "HTTP 500" alone is what cost two blind fixes to
          this filter: SharePoint names the offending field and the reason in the BODY, and nothing was
          reading it. Console rather than the banner — it is developer detail, and the banner already
          names the library and the status. */
       if (!refused) {
-        console.error(`CRS Search: ${libApiTitle(lib)} read failed (HTTP ${r.status})`, r.body);
+        console.error(
+          `CRS Search: ${libApiTitle(lib)} read failed (HTTP ${r.status})`,
+          r.body,
+        );
       }
-      return { library: lib, outcome: refused ? "refused" : "failed", status: r.status, hits: [] };
+      return {
+        library: lib,
+        outcome: refused ? "refused" : "failed",
+        status: r.status,
+        hits: [],
+      };
     }
     const hits: SearchHit[] = [];
     for (const row of (r.body.value as RawRow[]) ?? []) {
@@ -728,11 +979,14 @@ export default function DocumentSearch(
       const author = (row.Author as RawRow) ?? {};
       /* The narrowing REST could not do. `textOf` already handles a taxonomy field's
          `{Label, TermGuid, WssId}` shape as well as a bare string. */
-      if (narrowed && !metadataFilterMatches(criteria, {
-        documentType: textOf(row[METADATA_FILTER_FIELDS.documentType]),
-        year: textOf(row[METADATA_FILTER_FIELDS.year]),
-        confidentiality: textOf(row[METADATA_FILTER_FIELDS.confidentiality]),
-      })) {
+      if (
+        narrowed &&
+        !metadataFilterMatches(criteria, {
+          documentType: textOf(row[METADATA_FILTER_FIELDS.documentType]),
+          year: textOf(row[METADATA_FILTER_FIELDS.year]),
+          confidentiality: textOf(row[METADATA_FILTER_FIELDS.confidentiality]),
+        })
+      ) {
         continue;
       }
       hits.push({
@@ -741,7 +995,10 @@ export default function DocumentSearch(
         library: lib,
         name: textOf(row.FileLeafRef),
         path: textOf(row.FileRef),
-        modified: textOf(row.Modified),
+        // `Created` to agree with the KQL half above, which cannot report a true Modified at all.
+        // `Modified` stays in the `$select` because `$orderby` uses it — newest CHANGE first is
+        // still the right order for a result list.
+        modified: textOf(row.Created),
         author: textOf(author.Title),
         size: textOf(file.Length),
       });
@@ -765,6 +1022,27 @@ export default function DocumentSearch(
     setOpen(undefined);
     setShown(pageSize);
 
+    /* ⚠⚠ AWAITED HERE, INSIDE THE SEARCH — NOT LEFT TO THE MOUNT EFFECT (found live 2026-09-05).
+       Every title below comes from a MODULE CACHE that `primeNames` fills, and until it settles
+       `libApiTitle` answers the LEGACY names: `Staging`, and `Documents` for a library actually
+       titled `Restricted & Confidential Document`. Both 404. Press Search before the mount effect's
+       probes resolve — which is a second or two after the page appears — and the search runs against
+       two libraries that do not exist.
+
+       ⚠ THE SYMPTOM NAMES THE RIGHT TITLES, WHICH IS WHY IT READS AS A SERVER FAULT.
+       `2 libraries could not be searched: Approval for Document (HTTP 404), Restricted &
+       Confidential Document (HTTP 404)` — because `libraryLabel` resolves at RENDER time, by which
+       point priming HAS settled. The banner is built from a later render than the request was.
+       Identical to StagingAccess's `listBase` trap of 2026-08-14 and reconciliation's segment picker
+       of 2026-08-21: a name resolved at render time is fine for DISPLAY and never for a request.
+
+       ⚠ AND THE TELL THAT CONFIRMS IT IS WHAT IS *MISSING*: exactly TWO libraries failed. The HC
+       pair was never even attempted, because `cachedHcLibraries()` was still `undefined` and its
+       jobs are only queued when it resolves. A wrong TITLE would have failed four.
+
+       Idempotent and cached, so on every settled page load this costs nothing. */
+    await primeNames(sp, siteUrl).catch(() => undefined);
+
     const hc = cachedHcLibraries();
 
     /* ⚠ RESOLVED PER LIBRARY, NOT ONCE (2026-09-04). One filter string is sent to up to four
@@ -776,10 +1054,15 @@ export default function DocumentSearch(
        `libraryHasColumns` caches per library, so this is at most one extra read per library per
        page, and it answers FALSE on any failure — the safe direction, because the cost of a wrong
        `true` is a dead search and the cost of a wrong `false` is one field not being matched. */
-    const hasKw = async (t: "Staging" | "Documents" | "StagingHC" | "DocumentsHC"): Promise<boolean> => {
+    const hasKw = async (
+      t: "Staging" | "Documents" | "StagingHC" | "DocumentsHC",
+    ): Promise<boolean> => {
       try {
         return await libraryHasColumns(
-          context.spHttpClient, siteUrl, libApiTitle(t), [KEYWORD_COLUMN],
+          context.spHttpClient,
+          siteUrl,
+          libApiTitle(t),
+          [KEYWORD_COLUMN],
         );
       } catch {
         return false;
@@ -862,7 +1145,9 @@ export default function DocumentSearch(
   const failed = failedLibraries(results);
   /* Read straight off the results rather than recomputed: the read itself is the only thing that
      knows whether its `$select` was accepted. */
-  const unnarrowedLibraries = results.filter((r) => r.unnarrowed === true).map((r) => r.library);
+  const unnarrowedLibraries = results
+    .filter((r) => r.unnarrowed === true)
+    .map((r) => r.library);
 
   if (open) {
     const preview = previewTarget(open.name, open.path, tenantRoot, siteUrl);
@@ -906,7 +1191,11 @@ export default function DocumentSearch(
             ) : preview.kind === "image" ? (
               // Fit to WIDTH and scroll — the same fix the approval page needed.
               <div style={{ maxHeight: 600, overflow: "auto" }}>
-                <img src={preview.url} alt={open.name} style={{ width: "100%", display: "block" }} />
+                <img
+                  src={preview.url}
+                  alt={open.name}
+                  style={{ width: "100%", display: "block" }}
+                />
               </div>
             ) : (
               <iframe
@@ -920,7 +1209,9 @@ export default function DocumentSearch(
             {fieldText === undefined ? (
               <div style={s.meta}>Reading details…</div>
             ) : rows.length === 0 ? (
-              <div style={s.meta}>No details were recorded for this document.</div>
+              <div style={s.meta}>
+                No details were recorded for this document.
+              </div>
             ) : (
               rows.map((r) => (
                 <div key={`${r.label}:${r.value}`} style={s.dRow}>
@@ -965,8 +1256,19 @@ export default function DocumentSearch(
           <div style={s.heroBar}>
             <span style={s.heroIcon} aria-hidden="true">
               <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.6" />
-                <path d="M10.5 10.5L14 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+                <circle
+                  cx="7"
+                  cy="7"
+                  r="4.5"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                />
+                <path
+                  d="M10.5 10.5L14 14"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
               </svg>
             </span>
             <input
@@ -974,7 +1276,9 @@ export default function DocumentSearch(
               placeholder="Search file..."
               aria-label="Search documents"
               value={criteria.text}
-              onChange={(e) => setCriteria((c) => ({ ...c, text: e.target.value }))}
+              onChange={(e) =>
+                setCriteria((c) => ({ ...c, text: e.target.value }))
+              }
               onKeyDown={(e) => {
                 if (e.key === "Enter") runSearchSafely();
               }}
@@ -983,7 +1287,10 @@ export default function DocumentSearch(
               type="button"
               /* ⚠ DISABLED ONLY WHILE A SEARCH IS RUNNING. Empty criteria no longer dim it — the
                  press is what surfaces the message. */
-              style={{ ...s.heroBtn, ...(busy ? { opacity: 0.6, cursor: "default" } : {}) }}
+              style={{
+                ...s.heroBtn,
+                ...(busy ? { opacity: 0.6, cursor: "default" } : {}),
+              }}
               disabled={busy}
               onClick={runSearchSafely}
             >
@@ -996,93 +1303,147 @@ export default function DocumentSearch(
               would leave "type something to search for" sitting above a filled-in filter. ANY
               criterion becoming non-empty hides it, with nothing to remember. */}
           {emptySearch && !hasCriteria(criteria) ? (
-            <p style={s.heroWarn}>Type something to search for, or pick a filter, then choose Search.</p>
+            <p style={s.heroWarn}>
+              Type something to search for, or pick a filter, then choose
+              Search.
+            </p>
           ) : undefined}
 
           <div style={s.advToggleWrap}>
-          <button
-            type="button"
-            style={s.advToggle}
-            aria-expanded={showAdvanced}
-            onClick={() => setShowAdvanced((v) => !v)}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-              <path d="M2 3h12l-4.6 5.4V13L6.6 11.4V8.4L2 3z" stroke="currentColor" strokeWidth="1.4"
-                strokeLinejoin="round" />
-            </svg>
-            Advanced Filters
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true"
-              style={{ transform: showAdvanced ? "rotate(180deg)" : undefined }}>
-              <path d="M3.5 6L8 10.5 12.5 6" stroke="currentColor" strokeWidth="1.6"
-                strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
+            <button
+              type="button"
+              style={s.advToggle}
+              aria-expanded={showAdvanced}
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 16 16"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M2 3h12l-4.6 5.4V13L6.6 11.4V8.4L2 3z"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              Advanced Filters
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 16 16"
+                fill="none"
+                aria-hidden="true"
+                style={{
+                  transform: showAdvanced ? "rotate(180deg)" : undefined,
+                }}
+              >
+                <path
+                  d="M3.5 6L8 10.5 12.5 6"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
           </div>
 
           {showAdvanced ? (
             <>
-      <div style={s.advPanel}>
-        <div style={s.field}>
-          <label style={s.label} htmlFor="crs-doctype">Document type</label>
-          <select
-            id="crs-doctype"
-            style={s.input}
-            value={criteria.documentType}
-            onChange={(e) => setCriteria((c) => ({ ...c, documentType: e.target.value }))}
-          >
-            <option value="">Any</option>
-            {(fixedOptions.documentType ?? []).map((o) => (
-              <option key={o.id} value={o.label}>{o.label}</option>
-            ))}
-          </select>
-        </div>
+              <div style={s.advPanel}>
+                <div style={s.field}>
+                  <label style={s.label} htmlFor="crs-doctype">
+                    Document type
+                  </label>
+                  <select
+                    id="crs-doctype"
+                    style={s.input}
+                    value={criteria.documentType}
+                    onChange={(e) =>
+                      setCriteria((c) => ({
+                        ...c,
+                        documentType: e.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">Any</option>
+                    {(fixedOptions.documentType ?? []).map((o) => (
+                      <option key={o.id} value={o.label}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-        <div style={s.field}>
-          <label style={s.label} htmlFor="crs-year">Year</label>
-          <select
-            id="crs-year"
-            style={s.input}
-            value={criteria.year}
-            onChange={(e) => setCriteria((c) => ({ ...c, year: e.target.value }))}
-          >
-            <option value="">Any</option>
-            {(fixedOptions.year ?? []).map((o) => (
-              <option key={o.id} value={o.label}>{o.label}</option>
-            ))}
-          </select>
-        </div>
+                <div style={s.field}>
+                  <label style={s.label} htmlFor="crs-year">
+                    Year
+                  </label>
+                  <select
+                    id="crs-year"
+                    style={s.input}
+                    value={criteria.year}
+                    onChange={(e) =>
+                      setCriteria((c) => ({ ...c, year: e.target.value }))
+                    }
+                  >
+                    <option value="">Any</option>
+                    {(fixedOptions.year ?? []).map((o) => (
+                      <option key={o.id} value={o.label}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-        <div style={s.field}>
-          <label style={s.label} htmlFor="crs-conf">Confidentiality</label>
-          <select
-            id="crs-conf"
-            style={s.input}
-            value={criteria.confidentiality}
-            onChange={(e) => setCriteria((c) => ({ ...c, confidentiality: e.target.value }))}
-          >
-            <option value="">Any</option>
-            {(fixedOptions.confidentiality ?? []).map((o) => (
-              <option key={o.id} value={o.label}>{o.label}</option>
-            ))}
-          </select>
-        </div>
+                <div style={s.field}>
+                  <label style={s.label} htmlFor="crs-conf">
+                    Confidentiality
+                  </label>
+                  <select
+                    id="crs-conf"
+                    style={s.input}
+                    value={criteria.confidentiality}
+                    onChange={(e) =>
+                      setCriteria((c) => ({
+                        ...c,
+                        confidentiality: e.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">Any</option>
+                    {(fixedOptions.confidentiality ?? []).map((o) => (
+                      <option key={o.id} value={o.label}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-        <div style={s.field}>
-          <label style={s.label} htmlFor="crs-segment">Business segment</label>
-          <select
-            id="crs-segment"
-            style={s.input}
-            value={criteria.segment}
-            onChange={(e) => chooseSegment(e.target.value)}
-          >
-            <option value="">Any</option>
-            {segments.map((seg) => (
-              <option key={seg.key} value={seg.label}>{seg.label}</option>
-            ))}
-          </select>
-        </div>
+                <div style={s.field}>
+                  <label style={s.label} htmlFor="crs-segment">
+                    Business segment
+                  </label>
+                  <select
+                    id="crs-segment"
+                    style={s.input}
+                    value={criteria.segment}
+                    onChange={(e) => chooseSegment(e.target.value)}
+                  >
+                    <option value="">Any</option>
+                    {segments.map((seg) => (
+                      <option key={seg.key} value={seg.label}>
+                        {seg.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-        {/* ⚠ THE TIER AND DATE FILTERS WERE REMOVED HERE (client, 2026-08-30: *"just follow the
+                {/* ⚠ THE TIER AND DATE FILTERS WERE REMOVED HERE (client, 2026-08-30: *"just follow the
             mock, keep it simple, don't give client too many features or inputs, it will make them
             scared"*). What went: the segment's own cascading tiers (Department/Unit, Region/Estate
             — derived, never hardcoded), Document date from/to, and Uploaded from/to.
@@ -1092,15 +1453,20 @@ export default function DocumentSearch(
             empty, which every builder already treats as "no constraint". Restoring any of them is
             re-adding a `<select>`, not re-implementing a filter. Deleting the model instead would
             have thrown away tested behaviour to satisfy a layout. */}
-      </div>
+              </div>
 
               <div style={s.advActions}>
                 {/* Clears the filters AND the typed text — the same `reset` the old Clear button
                     called, so there is one definition of "start again". */}
-                <button type="button" style={s.advReset} onClick={reset}>Reset Filter</button>
+                <button type="button" style={s.advReset} onClick={reset}>
+                  Reset Filter
+                </button>
                 <button
                   type="button"
-                  style={{ ...s.advApply, ...(busy ? { opacity: 0.6, cursor: "default" } : {}) }}
+                  style={{
+                    ...s.advApply,
+                    ...(busy ? { opacity: 0.6, cursor: "default" } : {}),
+                  }}
                   disabled={busy}
                   onClick={runSearchSafely}
                 >
@@ -1112,7 +1478,9 @@ export default function DocumentSearch(
         </div>
       </div>
 
-      {configWarning.length > 0 ? <div style={{ ...s.note, ...s.noteWarn }}>{configWarning}</div> : undefined}
+      {configWarning.length > 0 ? (
+        <div style={{ ...s.note, ...s.noteWarn }}>{configWarning}</div>
+      ) : undefined}
 
       {/* A PARTIAL failure shows its results AND says what is missing. Rendering it as a clean list
           silently understates what is there; rendering it as "no results" is how someone concludes
@@ -1127,7 +1495,9 @@ export default function DocumentSearch(
             .map(
               (f) =>
                 `${libraryLabel(f.library)} (${
-                  f.status === 0 ? "the request did not complete" : `HTTP ${f.status}`
+                  f.status === 0
+                    ? "the request did not complete"
+                    : `HTTP ${f.status}`
                 })`,
             )
             .join(", ")}
@@ -1144,44 +1514,36 @@ export default function DocumentSearch(
       {unnarrowedLibraries.length > 0 ? (
         <div style={{ ...s.note, ...s.noteWarn }}>
           Document type, Year and Confidentiality could not be applied to{" "}
-          {unnarrowedLibraries.map((l) => libraryLabel(l)).join(", ")}, so results from{" "}
-          {unnarrowedLibraries.length === 1 ? "it" : "them"} may include documents that do not match
-          those three filters. Every other filter was applied everywhere.
+          {unnarrowedLibraries.map((l) => libraryLabel(l)).join(", ")}, so
+          results from {unnarrowedLibraries.length === 1 ? "it" : "them"} may
+          include documents that do not match those three filters. Every other
+          filter was applied everywhere.
         </div>
       ) : undefined}
-
-      {/* ⚠ THE ACCESS SENTENCE MOVED HERE FROM THE OLD SUBTITLE (2026-08-30) rather than being
-          dropped with it. The hero has no room for prose, but the fact still matters and belongs
-          where somebody wondering "why is my colleague's document not showing" will read it —
-          beside the results, not above the box. Always rendered, in every state: it explains an
-          EMPTY result as readily as a short one. */}
-      <p style={{ ...s.sub, marginTop: 14, marginBottom: 10 }}>
-        You will only ever see documents you are already allowed to open — searching does not give
-        access to anything new.
-      </p>
 
       {/* ⚠ ADMIN-ONLY, AND ONLY WHEN THE BANNER ACTUALLY FAILED. `bannerNote` is set for nobody else
           (the probe is skipped for them), so an uploader never meets a message about a file they
           cannot fix. It names the URL because the property-pane override can point anywhere, and
           both causes because SharePoint's 404 and 403 are interchangeable here. */}
       {bannerNote !== undefined && (
-        <p style={{ ...s.sub, marginTop: 0, marginBottom: 10, color: "#8a4b00" }}>
-          <strong>Banner image not loading (HTTP {bannerNote}).</strong>{" "}
-          The page fell back to the plain green. The address it tried is{" "}
-          <code>{heroImageUrl}</code> — either nothing is there, or this account cannot read it.
-          Open that address in a new tab: if it downloads or displays, the file is fine and{" "}
-          <strong>Site Assets</strong> needs Read for the site members group; if it fails, upload the
-          image to Site Assets under that exact name, or set a different address in this web part&rsquo;s
-          property pane. Only administrators see this line.
+        <p
+          style={{ ...s.sub, marginTop: 0, marginBottom: 10, color: "#8a4b00" }}
+        >
+          <strong>Banner image not loading (HTTP {bannerNote}).</strong> The
+          page fell back to the plain green. The address it tried is{" "}
+          <code>{heroImageUrl}</code> — either nothing is there, or this account
+          cannot read it. Open that address in a new tab: if it downloads or
+          displays, the file is fine and <strong>Site Assets</strong> needs Read
+          for the site members group; if it fails, upload the image to Site
+          Assets under that exact name, or set a different address in this web
+          part&rsquo;s property pane. Only administrators see this line.
         </p>
       )}
 
-      {state === "idle" ? (
-        <div style={s.empty}>Type something above, or pick a filter, then choose Search.</div>
-      ) : state === "error" ? (
+      {state === "error" ? (
         <div style={s.empty}>
-          The search could not be completed, so this is <strong>not</strong> a statement that nothing
-          matched. See the message above, then try again.
+          The search could not be completed, so this is <strong>not</strong> a
+          statement that nothing matched. See the message above, then try again.
         </div>
       ) : state === "empty" ? (
         /* ⚠ THE ATTENTION BOX, NOT PLAIN TEXT (client, 2026-09-04: *"when something is not found can
@@ -1196,14 +1558,26 @@ export default function DocumentSearch(
             visual register, which is what the split was for. If the error state should be red too,
             that needs its own decision. */
         <div style={{ ...s.noteWarn, padding: "12px 14px", borderRadius: 8 }}>
-          No documents matched. Note that a document approved in the last few minutes may not be
-          findable yet.
+          No result found.
         </div>
       ) : (
         <div>
-          <div style={{ ...s.meta, marginBottom: 6 }}>
-            {allHits.length === 1 ? "1 document" : `${allHits.length} documents`}
-          </div>
+          {/* ⚠ ONLY WHEN THERE IS SOMETHING TO COUNT (client, 2026-09-05: *"Can you delete the 0
+              document thingy?"*). The states above are `error`, `empty` and everything else — and
+              IDLE falls into "everything else", so before any search had been run this rendered an
+              empty result list headed `0 documents`. That is not an answer to anything: nobody has
+              asked a question yet, and `empty` is the state that means nothing matched.
+              ⚠ THE COUNT STAYS FOR A REAL RESULT SET. Only part of it is listed at a time
+              (`allHits.slice(0, shown)`), so this is the ONLY thing on screen saying how much was
+              found — and a list quietly showing less than it found is exactly the disagreement the
+              My Submissions pager exposed on the same day. */}
+          {allHits.length > 0 && (
+            <div style={{ ...s.meta, marginBottom: 6 }}>
+              {allHits.length === 1
+                ? "1 document"
+                : `${allHits.length} documents`}
+            </div>
+          )}
           {allHits.slice(0, shown).map((h) => (
             <button
               type="button"
@@ -1214,9 +1588,13 @@ export default function DocumentSearch(
               <div style={{ minWidth: 0, flex: "1 1 auto" }}>
                 <div style={s.name}>
                   {h.name}
-                  {isHcLibrary(h.library) ? <span style={{ ...s.chip, ...s.chipHc }}>HC</span> : undefined}
+                  {isHcLibrary(h.library) ? (
+                    <span style={{ ...s.chip, ...s.chipHc }}>HC</span>
+                  ) : undefined}
                   {h.library === "Staging" || h.library === "StagingHC" ? (
-                    <span style={{ ...s.chip, ...s.chipPending }}>Awaiting approval</span>
+                    <span style={{ ...s.chip, ...s.chipPending }}>
+                      Awaiting approval
+                    </span>
                   ) : undefined}
                 </div>
                 <div style={s.meta}>{trailOf(h.path)}</div>

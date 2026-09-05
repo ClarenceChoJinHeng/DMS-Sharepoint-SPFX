@@ -254,8 +254,15 @@ describe("event types the flows write", () => {
     expect(ALL_EVENT_TYPES.indexOf("ShareRevoked")).toBeGreaterThan(-1);
   });
 
-  it("labels Replaced as what happened to THIS document, not what it did", () => {
-    // The bare word reads as though this row's file did the replacing.
-    expect(EVENT_LABEL.Replaced).toContain("newer upload");
+  /* ⚠ SHORTENED TO "Replaced" ON THE CLIENT'S INSTRUCTION (2026-09-04). This test previously pinned
+     the longer "Replaced by a newer upload", whose point was that the row records what happened TO
+     this document rather than what it did — a distinction the bare word does lose. Their call; the
+     row's `Details` and `What` both name the file.
+     Still pinned, because the STORED value must stay `Replaced` whatever the label says: it is what
+     both routing flows write, and a label edit that drifted into `EVENT.replaced` would orphan every
+     row already in the list. */
+  it("labels Replaced with the client's short form, and stores the unchanged value", () => {
+    expect(EVENT_LABEL.Replaced).toBe("Replaced");
+    expect(EVENT.replaced).toBe("Replaced");
   });
 });

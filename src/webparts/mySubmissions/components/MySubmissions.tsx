@@ -17,6 +17,8 @@
 // 2026-08-14. Pending and rejected privacy IS real, and comes from Draft Item Security.
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
+// Paged rather than scrolled since 2026-09-04 — one implementation, shared with the Requests page.
+import { paginate, Pager } from "../../../shared/pagination";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IMySubmissionsProps } from "./IMySubmissionsProps";
 import { PersonPick, searchTenantPeople } from "../../../shared/spGroups";
@@ -366,6 +368,49 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   // needs the bare host to build an absolute file URL.
   const tenantRoot = siteUrl.replace(/^(https?:\/\/[^/]+).*$/, "$1");
   const [tab, setTab] = useState("Submissions");
+
+  /* Which page each of the three lists is on (client, 2026-09-04: *"apply for pagination for My
+     Submission, File Request, no need to use auto scroll"*). Keyed, not three numbers, because the
+     lists are independent and a shared page would move the one nobody clicked.
+     ⚠ WITH THE OTHER HOOKS. A `useState` below an early return blanks the whole web part — that
+     shipped on the Requests page earlier today and took a diagnosis to find. */
+  const [listPage, setListPage] = useState<Record<string, number>>({});
+  const pageOf = (key: string): number => listPage[key] ?? 0;
+  const setPage = (key: string, n: number): void =>
+    setListPage((prev) => ({ ...prev, [key]: n }));
+  /**
+   * Move to a tab, and put every list back on page one.
+   *
+   * Client, 2026-09-04: *"when I go to 2 pagination on My Submission and I switch to another tab
+   * call Request it stuck at 2, its best that if it reset to 1."*
+   *
+   * ⚠ THE FIVE STATUS TABS SHARE ONE KEY (`rows`), because they are one list under five filters —
+   * so leaving page 2 set carries it from All into Pending, where the reader has no idea they are
+   * looking at the middle of a list they have just opened. `paginate` clamps, so nothing renders
+   * empty; it simply starts somewhere nobody chose.
+   *
+   * ⚠ CLEARS EVERY KEY, not only the one being left. Clearing just the departing tab's key leaves
+   * the ARRIVING tab wherever it was last, which is the same surprise a moment later.
+   */
+  /**
+   * Which FAMILY each segment folder belongs to — `{ gho: "BusinessSegment", glp: "Project" }`.
+   *
+   * Client, 2026-09-02: *"the label is not dynamic such as the one showing in ApprovalDocument.aspx
+   * or My Submission"*. Built for the approver's screen first (1.0.413.0); this is the same fix on
+   * the uploader's.
+   *
+   * ⚠ THE DOCUMENT'S OWN FIELDS CANNOT ANSWER IT. Both families write the SAME physical column,
+   * `Business_x0020_Segment`, so the value reads `Group-led Projects` either way. Only the mode
+   * row's `Category` knows. `undefined` means unread, unreadable, or no such column — every one of
+   * which keeps today's `Business Segment`.
+   */
+  const [segmentSides, setSegmentSides] =
+    useState<Record<string, "BusinessSegment" | "Project"> | undefined>(undefined);
+
+  const goTab = (next: string): void => {
+    setTab(next);
+    setListPage({});
+  };
   /* `MergedRow`, not `Submission`: a row can now be a RECORD of a file that no longer exists.
      `MergedRow extends Submission`, so every helper on this page still takes them unchanged, and a
      row with no `recordState` is an ordinary live document exactly as before. */
@@ -1383,6 +1428,51 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     });
   }, []);
 
+  /**
+   * The segment families, for the detail panel's top label.
+   *
+   * ⚠ ITS OWN EFFECT, never folded into `load`. That function reads up to six libraries and IS the
+   * page; a label lookup must not sit anywhere on that path, and its failure must not be able to
+   * reach the "could not read your submissions" state.
+   *
+   * ⚠ AWAITS `primeNames` ITSELF rather than trusting the effect above to have got there first —
+   * `cachedListTitle` answers the legacy `DMS Config` until priming settles, which 404s on a renamed
+   * site. Priming is idempotent and cached, so awaiting it twice costs nothing.
+   */
+  useEffect(() => {
+    (async (): Promise<void> => {
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      const base =
+        `${siteUrl}/_api/web/lists/getbytitle(` +
+        `'${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items`;
+      /* ⚠ RETRIED WITHOUT `Category` ON 400 ONLY. One unknown field name fails the WHOLE request
+         (gotcha #11), and `Category` is a column `SegmentCreator` creates — so a site whose mode
+         rows were authored by hand may not have it. 400 only: a 404 is the config list missing and
+         a 403 is permissions on it, and retrying either asks the same unanswerable question twice.
+         There is nothing to retry FOR, though — without the column there is no label to derive —
+         so the retry is simply not made and the state stays `undefined`. */
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${base}?$select=StagingFolder,Category&$filter=ConfigType eq 'mode'&$top=200`,
+        SPHttpClient.configurations.v1,
+        { headers: NO_CACHE },
+      );
+      if (!res.ok) return;   // stays undefined — every label falls back to "Business Segment"
+      const rows = ((await res.json()).value ?? []) as Array<{
+        StagingFolder?: string;
+        Category?: string;
+      }>;
+      const sides: Record<string, "BusinessSegment" | "Project"> = {};
+      for (const r of rows) {
+        const key = (r.StagingFolder ?? "").trim().toLowerCase();
+        /* The SAME rule as the upload form and the approver's screen (`Category === "Project"`,
+           everything else a business segment) — one meaning for the value, so the three screens
+           cannot disagree about what an uploader filed. */
+        if (key.length > 0) sides[key] = r.Category === "Project" ? "Project" : "BusinessSegment";
+      }
+      setSegmentSides(sides);
+    })().catch(() => undefined);
+  }, []);
+
   /* Manual refresh (client, 2026-09-02: "add a refresh button... instead of refreshing the entire
      page"), same pattern as the Audit Log's icon-only header refresh. Deliberately does NOT clear
      `rows` on failure the way the mount load does — that fallback exists for when there is nothing
@@ -1417,6 +1507,15 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   const allGroups = groupSubmissions(rows ?? []);
   const tabCounts: Record<string, number> = {
     ...counts,
+    /* ⚠ `All` MUST NOT COME FROM `counts`, which is `liveRowsOnly`. The All tab deliberately shows
+       EVERY row — deleted, replaced and archived records included (see the note below) — so the
+       live-only tally read `All (14)` above a list of 44. Found on site 2026-09-05, and findable
+       only because the pager states a total: before that the tab was the one number on screen and
+       nothing on the page contradicted it.
+       Counted from the SAME expression the tab renders, so the two cannot disagree. It is CORRECT
+       for this to exceed Pending + Approved + Rejected: those three are approval outcomes, and a
+       destroyed or archived document no longer has one. */
+    All: filterByTab(rows ?? [], "All").length,
     Submissions: allGroups.length,
     // Counted from the same helper the tab renders, so the tally and the list cannot disagree.
     Archive: archivedRowsOnly(rows ?? []).length,
@@ -1439,6 +1538,18 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   /* The tabs that FILTER the flat file list. `Submissions` and `Requests` render their own views and
      their own empty states, so the shared ones below must not fire for them. */
   const isStatusTab = tab !== "Requests" && tab !== "Submissions";
+
+  /* ── The three paged lists (client, 2026-09-04) ────────────────────────────────────────────────
+     Declared together, from arrays that already exist here, so the render below only ever walks a
+     slice. `paginate` CLAMPS the page itself, which matters on this screen: switching tab or having
+     a request decided elsewhere shortens a list, and an unclamped page past the end would render as
+     "nothing here" over a list that has plenty. */
+  /* Page sizes are the client's own numbers (2026-09-04): six submissions, three requests. They are
+     NOT the shared default - a submission row is several lines tall (name, path, badges), so twenty
+     of them is the long page pagination was meant to replace. */
+  const pg_submissions = paginate(groupSubmissions(rows ?? []), pageOf("submissions"), 6);
+  const pg_requests = paginate(myRequestList, pageOf("requests"), 3);
+  const pg_rows = paginate(shown, pageOf("rows"), 6);
   // Every library segment the trail builder must strip. Without the HC pair, an HC file's folder
   // trail would start with "HCApprovalDocument" — the library name presented as a folder.
   const hcLibs = cachedHcLibraries();
@@ -1461,6 +1572,23 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
        exactly the "Shared Documents" bug of 2026-08-14 at a new library. */
     ...(arcLibs ? [arcLibs.normal.urlSegment, ...(arcLibs.hc ? [arcLibs.hc.urlSegment] : [])] : []),
   ];
+
+  /**
+   * What to call the top of the hierarchy for a file, from its path.
+   *
+   * ⚠ ONE HELPER, TWO CALL SITES, AND THAT IS THE POINT. It was written inline in the single-file
+   * panel on 2026-09-04 and the BATCH card was missed — so opening a submission showed
+   * `Business Segment` on the folder card and `Group-Led Project` one level down, on the same page.
+   * Reported 2026-09-05. A second inline copy is how that happens again.
+   *
+   * `folderTrail` has already stripped every library segment, so `[0]` is the mode row's
+   * `StagingFolder`. Returns `undefined` rather than a string, so callers pass it straight through as
+   * the OPTIONAL argument and unknown keeps `Business Segment` without anyone deciding to.
+   */
+  const segmentLabelFor = (fileRef: string): string | undefined =>
+    segmentSides?.[(folderTrail(fileRef, libs)[0] ?? "").toLowerCase()] === "Project"
+      ? "Group-Led Project"
+      : undefined;
 
   /* ── The detail view ──────────────────────────────────────────────────────────
      An INNER view, not a link out. The client's point: clicking a file used to leave the page for
@@ -1805,8 +1933,12 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
        which is why each says "unknown" rather than being omitted: an absent row reads as a file with
        no location, and this screen can tell the difference. */
     const trail = trailText(folderTrail(open.fileRef, libs));
+    // Named for its FAMILY (client, 2026-09-02). See `segmentLabelFor` — shared with the batch card,
+    // which is where an inline second copy went wrong.
+    const segmentLabel = segmentLabelFor(open.fileRef);
     const details = buildDetailRows({
       fieldText: fieldText ?? {},
+      segmentLabel,
       leading: [{ label: "Location", value: trail || "the library root" }],
       trailing: [
         // Both come from the list query, not FieldValuesAsText — one round trip already spent.
@@ -2109,7 +2241,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           <button
             key={t}
             style={{ ...s.tab, ...(tab === t ? s.tabOn : {}) }}
-            onClick={() => setTab(t)}
+            onClick={() => goTab(t)}
           >
             {t} ({tabCounts[t] ?? 0})
           </button>
@@ -2216,7 +2348,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
              Taken from whichever gone file HAS a snapshot: one written before the record feature
              existed is empty, and it must not stand in for a sibling that has one. */
           const destRows = destSource
-            ? buildBatchRows(destSource)
+            ? buildBatchRows(destSource, segmentLabelFor(batch.files[0]?.fileRef ?? ""))
             : batch.files
               .map((f) => snapshotFolderRows(f.record?.metadata))
               .filter((r) => r.length > 0)[0] ?? [];
@@ -2462,7 +2594,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                 adds the columns; every upload after that is grouped by what was actually sent.
               </div>
             )}
-            <div style={s.scroller}>
+            {/* PAGED, not scrolled (client, 2026-09-04). The 60vh box is gone; the pager below
+                states the total, which the scroll box never did. */}
             <table style={s.table}>
               <thead>
                 <tr>
@@ -2480,7 +2613,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                 </tr>
               </thead>
               <tbody>
-                {groups.map((g) => {
+                {pg_submissions.slice.map((g) => {
                   /* ⚠ THE ROW IS LABELLED BY ITS DESTINATION, NOT BY A REFERENCE OR A FILE NAME
                      (client, 2026-08-22, sketching it: `GHO › GF › TAX › 2024 › Term Sheet`).
                      A reference is what you QUOTE to an approver; a path is what you RECOGNISE, and
@@ -2532,7 +2665,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                 })}
               </tbody>
             </table>
-            </div>
+            <Pager page={pg_submissions} onPage={(n) => setPage("submissions", n)} label="submissions" />
           </div>
         );
       })()}
@@ -2547,7 +2680,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             </p>
           )}
           {myRequestList.length > 0 && (
-            <div style={s.scroller}>
+            <>
             <table style={s.table}>
               <thead>
                 <tr>
@@ -2559,7 +2692,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                 </tr>
               </thead>
               <tbody>
-                {myRequestList.map((rq) => {
+                {pg_requests.slice.map((rq) => {
                   const on = new Date(rq.at);
                   return (
                     <tr key={rq.id}>
@@ -2597,7 +2730,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                 })}
               </tbody>
             </table>
-            </div>
+            <Pager page={pg_requests} onPage={(n) => setPage("requests", n)} label="requests" />
+            </>
           )}
         </>
       )}
@@ -2650,7 +2784,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       )}
 
       {shown.length > 0 && (
-        <div style={s.scroller}>
+        <>
         <table style={s.table}>
           <thead>
             <tr>
@@ -2661,7 +2795,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             </tr>
           </thead>
           <tbody>
-            {shown.map((r) => (
+            {pg_rows.slice.map((r) => (
               /* ⚠ KEYED BY `mergedKey`, NOT `submissionKey`. The latter is `library#itemId`, and a
                  record row's item id belongs to a DIFFERENT list — so two records could collide with
                  each other and with a live document, and React would silently drop a row. */
@@ -2799,7 +2933,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             ))}
           </tbody>
         </table>
-        </div>
+        <Pager page={pg_rows} onPage={(n) => setPage("rows", n)} label="documents" />
+        </>
       )}
 
       {/* A BULLET LIST since 2026-08-30 (client's own wording). It was one paragraph of four facts,

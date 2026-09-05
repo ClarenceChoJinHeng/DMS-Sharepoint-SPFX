@@ -45,6 +45,13 @@ const s: Record<string, React.CSSProperties> = {
   grid:      { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 20, alignItems: "start" },
   col:       { display: "flex", flexDirection: "column", gap: 20 },
   card:      { border: "1px solid #e8e6e6", borderRadius: 12, background: "#fff", padding: 20, boxShadow: "0 1px 2px rgba(0,0,0,.04)" },
+  /* Added when the WHOLE card is the link (client, 2026-09-04). Spread ON TOP of `card`, so the look
+     is unchanged and only the anchor's own defaults are corrected: an `<a>` brings underlined blue
+     text and inline layout with it, and a card wearing those reads as a broken paragraph.
+     ⚠ THIS OBJECT IS A `Record<string, CSSProperties>` — a key that does not exist yields `undefined`
+     and the element renders UNSTYLED with a green build. This key was referenced before it was
+     declared, which is that mistake caught one step early. */
+  linkCard:  { display: "block", textDecoration: "none", color: "inherit", cursor: "pointer" },
   cardHead:  { display: "flex", alignItems: "flex-start", gap: 14 },
   cardText:  { flex: 1, minWidth: 0 },
   cardTitle: { margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3 },
@@ -103,8 +110,25 @@ function Card({
 }): React.ReactElement {
   const self = card.self ? targets[card.self.key] : undefined;
   const selfMissing = self === undefined || self.state === "missing";
+  /* ⚠ THE WHOLE CARD IS THE LINK when it resolves to one page (client, 2026-09-04: *"instead of
+     making the button clicable only, make the entire box clickable"*). A 30px arrow was the only hit
+     target on a card the size of a business card.
+
+     ⚠ ONLY FOR A `card.self` CARD, and that is not a shortcut. A card with a ROW LIST (User Access
+     Management, which offers Group Management and Page Access) has no single destination — making its
+     box a link would need one of the rows to be the "real" one, and it would also put an `<a>` inside
+     an `<a>`, which is invalid HTML and lets the outer link swallow the row's own click. Same trap as
+     the nested button in the Requests accordion header.
+
+     `linkCard` only adds the interactive affordances; the card's own look is untouched. */
+  const wholeCardHref =
+    card.self && self && self.state !== "missing" ? self.url : undefined;
+  const Box = wholeCardHref === undefined ? "div" : "a";
   return (
-    <div style={s.card}>
+    <Box
+      style={wholeCardHref === undefined ? s.card : { ...s.card, ...s.linkCard }}
+      {...(wholeCardHref === undefined ? {} : { href: wholeCardHref, title: card.title })}
+    >
       <div style={s.cardHead}>
         <CardIcon name={card.icon} />
         <div style={s.cardText}>
@@ -124,10 +148,14 @@ function Card({
             </div>
           )}
         </div>
-        {card.self && self && self.state !== "missing" && (
-          <a style={s.arrowBox} href={self.url} title={card.title}>
+        {/* ⚠ A `<span>`, NOT AN `<a>`, now the card itself is the link — an anchor inside an anchor
+            is invalid HTML and browsers recover from it unpredictably. It stays visible because it is
+            the affordance that says the card goes somewhere; it simply is not the hit target any
+            more. `aria-hidden` because the card's own link already carries the name. */}
+        {wholeCardHref !== undefined && (
+          <span style={s.arrowBox} aria-hidden="true">
             &#8594;
-          </a>
+          </span>
         )}
       </div>
       {card.links.length > 0 && (
@@ -137,7 +165,7 @@ function Card({
           ))}
         </div>
       )}
-    </div>
+    </Box>
   );
 }
 

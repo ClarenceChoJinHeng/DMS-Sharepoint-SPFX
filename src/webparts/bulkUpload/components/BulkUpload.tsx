@@ -661,7 +661,9 @@ export default function BulkUpload({
      like every other field on this screen — unlike the upload form, where it is per file. That is
      this screen's own model (one metadata set, one destination), not an inconsistency. */
   const [keyword, setKeyword] = useState<string>("");
-  const [keywordBlocked, setKeywordBlocked] = useState<string | undefined>(undefined);
+  const [keywordBlocked, setKeywordBlocked] = useState<string | undefined>(
+    undefined,
+  );
   const [remarkBlocked, setRemarkBlocked] = useState<string | undefined>(
     undefined,
   );
@@ -2275,7 +2277,10 @@ export default function BulkUpload({
       [KEYWORD_COLUMN],
     );
     if (canKeyword) {
-      formValues.push({ FieldName: KEYWORD_COLUMN, FieldValue: keyword.trim() });
+      formValues.push({
+        FieldName: KEYWORD_COLUMN,
+        FieldValue: keyword.trim(),
+      });
     }
     const canRef = await libraryHasColumns(
       context.spHttpClient,
@@ -3116,12 +3121,12 @@ export default function BulkUpload({
         .dms-subtitle { margin: 0 0 16px; font-size: 14px; color: #666; }
         .dms-warn { display: flex; gap: 10px; align-items: flex-start; ${NOTICE_ATTENTION_CSS} border-radius: 6px; padding: 12px 14px; font-size: 13px; margin: 0 0 24px; max-width: 626px; }
         .dms-section { background: #fff; border: 1px solid #e1e1e1; border-radius: 8px; padding: 24px; margin-bottom: 20px; }
-        .dms-section-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #0f6c3f; margin: 0 0 16px; }
+        .dms-section-title { font-size: 14px; font-weight: 700; text-transform: uppercase; color: rgba(0, 104, 74, 1); margin: 0 0 16px; letter-spacing: 0.5px; }
         /* Drop zone — same component and styling as the single-file Form's; the
            only functional difference is the multiple attribute on the input. */
         .dms-dropzone { display: flex; flex-direction: column; align-items: center; justify-content: center;
           gap: 8px; text-align: center; border: 1px dashed #9bbfaa; border-radius: 10px;
-          background: #f2f8f4; padding: 24px 16px; cursor: pointer; font-size: 13px;
+          background: rgba(235, 244, 231, 1); padding: 24px 16px; cursor: pointer; font-size: 13px;
           transition: background .12s, border-color .12s; }
         .dms-dropzone:hover, .dms-dropzone:focus-visible { border-color: #0f6c3f; background: #eaf4ee; }
         /* .over fires on dragover — without a visible change there is no confirmation
@@ -3178,7 +3183,7 @@ export default function BulkUpload({
         .dms-overall-track { height: 10px; border-radius: 6px; background: #ececec; overflow: hidden; }
         .dms-overall-fill { height: 100%; background: #0f6c3f; border-radius: 6px; transition: width .3s ease; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
-        .dms-field > span { font-weight: 600; }
+        .dms-field > span { font-weight: 600; color: black font-size: 14px;}
         .dms-field .req { color: #d13438; font-style: normal; }
         .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
         /* Client, 2026-09-04: *"the icon arrow for each dropdown is too close to the border, move it
@@ -3219,8 +3224,8 @@ export default function BulkUpload({
            destination folder, so they read better as a set than stacked. */
         .dms-grid-3 { grid-template-columns: 1.8fr 0.9fr 1.3fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; align-items: center; }
-        .dms-radio-group p { margin: 0; font-size: 13px; }
-        .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; color: #1b1b1b; }
+        .dms-radio-group p { margin: 0; font-size: 13px; color: black; font-weight: 600; }
+        .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; cursor: pointer; color: black; }
         .dms-radio-group input[type="radio"] { accent-color: #0f6c3f; width: 16px; height: 16px; cursor: pointer; }
         .dms-dept-badge { display: inline-flex; align-items: center; gap: 8px; background: #e8f5ee; border: 1px solid #b3d9c4; border-radius: 20px; padding: 5px 14px; font-size: 13px; margin-bottom: 20px; }
         .dms-dept-badge .dept-label { font-weight: 400; color: #555; }
@@ -3351,7 +3356,7 @@ export default function BulkUpload({
       {/* Deliberately BEFORE Documents Details in SOURCE order, not reordered
           with CSS: tab order follows the DOM. Mirrors Form.tsx. */}
       <div className="dms-section">
-        <p className="dms-section-title">Documents Folder Information</p>
+        <p className="dms-section-title">1. Documents Folder Information</p>
 
         {deptLoading ? (
           <p className="dms-dept-loading">Loading your access&hellip;</p>
@@ -3400,14 +3405,14 @@ export default function BulkUpload({
                   disabled={busy}
                   onChange={() => switchMode(offerable[0].key)}
                 />
-                {/* ⚠ HARDCODED to "Group Led Project", client's explicit instruction
+                {/* ⚠ HARDCODED to "Group-Led Project" (capitalised 2026-09-04), client's instruction
                     (2026-09-02) — mirrors Form.tsx's identical change; see that file's comment
                     for why this will need revisiting once a second Project-category segment
                     exists. Keep the two upload screens' wording in sync deliberately — this
                     project's own history is full of the two drifting apart. */}
                 {side === "BusinessSegment"
                   ? "Business Segment"
-                  : "Group Led Project"}
+                  : "Group-Led Project"}
               </label>
             );
           })}
@@ -3570,42 +3575,12 @@ export default function BulkUpload({
               <small>Max. 250 characters</small>
             )}
           </label>
-
-          {/* Keyword (client, 2026-09-04). Spans the row, as Remark does, and optional for the same
-              reason it is optional on the upload form: it is a findability aid, not a property of the
-              document, so requiring it would block an import of files nobody has words for. */}
-          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-            <span>Keyword</span>
-            <input
-              type="text"
-              value={keyword}
-              maxLength={255}
-              disabled={busy}
-              placeholder="Words to help find these documents later"
-              onChange={(e) => {
-                /* The same strip-and-say guard as Remark above — a character vanishing with no
-                   explanation is how a field comes to feel broken. */
-                const clean = stripBlockedChars(e.target.value);
-                setKeywordBlocked(
-                  clean !== e.target.value
-                    ? blockedCharsMessage(e.target.value)
-                    : undefined,
-                );
-                setKeyword(clean);
-              }}
-            />
-            {keywordBlocked ? (
-              <small className="dms-err">{keywordBlocked}</small>
-            ) : (
-              <small>Optional &middot; searchable from the home page</small>
-            )}
-          </label>
         </div>
       </div>
 
       {/* ── Documents Details ───────────────────────────────────────────── */}
       <div className="dms-section">
-        <p className="dms-section-title">Documents Details</p>
+        <p className="dms-section-title">2. Documents Details</p>
 
         {/* The file area has three states: empty drop zone, selected list, and
             live upload progress. Spec 2026-08-03 §3. */}
@@ -3927,6 +3902,51 @@ export default function BulkUpload({
               })()}
             </select>
           </div>
+
+          {/* ⚠ MOVED HERE FROM THE FOLDER-INFORMATION SECTION (client, 2026-09-04: *"ensure the
+            keyword input is under Documents Details for bulk upload"*). It describes the DOCUMENTS,
+            not their destination, so it belongs with them.
+            Only the position changed: the state, the strip-and-say guard and the conditional write
+            (guarded by `libraryHasColumns`, gotcha #4) are all untouched.
+            Optional for the same
+          reason it is optional on the upload form: it is a findability aid, not a property of the
+          document, so requiring it would block an import of files nobody has words for. */}
+
+          <label
+            className="dms-field"
+            style={{ display: "block", marginTop: 16, maxWidth: 620 }}
+          >
+            <span>Keyword</span>
+            <input
+              type="text"
+              value={keyword}
+              // 50, matching the hint below and the upload form's own cap.
+              maxLength={50}
+              disabled={busy}
+              placeholder="Words to help find these documents later"
+              onChange={(e) => {
+                /* The same strip-and-say guard as Remark above — a character vanishing with no
+             explanation is how a field comes to feel broken. */
+                const clean = stripBlockedChars(e.target.value);
+                setKeywordBlocked(
+                  clean !== e.target.value
+                    ? blockedCharsMessage(e.target.value)
+                    : undefined,
+                );
+                setKeyword(clean);
+              }}
+            />
+            {keywordBlocked ? (
+              <small className="dms-err">{keywordBlocked}</small>
+            ) : (
+              /* Matched to the upload form (client, 2026-09-04) - one field, one hint.
+             NOTE the comment style: this is an EXPRESSION position (a ternary branch), so it
+             takes a plain block comment. A JSX-children comment belongs in children, and a
+             line comment in an attribute list - the three are not interchangeable, and this
+             file has now been broken by each of them. */
+              <small>Max. 50 characters</small>
+            )}
+          </label>
 
           {/* Offered only for the levels LISTED by `legallyPrivilegedFor` in DMS
               Config (a list since 2026-08-19; one value behaves as before). Unset

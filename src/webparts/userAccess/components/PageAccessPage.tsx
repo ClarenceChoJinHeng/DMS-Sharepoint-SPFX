@@ -7,7 +7,6 @@ export default function PageAccessPage({ context }: IAccessProps): React.ReactEl
   return (
     <AccessShell
       title="Page Access"
-      subtitle="Who may open each page on this site. Each page is granted separately."
     >
       <PageAccess context={context} siteUrl={context.pageContext.web.absoluteUrl} />
     </AccessShell>

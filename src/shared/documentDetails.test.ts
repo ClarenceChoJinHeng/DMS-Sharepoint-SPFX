@@ -191,6 +191,22 @@ describe("tierRows", () => {
     ]);
   });
 
+  /* The label is the FAMILY's, not the column's (client, 2026-09-02). Pinned because the column is
+     `Business_x0020_Segment` for a project too — there is no second column — so nothing in the data
+     itself could ever catch a regression here. */
+  it("renames ONLY the top row when a segment label is given", () => {
+    expect(tierRows(UPOPSMY, "Group-Led Project")).toEqual([
+      { label: "Group-Led Project", value: "Upstream Operations Malaysia" },
+      { label: "Region", value: "Johor" },
+      { label: "Estate Mill", value: "Bukit Example" },
+    ]);
+  });
+
+  it("keeps Business Segment when no label is given — the twelve-of-thirteen case", () => {
+    expect(tierRows(UPOPSMY)[0].label).toBe("Business Segment");
+    expect(tierRows(UPOPSMY, undefined)[0].label).toBe("Business Segment");
+  });
+
   it("drops a tier column that exists but has no value for this document", () => {
     // An optional SubUnit does not apply to every unit; an em dash row would be noise.
     const withEmptySub = { ...UPOPSMY, SubUnit: "", SubUnitTid: "" };

@@ -15,6 +15,8 @@
  */
 import * as React from "react";
 import { useEffect, useRef, useState } from "react";
+// Paged rather than scrolled since 2026-09-04 — one implementation, shared with My Submissions.
+import { paginate, Pager } from "../../../shared/pagination";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 
 import { IRequestsProps } from "./IRequestsProps";
@@ -400,6 +402,26 @@ const s: Record<string, React.CSSProperties> = {
  * A `Record` over the union, so adding a `RequestStatus` is a compile error here until it is given a
  * colour — the same guard that has kept `PILL` complete through three additions.
  */
+/**
+ * Is the "Documents with Shared Access" section on?
+ *
+ * ⚠ HIDDEN, NOT DELETED (Crystal via the client, 2026-09-04: *"client haven't ask for the feature
+ * yet, we can add it back once they ask"*). Flip this to `true` and the whole section returns — the
+ * markup, its own state/text filter, the Re-check button, the revoke buttons and the admin-only
+ * leftover-permissions note are all still here and still compile.
+ *
+ * ⚠ IT ALSO STOPS THE ACL PROBE. That section is the ONLY reader of `loadAcls`, which issues one
+ * `roleassignments` request PER SHARED FILE on page load. Hiding the markup alone would leave a
+ * screen quietly making a request per shared document for a section nobody can see.
+ *
+ * ⚠ WHAT GOES WITH IT, so nobody is surprised: this page is now the only index of CRS shares, and
+ * with the section off there is NO index at all. Revoking an approved share can only be done through
+ * the library's own Permissions page (see the note inside the section for the exact route, including
+ * the warning about the header checkbox). Worth saying to the client if they ask how to take a share
+ * back before this comes off.
+ */
+const SHOW_SHARED_FILES = false;
+
 const STATUS_ACCENT: Record<RequestStatus, string> = {
   /* ⚠ THE TAG'S OWN AMBER, NOT ITS TEXT COLOUR (client, 2026-09-04: *"For the Pending one can you
      change the border color to follow the Pending color tag?"*). It was `#8a4b00` — the brown the
@@ -486,15 +508,12 @@ const FIL_CLEAR: React.CSSProperties = {
   fontSize: 13,
   cursor: "pointer",
 };
-/* ⚠ 60vh, and safe ONLY because nothing on this page is absolutely positioned. A scroll container
-   clips popovers — it has already broken Group Management's people picker, the upload form's info
-   panels and the member-add dropdown. Re-check before adding one here. */
-const SCROLLER: React.CSSProperties = {
-  maxHeight: "60vh",
-  overflowY: "auto",
-  overflowX: "hidden",
-  paddingRight: 4,
-};
+/* The 60vh `SCROLLER` that used to live here is GONE — all three sections are paged now (client,
+   2026-09-04). Deleted rather than parked: an unused exported-looking const is an invitation to wire
+   it back beside a pager, which would give one list two ways of being long at once.
+   ⚠ IF A SCROLL BOX IS EVER WANTED HERE AGAIN, the rule it carried still applies: a scroll container
+   CLIPS popovers, and it has already broken Group Management's people picker, the upload form's info
+   panels and the member-add dropdown. Check for absolutely-positioned descendants first. */
 
 /**
  * ⚠ `unknown` IS DELIBERATELY THE LOUD ONE, and that inverts the usual instinct.
@@ -1269,6 +1288,11 @@ export default function Requests({
      convenience into a per-file request storm. `aclsRead` is deliberately STICKY, and the Re-check
      button is how an approver asks for a fresh answer. A revoke re-probes its own file regardless. */
   useEffect(() => {
+    /* ⚠ THE GUARD IS INSIDE THE EFFECT, NOT AROUND IT. Wrapping the `useEffect` itself in a
+       condition changes the HOOK COUNT between renders, which throws "Rendered more hooks than
+       during the previous render" and blanks the entire web part - this page shipped exactly that
+       on 2026-09-04 and it took a diagnosis to find. */
+    if (!SHOW_SHARED_FILES) return;
     if (aclsRead || aclsLoading) return;
     const rowsNow = rows.state === "ready" ? rows.value : [];
     loadAcls(
@@ -1646,6 +1670,14 @@ export default function Requests({
    */
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
 
+  /* Which page each section is on, keyed the same way as `openSections` ("Deletion", "Share",
+     "shared"). A RECORD rather than one number because `typeSection` is ONE function rendering TWO
+     sections — a single page state would move Deletion and Share together, which reads as the wrong
+     list responding to the click.
+     ⚠ DECLARED HERE, ABOVE THE EARLY RETURN, for the reason spelled out on `openSections` — a hook
+     below it blanks the entire web part. That shipped once today already. */
+  const [sectionPage, setSectionPage] = useState<Record<string, number>>({});
+
   /* ── Render ───────────────────────────────────────────────────────────── */
 
   if (rows.state === "loading") return <p style={s.wrap}>Loading&hellip;</p>;
@@ -1727,6 +1759,9 @@ export default function Requests({
    * introduce a hook.
    */
   const isOpen = (key: string): boolean => openSections[key] !== false;
+  const pageOf = (key: string): number => sectionPage[key] ?? 0;
+  const setPage = (key: string, n: number): void =>
+    setSectionPage((prev) => ({ ...prev, [key]: n }));
   const toggle = (key: string): void =>
     setOpenSections((prev) => ({ ...prev, [key]: prev[key] === false }));
 
@@ -1969,13 +2004,26 @@ export default function Requests({
             {shown.length === 0 ? (
               <p style={s.quiet}>No request matches the filter.</p>
             ) : (
-              /* SCROLLS at 60vh. Safe here, unlike Group Management's group list and the upload
-                 form's file rows, because nothing in this card is absolutely positioned. */
-              <div style={SCROLLER}>
-                {shown.map((r) =>
-                  requestCard(r, r.status === "Pending" && canDecide(r, scope)),
-                )}
-              </div>
+              /* ⚠ PAGED, NOT SCROLLED (client, 2026-09-04: *"apply for pagination ... no need to use
+                 auto scroll"*). The 60vh box is gone.
+                 ⚠ THE PENDING ROWS SORT FIRST (see `merged` above), so page 1 is always the work —
+                 a page boundary can never bury an outstanding request behind a decided one. The
+                 pager's own count states the total either way, which the scroll box never did. */
+              (() => {
+                /* Three per section (client, 2026-09-04: *"The Approver page show 3 list card per
+                   dropdown as well"*), matching My Submissions' own Requests list. Not the shared
+                   default of twenty: a request card is several lines tall and all three sections
+                   are open at once, so twenty each is the long page pagination replaced. */
+                const pg = paginate(shown, pageOf(t), 3);
+                return (
+                  <>
+                    {pg.slice.map((r) =>
+                      requestCard(r, r.status === "Pending" && canDecide(r, scope)),
+                    )}
+                    <Pager page={pg} onPage={(n) => setPage(t, n)} label="requests" />
+                  </>
+                );
+              })()
             )}
           </>
         )}
@@ -2211,7 +2259,7 @@ export default function Requests({
           page (client's mockup: "Putting Shared File tab besides other tabs, doesn't communicate
           objectively the objective"). Retitled to match: "Documents with Shared Access". Everything
           below is otherwise UNCHANGED — same filter, same revoke logic, same admin-only note. */}
-      {
+      {SHOW_SHARED_FILES && (
         <div style={s.card}>
           {/* WARN: RE-CHECK IS NOT IN THE HEADER, deliberately: the header is a BUTTON that toggles
               the accordion, and a button inside a button is invalid HTML - the inner one swallows
@@ -2312,8 +2360,14 @@ export default function Requests({
                       : "No approved share requests, so CRS has granted nobody access to a document."}
                 </p>
               ) : (
-                <div style={SCROLLER}>
-                  {shownShared.map((f) => {
+                /* Paged with the other two — the 60vh box is gone. Wrapped in an IIFE so the page
+                   can be computed without hoisting a `let` out of the JSX; the map below is unchanged
+                   apart from the array it walks. */
+                (() => {
+                  const pg = paginate(shownShared, pageOf("shared"));
+                  return (
+                    <>
+                  {pg.slice.map((f) => {
                     const mayRevoke = canRevoke(f, scope);
                     const livePeople = f.recipients.filter(
                       (r) => r.state === "live",
@@ -2442,7 +2496,14 @@ export default function Requests({
                       </div>
                     );
                   })}
-                </div>
+                      <Pager
+                        page={pg}
+                        onPage={(n) => setPage("shared", n)}
+                        label="documents"
+                      />
+                    </>
+                  );
+                })()
               )}
 
               {/* ⚠ ADMINS ONLY, AND THAT IS NOT TIDINESS — A HEAD OF UNIT CANNOT USE THIS.
@@ -2489,7 +2550,7 @@ export default function Requests({
             </>
           )}
         </div>
-      }
+      )}
 
       <p style={s.quiet}>
         {tally.Pending} pending · {tally.Approved} approved · {tally.Rejected}{" "}

@@ -701,6 +701,14 @@ export default function FileTypeSettings({
               </div>
             )}
 
+            {/* ⚠ SCROLLS AT 60vh (client, 2026-09-04: *"ensure that File Ttype management is using
+                auto scroll"*) — the OPPOSITE call from Requests and My Submissions in the same
+                message, and rightly so: this list is a fixed policy of a handful of extensions, not a
+                growing record, so a pager would put page controls under five rows.
+                ⚠ SAFE HERE because nothing inside a row is absolutely positioned — each is a
+                checkbox, a label and a Remove button. That check is not a formality: a scroll cap has
+                already clipped a popover on three screens in this project. */}
+            <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
             {rows.map((ext) => {
               const on = ticked.indexOf(ext) !== -1;
               const blocked = isBlockedType(ext);
@@ -746,7 +754,10 @@ export default function FileTypeSettings({
                 </div>
               );
             })}
+            </div>
 
+            {/* The add box stays OUTSIDE the scroll box — a control that scrolls away from the list it
+                adds to is the rule the abbreviation editor already follows with its Save button. */}
             <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 14, flexWrap: "wrap" }}>
               <input
                 style={s.input}

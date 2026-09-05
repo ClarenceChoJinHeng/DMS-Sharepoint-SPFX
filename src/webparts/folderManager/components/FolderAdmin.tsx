@@ -23,7 +23,10 @@
 import * as React from "react";
 import { UploadPauseToggle } from "../../userAccess/components/UploadPauseToggle";
 import { stepUsesSegment, scopeFactsToFlow } from "../../../shared/folderFlows";
-import { UPLOAD_PAUSE_SETTING, uploadsArePaused } from "../../../shared/uploadPause";
+import {
+  UPLOAD_PAUSE_SETTING,
+  uploadsArePaused,
+} from "../../../shared/uploadPause";
 import { useEffect, useState } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import FolderManager from "./FolderManager";
@@ -61,7 +64,11 @@ function readHash(): { flowId: string; wantsTabs: boolean } {
   const m = /[#&]flow=([^&]+)/.exec(hash);
   let flowId = "";
   if (m) {
-    try { flowId = decodeURIComponent(m[1]).trim(); } catch { flowId = ""; }
+    try {
+      flowId = decodeURIComponent(m[1]).trim();
+    } catch {
+      flowId = "";
+    }
   }
   return { flowId, wantsTabs: tabFromHash(hash).length > 0 };
 }
@@ -90,87 +97,351 @@ const s: Record<string, React.CSSProperties> = {
      reconciliation run panel, the migration scan and the group tables all render inside it - and
      capping the column would put a horizontal scrollbar on the screens that most need width. The
      padding alone answers what was asked: it no longer sticks to the wall. */
-  wrap:      { fontFamily: '"Segoe UI", system-ui, sans-serif', color: "#242424", margin: "32px auto", padding: "0 24px 48px" },
-  h2:        { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 6px" },
-  sub:       { fontSize: 13, color: "#5f5f5f", margin: "0 0 20px", lineHeight: 1.5 },
+  wrap: {
+    fontFamily: '"Segoe UI", system-ui, sans-serif',
+    color: "#242424",
+    margin: "32px auto",
+    padding: "0 24px 48px",
+  },
+  h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 6px" },
+  sub: { fontSize: 13, color: "#5f5f5f", margin: "0 0 20px", lineHeight: 1.5 },
   /* THE CARD GRID (client design, 2026-08-30). Four across on a wide screen, and it reflows rather
      than scrolling: `auto-fit` with a `min()` floor keeps a card readable on a phone instead of
      squeezing five into the width. */
-  cards:     { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 250px), 1fr))", gap: 16, alignItems: "stretch" },
+  cards: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 250px), 1fr))",
+    gap: 16,
+    alignItems: "stretch",
+  },
   /* `display: flex` + `column` is what lets the step-count row sit on the BOTTOM of every card
      whatever the blurb's length — cards of different text lengths otherwise end with the meta line
      at a different height each, which reads as misalignment rather than as different content. */
-  card:      { display: "flex", flexDirection: "column", textAlign: "left", border: "1px solid #e6e6e6", borderRadius: 12, background: "#fff", padding: "20px 18px 16px", cursor: "pointer", font: "inherit" },
-  cardIcon:  { marginBottom: 14 },
+  card: {
+    display: "flex",
+    flexDirection: "column",
+    textAlign: "left",
+    border: "1px solid #e6e6e6",
+    borderRadius: 12,
+    background: "#fff",
+    padding: "20px 18px 16px",
+    cursor: "pointer",
+    font: "inherit",
+  },
+  cardIcon: { marginBottom: 14 },
   cardTitle: { fontSize: 15, fontWeight: 600, margin: 0, color: "#242424" },
-  cardBlurb: { fontSize: 12.5, color: "#616161", margin: "6px 0 0", lineHeight: 1.5, flex: "1 1 auto" },
+  cardBlurb: {
+    fontSize: 12.5,
+    color: "#616161",
+    margin: "6px 0 0",
+    lineHeight: 1.5,
+    flex: "1 1 auto",
+  },
   /* The footer: step count left, arrow right — `marginTop: auto` is what pins it down. */
-  cardFoot:  { display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16 },
-  cardMetaMuted:{ fontSize: 11.5, color: "#8a8886" },
-  cardGo:    { width: 30, height: 30, borderRadius: 8, border: "1px solid #cfe3d5", background: "#fff", color: "#0f6c3f", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  cardFoot: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 16,
+  },
+  cardMetaMuted: { fontSize: 11.5, color: "#8a8886" },
+  cardGo: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    border: "1px solid #cfe3d5",
+    background: "#fff",
+    color: "#0f6c3f",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
   /* Retiring is a BANNER, not a card (client design): it is the one destructive action here, and a
      fifth tile in the same grid invites it to be clicked as casually as the others. */
-  cardDanger:{ display: "flex", alignItems: "flex-start", gap: 10, width: "100%", textAlign: "left", border: "1px solid #f3c9cb", borderRadius: 10, background: "#fdf4f4", padding: "14px 16px", cursor: "pointer", font: "inherit" },
-  dangerName:{ fontSize: 13.5, fontWeight: 600, color: "#a4262c", marginRight: 8 },
-  dangerBlurb:{ fontSize: 12.5, color: "#605e5c", lineHeight: 1.5 },
-  sectionHead:{ fontSize: 12, fontWeight: 600, color: "#605e5c", textTransform: "uppercase", letterSpacing: ".04em", margin: "26px 0 10px" },
+  cardDanger: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: 10,
+    width: "100%",
+    textAlign: "left",
+    border: "1px solid #f3c9cb",
+    borderRadius: 10,
+    background: "#fdf4f4",
+    padding: "14px 16px",
+    cursor: "pointer",
+    font: "inherit",
+  },
+  dangerName: {
+    fontSize: 15,
+    fontWeight: 600,
+    color: "#a4262c",
+    marginRight: 8,
+  },
+  dangerBlurb: { fontSize: 12.5, color: "#605e5c", lineHeight: 1.5 },
+  /* The card arrow, in the danger palette (client, 2026-09-04: *"Add button for retire a segment as
+     well"*). The banner was ALREADY a `<button>` — the whole strip has always been clickable — but it
+     was the only entry on this page with no arrow, so it read as a notice rather than a way in.
+     ⚠ IT IS STILL ONE BUTTON, NOT A BUTTON INSIDE A BANNER. A nested `<button>` is invalid HTML and
+     the inner one swallows the click, which is the trap the Requests accordion header already hit.
+     This is a `<span>` styled to match `cardGo`, so the whole strip stays the hit target. */
+  dangerGo: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    border: "1px solid #f1b0b3",
+    background: "#fff",
+    color: "#a4262c",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    marginLeft: "auto",
+    alignSelf: "center",
+  },
+  sectionHead: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#605e5c",
+    textTransform: "uppercase",
+    letterSpacing: ".04em",
+    margin: "26px 0 10px",
+  },
   // The "All tools ›" link at the foot of the picker. It borrows the back band's TEXT style
   // (`backLinkStyle` in shared/backToSettings) without the band, because it is a descent into a
   // deeper screen rather than an exit — banding it would make two opposite moves look identical.
-  back:      { border: "none", background: "transparent", padding: 0, font: "inherit", color: "rgba(0, 104, 74, 1)", fontSize: 14, fontWeight: 600, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 },
+  back: {
+    border: "none",
+    background: "transparent",
+    padding: 0,
+    font: "inherit",
+    color: "rgba(0, 104, 74, 1)",
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+  },
   // FLEX, not `repeat(auto-fit, …)`. That grid made as many 240px columns as would fit, so on a wide
   // screen it produced a third empty column and the panel — spanning two — left a band of dead space to
   // its right (client, 2026-08-17: "CAn you remove the padding?"). Flex gives the same wrapping on a
   // narrow screen with no phantom tracks on a wide one.
-  runner:    { display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" },
+  runner: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 20,
+    alignItems: "flex-start",
+  },
   /* THE STEPPER (client design, 2026-08-30). White card rather than the old grey block, so it reads
      as a panel beside the work rather than a sidebar behind it. `position: relative` anchors the
      connector line drawn between the numbers. */
-  rail:      { position: "relative", border: "1px solid #e6e6e6", borderRadius: 12, background: "#fff", padding: "18px 16px", flex: "0 1 260px" },
-  railItem:  { position: "relative", display: "flex", gap: 12, width: "100%", textAlign: "left", border: "none", background: "transparent", font: "inherit", padding: "10px 8px", borderRadius: 8, cursor: "pointer", alignItems: "center" },
-  railActive:{ background: "#eef7f1" },
+  rail: {
+    position: "relative",
+    border: "1px solid #e6e6e6",
+    borderRadius: 12,
+    background: "#fff",
+    padding: "18px 16px",
+    flex: "0 1 260px",
+  },
+  railItem: {
+    position: "relative",
+    display: "flex",
+    gap: 12,
+    width: "100%",
+    textAlign: "left",
+    border: "none",
+    background: "transparent",
+    font: "inherit",
+    padding: "10px 8px",
+    borderRadius: 8,
+    cursor: "pointer",
+    alignItems: "center",
+  },
+  railActive: { background: "#eef7f1" },
   /* The line joining one number to the next. Drawn per ITEM rather than as one line behind the
      list, because the last step must not trail a stub below it — which is exactly what a single
      absolutely-positioned line would do. */
-  railLink:  { position: "absolute", left: 21, top: 34, width: 2, bottom: -6, background: "#e2e2e2" },
+  railLink: {
+    position: "absolute",
+    left: 21,
+    top: 34,
+    width: 2,
+    bottom: -6,
+    background: "#e2e2e2",
+  },
   /* The number pill used to take its colour from the step STATE (done / todo / unknown). With the
      state gone it needs a resting look of its own — `s` is a `Record<string, CSSProperties>`,
      so a key that does not exist renders unstyled with a green build. */
   railNumIdle: { background: "#eaeaea", color: "#8a8886" },
   /* `zIndex` lifts the number above the connector line so the line appears to run BETWEEN the
      circles rather than through them. */
-  railNum:   { position: "relative", zIndex: 1, flexShrink: 0, width: 26, height: 26, borderRadius: "50%", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", background: "#0f6c3f", color: "#fff" },
-  railLabel: { fontSize: 13, fontWeight: 600, lineHeight: 1.35, color: "#242424" },
+  railNum: {
+    position: "relative",
+    zIndex: 1,
+    flexShrink: 0,
+    width: 26,
+    height: 26,
+    borderRadius: "50%",
+    fontSize: 12,
+    fontWeight: 700,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "#0f6c3f",
+    color: "#fff",
+  },
+  railLabel: {
+    fontSize: 13,
+    fontWeight: 600,
+    lineHeight: 1.35,
+    color: "#242424",
+  },
   railState: { fontSize: 11, lineHeight: 1.4, marginTop: 2, display: "block" },
   // `flex: 1 1 420px` — takes the rest of the row, wraps under the rail below ~700px. The old
   // `gridColumn: span 2` belonged to the auto-fit grid above and is what left the dead band.
-  panel:     { minWidth: 0, flex: "1 1 420px" },
-  stepHead:  { fontSize: 18, fontWeight: 600, margin: "0 0 4px" },
-  stepHint:  { fontSize: 13, color: "#5f5f5f", margin: "0 0 16px", lineHeight: 1.55 },
+  panel: { minWidth: 0, flex: "1 1 420px" },
+  stepHead: { fontSize: 18, fontWeight: 600, margin: "0 0 4px" },
+  stepHint: {
+    fontSize: 13,
+    color: "#5f5f5f",
+    margin: "0 0 16px",
+    lineHeight: 1.55,
+  },
   /* ⚠ GREEN, NOT BLUE, since 2026-08-30 (client: *"keep the old design but tweak the color to match
      the other designs"*). The CONTENT of an `outside` step is unchanged and deliberately so — their
      mock replaced step 1 with a Create Term Set form, and **this app cannot create a term set or its
      terms**; the client's own answer was *"we do not have the time to built that interface"*. So the
      step still says the work happens in the term store, in the palette the rest of the page uses. */
-  termStoreLink: { display: "inline-block", fontWeight: 600, color: "#0f6c3f", textDecoration: "underline" },
-  termStoreNote: { display: "block", fontSize: 11.5, color: "#5f7a6b", marginTop: 4, lineHeight: 1.5 },
-  outside:   { border: "1px solid #cfe3d5", background: "#f2f9f5", borderRadius: 10, padding: "14px 16px", fontSize: 13, color: "#1c4d33", lineHeight: 1.6 },
-  lockBox:   { border: "1px solid #f2c9a0", background: "#fff8f0", borderRadius: 8, padding: "12px 14px", fontSize: 12.5, color: "#8a4b00", lineHeight: 1.55, marginBottom: 14 },
-  label:     { display: "block", fontWeight: 600, fontSize: 12, margin: "0 0 4px" },
-  select:    { width: "100%", maxWidth: 420, boxSizing: "border-box", padding: "7px 10px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff" },
-  input:     { width: "100%", maxWidth: 420, boxSizing: "border-box", padding: "7px 10px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4 },
-  railBusy:  { cursor: "not-allowed", opacity: 0.55 },
-  navBar:    { display: "flex", gap: 8, marginTop: 20, paddingTop: 16, borderTop: "1px solid #eceaea", flexWrap: "wrap" },
-  primary:   { padding: "7px 16px", fontSize: 13, background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer" },
-  off:       { padding: "7px 16px", fontSize: 13, background: "#e6e6e6", color: "#9a9a9a", border: "none", borderRadius: 4, cursor: "not-allowed" },
-  ghost:     { padding: "7px 16px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
-  danger:    { marginBottom: 16, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 8, fontSize: 12.5, color: "#a4262c", lineHeight: 1.5 },
-  allTools:  { marginTop: 30, paddingTop: 16, borderTop: "1px solid #eceaea" },
-  modeBar:   { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" },
-  modeOn:    { padding: "7px 14px", fontSize: 13, fontWeight: 600, background: "#0f6c3f", color: "#fff", border: "1px solid #0f6c3f", borderRadius: 4, cursor: "pointer" },
-  modeOff:   { padding: "7px 14px", fontSize: 13, background: "#fff", color: "#1b1b1b", border: "1px solid #c7c7c7", borderRadius: 4, cursor: "pointer" },
-  hint:      { fontSize: 11.5, color: "#5f6f80", marginTop: 6, lineHeight: 1.5 },
-  doneBox:   { border: "1px solid #c6e3d1", background: "#f1f8f4", borderRadius: 8, padding: "12px 14px", fontSize: 13, color: "#0f6c3f", lineHeight: 1.55, marginBottom: 14 },
+  termStoreLink: {
+    display: "inline-block",
+    fontWeight: 600,
+    color: "#0f6c3f",
+    textDecoration: "underline",
+  },
+  termStoreNote: {
+    display: "block",
+    fontSize: 11.5,
+    color: "#5f7a6b",
+    marginTop: 4,
+    lineHeight: 1.5,
+  },
+  outside: {
+    border: "1px solid #cfe3d5",
+    background: "#f2f9f5",
+    borderRadius: 10,
+    padding: "14px 16px",
+    fontSize: 13,
+    color: "#1c4d33",
+    lineHeight: 1.6,
+  },
+  lockBox: {
+    border: "1px solid #f2c9a0",
+    background: "#fff8f0",
+    borderRadius: 8,
+    padding: "12px 14px",
+    fontSize: 12.5,
+    color: "#8a4b00",
+    lineHeight: 1.55,
+    marginBottom: 14,
+  },
+  label: { display: "block", fontWeight: 600, fontSize: 12, margin: "0 0 4px" },
+  select: {
+    width: "100%",
+    maxWidth: 420,
+    boxSizing: "border-box",
+    padding: "7px 10px",
+    fontSize: 13,
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+    background: "#fff",
+  },
+  input: {
+    width: "100%",
+    maxWidth: 420,
+    boxSizing: "border-box",
+    padding: "7px 10px",
+    fontSize: 13,
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+  },
+  railBusy: { cursor: "not-allowed", opacity: 0.55 },
+  navBar: {
+    display: "flex",
+    gap: 8,
+    marginTop: 20,
+    paddingTop: 16,
+    borderTop: "1px solid #eceaea",
+    flexWrap: "wrap",
+  },
+  primary: {
+    padding: "7px 16px",
+    fontSize: 13,
+    background: "#0f6c3f",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    cursor: "pointer",
+  },
+  off: {
+    padding: "7px 16px",
+    fontSize: 13,
+    background: "#e6e6e6",
+    color: "#9a9a9a",
+    border: "none",
+    borderRadius: 4,
+    cursor: "not-allowed",
+  },
+  ghost: {
+    padding: "7px 16px",
+    fontSize: 13,
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+    background: "#fff",
+    cursor: "pointer",
+  },
+  danger: {
+    marginBottom: 16,
+    padding: "10px 12px",
+    border: "1px solid #f1b0b3",
+    background: "#fdf3f4",
+    borderRadius: 8,
+    fontSize: 12.5,
+    color: "#a4262c",
+    lineHeight: 1.5,
+  },
+  allTools: { marginTop: 30, paddingTop: 16, borderTop: "1px solid #eceaea" },
+  modeBar: { display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" },
+  modeOn: {
+    padding: "7px 14px",
+    fontSize: 13,
+    fontWeight: 600,
+    background: "#0f6c3f",
+    color: "#fff",
+    border: "1px solid #0f6c3f",
+    borderRadius: 4,
+    cursor: "pointer",
+  },
+  modeOff: {
+    padding: "7px 14px",
+    fontSize: 13,
+    background: "#fff",
+    color: "#1b1b1b",
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+    cursor: "pointer",
+  },
+  hint: { fontSize: 11.5, color: "#5f6f80", marginTop: 6, lineHeight: 1.5 },
+  doneBox: {
+    border: "1px solid #c6e3d1",
+    background: "#f1f8f4",
+    borderRadius: 8,
+    padding: "12px 14px",
+    fontSize: 13,
+    color: "#0f6c3f",
+    lineHeight: 1.55,
+    marginBottom: 14,
+  },
 };
 
 /* ⚠ REMOVED 2026-08-30 with the per-step status, at the client's request. `stepState` and
@@ -180,7 +451,9 @@ const s: Record<string, React.CSSProperties> = {
    still explain themselves beside the Next button. What went is the GRADING of every step, not the
    checking of the ones that can actually be checked. Re-render it by restoring this map. */
 
-export default function FolderAdmin({ context }: IFolderManagerProps): React.ReactElement {
+export default function FolderAdmin({
+  context,
+}: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
   // Read once, synchronously, so an addressed screen never flashes the picker first.
@@ -209,6 +482,13 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    * that contradicts itself is worse than one that says nothing.
    */
   const [reload, setReload] = useState(0);
+  /* ⚠ PURELY SO THE PRESS IS VISIBLE (client, 2026-09-04: *"Button is not clickable"* against the
+     Refresh list button). It always WAS clickable — no `disabled`, a live `onClick` — but a press
+     re-reads a list that usually comes back identical, so nothing on screen moves and the button
+     reads as dead. Exactly the same complaint they raised in the same message about the audit log's
+     "History of this file" link, which genuinely did nothing.
+     The read is fast, so this is mostly a flicker; what matters is that SOMETHING happens. */
+  const [refreshing, setRefreshing] = useState(false);
   /**
    * Whether the New segment FORM is open on step 2.
    *
@@ -228,7 +508,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
    * over instead. Until it does, `undefined` gates nothing — which is why Next was clickable on a screen
    * covered in "no folder will be created" warnings (client, 2026-08-17).
    */
-  const [abbrevMissing, setAbbrevMissing] = useState<number | undefined>(undefined);
+  const [abbrevMissing, setAbbrevMissing] = useState<number | undefined>(
+    undefined,
+  );
   /**
    * True while the abbreviations screen is reading. A SEPARATE fact from the count, because the count
    * is `undefined` both while loading and when the read failed — and only the first should hold Next
@@ -321,7 +603,12 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       if (!res.ok) throw new Error(`config HTTP ${res.status}`);
       const data = await res.json();
       const rows = ((data.value ?? []) as Array<Record<string, unknown>>)
-        .filter((r) => String(r.ConfigType ?? "").trim().toLowerCase() === "mode")
+        .filter(
+          (r) =>
+            String(r.ConfigType ?? "")
+              .trim()
+              .toLowerCase() === "mode",
+        )
         .map((r) => ({
           key: String(r.Title ?? "").trim(),
           label: String(r.ModeLabel ?? r.Title ?? "").trim(),
@@ -346,8 +633,11 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
         );
         if (p2.ok) {
           stagedKnown = true;
-          for (const r of ((await p2.json()).value ?? []) as Array<Record<string, unknown>>) {
-            staged[Number(r.Id ?? 0)] = String(r.PendingLevels ?? "").trim().length > 0;
+          for (const r of ((await p2.json()).value ?? []) as Array<
+            Record<string, unknown>
+          >) {
+            staged[Number(r.Id ?? 0)] =
+              String(r.PendingLevels ?? "").trim().length > 0;
           }
         }
       } catch {
@@ -357,12 +647,17 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       // segment `undefined`, which reads as "not checked" and locks nothing.
       setSegments(
         stagedKnown
-          ? rows.map((r) => ({ ...r, pendingLevels: staged[r.itemId] === true }))
+          ? rows.map((r) => ({
+              ...r,
+              pendingLevels: staged[r.itemId] === true,
+            }))
           : rows,
       );
       setLoadError(undefined);
+      setRefreshing(false);
     };
     load().catch((e) => {
+      setRefreshing(false);
       // Unreadable ≠ none. A failed read must not present as "this site has no segments", which would
       // send an admin off to create one that already exists.
       setSegments(undefined);
@@ -395,35 +690,59 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
         const groups = await context.spHttpClient
           // $top=5000, not 500: a provisioned segment is ~324 groups on its own, and a truncated
           // read would report an existing segment's groups as absent.
-          .get(`${siteUrl}/_api/web/sitegroups?$select=Title&$top=5000`, SPHttpClient.configurations.v1, { headers: GET })
-          .then(async (r) => (r.ok ? ((await r.json()).value ?? []) as Array<{ Title?: string }> : undefined))
+          .get(
+            `${siteUrl}/_api/web/sitegroups?$select=Title&$top=5000`,
+            SPHttpClient.configurations.v1,
+            { headers: GET },
+          )
+          .then(async (r) =>
+            r.ok
+              ? (((await r.json()).value ?? []) as Array<{ Title?: string }>)
+              : undefined,
+          )
           .catch(() => undefined);
         if (groups) {
           const prefix = target.code.toLowerCase();
-          next.groupsExist = prefix.length > 0 &&
-            groups.filter((g) => (g.Title ?? "").toLowerCase().indexOf(prefix) === 0).length > 0;
+          next.groupsExist =
+            prefix.length > 0 &&
+            groups.filter(
+              (g) => (g.Title ?? "").toLowerCase().indexOf(prefix) === 0,
+            ).length > 0;
         }
 
         const mapRows = await context.spHttpClient
           .get(
             `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items` +
               `?$select=Id,Segment&$top=5000`,
-            SPHttpClient.configurations.v1, { headers: GET },
+            SPHttpClient.configurations.v1,
+            { headers: GET },
           )
-          .then(async (r) => (r.ok ? ((await r.json()).value ?? []) as Array<{ Segment?: string }> : undefined))
+          .then(async (r) =>
+            r.ok
+              ? (((await r.json()).value ?? []) as Array<{ Segment?: string }>)
+              : undefined,
+          )
           .catch(() => undefined);
         const folderRows = await context.spHttpClient
           .get(
             `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.folderMap))}')/items` +
               `?$select=Id,Section&$top=5000`,
-            SPHttpClient.configurations.v1, { headers: GET },
+            SPHttpClient.configurations.v1,
+            { headers: GET },
           )
-          .then(async (r) => (r.ok ? ((await r.json()).value ?? []) as Array<{ Section?: string }> : undefined))
+          .then(async (r) =>
+            r.ok
+              ? (((await r.json()).value ?? []) as Array<{ Section?: string }>)
+              : undefined,
+          )
           .catch(() => undefined);
         if (folderRows) {
-          next.foldersExist = folderRows.filter(
-            (r) => (r.Section ?? "").trim().toLowerCase() === target.code.toLowerCase(),
-          ).length > 0;
+          next.foldersExist =
+            folderRows.filter(
+              (r) =>
+                (r.Section ?? "").trim().toLowerCase() ===
+                target.code.toLowerCase(),
+            ).length > 0;
         }
       }
       // The site-wide upload pause, for the two pause steps' ticks. Its own request because the
@@ -437,15 +756,24 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
         if (pRes.ok) {
-          const pRows = ((await pRes.json()).value ?? []) as Array<{ SettingValue?: string }>;
+          const pRows = ((await pRes.json()).value ?? []) as Array<{
+            SettingValue?: string;
+          }>;
           // No row is a valid state meaning "not paused"; only a failed READ is unknown.
-          next.uploadsPaused = pRows.length > 0 ? uploadsArePaused(pRows[0].SettingValue) : false;
+          next.uploadsPaused =
+            pRows.length > 0 ? uploadsArePaused(pRows[0].SettingValue) : false;
         }
-      } catch { /* leaves uploadsPaused undefined — unknown, never "on" */ }
+      } catch {
+        /* leaves uploadsPaused undefined — unknown, never "on" */
+      }
       if (!cancelled) setBaseFacts(next);
     };
-    load().catch(() => { if (!cancelled) setBaseFacts({}); });
-    return () => { cancelled = true; };
+    load().catch(() => {
+      if (!cancelled) setBaseFacts({});
+    });
+    return () => {
+      cancelled = true;
+    };
     // `reload` is in here so a bulk run's results are picked up the moment it ends — see
     // onRunBusyChange. It also refreshes the segment list, which is harmless and occasionally right.
     //
@@ -488,7 +816,9 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       // `abbreviationsLoading` is carried ALWAYS, count or no count — it is the fact that tells the
       // gate apart "not read yet" from "read and failed", and only the first holds Next.
       abbreviationsLoading: abbrevLoading,
-      ...(abbrevMissing === undefined ? {} : { abbreviationsMissing: abbrevMissing }),
+      ...(abbrevMissing === undefined
+        ? {}
+        : { abbreviationsMissing: abbrevMissing }),
     };
     if (!flow || flow.asksSubject !== "newSegment") return facts;
     // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
@@ -547,13 +877,15 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
         <BackToSettings context={context} siteUrl={siteUrl} />
         <h2 style={s.h2}>Folder Management</h2>
         <p style={s.sub}>
-          Select an action below. You&rsquo;ll be guided through the required screens step by step.
+          Select an action below. You&rsquo;ll be guided through the required
+          screens step by step.
         </p>
 
         {loadError && (
           <div style={s.danger}>
-            Could not read this site&rsquo;s segments ({loadError}). This does <strong>not</strong> mean
-            there are none — the flows still work, they just cannot tell you what is already done.
+            Could not read this site&rsquo;s segments ({loadError}). This does{" "}
+            <strong>not</strong> mean there are none — the flows still work,
+            they just cannot tell you what is already done.
           </div>
         )}
 
@@ -566,11 +898,18 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               // segment-picking flow behind it — every other card leads into a guided sequence of
               // steps — so it reads as the odd one out anyway; stretching it says so visually rather
               // than leaving it sized like a step-by-step flow it is not.
-              style={f.id === "runRecon" ? { ...s.card, gridColumn: "1 / -1" } : s.card}
-              onClick={() => openFlow(f)}>
+              style={
+                f.id === "runRecon"
+                  ? { ...s.card, gridColumn: "1 / -1" }
+                  : s.card
+              }
+              onClick={() => openFlow(f)}
+            >
               {/* Keyed on the FLOW ID, so a flow added later gets no icon rather than the wrong
                   one — `FlowIcon` renders nothing for a name it does not know. */}
-              <span style={s.cardIcon}><FlowIcon name={f.id} /></span>
+              <span style={s.cardIcon}>
+                <FlowIcon name={f.id} />
+              </span>
               <div style={s.cardTitle}>{f.label}</div>
               <div style={s.cardBlurb}>{f.blurb}</div>
               <div style={s.cardFoot}>
@@ -580,8 +919,13 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 </span>
                 <span style={s.cardGo} aria-hidden="true">
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
-                    <path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" strokeWidth="1.6"
-                      strokeLinecap="round" strokeLinejoin="round" />
+                    <path
+                      d="M3 8h10M9 4l4 4-4 4"
+                      stroke="currentColor"
+                      strokeWidth="1.6"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                 </span>
               </div>
@@ -595,16 +939,46 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
             different kind of thing, which is what it is. The "Take note" heading went with the
             redesign — the banner says everything the heading did, in the place it applies. */}
         {FLOWS.filter((f) => f.tone === "destructive").map((f) => (
-          <button key={f.id} style={{ ...s.cardDanger, marginTop: 18 }} onClick={() => openFlow(f)}>
-            <span style={{ flexShrink: 0, color: "#a4262c", marginTop: 1 }} aria-hidden="true">
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-                <path d="M8 2.2 15 14H1L8 2.2z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
-                <path d="M8 6.4v3.2M8 11.6v.6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          <button
+            key={f.id}
+            style={{ ...s.cardDanger, marginTop: 18 }}
+            onClick={() => openFlow(f)}
+          >
+            <span
+              style={{ flexShrink: 0, color: "#a4262c", marginTop: 1 }}
+              aria-hidden="true"
+            >
+              <svg width="35" height="35" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M8 2.2 15 14H1L8 2.2z"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M8 6.4v3.2M8 11.6v.6"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
               </svg>
             </span>
             <span>
               <span style={s.dangerName}>{f.label}</span>
               <span style={s.dangerBlurb}>{f.blurb}</span>
+            </span>
+            {/* Same glyph as every card's, so "this is how you go in" is one visual idea across the
+                page. `marginLeft: auto` pushes it to the far edge of the flex row. */}
+            <span style={s.dangerGo} aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+                <path
+                  d="M3 8h10M9 4l4 4-4 4"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
             </span>
           </button>
         ))}
@@ -629,7 +1003,10 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
   if (allTools) {
     return (
       <section style={s.wrap}>
-        <BackBand label="Back to Folder Management" onClick={() => setAllTools(false)} />
+        <BackBand
+          label="Back to Folder Management"
+          onClick={() => setAllTools(false)}
+        />
         <FolderManager context={context} />
       </section>
     );
@@ -658,21 +1035,28 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       return (
         <div>
           <label style={s.label}>Which segment?</label>
-          <select style={s.select} value={segKey} onChange={(e) => setSegKey(e.target.value)}>
+          <select
+            style={s.select}
+            value={segKey}
+            onChange={(e) => setSegKey(e.target.value)}
+          >
             <option value="">Select a segment&hellip;</option>
             {(segments ?? []).map((x) => (
-              <option key={x.key} value={x.key}>{x.label}</option>
+              <option key={x.key} value={x.key}>
+                {x.label}
+              </option>
             ))}
           </select>
           {segments !== undefined && segments.length === 0 && (
             <p style={s.hint}>
-              No segments exist yet — use <strong>Add a new segment</strong> instead.
+              No segments exist yet — use <strong>Add a new segment</strong>{" "}
+              instead.
             </p>
           )}
           {segments === undefined && (
             <p style={s.hint}>
-              The segment list could not be read, so it is empty here. Everything still works from{" "}
-              <strong>All tools</strong>.
+              The segment list could not be read, so it is empty here.
+              Everything still works from <strong>All tools</strong>.
             </p>
           )}
         </div>
@@ -705,65 +1089,77 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
               would send an admin to the wrong tool at the one moment they are being asked to do
               something else entirely. Same trap as `stepUsesSegment` on 2026-08-19: the SCREEN KIND
               is not the question; what the step is ABOUT is. */}
-          {(st.id === "termSet" || st.id === "addTerm" || st.id === "renameTerm") && (
-          <p style={{ margin: "0 0 12px" }}>
-            <a
-              href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={s.termStoreLink}
-            >
-              Open the Term Store Management Tool
-              <span aria-hidden="true" style={{ marginLeft: 6 }}>&#8599;</span>
-            </a>
-            <span style={s.termStoreNote}>
-              Opens in a new tab. Use this page, not the term store in the SharePoint admin centre
-              &mdash; that one needs tenant administrator rights and will refuse a site collection
-              administrator.
-            </span>
-          </p>
+          {(st.id === "termSet" ||
+            st.id === "addTerm" ||
+            st.id === "renameTerm") && (
+            <p style={{ margin: "0 0 12px" }}>
+              <a
+                href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={s.termStoreLink}
+              >
+                Open the Term Store Management Tool
+                <span aria-hidden="true" style={{ marginLeft: 6 }}>
+                  &#8599;
+                </span>
+              </a>
+              <span style={s.termStoreNote}>
+                Opens in a new tab. Use this page, not the term store in the
+                SharePoint admin centre &mdash; that one needs tenant
+                administrator rights and will refuse a site collection
+                administrator.
+              </span>
+            </p>
           )}
           {/* NO HINT HERE. The panel prints `step.hint` immediately above this box, so repeating it
               rendered the same sentence twice, one under the other — which reads as a rendering fault
               rather than emphasis. This box carries the part that is NOT the hint. */}
-          {active.asksSubject && (st.id === "addTerm" || st.id === "renameTerm") && (
-            <div style={{ marginTop: 14 }}>
-              {/* PAST TENSE, and the segment named rather than ASKED for. "What are you adding?" over a
+          {active.asksSubject &&
+            (st.id === "addTerm" || st.id === "renameTerm") && (
+              <div style={{ marginTop: 14 }}>
+                {/* PAST TENSE, and the segment named rather than ASKED for. "What are you adding?" over a
                   text box reads as "type it here and I'll add it" — but this is an `outside` step and
                   the box creates nothing; an admin could type a name, press Next, and believe the term
                   had been created. Naming the segment when one is already chosen gives the context the
                   client asked for WITHOUT putting a segment question in front of an instruction-only
                   step, which is the exact bug reported on 2026-08-19 (see `stepUsesSegment`). */}
-              <label style={s.label}>
-                {active.asksSubject === "add"
-                  ? `Which department or unit did you add${segment ? ` to ${segment.label}` : ""}?`
-                  : `Which term did you rename${segment ? ` in ${segment.label}` : ""}?`}
-              </label>
-              <input
-                style={s.input}
-                value={subject}
-                placeholder="e.g. Treasury"
-                onChange={(e) => setSubject(e.target.value)}
-              />
-              {/* Naming it is what lets the next step point at the right row. OPTIONAL: leaving it blank
+                <label style={s.label}>
+                  {active.asksSubject === "add"
+                    ? `Which department or unit did you add${segment ? ` to ${segment.label}` : ""}?`
+                    : `Which term did you rename${segment ? ` in ${segment.label}` : ""}?`}
+                </label>
+                <input
+                  style={s.input}
+                  value={subject}
+                  placeholder="e.g. Treasury"
+                  onChange={(e) => setSubject(e.target.value)}
+                />
+                {/* Naming it is what lets the next step point at the right row. OPTIONAL: leaving it blank
                   costs a little help, never progress — the flow must not stop them working. */}
-              {/* WHY, not just "optional" — the client asked "why do I have to type in the term?".
+                {/* WHY, not just "optional" — the client asked "why do I have to type in the term?".
                   Nothing can check whether someone renamed a term in the term store, so this box is
                   the only thing that can turn an uncheckable step into a checked one, and it carries
                   the name into the steps below. Blank costs help, never progress. */}
-              <div style={s.hint}>
-                Type the name exactly as it appears in the term store — the name, not a GUID.{" "}
-                <strong>This box creates nothing.</strong> Nothing can see into the term store, so
-                naming the term is the only way this step can confirm itself — and it takes you
-                straight to that term on the next step. Optional: leave it blank and everything still
-                works.
+                <div style={s.hint}>
+                  Type the name exactly as it appears in the term store — the
+                  name, not a GUID. <strong>This box creates nothing.</strong>{" "}
+                  Nothing can see into the term store, so naming the term is the
+                  only way this step can confirm itself — and it takes you
+                  straight to that term on the next step. Optional: leave it
+                  blank and everything still works.
+                </div>
               </div>
-            </div>
-          )}
+            )}
           {/* A step that asks for nothing has an empty box, which reads as a failed load. Say what the
               box is for instead: these steps are the ones this tool cannot do for you. */}
-          {!(active.asksSubject && (st.id === "addTerm" || st.id === "renameTerm")) && (
-            <div>This step happens outside this tool. Come back when it is done.</div>
+          {!(
+            active.asksSubject &&
+            (st.id === "addTerm" || st.id === "renameTerm")
+          ) && (
+            <div>
+              This step happens outside this tool. Come back when it is done.
+            </div>
           )}
         </div>
       );
@@ -787,8 +1183,8 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
          was the same screen a click later. The union in `folderFlows.ts` no longer carries that id,
          so adding a new component step is a compile error here rather than a silent fallthrough. */
       return (
-          <div>
-            {/* ⚠ THE "Create one group" MODE SWITCH IS GONE (2026-09-02, client: "remove the Create
+        <div>
+          {/* ⚠ THE "Create one group" MODE SWITCH IS GONE (2026-09-02, client: "remove the Create
                 one group, since we are automatically creating the group for them"), matching the
                 identical removal on the standalone Group Management page
                 (`GroupManagementPage.tsx`). Bulk provisioning is the only creation path here now.
@@ -797,13 +1193,13 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 (`hideCreateForm={true}`, unconditionally) — the same "kept, not deleted" pattern as
                 `GroupMapBuilder`'s form. It still exists for CRS_SITE_MEMBERS and a genuine one-off
                 nobody planned; re-enabling it here is passing `false` again, not rebuilding it. */}
-            <BulkGroupProvisioner
-              context={context}
-              siteUrl={siteUrl}
-              onBusyChange={setRunBusy}
-              onRunComplete={onRunComplete}
-            />
-            {/* ⚠ `RolesReference` REMOVED AGAIN HERE (2026-09-02, client's confirmed call, same
+          <BulkGroupProvisioner
+            context={context}
+            siteUrl={siteUrl}
+            onBusyChange={setRunBusy}
+            onRunComplete={onRunComplete}
+          />
+          {/* ⚠ `RolesReference` REMOVED AGAIN HERE (2026-09-02, client's confirmed call, same
                 request as removing it from the standalone page). It had been brought back
                 2026-08-30 specifically because it is the ONLY place documenting how to create the
                 three custom permission levels (CRS Upload/Approve/Delete) — without it, a newly
@@ -813,13 +1209,13 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 anyway on their explicit instruction. If this bites again, the fix is re-adding
                 `<RolesReference spHttpClient={context.spHttpClient} siteUrl={siteUrl} />` here, not
                 rebuilding it — the component itself is untouched. */}
-            {/* The LIST always renders — hiding what already exists is how a group gets created twice. */}
-            <GroupManager
-              context={context}
-              siteUrl={siteUrl}
-              hideCreateForm={true}
-              refreshKey={reload}
-            />
+          {/* The LIST always renders — hiding what already exists is how a group gets created twice. */}
+          <GroupManager
+            context={context}
+            siteUrl={siteUrl}
+            hideCreateForm={true}
+            refreshKey={reload}
+          />
         </div>
       );
     }
@@ -850,17 +1246,21 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
        same control every other flow uses, and it is derived from data so it survives a refresh, a second
        tab and someone else's session. It also sets `segKey`, which is what carries the segment into steps
        3-6 instead of leaving each one to ask again. */
-    const confirms = active.asksSubject === "newSegment" && st.id === "createSegment";
+    const confirms =
+      active.asksSubject === "newSegment" && st.id === "createSegment";
     // On step 2 the form is BEHIND A BUTTON, and closes once the segment is confirmed. Everywhere else
     // the step IS the screen, so it renders directly.
     if (confirms && !showForm && segment) {
       return (
         <div>
           <div style={s.doneBox}>
-            <strong>{segment.label}</strong> is created — top folder <strong>{segment.code}</strong>.
-            The remaining steps below are set up for it.
+            <strong>{segment.label}</strong> is created — top folder{" "}
+            <strong>{segment.code}</strong>. The remaining steps below are set
+            up for it.
           </div>
-          <button style={s.ghost} onClick={() => setShowForm(true)}>+ Create another segment</button>
+          <button style={s.ghost} onClick={() => setShowForm(true)}>
+            + Create another segment
+          </button>
         </div>
       );
     }
@@ -868,9 +1268,12 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       <div>
         {confirms && !showForm && (
           <div style={{ marginBottom: 16 }}>
-            <button style={s.primary} onClick={() => setShowForm(true)}>+ Create a new segment</button>
+            <button style={s.primary} onClick={() => setShowForm(true)}>
+              + Create a new segment
+            </button>
             <div style={s.hint}>
-              Already created it earlier? Pick it below to carry on — no need to open the form again.
+              Already created it earlier? Pick it below to carry on — no need to
+              open the form again.
             </div>
           </div>
         )}
@@ -928,24 +1331,50 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 CREATE one: *"I actually thought at first that I can recreate Group Head Office when I
                 already create."* Naming it for RESUMING is the whole point: this exists for coming back
                 to an unfinished segment, and it is also what carries the segment into steps 3-6. */}
-            <label style={s.label} htmlFor="fa-newseg">Continuing an earlier segment?</label>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <label style={s.label} htmlFor="fa-newseg">
+              Continuing an earlier segment?
+            </label>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
               <select
                 id="fa-newseg"
                 style={s.select}
                 value={segKey}
                 // Confirming closes the form: it has served its purpose, and leaving a creation form under
                 // the confirmation of what was just created is what made this read as broken.
-                onChange={(e) => { setSegKey(e.target.value); if (e.target.value) setShowForm(false); }}
+                onChange={(e) => {
+                  setSegKey(e.target.value);
+                  if (e.target.value) setShowForm(false);
+                }}
               >
                 <option value="">Select a segment&hellip;</option>
                 {(segments ?? []).map((x) => (
-                  <option key={x.key} value={x.key}>{x.label}</option>
+                  <option key={x.key} value={x.key}>
+                    {x.label}
+                  </option>
                 ))}
               </select>
               {/* The list is read on mount, and Create happens after — so without this the segment just
                   made is missing from its own confirmation. One list read. */}
-              <button style={s.ghost} onClick={() => setReload((n) => n + 1)}>Refresh list</button>
+              {/* `type="button"` is defensive rather than a fix for the report: there is no <form>
+                  here today, but a button with no type submits one the day somebody adds it. */}
+              <button
+                type="button"
+                style={s.ghost}
+                disabled={refreshing}
+                onClick={() => {
+                  setRefreshing(true);
+                  setReload((n) => n + 1);
+                }}
+              >
+                {refreshing ? "Refreshing…" : "Refresh list"}
+              </button>
             </div>
             <div style={s.hint}>
               {segments === undefined
@@ -974,14 +1403,23 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
       />
       {(structureDirty || abbreviationsDirty) && !runBusy && (
         <p style={s.hint}>
-          Finish or clear what you are editing first — leaving now would lose it, and the guided flow
-          you land on would open holding a warning that belongs to this screen, not to it.
+          Finish or clear what you are editing first — leaving now would lose
+          it, and the guided flow you land on would open holding a warning that
+          belongs to this screen, not to it.
         </p>
       )}
       <h2 style={s.h2}>{active.label}</h2>
       <p style={s.sub}>
-        {segment ? <>Segment: <strong>{segment.label}</strong>. </> : undefined}
-        {subject.trim().length > 0 ? <>Subject: <strong>{subject.trim()}</strong>. </> : undefined}
+        {segment ? (
+          <>
+            Segment: <strong>{segment.label}</strong>.{" "}
+          </>
+        ) : undefined}
+        {subject.trim().length > 0 ? (
+          <>
+            Subject: <strong>{subject.trim()}</strong>.{" "}
+          </>
+        ) : undefined}
         {/* ⚠ "N of M steps still to check" REMOVED, and the per-step tick with it (client QA,
             2026-08-30: *"JUST FORCE SYSTEM ADMIN TO FOLLOW EVERY STEP. NO NEED TO HAVE STEP 1
             CHECKED, STEP 2 CHECKED AND SO ON"*). Their objection was that on step 1 of a brand new
@@ -1020,9 +1458,11 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 // step unmounts the run and stops it part-way, silently.
                 disabled={runBusy || !reachable}
                 title={
-                  runBusy ? "Wait for the run to finish."
-                    : reachable ? undefined
-                    : "Finish the step you are on first."
+                  runBusy
+                    ? "Wait for the run to finish."
+                    : reachable
+                      ? undefined
+                      : "Finish the step you are on first."
                 }
                 onClick={() => setStepIdx(i)}
               >
@@ -1034,7 +1474,14 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                     Done / To do / Not checked grading was removed at the client's request the same
                     day, and this must not quietly reintroduce it. A reached step is one you have
                     walked past, never one that has been checked. */}
-                <span style={{ ...s.railNum, ...(i <= maxIdx ? {} : s.railNumIdle) }}>{i + 1}</span>
+                <span
+                  style={{
+                    ...s.railNum,
+                    ...(i <= maxIdx ? {} : s.railNumIdle),
+                  }}
+                >
+                  {i + 1}
+                </span>
                 <span>
                   <span style={s.railLabel}>{st.label}</span>
                 </span>
@@ -1079,7 +1526,12 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                   </button>
                   <button
                     style={
-                      last || blocked || runBusy || structureDirty || abbreviationsDirty || migratePending
+                      last ||
+                      blocked ||
+                      runBusy ||
+                      structureDirty ||
+                      abbreviationsDirty ||
+                      migratePending
                         ? s.off
                         : s.primary
                     }
@@ -1091,13 +1543,19 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                       abbreviationsDirty ||
                       migratePending
                     }
-                    onClick={() => setStepIdx(Math.min(steps.length - 1, idx + 1))}
+                    onClick={() =>
+                      setStepIdx(Math.min(steps.length - 1, idx + 1))
+                    }
                   >
                     Next step &rsaquo;
                   </button>
                   {last && (
                     <button
-                      style={runBusy || structureDirty || abbreviationsDirty ? s.off : s.ghost}
+                      style={
+                        runBusy || structureDirty || abbreviationsDirty
+                          ? s.off
+                          : s.ghost
+                      }
                       disabled={runBusy || structureDirty || abbreviationsDirty}
                       onClick={leaveFlow}
                     >
@@ -1108,14 +1566,21 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                 {/* The reason sits BESIDE the disabled button, never only in a tooltip: a greyed button
                     with no explanation reads as a broken page, and the admin's next move is to reload
                     rather than to finish the step. */}
-                {!last && blocked.length > 0 && !runBusy && !structureDirty && !abbreviationsDirty && !migratePending && <div style={s.hint}>{blocked}</div>}
+                {!last &&
+                  blocked.length > 0 &&
+                  !runBusy &&
+                  !structureDirty &&
+                  !abbreviationsDirty &&
+                  !migratePending && <div style={s.hint}>{blocked}</div>}
                 {/* Its own reason, again: "a run is in progress" would be wrong — nothing is running,
                     the admin simply has not pressed the button yet. */}
                 {migratePending && !runBusy && (
                   <div style={s.hint}>
-                    There are folders still to rebuild. Run them first — moving on now would leave the
-                    segment half-changed and the next step turns uploads back on over it. If you meant
-                    to skip a unit, set it to <strong>Leave this unit alone</strong> and check again.
+                    There are folders still to rebuild. Run them first — moving
+                    on now would leave the segment half-changed and the next
+                    step turns uploads back on over it. If you meant to skip a
+                    unit, set it to <strong>Leave this unit alone</strong> and
+                    check again.
                   </div>
                 )}
                 {/* Its own message, not folded into the run padlock: the fix is a click away on this
@@ -1123,9 +1588,10 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                     pressed Save would send them looking for something that is not happening. */}
                 {structureDirty && !runBusy && (
                   <div style={s.hint}>
-                    Save the structure first — the next step reads the saved pending change, so it
-                    would report nothing to move. Press <strong>Save structure</strong> above, or
-                    Cancel to discard the edit.
+                    Save the structure first — the next step reads the saved
+                    pending change, so it would report nothing to move. Press{" "}
+                    <strong>Save structure</strong> above, or Cancel to discard
+                    the edit.
                   </div>
                 )}
                 {/* Same shape as structureDirty above, on the sibling screen it was never applied to
@@ -1135,9 +1601,10 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                     with the admin believing the rename happened. */}
                 {abbreviationsDirty && !runBusy && (
                   <div style={s.hint}>
-                    Save the abbreviation changes first — reconciliation reads the saved codes, so it
-                    would rename nothing for this edit and report success anyway. Press{" "}
-                    <strong>Save</strong> above, or discard the edit to continue without it.
+                    Save the abbreviation changes first — reconciliation reads
+                    the saved codes, so it would rename nothing for this edit
+                    and report success anyway. Press <strong>Save</strong>{" "}
+                    above, or discard the edit to continue without it.
                   </div>
                 )}
                 {/* Beside the greyed buttons, never only in a tooltip — the same rule as the Next
@@ -1147,9 +1614,10 @@ export default function FolderAdmin({ context }: IFolderManagerProps): React.Rea
                     reconciliation was going would read as the wrong screen. */}
                 {runBusy && (
                   <div style={s.hint}>
-                    A run is in progress on this step. Moving away would stop it part-way, so
-                    navigation is held until it finishes. Anything already written stays written, and
-                    re-running picks up what is missing.
+                    A run is in progress on this step. Moving away would stop it
+                    part-way, so navigation is held until it finishes. Anything
+                    already written stays written, and re-running picks up what
+                    is missing.
                   </div>
                 )}
               </>

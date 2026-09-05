@@ -136,8 +136,26 @@ export function managedProperty(internalName: string, kind?: "text" | "date"): s
   return `${name}OWS${kind === "date" ? "DATE" : "TEXT"}`;
 }
 
-/** The free-text columns a typed word is matched against, over and above filename and contents. */
-export const TEXT_COLUMNS = ["ProjectName", "Vendor_x002f_CustomerName", "Remark"];
+/**
+ * The free-text columns a typed word is matched against, over and above filename and contents.
+ *
+ * ⚠ `Keyword` WAS MISSING FROM THIS LIST UNTIL 2026-09-05, and the feature was inert on the approved
+ * side because of it. A document filed with the keyword `2X` returned nothing when `2X` was searched,
+ * while the library view showed the value plainly. The column existed on all six libraries, both
+ * upload forms wrote it, and the one list deciding what a typed word is COMPARED AGAINST never named
+ * it — so every part looked correct in isolation.
+ *
+ * ⚠ THE TWO HALVES OF THIS PAGE FAIL DIFFERENTLY, WHICH IS WHY IT WENT UNNOTICED. The approval
+ * libraries go through REST, where `buildListFilter` has covered `Keyword` since the day it was
+ * added — so a keyword search on a PENDING document worked, and only the approved side (KQL) was
+ * blind. A feature that works for the file you just uploaded and stops working the moment it is
+ * approved is the hardest kind to report.
+ *
+ * Adding a column here cannot break an existing search: each clause sits in an OR with the bare term,
+ * and a KQL clause naming a property that does not exist matches nothing rather than erroring. That
+ * same forgiveness is what makes the managed-property caveat on `managedProperty` invisible.
+ */
+export const TEXT_COLUMNS = ["ProjectName", "Vendor_x002f_CustomerName", "Remark", "Keyword"];
 
 /* ─────────────────────────────── KQL ─────────────────────────────── */
 

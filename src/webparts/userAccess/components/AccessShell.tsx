@@ -20,7 +20,16 @@ const s: Record<string, React.CSSProperties> = {
 
 export interface AccessShellProps {
   title: string;
-  subtitle: string;
+  /**
+   * OPTIONAL since 2026-09-04 — Page Access's was removed at the client's request and the heading now
+   * stands on its own there.
+   *
+   * ⚠ AN ABSENT SUBTITLE RENDERS NOTHING, not an empty paragraph. `<p>` carries the 24px bottom
+   * margin that separates the heading from the page, so rendering it empty would leave a blank gap
+   * that reads as a failed load rather than as a deliberate omission — and the five pages that DO
+   * pass one are unaffected either way.
+   */
+  subtitle?: string;
   /** Only Folder Access needs one — see FolderAccessPage. */
   note?: React.ReactNode;
   children: React.ReactNode;
@@ -30,7 +39,7 @@ export default function AccessShell({ title, subtitle, note, children }: AccessS
   return (
     <section style={s.wrap}>
       <h2 style={s.h2}>{title}</h2>
-      <p style={s.subtitle}>{subtitle}</p>
+      {subtitle !== undefined && <p style={s.subtitle}>{subtitle}</p>}
       {note !== undefined && <p style={s.note}>{note}</p>}
       {children}
     </section>

@@ -300,7 +300,19 @@ function BulkApprovePanel(p: PanelProps): React.ReactElement {
                      recite — destination exists, folder locked down, no name clash — ALL STILL RUN,
                      per file, and a failure still names the file and the reason. Only the preamble
                      is gone. Do not read the shorter sentence as the guards having been relaxed. */
-                  ? `Approved documents are automatically moved to ${destTitle} after approval.`
+                  /* ⚠ "Document", NOT the library's full title (client, 2026-09-04). `destTitle`
+                     resolves to "Restricted & Confidential Document" on this site, which made the
+                     sentence a mouthful in a narrow panel. Matched against the LIVE title rather than
+                     a hardcoded string: this client renames libraries routinely, and a literal would
+                     stop matching on the next rename with nothing to explain it.
+                     ⚠ THE HC DESTINATION KEEPS ITS NAME — an approver of a Highly Confidential
+                     document should be told where it is going, and "Document" would read as the open
+                     library. */
+                  ? `Approved documents are automatically moved to ${
+                      destTitle.trim().toLowerCase() === documentsLibraryTitle().trim().toLowerCase()
+                        ? "Document"
+                        : destTitle
+                    } after approval.`
                   : "Rejected documents stay in this library, so the uploader can see the comment and fix them."}
               </p>
             </>

@@ -43,6 +43,8 @@
 // docs/superpowers/specs/2026-09-02-access-pages-read-only-design.md, and
 // docs/superpowers/specs/2026-09-02-access-pages-usability-pass-design.md §3 for this change.
 import * as React from "react";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+import { AttentionIcon } from "../../../shared/attentionBanner";
 import { useEffect, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
@@ -97,6 +99,10 @@ const s: Record<string, React.CSSProperties> = {
   drift:    { fontSize: 11, color: "#8a4b00", marginTop: 2 },
   policyBox:{ marginBottom: 12, padding: "8px 10px", border: "1px solid #d6e8dc", background: "#f6fbf8", borderRadius: 4, fontSize: 12, color: "#265", lineHeight: 1.5 },
   adminBox: { marginBottom: 12, padding: "8px 10px", border: "1px solid #cfd8e3", background: "#f4f7fb", borderRadius: 4, fontSize: 12, color: "#2b3f56", lineHeight: 1.5 },
+  /* Bulk Upload's `.dms-warn`, as an inline style: same palette, same flex row, same radius and
+     padding. Only `maxWidth` is dropped — that 626px was tuned by the client for a short sentence on
+     a narrow form, and this page's notice sits above a full-width card. */
+  attention: { display: "flex", gap: 10, alignItems: "flex-start", ...NOTICE_ATTENTION, borderRadius: 6, padding: "12px 14px", fontSize: 13, lineHeight: 1.5, marginBottom: 16 },
   warnBox:  { marginBottom: 16, padding: "10px 12px", border: "1px solid #f2c9a0", background: "#fff8f0", borderRadius: 4, fontSize: 12, color: "#8a4b00", lineHeight: 1.5 },
   dangerBox:{ marginBottom: 16, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 4, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
   openBox:  { marginBottom: 16, padding: "10px 12px", border: "1px solid #c7c7c7", background: "#fff", borderRadius: 4, fontSize: 12, color: "#444", lineHeight: 1.5 },
@@ -161,7 +167,13 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   const liveByPid = new Map<number, LiveGrant>();
   for (const l of live ?? []) liveByPid.set(l.principalId, l);
 
-  const policy = policyForPage(target);
+  /* ⚠ THE `policy` LOCAL IS GONE with the box it fed (client, 2026-09-04). `policyForPage` itself is
+     STILL USED — line ~163 filters admin-only pages out of the picker with `policyForPage(p.fileName)
+     .adminOnly`, which is the same flag reconciliation locks those pages on — so the import stays and
+     the rule is untouched. Only the per-page sentence it produced is no longer rendered.
+     `s.policyBox` and `s.adminBox` are deliberately left in the style map: restoring the box is one
+     line, and a style key that has to be re-invented is how the amber/green distinction between an
+     admin page and an approver page would come back slightly different. */
 
   /**
    * Groups worth ever considering for this page. Two exclusions are absolute:
@@ -340,11 +352,24 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
           the read-only note plus the one link is what an admin acts on; the mechanism is prose. */}
       <p style={s.intro}>View page access permissions.</p>
 
-      <div style={s.warnBox}>
-        <strong>This page is read-only.</strong> To change who can access a page,{" "}
-        {groupManagementHref !== undefined
-          ? <a href={groupManagementHref} style={{ fontWeight: 600 }}>go to Group Management</a>
-          : <strong>go to the Group Management page</strong>}.
+      {/* ⚠ BULK UPLOAD'S BANNER DESIGN (client, 2026-09-04: *"Use the same design from bulk
+          upload"*) — the client's own icon, the shared `NOTICE_ATTENTION` palette, a flex row.
+          `s.warnBox`'s amber is deliberately NOT used here: every attention banner in the product was
+          pointed at one palette on 2026-09-03, and this notice had been left behind.
+
+          The ICON comes from `shared/attentionBanner.tsx` rather than a second copy of the path —
+          Bulk Upload's inline `<svg>` was the first, and a pasted 2 KB path is how two banners come
+          to differ by a pixel nobody can find. `s.warnBox` STAYS: it is still used by the
+          "could not read this page's permissions" box further down, which is a STATE rather than a
+          permanent notice and should not look identical to this one. */}
+      <div style={s.attention}>
+        <AttentionIcon size={22} />
+        <span>
+          <strong>This page is read-only.</strong> To change who can access a page,{" "}
+          {groupManagementHref !== undefined
+            ? <a href={groupManagementHref} style={{ fontWeight: 600, color: "inherit" }}>go to Group Management</a>
+            : <strong>go to the Group Management page</strong>}.
+        </span>
       </div>
 
       {scopeMissing && (
@@ -376,9 +401,9 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
             {/* ⚠ "The site home page is not listed..." REMOVED (client's mockup, 2026-09-03), and
                 `excludedCount` went with it — its only reader. Removing rather than parking: it is a
                 one-line derivation, trivially re-added if this note is ever wanted back. */}
-            <div style={s.hint}>
-              &ldquo;restricted&rdquo; means the page already has its own permissions.
-            </div>
+            {/* The "&ldquo;restricted&rdquo; means the page already has its own permissions" hint is
+                GONE (client, 2026-09-04). The word still appears on the options themselves, where it
+                is the useful half; only the gloss is removed. */}
           </>
         )}
       </div>
@@ -402,7 +427,18 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
               table holds the groups it does. No escape hatch any more: the old "Show all N groups"
               button existed to override a policy-derived guess, and there is no guess left to
               override — the table already shows every group truly granted, whatever its name. */}
-          <div style={policy.adminOnly ? s.adminBox : s.policyBox}>{policy.reason}</div>
+          {/* ⚠ `policy.reason` IS NO LONGER RENDERED (client, 2026-09-04: *"Remove 'Only approver
+              groups are listed — this page is where pending documents are approved.'"*).
+
+              `policyForPage` itself is UNTOUCHED and still drives everything that matters — the
+              `adminOnly` flag it returns is what reconciliation locks admin pages on, and
+              `derivedRolesForPage` still decides which groups are granted. This removes the sentence
+              that explained the page's PURPOSE, not the rule.
+
+              ⚠ WHAT GOES WITH IT: an admin page ("only administrators can open this") and an
+              approver page now look identical here — the amber `adminBox` was the only thing marking
+              the difference at a glance. `s.adminBox` and `s.policyBox` are left in place, so
+              restoring it is one line. */}
 
           {!page.unique ? (
             <p style={s.hint}>

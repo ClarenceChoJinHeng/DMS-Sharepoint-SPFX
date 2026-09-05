@@ -245,6 +245,27 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const [tierCounts, setTierCounts] = useState<Record<string, number> | undefined>(undefined);
 
   /**
+   * Which FAMILY each segment folder belongs to — `{ gho: "BusinessSegment", glp: "Project" }`,
+   * keyed lower-cased exactly like `tierCounts`, and read in the same request.
+   *
+   * Client, 2026-09-02: *"I notice that the label is not dynamic such as the one showing in
+   * ApprovalDocument.aspx or My Submission ... in the future they might be different structure
+   * naming so it needs to be updated as well."*
+   *
+   * ⚠ THE DOCUMENT'S OWN FIELDS CANNOT ANSWER THIS. Both families write the SAME physical column,
+   * `Business_x0020_Segment` — there is no separate Project column — so the value reads
+   * "Group-led Projects" either way and nothing on the item says which family that is. Only the mode
+   * row's `Category` knows, which is why this rides along with the tier-count read.
+   *
+   * ⚠ ABSENT IS "BusinessSegment", NEVER A BLANK LABEL. Twelve of the thirteen segments are business
+   * segments, so an unknown key keeps today's wording rather than leaving the row unlabelled — and
+   * `Category` is a column `SegmentCreator` writes, so a hand-authored mode row may legitimately not
+   * carry it.
+   */
+  const [segmentSides, setSegmentSides] =
+    useState<Record<string, "BusinessSegment" | "Project"> | undefined>(undefined);
+
+  /**
    * The approver's queue: the pending documents they can see, oldest first.
    *
    * Captured ONCE at mount and never re-queried. Deciding removes a document from the
@@ -530,26 +551,58 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       try {
         await primeNames(context.spHttpClient, webUrl).catch(() => undefined);
         const config = await listTitleEncoded(context.spHttpClient, webUrl, LIST_SUFFIX.config);
-        const res: SPHttpClientResponse = await context.spHttpClient.get(
-          `${webUrl}/_api/web/lists/getbytitle('${config}')/items` +
-            `?$select=StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200${bust()}`,
-          SPHttpClient.configurations.v1,
-          { headers: GET_FRESH },
-        );
+        const read = async (select: string): Promise<SPHttpClientResponse> =>
+          context.spHttpClient.get(
+            `${webUrl}/_api/web/lists/getbytitle('${config}')/items` +
+              `?$select=${select}&$filter=ConfigType eq 'mode'&$top=200${bust()}`,
+            SPHttpClient.configurations.v1,
+            { headers: GET_FRESH },
+          );
+        /* ⚠ `Category` IS ASKED FOR, AND ITS ABSENCE MUST NOT BREAK THE GUARD. One unknown field name
+           fails the WHOLE request (gotcha #11), and this request is what gates Approve — so on a site
+           whose mode rows predate `SegmentCreator` (which is what creates that column) asking
+           unconditionally would refuse EVERY approval, to relabel one row.
+           ⚠ RETRIED ON 400 ONLY. A 404 is the config list missing and a 403 is permissions on it;
+           retrying either asks the same unanswerable question twice and hides the real status. */
+        let res: SPHttpClientResponse = await read("StagingFolder,Levels,Category");
+        let hasCategory = res.ok;
+        if (!res.ok && res.status === 400) {
+          console.warn(
+            "Approval guard: no Category column on the config list — the segment label stays " +
+              '"Business Segment". Everything else is unaffected.',
+          );
+          res = await read("StagingFolder,Levels");
+          hasCategory = false;
+        }
         if (!res.ok) {
           console.error("Approval guard: could not read the mode rows:", res.status);
           return;   // stays undefined — the guard refuses and says why
         }
-        const rows = ((await res.json()).value ?? []) as Array<{ StagingFolder?: string; Levels?: string }>;
+        const rows = ((await res.json()).value ?? []) as Array<{
+          StagingFolder?: string;
+          Levels?: string;
+          Category?: string;
+        }>;
         const map: Record<string, number> = {};
+        const sides: Record<string, "BusinessSegment" | "Project"> = {};
         for (const r of rows) {
           const key = (r.StagingFolder ?? "").trim().toLowerCase();
           const n = permissionedTierCount(r.Levels);
           // A segment whose Levels could not be parsed is LEFT OUT rather than stored as 0: absent
           // reads as "unknown" downstream, which refuses; a stored 0 would claim we know it is flat.
           if (key.length > 0 && n !== undefined) map[key] = n;
+          /* The SAME rule as the upload form (`Form.tsx`, `Category === "Project"` and everything
+             else BusinessSegment) — one definition of what the value means, so the label an approver
+             reads can never disagree with the one the uploader chose it under. */
+          if (key.length > 0 && hasCategory) {
+            sides[key] = r.Category === "Project" ? "Project" : "BusinessSegment";
+          }
         }
         setTierCounts(map);
+        /* `undefined` when the column was not there, NOT an empty map — the label falls back to
+           today's wording either way, but the two states are different facts and the console line
+           above only makes sense alongside the first. */
+        if (hasCategory) setSegmentSides(sides);
       } catch (e) {
         console.error("Approval guard: mode rows unavailable", e);
       }
@@ -1118,9 +1171,30 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   // Location is the folder path, which is ABBREVIATED (GHO › GCA › EG), while
   // these three carry the terms' full labels. An approver needs the full label
   // to be sure which unit they are publishing to.
+  /**
+   * What to call the top of the hierarchy for THIS document.
+   *
+   * Client, 2026-09-02: the label *"is not dynamic"* — it read "Business Segment" even on a
+   * Group-Led Project. The wording matches the upload form's verbatim (capitalised, settled
+   * 2026-09-04), so the approver sees the same word the uploader filed it under.
+   *
+   * ⚠ KEYED ON THE SEGMENT FOLDER, which IS the mode row's `StagingFolder` — the same key the
+   * approval guard uses, and one that renaming a segment's LABEL cannot break. Derived from the path
+   * rather than from the metadata, because the metadata VALUE is identical for both families.
+   */
+  const segmentLabel = ((): string => {
+    const prefix = `${context.pageContext.web.serverRelativeUrl}/${libSeg()}/`.toLowerCase();
+    const url = item.File.ServerRelativeUrl.toLowerCase();
+    if (url.indexOf(prefix) !== 0) return "Business Segment";
+    const folder = url.slice(prefix.length).split("/")[0] ?? "";
+    // Unread, unreadable, or a segment with no Category row all land here — today's wording, which
+    // is right for twelve of the thirteen segments and never leaves the row unlabelled.
+    return segmentSides?.[folder] === "Project" ? "Group-Led Project" : "Business Segment";
+  })();
+
   const metadata: [string, string][] = [
     ["Location",             orgLocation],
-    ["Business Segment",     pick("Business_x005f_x0020_x005f_Segment", "Business_x0020_Segment")],
+    [segmentLabel,           pick("Business_x005f_x0020_x005f_Segment", "Business_x0020_Segment")],
     ["Department",           pick("Department")],
     ["Unit",                 pick("Unit")],
     ["Document Type",        pick("Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],

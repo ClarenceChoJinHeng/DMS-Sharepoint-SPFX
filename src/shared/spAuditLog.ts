@@ -369,6 +369,19 @@ export interface AuditQuery {
   /** One file's whole history, across path changes. */
   itemUniqueId?: string;
   top?: number;
+  /**
+   * Oldest first instead of newest first (client, 2026-09-04: *"add a filter for When column, like it
+   * will sort the latest or the oldest"*).
+   *
+   * ⚠ IT IS A SERVER SORT, NOT A CLIENT ONE, and it has to be: this list is PAGED, so sorting the
+   * thirty rows already on screen would order one page against itself and leave page 2 holding older
+   * events than page 1 — the arrangement that looks sorted and is not. `EventTime` is indexed, so
+   * either direction is cheap.
+   * ⚠ `Id` FOLLOWS IN THE SAME DIRECTION. Two rows can share a timestamp to the second (an approval
+   * and its routing often do), and a tie broken the opposite way to the sort makes rows appear to
+   * swap places between reads.
+   */
+  oldestFirst?: boolean;
 }
 
 export interface AuditRecord extends AuditRow {
@@ -445,10 +458,78 @@ export async function readAudit(
   const url =
     `${listBase(siteUrl, auditListTitle())}/items` +
     `?$select=${READ_SELECT}` +
-    `&$orderby=EventTime desc,Id desc` +
+    `&$orderby=EventTime ${q.oldestFirst ? "asc" : "desc"},Id ${q.oldestFirst ? "asc" : "desc"}` +
     `&$top=${q.top ?? 100}` +
     (filter.length > 0 ? `&$filter=${encodeURIComponent(filter)}` : "");
   return fetchPage(sp, url);
+}
+
+export interface AuditCount {
+  /** How many rows match. When `exact` is false this is a floor, not a total. */
+  total: number;
+  /**
+   * False when the walk hit its cap and stopped. The screen must then read `25,000+`, never
+   * `25,000` — an understated total presented as a total is exactly the failure this page exists
+   * not to have.
+   */
+  exact: boolean;
+}
+
+/** How many 5,000-row pages the count walks before giving up. 25,000 rows. */
+const COUNT_MAX_PAGES = 5;
+
+/**
+ * Count the rows a query matches.
+ *
+ * Client, 2026-09-04, on the mock's `Showing 1 to 5 of 235 events`: *"Add it, just follow what the
+ * mockup would want."*
+ *
+ * ⚠ IT DOES NOT USE THE LIST'S `ItemCount`, and that is the whole reason this function exists.
+ * `ItemCount` is a CACHED aggregate that lags in both directions — it read **2,419 for a list whose
+ * view was empty** (2026-08-24) — and it cannot answer a FILTERED question at all. A number known to
+ * be wrong, on the one screen whose entire value is being trusted, is worse than no number.
+ *
+ * ⚠ NOR `$inlinecount` / `$count`: SharePoint's list-item endpoint does not answer those reliably,
+ * and a silently ignored option returns a page shaped exactly like a working one. So this walks
+ * `$select=Id` pages — the cheapest column there is — and adds them up. One extra request per load
+ * for any result set under 5,000, which is every ordinary filtered view.
+ *
+ * ⚠ NO `$orderby`. The rows are never rendered, so ordering them buys nothing and puts a sort on the
+ * query for no reason. The default Id order is indexed.
+ *
+ * Returns `undefined` on any failure, and NEVER throws — the caller then shows what it showed before
+ * this existed (`and more`) rather than a total it could not establish. A count is a convenience and
+ * must not be able to take the log off the screen.
+ */
+export async function countAudit(
+  sp: SPHttpClient,
+  siteUrl: string,
+  q: AuditQuery,
+): Promise<AuditCount | undefined> {
+  try {
+    const filter = buildAuditFilter(q);
+    let url =
+      `${listBase(siteUrl, auditListTitle())}/items` +
+      `?$select=Id&$top=5000` +
+      (filter.length > 0 ? `&$filter=${encodeURIComponent(filter)}` : "");
+    let total = 0;
+    for (let page = 0; page < COUNT_MAX_PAGES; page++) {
+      const res: SPHttpClientResponse = await sp.get(url, SPHttpClient.configurations.v1, {
+        headers: { Accept: "application/json;odata=nometadata" },
+      });
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      total += ((data.value ?? []) as unknown[]).length;
+      const nextLink = data["odata.nextLink"];
+      if (typeof nextLink !== "string" || nextLink.length === 0) {
+        return { total, exact: true };
+      }
+      url = nextLink;
+    }
+    return { total, exact: false };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Follow a `next` link from a previous page. */
