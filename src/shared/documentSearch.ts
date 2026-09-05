@@ -30,8 +30,26 @@
  * exists. Crawl latency there reads as a broken search, so they stay on `$filter`.
  */
 
-/** The four libraries a search can cover. Logical keys, translated at the API boundary. */
-export type SearchLibrary = "Documents" | "DocumentsHC" | "Staging" | "StagingHC";
+/**
+ * The libraries a search can cover. Logical keys, translated at the API boundary.
+ *
+ * ⚠ THE ARCHIVE PAIR IS HERE BECAUSE THE ARCHIVE IS SEARCHED (2026-08-22) — and until 2026-09-05 it
+ * was searched while being LABELLED as the live library, because `libraryOfPath` knew only about the
+ * HC split. Two consequences, and the second is not cosmetic: an archived document was presented as
+ * living in `Restricted & Confidential Document`, and the detail panel resolves its per-item read
+ * through `libApiTitle(hit.library)` — so that read went to the wrong library entirely and the panel
+ * came back with no metadata.
+ *
+ * These keys are a SUBSET of `LibTarget` in `naming.ts`, deliberately: `libApiTitle` takes that
+ * union, so every member here must exist there or the detail read cannot resolve a title.
+ */
+export type SearchLibrary =
+  | "Documents"
+  | "DocumentsHC"
+  | "Staging"
+  | "StagingHC"
+  | "Archive"
+  | "ArchiveHC";
 
 /** The libraries served by the Search API. */
 export const CRAWLED_LIBS: SearchLibrary[] = ["Documents", "DocumentsHC"];
@@ -39,9 +57,15 @@ export const CRAWLED_LIBS: SearchLibrary[] = ["Documents", "DocumentsHC"];
 /** The libraries served by a live REST read. */
 export const LIVE_LIBS: SearchLibrary[] = ["Staging", "StagingHC"];
 
-/** True for the two Highly Confidential libraries. */
+/**
+ * True for every Highly Confidential library, the ARCHIVE one included.
+ *
+ * ⚠ `ArchiveHC` MUST BE HERE. It drives the `HC` chip on a result and the "refused" outcome that
+ * stops an uncleared reader's 403 being reported as a failure — so omitting it would show an
+ * archived Highly Confidential document with no HC marking at all.
+ */
 export function isHcLibrary(lib: SearchLibrary): boolean {
-  return lib === "DocumentsHC" || lib === "StagingHC";
+  return lib === "DocumentsHC" || lib === "StagingHC" || lib === "ArchiveHC";
 }
 
 /** One tier filter: the column's internal name and the value chosen. */

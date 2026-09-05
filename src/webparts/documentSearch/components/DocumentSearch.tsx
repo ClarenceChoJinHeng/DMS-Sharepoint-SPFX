@@ -56,8 +56,11 @@ import {
   cachedListTitle,
   libApiTitle,
   libraryTitle,
+  libraryUrlSegment,
 } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+// The trail builder My Submissions uses — see the note where `trailOf` used to be.
+import { folderTrail, trailText } from "../../../shared/mySubmissions";
 // The `Keyword` column is created by reconciliation, so a library provisioned earlier may not have
 // it — and a $filter naming an absent column 400s the whole read. Probed, never assumed.
 import {
@@ -159,14 +162,15 @@ function formatDate(iso: string): string {
   return `${day}/${MONTHS[d.getMonth()]}/${d.getFullYear()}`;
 }
 
-/** The folder trail of a server-relative path, library segment and file name removed. */
-function trailOf(path: string): string {
-  return (path ?? "")
-    .split("/")
-    .filter((p) => p.length > 0)
-    .slice(0, -1)
-    .join(" › ");
-}
+/* ⚠ `trailOf` IS GONE (2026-09-05). Its own comment claimed it removed "library segment and file
+   name" and it removed only the file name — so a result's Location read
+   `sites › ClarenceDMSTesting › Archive › GHO › GCA › EG › 2026 › Cause Papers`, with the site path
+   and the library presented as though they were folders. Reported live.
+
+   `folderTrail`/`trailText` in `shared/mySubmissions.ts` already do this correctly and are what My
+   Submissions uses: they find the LIBRARY SEGMENT and return everything below it, falling back to
+   dropping `/sites/<site>/` when no segment is recognised. One definition, two screens — a second
+   local copy is exactly how this one drifted from its own documentation. */
 
 /* ─────────────────────────────── Styles ─────────────────────────────── */
 
@@ -823,15 +827,52 @@ export default function DocumentSearch({
     if (lib === "DocumentsHC") return hc ? hc.documents.title : "HC Documents";
     if (lib === "StagingHC")
       return hc ? hc.approval.title : "HC Approval Document";
+    /* The archive pair. Falls back to the KEY rather than a guessed title: an archive is resolved
+       or it is not, and inventing "Archive" for a library whose real name nobody read would put a
+       name on screen that matches no library on the site. */
+    const arc = cachedArchiveLibraries();
+    if (lib === "Archive") return arc ? arc.normal.title : lib;
+    if (lib === "ArchiveHC") return arc && arc.hc ? arc.hc.title : lib;
     return lib;
   };
+
+  /**
+   * Every library URL SEGMENT a folder trail must strip.
+   *
+   * ⚠ SEGMENTS, NEVER TITLES. `Restricted & Confidential Document` sits at `/Shared Documents`, so a
+   * title match would never fire and would leave the library name in the trail — silently, which is
+   * gotcha #12 and the reason `folderTrail` matches this way.
+   */
+  const trailSegments = ((): string[] => {
+    const hc = cachedHcLibraries();
+    const arc = cachedArchiveLibraries();
+    return [
+      docsSegment,
+      /* The approval library too: its REST hits carry `/ApprovalDocument/` in the path, and without
+         it the trail would open with the library name presented as a folder. */
+      libraryUrlSegment(),
+      ...(hc ? [hc.documents.urlSegment, hc.approval.urlSegment] : []),
+      ...(arc ? [arc.normal.urlSegment, ...(arc.hc ? [arc.hc.urlSegment] : [])] : []),
+    ].filter((x) => (x ?? "").length > 0);
+  })();
 
   /** Which approved-side library a crawled result came from, by its path. */
   const libraryOfPath = (path: string): SearchLibrary => {
     const hc = cachedHcLibraries();
+    const arc = cachedArchiveLibraries();
     const p = (path ?? "").toLowerCase();
-    if (hc && p.indexOf(`/${hc.documents.urlSegment.toLowerCase()}/`) !== -1)
-      return "DocumentsHC";
+    const has = (seg: string): boolean =>
+      seg.length > 0 && p.indexOf(`/${seg.toLowerCase()}/`) !== -1;
+    /* ⚠ THE ARCHIVE PAIR IS TESTED FIRST, AND THE ORDER MATTERS ON A RENAMED SITE. The archive
+       segments here are `Archive` and `HCArchive`, which share no prefix with the live ones — but a
+       future archive named `…Documents…` would match the live test if that ran first, and the cost
+       is silent: an archived document labelled as living in the library people browse.
+       ⚠ AND THIS IS NOT COSMETIC. `openRow` resolves the per-item read through
+       `libApiTitle(hit.library)`, so a mislabelled hit reads the WRONG library and the detail panel
+       comes back with no metadata at all. Reported live 2026-09-05. */
+    if (arc && arc.hc && has(arc.hc.urlSegment)) return "ArchiveHC";
+    if (arc && has(arc.normal.urlSegment)) return "Archive";
+    if (hc && has(hc.documents.urlSegment)) return "DocumentsHC";
     return "Documents";
   };
 
@@ -864,7 +905,7 @@ export default function DocumentSearch({
     if (query.length === 0) return [];
 
     const props =
-      "Path,Filename,Title,Created,Author,Size,UniqueId,ListItemID";
+      "Path,Filename,Title,Created,CreatedBy,Author,Size,UniqueId,ListItemID";
     const r = await jsonGet(
       `${siteUrl}/_api/search/query?querytext='${encodeURIComponent(query)}'` +
         `&rowlimit=200&trimduplicates=false&selectproperties='${encodeURIComponent(props)}'`,
@@ -912,7 +953,22 @@ export default function DocumentSearch({
            My Submissions labels "Uploaded". Matched by the REST half below so one list cannot mix
            two kinds of date. */
         modified: map.Created ?? "",
-        author: map.Author ?? "",
+        /* ⚠ `CreatedBy`, NOT `Author` — PROVEN 2026-09-05, not inferred. The crawled `Author`
+           property is MULTI-VALUED and merges the FILE'S OWN embedded author with SharePoint's
+           Created By and Modified By, so a result read
+           `Liyana Binti Jamil;Crystal Kong;Clarence Cho` — the first of those being a name inside
+           the .docx, confirmed in Word's own File > Info. The SharePoint item was clean throughout:
+           its `Author` is one person.
+
+           ⚠ THAT IS A DISCLOSURE, NOT A DISPLAY BUG. Uploaded documents carry their authors,
+           companies and comments in their own metadata, and SDG's real files will carry their
+           clients' names. This stops us DISPLAYING it; nothing here removes it from the files.
+
+           `CreatedBy` maps from SharePoint's `ows_Author` and is single-valued, so it cannot carry a
+           name from inside a file. `Author` stays as a fallback ONLY so the field can never render
+           empty — a blank "Uploaded by" would read as a document nobody filed. Same class of fault
+           as the date beside it: a search property is not the item's field. */
+        author: map.CreatedBy ?? map.Author ?? "",
         size: map.Size ?? "",
       });
     }
@@ -1155,7 +1211,7 @@ export default function DocumentSearch({
       fieldText: fieldText ?? {},
       leading: [
         { label: "Library", value: libraryLabel(open.library) },
-        { label: "Location", value: trailOf(open.path) },
+        { label: "Location", value: trailText(folderTrail(open.path, trailSegments)) },
       ],
       trailing: [
         { label: "Uploaded by", value: open.author },
@@ -1597,7 +1653,7 @@ export default function DocumentSearch({
                     </span>
                   ) : undefined}
                 </div>
-                <div style={s.meta}>{trailOf(h.path)}</div>
+                <div style={s.meta}>{trailText(folderTrail(h.path, trailSegments))}</div>
                 <div style={s.meta}>
                   {[h.author, formatDate(h.modified), formatBytes(h.size)]
                     .filter((x) => x.length > 0)
