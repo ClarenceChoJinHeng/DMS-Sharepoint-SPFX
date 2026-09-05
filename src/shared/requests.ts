@@ -214,6 +214,34 @@ export interface ValidationContext {
  * Messages rather than a boolean: "invalid" gives someone nothing to act on, and this form is filled
  * in by an uploader who cannot ask an administrator what they got wrong.
  */
+/**
+ * The two problems that belong to a FIELD rather than to the request as a whole.
+ *
+ * Client, 2026-09-05: *"Instead of having a note at the bottom. Just highlight the title and box in
+ * RED and provide a error message below it."* The dialog now renders these beneath their own input,
+ * and everything else in the summary box.
+ *
+ * ⚠ CONSTANTS, NOT COPIES. The requirement lives once, in `validateDraft`; the screen decides where
+ * to PUT the message by matching on these. Re-stating "a reason is required" in the component would
+ * be a second definition of the rule, free to disagree with the one that actually blocks the send.
+ */
+export const REASON_REQUIRED = "Reasoning is required";
+export const RECIPIENT_REQUIRED = "At least one recipient is required";
+
+/**
+ * Which field a message belongs beside, or `undefined` for the request as a whole.
+ *
+ * ⚠ `undefined` IS THE IMPORTANT ANSWER. An archived document, a pending file that cannot be shared,
+ * and a blocked external recipient are not things to fix in an input — they are reasons the request
+ * cannot be made at all. Rendering them under a field would invite the requester to edit their way
+ * out of a refusal that no edit can lift.
+ */
+export function fieldForMessage(message: string): "reason" | "shareWith" | undefined {
+  if (message === REASON_REQUIRED) return "reason";
+  if (message === RECIPIENT_REQUIRED) return "shareWith";
+  return undefined;
+}
+
 export function validateDraft(draft: RequestDraft, ctx: ValidationContext): string[] {
   const out: string[] = [];
   const d = draft ?? ({} as RequestDraft);
@@ -221,7 +249,7 @@ export function validateDraft(draft: RequestDraft, ctx: ValidationContext): stri
   if (!(d.itemUniqueId ?? "").trim()) out.push("No document selected.");
   // REQUIRED. An approver deciding with no reason in front of them will approve, every time — which
   // makes the whole workflow theatre.
-  if (!(d.reason ?? "").trim()) out.push("Give a reason — the approver sees only this.");
+  if (!(d.reason ?? "").trim()) out.push(REASON_REQUIRED);
 
   /* ⚠ AN ARCHIVED DOCUMENT CANNOT BE DELETED OR SHARED — BOTH types, unlike the pending rule below
      which refuses Share alone.
@@ -259,7 +287,7 @@ export function validateDraft(draft: RequestDraft, ctx: ValidationContext): stri
   if (d.type === "Share" && canShareStage(d.stage)) {
     const list = parseRecipients(d.shareWith ?? "");
     if (list.length === 0) {
-      out.push("Add at least one person to share with.");
+      out.push(RECIPIENT_REQUIRED);
     } else {
       const bad = list.filter((e) => !looksLikeEmail(e));
       if (bad.length > 0) out.push(`Not an email address: ${bad.join(", ")}.`);

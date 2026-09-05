@@ -46,6 +46,8 @@ import {
   ShareState,
   SharePermission,
   longDate,
+  REASON_REQUIRED,
+  RECIPIENT_REQUIRED,
 } from "./requests";
 
 const DOMAINS = ["example.com", "sdguthrie.com"];
@@ -135,7 +137,9 @@ describe("validateDraft", () => {
   });
 
   it("REQUIRES a reason — an approver with nothing to read approves everything", () => {
-    expect(validateDraft(draft({ reason: "" }), ctx)[0]).toContain("reason");
+    // Against the CONSTANT, not a substring: the copy has changed twice and a hand-typed
+    // fragment pins the wording rather than the rule.
+    expect(validateDraft(draft({ reason: "" }), ctx)[0]).toBe(REASON_REQUIRED);
     expect(validateDraft(draft({ reason: "   " }), ctx).length).toBe(1);
   });
 
@@ -144,7 +148,7 @@ describe("validateDraft", () => {
   });
 
   it("requires at least one recipient on a share", () => {
-    expect(validateDraft(draft({ type: "Share", shareWith: "" }), ctx)[0]).toContain("at least one");
+    expect(validateDraft(draft({ type: "Share", shareWith: "" }), ctx)[0]).toBe(RECIPIENT_REQUIRED);
   });
 
   it("names the addresses it could not read", () => {
@@ -562,7 +566,7 @@ describe("stage — a pending file may be deleted by request, never shared (2026
 
   it("still validates recipients normally for an APPROVED document", () => {
     expect(validateDraft({ ...base, type: "Share", stage: "approved" }, ctx))
-      .toEqual(["Add at least one person to share with."]);
+      .toEqual([RECIPIENT_REQUIRED]);
     expect(validateDraft(
       { ...base, type: "Share", shareWith: "nope", sharePermission: "View" }, ctx,
     ).join(" ")).toContain("Not an email address");
@@ -570,7 +574,7 @@ describe("stage — a pending file may be deleted by request, never shared (2026
 
   it("still requires a reason on a pending deletion", () => {
     expect(validateDraft({ ...base, reason: "", type: "Deletion", stage: "pending" }, ctx))
-      .toEqual(["Give a reason — the approver sees only this."]);
+      .toEqual([REASON_REQUIRED]);
   });
 });
 

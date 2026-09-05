@@ -82,7 +82,10 @@ import {
   isExternal,
   parseRecipients,
   validateDraft,
+  fieldForMessage,
 } from "../../../shared/requests";
+import { swapLibrarySegment } from "../../../shared/hcRouting";
+import { encodeServerRelativePath } from "../../../shared/pathEncoding";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { EVENT } from "../../../shared/auditLog";
 // The preview strategy is ALREADY built and tested for the approval page: PDF, Office Online,
@@ -212,6 +215,15 @@ const s: Record<string, React.CSSProperties> = {
   modalBg:  { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
   modal:    { background: "#fff", borderRadius: 8, padding: 20, width: "min(560px, 94vw)", maxHeight: "86vh", overflowY: "auto", fontSize: 13 },
   label:    { display: "block", marginTop: 12, marginBottom: 4, fontSize: 12, fontWeight: 600, color: "#3b3a39" },
+  /* The client's inline-error pattern (2026-09-05), matching the sample they supplied: red label,
+     red-bordered box, message beneath. `#a4262c` is this project's established danger red — the same
+     one the attention banners and the rejected pill use, so an error looks like an error everywhere.
+     ⚠ THREE KEYS, AND EVERY ONE MUST EXIST HERE. `s` is a `Record<string, CSSProperties>`, so a
+     mistyped key yields `undefined` and the field renders perfectly normally on a green build — the
+     failure being that a required field never turns red. */
+  labelBad: { display: "block", marginTop: 12, marginBottom: 4, fontSize: 12, fontWeight: 600, color: "#a4262c" },
+  fieldBad: { borderColor: "#a4262c", background: "#fdf6f6" },
+  fieldErr: { margin: "4px 0 0", fontSize: 11.5, color: "#a4262c", lineHeight: 1.45 },
   field:    { width: "100%", boxSizing: "border-box", padding: "7px 10px", fontSize: 13, fontFamily: "inherit", border: "1px solid #c7c7c7", borderRadius: 4 },
   hint:     { fontSize: 12, color: "#605e5c", marginTop: 6, lineHeight: 1.5 },
   // Amber rather than red: this is a CLASSIFICATION, not a problem with the row.
@@ -504,6 +516,21 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   const [permission, setPermission] = useState<SharePermission>("View");
   const [expiresAt, setExpiresAt] = useState("");
   const [problems, setProblems] = useState<string[]>([]);
+  /* The client's validation pattern (2026-09-05): *"Instead of having a note at the bottom. Just
+     highlight the title and box in RED and provide a error message below it."*
+
+     ⚠ PARTITIONED, NOT REPLACED. `validateDraft` stays the single source of truth for what blocks a
+     request — the component only decides where each message is PUT. `fieldForMessage` answers
+     `undefined` for the three refusals that belong to no field (archived document, a pending file
+     that cannot be shared, a blocked external recipient); those keep the summary box, because they
+     are reasons the request cannot be made at all rather than something to fix in an input.
+
+     ⚠ AND THEY APPEAR ONLY AFTER A FAILED SUBMIT. `problems` is cleared when the dialog opens, so an
+     untouched form is never red — the same rule the upload form settled on, for the same reason: a
+     blank form covered in errors reads as broken rather than as unfinished. */
+  const fieldProblem = (field: "reason" | "shareWith"): string | undefined =>
+    problems.filter((p) => fieldForMessage(p) === field)[0];
+  const generalProblems = problems.filter((p) => fieldForMessage(p) === undefined);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string | undefined>(undefined);
 
@@ -743,10 +770,88 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     }
   };
 
+  /**
+   * The same file, in the library Auto-route moved it to — or `undefined`.
+   *
+   * Client, 2026-09-06: *"why not just direct the url to the document library?"*
+   *
+   * ⚠ THE CASE THIS EXISTS FOR IS NOW COMMON, BECAUSE SELF-APPROVE MADE IT SO. A row opened from an
+   * approval library points at an item Auto-route COPIES and then DELETES, so the moment routing
+   * completes the panel is holding a dead item id: blank preview, and "no details were recorded"
+   * about a document whose metadata is intact one library over. It used to open minutes after a
+   * human approved, with the page long since reloaded; now upload → approve → route happens while
+   * the uploader is still looking at it.
+   *
+   * ⚠ RESOLVED BY PATH, NOT BY ID. Auto-route COPIES, so the routed file has a NEW item id and the
+   * one we hold belongs to the deleted source. The folder path is identical either side — only the
+   * library segment differs — so the path is the only thing that survives the move.
+   *
+   * ⚠ AND ONLY WHEN THE SOURCE IS GENUINELY GONE. `fetchFieldText` answers `{}` for every failure,
+   * so an empty result is NOT evidence of a move: a 403 or a throttle looks identical. Swapping on
+   * that would present a DIFFERENT document — during a pending replacement the approval library
+   * holds the new file and the approved side still holds the old one — as though it were this row.
+   * So the source is probed first, and anything other than a 404 leaves the row alone.
+   */
+  const reresolveRouted = async (row: Submission): Promise<Submission | undefined> => {
+    const hc = cachedHcLibraries();
+    // Approval libraries only. A row already on the approved side, or in the archive, has not moved.
+    const dest =
+      row.library === libraryUrlSegment() ? docsSegment
+      : hc && row.library === hc.approval.urlSegment ? hc.documents.urlSegment
+      : undefined;
+    if (dest === undefined) return undefined;
+    if (!row.fileRef) return undefined;
+    // Locals, so the narrowing above survives the awaits below — a `const` of a union type loses it
+    // across control flow often enough that pinning it here is cheaper than re-checking.
+    const destSeg: string = dest;
+    const srcRef: string = row.fileRef;
+    // ⚠ THE ALIAS FORM, NOT AN INLINE LITERAL. A long encoded path inside quotes answers HTTP 400
+    // rather than 404 once it is deep enough (gotcha #9) — which this code would read as "not gone".
+    const exists = async (path: string): Promise<SPHttpClientResponse> =>
+      context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id&@f='${encodeServerRelativePath(path)}'`,
+        SPHttpClient.configurations.v1,
+        { headers: NO_CACHE },
+      );
+    try {
+      const src = await exists(srcRef);
+      if (src.status !== 404) return undefined;   // still there, or unreadable — not a move
+      const moved = swapLibrarySegment(srcRef, row.library, destSeg);
+      // ⚠ IT RETURNS  RATHER THAN FALLING BACK — the HC rule, and right here too: a path
+      // it could not swap must not be guessed at, or the panel could resolve to a file in another
+      // library entirely.
+      if (moved === undefined || moved === srcRef) return undefined;
+      const dst = await exists(moved);
+      // Not yet copied: the source is deleted and the destination is not written. Seconds wide, and
+      // the honest answer is the message the caller already shows.
+      if (!dst.ok) return undefined;
+      const id = Number(((await dst.json()) as { Id?: number }).Id ?? 0);
+      if (!id) return undefined;
+      return { ...row, library: destSeg, fileRef: moved, itemId: id };
+    } catch {
+      return undefined;
+    }
+  };
+
   /** Fill `fieldText` for one row — the single-document detail view's loader. */
   const loadFieldText = async (row: Submission): Promise<void> => {
     setFieldText(undefined);
-    setFieldText(await fetchFieldText(row));
+    const ft = await fetchFieldText(row);
+    if (Object.keys(ft).length > 0) {
+      setFieldText(ft);
+      return;
+    }
+    /* Empty means the read failed — see `reresolveRouted`, which decides whether that was a MOVE.
+       ⚠ THE WHOLE ROW IS REPLACED, not just the metadata. Preview, file size and the request buttons
+       all read from it, so patching only `fieldText` would leave a panel with correct details and a
+       broken image beside them. */
+    const moved = await reresolveRouted(row);
+    if (moved !== undefined) {
+      setOpen(moved as MergedRow);
+      setFieldText(await fetchFieldText(moved));
+      return;
+    }
+    setFieldText(ft);
   };
 
   /**
@@ -1701,7 +1806,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                     said the way whoever is deciding actually holds the role (a Head of Unit for most
                     units, a Head of Department where they fan down). */}
                 {asking !== "Deletion"
-                  ? "Your approver must approve this request. If approved, the people below get access to this file — and nothing else."
+                  ? "Your approver must approve this request. If approved, the person will be able to view the file."
                   : subject.status === "Approved"
                   ? "Your approver must approve this request. If approved, the file moves to the recycle bin and can be restored within 93 days."
                   // Named for what it IS from the uploader's side. "Withdraw" was considered and
@@ -1723,18 +1828,32 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                   )}
               </p>
 
-              <label style={s.label}>Reason</label>
+              <label style={fieldProblem("reason") ? s.labelBad : s.label}>Reason</label>
               <textarea
-                style={{ ...s.field, minHeight: 64, resize: "vertical" }}
+                /* ⚠ `resize: "none"` (client, 2026-09-05: *"Ensure to also not allow client to
+                   expand the textbox so big"*). This dialog is a fixed-width column, and a
+                   drag-resized textarea pushes Submit and Cancel out of view with no way back short
+                   of reopening it — the same reason the Bulk Approve comment box is fixed. */
+                style={{
+                  ...s.field,
+                  minHeight: 64,
+                  resize: "none",
+                  ...(fieldProblem("reason") ? s.fieldBad : {}),
+                }}
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
               />
+              {fieldProblem("reason") !== undefined && (
+                <p style={s.fieldErr}>{fieldProblem("reason")}</p>
+              )}
 
               {asking === "Share" && (
                 <>
-                  <label style={s.label}>Share with</label>
+                  <label style={fieldProblem("shareWith") ? s.labelBad : s.label}>
+                    Share with
+                  </label>
                   <input
-                    style={s.field}
+                    style={{ ...s.field, ...(fieldProblem("shareWith") ? s.fieldBad : {}) }}
                     placeholder="Search for a person, or type an email address below"
                     value={peopleQ}
                     onChange={(e) => setPeopleQ(e.target.value)}
@@ -1789,6 +1908,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                       its own. Nothing inside is absolutely positioned — the people picker sits ABOVE
                       this box, not in it — so the cap cannot clip a popover, which is the trap that
                       has caught three other screens in this project. */}
+                  {/* Beneath the box it belongs to, which is what the client's mock shows — the
+                      chip list below merely displays what the box collected. */}
+                  {fieldProblem("shareWith") !== undefined && (
+                    <p style={s.fieldErr}>{fieldProblem("shareWith")}</p>
+                  )}
                   <label style={s.label}>Email addresses</label>
                   <div
                     style={{
@@ -1874,14 +1998,14 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                     onChange={(e) => setExpiresAt(e.target.value)}
                   />
                   <p style={{ fontSize: 11.5, color: "#605e5c", marginTop: 4, lineHeight: 1.45 }}>
-                    Leave it blank and the access is permanent until someone removes it.
+                    Leave blank for permanent access. Access remains until manually removed.
                   </p>
                 </>
               )}
 
-              {problems.length > 0 && (
+              {generalProblems.length > 0 && (
                 <div style={{ ...s.rejectBox, marginTop: 12, marginBottom: 0 }}>
-                  {problems.map((p) => <div key={p}>{p}</div>)}
+                  {generalProblems.map((p) => <div key={p}>{p}</div>)}
                 </div>
               )}
 
@@ -2034,8 +2158,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           <div style={openRequest.status === "Pending" ? s.askQuiet : s.askDecided}>
             {openRequest.status === "Pending" ? (
               <>
+                {/* The reassurance that nothing had happened to the file yet came off on the
+                    client's instruction (2026-09-05). The badge beside the status already says
+                    "Deletion Requested", so the sentence restated it. */}
                 {openRequest.type === "Share" ? "Share" : "Deletion"} request submitted
-                {askedOn ? ` on ${askedOn}` : ""}. Nothing has happened to the file yet.
+                {askedOn ? ` on ${askedOn}` : ""}.
               </>
             ) : (
               /* ⚠ EVERY STATUS IS NAMED, because the fallback was "attempted and failed" and TWO
@@ -2130,9 +2257,16 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             {!showDelete && !showShare
               ? "You can delete or share this document yourself, in the library — no request is needed."
               : requestBlock ??
-                (approved
-                  ? "Your Approver decides these."
-                  : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted.")}
+                /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
+                   REPLACES the buttons in that state, so "Your Approver decides these" was pointing
+                   at controls that were not on the screen — which reads as a page that failed to
+                   render rather than as a state. It stays where the buttons ARE shown, because
+                   there it explains who acts on them. */
+                (openRequest?.status === "Pending"
+                  ? undefined
+                  : approved
+                    ? "Your Approver decides these."
+                    : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted.")}
           </span>
         </div>
           );

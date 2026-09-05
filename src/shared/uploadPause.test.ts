@@ -51,9 +51,17 @@ describe("the constants", () => {
     expect(UPLOAD_PAUSE_SETTING).toBe("uploadsPaused");
   });
 
-  /** The uploader must be told nothing is wrong with THEIR file, or they retry it repeatedly. */
-  it("explains itself to an uploader who did nothing wrong", () => {
-    expect(UPLOAD_PAUSE_MESSAGE).toContain("paused");
-    expect(UPLOAD_PAUSE_MESSAGE.toLowerCase()).toContain("nothing is wrong");
+  /**
+   * ⚠ THIS TEST USED TO PIN "nothing is wrong" — the reassurance that the uploader's own FILE was
+   * not the problem — and the client replaced the whole sentence on 2026-09-05. Their wording is
+   * shorter and drops that clause, which is their call; what must survive is that the message says
+   * the state is TEMPORARY and names somewhere to go, or an uploader meeting a dead form retries the
+   * same file repeatedly and then mails an administrator who is mid-migration.
+   */
+  it("says the state is temporary and where to go", () => {
+    const m = UPLOAD_PAUSE_MESSAGE.toLowerCase();
+    expect(m).toContain("temporarily");
+    expect(m).toContain("try again");
+    expect(m).toContain("administrator");
   });
 });

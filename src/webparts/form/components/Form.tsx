@@ -3173,7 +3173,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           // human to sort out, exactly the outcome a denied probe already produces below.
           // `.clash` only — the names this now also returns are for building a rename suggestion, which
           // has no meaning here: self-approve either fires or does not, and nothing is being renamed.
-          const clashNow = (await approvedClashInfo()).clash;
+          /* ⚠ CONSENT LIFTS THIS, AND ONLY CONSENT (client, 2026-09-05: *"If you are an approver
+             and an system admin then it will still show the same popup for clashing and if they
+             click yes it will go to staging and auto approve and replace the one on documents
+             library"*).
+
+             `replaceApproved` is true only for a file the uploader ticked through the Replace
+             Existing File dialog, so a clash they were SHOWN and accepted no longer holds the
+             document in the queue — it self-approves and Auto-route replaces the filed copy as a
+             new VERSION (`Update file`, verified 2.0 over 1.0 on both verticals).
+
+             ⚠ AN UNCONSENTED CLASH STILL SKIPS, which is the whole reason this check exists. The
+             pre-check runs before the upload and the tagging call, so a same-named document can
+             land on the approved side in the seconds between — nobody saw a dialog and nobody
+             agreed to anything, and replacing a filed record on that basis is the one outcome this
+             must not produce. It stays Pending for a human, exactly as a denied probe leaves it.
+
+             ⚠ AND THIS GRANTS A PIC NOTHING. The gate below is a live `ApproveItems` read on the
+             destination folder, which answers `denied` for an uploader however they got here — so
+             "an uploader only cannot auto approve" needs no persona branch and cannot drift from
+             the ACLs. */
+          const clashNow = !replaceApproved && (await approvedClashInfo()).clash;
           if (clashNow) {
             console.warn(
               "Self-approve skipped: a same-named document already exists on the approved side.",
@@ -5604,9 +5624,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 lineHeight: 1.55,
               }}
             >
-              There is already an existing file with the same name. Please
-              confirm if you would like to proceed to overwrite{" "}
-              {clashRows.length === 1 ? "this file" : "these files"}
+              {/* Two lines and a full stop (client, 2026-09-05). The break separates the FACT from
+                  the QUESTION — the first sentence states what was found, the second asks for a
+                  decision, and running them together made the ask easy to skim past. */}
+              There is already an existing file with the same name.
+              <br />
+              Please confirm if you would like to proceed to overwrite{" "}
+              {clashRows.length === 1 ? "this file" : "these files"}.
             </p>
             <div
               style={{
@@ -5630,9 +5654,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               <button
                 className="dms-popup-btn confirm"
                 onClick={() => {
+                  /* ⚠ `both` COUNTS AS APPROVED-SIDE CONSENT TOO (2026-09-05). It is in the
+                     staging set below as well, and both memberships are correct — the uploader
+                     agreed to replace what is there, and for `both` that is a pending draft AND a
+                     filed copy. Left out of this set, self-approve went on skipping exactly the
+                     case the client reported: a name that exists in staging and in Documents, where
+                     they clicked Yes and the upload still sat Pending. */
                   const approved = new Set<string>(
                     clashRows
-                      .filter((r) => r.where === "approved")
+                      .filter((r) => r.where === "approved" || r.where === "both")
                       .map((r) => r.fileId),
                   );
                   const pending = new Set<string>(

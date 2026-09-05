@@ -32,8 +32,7 @@ export const UPLOAD_PAUSE_SETTING = "uploadsPaused";
  * an administrator who is in the middle of a migration.
  */
 export const UPLOAD_PAUSE_MESSAGE =
-  "Uploads are paused while an administrator reorganises the document folders. " +
-  "Nothing is wrong with your file — please try again shortly, or check with your CRS administrator.";
+  "Upload is temporarily disabled. Please try again shortly or check with the system administrator.";
 
 /**
  * Is the pause ON?

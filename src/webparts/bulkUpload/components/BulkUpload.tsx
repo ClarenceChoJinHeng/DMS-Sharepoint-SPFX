@@ -3302,9 +3302,11 @@ export default function BulkUpload({
             lineHeight: 1.5,
           }}
         >
-          <strong>Uploads are paused.</strong> An administrator is reorganising
-          the document folders. Nothing is wrong with your files — please try
-          again shortly.
+          {/* The SAME sentence as the upload form (client, 2026-09-05). Two screens describing one
+              site-wide state in different words invites the reader to wonder whether they are two
+              different states. */}
+          <strong>Upload is temporarily disabled.</strong> Please try again
+          shortly or check with the system administrator.
         </div>
       ) : undefined}
       <div className="dms-warn">
