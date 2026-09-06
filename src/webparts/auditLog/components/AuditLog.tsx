@@ -8,6 +8,7 @@ import { SPHttpClient } from "@microsoft/sp-http";
 
 import {
   ALL_EVENT_TYPES,
+  EVENT,
   EVENT_LABEL,
   eventLabelForRow,
 } from "../../../shared/auditLog";
@@ -70,7 +71,9 @@ const PAGE_SIZE = 10;
 function shortLibrary(libraryName?: string): string | undefined {
   const raw = (libraryName ?? "").trim();
   if (raw.length === 0) return libraryName;
-  return raw.toLowerCase() === documentsLibraryTitle().trim().toLowerCase() ? "Document" : raw;
+  return raw.toLowerCase() === documentsLibraryTitle().trim().toLowerCase()
+    ? "Document"
+    : raw;
 }
 
 /** Preset windows. Every query keeps a date bound, so the filter stays on an indexed column. */
@@ -95,17 +98,17 @@ const s: Record<string, React.CSSProperties> = {
     lineHeight: 1.5,
   },
   card: {
-    border: "1px solid #e1dfdd",
+    border: "1px solid rgba(217, 217, 217, 1)",
     borderRadius: 8,
     padding: "18px 22px",
     marginBottom: 16,
+    background: "rgba(251, 251, 252, 1)",
   },
   cardTitle: {
-    fontSize: 12,
+    fontSize: 16,
     fontWeight: 700,
-    letterSpacing: ".06em",
     textTransform: "uppercase",
-    color: "#0f6c3f",
+    color: "rgba(0, 104, 74, 1)",
     margin: "0 0 10px",
   },
   msg: {
@@ -175,7 +178,12 @@ const s: Record<string, React.CSSProperties> = {
     gridColumn: "1 / -1",
   },
   pairRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  pairTag: { fontSize: 11.5, color: "#605e5c", flexShrink: 0 },
+  pairTag: {
+    fontSize: 14,
+    color: "rgba(50, 49, 48, 1)",
+    flexShrink: 0,
+    fontWeight: 600,
+  },
   /* The intro card. Icon left, heading and one line of explanation right — the same shape the CRS
      Settings cards use, so the two pages read as one system. */
   intro: {
@@ -188,12 +196,12 @@ const s: Record<string, React.CSSProperties> = {
     flexShrink: 0,
     width: 54,
     height: 54,
-    borderRadius: 10,
-    background: "#D5EBD2",
+    /* No `background` and no `borderRadius`: the client's mark draws its own circle, and a rounded
+       square behind it showed as a pale box with a circle floating inside. `color` is gone too - the
+       artwork is coloured by its own `fill`, not by inheritance. */
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    color: "#00684A",
   },
   introHead: {
     fontSize: 14,
@@ -210,12 +218,14 @@ const s: Record<string, React.CSSProperties> = {
     marginBottom: 14,
   },
   field: { display: "flex", flexDirection: "column", gap: 4 },
-  label: { fontSize: 11, fontWeight: 600, color: "#605e5c" },
+  label: { fontSize: 14, fontWeight: 600, color: "rgba(50, 49, 48, 1)" },
+  // 8px on the filter controls (client, 2026-09-06), matching the upload form's fields. The BUTTONS
+  // below keep 4 — the client's design shows square-ish buttons beside rounded inputs.
   input: {
     padding: "7px 9px",
     fontSize: 13,
     border: "1px solid #c8c8c8",
-    borderRadius: 4,
+    borderRadius: 8,
     boxSizing: "border-box",
     minWidth: 180,
   },
@@ -223,7 +233,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "7px 9px",
     fontSize: 13,
     border: "1px solid #c8c8c8",
-    borderRadius: 4,
+    borderRadius: 8,
   },
   btn: {
     background: "#0f6c3f",
@@ -232,16 +242,27 @@ const s: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     padding: "8px 16px",
     fontSize: 13,
+    fontWeight: 700,
     cursor: "pointer",
+    maxWidth: 106,
   },
   ghost: {
     background: "#fff",
-    color: "#1b1b1b",
-    border: "1px solid #c8c8c8",
+    color: "rgba(3, 101, 52, 1)",
+    border: "1px solid rgba(0, 104, 74, 1)",
     borderRadius: 4,
     padding: "7px 14px",
+    fontWeight: 700,
     fontSize: 13,
     cursor: "pointer",
+    maxWidth: 106,
+    /* Reset and Export now hold an SVG beside their label (2026-09-06), so the button has to lay its
+       children out rather than relying on them being text. `center` on both axes, or the 14px icon
+       sits on the text baseline. */
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
   },
   chipRow: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 },
   chip: {
@@ -281,8 +302,11 @@ const s: Record<string, React.CSSProperties> = {
   /* The only clickable heading. Underlined on purpose: a heading that does something must not look
      exactly like the three beside it that do not. */
   sortHead: {
-    cursor: "pointer", userSelect: "none", textDecoration: "underline",
-    textDecorationStyle: "dotted", color: "#0f6c3f",
+    cursor: "pointer",
+    userSelect: "none",
+    textDecoration: "underline",
+    textDecorationStyle: "dotted",
+    color: "#0f6c3f",
   },
   headWho: {
     display: "flex",
@@ -305,6 +329,11 @@ const s: Record<string, React.CSSProperties> = {
     color: "#0f6c3f",
     fontWeight: 600,
     whiteSpace: "nowrap",
+    // Same reason as `ghost` — this button carries the refresh mark beside its label now.
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
   },
   when: { fontSize: 12, color: "#323130", fontFamily: "Consolas, monospace" },
   type: { fontSize: 12, fontWeight: 600, color: "#0f6c3f" },
@@ -346,6 +375,72 @@ const s: Record<string, React.CSSProperties> = {
     textAlign: "left",
   },
 };
+
+/* ── The client's icons (2026-09-06) ──────────────────────────────────────────
+ *
+ * WARN: INLINED AS JSX, NEVER REFERENCED AS FILES. Shipping an image asset in this package has
+ * failed to provision on this tenant TWICE, both times silently - the New Folder customizer, then
+ * the bulk-approve command set - so a `src`-referenced SVG would render as a broken box with nothing
+ * explaining it. The root `Group 634044.svg`, `refresh-Icon.svg` and `download-Icon.svg` are the
+ * design sources and are NOT built or copied anywhere.
+ *
+ * WARN: THE COLOURS ARE THE CLIENT'S, NOT `currentColor`. Switching them to inherit would quietly
+ * redesign their assets - and the two small ones are drawn with `stroke`, not `fill`, so a `fill`
+ * override would do nothing at all and look like the swap had failed.
+ */
+
+/** The people mark for the intro card. Carries its OWN pale circle, so its wrapper draws none. */
+function AuditLogoIcon(): React.ReactElement {
+  return (
+    <svg width="54" height="54" viewBox="0 0 61 61" fill="none" aria-hidden="true">
+      <circle cx="30.5" cy="30.5" r="30.5" fill="#F1F7EF" />
+      <path
+        d="M27.2861 30.5C29.8869 30.5001 32.3773 31.5702 34.2109 33.4688C36.0441 35.3669 37.0713 37.938 37.0713 40.6152V42.5381C37.0713 43.3286 36.4479 44 35.6426 44H18.9287C18.1234 44 17.5 43.3286 17.5 42.5381V40.6152C17.5 37.938 18.5272 35.3669 20.3604 33.4688C22.1941 31.5701 24.6852 30.5 27.2861 30.5ZM36.3486 31.8125C36.6234 31.0648 37.447 30.6666 38.1992 30.9629C40.0539 31.6935 41.6475 32.9892 42.7715 34.6748C43.8953 36.3602 44.4975 38.3577 44.5 40.4023V42.5381C44.5 43.3286 43.8765 44 43.0713 44H40.2861C39.4809 44 38.8574 43.3286 38.8574 42.5381C38.8576 41.7477 39.4811 41.0771 40.2861 41.0771H41.6426V40.4053L41.6377 40.1318C41.5859 38.7678 41.1605 37.4462 40.4111 36.3223C39.6117 35.1234 38.4812 34.2062 37.1719 33.6904C36.4291 33.3975 36.0768 32.5524 36.3486 31.8125ZM27.2861 33.4229C25.4543 33.4229 23.6934 34.1765 22.3926 35.5234C21.0912 36.871 20.3575 38.7022 20.3574 40.6152V41.0771H34.2139V40.6152C34.2138 38.7022 33.48 36.871 32.1787 35.5234C30.878 34.1766 29.1178 33.423 27.2861 33.4229ZM27.2861 18C30.3988 18.0002 32.8924 20.6081 32.8926 23.7881C32.8926 26.9682 30.399 29.5769 27.2861 29.5771C24.1731 29.5771 21.6787 26.9684 21.6787 23.7881C21.6789 20.608 24.1732 18 27.2861 18ZM34.7139 18C36.2067 18 37.6355 18.6138 38.6855 19.7012C39.7352 20.7879 40.3212 22.2585 40.3213 23.7881C40.3213 25.3176 39.735 26.7882 38.6855 27.875C37.6355 28.9624 36.2067 29.5771 34.7139 29.5771C33.9088 29.5769 33.2861 28.9057 33.2861 28.1152C33.2862 27.3248 33.9088 26.6545 34.7139 26.6543C35.4373 26.6543 36.1353 26.3566 36.6523 25.8213C37.1701 25.2851 37.4639 24.5535 37.4639 23.7881C37.4638 23.0228 37.17 22.2919 36.6523 21.7559C36.1353 21.2205 35.4374 20.9229 34.7139 20.9229C33.9089 20.9226 33.2863 20.2522 33.2861 19.4619C33.2861 18.6715 33.9088 18.0002 34.7139 18ZM27.2861 20.9229C25.7838 20.9229 24.5363 22.1892 24.5361 23.7881C24.5361 25.3872 25.7836 26.6543 27.2861 26.6543C28.7884 26.6541 30.0361 25.387 30.0361 23.7881C30.0359 22.1893 28.7883 20.9231 27.2861 20.9229Z"
+        fill="#00684A"
+      />
+    </svg>
+  );
+}
+
+/** The circular arrow on Reset and on the header's Refresh. `stroke`, not `fill`. */
+function RefreshIcon(): React.ReactElement {
+  return (
+    <svg
+      width="14"
+      height="15"
+      viewBox="0 0 14 15"
+      fill="none"
+      aria-hidden="true"
+      style={{ flexShrink: 0 }}
+    >
+      <path
+        d="M12.1307 12.1307C9.52722 14.7342 5.30612 14.7342 2.70262 12.1307C0.0991263 9.52722 0.099126 5.30612 2.70262 2.70262C5.30612 0.0991262 9.52722 0.0991262 12.1307 2.70262M12.75 0.75V3.35C12.75 3.38682 12.7202 3.41667 12.6833 3.41667H10.0833"
+        stroke="#00684A"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** The download arrow on Export. A single filled path, unlike the other two. */
+function DownloadIcon(): React.ReactElement {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 14 14"
+      fill="none"
+      aria-hidden="true"
+      style={{ flexShrink: 0 }}
+    >
+      <path
+        d="M5.99998 9.24209C5.99998 9.71153 6.38053 10.0921 6.84998 10.0921C7.31942 10.0921 7.69998 9.71153 7.69998 9.24209H6.84998H5.99998ZM7.69998 1.90875C7.69998 1.43931 7.31942 1.05875 6.84998 1.05875C6.38053 1.05875 5.99998 1.43931 5.99998 1.90875H6.84998L7.69998 1.90875ZM8.9156 3.84313C9.24755 4.17507 9.78574 4.17507 10.1177 3.84313C10.4496 3.51118 10.4496 2.97299 10.1177 2.64105L9.51664 3.24209L8.9156 3.84313ZM7.32138 1.04682L6.72034 1.64787L7.32138 1.04682ZM6.37857 1.04682L6.97961 1.64787L6.97961 1.64787L6.37857 1.04682ZM3.58227 2.64105C3.25032 2.97299 3.25032 3.51118 3.58227 3.84313C3.91421 4.17507 4.4524 4.17507 4.78435 3.84313L4.18331 3.24209L3.58227 2.64105ZM1.69998 9.24209C1.69998 8.77264 1.31942 8.39209 0.849976 8.39209C0.380534 8.39209 -2.44379e-05 8.77264 -2.44379e-05 9.24209H0.849976H1.69998ZM13.7 9.24209C13.7 8.77264 13.3194 8.39209 12.85 8.39209C12.3805 8.39209 12 8.77264 12 9.24209H12.85H13.7ZM11.758 12.3574L11.3721 11.6001L11.3721 11.6001L11.758 12.3574ZM12.632 11.4834L13.3893 11.8693V11.8693L12.632 11.4834ZM1.06796 11.4834L0.310607 11.8693L1.06796 11.4834ZM1.94199 12.3574L1.5561 13.1148H1.5561L1.94199 12.3574ZM6.84998 9.24209H7.69998L7.69998 1.90875L6.84998 1.90875H5.99998L5.99998 9.24209H6.84998ZM9.51664 3.24209L10.1177 2.64105L7.92242 0.445784L7.32138 1.04682L6.72034 1.64787L8.9156 3.84313L9.51664 3.24209ZM6.37857 1.04682L5.77753 0.445784L3.58227 2.64105L4.18331 3.24209L4.78435 3.84313L6.97961 1.64787L6.37857 1.04682ZM7.32138 1.04682L7.92242 0.445784C7.33013 -0.146512 6.36982 -0.146511 5.77753 0.445784L6.37857 1.04682L6.97961 1.64787C6.90802 1.71946 6.79194 1.71946 6.72034 1.64787L7.32138 1.04682ZM0.849976 9.24209H-2.44379e-05V9.37542H0.849976H1.69998V9.24209H0.849976ZM4.04998 12.5754V13.4254H9.64998V12.5754V11.7254H4.04998V12.5754ZM12.85 9.37542H13.7V9.24209H12.85H12V9.37542H12.85ZM9.64998 12.5754V13.4254C10.196 13.4254 10.6566 13.4261 11.0328 13.3953C11.4189 13.3638 11.7901 13.295 12.1438 13.1148L11.758 12.3574L11.3721 11.6001C11.298 11.6378 11.1753 11.678 10.8944 11.701C10.6035 11.7248 10.2241 11.7254 9.64998 11.7254V12.5754ZM12.85 9.37542H12C12 9.9495 11.9993 10.3289 11.9756 10.6198C11.9526 10.9007 11.9124 11.0234 11.8746 11.0975L12.632 11.4834L13.3893 11.8693C13.5696 11.5156 13.6384 11.1443 13.6699 10.7582C13.7006 10.3821 13.7 9.92145 13.7 9.37542H12.85ZM11.758 12.3574L12.1438 13.1148C12.6801 12.8415 13.1161 12.4056 13.3893 11.8693L12.632 11.4834L11.8746 11.0975C11.7644 11.3139 11.5885 11.4898 11.3721 11.6001L11.758 12.3574ZM0.849976 9.37542H-2.44379e-05C-2.44379e-05 9.92145 -0.000685513 10.3821 0.0300469 10.7582C0.06159 11.1443 0.130383 11.5156 0.310607 11.8693L1.06796 11.4834L1.82532 11.0975C1.78756 11.0234 1.74735 10.9007 1.7244 10.6198C1.70064 10.3289 1.69998 9.9495 1.69998 9.37542H0.849976ZM4.04998 12.5754V11.7254C3.4759 11.7254 3.09646 11.7248 2.8056 11.701C2.52466 11.678 2.402 11.6378 2.32789 11.6001L1.94199 12.3574L1.5561 13.1148C1.90981 13.295 2.28109 13.3638 2.66716 13.3953C3.04331 13.4261 3.50395 13.4254 4.04998 13.4254V12.5754ZM1.06796 11.4834L0.310607 11.8693C0.583846 12.4056 1.01984 12.8415 1.5561 13.1148L1.94199 12.3574L2.32789 11.6001C2.1115 11.4898 1.93557 11.3139 1.82532 11.0975L1.06796 11.4834Z"
+        fill="#00684A"
+      />
+    </svg>
+  );
+}
 
 /**
  * `13/Aug/2026 09:41` — the agreed display format, with the time the feed needs.
@@ -668,35 +763,11 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
           service account by design, and an admin who does not know that has no reason to trust a row
           in front of them. */}
       <div style={s.intro}>
+        {/* The client's mark replaces the hand-drawn one (2026-09-06). It carries its own pale
+            circle, so `s.introIcon` no longer draws a background or a corner radius - leaving them
+            would put a rounded square behind a circle. */}
         <span style={s.introIcon} aria-hidden="true">
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
-            <circle
-              cx="9"
-              cy="8"
-              r="3.2"
-              stroke="currentColor"
-              strokeWidth="1.6"
-            />
-            <path
-              d="M3 19c0-3.2 2.7-5.3 6-5.3 1.4 0 2.7.4 3.7 1.1"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-            />
-            <circle
-              cx="17"
-              cy="15"
-              r="3.2"
-              stroke="currentColor"
-              strokeWidth="1.6"
-            />
-            <path
-              d="M13.5 21c.5-1.6 1.9-2.6 3.5-2.6s3 1 3.5 2.6"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-            />
-          </svg>
+          <AuditLogoIcon />
         </span>
         <div>
           <p style={s.introHead}>What can you do with the Audit Log?</p>
@@ -950,7 +1021,24 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 anyLabel="Select action"
                 placeholder="Select action"
                 searchPlaceholder="Type to filter actions…"
-                options={ALL_EVENT_TYPES.map((t) => ({
+                /* WARN: THE TWO ACCESS EVENTS ARE HIDDEN FROM THE PICKER, NOT FROM THE LOG (client,
+                   2026-09-06: *"REMOVE THESE OPTIONS"*). Reconciliation still WRITES
+                   `AccessGranted`/`AccessRevoked` rows on every run, so they remain in the list and
+                   in the CSV - they simply cannot be filtered TO any more. Raised with the client
+                   and accepted. Filtered here rather than removed from `ALL_EVENT_TYPES`, which is
+                   also what the viewer reads back to label a row: dropping them there would leave
+                   those rows showing a raw `AccessGranted` instead of "Access granted". */
+                /* ⚠ `shareRevoked` JOINS THE HIDDEN SET (client, 2026-09-06). The revoke control was
+                   removed from the Requests page, so nothing in the app raises this any more — but
+                   ROWS ALREADY EXIST from before it was removed, and the `CRS — Audit request
+                   activity` flow still writes one if `RevokedBy` is ever set. They stay in the log
+                   and in the CSV; they simply cannot be filtered TO. */
+                options={ALL_EVENT_TYPES.filter(
+                  (t) =>
+                    t !== EVENT.accessGranted &&
+                    t !== EVENT.accessRevoked &&
+                    t !== EVENT.shareRevoked,
+                ).map((t) => ({
                   value: t,
                   label: EVENT_LABEL[t] ?? t,
                 }))}
@@ -1004,14 +1092,16 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 load(focus?.id, CLEARED).catch(() => undefined);
               }}
             >
-              ↻ Reset
+              <RefreshIcon />
+              Reset
             </button>
             <button
               style={s.ghost}
               disabled={rows.length === 0}
               onClick={() => downloadCsv(toAuditCsv(rows), csvName(new Date()))}
             >
-              ↑ Export
+              <DownloadIcon />
+              Export
             </button>
             <span style={s.actionsNote}>export what is shown</span>
           </div>
@@ -1062,7 +1152,11 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               role="button"
               tabIndex={0}
               style={s.sortHead}
-              title={oldestFirst ? "Showing oldest first — click for newest" : "Showing newest first — click for oldest"}
+              title={
+                oldestFirst
+                  ? "Showing oldest first — click for newest"
+                  : "Showing newest first — click for oldest"
+              }
               onClick={() => {
                 const next = !oldestFirst;
                 setOldestFirst(next);
@@ -1076,7 +1170,16 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 load(focus?.id, { oldestFirst: next }).catch(() => undefined);
               }}
             >
-              When <span aria-hidden="true">{oldestFirst ? "↑" : "↓"}</span>
+              When{" "}
+              {/* Bigger than the surrounding label (client, 2026-09-06). It is the only control in
+                  this header row, and at the text's own size it read as punctuation rather than as
+                  something clickable. `lineHeight: 0` keeps the taller glyph from growing the row. */}
+              <span
+                aria-hidden="true"
+                style={{ fontSize: 18, lineHeight: 0, verticalAlign: "-2px" }}
+              >
+                {oldestFirst ? "↑" : "↓"}
+              </span>
             </span>
             <span>Event</span>
             <span>What</span>
@@ -1116,7 +1219,14 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                   }).catch(() => undefined);
                 }}
               >
-                {loading ? "…" : "↻ Refresh"}
+                {loading ? (
+                  "…"
+                ) : (
+                  <>
+                    <RefreshIcon />
+                    Refresh
+                  </>
+                )}
               </button>
             </span>
           </div>
@@ -1187,7 +1297,17 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                     lining up with their columns. */}
                 <span aria-hidden="true" />
                 <div style={s.who}>
-                  <div>{r.ActorName || r.ActorEmail || "—"}</div>
+                  {/* WARN: DISPLAY ONLY - THE ACTOR IS STILL STORED, AND THE CSV STILL CARRIES IT.
+                      Archiving and routing are done BY A SCHEDULED FLOW, so whatever name the row
+                      holds is whoever the flow ran as, not a person who decided anything - and
+                      showing it invites exactly that reading (client, 2026-09-06). The row keeps
+                      `ActorName`/`ActorEmail` for an investigation; only this cell is blanked. */}
+                  <div>
+                    {r.EventType === EVENT.archived ||
+                    r.EventType === EVENT.routed
+                      ? "-"
+                      : r.ActorName || r.ActorEmail || "—"}
+                  </div>
                 </div>
               </div>
             );
@@ -1214,7 +1334,9 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 ? ""
                 : ` of ${total.total.toLocaleString()}${total.exact ? "" : "+"}`}{" "}
               event
-              {(total !== undefined ? total.total : rows.length) === 1 ? "" : "s"}
+              {(total !== undefined ? total.total : rows.length) === 1
+                ? ""
+                : "s"}
               {total === undefined && next !== undefined ? " and more" : ""}
             </span>
             <div style={s.pagerBtns}>

@@ -2678,7 +2678,12 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
               <table style={s.table}>
                 <thead>
                   <tr>
-                    <th style={s.th}>Batch &mdash; where these files went</th>
+                    {/* "Set", not "Batch" (client, 2026-09-06) — matching what the upload form calls
+                        it, so one thing has one name across the two screens.
+                        ⚠ DISPLAY ONLY. `BatchId` and `BatchRef` are columns on all four libraries
+                        and on `CRS Submissions`, and every stored value keeps the old name — this
+                        renames the word on screen and nothing else. */}
+                    <th style={s.th}>Set &mdash; where these files went</th>
                     <th style={s.th}>Status</th>
                   </tr>
                 </thead>
@@ -2734,7 +2739,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
               <thead>
                 <tr>
                   <th style={s.th}>Submission</th>
-                  <th style={s.th}>Batches</th>
+                  <th style={s.th}>Sets</th>
                   {/* ⚠ THE "Upload" COLUMN IS GONE (client, 2026-09-03: "you forgot to remove the
                       upload column, add Bulk tagging beside the folder name"). It read `Batch` on
                       almost every row — the ordinary case, saying nothing — so a whole column was

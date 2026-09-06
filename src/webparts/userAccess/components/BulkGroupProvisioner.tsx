@@ -181,7 +181,9 @@ const s: Record<string, React.CSSProperties> = {
     marginBottom: 20,
     background: "#fafafa",
   },
-  head: { fontWeight: 600, fontSize: 13, margin: "0 0 8px" },
+  /* 20px and title case (client, 2026-09-06). This is the heading of the whole card, and at 13px it
+     read as a field label rather than the start of a section. */
+  head: { fontWeight: 600, fontSize: 20, margin: "0 0 8px" },
   label: {
     display: "block",
     fontSize: 12,
@@ -989,7 +991,7 @@ export default function BulkGroupProvisioner({
           list"). The stale "set on Folder Access" reference is gone WITH this rewrite — Folder
           Access itself was retired 2026-08-23, and membership editing moved to Group Management;
           the client's own shorter sentence happens to drop the dangling reference along with it. */}
-      <p style={s.head}>Create group</p>
+      <p style={s.head}>Create Group</p>
       <div style={s.okBox}>
         Set up the groups a segment needs. Creating a group also writes its
         folder mapping — permissions apply once you run folder reconciliation.

@@ -116,6 +116,14 @@ export interface IFolderManagerProps {
    */
   onAbbreviationsDirtyChange?: (dirty: boolean) => void;
   /**
+   * Hands the abbreviation screen's own `save()` up to a guided flow, so **Next** can save before
+   * advancing (client, 2026-09-06 — that screen's Save button is gone).
+   *
+   * Passed straight through to `AbbreviationManager.registerSave`; see the note there for why the
+   * host must call THAT function rather than write the rows itself.
+   */
+  onAbbreviationsRegisterSave?: (save: (() => Promise<boolean>) | undefined) => void;
+  /**
    * Hides the create-a-segment form on the NewSegment tab, leaving only the segments list and its
    * Delete buttons. For the Retire flow's "Segments -> Delete" step, which has no use for it — client,
    * 2026-08-26: "Retiring a segment is just to delete, not to create." Mirrors `hideSegmentDelete`,

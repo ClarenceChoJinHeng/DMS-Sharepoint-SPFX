@@ -127,23 +127,50 @@ const RECONCILE: FlowStep = {
   },
 };
 
+/**
+ * The abbreviations step, with the label and hint the FLOW needs.
+ *
+ * ⚠ A FACTORY SINCE 2026-09-06, AND THE `id` MUST STAY `abbreviations` IN EVERY ONE. The client's
+ * redesign names it "Create Term Abbreviation" when adding and "Rename Term Abbreviation" when
+ * renaming - but `NEXT_GATED_STEPS` keys on the id, and so does the padlock that stops an admin
+ * reaching reconciliation with terms that have no code. Give one of these a new id and that gate
+ * silently stops applying to it.
+ */
+function abbreviationsStep(label: string, hint: string): FlowStep {
+  return { id: "abbreviations", label, hint, screen: { kind: "tab", tab: "abbreviations" } };
+}
+
 const ABBREVIATIONS: FlowStep = {
   id: "abbreviations",
   label: "CRS Term Abbreviations",
-  hint: "Give every term a short folder code. A term with no code gets no folder.",
+  /* The mandatory sentence the client asked for (2026-09-06) sits here rather than in the screen,
+     because this is the hint the flow renders above it — the screen has no intro of its own once the
+     top-folder and below-Unit notes came off. */
+  /* WARN: THE NEWLINE IS LOAD-BEARING (client, 2026-09-06: *"Basically break line"*). It renders
+     only because `s.stepHint` sets `white-space: pre-line`; strip that and the two sentences run
+     together again with nothing failing. No other hint contains one, so nothing else changes shape. */
+  hint:
+    "Give every term a short folder code. A term with no code gets no folder.\n" +
+    "All fields marked * are mandatory.",
   screen: { kind: "tab", tab: "abbreviations" },
 };
 
-const GROUPS: FlowStep = {
-  id: "groups",
-  label: "Group Management",
-  hint:
-    "Create the groups, then put the people in them. Creating a group also writes its folder " +
-    "mappings, so there is nothing to map by hand afterwards. Adding people is OPTIONAL — an empty " +
-    "group keeps its permissions and works the day somebody is added, so come back whenever you know " +
-    "who belongs where. If the groups already exist and you know nobody yet, there is nothing to do here.",
-  screen: { kind: "component", id: "groups" },
-};
+/*
+ * ⚠ THE `groups` STEP IS GONE FROM EVERY FLOW (client, 2026-09-06: *"Remove Group Management from
+ * ALL Folder Management … Let client assign members under USER ACCESS MANAGEMENT > GROUP
+ * MANAGEMENT"*). It stood between the abbreviations and reconciliation in `newSegment` and
+ * `addUnit`.
+ *
+ * DELETED rather than parked. An unused const is a lint warning here, and this project's own rule
+ * from `inviteToGroup` applies: something kept alive doing exactly the thing that was withdrawn is
+ * only ever a matter of time before it is wired back up. Re-adding it is eight lines — a `label`, a
+ * `hint`, and `screen: { kind: "component", id: "groups" }` — and the component id is still in the
+ * `screen` union above, so the mount point survives.
+ *
+ * ⚠ NOTHING ABOUT PROVISIONING CHANGED. Bulk provisioning still creates every group and writes its
+ * mappings, and reconciliation still grants from those rows, so a segment built through this flow is
+ * complete without the step. What moved is WHO adds the people, and where.
+ */
 
 /*
  * ⚠ THE `folderAccess` STEP IS GONE (2026-08-23). It existed to ADD PEOPLE, which the Group
@@ -200,7 +227,6 @@ export const FLOWS: Flow[] = [
           reason: "Create the segment first — until it exists there is no term tree to give codes to.",
         },
       },
-      GROUPS,
       RECONCILE,
     ],
   },
@@ -210,16 +236,21 @@ export const FLOWS: Flow[] = [
     blurb: "Add another department or unit under an existing segment.",
     tone: "normal",
     needsSegment: true,
+    /* ⚠ KEPT THOUGH THE SUBJECT BOX IS GONE. The "which department did you add?" field lived on the
+       `addTerm` step this flow no longer has, so nothing asks for it any more - but `asksSubject` is
+       ALSO what `scopeFactsToFlow` reads to drop the segment-level facts, and without it the rail
+       would tick Reconciliation as Done before anything was provisioned (the 1.0.189.0 defect). */
     asksSubject: "add",
+    /* ⚠ FOUR STEPS DOWN TO TWO (client's redesign, 2026-09-06). The `addTerm` instruction step is
+       gone; the Term Store link it carried now renders on the abbreviations step, which is where an
+       admin is standing when they need it. Nothing about the TERM STORE work changed - it still has
+       to be done there first, and the abbreviation screen still shows nothing for a term that does
+       not exist yet, which is how this step confirms it took. */
     steps: [
-      {
-        id: "addTerm",
-        label: "Add the term",
-        hint: "In the term store, add the term under its parent. The next step will show you whether it took.",
-        screen: { kind: "outside" },
-      },
-      ABBREVIATIONS,
-      GROUPS,
+      abbreviationsStep(
+        "Create Term Abbreviation",
+        "Add the term in the term store, then give it a short folder code below.",
+      ),
       RECONCILE,
     ],
   },
@@ -237,40 +268,70 @@ export const FLOWS: Flow[] = [
         // its folder was scanned, is never moved; the staged-apply guard then keeps the migration
         // pending rather than letting it go live, which is safe but can loop.
         id: "pauseUploads",
-        label: "Pause uploads",
-        hint: "Turn uploads off site-wide while you reorganise the folders. Remember to turn them back on at the end — the last step reminds you.",
+        label: "Temporarily disable uploads",
+        hint: "Temporarily restrict document uploads across the site while you reorganise the folder structure.",
         screen: { kind: "component", id: "pauseUploads" },
       },
-      {
-        id: "pauseFlows",
-        label: "Power Automate (optional)",
-        hint: "You can leave the flows running. Pausing Auto-route and folder approval avoids a lot of flow runs that do nothing.",
-        screen: { kind: "outside" },
-      },
+      /* ⚠ THE "Power Automate (optional)" STEP IS GONE (client's redesign, 2026-09-06 — five steps
+         down to four), AND WITH IT THE ONLY PLACE THIS TOOL MENTIONS THE FLOWS.
+         What it said is still TRUE and is now told to nobody: leaving Auto-route and the
+         folder-approval flows running is SAFE — Auto-route reads moderation status and takes the
+         False branch for a moved pending file — but a migration produces hundreds of no-op runs,
+         which burn the daily quota, and an exhausted quota means the next real approval is never
+         routed, silently.
+         Raised with the client before removing it; accepted. If flow quota is ever exhausted during
+         a structure change, this is why. */
       {
         id: "levels",
         label: "Folder Structure Management",
-        hint: "Edit the levels. Saved as a pending change — nothing moves and nothing goes live yet.",
+        hint:
+          "Edit the folder levels. Changes are saved as pending and will not affect existing " +
+          "folders until applied.",
         screen: { kind: "tab", tab: "structure" },
       },
       {
         id: "migrate",
         label: "Move existing folders",
-        hint: "Move the documents into the new shape. This applies the new structure as its last step.",
+        /* ⚠ THE CLIENT'S COPY DROPS THE ONE FACT THAT MAKES THIS STEP THE POINT OF NO RETURN, so it
+           is kept on the end: the migration APPLIES the pending chain as its last action, and only
+           when a fresh scan finds no drift left. Until it runs, uploads are still filing into the
+           old shape - which is why "saved as pending" on the previous step is true and why walking
+           past this one leaves the segment half-changed. */
+        hint:
+          "Apply the new folder structure to existing documents. This is what makes the pending " +
+          "change live — until it runs, uploads keep using the old structure.",
         screen: { kind: "tab", tab: "migrate" },
         lock: {
           fact: "pendingLevels",
           reason: "There is no pending structure change to move to — edit the levels first, or this has nothing to do.",
         },
       },
+      /* ⚠ RECONCILIATION IS IN THIS FLOW SINCE 2026-09-06, REVERSING A DELIBERATE EXCLUSION.
+         It was kept OUT because reconciliation walks the TERM TREE, not `Levels` — so a change to
+         the levels below Unit creates nothing for it to do, and offering it invited an hour-long run
+         that changes nothing. There was a test named "does NOT offer reconciliation in the structure
+         flow" saying exactly that.
+         The client asked for it anyway, having been shown that reasoning and the two ways to read
+         their own slides: *"A"* — a step of its own, before uploads resume.
+         It is defensible on the OTHER reading of the request: a structure change moves folders, and
+         re-asserting permissions before letting people back in is worth a run even when the tree is
+         unchanged. What it must never be described as is "applying the structure change" — the
+         migration already did that, as its own last step. */
+      RECONCILE,
       {
         // ⚠ THE WHOLE REASON THE PAUSE IS MANUAL. Turning uploads back on is the step that gets
         // forgotten, and a forgotten pause is a DMS that quietly accepts no documents — with a
         // banner explaining why, which makes it look deliberate. It gets its own step so the flow
         // does not end until someone has looked at it.
         id: "resumeUploads",
-        label: "Turn uploads back on",
-        hint: "The structure change is done — let people upload again. Until you do, nobody can file a document.",
+        /* The client's title and description (2026-09-06).
+           ⚠ THE OLD LABEL WAS DOING SAFETY WORK AND THE NEW ONE MUST KEEP DOING IT. This is the step
+           that gets forgotten, and a forgotten pause is a DMS that quietly accepts no documents
+           behind a banner that makes it look deliberate. The hint keeps the consequence on the end
+           for that reason - "Enable upload access" alone states an action and not what happens if
+           nobody performs it. */
+        label: "Enable Upload",
+        hint: "Enable upload access. Until you do, nobody can file a document.",
         screen: { kind: "component", id: "pauseUploads" },
       },
     ],
@@ -281,15 +342,20 @@ export const FLOWS: Flow[] = [
     blurb: "Change a folder's name by renaming its term, or by changing its short code.",
     tone: "normal",
     needsSegment: true,
+    // Kept for `scopeFactsToFlow`, exactly as on `addUnit` — see the note there.
     asksSubject: "rename",
+    /* ⚠ THE "NEVER DELETE AND RE-ADD" WARNING LOST ITS STEP, AND IT IS THE MOST EXPENSIVE MISTAKE ON
+       THIS SCREEN. Deleting a term and re-adding it gives a NEW GUID, which orphans the abbreviation
+       row, the folder-map row and every group mapping at once - reconciliation then repairs only a
+       1:1 label match and reports the rest. The sentence now rides on the abbreviations hint below,
+       because the client's redesign has no instruction step to put it on. If that hint is ever
+       shortened, this warning needs somewhere else to live. */
     steps: [
-      {
-        id: "renameTerm",
-        label: "Rename the term",
-        hint: "In the term store, RENAME it — never delete and re-add. A new GUID orphans the abbreviation, folder and group rows at once.",
-        screen: { kind: "outside" },
-      },
-      ABBREVIATIONS,
+      abbreviationsStep(
+        "Rename Term Abbreviation",
+        "Rename the folder in the Term Store and on this page, where applicable. Always RENAME a " +
+          "term — never delete and re-add it, which orphans its abbreviation, folder and group rows.",
+      ),
       RECONCILE,
     ],
   },

@@ -31,13 +31,13 @@ const s: Record<string, React.CSSProperties> = {
   button: {
     width: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8,
     padding: "7px 10px", fontSize: 13, fontFamily: "inherit", textAlign: "left",
-    border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer",
+    border: "1px solid #c7c7c7", borderRadius: 8, background: "#fff", cursor: "pointer",
     color: "#1b1b1b",
   },
   buttonOff: {
     width: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8,
     padding: "7px 10px", fontSize: 13, fontFamily: "inherit", textAlign: "left",
-    border: "1px solid #e6e6e6", borderRadius: 4, background: "#f6f6f6", cursor: "not-allowed",
+    border: "1px solid #e6e6e6", borderRadius: 8, background: "#f6f6f6", cursor: "not-allowed",
     color: "#a6a6a6",
   },
   /* The chosen label takes the free space so the chevron sits at the right edge, and truncates rather
@@ -50,7 +50,7 @@ const s: Record<string, React.CSSProperties> = {
   chevron: { flexShrink: 0, fontSize: 10, color: "#605e5c" },
   panel: {
     position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 30,
-    background: "#fff", border: "1px solid #c7c7c7", borderRadius: 4,
+    background: "#fff", border: "1px solid #c7c7c7", borderRadius: 8,
     boxShadow: "0 4px 14px rgba(0,0,0,.14)", overflow: "hidden",
   },
   search: {

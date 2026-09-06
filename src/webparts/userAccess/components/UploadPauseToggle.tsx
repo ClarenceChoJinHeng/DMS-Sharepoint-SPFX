@@ -8,7 +8,8 @@ import {
   uploadsArePaused,
   pauseSettingValue,
 } from "../../../shared/uploadPause";
-import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+// `NOTICE_ATTENTION` was the paused banner's palette. The status switch states OFF in its own red,
+// so the shared attention style is no longer used here — re-import it if a banner ever returns.
 
 /**
  * The site-wide upload pause, as a screen in the "Change the folder structure" flow.
@@ -113,25 +114,21 @@ export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, 
   const box: React.CSSProperties = {
     padding: "12px 14px", borderRadius: 4, fontSize: 13, lineHeight: 1.5, marginBottom: 12,
   };
-  const btn = (enabled: boolean, on: string, off: string): React.CSSProperties => ({
-    padding: "7px 16px", fontSize: 13, borderRadius: 4, border: "none", color: "#fff",
-    background: enabled ? on : off,
-    cursor: enabled ? "pointer" : "not-allowed",
-  });
+  // The two coloured action buttons this styled were replaced by the SharePoint status switch
+  // (2026-09-06), which carries its own colours.
 
   const canPause = load === "ok" && !busy && paused === false;
   const canResume = load === "ok" && !busy && paused === true;
 
   return (
     <div>
-      <h3 style={{ margin: "0 0 4px", fontSize: 18 }}>
-        {mode === "pause" ? "Pause uploads" : "Turn uploads back on"}
-      </h3>
-      <p style={{ margin: "0 0 14px", color: "#666", lineHeight: 1.5 }}>
-        {mode === "pause"
-          ? "While this is on, the Upload Form and Bulk Upload refuse new documents across the whole site. Do the structure change, then turn it back on at the last step."
-          : "The structure change is finished. Until you turn this off, nobody can file a document."}
-      </p>
+      {/* ⚠ NO HEADING AND NO DESCRIPTION HERE. This component is mounted ONLY as a step of a guided
+          flow (`FolderAdmin` is its single importer), and that step already prints the same title
+          and the same sentence immediately above — the client's screenshot showed each of them
+          twice, one under the other.
+          The wording now lives in ONE place: the `pauseUploads` / `resumeUploads` steps in
+          `folderFlows.ts`. If this is ever mounted somewhere with no step around it, it needs its
+          heading back, or it opens as an unlabelled switch. */}
 
       {/* A read that FAILED is not "uploads are on", and the difference matters more here than
           almost anywhere else: an admin who believes uploads are paused when the setting could not
@@ -146,40 +143,77 @@ export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, 
         <div style={{ ...box, background: "#f4f4f4", border: "1px solid #ddd", color: "#555" }}>
           Reading the current setting…
         </div>
-      ) : paused ? (
-        <div style={{ ...box, ...NOTICE_ATTENTION }}>
-          <strong>Uploads are PAUSED right now.</strong> The Upload Form and Bulk Upload are refusing
-          new documents site-wide.
-        </div>
       ) : (
-        <div style={{ ...box, background: "#eef7f1", border: "1px solid #cfe4d8", color: "#0f6c3f" }}>
-          <strong>Uploads are ON.</strong> People can file documents normally.
+        /* ── SharePoint status (client's design, 2026-09-06) ──────────────────────────────────
+           ONE control instead of two buttons. The pair could express a state the site was not in -
+           "Pause uploads" was clickable-looking while already paused - and the toggle cannot.
+
+           ⚠ IT SHOWS THE STATE AND SETS THE OPPOSITE, which is the ordinary meaning of a switch but
+           worth stating: ON means uploads are working, and pressing it PAUSES them. `canPause` /
+           `canResume` still gate it, so a failed read (handled above) never reaches here and the
+           switch is never live over a state nobody could confirm.
+
+           ⚠ `paused === false` RATHER THAN `!paused`. The value is three-state - true, false, and
+           not-yet-read - and `!undefined` is true, which would draw a green "uploads are on" switch
+           over a setting that had not been read at all. */
+        <div style={{ ...box, background: "#fff", border: "1px solid #e1e1e1", color: "#323130" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+            <strong style={{ fontSize: 14 }}>SharePoint status</strong>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={paused === false}
+              aria-label={paused === false ? "Uploads are on — turn them off" : "Uploads are off — turn them on"}
+              disabled={paused === false ? !canPause : !canResume}
+              onClick={() => { write(paused === false).catch(() => undefined); }}
+              style={{
+                position: "relative",
+                width: 46,
+                height: 24,
+                flexShrink: 0,
+                borderRadius: 12,
+                border: "none",
+                padding: 0,
+                cursor: busy ? "not-allowed" : "pointer",
+                background: paused === false ? "#0f6c3f" : "#d13438",
+                opacity: busy ? 0.6 : 1,
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  top: 3,
+                  left: paused === false ? 25 : 3,
+                  width: 18,
+                  height: 18,
+                  borderRadius: "50%",
+                  background: "#fff",
+                  transition: "left .15s ease",
+                }}
+              />
+            </button>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <strong style={{ color: paused === false ? "#0f6c3f" : "#a4262c" }}>
+              {paused === false ? "ON" : "OFF"}
+            </strong>
+            <div style={{ marginTop: 2, lineHeight: 1.5 }}>
+              {paused === false
+                ? "Users can upload documents normally."
+                : "Uploads are paused. The Upload Form and Bulk Upload refuse new documents until this is turned back on."}
+            </div>
+          </div>
+          <button
+            disabled={busy}
+            onClick={() => { read().catch(() => setLoad("error")); }}
+            style={{ marginTop: 12, padding: "7px 14px", fontSize: 13, borderRadius: 4, border: "1px solid #ccc", background: "#fff", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            <span aria-hidden="true">&#8635;</span>
+            Refresh
+          </button>
         </div>
       )}
-
-      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <button
-          disabled={!canPause}
-          onClick={() => { write(true).catch(() => undefined); }}
-          style={btn(canPause, "#9a6b00", "#c9b98f")}
-        >
-          Pause uploads
-        </button>
-        <button
-          disabled={!canResume}
-          onClick={() => { write(false).catch(() => undefined); }}
-          style={btn(canResume, "#0f6c3f", "#b6c6bd")}
-        >
-          Turn uploads back on
-        </button>
-        <button
-          disabled={busy}
-          onClick={() => { read().catch(() => setLoad("error")); }}
-          style={{ padding: "7px 14px", fontSize: 13, borderRadius: 4, border: "1px solid #ccc", background: "#fff", cursor: "pointer" }}
-        >
-          Refresh
-        </button>
-      </div>
 
       {note ? (
         <p style={{ marginTop: 12, fontSize: 13, color: note.indexOf("Could not") === 0 ? "#7a2020" : "#0f6c3f" }}>
@@ -187,12 +221,13 @@ export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, 
         </p>
       ) : undefined}
 
-      <p style={{ marginTop: 16, fontSize: 12, color: "#777", lineHeight: 1.6 }}>
-        <strong>This does not reach a page somebody already had open.</strong> A browser tab opened
-        before you paused still holds its own copy of the form. It is re-checked at the moment of
-        upload, so the document is refused rather than misfiled — but the safest time to change the
-        structure is still outside working hours.
-      </p>
+      {/* ⚠ THE "already-open page" NOTE WAS REMOVED AT THE CLIENT'S REQUEST (2026-09-06), AND WHAT
+          IT DESCRIBED IS STILL TRUE. A browser tab opened before the pause holds its own copy of the
+          form: the pause is re-checked at the moment of upload, so such a document is REFUSED rather
+          than misfiled — the guard works, it simply cannot reach a page that never asks the server
+          again. The operational answer is unchanged and is the client's own: make structure changes
+          outside working hours. If anyone asks why somebody could still see an upload form after the
+          pause, this is the answer. */}
     </div>
   );
 };

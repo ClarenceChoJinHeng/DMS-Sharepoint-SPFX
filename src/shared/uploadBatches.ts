@@ -218,14 +218,40 @@ export function decideClash(i: ClashInputs): ClashDecision {
           ? "approved"
           : undefined;
 
-  if (where === undefined) return { consented: true, overwrite: false };
+  /**
+   * WARN: THIS IS WHAT `overwrite` KEYS ON, AND IT DELIBERATELY DOES NOT CONSULT `inStaging`.
+   *
+   * It used to be `consented && i.inStaging`, on the reasoning that a file which is not there needs
+   * no overwriting. True of the file, false of the CHECK: `inStaging` comes from
+   * `Files('name')?$select=Exists`, which Draft Item Security trims to a 404 for a colleague's
+   * pending draft. So the one case the whole `hidden` branch exists for - person A has a pending
+   * document, person B uploads the same name - answered "not there", left `overwrite` false, and the
+   * write failed again on the retry. **Pressing Yes could never replace it, however many times.**
+   *
+   * It converged until 2026-09-04 only because the dialog also offered a rename; when that became
+   * Yes/No, the path became a loop. Client, 2026-09-06: *"clarencechojinheng an uploader and
+   * chocheetuck an uploader under the same unit, yes they can override each other files during
+   * upload."* So this is RESTORING the 2026-08-28 rule where the pre-check cannot see, not widening
+   * it - the permission was never in question, only whether the file happened to be visible.
+   *
+   * `overwrite=true` on a name that genuinely is not there simply creates it, so honouring a consent
+   * the uploader has already given costs nothing when the check was right.
+   *
+   * WARN: AN APPROVED-SIDE CONSENT STILL NEVER OVERWRITES. `replaceStaging` is set only for a file
+   * whose clash was `staging`, `hidden` or `both`; an `approved` row carries `replaceApproved`
+   * instead, which is what keeps "send for approval as a replacement" non-destructive - the filed
+   * copy is replaced later by Auto-route, if an approver agrees.
+   *
+   * WARN: `allowStagingReplace` GATES IT, so Bulk Upload - which passes false - can still never
+   * overwrite anything, whatever consent is handed in.
+   */
+  const mayReplaceStaging = allowStagingReplace && i.replaceStaging;
 
-  const consented =
-    where === "approved" ? i.replaceApproved : allowStagingReplace && i.replaceStaging;
+  if (where === undefined) return { consented: true, overwrite: mayReplaceStaging };
 
-  // `inStaging` is what makes an overwrite necessary at all, so an approved-side consent can never
-  // produce one - which is what keeps "send for approval as a replacement" non-destructive.
-  return { where, consented, overwrite: consented && i.inStaging };
+  const consented = where === "approved" ? i.replaceApproved : mayReplaceStaging;
+
+  return { where, consented, overwrite: mayReplaceStaging };
 }
 
 /* ── Names ──────────────────────────────────────────────────────────────────── */
@@ -472,6 +498,79 @@ export function duplicateAcrossBatches(batches: Batch[]): string[] {
   const out: string[] = [];
   seen.forEach((n, key) => {
     if (n > 1) out.push(label.get(key) ?? "");
+  });
+  return out;
+}
+
+/** One staged file, reduced to the two things that decide whether it will overwrite another. */
+export interface DestinationFile {
+  /**
+   * An OPAQUE key for "the same folder in the same library".
+   *
+   * Opaque because this module must not learn what a term GUID or a confidentiality level is - the
+   * caller builds it. Form.tsx folds the chain labels AND whether the file routes to the HC pair
+   * into it, because two files with one path but different confidentiality land in DIFFERENT
+   * libraries and do not collide at all.
+   */
+  dest: string;
+  /** The name the file will be SAVED under - the composed name, never the name on disk. */
+  name: string;
+  /** How the message should refer to the set it is in, e.g. "Set 2". */
+  setLabel: string;
+}
+
+/** A name that two different sets would both write into one folder. */
+export interface DestinationClash {
+  name: string;
+  /** Every set writing it, in the order given. Always two or more. */
+  sets: string[];
+}
+
+/**
+ * Sets that would write the SAME name into the SAME folder - where one silently destroys the other.
+ *
+ * WARN: THIS IS NOT `duplicateAcrossBatches`, AND THE DIFFERENCE IS THE WHOLE POINT. That one asks
+ * whether the same file on disk was PICKED twice, which is harmless when the two batches file it in
+ * two different places - its note says so: *"That is allowed - it will be filed in each place."*
+ * This one asks whether two files END UP AT ONE ADDRESS, which is never harmless: the second upload
+ * lands on the first and only one document survives.
+ *
+ * Client, 2026-09-06, having watched exactly that: *"if someone upload one set and another set both
+ * same destination and have the same file name for different set then ensure it is showing an
+ * error."* What they saw was a SECOND replace dialog - the first set's own upload had become the
+ * thing the second set collided with - and no amount of answering it can leave two documents behind.
+ *
+ * WARN: IT COMPARES THE COMPOSED NAME, NOT THE FILENAME. Two genuinely different documents collide
+ * when their project, vendor, name and date match - the common case, not the exotic one, since every
+ * uploaded name is built from those four. So two files picked from different folders on disk can
+ * clash here, and two copies of one file can be perfectly fine.
+ *
+ * WARN: ONLY ACROSS SETS. A collision INSIDE one set is `collisionsWithin`'s job and is already
+ * blocked at save time; reporting it here as well would show the uploader one problem twice under
+ * two different messages.
+ *
+ * Case-insensitive, because SharePoint file names are - `test.pdf` and `TEST.pdf` cannot coexist in
+ * one folder, so treating them as distinct would report no clash where there is one.
+ */
+export function sameDestinationDuplicates(
+  rows: DestinationFile[],
+): DestinationClash[] {
+  const bucket = new Map<string, { name: string; sets: string[] }>();
+  for (const r of rows ?? []) {
+    const name = (r?.name ?? "").trim();
+    if (name.length === 0) continue;
+    const key = `${r.dest ?? ""}|${name.toLowerCase()}`;
+    const seen = bucket.get(key);
+    if (!seen) {
+      bucket.set(key, { name, sets: [r.setLabel] });
+      continue;
+    }
+    // DISTINCT sets only - two files of one name inside a single set are the other rule's business.
+    if (seen.sets.indexOf(r.setLabel) === -1) seen.sets.push(r.setLabel);
+  }
+  const out: DestinationClash[] = [];
+  bucket.forEach((v) => {
+    if (v.sets.length > 1) out.push({ name: v.name, sets: v.sets });
   });
   return out;
 }

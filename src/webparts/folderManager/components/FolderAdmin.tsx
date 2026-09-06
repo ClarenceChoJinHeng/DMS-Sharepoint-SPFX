@@ -27,7 +27,7 @@ import {
   UPLOAD_PAUSE_SETTING,
   uploadsArePaused,
 } from "../../../shared/uploadPause";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import FolderManager from "./FolderManager";
 import { IFolderManagerProps } from "./IFolderManagerProps";
@@ -307,6 +307,11 @@ const s: Record<string, React.CSSProperties> = {
     color: "#5f5f5f",
     margin: "0 0 16px",
     lineHeight: 1.55,
+    /* A step hint may carry its own line breaks (client, 2026-09-06 - the abbreviations hint puts
+       "All fields marked * are mandatory." on its own line). `pre-line` honours a newline while
+       still collapsing ordinary wrapping whitespace, unlike `pre`, which would also preserve the
+       indentation of every concatenated string literal in `folderFlows.ts`. */
+    whiteSpace: "pre-line",
   },
   /* ⚠ GREEN, NOT BLUE, since 2026-08-30 (client: *"keep the old design but tweak the color to match
      the other designs"*). The CONTENT of an `outside` step is unchanged and deliberately so — their
@@ -468,6 +473,16 @@ export default function FolderAdmin({
      finished. That is the "confusing" the client was worried about, not the locking itself.
      Reset with the flow, so a new flow starts closed again. */
   const [maxIdx, setMaxIdx] = useState(0);
+  /**
+   * The abbreviation screen's own `save()`, while that screen is mounted.
+   *
+   * ⚠ A REF, NOT STATE. It is re-registered on EVERY render of that screen (its closure has to stay
+   * current over `rows`), and holding it in state would set state during render — an update loop.
+   * Nothing renders from it; only the Next handler reads it.
+   */
+  const abbrevSaveRef = useRef<(() => Promise<boolean>) | undefined>(undefined);
+  /** True while that save is in flight, so Next cannot be pressed twice. */
+  const [abbrevSaving, setAbbrevSaving] = useState(false);
   const [allTools, setAllTools] = useState(() => readHash().wantsTabs);
 
   const [segments, setSegments] = useState<Segment[] | undefined>(undefined);
@@ -539,7 +554,11 @@ export default function FolderAdmin({
    * the admin believes they made, and the flow looks broken rather than incomplete.
    */
   const [structureDirty, setStructureDirty] = useState(false);
-  const [abbreviationsDirty, setAbbreviationsDirty] = useState(false);
+  /* ⚠ REPORTED BUT NO LONGER GATING (2026-09-06). Nothing reads the flag now that Next saves — the
+     state it protected against cannot arise — but the screen still reports it, and dropping the
+     receiver would make re-instating a dirty gate a two-file change instead of a one-line one.
+     Named `_` so lint sees it consumed without pretending it is used. */
+  const [, setAbbreviationsDirty] = useState(false);
   /**
    * The migration screen has scanned work it has not run.
    *
@@ -829,16 +848,27 @@ export default function FolderAdmin({
   }, [flow, baseFacts, segments, segment, abbrevMissing, abbrevLoading]);
 
   /** Open a flow on the first thing left to do. */
+  /* ⚠ `segKey` IS CLEARED ON BOTH TRANSITIONS (client, 2026-09-06: leaving the structure flow and
+     coming back "keeps holding the previous dropdown I selected").
+     It survived because it is held HERE, in the host, so that one answer carries into every later
+     step instead of each screen asking again — and nothing was resetting it. A stale segment is
+     worse than an unanswered one on this flow in particular: the migrate step is pre-selected from
+     it, so an admin returning for a DIFFERENT segment would have been shown the previous one already
+     chosen, with the picker replaced by a static line saying so.
+     Cleared on OPEN as well as on leave: a flow entered from a bookmark or a `#flow=` link never
+     goes through `leaveFlow` first. */
   const openFlow = (f: Flow): void => {
     setFlow(f);
     setAllTools(false);
     setSubject("");
+    setSegKey("");
     setStepIdx(firstIncompleteStep(f, baseFacts));
   };
 
   const leaveFlow = (): void => {
     setFlow(undefined);
     setBaseFacts({});
+    setSegKey("");
     setStepIdx(0);
     setMaxIdx(0);
   };
@@ -913,10 +943,11 @@ export default function FolderAdmin({
               <div style={s.cardTitle}>{f.label}</div>
               <div style={s.cardBlurb}>{f.blurb}</div>
               <div style={s.cardFoot}>
-                <span style={s.cardMetaMuted}>
-                  {f.steps.length} step{f.steps.length === 1 ? "" : "s"}
-                  {f.needsSegment ? " · pick a segment first" : ""}
-                </span>
+                {/* The step count and "pick a segment first" came off on the client's instruction
+                    (2026-09-06). Both were still true — the count comes from the flow itself and the
+                    picker does appear first — but the card is a door, and neither fact changes which
+                    door you take. The arrow keeps the footer from collapsing. */}
+                <span />
                 <span style={s.cardGo} aria-hidden="true">
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
                     <path
@@ -1266,6 +1297,43 @@ export default function FolderAdmin({
     }
     return (
       <div>
+        {/* ⚠ THE TERM STORE LINK MOVED HERE ON 2026-09-06, and it had to move somewhere.
+            `addUnit` and `rename` lost the instruction steps that carried it when the client's
+            redesign cut them to two steps — and the work it points at is still the FIRST thing an
+            admin has to do: a term that does not exist in the term store has no row on this screen,
+            so without the link the step gives no way to create one.
+
+            ⚠ THE LINK IS THE **CLASSIC, SITE-LEVEL** MANAGER, and that is the whole point of it. The
+            modern one (`/_layouts/15/SiteAdmin.aspx#/termStoreAdminCenter`) is the TENANT admin
+            centre and answers "Access denied" to a site collection administrator. Built from
+            `siteUrl`, never hardcoded.
+
+            Shown on the abbreviations step ONLY. It is gated on the step id rather than the screen
+            kind for the reason `stepUsesSegment` exists: what the step is ABOUT is the question, not
+            what it happens to render. */}
+        {/* ⚠ WRAPPED IN `s.outside` — THE GREEN BANNER. When this moved off the instruction step it
+            left that container behind and rendered as a bare link on white, which the client
+            reported as the design banner "not being there". The box is what makes it read as the
+            one thing to do before anything else on the screen. */}
+        {st.id === "abbreviations" && (
+          <div style={{ ...s.outside, marginBottom: 14 }}>
+            <a
+              href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={s.termStoreLink}
+            >
+              Open the term store management tool
+              <span aria-hidden="true" style={{ marginLeft: 6 }}>
+                &#8599;
+              </span>
+            </a>
+            <span style={s.termStoreNote}>
+              Use this tool instead of the SharePoint admin centre version,
+              which requires tenant administrator access.
+            </span>
+          </div>
+        )}
         {confirms && !showForm && (
           <div style={{ marginBottom: 16 }}>
             <button style={s.primary} onClick={() => setShowForm(true)}>
@@ -1291,6 +1359,21 @@ export default function FolderAdmin({
               setSegKey(key);
               setShowForm(false);
               setReload((n) => n + 1);
+              /* ⚠ AND MOVE ON BY ITSELF (client, 2026-09-06: *"the system should automatically
+                 proceed to Step 3 screen … without requiring System Admin to click Next Step
+                 button manually. This will make the process clearer and easier"*).
+
+                 Safe only because the creation ANNOUNCED itself. This runs from `onCreated`, which
+                 SegmentCreator calls after the mode row is written — so the segment provably exists
+                 by the time the step changes, which is exactly what the abbreviations step is locked
+                 behind. Advancing on anything weaker (a timer, a form close) could land on a locked
+                 step with nothing to explain it.
+
+                 ⚠ `stepIdx + 1`, NOT a hardcoded 2. The step lives at index 2 of `newSegment`
+                 today; a step inserted above it would silently send the admin to the wrong screen,
+                 and this is the only flow that auto-advances so nothing else would catch it.
+                 `idx` is clamped on read, so an overrun cannot leave the runner out of range. */
+              setStepIdx((n) => n + 1);
             }}
             /* Delete belongs to the Retire flow, which moves the documents out first and asks for a typed
                confirmation. Offering it beside a creation form gives the destructive half with none of
@@ -1315,6 +1398,9 @@ export default function FolderAdmin({
             // opened the screen by mistake. It gates NEXT only, with its own reason.
             onStructureDirtyChange={setStructureDirty}
             onAbbreviationsDirtyChange={setAbbreviationsDirty}
+            onAbbreviationsRegisterSave={(fn) => {
+              abbrevSaveRef.current = fn;
+            }}
             // Gates NEXT only, like unsaved level edits — not the rail, because Back must stay open.
             onMigratePendingChange={setMigratePending}
             // The flow already asked which segment, and prints it in the header — so the migration
@@ -1399,9 +1485,9 @@ export default function FolderAdmin({
       <BackBand
         label="Back to Folder Management"
         onClick={leaveFlow}
-        disabled={runBusy || structureDirty || abbreviationsDirty}
+        disabled={runBusy || structureDirty}
       />
-      {(structureDirty || abbreviationsDirty) && !runBusy && (
+      {structureDirty && !runBusy && (
         <p style={s.hint}>
           Finish or clear what you are editing first — leaving now would lose
           it, and the guided flow you land on would open holding a warning that
@@ -1522,7 +1608,7 @@ export default function FolderAdmin({
                     disabled={idx === 0 || runBusy}
                     onClick={() => setStepIdx(Math.max(0, idx - 1))}
                   >
-                    &lsaquo; Back
+                    Back
                   </button>
                   <button
                     style={
@@ -1530,7 +1616,7 @@ export default function FolderAdmin({
                       blocked ||
                       runBusy ||
                       structureDirty ||
-                      abbreviationsDirty ||
+                      abbrevSaving ||
                       migratePending
                         ? s.off
                         : s.primary
@@ -1540,23 +1626,49 @@ export default function FolderAdmin({
                       blocked.length > 0 ||
                       runBusy ||
                       structureDirty ||
-                      abbreviationsDirty ||
+                      abbrevSaving ||
                       migratePending
                     }
-                    onClick={() =>
-                      setStepIdx(Math.min(steps.length - 1, idx + 1))
-                    }
+                    /* ⚠ NEXT SAVES THE ABBREVIATIONS BEFORE IT ADVANCES (client, 2026-09-06 —
+                       that screen's Save button is gone). It calls the SCREEN'S OWN `save()`, which
+                       validates, writes and re-baselines its rows; the runner never writes them
+                       itself, or there would be two definitions of what saving means.
+
+                       ⚠ AND IT ADVANCES ONLY IF THAT SUCCEEDED. The codes live in that component's
+                       state and nowhere else, so a step change after a failed write loses them
+                       silently — which is precisely what the removed "save first" warning existed
+                       to prevent. A refusal (two siblings sharing a name) counts as a failure here:
+                       reconciliation would abort on it three steps later. The screen reports the
+                       reason itself, in the panel already being read. */
+                    onClick={() => {
+                      const go = (): void =>
+                        setStepIdx(Math.min(steps.length - 1, idx + 1));
+                      const save =
+                        step.id === "abbreviations" ? abbrevSaveRef.current : undefined;
+                      if (!save) {
+                        go();
+                        return;
+                      }
+                      setAbbrevSaving(true);
+                      save()
+                        .then((ok: boolean) => {
+                          if (ok) go();
+                        })
+                        .catch(() => undefined)
+                        .then(() => setAbbrevSaving(false))
+                        .catch(() => undefined);
+                    }}
                   >
-                    Next step &rsaquo;
+                    {abbrevSaving ? "Saving…" : "Next"}
                   </button>
                   {last && (
                     <button
                       style={
-                        runBusy || structureDirty || abbreviationsDirty
+                        runBusy || structureDirty
                           ? s.off
                           : s.ghost
                       }
-                      disabled={runBusy || structureDirty || abbreviationsDirty}
+                      disabled={runBusy || structureDirty}
                       onClick={leaveFlow}
                     >
                       Finish
@@ -1570,7 +1682,6 @@ export default function FolderAdmin({
                   blocked.length > 0 &&
                   !runBusy &&
                   !structureDirty &&
-                  !abbreviationsDirty &&
                   !migratePending && <div style={s.hint}>{blocked}</div>}
                 {/* Its own reason, again: "a run is in progress" would be wrong — nothing is running,
                     the admin simply has not pressed the button yet. */}
@@ -1594,19 +1705,19 @@ export default function FolderAdmin({
                     the edit.
                   </div>
                 )}
-                {/* Same shape as structureDirty above, on the sibling screen it was never applied to
-                    (found live 2026-08-26, client's own question: "wouldn't that mean someone can
-                    click Next without saving?"). Reconciliation reads the SAVED rows, so an unsaved
-                    edit here means the run reports success having done nothing for it — silently,
-                    with the admin believing the rename happened. */}
-                {abbreviationsDirty && !runBusy && (
-                  <div style={s.hint}>
-                    Save the abbreviation changes first — reconciliation reads
-                    the saved codes, so it would rename nothing for this edit
-                    and report success anyway. Press <strong>Save</strong>{" "}
-                    above, or discard the edit to continue without it.
-                  </div>
-                )}
+                {/* ⚠ THE UNSAVED-ABBREVIATIONS GATE IS GONE, AND REMOVING IT WAS REQUIRED RATHER
+                    THAN OPTIONAL. It held Back, Next and Finish and told the admin to "press Save
+                    above" — a button that no longer exists, which would have left them with no way
+                    out of the flow at all.
+
+                    What replaces it is stronger: Next SAVES. The state it guarded against —
+                    advancing with codes held only in component state — cannot arise, because
+                    reconciliation is now reached through a save that had to succeed.
+
+                    ⚠ LEAVING BY BACK OR THE BACK BAND STILL DISCARDS THE EDIT. Client, asked
+                    directly, 2026-09-06: *"if they leave halfway and it is erased, that is their
+                    problem."* The `beforeunload` guard inside the screen still catches a closed
+                    tab. */}
                 {/* Beside the greyed buttons, never only in a tooltip — the same rule as the Next
                     gate. A held navigation bar with no stated reason reads as a broken page. */}
                 {/* ONE message for both runs, because it is one padlock. Naming neither specifically

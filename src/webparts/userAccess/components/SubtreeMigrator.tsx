@@ -1299,12 +1299,28 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
 
   return (
     <div>
+      {/* The client's banner (2026-09-06). It replaces the Power Automate warning that stood here.
+          ⚠ IT IS NOT A GATE. Nothing on this screen reads the pause state, so a migration CAN still
+          be run with uploads on — and doing so is the loop the pause exists to prevent: a file
+          filed mid-migration lands in the OLD shape and, if it arrives after its folder was scanned,
+          is never moved, which keeps the pending chain from ever applying. If this ever needs to
+          BLOCK rather than warn, the fact to read is `uploadsPaused`, which the guided flow already
+          computes for its own rail. */}
       <div style={{ ...s.msg, ...s.warn }}>
-        <strong>Turn off the two Power Automate flows before running this</strong> — Auto-route and
-        the folder-approval flow. Moving a file re-triggers Auto-route, which then fails because the
-        file has already moved. Nothing is damaged, but the run history fills with failures and a
-        real one becomes hard to spot. Turn them back on afterwards.
+        <span aria-hidden="true" style={{ marginRight: 6 }}>&#9888;</span>
+        <strong>Uploads must be turned off before continuing.</strong> Go back to Step 1 to turn off
+        uploads.
       </div>
+      {/* ⚠ THE POWER AUTOMATE CAVEAT, KEPT DELIBERATELY THOUGH IT IS NOT IN THE CLIENT'S MOCKUP.
+          Its own step was removed on 2026-09-06, so this is the LAST place it is said anywhere. It
+          is not a safety warning — leaving the flows on damages nothing — but a migration produces
+          hundreds of no-op Auto-route runs, and an exhausted daily quota means the next real
+          approval is never routed, SILENTLY. Demoted to a quiet line rather than dropped; say the
+          word and it goes. */}
+      <p style={{ fontSize: 11.5, color: "#5f6f80", margin: "-4px 0 14px", lineHeight: 1.5 }}>
+        Optional: pausing Auto-route and the folder-approval flow first avoids a large number of
+        flow runs that do nothing. Turn them back on afterwards.
+      </p>
 
       {/* An editable dropdown here is only right when THIS screen is picking the segment — when a
           guided flow already asked and pre-selected it (`initialSegmentKey`), an interactive select
@@ -1742,12 +1758,23 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
       {confirm && (
         <div style={s.modalBg} role="dialog" aria-modal="true">
           <div style={s.modal}>
-            <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>This moves documents that are already filed</h3>
+            {/* The client's own title and copy (2026-09-06).
+                ⚠ TWO FACTS CAME OFF WITH THE OLD WORDING AND BOTH ARE STILL TRUE: approved documents
+                stay APPROVED (a move preserves moderation status — verified 2026-08-11), and the
+                only folders deleted are ones left completely EMPTY. They were reassurance rather
+                than warning, which is why they were the half that could go; the warning half — no
+                undo, and old links stop working — is what the new copy keeps. */}
+            <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>
+              <span aria-hidden="true" style={{ marginRight: 8 }}>
+                &#9888;
+              </span>
+              Important: confirm folder structure change
+            </h3>
             <p style={{ fontSize: 13, lineHeight: 1.6 }}>
-              Documents in {totalMoves} folder(s) will be moved into the new shape. Approved documents
-              stay approved, and the only folders deleted are ones left completely empty — but{" "}
-              <strong>there is no undo</strong>, and anyone holding a link to a moved folder will need
-              a new one.
+              Documents in {totalMoves} folders will be moved to the new folder
+              structure. This action cannot be undone. Links to the existing
+              folders will no longer work after the move — users are required to
+              access the documents using their new folder locations.
             </p>
             <p style={{ fontSize: 13, lineHeight: 1.6 }}>
               Type <strong>MOVE</strong> to continue.
@@ -1766,7 +1793,10 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                   run().catch(() => undefined);
                 }}
               >
-                Move them
+                {/* "Submit", to the client's design. ⚠ The typed-MOVE gate above is unchanged and is
+                    what actually guards this — a generic label makes the typed word the only thing
+                    naming the action, so that field must never become optional. */}
+                Submit
               </button>{" "}
               <button
                 style={s.ghost}

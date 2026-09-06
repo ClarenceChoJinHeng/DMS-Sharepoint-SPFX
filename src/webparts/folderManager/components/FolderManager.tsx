@@ -1,30 +1,70 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
-import { searchSiteGroups, fetchAllSiteGroups, getGroupMembers, addGroupMember } from "../../../shared/spGroups";
+import {
+  searchSiteGroups,
+  fetchAllSiteGroups,
+  getGroupMembers,
+  addGroupMember,
+} from "../../../shared/spGroups";
 import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
-import { findSiteEntryGroup, siteEntryGroupTitle, isForbiddenPageTarget, normalizeRoleValue } from "../../../shared/groupMapModel";
+import {
+  findSiteEntryGroup,
+  siteEntryGroupTitle,
+  isForbiddenPageTarget,
+  normalizeRoleValue,
+} from "../../../shared/groupMapModel";
 // The SAME policy the admin screens filter with, so a page cannot be admin-only in the UI and wide
 // open in SharePoint. See docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md.
 import { normalizeTermGuid } from "../../../shared/segmentReadiness";
 import { needsGrant, shouldReadExistingAcl } from "../../../shared/grantSkip";
 import { fansFromSegmentTier } from "../../../shared/groupMapModel";
-import { resolveRunScope, coversEverySegment, ScopeSegment } from "../../../shared/reconScope";
-import { groupDuplicateRows, chooseKeeper } from "../../../shared/folderMapDuplicates";
-import { policyForPage, derivedRolesForPage } from "../../../shared/pageAccessPolicy";
-import { groupRolesById, intendedPageGroups, groupsToRemove, groupsForRequestLists } from "../../../shared/pageGrants";
+import {
+  resolveRunScope,
+  coversEverySegment,
+  ScopeSegment,
+} from "../../../shared/reconScope";
+import {
+  groupDuplicateRows,
+  chooseKeeper,
+} from "../../../shared/folderMapDuplicates";
+import {
+  policyForPage,
+  derivedRolesForPage,
+} from "../../../shared/pageAccessPolicy";
+import {
+  groupRolesById,
+  intendedPageGroups,
+  groupsToRemove,
+  groupsForRequestLists,
+} from "../../../shared/pageGrants";
 // The submissions list's schema, shared with the pure module that reads it back.
 import { RECORD_COLUMNS } from "../../../shared/submissionRecords";
 import { EVENT } from "../../../shared/auditLog";
-import { cachedListTitle, hcAvailable, LIST_SUFFIX, libApiTitle, namesPrimed, allLibraryTitles,
-  cachedArchiveLibraries, titleForNewList, noteCreatedList,
+import {
+  cachedListTitle,
+  hcAvailable,
+  LIST_SUFFIX,
+  libApiTitle,
+  namesPrimed,
+  allLibraryTitles,
+  cachedArchiveLibraries,
+  titleForNewList,
+  noteCreatedList,
 } from "../../../shared/naming";
 // One parser for the `#tab=` deep link, shared with the CRS Settings page that writes it — the two
 // halves of one contract, so they cannot drift.
 import { tabFromHash } from "../../../shared/adminPages";
 import { primeNames } from "../../../shared/spNaming";
 import { ensureColumn } from "../../../shared/spColumns";
-import { REF_COLUMNS, BULK_IMPORT_COLUMN, ARCHIVED_COLUMN, SUBMISSION_FILE_COLUMN, APPROVED_BY_COLUMN, KEYWORD_COLUMN } from "../../../shared/optionalColumns";
+import {
+  REF_COLUMNS,
+  BULK_IMPORT_COLUMN,
+  ARCHIVED_COLUMN,
+  SUBMISSION_FILE_COLUMN,
+  APPROVED_BY_COLUMN,
+  KEYWORD_COLUMN,
+} from "../../../shared/optionalColumns";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { IFolderManagerProps } from "./IFolderManagerProps";
 import {
@@ -40,8 +80,19 @@ import {
   ensureFolder,
   encodeServerRelativePath,
 } from "../../../shared/dmsFolderMap";
-import { sanitizeFolderSegment, parseLevels, parseReconModes, RawModeRow, Level } from "../../../shared/formModel";
-import { gridPlan, isPermissioned, splitChain, validateChain } from "../../../shared/folderChain";
+import {
+  sanitizeFolderSegment,
+  parseLevels,
+  parseReconModes,
+  RawModeRow,
+  Level,
+} from "../../../shared/formModel";
+import {
+  gridPlan,
+  isPermissioned,
+  splitChain,
+  validateChain,
+} from "../../../shared/folderChain";
 import {
   abbrevListTitle,
   AbbrevCollision,
@@ -54,7 +105,11 @@ import {
   lookupAbbrev,
   planOrphanRepairs,
 } from "../../../shared/folderAbbreviation";
-import { FULL_NAME_COLUMN_TITLE, pickFullNameField, SpFieldLite } from "../../../shared/folderFullName";
+import {
+  FULL_NAME_COLUMN_TITLE,
+  pickFullNameField,
+  SpFieldLite,
+} from "../../../shared/folderFullName";
 import AbbreviationManager from "./AbbreviationManager";
 // The three Folder Structure screens are MOUNTED here, not copied: they keep living in the
 // userAccess web part so the `Folder Structure` page stays working for any site that already has it
@@ -68,7 +123,7 @@ import SegmentCreator from "../../userAccess/components/SegmentCreator";
 // be hardcoded (Departments / Projects); they are now discovered dynamically so
 // the tool works with the multi-segment model (Group Head Office, Group Upstream
 // Operations, …) or any future top-level folder naming.
-type Mode      = string;
+type Mode = string;
 /**
  * The libraries, as a LOGICAL key — not necessarily what any of them is called on the site.
  *
@@ -134,7 +189,9 @@ const libDisplayName = (lib: string): string => libApiTitle(lib);
  * disagree about which libraries exist.
  */
 const reconLibs = (): LibTarget[] => {
-  const withHc: LibTarget[] = hcAvailable() ? [...BASE_LIBS, "StagingHC", "DocumentsHC"] : BASE_LIBS;
+  const withHc: LibTarget[] = hcAvailable()
+    ? [...BASE_LIBS, "StagingHC", "DocumentsHC"]
+    : BASE_LIBS;
   const arc = cachedArchiveLibraries();
   if (!arc) return withHc;
   return arc.hc ? [...withHc, "Archive", "ArchiveHC"] : [...withHc, "Archive"];
@@ -174,7 +231,14 @@ let resolvedFolderCtName: string | undefined;
  */
 // Spelled out rather than `LibTarget | …`: since 2026-08-15 LibTarget carries the two HC keys, and
 // deriving Tab from it would invent two browsable tabs for libraries that have no tree UI at all.
-type Tab       = "Staging" | "Documents" | "Reconciliation" | "Abbreviations" | "Levels" | "Migrate" | "NewSegment";
+type Tab =
+  | "Staging"
+  | "Documents"
+  | "Reconciliation"
+  | "Abbreviations"
+  | "Levels"
+  | "Migrate"
+  | "NewSegment";
 
 /**
  * Tabs the CRS Settings landing page may deep-link to, by slug.
@@ -214,14 +278,30 @@ function tabFromDeepLink(explicit?: string): Tab {
 // their term sets are onboarded (term-set GUID + its container folder name).
 type ReconMode = { key: string; termSetGuid: string; stagingFolder: string };
 const RECON_MODES: ReconMode[] = [
-  { key: "gho", termSetGuid: "08dd94cb-f76c-431c-9b37-e9c98f739ffc", stagingFolder: "Group Head Office" },
+  {
+    key: "gho",
+    termSetGuid: "08dd94cb-f76c-431c-9b37-e9c98f739ffc",
+    stagingFolder: "Group Head Office",
+  },
   // PLACEHOLDER — Upstream Malaysia is NOT onboarded (client scope 2026-07-29 is the other
   // three head offices). This GUID pre-dates the 2026-07-29 term-set rebuild and is stale.
   // Inert: with no `mode` row in DMS Config the segment is never offered. Replace the GUID
   // when the client creates the term set — nothing else needs to change.
-  { key: "upstream_my_ho", termSetGuid: "16a52947-57a3-4217-9a49-b48cb8b0dd31", stagingFolder: "Upstream Malaysia Head Office" },
-  { key: "minamas_ho", termSetGuid: "9ad00b00-a43c-4a8b-a39a-d0efa89ba706", stagingFolder: "Minamas Head Office" },
-  { key: "nbpol_ho", termSetGuid: "77c3993b-0c3c-4a18-89d9-d69209886322", stagingFolder: "NBPOL Head Office" },
+  {
+    key: "upstream_my_ho",
+    termSetGuid: "16a52947-57a3-4217-9a49-b48cb8b0dd31",
+    stagingFolder: "Upstream Malaysia Head Office",
+  },
+  {
+    key: "minamas_ho",
+    termSetGuid: "9ad00b00-a43c-4a8b-a39a-d0efa89ba706",
+    stagingFolder: "Minamas Head Office",
+  },
+  {
+    key: "nbpol_ho",
+    termSetGuid: "77c3993b-0c3c-4a18-89d9-d69209886322",
+    stagingFolder: "NBPOL Head Office",
+  },
 ];
 type TermLite = { id: string; label: string };
 
@@ -231,7 +311,7 @@ type TermLite = { id: string; label: string };
 // Offline fallback only — the grid term sets are read at runtime from the DMS Config
 // `setting` rows (termSet_yearPeriod / termSet_documentType) via loadReconGridTermSets,
 // so a different tenant needs no code edit. These GUIDs are the sandbox values.
-const YEAR_TERMSET    = "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf";
+const YEAR_TERMSET = "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf";
 const DOCTYPE_TERMSET = "866c5754-258e-401f-8685-03d20ae59b1d";
 
 /**
@@ -271,7 +351,17 @@ const DEFAULT_GRID_MODE: GridMode = "off";
 // termSetGuid identifies which MODE this target belongs to, so the below-Unit grid
 // can follow that segment's own configured chain. Without it every segment would
 // share one hardcoded Year → Document Type shape, which is the bug this replaces.
-type ProvTarget = { termGuid: string | null; assignTerm: string; ancestorTerms: string[]; relPath: string; label: string; fullName: string; section: string; isLeaf: boolean; termSetGuid: string };
+type ProvTarget = {
+  termGuid: string | null;
+  assignTerm: string;
+  ancestorTerms: string[];
+  relPath: string;
+  label: string;
+  fullName: string;
+  section: string;
+  isLeaf: boolean;
+  termSetGuid: string;
+};
 
 // DMS Group Map role → SharePoint permission level. GLOBAL is a privileged
 // uploader bypass (not folder-scoped) and is never assigned to a folder.
@@ -388,9 +478,12 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
  * on the next site.
  */
 function applyPermissionPrefix(levelNames: string[]): void {
-  const prefix = levelNames.indexOf("CRS Upload") !== -1 ? "CRS"
-    : levelNames.indexOf("DMS Upload") !== -1 ? "DMS"
-    : undefined;
+  const prefix =
+    levelNames.indexOf("CRS Upload") !== -1
+      ? "CRS"
+      : levelNames.indexOf("DMS Upload") !== -1
+        ? "DMS"
+        : undefined;
   // No match: leave the legacy values. Reconciliation then logs `no "DMS Upload" role definition
   // on site` and grants nothing for that role — visible, and better than guessing at a name.
   if (prefix === undefined) return;
@@ -476,7 +569,18 @@ const LIBRARY_ROLES: Record<LibTarget, string[]> = {
   // APRHC joined both approval rows on 2026-08-24 — it is a SUPERSET like UPLHC, so an HC Head of
   // Unit approves ordinary documents through the same role that reaches HC.
   Staging: ["UPL", "APR", "DELS", "UPLHC", "APRHC", "DELSHC"],
-  Documents: ["MEMBER", "DEPTVIEW", "DEL", "GLOBAL", "SEGVIEW", "UPL", "APR", "SHARE", "UPLHC", "APRHC"],
+  Documents: [
+    "MEMBER",
+    "DEPTVIEW",
+    "DEL",
+    "GLOBAL",
+    "SEGVIEW",
+    "UPL",
+    "APR",
+    "SHARE",
+    "UPLHC",
+    "APRHC",
+  ],
   // NO `DEL` HERE, and that was a real mistake caught by test: C-Level carries DEL too
   // (clevel_global = GLOBAL + DEL + SHARE), so DEL on this row would let a C-Level read and delete
   // UNAPPROVED HC drafts — breaking the rule that keeps every view role off both approval libraries.
@@ -489,7 +593,16 @@ const LIBRARY_ROLES: Record<LibTarget, string[]> = {
   // and HC HoU's approved-side HC powers ride on DELHC/SHAREHC instead. Restoring any of APR, DEL
   // or SHARE to an HC row silently re-opens HC to every ordinary Head of Unit.
   StagingHC: ["UPLHC", "DELSHC", "APRHC"],
-  DocumentsHC: ["UPLHC", "MEMBERHC", "APRHC", "DELHC", "DEPTVIEW", "GLOBAL", "SEGVIEW", "SHAREHC"],
+  DocumentsHC: [
+    "UPLHC",
+    "MEMBERHC",
+    "APRHC",
+    "DELHC",
+    "DEPTVIEW",
+    "GLOBAL",
+    "SEGVIEW",
+    "SHAREHC",
+  ],
   /* THE SEVEN-YEAR ARCHIVE — NARROWED TO C-LEVEL ONLY, 2026-09-02 (client: "only C level and system
      administrator have access to archive, so no more HOD till Normal viewer have access to Archive
      Library"). REVERSES the 2026-08-22 rule directly below, kept as the record of what this used to
@@ -585,12 +698,18 @@ function permissionForRole(lib: LibTarget, role: string): string | undefined {
      hand-written Group Map row naming a role that does not exist, and `ENTRY` — deliberately absent
      from LIBRARY_ROLES — must keep being skipped rather than approximated. The lookup is what
      answers "is this a role at all"; the library only decides the LEVEL. */
-  if (READ_ONLY_LIBS.indexOf(lib) > -1) return ROLE_TO_PERMISSION[role] ? "Read" : undefined;
-  if (APPROVED_SIDE_LIBS.indexOf(lib) > -1 && DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1) return "Read";
+  if (READ_ONLY_LIBS.indexOf(lib) > -1)
+    return ROLE_TO_PERMISSION[role] ? "Read" : undefined;
+  if (
+    APPROVED_SIDE_LIBS.indexOf(lib) > -1 &&
+    DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1
+  )
+    return "Read";
   return ROLE_TO_PERMISSION[role];
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 // Throttle-safety tuning for reconciliation. These are the DEFAULTS/fallbacks —
 // they can be overridden live via DMS Config `setting` rows (recon_writeDelayMs /
@@ -600,11 +719,11 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 // Lower delay = faster; too low risks 429s whose Retry-After penalty can be large,
 // so ~150ms is a sensible aggressive floor. Grid is sequential (the old parallel
 // burst was what tripped the throttle originally).
-const RECON_WRITE_DELAY_MS = 200;    // pause between folder/permission writes (was 500)
-const RECON_BATCH_SIZE      = 300;   // writes before an automatic cooldown (was 150)
-const RECON_COOLDOWN_MS     = 2500;  // cooldown length, masked in the UI as "work" (was 4000)
-const RECON_EST_HTTP_MS     = 250;   // rough per-write network+server time, on top of the delay
-                                     // (used only for the up-front estimate before a live rate exists)
+const RECON_WRITE_DELAY_MS = 200; // pause between folder/permission writes (was 500)
+const RECON_BATCH_SIZE = 300; // writes before an automatic cooldown (was 150)
+const RECON_COOLDOWN_MS = 2500; // cooldown length, masked in the UI as "work" (was 4000)
+const RECON_EST_HTTP_MS = 250; // rough per-write network+server time, on top of the delay
+// (used only for the up-front estimate before a live rate exists)
 
 // Human-friendly duration: "45s" or "3m 07s".
 const fmtDur = (ms: number): string => {
@@ -634,7 +753,10 @@ async function withThrottleRetry(
     let burst403 = false;
     if (res.status === 403 && attempt < 3) {
       // Peek at a CLONE so the original body stays readable for the caller.
-      const body = await res.clone().text().catch(() => "");
+      const body = await res
+        .clone()
+        .text()
+        .catch(() => "");
       burst403 = /E_ACCESSDENIED|UnauthorizedAccessException/i.test(body);
     }
     if ((!throttled && !burst403) || attempt >= 5) return res;
@@ -646,7 +768,10 @@ async function withThrottleRetry(
 }
 
 // Live reconciliation progress feed item (rendered in the two-panel progress view).
-type ProgItem = { text: string; status: "run" | "ok" | "skip" | "fail" | "warn" | "admin" };
+type ProgItem = {
+  text: string;
+  status: "run" | "ok" | "skip" | "fail" | "warn" | "admin";
+};
 
 type GroupMapRow = { groupId: string; groupName: string; role: string };
 
@@ -655,8 +780,9 @@ type GroupMapRow = { groupId: string; groupName: string; role: string };
 const isSystemFolder = (name: string): boolean =>
   name === "Forms" || name.startsWith("_");
 
-const sanitize = (str: string): string => str.replace(/[\\/:*?"<>|#%]/g, "").trim();
-const uid      = (): string => Math.random().toString(36).slice(2, 9);
+const sanitize = (str: string): string =>
+  str.replace(/[\\/:*?"<>|#%]/g, "").trim();
+const uid = (): string => Math.random().toString(36).slice(2, 9);
 
 // Reserved tree key holding NEW top-level folders staged for creation directly
 // under the library root. "*" is illegal in SharePoint folder names, so this key
@@ -665,14 +791,20 @@ const NEW_TOP_LEVEL = "*pending-top-level*";
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
-type RoleDef        = { id: number; name: string };
-type GroupPick      = { id: string; displayName: string };
-type ExistingAssign = { uid: string; principalId: number; title: string; roleDefId: number; kept: boolean };
-type PendingAssign  = { uid: string; group: GroupPick; roleDefId: number };
-type LogEntry       = { msg: string; ok: boolean };
+type RoleDef = { id: number; name: string };
+type GroupPick = { id: string; displayName: string };
+type ExistingAssign = {
+  uid: string;
+  principalId: number;
+  title: string;
+  roleDefId: number;
+  kept: boolean;
+};
+type PendingAssign = { uid: string; group: GroupPick; roleDefId: number };
+type LogEntry = { msg: string; ok: boolean };
 // A library tab is keyed by the LIBRARY TITLE, resolved at run time, because the titles are
 // site-specific ("Approval Document", once "Staging") and the HC pair may not exist at all.
-type LogTab         = string;
+type LogTab = string;
 
 // Permission state now lives directly on the folder node so a single "Update"
 // commit can apply renames, new-folder creation, and permission edits together.
@@ -708,55 +840,320 @@ type FolderNode = {
 /* ── Styles ─────────────────────────────────────────────────────────────────── */
 
 const s: Record<string, React.CSSProperties> = {
-  wrap:          { maxWidth: 880, margin: "32px auto", padding: "0 24px 48px", fontFamily: "'Segoe UI', sans-serif" },
+  wrap: {
+    maxWidth: 880,
+    margin: "32px auto",
+    padding: "0 24px 48px",
+    fontFamily: "'Segoe UI', sans-serif",
+  },
   // Mounted inside a guided flow step, where the panel already supplies width, centring and padding.
   // Reusing `wrap` there added a SECOND set of all three — an indent plus an 880px cap inside a panel
   // often narrower than that, which is the "margin and padding" the client asked to remove. Font stays,
   // because the flow does not set one on the step body.
-  wrapEmbedded:  { fontFamily: "'Segoe UI', sans-serif" },
-  h2:            { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
-  subtitle:      { fontSize: 13, color: "#666", margin: "0 0 24px" },
-  toggleWrap:    { display: "flex", justifyContent: "center", marginBottom: 24 },
+  wrapEmbedded: { fontFamily: "'Segoe UI', sans-serif" },
+  h2: { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
+  subtitle: { fontSize: 13, color: "#666", margin: "0 0 24px" },
+  toggleWrap: { display: "flex", justifyContent: "center", marginBottom: 24 },
   // flexWrap + narrower padding since the tab count reached seven: without wrapping the bar
   // overflows the web part on a laptop and the last tabs become unreachable.
-  seg:           { display: "flex", flexWrap: "wrap", justifyContent: "center", maxWidth: "100%", border: "1px solid #0f6c3f", borderRadius: 8, overflow: "hidden" },
-  segBtn:        { padding: "8px 16px", fontSize: 13, fontFamily: "'Segoe UI', sans-serif", fontWeight: 600, cursor: "pointer", background: "#fff", color: "#0f6c3f", border: "none", borderRight: "1px solid #0f6c3f" },
-  segActive:     { background: "#0f6c3f", color: "#fff" },
-  secHeader:     { display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", margin: "0 0 10px", padding: "4px 0" },
-  secTitle:      { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".07em", color: "#0f6c3f", margin: 0 },
-  ico:           { fontSize: 11, color: "#0f6c3f", lineHeight: 1, flexShrink: 0 },
-  badge:         { fontSize: 11, color: "#888", background: "#f3f3f3", borderRadius: 10, padding: "1px 7px", flexShrink: 0 },
-  scrollPane:    { maxHeight: 560, overflowY: "auto", border: "1px solid #e0e0e0", borderRadius: 6, padding: "12px 16px", marginBottom: 8 },
-  parentRow:     { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #f0f0f0" },
-  childRow:      { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" },
-  chevBtn:       { background: "none", border: "none", cursor: "pointer", padding: "2px 4px", fontSize: 11, color: "#666", lineHeight: 1, flexShrink: 0 },
-  renameIn:      { padding: "5px 9px", border: "1px solid #c8c8c8", borderRadius: 4, fontFamily: "'Segoe UI', sans-serif", fontSize: 13, width: 200, boxSizing: "border-box" },
-  wasLabel:      { fontSize: 11, color: "#aaa", fontStyle: "italic", whiteSpace: "nowrap" },
-  permBtn:       { marginLeft: "auto", background: "none", border: "1px solid #c8c8c8", borderRadius: 4, padding: "3px 10px", fontSize: 11, cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", color: "#444", flexShrink: 0, whiteSpace: "nowrap" },
-  permBtnOpen:   { borderColor: "#0f6c3f", color: "#0f6c3f" },
-  childrenPane:  { marginLeft: 40, borderLeft: "2px solid #e8f5ee", paddingLeft: 12, marginBottom: 4 },
-  permPanel:     { margin: "2px 0 8px", background: "#f8faf8", border: "1px solid #d0e8d8", borderRadius: 6, padding: "10px 12px" },
-  permTitle:     { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", color: "#0f6c3f", margin: "0 0 8px" },
-  assignRow:     { display: "flex", alignItems: "center", gap: 6, marginBottom: 5 },
-  chip:          { display: "inline-flex", alignItems: "center", gap: 5, color: "#0f6c3f", fontWeight: 600, fontSize: 11, border: "1px solid #cfe8da", borderRadius: 4, padding: "3px 7px", background: "#fff", maxWidth: 190, boxSizing: "border-box", flexShrink: 0 },
-  chipName:      { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
-  chipX:         { background: "none", border: "none", color: "#888", cursor: "pointer", fontSize: 11, lineHeight: 1, padding: 0, flexShrink: 0 },
-  roleSelect:    { flex: "0 0 130px", padding: "4px 6px", border: "1px solid #c8c8c8", borderRadius: 4, fontSize: 12, fontFamily: "'Segoe UI', sans-serif", background: "#fff" },
-  undoLink:      { background: "none", border: "none", color: "#0f6c3f", cursor: "pointer", fontSize: 11, padding: 0, fontFamily: "'Segoe UI', sans-serif" },
-  searchWrap:    { position: "relative", marginBottom: 6 },
-  searchIn:      { padding: "5px 9px", border: "1px solid #c8c8c8", borderRadius: 4, fontFamily: "'Segoe UI', sans-serif", fontSize: 12, width: "100%", boxSizing: "border-box" },
-  dropdown:      { position: "absolute", top: 30, left: 0, right: 0, background: "#fff", border: "1px solid #d0d0d0", borderRadius: 4, boxShadow: "0 6px 18px rgba(0,0,0,.14)", zIndex: 100, maxHeight: 180, overflowY: "auto" },
-  dropItem:      { padding: "7px 10px", cursor: "pointer", borderBottom: "1px solid #f2f2f2", fontSize: 12 },
-  addFolderBtn:  { background: "none", border: "1px dashed #0f6c3f", color: "#0f6c3f", borderRadius: 4, padding: "4px 12px", fontSize: 12, cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", marginTop: 8 },
-  actions:       { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 },
-  btn:           { padding: "8px 22px", borderRadius: 4, cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 13 },
-  logBox:        { marginTop: 20, background: "#f5f5f5", borderRadius: 6, padding: "12px 16px" },
-  logTitle:      { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em", color: "#555", margin: "0 0 8px" },
-  toast:         { position: "fixed", top: 24, right: 24, color: "#fff", padding: "14px 44px 14px 16px", borderRadius: 6, fontSize: 13, zIndex: 9999, minWidth: 280, maxWidth: 420, boxShadow: "0 4px 16px rgba(0,0,0,.18)" },
-  toastClose:    { position: "absolute", top: 10, right: 12, background: "none", border: "none", cursor: "pointer", color: "#fff", fontSize: 16, opacity: .7, lineHeight: "1" },
-  confirmBar:    { display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#fdf3f3", border: "1px solid #f1c0c0", borderRadius: 4, fontSize: 12, color: "#a4262c" },
-  dangerBtn:     { padding: "5px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 12, border: "none", background: "#a4262c", color: "#fff", flexShrink: 0 },
-  ghostBtn:      { padding: "5px 14px", borderRadius: 4, cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 12, border: "1px solid #d0d0d0", background: "#fff", color: "#333", flexShrink: 0 },
+  seg: {
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    maxWidth: "100%",
+    border: "1px solid #0f6c3f",
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  segBtn: {
+    padding: "8px 16px",
+    fontSize: 13,
+    fontFamily: "'Segoe UI', sans-serif",
+    fontWeight: 600,
+    cursor: "pointer",
+    background: "#fff",
+    color: "#0f6c3f",
+    border: "none",
+    borderRight: "1px solid #0f6c3f",
+  },
+  segActive: { background: "#0f6c3f", color: "#fff" },
+  secHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    cursor: "pointer",
+    userSelect: "none",
+    margin: "0 0 10px",
+    padding: "4px 0",
+  },
+  secTitle: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: ".07em",
+    color: "#0f6c3f",
+    margin: 0,
+  },
+  ico: { fontSize: 11, color: "#0f6c3f", lineHeight: 1, flexShrink: 0 },
+  badge: {
+    fontSize: 11,
+    color: "#888",
+    background: "#f3f3f3",
+    borderRadius: 10,
+    padding: "1px 7px",
+    flexShrink: 0,
+  },
+  scrollPane: {
+    maxHeight: 560,
+    overflowY: "auto",
+    border: "1px solid #e0e0e0",
+    borderRadius: 6,
+    padding: "12px 16px",
+    marginBottom: 8,
+  },
+  parentRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 0",
+    borderBottom: "1px solid #f0f0f0",
+  },
+  childRow: { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" },
+  chevBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    padding: "2px 4px",
+    fontSize: 11,
+    color: "#666",
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+  renameIn: {
+    padding: "5px 9px",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    fontFamily: "'Segoe UI', sans-serif",
+    fontSize: 13,
+    width: 200,
+    boxSizing: "border-box",
+  },
+  wasLabel: {
+    fontSize: 11,
+    color: "#aaa",
+    fontStyle: "italic",
+    whiteSpace: "nowrap",
+  },
+  permBtn: {
+    marginLeft: "auto",
+    background: "none",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    padding: "3px 10px",
+    fontSize: 11,
+    cursor: "pointer",
+    fontFamily: "'Segoe UI', sans-serif",
+    color: "#444",
+    flexShrink: 0,
+    whiteSpace: "nowrap",
+  },
+  permBtnOpen: { borderColor: "#0f6c3f", color: "#0f6c3f" },
+  childrenPane: {
+    marginLeft: 40,
+    borderLeft: "2px solid #e8f5ee",
+    paddingLeft: 12,
+    marginBottom: 4,
+  },
+  permPanel: {
+    margin: "2px 0 8px",
+    background: "#f8faf8",
+    border: "1px solid #d0e8d8",
+    borderRadius: 6,
+    padding: "10px 12px",
+  },
+  permTitle: {
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: ".06em",
+    color: "#0f6c3f",
+    margin: "0 0 8px",
+  },
+  assignRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 5 },
+  chip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    color: "#0f6c3f",
+    fontWeight: 600,
+    fontSize: 11,
+    border: "1px solid #cfe8da",
+    borderRadius: 4,
+    padding: "3px 7px",
+    background: "#fff",
+    maxWidth: 190,
+    boxSizing: "border-box",
+    flexShrink: 0,
+  },
+  chipName: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  chipX: {
+    background: "none",
+    border: "none",
+    color: "#888",
+    cursor: "pointer",
+    fontSize: 11,
+    lineHeight: 1,
+    padding: 0,
+    flexShrink: 0,
+  },
+  roleSelect: {
+    flex: "0 0 130px",
+    padding: "4px 6px",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    fontSize: 12,
+    fontFamily: "'Segoe UI', sans-serif",
+    background: "#fff",
+  },
+  undoLink: {
+    background: "none",
+    border: "none",
+    color: "#0f6c3f",
+    cursor: "pointer",
+    fontSize: 11,
+    padding: 0,
+    fontFamily: "'Segoe UI', sans-serif",
+  },
+  searchWrap: { position: "relative", marginBottom: 6 },
+  searchIn: {
+    padding: "5px 9px",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    fontFamily: "'Segoe UI', sans-serif",
+    fontSize: 12,
+    width: "100%",
+    boxSizing: "border-box",
+  },
+  dropdown: {
+    position: "absolute",
+    top: 30,
+    left: 0,
+    right: 0,
+    background: "#fff",
+    border: "1px solid #d0d0d0",
+    borderRadius: 4,
+    boxShadow: "0 6px 18px rgba(0,0,0,.14)",
+    zIndex: 100,
+    maxHeight: 180,
+    overflowY: "auto",
+  },
+  dropItem: {
+    padding: "7px 10px",
+    cursor: "pointer",
+    borderBottom: "1px solid #f2f2f2",
+    fontSize: 12,
+  },
+  addFolderBtn: {
+    background: "none",
+    border: "1px dashed #0f6c3f",
+    color: "#0f6c3f",
+    borderRadius: 4,
+    padding: "4px 12px",
+    fontSize: 12,
+    cursor: "pointer",
+    fontFamily: "'Segoe UI', sans-serif",
+    marginTop: 8,
+  },
+  actions: {
+    display: "flex",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 16,
+  },
+  btn: {
+    padding: "8px 22px",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: "'Segoe UI', sans-serif",
+    fontSize: 13,
+  },
+  logBox: {
+    marginTop: 20,
+    background: "#f5f5f5",
+    borderRadius: 6,
+    padding: "12px 16px",
+  },
+  logTitle: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: ".05em",
+    color: "#555",
+    margin: "0 0 8px",
+  },
+  toast: {
+    position: "fixed",
+    top: 24,
+    right: 24,
+    color: "#fff",
+    padding: "14px 44px 14px 16px",
+    borderRadius: 6,
+    fontSize: 13,
+    zIndex: 9999,
+    minWidth: 280,
+    maxWidth: 420,
+    boxShadow: "0 4px 16px rgba(0,0,0,.18)",
+  },
+  toastClose: {
+    position: "absolute",
+    top: 10,
+    right: 12,
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    color: "#fff",
+    fontSize: 16,
+    opacity: 0.7,
+    lineHeight: "1",
+  },
+  confirmBar: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    margin: "4px 0 8px",
+    padding: "8px 10px",
+    background: "#fdf3f3",
+    border: "1px solid #f1c0c0",
+    borderRadius: 4,
+    fontSize: 12,
+    color: "#a4262c",
+  },
+  dangerBtn: {
+    padding: "5px 14px",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: "'Segoe UI', sans-serif",
+    fontSize: 12,
+    border: "none",
+    background: "#a4262c",
+    color: "#fff",
+    flexShrink: 0,
+  },
+  ghostBtn: {
+    padding: "5px 14px",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: "'Segoe UI', sans-serif",
+    fontSize: 12,
+    border: "1px solid #d0d0d0",
+    background: "#fff",
+    color: "#333",
+    flexShrink: 0,
+  },
 };
 
 /* ── GroupSearch ─────────────────────────────────────────────────────────────── */
@@ -767,20 +1164,31 @@ const GroupSearch: React.FC<{
   onSearch: (q: string) => Promise<GroupPick[]>;
   onPick: (g: GroupPick) => void;
 }> = ({ disabled, placeholder = "Search for a group…", onSearch, onPick }) => {
-  const [q,         setQ]         = useState("");
-  const [results,   setResults]   = useState<GroupPick[]>([]);
-  const [open,      setOpen]      = useState(false);
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<GroupPick[]>([]);
+  const [open, setOpen] = useState(false);
   const [searching, setSearching] = useState(false);
-  const [focused,   setFocused]   = useState(false);
+  const [focused, setFocused] = useState(false);
 
   useEffect(() => {
     if (!focused) return undefined;
-    const h = setTimeout(() => {
-      setSearching(true);
-      onSearch(q.trim())
-        .then(r => { setResults(r); setOpen(true); setSearching(false); })
-        .catch(() => { setResults([]); setOpen(false); setSearching(false); });
-    }, q.trim().length === 0 ? 0 : 300);
+    const h = setTimeout(
+      () => {
+        setSearching(true);
+        onSearch(q.trim())
+          .then((r) => {
+            setResults(r);
+            setOpen(true);
+            setSearching(false);
+          })
+          .catch(() => {
+            setResults([]);
+            setOpen(false);
+            setSearching(false);
+          });
+      },
+      q.trim().length === 0 ? 0 : 300,
+    );
     return () => clearTimeout(h);
   }, [q, focused]);
 
@@ -791,20 +1199,50 @@ const GroupSearch: React.FC<{
         placeholder={placeholder}
         value={q}
         disabled={disabled}
-        onFocus={() => { setFocused(true); setOpen(true); }}
-        onBlur={() => { window.setTimeout(() => { setFocused(false); setOpen(false); }, 150); }}
-        onChange={e => setQ(e.target.value)}
+        onFocus={() => {
+          setFocused(true);
+          setOpen(true);
+        }}
+        onBlur={() => {
+          window.setTimeout(() => {
+            setFocused(false);
+            setOpen(false);
+          }, 150);
+        }}
+        onChange={(e) => setQ(e.target.value)}
       />
-      {searching && <span style={{ position: "absolute", right: 8, top: 7, fontSize: 11, color: "#aaa" }}>Searching…</span>}
+      {searching && (
+        <span
+          style={{
+            position: "absolute",
+            right: 8,
+            top: 7,
+            fontSize: 11,
+            color: "#aaa",
+          }}
+        >
+          Searching…
+        </span>
+      )}
       {open && (
         <div style={s.dropdown}>
-          {results.length > 0 ? results.map(g => (
-            <div key={g.id} style={s.dropItem}
-              onMouseDown={() => { onPick(g); setOpen(false); setFocused(false); setResults([]); setQ(""); }}
-            >
-              <div style={{ fontWeight: 600 }}>{g.displayName}</div>
-            </div>
-          )) : (
+          {results.length > 0 ? (
+            results.map((g) => (
+              <div
+                key={g.id}
+                style={s.dropItem}
+                onMouseDown={() => {
+                  onPick(g);
+                  setOpen(false);
+                  setFocused(false);
+                  setResults([]);
+                  setQ("");
+                }}
+              >
+                <div style={{ fontWeight: 600 }}>{g.displayName}</div>
+              </div>
+            ))
+          ) : (
             <div style={{ ...s.dropItem, color: "#888", cursor: "default" }}>
               {searching ? "Searching…" : "No groups found"}
             </div>
@@ -831,6 +1269,7 @@ export default function FolderManager({
   migrateInitialSegmentKey,
   abbreviationsInitialSegmentKey,
   onAbbreviationsDirtyChange,
+  onAbbreviationsRegisterSave,
   hideSegmentCreate,
   onStructureDirtyChange,
 }: IFolderManagerProps): React.ReactElement {
@@ -850,8 +1289,8 @@ export default function FolderManager({
   // single page, so without the deep link they would all land here and two of the three would look
   // broken. An absent or unrecognised hash falls back to the default rather than showing nothing.
   // `initialTab` (a guided flow driving one step) wins over the URL hash, which wins over the default.
-  const [tab,          setTab]          = useState<Tab>(() => tabFromDeepLink(initialTab));
-  const [libTarget]                     = useState<LibTarget>("Staging");
+  const [tab, setTab] = useState<Tab>(() => tabFromDeepLink(initialTab));
+  const [libTarget] = useState<LibTarget>("Staging");
   /**
    * True while a mounted structure screen holds unsaved changes. Switching tabs UNMOUNTS it, which
    * discards the edit silently, so the switch is REFUSED rather than confirmed — the Save button is
@@ -859,37 +1298,41 @@ export default function FolderManager({
    * that looks like ordinary navigation. Copied in behaviour from FolderStructurePage, whose three
    * tabs now live here.
    */
-  const [dirty,        setDirty]        = useState(false);
-  const [tabBlocked,   setTabBlocked]   = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [tabBlocked, setTabBlocked] = useState(false);
   // Top-level container folders discovered under the library root, in display order.
-  const [sections,     setSections]     = useState<Mode[]>([]);
+  const [sections, setSections] = useState<Mode[]>([]);
   /* Where the segment list on the reconciliation screen actually came from.
      `config` is the only trustworthy answer; the rest mean the built-in RECON_MODES is showing, and
      that list contains a deliberate placeholder segment with a stale term-set GUID. Silent before
      2026-08-21, when it offered four segments on a site with two and nothing said why. */
-  const [modeSource, setModeSource] = useState<"config" | "failed" | "empty" | "no-sortorder">("config");
-  const [tree,         setTree]         = useState<Record<Mode, FolderNode[]>>({});
-  const [libRoot,      setLibRoot]      = useState<string | null>(null);
+  const [modeSource, setModeSource] = useState<
+    "config" | "failed" | "empty" | "no-sortorder"
+  >("config");
+  const [tree, setTree] = useState<Record<Mode, FolderNode[]>>({});
+  const [libRoot, setLibRoot] = useState<string | null>(null);
   // Has primeNames() resolved? The tree CANNOT load before it has. Every library read goes
   // through libApiTitle(), which maps the logical key "Staging" to the live title — and until
   // priming lands that returns the legacy default, so getbytitle('Staging') 404s on this site
   // (the library is titled "Approval Document") and the tab renders "No top-level folders under
   // Staging yet" on a library holding 200 of them. Documents hid the bug: its title never
   // changed, so it loaded correctly whether primed or not.
-  const [namesReady,   setNamesReady]   = useState(false);
-  const [loading,      setLoading]      = useState(true);
-  const [busy,         setBusy]         = useState(false);
-  const [roleDefs,     setRoleDefs]     = useState<RoleDef[]>([]);
+  const [namesReady, setNamesReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [roleDefs, setRoleDefs] = useState<RoleDef[]>([]);
   const [ownerGroupId, setOwnerGroupId] = useState<number | null>(null);
-  const [log,          setLog]          = useState<LogEntry[]>([]);
+  const [log, setLog] = useState<LogEntry[]>([]);
   // Which slice of the log is on screen. "All" is the default because the prune,
   // orphan-repair and site-entry passes name neither library, so they are reachable
   // from nowhere else.
-  const [logTab,       setLogTab]       = useState<LogTab>("All");
+  const [logTab, setLogTab] = useState<LogTab>("All");
   /* SELECTIVE RECONCILIATION (register #18). `undefined` means "not chosen yet", which resolves to
      ALL — the safe default is today's behaviour. A default of "only what changed" would make the
      first run after an unseen manual edit skip the one segment that needed it. */
-  const [scopeSegs,    setScopeSegs]    = useState<ScopeSegment[] | undefined>(undefined);
+  const [scopeSegs, setScopeSegs] = useState<ScopeSegment[] | undefined>(
+    undefined,
+  );
   /* ⚠ STARTS EMPTY, NOT "everything" (client, 2026-09-04: *"Remmeber when I said auto select the
      segment? This time let them select instead."*). It was `undefined`, which `resolveRunScope` reads
      as EVERY segment — so opening the screen and pressing Run reconciled the whole site, and on this
@@ -900,30 +1343,60 @@ export default function FolderManager({
      `undefined` would have quietly changed which runs are allowed to delete orphaned rows.
      ⚠ AN EMPTY SET IS REFUSED, not treated as all — `resolveRunScope` already fails closed, so the
      screen says what to do instead of running something nobody chose. */
-  const [scopePicked,  setScopePicked]  = useState<Set<string> | undefined>(new Set<string>());
+  /* ⚠⚠ STARTS EMPTY — NOTHING TICKED — AND MUST STAY THAT WAY. `undefined` means ALL, and setting
+     it as the initial value pre-ticks every segment. That was tried on 2026-09-06, from a mockup
+     that showed ticked boxes, and the client rejected it immediately: *"I already told you to not
+     bring back the auto select for the folder recon."*
+     The reason it matters: a full run walks every segment's term tree and re-asserts every grant -
+     tens of minutes on a provisioned site. Pre-ticking makes the expensive run the DEFAULT, one
+     click away, for an admin who came to reconcile one segment. Making them choose is the point.
+     "Select all" is still there for anyone who wants the full run deliberately. */
+  const [scopePicked, setScopePicked] = useState<Set<string> | undefined>(
+    new Set<string>(),
+  );
+  /** Types into the segment filter. Display only — it never changes what a run covers. */
+  const [scopeFilter, setScopeFilter] = useState("");
   /** One resolver for the picker, the run and the log, so they cannot disagree about coverage. */
   const runScope = (): ReturnType<typeof resolveRunScope> =>
     resolveRunScope(scopeSegs, scopePicked);
-  const [toast,        setToast]        = useState<{ message: string; error: boolean } | null>(null);
-  const [expandedIds,  setExpandedIds]  = useState<Record<string, boolean>>({});
+  const [toast, setToast] = useState<{
+    message: string;
+    error: boolean;
+  } | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   // Section collapse state, keyed by section name; sections default to open.
-  const [modeOpen,     setModeOpen]     = useState<Record<Mode, boolean>>({});
-  // Confirm gate for the Reconciliation tab's provisioning run.
-  const [reconConfirm, setReconConfirm] = useState(false);
+  const [modeOpen, setModeOpen] = useState<Record<Mode, boolean>>({});
+  /* ⚠ THE CONFIRM GATE IS GONE (client's design, 2026-09-06). Pressing "Update folder structure"
+     used to open a bar that asked a second time; the design shows one button with the segments
+     already on screen, so the run starts on the press.
+
+     Safe ONLY because reconciliation is idempotent - the gate was informational, never protective.
+     If anything destructive is ever added to that run, this state comes back. */
   // Live reconciliation progress (two-panel view + rotating cooldown text).
   const [reconRunning, setReconRunning] = useState(false);
-  const [reconPhase,   setReconPhase]   = useState("");
+  const [reconPhase, setReconPhase] = useState("");
   // One feed per library per kind — four panels. A single merged pair made a
   // 700-step run read as one undifferentiated wall; the client's question is
   // always "how is Staging doing", never "how is the run doing".
   // All four keys always, even on a site with no HC: the panels render from reconLibs(), so the
   // unused pair costs two empty arrays and nothing on screen. Keying them lazily would mean
   // pushFolder spreading `undefined` the first time an HC step reported.
-  const emptyFeeds = (): Record<LibTarget, ProgItem[]> =>
-    ({ Staging: [], Documents: [], StagingHC: [], DocumentsHC: [], Archive: [], ArchiveHC: [] });
-  const [folderFeeds,  setFolderFeeds]  = useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
-  const [assignFeeds,  setAssignFeeds]  = useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
-  const [reconCounts,  setReconCounts]  = useState<{ folders: number; assigns: number }>({ folders: 0, assigns: 0 });
+  const emptyFeeds = (): Record<LibTarget, ProgItem[]> => ({
+    Staging: [],
+    Documents: [],
+    StagingHC: [],
+    DocumentsHC: [],
+    Archive: [],
+    ArchiveHC: [],
+  });
+  const [folderFeeds, setFolderFeeds] =
+    useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
+  const [assignFeeds, setAssignFeeds] =
+    useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
+  const [reconCounts, setReconCounts] = useState<{
+    folders: number;
+    assigns: number;
+  }>({ folders: 0, assigns: 0 });
   // ETA: planned total throttled ops, run start time, and a ticking "now" so the
   // elapsed/remaining estimate repaints every second even between ops.
   const [reconPlanned, setReconPlanned] = useState(0);
@@ -937,9 +1410,11 @@ export default function FolderManager({
    * "~197m left". Attempted-vs-planned is the only pair that measures the same
    * thing on both sides.
    */
-  const [reconDone,    setReconDone]    = useState(0);
-  const [reconStartMs, setReconStartMs] = useState<number | undefined>(undefined);
-  const [reconNow,     setReconNow]     = useState(0);
+  const [reconDone, setReconDone] = useState(0);
+  const [reconStartMs, setReconStartMs] = useState<number | undefined>(
+    undefined,
+  );
+  const [reconNow, setReconNow] = useState(0);
 
   useEffect(() => {
     if (!reconRunning) return;
@@ -964,7 +1439,8 @@ export default function FolderManager({
       e.preventDefault();
       // Browsers show their own wording and ignore ours, but a non-empty returnValue is
       // still what triggers the prompt at all.
-      e.returnValue = "Reconciliation is still running. Leaving now will stop it.";
+      e.returnValue =
+        "Reconciliation is still running. Leaving now will stop it.";
       return e.returnValue;
     };
     window.addEventListener("beforeunload", warn);
@@ -973,31 +1449,82 @@ export default function FolderManager({
 
   // Keep the live feeds short so hundreds of ops don't flood the DOM.
   const FEED_CAP = 40;
-  const pushFolder = (lib: LibTarget, text: string, status: ProgItem["status"]): void =>
-    setFolderFeeds((f) => ({ ...f, [lib]: [...f[lib].slice(-(FEED_CAP - 1)), { text, status }] }));
-  const setLastFolder = (lib: LibTarget, text: string, status: ProgItem["status"]): void =>
+  const pushFolder = (
+    lib: LibTarget,
+    text: string,
+    status: ProgItem["status"],
+  ): void =>
     setFolderFeeds((f) => ({
       ...f,
-      [lib]: f[lib].length ? [...f[lib].slice(0, -1), { text, status }] : [{ text, status }],
+      [lib]: [...f[lib].slice(-(FEED_CAP - 1)), { text, status }],
     }));
-  const pushAssign = (lib: LibTarget, text: string, status: ProgItem["status"]): void =>
-    setAssignFeeds((a) => ({ ...a, [lib]: [...a[lib].slice(-(FEED_CAP - 1)), { text, status }] }));
+  const setLastFolder = (
+    lib: LibTarget,
+    text: string,
+    status: ProgItem["status"],
+  ): void =>
+    setFolderFeeds((f) => ({
+      ...f,
+      [lib]: f[lib].length
+        ? [...f[lib].slice(0, -1), { text, status }]
+        : [{ text, status }],
+    }));
+  const pushAssign = (
+    lib: LibTarget,
+    text: string,
+    status: ProgItem["status"],
+  ): void =>
+    setAssignFeeds((a) => ({
+      ...a,
+      [lib]: [...a[lib].slice(-(FEED_CAP - 1)), { text, status }],
+    }));
   /** One planned step attempted — succeeded, skipped or failed alike. */
   const step = (n = 1): void => setReconDone((d) => d + n);
   // Surfaces a 429 backoff wait in the rotating status line (safety-net path).
   const reconWaitNote = (ms: number): void =>
-    setReconPhase(`Easing off — SharePoint is busy (${Math.round(ms / 1000)}s)…`);
+    setReconPhase(
+      `Easing off — SharePoint is busy (${Math.round(ms / 1000)}s)…`,
+    );
 
   // Status glyph for a progress-feed row (spinner while running, else a colored mark).
   const progIcon = (status: ProgItem["status"]): React.ReactElement => {
     if (status === "run") {
-      return <span style={{ display: "inline-block", width: 11, height: 11, border: "2px solid #cfe4d8", borderTopColor: "#0f6c3f", borderRadius: "50%", animation: "fmspin 0.8s linear infinite", flexShrink: 0 }} />;
+      return (
+        <span
+          style={{
+            display: "inline-block",
+            width: 11,
+            height: 11,
+            border: "2px solid #cfe4d8",
+            borderTopColor: "#0f6c3f",
+            borderRadius: "50%",
+            animation: "fmspin 0.8s linear infinite",
+            flexShrink: 0,
+          }}
+        />
+      );
     }
     const marks: Record<string, [string, string]> = {
-      ok: ["✓", "#0f6c3f"], skip: ["○", "#999"], fail: ["✗", "#c0392b"], admin: ["⚠", "#b45309"], warn: ["⚠", "#b45309"],
+      ok: ["✓", "#0f6c3f"],
+      skip: ["○", "#999"],
+      fail: ["✗", "#c0392b"],
+      admin: ["⚠", "#b45309"],
+      warn: ["⚠", "#b45309"],
     };
     const [ch, color] = marks[status] ?? ["•", "#666"];
-    return <span style={{ color, fontSize: 12, width: 11, textAlign: "center", flexShrink: 0 }}>{ch}</span>;
+    return (
+      <span
+        style={{
+          color,
+          fontSize: 12,
+          width: 11,
+          textAlign: "center",
+          flexShrink: 0,
+        }}
+      >
+        {ch}
+      </span>
+    );
   };
 
   const showToast = (message: string, error: boolean): void => {
@@ -1005,7 +1532,8 @@ export default function FolderManager({
     setTimeout(() => setToast(null), 5000);
   };
 
-  const roleName = (id: number): string => roleDefs.find(r => r.id === id)?.name ?? String(id);
+  const roleName = (id: number): string =>
+    roleDefs.find((r) => r.id === id)?.name ?? String(id);
 
   /* ── REST ────────────────────────────────────────────────────────────────────── */
 
@@ -1014,20 +1542,28 @@ export default function FolderManager({
     // pass in reconciliation (e.g. Documents skipped → no MEMBER grants land). Log the
     // real HTTP status on genuine failure rather than reporting a false "not found"
     // (CLAUDE.md gotcha #9 — a transient status is not missing data).
-    const res: SPHttpClientResponse = await withThrottleRetry(() => context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/RootFolder?$select=ServerRelativeUrl`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json" } },
-    ), reconWaitNote);
+    const res: SPHttpClientResponse = await withThrottleRetry(
+      () =>
+        context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/RootFolder?$select=ServerRelativeUrl`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json" } },
+        ),
+      reconWaitNote,
+    );
     if (!res.ok) {
-      console.warn(`getLibraryRoot('${libDisplayName(lib)}') failed: HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      console.warn(
+        `getLibraryRoot('${libDisplayName(lib)}') failed: HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
       return null;
     }
     const data = await res.json();
     return data.ServerRelativeUrl ?? null;
   };
 
-  const getFolders = async (folderPath: string): Promise<Array<{ Name: string; ServerRelativeUrl: string }>> => {
+  const getFolders = async (
+    folderPath: string,
+  ): Promise<Array<{ Name: string; ServerRelativeUrl: string }>> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(folderPath)}')/Folders?$select=Name,ServerRelativeUrl&$orderby=Name`,
       SPHttpClient.configurations.v1,
@@ -1038,7 +1574,10 @@ export default function FolderManager({
     return data.value ?? [];
   };
 
-  const moveFolder = async (oldPath: string, newPath: string): Promise<void> => {
+  const moveFolder = async (
+    oldPath: string,
+    newPath: string,
+  ): Promise<void> => {
     const res: SPHttpClientResponse = await context.spHttpClient.post(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@s)/MoveTo(newUrl=@d)?@s='${encodeURIComponent(oldPath)}'&@d='${encodeURIComponent(newPath)}'`,
       SPHttpClient.configurations.v1,
@@ -1049,7 +1588,9 @@ export default function FolderManager({
     if (!res.ok) throw new Error(`MoveTo HTTP ${res.status}`);
   };
 
-  const getRoleAssignments = async (folderPath: string): Promise<ExistingAssign[]> => {
+  const getRoleAssignments = async (
+    folderPath: string,
+  ): Promise<ExistingAssign[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments?$expand=Member,RoleDefinitionBindings&@f='${encodeServerRelativePath(folderPath)}'`,
       SPHttpClient.configurations.v1,
@@ -1058,13 +1599,24 @@ export default function FolderManager({
     if (!res.ok) return [];
     const data = await res.json();
     const result: ExistingAssign[] = [];
-    for (const ra of (data.value ?? [])) {
+    for (const ra of data.value ?? []) {
       if (ownerGroupId !== null && ra.PrincipalId === ownerGroupId) continue;
       const rawBindings = ra.RoleDefinitionBindings;
-      const bindings: Array<{ RoleTypeKind: number; Id: number }> = Array.isArray(rawBindings) ? rawBindings : (rawBindings?.value ?? rawBindings?.results ?? []);
-      const valid = bindings.find(b => b.RoleTypeKind !== 1 && b.RoleTypeKind !== 7);
+      const bindings: Array<{ RoleTypeKind: number; Id: number }> =
+        Array.isArray(rawBindings)
+          ? rawBindings
+          : (rawBindings?.value ?? rawBindings?.results ?? []);
+      const valid = bindings.find(
+        (b) => b.RoleTypeKind !== 1 && b.RoleTypeKind !== 7,
+      );
       if (!valid) continue;
-      result.push({ uid: uid(), principalId: ra.PrincipalId, title: ra.Member?.Title ?? String(ra.PrincipalId), roleDefId: valid.Id, kept: true });
+      result.push({
+        uid: uid(),
+        principalId: ra.PrincipalId,
+        title: ra.Member?.Title ?? String(ra.PrincipalId),
+        roleDefId: valid.Id,
+        kept: true,
+      });
     }
     return result;
   };
@@ -1097,17 +1649,22 @@ export default function FolderManager({
     if (!res.ok) return undefined;
     const data = await res.json();
     const out: Array<{ principalId: number; roleDefId: number }> = [];
-    for (const ra of (data.value ?? [])) {
+    for (const ra of data.value ?? []) {
       const raw = ra.RoleDefinitionBindings;
-      const bindings: Array<{ Id: number }> = Array.isArray(raw) ? raw : (raw?.value ?? raw?.results ?? []);
+      const bindings: Array<{ Id: number }> = Array.isArray(raw)
+        ? raw
+        : (raw?.value ?? raw?.results ?? []);
       for (const b of bindings) {
-        if (typeof b?.Id === "number") out.push({ principalId: ra.PrincipalId, roleDefId: b.Id });
+        if (typeof b?.Id === "number")
+          out.push({ principalId: ra.PrincipalId, roleDefId: b.Id });
       }
     }
     return out;
   };
 
-  const getHasUniquePerms = async (folderPath: string): Promise<boolean | null> => {
+  const getHasUniquePerms = async (
+    folderPath: string,
+  ): Promise<boolean | null> => {
     const res = await context.spHttpClient.get(
       `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields?$select=HasUniqueRoleAssignments&@f='${encodeServerRelativePath(folderPath)}'`,
       SPHttpClient.configurations.v1,
@@ -1115,7 +1672,9 @@ export default function FolderManager({
     );
     if (!res.ok) return null;
     const data = await res.json();
-    return typeof data.HasUniqueRoleAssignments === "boolean" ? data.HasUniqueRoleAssignments : null;
+    return typeof data.HasUniqueRoleAssignments === "boolean"
+      ? data.HasUniqueRoleAssignments
+      : null;
   };
 
   const folderExists = async (path: string): Promise<boolean> => {
@@ -1129,20 +1688,36 @@ export default function FolderManager({
 
   const createFolder = async (path: string): Promise<void> => {
     if (await folderExists(path)) return;
-    const res = await withThrottleRetry(() => context.spHttpClient.post(
-      `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@d,overwrite=false)?@d='${encodeServerRelativePath(path)}'`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" } },
-    ), reconWaitNote);
-    if (!res.ok) throw new Error(`create folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
+    const res = await withThrottleRetry(
+      () =>
+        context.spHttpClient.post(
+          `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@d,overwrite=false)?@d='${encodeServerRelativePath(path)}'`,
+          SPHttpClient.configurations.v1,
+          {
+            headers: {
+              Accept: "application/json;odata=nometadata",
+              "Content-Type": "application/json",
+            },
+          },
+        ),
+      reconWaitNote,
+    );
+    if (!res.ok)
+      throw new Error(
+        `create folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
   };
 
   const breakInheritance = async (path: string): Promise<void> => {
-    const res = await withThrottleRetry(() => context.spHttpClient.post(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)?@f='${encodeServerRelativePath(path)}'`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    ), reconWaitNote);
+    const res = await withThrottleRetry(
+      () =>
+        context.spHttpClient.post(
+          `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)?@f='${encodeServerRelativePath(path)}'`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        ),
+      reconWaitNote,
+    );
     if (!res.ok) throw new Error(`breakroleinheritance HTTP ${res.status}`);
   };
 
@@ -1154,7 +1729,10 @@ export default function FolderManager({
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
-    if (!res.ok) throw new Error(`delete folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`);
+    if (!res.ok)
+      throw new Error(
+        `delete folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
   };
 
   // SP site group: the group's integer Id IS the role-assignment principal id.
@@ -1204,17 +1782,25 @@ export default function FolderManager({
   // interchangeable; do not "simplify" a future library-root pass by routing it through here. That
   // tool has also been removed (1.0.381.0), for the same reason as the first.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const removeRoleAssignment = async (path: string, principalId: number): Promise<void> => {
-    const res = await withThrottleRetry(() => context.spHttpClient.post(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/removeroleassignment(principalid=${principalId})?@f='${encodeServerRelativePath(path)}'`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    ));
+  const removeRoleAssignment = async (
+    path: string,
+    principalId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(() =>
+      context.spHttpClient.post(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/removeroleassignment(principalid=${principalId})?@f='${encodeServerRelativePath(path)}'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
       try {
         const json = await res.json();
-        const sp = json?.error?.message?.value ?? json?.error?.message ?? json?.["odata.error"]?.message?.value;
+        const sp =
+          json?.error?.message?.value ??
+          json?.error?.message ??
+          json?.["odata.error"]?.message?.value;
         if (sp) msg += ` — ${sp}`;
       } catch {
         msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
@@ -1240,11 +1826,18 @@ export default function FolderManager({
    * data problem. The ids go in too, because "which principal" is the question a stale-id failure
    * turns on and nothing else in the log carries it.
    */
-  const grantFailure = async (res: SPHttpClientResponse, principalId: number, roleDefId: number): Promise<string> => {
+  const grantFailure = async (
+    res: SPHttpClientResponse,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<string> => {
     let msg = `HTTP ${res.status} (principal ${principalId}, role ${roleDefId})`;
     try {
       const json = await res.json();
-      const sp = json?.error?.message?.value ?? json?.error?.message ?? json?.["odata.error"]?.message?.value;
+      const sp =
+        json?.error?.message?.value ??
+        json?.error?.message ??
+        json?.["odata.error"]?.message?.value;
       if (sp) msg += ` — ${sp}`;
     } catch {
       msg += ` — ${(await res.text().catch(() => "")).slice(0, 300)}`;
@@ -1252,17 +1845,26 @@ export default function FolderManager({
     return msg;
   };
 
-  const addRoleAssignmentToList = async (listBase: string, principalId: number, roleDefId: number): Promise<void> => {
-    const res = await withThrottleRetry(() => context.spHttpClient.post(
-      `${listBase}/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    ));
+  const addRoleAssignmentToList = async (
+    listBase: string,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(() =>
+      context.spHttpClient.post(
+        `${listBase}/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
       try {
         const json = await res.json();
-        const sp = json?.error?.message?.value ?? json?.error?.message ?? json?.["odata.error"]?.message?.value;
+        const sp =
+          json?.error?.message?.value ??
+          json?.error?.message ??
+          json?.["odata.error"]?.message?.value;
         if (sp) msg += ` — ${sp}`;
       } catch {
         msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
@@ -1271,13 +1873,24 @@ export default function FolderManager({
     }
   };
 
-  const addRoleAssignment = async (path: string, principalId: number, roleDefId: number): Promise<void> => {
-    const res = await withThrottleRetry(() => context.spHttpClient.post(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeServerRelativePath(path)}'`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    ), reconWaitNote);
-    if (!res.ok) throw new Error(`addroleassignment ${await grantFailure(res, principalId, roleDefId)}`);
+  const addRoleAssignment = async (
+    path: string,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(
+      () =>
+        context.spHttpClient.post(
+          `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeServerRelativePath(path)}'`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        ),
+      reconWaitNote,
+    );
+    if (!res.ok)
+      throw new Error(
+        `addroleassignment ${await grantFailure(res, principalId, roleDefId)}`,
+      );
   };
 
   const searchGroups = async (query: string): Promise<GroupPick[]> => {
@@ -1349,13 +1962,18 @@ export default function FolderManager({
     );
     if (!res.ok) throw new Error(`roledefinitions returned HTTP ${res.status}`);
     const data = await res.json();
-    const all = (data.value ?? []) as Array<{ Id: number; Name: string; Hidden: boolean; RoleTypeKind: number }>;
+    const all = (data.value ?? []) as Array<{
+      Id: number;
+      Name: string;
+      Hidden: boolean;
+      RoleTypeKind: number;
+    }>;
     // Detect the custom-level prefix from the UNFILTERED list, before the hidden/system levels
     // are dropped — the filter is about what an admin may pick, not about what exists.
-    applyPermissionPrefix(all.map(r => r.Name));
+    applyPermissionPrefix(all.map((r) => r.Name));
     const kept = all
-      .filter(r => !r.Hidden && r.RoleTypeKind !== 1 && r.RoleTypeKind !== 7)
-      .map(r => ({ id: r.Id, name: r.Name }));
+      .filter((r) => !r.Hidden && r.RoleTypeKind !== 1 && r.RoleTypeKind !== 7)
+      .map((r) => ({ id: r.Id, name: r.Name }));
     setRoleDefs(kept);
     return kept;
   };
@@ -1386,13 +2004,43 @@ export default function FolderManager({
   /* ── Tree ────────────────────────────────────────────────────────────────────── */
 
   const makeNode = (name: string, path: string): FolderNode => ({
-    id: uid(), name, newName: name, path, isNew: false, isDeleted: false, confirmingDelete: false, childrenLoaded: false, children: [],
-    perm: { existing: [], pending: [], loaded: false, loading: false, isUnique: null, open: false },
+    id: uid(),
+    name,
+    newName: name,
+    path,
+    isNew: false,
+    isDeleted: false,
+    confirmingDelete: false,
+    childrenLoaded: false,
+    children: [],
+    perm: {
+      existing: [],
+      pending: [],
+      loaded: false,
+      loading: false,
+      isUnique: null,
+      open: false,
+    },
   });
 
   const makeNewNode = (): FolderNode => ({
-    id: uid(), name: "", newName: "", path: null, isNew: true, isDeleted: false, confirmingDelete: false, childrenLoaded: true, children: [],
-    perm: { existing: [], pending: [], loaded: true, loading: false, isUnique: null, open: true },
+    id: uid(),
+    name: "",
+    newName: "",
+    path: null,
+    isNew: true,
+    isDeleted: false,
+    confirmingDelete: false,
+    childrenLoaded: true,
+    children: [],
+    perm: {
+      existing: [],
+      pending: [],
+      loaded: true,
+      loading: false,
+      isUnique: null,
+      open: true,
+    },
   });
 
   const loadTree = async (): Promise<void> => {
@@ -1409,13 +2057,16 @@ export default function FolderManager({
     }
     // Discover the top-level container folders under the library root (e.g. the
     // segment folders) instead of assuming a fixed Departments/Projects layout.
-    const topFolders = (await getFolders(root))
-      .filter(f => !isSystemFolder(f.Name));
-    const sectionNames = topFolders.map(f => f.Name);
+    const topFolders = (await getFolders(root)).filter(
+      (f) => !isSystemFolder(f.Name),
+    );
+    const sectionNames = topFolders.map((f) => f.Name);
     const result: Record<Mode, FolderNode[]> = {};
     for (const f of topFolders) {
       const parents = await getFolders(f.ServerRelativeUrl);
-      result[f.Name] = parents.map(p => makeNode(p.Name, p.ServerRelativeUrl));
+      result[f.Name] = parents.map((p) =>
+        makeNode(p.Name, p.ServerRelativeUrl),
+      );
     }
     setSections(sectionNames);
     setTree(result);
@@ -1431,26 +2082,49 @@ export default function FolderManager({
     // open, and its failure toast would accuse the admin of a permissions problem on a tab that is
     // not there. Reconciliation reads its own state and does not depend on this.
     if (tab !== "Staging" && tab !== "Documents") return;
-    loadTree().catch(() => { setLoading(false); showToast("Could not load folders. Check your permissions.", true); });
+    loadTree().catch(() => {
+      setLoading(false);
+      showToast("Could not load folders. Check your permissions.", true);
+    });
   }, [libTarget, namesReady, tab]);
 
   /* ── Generic tree mutation helpers (recursive, keyed by node id) ───────────────── */
 
-  const mapTree = (nodes: FolderNode[], id: string, updater: (n: FolderNode) => FolderNode): FolderNode[] =>
-    nodes.map(n => n.id === id ? updater(n) : (n.children.length > 0 ? { ...n, children: mapTree(n.children, id, updater) } : n));
+  const mapTree = (
+    nodes: FolderNode[],
+    id: string,
+    updater: (n: FolderNode) => FolderNode,
+  ): FolderNode[] =>
+    nodes.map((n) =>
+      n.id === id
+        ? updater(n)
+        : n.children.length > 0
+          ? { ...n, children: mapTree(n.children, id, updater) }
+          : n,
+    );
 
-  const updateNode = (id: string, updater: (n: FolderNode) => FolderNode): void =>
-    setTree(prev => {
+  const updateNode = (
+    id: string,
+    updater: (n: FolderNode) => FolderNode,
+  ): void =>
+    setTree((prev) => {
       const next: Record<Mode, FolderNode[]> = {};
-      for (const k of Object.keys(prev)) next[k] = mapTree(prev[k], id, updater);
+      for (const k of Object.keys(prev))
+        next[k] = mapTree(prev[k], id, updater);
       return next;
     });
 
   const filterTree = (nodes: FolderNode[], id: string): FolderNode[] =>
-    nodes.filter(n => n.id !== id).map(n => n.children.length > 0 ? { ...n, children: filterTree(n.children, id) } : n);
+    nodes
+      .filter((n) => n.id !== id)
+      .map((n) =>
+        n.children.length > 0
+          ? { ...n, children: filterTree(n.children, id) }
+          : n,
+      );
 
   const discardNode = (id: string): void =>
-    setTree(prev => {
+    setTree((prev) => {
       const next: Record<Mode, FolderNode[]> = {};
       for (const k of Object.keys(prev)) next[k] = filterTree(prev[k], id);
       return next;
@@ -1460,11 +2134,18 @@ export default function FolderManager({
 
   const toggleExpand = async (node: FolderNode): Promise<void> => {
     const isOpen = !!expandedIds[node.id];
-    if (isOpen) { setExpandedIds(prev => ({ ...prev, [node.id]: false })); return; }
-    setExpandedIds(prev => ({ ...prev, [node.id]: true }));
+    if (isOpen) {
+      setExpandedIds((prev) => ({ ...prev, [node.id]: false }));
+      return;
+    }
+    setExpandedIds((prev) => ({ ...prev, [node.id]: true }));
     if (node.childrenLoaded || node.isNew || !node.path) return;
     const kids = await getFolders(node.path).catch(() => []);
-    updateNode(node.id, n => ({ ...n, childrenLoaded: true, children: kids.map(c => makeNode(c.Name, c.ServerRelativeUrl)) }));
+    updateNode(node.id, (n) => ({
+      ...n,
+      childrenLoaded: true,
+      children: kids.map((c) => makeNode(c.Name, c.ServerRelativeUrl)),
+    }));
   };
 
   /* ── Add / discard folders (staged in-memory until Update) ─────────────────────── */
@@ -1472,79 +2153,147 @@ export default function FolderManager({
   const addNewChild = (mode: Mode, parentId: string | null): void => {
     const node = makeNewNode();
     if (parentId === null) {
-      setTree(prev => ({ ...prev, [mode]: [...(prev[mode] ?? []), node] }));
+      setTree((prev) => ({ ...prev, [mode]: [...(prev[mode] ?? []), node] }));
       return;
     }
-    setExpandedIds(prev => ({ ...prev, [parentId]: true }));
-    updateNode(parentId, n => ({ ...n, children: [...n.children, node] }));
+    setExpandedIds((prev) => ({ ...prev, [parentId]: true }));
+    updateNode(parentId, (n) => ({ ...n, children: [...n.children, node] }));
   };
 
   // Stage a brand-new TOP-LEVEL folder, created directly under the library root
   // on Update. Works even when the library currently has no folders at all.
   const addTopLevel = (): void =>
-    setTree(prev => ({ ...prev, [NEW_TOP_LEVEL]: [...(prev[NEW_TOP_LEVEL] ?? []), makeNewNode()] }));
+    setTree((prev) => ({
+      ...prev,
+      [NEW_TOP_LEVEL]: [...(prev[NEW_TOP_LEVEL] ?? []), makeNewNode()],
+    }));
 
   /* ── Delete existing folders (staged in-memory, requires confirmation, applied on Update) ── */
 
   const requestDelete = (id: string): void =>
-    updateNode(id, n => ({ ...n, confirmingDelete: true }));
+    updateNode(id, (n) => ({ ...n, confirmingDelete: true }));
 
   const cancelDelete = (id: string): void =>
-    updateNode(id, n => ({ ...n, confirmingDelete: false }));
+    updateNode(id, (n) => ({ ...n, confirmingDelete: false }));
 
   const confirmDelete = (id: string): void =>
-    updateNode(id, n => ({ ...n, confirmingDelete: false, isDeleted: true }));
+    updateNode(id, (n) => ({ ...n, confirmingDelete: false, isDeleted: true }));
 
   const undoDelete = (id: string): void =>
-    updateNode(id, n => ({ ...n, isDeleted: false }));
+    updateNode(id, (n) => ({ ...n, isDeleted: false }));
 
   /* ── Permission draft mutations (existing + new nodes share the same shape) ────── */
 
   const togglePermPanel = async (node: FolderNode): Promise<void> => {
     if (node.isNew || node.perm.loaded) {
-      updateNode(node.id, n => ({ ...n, perm: { ...n.perm, open: !n.perm.open } }));
+      updateNode(node.id, (n) => ({
+        ...n,
+        perm: { ...n.perm, open: !n.perm.open },
+      }));
       return;
     }
-    updateNode(node.id, n => ({ ...n, perm: { ...n.perm, open: true, loading: true } }));
+    updateNode(node.id, (n) => ({
+      ...n,
+      perm: { ...n.perm, open: true, loading: true },
+    }));
     const path = node.path as string;
     const [assignments, isUnique] = await Promise.all([
       getRoleAssignments(path).catch(() => [] as ExistingAssign[]),
       getHasUniquePerms(path).catch(() => null as boolean | null),
     ]);
-    updateNode(node.id, n => ({ ...n, perm: { ...n.perm, loading: false, loaded: true, existing: assignments, isUnique } }));
+    updateNode(node.id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        loading: false,
+        loaded: true,
+        existing: assignments,
+        isUnique,
+      },
+    }));
   };
 
   const permToggleKept = (id: string, aUid: string): void =>
-    updateNode(id, n => ({ ...n, perm: { ...n.perm, existing: n.perm.existing.map(a => a.uid === aUid ? { ...a, kept: !a.kept } : a) } }));
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        existing: n.perm.existing.map((a) =>
+          a.uid === aUid ? { ...a, kept: !a.kept } : a,
+        ),
+      },
+    }));
 
-  const permSetExistingRole = (id: string, aUid: string, roleDefId: number): void =>
-    updateNode(id, n => ({ ...n, perm: { ...n.perm, existing: n.perm.existing.map(a => a.uid === aUid ? { ...a, roleDefId } : a) } }));
+  const permSetExistingRole = (
+    id: string,
+    aUid: string,
+    roleDefId: number,
+  ): void =>
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        existing: n.perm.existing.map((a) =>
+          a.uid === aUid ? { ...a, roleDefId } : a,
+        ),
+      },
+    }));
 
   const permAddGroup = (id: string, group: GroupPick): void =>
-    updateNode(id, n => {
-      if (n.perm.pending.some(a => a.group.id === group.id)) return n;
-      const def = roleDefs.find(r => r.name === "Read") ?? roleDefs[0];
-      return { ...n, perm: { ...n.perm, pending: [...n.perm.pending, { uid: uid(), group, roleDefId: def?.id ?? 0 }] } };
+    updateNode(id, (n) => {
+      if (n.perm.pending.some((a) => a.group.id === group.id)) return n;
+      const def = roleDefs.find((r) => r.name === "Read") ?? roleDefs[0];
+      return {
+        ...n,
+        perm: {
+          ...n.perm,
+          pending: [
+            ...n.perm.pending,
+            { uid: uid(), group, roleDefId: def?.id ?? 0 },
+          ],
+        },
+      };
     });
 
-  const permSetPendingRole = (id: string, aUid: string, roleDefId: number): void =>
-    updateNode(id, n => ({ ...n, perm: { ...n.perm, pending: n.perm.pending.map(a => a.uid === aUid ? { ...a, roleDefId } : a) } }));
+  const permSetPendingRole = (
+    id: string,
+    aUid: string,
+    roleDefId: number,
+  ): void =>
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        pending: n.perm.pending.map((a) =>
+          a.uid === aUid ? { ...a, roleDefId } : a,
+        ),
+      },
+    }));
 
   const permRemovePending = (id: string, aUid: string): void =>
-    updateNode(id, n => ({ ...n, perm: { ...n.perm, pending: n.perm.pending.filter(a => a.uid !== aUid) } }));
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        pending: n.perm.pending.filter((a) => a.uid !== aUid),
+      },
+    }));
 
   /* ── Change detection ────────────────────────────────────────────────────────── */
 
   const nodeHasChanges = (node: FolderNode): boolean => {
     if (node.isNew) return true;
     if (node.isDeleted) return true;
-    const renamed = node.newName.trim() !== "" && node.newName.trim() !== node.name;
-    const permDirty = node.perm.loaded && (node.perm.existing.some(a => !a.kept) || node.perm.pending.length > 0);
+    const renamed =
+      node.newName.trim() !== "" && node.newName.trim() !== node.name;
+    const permDirty =
+      node.perm.loaded &&
+      (node.perm.existing.some((a) => !a.kept) || node.perm.pending.length > 0);
     return renamed || permDirty || node.children.some(nodeHasChanges);
   };
 
   const hasChanges =
-    sections.some(mode => (tree[mode] ?? []).some(nodeHasChanges)) ||
+    sections.some((mode) => (tree[mode] ?? []).some(nodeHasChanges)) ||
     (tree[NEW_TOP_LEVEL] ?? []).some(nodeHasChanges);
 
   /* ── Update (rename + create + permissions, all in one commit) ─────────────────── */
@@ -1556,26 +2305,55 @@ export default function FolderManager({
 
   const validateTree = (): ValidationError[] => {
     const errors: ValidationError[] = [];
-    const walk = (nodes: FolderNode[], mode: Mode, ancestorIds: string[], parentLabel: string): void => {
+    const walk = (
+      nodes: FolderNode[],
+      mode: Mode,
+      ancestorIds: string[],
+      parentLabel: string,
+    ): void => {
       for (const n of nodes) {
         // A folder marked for deletion is recycled whole — its children go with
         // it, so any staged edits inside it are moot and don't need validating.
         if (!n.isNew && n.isDeleted) continue;
         if (n.isNew) {
           const nm = n.newName.trim();
-          if (!nm) errors.push({ message: `A new folder under "${parentLabel}" is missing a name.`, mode, ancestorIds });
-          else if (n.perm.pending.length === 0) errors.push({ message: `"${nm}" (under "${parentLabel}") needs at least one group assigned.`, mode, ancestorIds });
+          if (!nm)
+            errors.push({
+              message: `A new folder under "${parentLabel}" is missing a name.`,
+              mode,
+              ancestorIds,
+            });
+          else if (n.perm.pending.length === 0)
+            errors.push({
+              message: `"${nm}" (under "${parentLabel}") needs at least one group assigned.`,
+              mode,
+              ancestorIds,
+            });
         } else if (n.perm.loaded) {
-          const dirty = n.perm.existing.some(a => !a.kept) || n.perm.pending.length > 0;
+          const dirty =
+            n.perm.existing.some((a) => !a.kept) || n.perm.pending.length > 0;
           if (dirty) {
-            const remaining = n.perm.existing.filter(a => a.kept).length + n.perm.pending.length;
-            if (remaining === 0) errors.push({ message: `"${n.newName.trim() || n.name}" would end up with no groups assigned.`, mode, ancestorIds });
+            const remaining =
+              n.perm.existing.filter((a) => a.kept).length +
+              n.perm.pending.length;
+            if (remaining === 0)
+              errors.push({
+                message: `"${n.newName.trim() || n.name}" would end up with no groups assigned.`,
+                mode,
+                ancestorIds,
+              });
           }
         }
-        if (n.children.length > 0) walk(n.children, mode, [...ancestorIds, n.id], n.newName.trim() || n.name || "(unnamed folder)");
+        if (n.children.length > 0)
+          walk(
+            n.children,
+            mode,
+            [...ancestorIds, n.id],
+            n.newName.trim() || n.name || "(unnamed folder)",
+          );
       }
     };
-    sections.forEach(mode => walk(tree[mode] ?? [], mode, [], mode));
+    sections.forEach((mode) => walk(tree[mode] ?? [], mode, [], mode));
     // New top-level folders live under the library root; label them by library.
     walk(tree[NEW_TOP_LEVEL] ?? [], NEW_TOP_LEVEL, [], libTarget);
     return errors;
@@ -1585,28 +2363,36 @@ export default function FolderManager({
     const problems = validateTree();
     if (problems.length > 0) {
       const first = problems[0];
-      setModeOpen(prev => ({ ...prev, [first.mode]: true }));
+      setModeOpen((prev) => ({ ...prev, [first.mode]: true }));
       if (first.ancestorIds.length > 0) {
-        setExpandedIds(prev => {
+        setExpandedIds((prev) => {
           const next = { ...prev };
-          first.ancestorIds.forEach(id => { next[id] = true; });
+          first.ancestorIds.forEach((id) => {
+            next[id] = true;
+          });
           return next;
         });
       }
       showToast(first.message, true);
       return;
     }
-    if (!libRoot) { showToast("Library root not found.", true); return; }
+    if (!libRoot) {
+      showToast("Library root not found.", true);
+      return;
+    }
 
     setBusy(true);
     const entries: LogEntry[] = [];
-    const fullCtrlId = roleDefs.find(r => r.name === "Full Control")?.id;
+    const fullCtrlId = roleDefs.find((r) => r.name === "Full Control")?.id;
     const ensurePrincipal = async (group: GroupPick): Promise<number> =>
       spGroupPrincipalId(group.id);
 
     // Pre-order walk: parents are created/renamed before their children are
     // processed, so each child always receives its parent's up-to-date path.
-    const processNode = async (node: FolderNode, parentPath: string): Promise<string | null> => {
+    const processNode = async (
+      node: FolderNode,
+      parentPath: string,
+    ): Promise<string | null> => {
       const trimmedNew = node.newName.trim();
 
       if (!node.isNew && node.isDeleted) {
@@ -1615,7 +2401,10 @@ export default function FolderManager({
           await deleteFolder(currentPath);
           entries.push({ msg: `"${node.name}" — deleted ✓`, ok: true });
         } catch (e) {
-          entries.push({ msg: `"${node.name}" — delete FAILED: ${(e as Error).message}`, ok: false });
+          entries.push({
+            msg: `"${node.name}" — delete FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
         }
         // Recycling the folder takes its whole subtree with it — nothing left to descend into.
         return null;
@@ -1626,17 +2415,26 @@ export default function FolderManager({
         try {
           await createFolder(fp);
           await breakInheritance(fp);
-          if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(fp, ownerGroupId, fullCtrlId);
+          if (ownerGroupId !== null && fullCtrlId !== undefined)
+            await addRoleAssignment(fp, ownerGroupId, fullCtrlId);
           for (const a of node.perm.pending) {
             const pid = await ensurePrincipal(a.group);
             await addRoleAssignment(fp, pid, a.roleDefId);
           }
-          const summary = node.perm.pending.map(a => `${a.group.displayName}=${roleName(a.roleDefId)}`).join(", ");
-          entries.push({ msg: `"${trimmedNew}" — created · ${summary}`, ok: true });
+          const summary = node.perm.pending
+            .map((a) => `${a.group.displayName}=${roleName(a.roleDefId)}`)
+            .join(", ");
+          entries.push({
+            msg: `"${trimmedNew}" — created · ${summary}`,
+            ok: true,
+          });
           for (const child of node.children) await processNode(child, fp);
           return fp;
         } catch (e) {
-          entries.push({ msg: `"${trimmedNew}" — create FAILED: ${(e as Error).message}`, ok: false });
+          entries.push({
+            msg: `"${trimmedNew}" — create FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
           return null;
         }
       }
@@ -1654,25 +2452,38 @@ export default function FolderManager({
           entries.push({ msg: `"${node.name}" → "${trimmedNew}" ✓`, ok: true });
           resolvedPath = newPath;
         } catch (e) {
-          entries.push({ msg: `"${node.name}" → "${trimmedNew}" FAILED: ${(e as Error).message}`, ok: false });
+          entries.push({
+            msg: `"${node.name}" → "${trimmedNew}" FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
         }
       }
 
       const perm = node.perm;
-      const permDirty = perm.loaded && (perm.existing.some(a => !a.kept) || perm.pending.length > 0);
+      const permDirty =
+        perm.loaded &&
+        (perm.existing.some((a) => !a.kept) || perm.pending.length > 0);
       if (permDirty) {
-        const kept = perm.existing.filter(a => a.kept);
+        const kept = perm.existing.filter((a) => a.kept);
         try {
           await breakInheritance(resolvedPath);
-          if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(resolvedPath, ownerGroupId, fullCtrlId);
-          for (const a of kept) await addRoleAssignment(resolvedPath, a.principalId, a.roleDefId);
+          if (ownerGroupId !== null && fullCtrlId !== undefined)
+            await addRoleAssignment(resolvedPath, ownerGroupId, fullCtrlId);
+          for (const a of kept)
+            await addRoleAssignment(resolvedPath, a.principalId, a.roleDefId);
           for (const a of perm.pending) {
             const pid = await ensurePrincipal(a.group);
             await addRoleAssignment(resolvedPath, pid, a.roleDefId);
           }
-          entries.push({ msg: `"${trimmedNew || node.name}" — permissions updated ✓`, ok: true });
+          entries.push({
+            msg: `"${trimmedNew || node.name}" — permissions updated ✓`,
+            ok: true,
+          });
         } catch (e) {
-          entries.push({ msg: `"${trimmedNew || node.name}" — permissions FAILED: ${(e as Error).message}`, ok: false });
+          entries.push({
+            msg: `"${trimmedNew || node.name}" — permissions FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
         }
       }
 
@@ -1682,23 +2493,25 @@ export default function FolderManager({
 
     for (const mode of sections) {
       const modeRootPath = `${libRoot}/${mode}`;
-      for (const node of (tree[mode] ?? [])) {
+      for (const node of tree[mode] ?? []) {
         await processNode(node, modeRootPath);
       }
     }
     // New top-level folders are created directly under the library root.
-    for (const node of (tree[NEW_TOP_LEVEL] ?? [])) {
+    for (const node of tree[NEW_TOP_LEVEL] ?? []) {
       await processNode(node, libRoot);
     }
 
     setLog(entries);
     setBusy(false);
-    const failed = entries.filter(e => !e.ok).length;
-    const ok     = entries.filter(e => e.ok).length;
+    const failed = entries.filter((e) => !e.ok).length;
+    const ok = entries.filter((e) => e.ok).length;
     showToast(
-      failed > 0 ? `${ok} update${ok !== 1 ? "s" : ""} applied, ${failed} failed — see log.` :
-      ok > 0     ? `${ok} update${ok !== 1 ? "s" : ""} applied.` :
-                   "No changes to update.",
+      failed > 0
+        ? `${ok} update${ok !== 1 ? "s" : ""} applied, ${failed} failed — see log.`
+        : ok > 0
+          ? `${ok} update${ok !== 1 ? "s" : ""} applied.`
+          : "No changes to update.",
       failed > 0,
     );
     await loadTree();
@@ -1715,12 +2528,21 @@ export default function FolderManager({
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json" } },
     );
-    if (!res.ok) throw new Error(`Term set ${termSetId} returned ${res.status}`);
+    if (!res.ok)
+      throw new Error(`Term set ${termSetId} returned ${res.status}`);
     const data = await res.json();
-    return (data.value ?? []).map((t: { id: string; labels: Array<{ name: string }> }) => ({ id: t.id, label: t.labels[0].name }));
+    return (data.value ?? []).map(
+      (t: { id: string; labels: Array<{ name: string }> }) => ({
+        id: t.id,
+        label: t.labels[0].name,
+      }),
+    );
   };
 
-  const loadReconChildren = async (termSetId: string, parentId: string): Promise<TermLite[]> => {
+  const loadReconChildren = async (
+    termSetId: string,
+    parentId: string,
+  ): Promise<TermLite[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}/terms/${parentId}/children`,
       SPHttpClient.configurations.v1,
@@ -1729,15 +2551,23 @@ export default function FolderManager({
     // THROWS on failure — do NOT soften this to `return []`. A silently empty child
     // list truncates the term tree, and prune reads "term not enumerated" as "term
     // deleted". Swallowing this error would let a throttle wipe a segment's map rows.
-    if (!res.ok) throw new Error(`Term children ${parentId} returned ${res.status}`);
+    if (!res.ok)
+      throw new Error(`Term children ${parentId} returned ${res.status}`);
     const data = await res.json();
-    return (data.value ?? []).map((t: { id: string; labels: Array<{ name: string }> }) => ({ id: t.id, label: t.labels[0].name }));
+    return (data.value ?? []).map(
+      (t: { id: string; labels: Array<{ name: string }> }) => ({
+        id: t.id,
+        label: t.labels[0].name,
+      }),
+    );
   };
 
   // Name of a term SET (not a term), used as the full name of the segment container
   // folder. Soft-fails to undefined: a missing label is cosmetic, and unlike the term
   // TREE this value feeds nothing that prune or routing depends on.
-  const loadTermSetName = async (termSetId: string): Promise<string | undefined> => {
+  const loadTermSetName = async (
+    termSetId: string,
+  ): Promise<string | undefined> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}`,
@@ -1783,17 +2613,25 @@ export default function FolderManager({
       if (internalName) return { internalName };
       // Name the near-misses. "Column absent" and "column present but the wrong type"
       // need different fixes, and the client cannot tell which one they are looking at.
-      const near = fields.filter((f) =>
-        (f.Title ?? "").trim().toLowerCase().indexOf("full") >= 0 ||
-        (f.InternalName ?? "").toLowerCase().indexOf("full") >= 0,
+      const near = fields.filter(
+        (f) =>
+          (f.Title ?? "").trim().toLowerCase().indexOf("full") >= 0 ||
+          (f.InternalName ?? "").toLowerCase().indexOf("full") >= 0,
       );
       if (near.length > 0) {
         const desc = near
-          .map((f) => `"${f.Title}" (${f.InternalName}, ${f.TypeAsString}${f.ReadOnlyField ? ", read-only" : ""})`)
+          .map(
+            (f) =>
+              `"${f.Title}" (${f.InternalName}, ${f.TypeAsString}${f.ReadOnlyField ? ", read-only" : ""})`,
+          )
           .join("; ");
-        return { note: `no usable "${FULL_NAME_COLUMN_TITLE}" column. Closest match: ${desc}` };
+        return {
+          note: `no usable "${FULL_NAME_COLUMN_TITLE}" column. Closest match: ${desc}`,
+        };
       }
-      return { note: `no column titled "${FULL_NAME_COLUMN_TITLE}" (${fields.length} fields read)` };
+      return {
+        note: `no column titled "${FULL_NAME_COLUMN_TITLE}" (${fields.length} fields read)`,
+      };
     } catch (e) {
       return { note: `field read threw: ${(e as Error).message}` };
     }
@@ -1812,7 +2650,9 @@ export default function FolderManager({
   // Resolved per library: the two libraries hold separate list-scoped copies of the same
   // site content type, with DIFFERENT ids. Undefined when it is absent, which is a soft
   // state — a site that has not provisioned it still gets all its folders.
-  const loadFolderContentTypeId = async (lib: LibTarget): Promise<string | undefined> => {
+  const loadFolderContentTypeId = async (
+    lib: LibTarget,
+  ): Promise<string | undefined> => {
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/ContentTypes?$select=Id,Name`,
@@ -1821,13 +2661,17 @@ export default function FolderManager({
       );
       if (!res.ok) return undefined;
       const data = await res.json();
-      const rows = (data.value ?? []) as Array<{ Id?: { StringValue?: string }; Name?: string }>;
+      const rows = (data.value ?? []) as Array<{
+        Id?: { StringValue?: string };
+        Name?: string;
+      }>;
       // Preference order, not "whichever matches first in the library's list": a library
       // mid-rename can carry BOTH, and stamping the one being retired would mean the next
       // run has to rewrite every folder again.
       for (const candidate of FOLDER_CONTENT_TYPE_CANDIDATES) {
         const hit = rows.find(
-          (c) => (c.Name ?? "").trim().toLowerCase() === candidate.toLowerCase(),
+          (c) =>
+            (c.Name ?? "").trim().toLowerCase() === candidate.toLowerCase(),
         );
         if (hit?.Id?.StringValue) {
           resolvedFolderCtName = candidate;
@@ -1847,7 +2691,11 @@ export default function FolderManager({
     serverRelativeUrl: string,
     internalName?: string,
     withModeration?: boolean,
-  ): Promise<{ fullName?: string; contentTypeId?: string; moderationStatus?: number }> => {
+  ): Promise<{
+    fullName?: string;
+    contentTypeId?: string;
+    moderationStatus?: number;
+  }> => {
     try {
       // The column is optional: a library can carry the content type before anyone adds
       // Full Name to it, and the content type must still be stamped in that state.
@@ -1856,7 +2704,9 @@ export default function FolderManager({
       // Naming a field that does not exist fails the WHOLE request with HTTP 400 — not a null
       // (CLAUDE.md #11) — so on a library without moderation this would break the Full Name
       // and content-type writes too.
-      const base = internalName ? `${internalName},ContentTypeId` : "ContentTypeId";
+      const base = internalName
+        ? `${internalName},ContentTypeId`
+        : "ContentTypeId";
       const select = withModeration ? `${base},OData__ModerationStatus` : base;
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
@@ -1915,7 +2765,9 @@ export default function FolderManager({
   // Load DMS Group Map keyed by term (lowercased UnitTermGuid) → its group rows.
   // Same list/fields the upload form reads. A term can have several rows (one per
   // role), so a folder gets every mapped group at its role's permission level.
-  const loadGroupMapForAssign = async (): Promise<Map<string, GroupMapRow[]>> => {
+  const loadGroupMapForAssign = async (): Promise<
+    Map<string, GroupMapRow[]>
+  > => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupName,GroupId,UnitTermGuid,Role&$top=5000`,
       SPHttpClient.configurations.v1,
@@ -1924,7 +2776,12 @@ export default function FolderManager({
     const map = new Map<string, GroupMapRow[]>();
     if (!res.ok) return map;
     const data = await res.json();
-    for (const r of (data.value ?? []) as Array<{ GroupName?: string; GroupId?: string; UnitTermGuid?: string; Role?: string }>) {
+    for (const r of (data.value ?? []) as Array<{
+      GroupName?: string;
+      GroupId?: string;
+      UnitTermGuid?: string;
+      Role?: string;
+    }>) {
       const term = (r.UnitTermGuid ?? "").toLowerCase();
       // Accepts the long-form value an admin naturally types now that the GROUP NAMES use
       // long suffixes ("UPLOADER" for UPL). Unrecognised values pass through and still fail
@@ -1939,7 +2796,11 @@ export default function FolderManager({
       // folder to grant on, so it is a broken row, not a wide one.
       if (!term && role !== "GLOBAL") continue;
       const arr = map.get(term) ?? [];
-      arr.push({ groupId: r.GroupId, groupName: r.GroupName ?? r.GroupId, role });
+      arr.push({
+        groupId: r.GroupId,
+        groupName: r.GroupName ?? r.GroupId,
+        role,
+      });
       map.set(term, arr);
     }
     return map;
@@ -1992,7 +2853,13 @@ export default function FolderManager({
       throw new Error(`CRS Group Map read failed: HTTP ${res.status}. ${body}`);
     }
     const data = await res.json();
-    return ((data.value ?? []) as Array<{ Id?: number; GroupName?: string; UnitTermGuid?: string }>)
+    return (
+      (data.value ?? []) as Array<{
+        Id?: number;
+        GroupName?: string;
+        UnitTermGuid?: string;
+      }>
+    )
       .map((r) => ({
         itemId: r.Id ?? 0,
         termGuid: (r.UnitTermGuid ?? "").trim(),
@@ -2045,18 +2912,22 @@ export default function FolderManager({
     );
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`${abbrevListTitle()} read failed: HTTP ${res.status}. ${body}`);
+      throw new Error(
+        `${abbrevListTitle()} read failed: HTTP ${res.status}. ${body}`,
+      );
     }
     const data = await res.json();
     // Id/Title/Level are read for the orphan-repair pass, which matches a dead row
     // to a re-created term by LABEL — the one thing that survives a delete-and-re-add.
-    return ((data.value ?? []) as Array<{
-      Id?: number;
-      TermGuid?: string;
-      Title?: string;
-      Level?: string;
-      Abbreviation?: string;
-    }>).map((r) => ({
+    return (
+      (data.value ?? []) as Array<{
+        Id?: number;
+        TermGuid?: string;
+        Title?: string;
+        Level?: string;
+        Abbreviation?: string;
+      }>
+    ).map((r) => ({
       itemId: r.Id ?? 0,
       termGuid: r.TermGuid ?? "",
       title: r.Title ?? "",
@@ -2065,10 +2936,15 @@ export default function FolderManager({
     }));
   };
 
-  const abbrevIndexOf = (rows: readonly OrphanAbbrevRow[]): Map<string, string> =>
+  const abbrevIndexOf = (
+    rows: readonly OrphanAbbrevRow[],
+  ): Map<string, string> =>
     buildAbbrevIndex(
       rows.map(
-        (r): AbbrevRow => ({ termGuid: r.termGuid, abbreviation: r.abbreviation }),
+        (r): AbbrevRow => ({
+          termGuid: r.termGuid,
+          abbreviation: r.abbreviation,
+        }),
       ),
     );
 
@@ -2098,7 +2974,9 @@ export default function FolderManager({
       );
       if (!res.ok) return out;
       const data = await res.json();
-      ((data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>).forEach((r) => {
+      (
+        (data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>
+      ).forEach((r) => {
         const guid = (r.TermSetGuid ?? "").trim().toLowerCase();
         if (!guid) return;
         const levels = parseLevels(r.Levels ?? "");
@@ -2126,14 +3004,18 @@ export default function FolderManager({
       );
       if (!res.ok) return out;
       const data = await res.json();
-      ((data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>).forEach((r) => {
+      (
+        (data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>
+      ).forEach((r) => {
         const guid = (r.TermSetGuid ?? "").trim().toLowerCase();
         if (!guid) return;
         // PERMISSIONED TIERS ONLY. These names are indexed by depth in the term tree,
         // which reconciliation walks — and that tree contains only permissioned tiers.
         // Leave the below-Unit entries in and every name shifts, so a missing
         // abbreviation gets reported against the wrong tier.
-        const names = parseLevels(r.Levels ?? "").filter(isPermissioned).map((l) => l.label);
+        const names = parseLevels(r.Levels ?? "")
+          .filter(isPermissioned)
+          .map((l) => l.label);
         if (names.length > 0) out.set(guid, names);
       });
     } catch {
@@ -2146,7 +3028,9 @@ export default function FolderManager({
   // Segments to provision come from the SAME DMS Config `mode` rows the upload form
   // reads, so onboarding a segment is data-only (add a mode row → Run) — no redeploy.
   // Falls back to the built-in RECON_MODES (GHO) if the config is empty/unreachable.
-  const loadReconModes = async (): Promise<Array<{ termSetGuid: string; stagingFolder: string }>> => {
+  const loadReconModes = async (): Promise<
+    Array<{ termSetGuid: string; stagingFolder: string }>
+  > => {
     /**
      * ⚠ PRIME FIRST. `cachedListTitle` answers the LEGACY `DMS Config` until the name cache has been
      * filled, and on a CRS-renamed site that 404s — which the old code turned into a SILENT fallback
@@ -2165,7 +3049,8 @@ export default function FolderManager({
      * mounted this component. A failed prime still proceeds: `cachedListTitle` then returns the
      * legacy name, the read 404s, and `modeSource` reports it instead of pretending.
      */
-    if (!namesPrimed()) await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+    if (!namesPrimed())
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
     const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items`;
     const filter = `&$filter=ConfigType eq 'mode'`;
     const get = async (url: string): Promise<SPHttpClientResponse> =>
@@ -2187,10 +3072,14 @@ export default function FolderManager({
        * The abbreviations screen never asked for `SortOrder` and was therefore right all along, which
        * is why two screens on one site disagreed about how many segments exist.
        */
-      let res = await get(`${base}?$select=TermSetGuid,StagingFolder,Levels,SortOrder${filter}&$orderby=SortOrder`);
+      let res = await get(
+        `${base}?$select=TermSetGuid,StagingFolder,Levels,SortOrder${filter}&$orderby=SortOrder`,
+      );
       if (res.status === 400) {
         setModeSource("no-sortorder");
-        res = await get(`${base}?$select=TermSetGuid,StagingFolder,Levels${filter}`);
+        res = await get(
+          `${base}?$select=TermSetGuid,StagingFolder,Levels${filter}`,
+        );
       }
       if (!res.ok) {
         setModeSource("failed");
@@ -2211,14 +3100,55 @@ export default function FolderManager({
     }
   };
 
+  /* The segment tick-list is shown the moment the tab opens (client, 2026-09-06: *"I think if you
+     can just immediately show the Segments"*), so the list has to be READ here rather than on the
+     press of a button that no longer exists.
+
+     ⚠ DECLARED AFTER `loadReconModes`, NOT WITH THE OTHER HOOKS. `no-use-before-define` is on, and
+     this is safe only because nothing between the hook block and here returns early - checked. If an
+     early return is ever added above this line, this effect stops running on the render that takes
+     it and React throws "Rendered more hooks than during the previous render", which blanks the
+     whole web part.
+
+     Cheap and deliberately bounded: `loadReconModes` is ONE list read of the mode rows. The
+     expensive per-segment term walk is NOT done here and must not be added - it is ~115 requests for
+     GHO alone (spec §4.1).
+
+     Guarded on `scopeSegs === undefined` so re-rendering the tab does not re-read, and on the tab
+     itself so the other four screens pay nothing. A failed read leaves it `undefined`, which renders
+     no picker and lets the run cover everything - the behaviour before selective runs existed. */
+  useEffect(() => {
+    if (tab !== "Reconciliation" || scopeSegs !== undefined) return;
+    loadReconModes()
+      .then((m) =>
+        setScopeSegs(
+          m.map((x) => ({
+            key: x.termSetGuid,
+            stagingFolder: x.stagingFolder,
+          })),
+        ),
+      )
+      .catch(() => setScopeSegs(undefined));
+    // `loadReconModes` is a render-time const and is deliberately NOT a dependency: adding it would
+    // re-run this on every render, which is one list read per keystroke elsewhere on the page.
+  }, [tab, scopeSegs]);
 
   // The Year × Document Type grid term sets come from the SAME DMS Config `setting`
   // rows the upload form reads (termSet_yearPeriod / termSet_documentType), so the
   // grid matches the form on any tenant with no code edit. Falls back to the built-in
   // YEAR_TERMSET / DOCTYPE_TERMSET constants per-key if the row or the list is missing.
-  type ReconSettings = { year: string; docType: string; gridMode: GridMode; fanOut: boolean; revokeAncestorRead: boolean };
+  type ReconSettings = {
+    year: string;
+    docType: string;
+    gridMode: GridMode;
+    fanOut: boolean;
+    revokeAncestorRead: boolean;
+  };
   const RECON_SETTINGS_FALLBACK: ReconSettings = {
-    year: YEAR_TERMSET, docType: DOCTYPE_TERMSET, gridMode: DEFAULT_GRID_MODE, fanOut: false,
+    year: YEAR_TERMSET,
+    docType: DOCTYPE_TERMSET,
+    gridMode: DEFAULT_GRID_MODE,
+    fanOut: false,
     revokeAncestorRead: false,
   };
   const loadReconGridTermSets = async (): Promise<ReconSettings> => {
@@ -2231,15 +3161,20 @@ export default function FolderManager({
       if (!res.ok) return RECON_SETTINGS_FALLBACK;
       const data = await res.json();
       const map: Record<string, string> = {};
-      ((data.value ?? []) as Array<{ Title: string; SettingValue: string }>).forEach(
-        (item) => { map[item.Title] = (item.SettingValue ?? "").trim(); },
-      );
+      (
+        (data.value ?? []) as Array<{ Title: string; SettingValue: string }>
+      ).forEach((item) => {
+        map[item.Title] = (item.SettingValue ?? "").trim();
+      });
       const raw = (map.recon_gridMode || "").toLowerCase();
       const gridMode: GridMode =
-        raw === "full" ? "full"
-        : raw === "currentyear" ? "currentYear"
-        : raw === "off" ? "off"
-        : DEFAULT_GRID_MODE;
+        raw === "full"
+          ? "full"
+          : raw === "currentyear"
+            ? "currentYear"
+            : raw === "off"
+              ? "off"
+              : DEFAULT_GRID_MODE;
       return {
         year: map.termSet_yearPeriod || YEAR_TERMSET,
         docType: map.termSet_documentType || DOCTYPE_TERMSET,
@@ -2297,8 +3232,16 @@ export default function FolderManager({
   // redeploy: recon_writeDelayMs / recon_batchSize / recon_cooldownMs. Falls back to
   // the module defaults. Lets the client dial the delay down to find their tenant's
   // throttle floor (withThrottleRetry catches any 429 that slips through).
-  const loadReconThrottle = async (): Promise<{ delayMs: number; batchSize: number; cooldownMs: number }> => {
-    const fallback = { delayMs: RECON_WRITE_DELAY_MS, batchSize: RECON_BATCH_SIZE, cooldownMs: RECON_COOLDOWN_MS };
+  const loadReconThrottle = async (): Promise<{
+    delayMs: number;
+    batchSize: number;
+    cooldownMs: number;
+  }> => {
+    const fallback = {
+      delayMs: RECON_WRITE_DELAY_MS,
+      batchSize: RECON_BATCH_SIZE,
+      cooldownMs: RECON_COOLDOWN_MS,
+    };
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
@@ -2308,9 +3251,11 @@ export default function FolderManager({
       if (!res.ok) return fallback;
       const data = await res.json();
       const map: Record<string, string> = {};
-      ((data.value ?? []) as Array<{ Title: string; SettingValue: string }>).forEach(
-        (item) => { map[item.Title] = (item.SettingValue ?? "").trim(); },
-      );
+      (
+        (data.value ?? []) as Array<{ Title: string; SettingValue: string }>
+      ).forEach((item) => {
+        map[item.Title] = (item.SettingValue ?? "").trim();
+      });
       const num = (v: string | undefined, d: number): number => {
         const n = Number(v);
         return Number.isFinite(n) && n > 0 ? n : d;
@@ -2371,17 +3316,20 @@ export default function FolderManager({
        ALWAYS_FULL_PASSES in shared/reconScope.ts.
        Keyed on `termSetGuid`: mode rows carry no `key` once parsed, and the term set is what
        actually identifies a segment. */
-    const modes = runScope().segments.length > 0
-      ? (await loadReconModes()).filter((m) =>
-          runScope().segments.some((x) => x.key === m.termSetGuid))
-      : await loadReconModes();
+    const modes =
+      runScope().segments.length > 0
+        ? (await loadReconModes()).filter((m) =>
+            runScope().segments.some((x) => x.key === m.termSetGuid),
+          )
+        : await loadReconModes();
     for (const mode of modes) {
       // Segment container: not a mapped term, but groups target it via the term-set GUID.
       // Its full name is the TERM SET's name, read live. mode.stagingFolder cannot serve
       // here — in DMS Config it already holds the abbreviation ("GHO"), which is exactly
       // the string Full Name exists to explain. Falls back to the folder name if the read
       // fails, so a term-store hiccup costs a label, not the run.
-      const segmentFullName = (await loadTermSetName(mode.termSetGuid)) ?? mode.stagingFolder;
+      const segmentFullName =
+        (await loadTermSetName(mode.termSetGuid)) ?? mode.stagingFolder;
       // The term-set GUID IS now placed in every descendant's ancestorTerms (2026-08-09),
       // so a segment-tier row can reach the segment's folders — which is what the C-Level
       // "view one business segment" persona is.
@@ -2392,119 +3340,167 @@ export default function FolderManager({
       // business segment. The fanned loop therefore accepts a segment-tier inheritance for
       // **SEGVIEW only** (see segmentTermSets there). Withholding the term entirely was the
       // blunter version of the same rule and made the intended role unusable.
-      out.push({ termGuid: null, assignTerm: mode.termSetGuid, ancestorTerms: [], relPath: `/${mode.stagingFolder}`, label: mode.stagingFolder, fullName: segmentFullName, section: mode.stagingFolder, isLeaf: false, termSetGuid: mode.termSetGuid });
+      out.push({
+        termGuid: null,
+        assignTerm: mode.termSetGuid,
+        ancestorTerms: [],
+        relPath: `/${mode.stagingFolder}`,
+        label: mode.stagingFolder,
+        fullName: segmentFullName,
+        section: mode.stagingFolder,
+        isLeaf: false,
+        termSetGuid: mode.termSetGuid,
+      });
       // A failure anywhere in this segment's tree marks the WHOLE segment incomplete.
       // Targets gathered before the failure are kept (creating a subset of folders is
       // harmless and idempotent) — but prune must not run against a partial picture.
       try {
-      const tops = await loadReconTops(mode.termSetGuid);
-      for (const top of tops) {
-        // Term labels are NOT safe as folder names. A "/" is the worst case — it is both
-        // rejected by SharePoint (HTTP 400, SPException -2130575245) and read as a path
-        // separator, so it silently implies an extra folder level. Real example: the
-        // Minamas unit "Value Creation / Value Transformation".
-        // Path segments are sanitised; the DISPLAY label and the map row Title keep the
-        // raw term text, so the log and the index still read like the term store.
-        // Folder names come from the abbreviation list, NOT the term label. The
-        // labels are long and their fullwidth ampersands cost 9 encoded characters
-        // each, which put the worst-case path within 73 characters of the ~330
-        // limit where GetFolderByServerRelativeUrl starts returning 400.
-        // See the 2026-07-30 folder-abbreviation-naming spec.
-        //
-        // sanitizeFolderSegment still applies: a "/" in a name is both rejected by
-        // SharePoint and read as a path separator.
-        //
-        // A term with no abbreviation is SKIPPED and reported, never guessed at.
-        // Falling back to the label would create a folder at a path the next run
-        // does not expect, and uploads resolve by UniqueId so nobody would notice.
-        //
-        // `depth` is 1-based (top = the first level in the segment's Levels chain).
-        // It resolves the level NAME the orphan-repair pass matches on, so a dead
-        // "Legal" department can never be repaired from a live "Legal" unit.
-        const levelNames =
-          levelNamesBySet.get((mode.termSetGuid ?? "").trim().toLowerCase()) ??
-          FALLBACK_LEVEL_NAMES;
-        // How deep the PERMISSIONED tiers go — `levelNames` is already filtered to
-        // them (see loadReconLevelNames). Caps the walk below.
-        //
-        // Until 2026-08-10 the walk recursed until a term had no children, which was
-        // correct only because nothing was ever nested below Unit. The client's
-        // SubUnit tier nests INSIDE the segment term set but INHERITS the unit's ACL,
-        // so an uncapped walk would create an ACL'd folder per subunit carrying only
-        // the owners group — invisible to the people who need it — and would stop
-        // Units being leaves, moving the Year × Document Type grid onto subunits.
-        // The term tree and the Levels chain now agree deliberately, not by accident.
-        const permissionedDepth = Math.max(1, levelNames.length);
-        const seg = (termGuid: string, label: string, depth: number): string | undefined => {
-          const abbrev = lookupAbbrev(abbrevIndex, termGuid);
-          if (abbrev === undefined) {
-            missingAbbrev.push({
-              termGuid,
-              label,
-              level: levelNames[depth - 1] ?? `Level ${depth}`,
-            });
-            return undefined;
-          }
-          return sanitizeFolderSegment(abbrev) || abbrev;
-        };
-        const topSeg = seg(top.id, top.label, 1);
-        if (topSeg === undefined) continue; // reported; its children are unreachable
-        abbrevTargets.push({ parentPath: `/${mode.stagingFolder}`, termGuid: top.id, abbreviation: topSeg, label: top.label });
-        // ancestorTerms leads with the SEGMENT (the term-set GUID) since 2026-08-09, so a
-        // segment-tier row reaches this department and everything under it. Restricted to
-        // SEGVIEW in the fanned loop — see segmentTermSets there.
-        const topTarget: ProvTarget = { termGuid: top.id, assignTerm: top.id, ancestorTerms: [mode.termSetGuid], relPath: `/${mode.stagingFolder}/${topSeg}`, label: `${mode.stagingFolder} > ${top.label}`, fullName: top.label, section: mode.stagingFolder, isLeaf: false, termSetGuid: mode.termSetGuid };
-        out.push(topTarget);
-        // Recurse; returns whether the term had children. A term with no children
-        // is a leaf (the upload target) and gets the Year × Document Type grid.
-        // `ancestors` carries raw labels for display, `pathAncestors` the sanitised
-        // segments for the folder path — they can differ and must not be conflated.
-        // `termAncestors` mirrors `ancestors` but carries term GUIDs rather than
-        // labels, and INCLUDES top (which `ancestors` excludes) because a row on
-        // the top tier fans down just like any other non-leaf row.
-        const walk = async (
-          parentId: string,
-          ancestors: string[],
-          pathAncestors: string[],
-          termAncestors: string[],
-        ): Promise<boolean> => {
-          // STOP at the permissioned boundary. `ancestors` excludes top, so a direct
-          // child of top is depth 2. Returning false (rather than skipping inside the
-          // loop) is what makes the caller mark this term a LEAF — the deepest
-          // permissioned folder, which is the upload target and where the grid hangs.
-          // Anything deeper in the term tree is a below-Unit tier: created on demand
-          // by the upload form, inheriting this folder's ACL, never provisioned here.
-          if (ancestors.length + 2 > permissionedDepth) return false;
-          const children = await loadReconChildren(mode.termSetGuid, parentId);
-          for (const child of children) {
-            // ancestors excludes `top`, so a direct child of top has depth 2.
-            const childSeg = seg(child.id, child.label, ancestors.length + 2);
-            if (childSeg === undefined) continue; // reported; skip this subtree
-            const chain = [...ancestors, child.label];
-            const pathChain = [...pathAncestors, childSeg];
-            const termChain = [...termAncestors, child.id];
-            const parentPath = `/${mode.stagingFolder}/${topSeg}${pathAncestors.length > 0 ? "/" + pathAncestors.join("/") : ""}`;
-            abbrevTargets.push({ parentPath, termGuid: child.id, abbreviation: childSeg, label: child.label });
-            const childTarget: ProvTarget = {
-              termGuid: child.id,
-              assignTerm: child.id,
-              ancestorTerms: termAncestors,
-              relPath: `/${mode.stagingFolder}/${topSeg}/${pathChain.join("/")}`,
-              label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
-              fullName: child.label,
-              section: mode.stagingFolder,
-              isLeaf: false,
-              termSetGuid: mode.termSetGuid,
-            };
-            out.push(childTarget);
-            childTarget.isLeaf = !(await walk(child.id, chain, pathChain, termChain));
-          }
-          return children.length > 0;
-        };
-        // termAncestors starts with the SEGMENT then the top term, so every descendant
-        // inherits both. Outermost first, matching the ProvTarget contract.
-        topTarget.isLeaf = !(await walk(top.id, [], [], [mode.termSetGuid, top.id]));
-      }
+        const tops = await loadReconTops(mode.termSetGuid);
+        for (const top of tops) {
+          // Term labels are NOT safe as folder names. A "/" is the worst case — it is both
+          // rejected by SharePoint (HTTP 400, SPException -2130575245) and read as a path
+          // separator, so it silently implies an extra folder level. Real example: the
+          // Minamas unit "Value Creation / Value Transformation".
+          // Path segments are sanitised; the DISPLAY label and the map row Title keep the
+          // raw term text, so the log and the index still read like the term store.
+          // Folder names come from the abbreviation list, NOT the term label. The
+          // labels are long and their fullwidth ampersands cost 9 encoded characters
+          // each, which put the worst-case path within 73 characters of the ~330
+          // limit where GetFolderByServerRelativeUrl starts returning 400.
+          // See the 2026-07-30 folder-abbreviation-naming spec.
+          //
+          // sanitizeFolderSegment still applies: a "/" in a name is both rejected by
+          // SharePoint and read as a path separator.
+          //
+          // A term with no abbreviation is SKIPPED and reported, never guessed at.
+          // Falling back to the label would create a folder at a path the next run
+          // does not expect, and uploads resolve by UniqueId so nobody would notice.
+          //
+          // `depth` is 1-based (top = the first level in the segment's Levels chain).
+          // It resolves the level NAME the orphan-repair pass matches on, so a dead
+          // "Legal" department can never be repaired from a live "Legal" unit.
+          const levelNames =
+            levelNamesBySet.get(
+              (mode.termSetGuid ?? "").trim().toLowerCase(),
+            ) ?? FALLBACK_LEVEL_NAMES;
+          // How deep the PERMISSIONED tiers go — `levelNames` is already filtered to
+          // them (see loadReconLevelNames). Caps the walk below.
+          //
+          // Until 2026-08-10 the walk recursed until a term had no children, which was
+          // correct only because nothing was ever nested below Unit. The client's
+          // SubUnit tier nests INSIDE the segment term set but INHERITS the unit's ACL,
+          // so an uncapped walk would create an ACL'd folder per subunit carrying only
+          // the owners group — invisible to the people who need it — and would stop
+          // Units being leaves, moving the Year × Document Type grid onto subunits.
+          // The term tree and the Levels chain now agree deliberately, not by accident.
+          const permissionedDepth = Math.max(1, levelNames.length);
+          const seg = (
+            termGuid: string,
+            label: string,
+            depth: number,
+          ): string | undefined => {
+            const abbrev = lookupAbbrev(abbrevIndex, termGuid);
+            if (abbrev === undefined) {
+              missingAbbrev.push({
+                termGuid,
+                label,
+                level: levelNames[depth - 1] ?? `Level ${depth}`,
+              });
+              return undefined;
+            }
+            return sanitizeFolderSegment(abbrev) || abbrev;
+          };
+          const topSeg = seg(top.id, top.label, 1);
+          if (topSeg === undefined) continue; // reported; its children are unreachable
+          abbrevTargets.push({
+            parentPath: `/${mode.stagingFolder}`,
+            termGuid: top.id,
+            abbreviation: topSeg,
+            label: top.label,
+          });
+          // ancestorTerms leads with the SEGMENT (the term-set GUID) since 2026-08-09, so a
+          // segment-tier row reaches this department and everything under it. Restricted to
+          // SEGVIEW in the fanned loop — see segmentTermSets there.
+          const topTarget: ProvTarget = {
+            termGuid: top.id,
+            assignTerm: top.id,
+            ancestorTerms: [mode.termSetGuid],
+            relPath: `/${mode.stagingFolder}/${topSeg}`,
+            label: `${mode.stagingFolder} > ${top.label}`,
+            fullName: top.label,
+            section: mode.stagingFolder,
+            isLeaf: false,
+            termSetGuid: mode.termSetGuid,
+          };
+          out.push(topTarget);
+          // Recurse; returns whether the term had children. A term with no children
+          // is a leaf (the upload target) and gets the Year × Document Type grid.
+          // `ancestors` carries raw labels for display, `pathAncestors` the sanitised
+          // segments for the folder path — they can differ and must not be conflated.
+          // `termAncestors` mirrors `ancestors` but carries term GUIDs rather than
+          // labels, and INCLUDES top (which `ancestors` excludes) because a row on
+          // the top tier fans down just like any other non-leaf row.
+          const walk = async (
+            parentId: string,
+            ancestors: string[],
+            pathAncestors: string[],
+            termAncestors: string[],
+          ): Promise<boolean> => {
+            // STOP at the permissioned boundary. `ancestors` excludes top, so a direct
+            // child of top is depth 2. Returning false (rather than skipping inside the
+            // loop) is what makes the caller mark this term a LEAF — the deepest
+            // permissioned folder, which is the upload target and where the grid hangs.
+            // Anything deeper in the term tree is a below-Unit tier: created on demand
+            // by the upload form, inheriting this folder's ACL, never provisioned here.
+            if (ancestors.length + 2 > permissionedDepth) return false;
+            const children = await loadReconChildren(
+              mode.termSetGuid,
+              parentId,
+            );
+            for (const child of children) {
+              // ancestors excludes `top`, so a direct child of top has depth 2.
+              const childSeg = seg(child.id, child.label, ancestors.length + 2);
+              if (childSeg === undefined) continue; // reported; skip this subtree
+              const chain = [...ancestors, child.label];
+              const pathChain = [...pathAncestors, childSeg];
+              const termChain = [...termAncestors, child.id];
+              const parentPath = `/${mode.stagingFolder}/${topSeg}${pathAncestors.length > 0 ? "/" + pathAncestors.join("/") : ""}`;
+              abbrevTargets.push({
+                parentPath,
+                termGuid: child.id,
+                abbreviation: childSeg,
+                label: child.label,
+              });
+              const childTarget: ProvTarget = {
+                termGuid: child.id,
+                assignTerm: child.id,
+                ancestorTerms: termAncestors,
+                relPath: `/${mode.stagingFolder}/${topSeg}/${pathChain.join("/")}`,
+                label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
+                fullName: child.label,
+                section: mode.stagingFolder,
+                isLeaf: false,
+                termSetGuid: mode.termSetGuid,
+              };
+              out.push(childTarget);
+              childTarget.isLeaf = !(await walk(
+                child.id,
+                chain,
+                pathChain,
+                termChain,
+              ));
+            }
+            return children.length > 0;
+          };
+          // termAncestors starts with the SEGMENT then the top term, so every descendant
+          // inherits both. Outermost first, matching the ProvTarget contract.
+          topTarget.isLeaf = !(await walk(
+            top.id,
+            [],
+            [],
+            [mode.termSetGuid, top.id],
+          ));
+        }
       } catch (e) {
         incomplete.push(`${mode.stagingFolder} — ${(e as Error).message}`);
         incompleteSections.push(mode.stagingFolder);
@@ -2531,7 +3527,6 @@ export default function FolderManager({
   // and manual extra grants survive. Folders whose term has no group-map rows are
   // logged as a warning (locked admin-only until groups are added).
   const runReconciliation = async (): Promise<void> => {
-    setReconConfirm(false);
     setBusy(true);
     setReconRunning(true);
     setFolderFeeds(emptyFeeds());
@@ -2560,8 +3555,10 @@ export default function FolderManager({
         setReconPhase("Generating folders…");
       }
     };
-    const bumpFolders = (): void => setReconCounts((c) => ({ ...c, folders: c.folders + 1 }));
-    const bumpAssigns = (): void => setReconCounts((c) => ({ ...c, assigns: c.assigns + 1 }));
+    const bumpFolders = (): void =>
+      setReconCounts((c) => ({ ...c, folders: c.folders + 1 }));
+    const bumpAssigns = (): void =>
+      setReconCounts((c) => ({ ...c, assigns: c.assigns + 1 }));
     try {
       // Permission levels, resolved HERE and not read from state.
       //
@@ -2589,14 +3586,16 @@ export default function FolderManager({
         setReconRunning(false);
         return;
       }
-      const fullCtrlId = defs.find(r => r.name === "Full Control")?.id;
-      const readId = defs.find(r => r.name === "Read")?.id;
+      const fullCtrlId = defs.find((r) => r.name === "Full Control")?.id;
+      const readId = defs.find((r) => r.name === "Read")?.id;
 
       /* THE OWNERS GROUP, RESOLVED BY THE RUN ITSELF — see `resolveOwnerGroupId`. State filled by a
          mount-time effect is not visible to this closure, so a run started before it settled read
          `null` throughout. Uses the state when it is already there, otherwise fetches. */
       const ownersId: number | undefined =
-        typeof ownerGroupId === "number" ? ownerGroupId : await resolveOwnerGroupId();
+        typeof ownerGroupId === "number"
+          ? ownerGroupId
+          : await resolveOwnerGroupId();
       /* REFUSES, for the same reason the empty-levels check above does — and the reason is stronger
          here. Without the Owners id: the admin pages are not locked (safe), a library whose
          inheritance this run BREAKS never gets Owners back (a lockout), and `protectedIds` in the
@@ -2616,7 +3615,11 @@ export default function FolderManager({
       // Read now serves two purposes: recognising a leftover ancestor browse grant (they
       // are all exactly Read) and granting site entry below. Without it the run still
       // provisions folders correctly — it just cannot do either of those.
-      if (readId === undefined) entries.push({ msg: `⚠ "Read" role definition not found — site entry and ancestor-browse cleanup will be skipped`, ok: false });
+      if (readId === undefined)
+        entries.push({
+          msg: `⚠ "Read" role definition not found — site entry and ancestor-browse cleanup will be skipped`,
+          ok: false,
+        });
 
       // ── Site entry, FIRST ──────────────────────────────────────────────────────
       //
@@ -2644,14 +3647,21 @@ export default function FolderManager({
         // creating when the group list cannot be read — creating on an unreadable list would make
         // a second entry group alongside the real one, both looking correct. The catch below
         // already treats that as non-fatal and names it in the log.
-        const ensured = await ensureSiteEntryGroup(context.spHttpClient, siteUrl);
-        if (ensured.created) entries.push({ msg: `${siteEntryGroupTitle()} created`, ok: true });
+        const ensured = await ensureSiteEntryGroup(
+          context.spHttpClient,
+          siteUrl,
+        );
+        if (ensured.created)
+          entries.push({ msg: `${siteEntryGroupTitle()} created`, ok: true });
         const entryId = ensured.group.id;
         // Carried out of this block for the Site Pages check below — that assertion needs the same
         // principal, and re-resolving it would be a second answer to "which group is the entry group".
         sitePagesEntryId = entryId;
         if (readId === undefined) {
-          entries.push({ msg: `⚠ ${siteEntryGroupTitle()}: cannot grant site Read — no "Read" role definition`, ok: false });
+          entries.push({
+            msg: `⚠ ${siteEntryGroupTitle()}: cannot grant site Read — no "Read" role definition`,
+            ok: false,
+          });
         } else {
           // The root web always has unique permissions, so there is no inheritance to break
           // here — unlike a library or a page. Grant directly.
@@ -2667,26 +3677,43 @@ export default function FolderManager({
           let holds = false;
           if (webRas.ok) {
             const raJson = await webRas.json();
-            holds = ((raJson.value ?? []) as Array<{ PrincipalId?: number }>)
-              .some((ra) => ra.PrincipalId === entryId);
+            holds = (
+              (raJson.value ?? []) as Array<{ PrincipalId?: number }>
+            ).some((ra) => ra.PrincipalId === entryId);
           }
           if (holds) {
-            entries.push({ msg: `${siteEntryGroupTitle()}: already holds a role on the site ✓`, ok: true });
+            entries.push({
+              msg: `${siteEntryGroupTitle()}: already holds a role on the site ✓`,
+              ok: true,
+            });
           } else {
-            const grant = await withThrottleRetry(() => context.spHttpClient.post(
-              `${siteUrl}/_api/web/roleassignments/addroleassignment(principalid=${entryId},roledefid=${readId})`,
-              SPHttpClient.configurations.v1,
-              { headers: { Accept: "application/json;odata=nometadata" } },
-            ));
-            entries.push(grant.ok
-              ? { msg: `${siteEntryGroupTitle()} → Read on the site ✓`, ok: true }
-              : { msg: `⚠ ${siteEntryGroupTitle()} → Read on the site FAILED (HTTP ${grant.status}) — users will reach folders by direct link only`, ok: false });
+            const grant = await withThrottleRetry(() =>
+              context.spHttpClient.post(
+                `${siteUrl}/_api/web/roleassignments/addroleassignment(principalid=${entryId},roledefid=${readId})`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              ),
+            );
+            entries.push(
+              grant.ok
+                ? {
+                    msg: `${siteEntryGroupTitle()} → Read on the site ✓`,
+                    ok: true,
+                  }
+                : {
+                    msg: `⚠ ${siteEntryGroupTitle()} → Read on the site FAILED (HTTP ${grant.status}) — users will reach folders by direct link only`,
+                    ok: false,
+                  },
+            );
           }
         }
       } catch (e) {
         // Never fatal. Folder provisioning is still worth doing, and the failure is named
         // rather than swallowed so it is not mistaken for a folder problem.
-        entries.push({ msg: `⚠ Site entry could not be ensured — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ Site entry could not be ensured — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       /* ── Submission reference columns ───────────────────────────────────────────
@@ -2710,15 +3737,32 @@ export default function FolderManager({
       try {
         for (const title of allLibraryTitles()) {
           try {
-            const madeSub = await ensureColumn(context.spHttpClient, siteUrl, title, REF_COLUMNS[0], "Submission Id");
-            const madeBat = await ensureColumn(context.spHttpClient, siteUrl, title, REF_COLUMNS[1], "Batch Id");
+            const madeSub = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              REF_COLUMNS[0],
+              "Submission Id",
+            );
+            const madeBat = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              REF_COLUMNS[1],
+              "Batch Id",
+            );
             /* ⚠ ALSO ON ALL FOUR, and for the SAME reason as the pair above: Auto-route's copy carries
                over only columns that exist at the destination. The marker is meaningless in `Documents`
                — the file has already arrived — but a column absent there would silently strip it from
                every routed file, and the day someone wants to find what was bulk-imported it would be
                gone. Cheap to keep, impossible to recover. */
             const madeImp = await ensureColumn(
-              context.spHttpClient, siteUrl, title, BULK_IMPORT_COLUMN, "Bulk Import", "Boolean",
+              context.spHttpClient,
+              siteUrl,
+              title,
+              BULK_IMPORT_COLUMN,
+              "Bulk Import",
+              "Boolean",
             );
             /* ⚠ AND THE ARCHIVE MARKER, on every library for the same reason again. It is written in
                the ARCHIVE, but the column must exist in `Documents` too or the move that sets it has
@@ -2726,7 +3770,12 @@ export default function FolderManager({
                unknown field name in a `$select` fails the WHOLE request (gotcha #11) rather than
                returning the row without it. */
             const madeArc = await ensureColumn(
-              context.spHttpClient, siteUrl, title, ARCHIVED_COLUMN, "Archived", "Boolean",
+              context.spHttpClient,
+              siteUrl,
+              title,
+              ARCHIVED_COLUMN,
+              "Archived",
+              "Boolean",
             );
             /* ⚠ AND THE PER-FILE REFERENCE — the JOIN KEY of the submission record (2026-08-27).
                On all four for the third time and the strongest reason yet: this is the ONLY thing
@@ -2736,7 +3785,11 @@ export default function FolderManager({
                renders as DELETED — so a missing column here would report every successfully approved
                file to its own uploader as destroyed. Spec §2. */
             const madeSfi = await ensureColumn(
-              context.spHttpClient, siteUrl, title, SUBMISSION_FILE_COLUMN, "Submission File Id",
+              context.spHttpClient,
+              siteUrl,
+              title,
+              SUBMISSION_FILE_COLUMN,
+              "Submission File Id",
             );
             /* ⚠ AND THE UPLOADER'S KEYWORDS (2026-09-04), on every library for the fourth time and
                the same reason: the routed copy keeps only columns that EXIST at the destination, so a
@@ -2744,16 +3797,36 @@ export default function FolderManager({
                moment it was approved — the one point at which it stops being a draft and becomes the
                record people search. Silent, on a green run. */
             const madeKey = await ensureColumn(
-              context.spHttpClient, siteUrl, title, KEYWORD_COLUMN, "Keyword",
+              context.spHttpClient,
+              siteUrl,
+              title,
+              KEYWORD_COLUMN,
+              "Keyword",
             );
-            if (madeSub || madeBat || madeImp || madeArc || madeSfi || madeKey) {
-              entries.push({ msg: `  ↳ ${title}: submission reference / bulk import column(s) created ✓`, ok: true });
+            if (
+              madeSub ||
+              madeBat ||
+              madeImp ||
+              madeArc ||
+              madeSfi ||
+              madeKey
+            ) {
+              entries.push({
+                msg: `  ↳ ${title}: submission reference / bulk import column(s) created ✓`,
+                ok: true,
+              });
             }
           } catch (e) {
-            entries.push({ msg: `  ⚠ ${title}: submission reference / bulk import columns could not be ensured — ${(e as Error).message}. Uploads still work; My Submissions will not group them, and bulk imports will WAIT IN THE APPROVAL QUEUE instead of auto-approving.`, ok: false });
+            entries.push({
+              msg: `  ⚠ ${title}: submission reference / bulk import columns could not be ensured — ${(e as Error).message}. Uploads still work; My Submissions will not group them, and bulk imports will WAIT IN THE APPROVAL QUEUE instead of auto-approving.`,
+              ok: false,
+            });
           }
         }
-        entries.push({ msg: `Submission reference and bulk import columns: present on all CRS libraries ✓`, ok: true });
+        entries.push({
+          msg: `Submission reference and bulk import columns: present on all CRS libraries ✓`,
+          ok: true,
+        });
 
         /* ⚠ THE APPROVER'S EMAIL, on the TWO APPROVAL-SIDE libraries only (2026-09-01).
            SharePoint records no "approved by" field, and `Editor` is not a stand-in for one — proven
@@ -2771,17 +3844,30 @@ export default function FolderManager({
           if (key === "StagingHC" && !hcAvailable()) continue;
           try {
             const madeAppr = await ensureColumn(
-              context.spHttpClient, siteUrl, title, APPROVED_BY_COLUMN, "Approved By",
+              context.spHttpClient,
+              siteUrl,
+              title,
+              APPROVED_BY_COLUMN,
+              "Approved By",
             );
             if (madeAppr) {
-              entries.push({ msg: `  ↳ ${title}: Approved By column created ✓`, ok: true });
+              entries.push({
+                msg: `  ↳ ${title}: Approved By column created ✓`,
+                ok: true,
+              });
             }
           } catch (e) {
-            entries.push({ msg: `  ⚠ ${title}: Approved By column could not be ensured — ${(e as Error).message}. Approving still works; the audit log will keep naming the uploader as the approver, and approval emails will keep being suppressed.`, ok: false });
+            entries.push({
+              msg: `  ⚠ ${title}: Approved By column could not be ensured — ${(e as Error).message}. Approving still works; the audit log will keep naming the uploader as the approver, and approval emails will keep being suppressed.`,
+              ok: false,
+            });
           }
         }
       } catch (e) {
-        entries.push({ msg: `  ⚠ Submission reference / bulk import columns not checked — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `  ⚠ Submission reference / bulk import columns not checked — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       /* ── Can the site-entry group READ Site Pages? ──────────────────────────────
@@ -2811,15 +3897,24 @@ export default function FolderManager({
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
         if (!spRes.ok) {
-          entries.push({ msg: `  ⚠ Site Pages: could not be read (HTTP ${spRes.status}) — whether ${siteEntryGroupTitle()} can open the site's pages was NOT checked`, ok: false });
+          entries.push({
+            msg: `  ⚠ Site Pages: could not be read (HTTP ${spRes.status}) — whether ${siteEntryGroupTitle()} can open the site's pages was NOT checked`,
+            ok: false,
+          });
         } else {
           const sp = await spRes.json();
           if (sp.HasUniqueRoleAssignments !== true) {
             // Inheriting from a web where the entry group holds Read, which the check above just
             // ensured. Nothing to do, and saying so is what makes a later `⚠` meaningful.
-            entries.push({ msg: `Site Pages: inherits site permissions — every member can open the home page ✓`, ok: true });
+            entries.push({
+              msg: `Site Pages: inherits site permissions — every member can open the home page ✓`,
+              ok: true,
+            });
           } else if (sitePagesEntryId === undefined) {
-            entries.push({ msg: `  ⚠ Site Pages has unique permissions and ${siteEntryGroupTitle()} could not be resolved — page access NOT checked`, ok: false });
+            entries.push({
+              msg: `  ⚠ Site Pages has unique permissions and ${siteEntryGroupTitle()} could not be resolved — page access NOT checked`,
+              ok: false,
+            });
           } else {
             const raRes = await context.spHttpClient.get(
               `${siteUrl}/_api/web/lists(guid'${sp.Id}')/roleassignments?$select=PrincipalId`,
@@ -2827,22 +3922,34 @@ export default function FolderManager({
               { headers: { Accept: "application/json;odata=nometadata" } },
             );
             if (!raRes.ok) {
-              entries.push({ msg: `  ⚠ Site Pages has unique permissions and its ACL could not be read (HTTP ${raRes.status}) — page access NOT checked`, ok: false });
+              entries.push({
+                msg: `  ⚠ Site Pages has unique permissions and its ACL could not be read (HTTP ${raRes.status}) — page access NOT checked`,
+                ok: false,
+              });
             } else {
               const raJson = await raRes.json();
-              const listed = ((raJson.value ?? []) as Array<{ PrincipalId?: number }>)
-                .some((ra) => ra.PrincipalId === sitePagesEntryId);
-              entries.push(listed
-                ? { msg: `Site Pages: unique permissions, ${siteEntryGroupTitle()} is granted ✓`, ok: true }
-                : {
-                  msg: `⚠ NOBODY CAN OPEN THE SITE HOME PAGE: Site Pages has unique permissions and ${siteEntryGroupTitle()} is NOT on it. Every page that inherits — the home page included — is refused for every non-administrator, while pages with their own permissions still work. Fix: Site Pages → Library settings → Permissions for this library → Grant Permissions → ${siteEntryGroupTitle()} → Read. Do NOT tick "share everything in this folder": it would unlock the administrator pages.`,
-                  ok: false,
-                });
+              const listed = (
+                (raJson.value ?? []) as Array<{ PrincipalId?: number }>
+              ).some((ra) => ra.PrincipalId === sitePagesEntryId);
+              entries.push(
+                listed
+                  ? {
+                      msg: `Site Pages: unique permissions, ${siteEntryGroupTitle()} is granted ✓`,
+                      ok: true,
+                    }
+                  : {
+                      msg: `⚠ NOBODY CAN OPEN THE SITE HOME PAGE: Site Pages has unique permissions and ${siteEntryGroupTitle()} is NOT on it. Every page that inherits — the home page included — is refused for every non-administrator, while pages with their own permissions still work. Fix: Site Pages → Library settings → Permissions for this library → Grant Permissions → ${siteEntryGroupTitle()} → Read. Do NOT tick "share everything in this folder": it would unlock the administrator pages.`,
+                      ok: false,
+                    },
+              );
             }
           }
         }
       } catch (e) {
-        entries.push({ msg: `  ⚠ Site Pages access could not be checked — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `  ⚠ Site Pages access could not be checked — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       // ── Library-scope grants ───────────────────────────────────────────────────
@@ -2869,18 +3976,37 @@ export default function FolderManager({
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
         if (!scopedRes.ok) {
-          entries.push({ msg: `Library access: skipped — Scope/Target columns not present on CRS Group Map`, ok: true });
+          entries.push({
+            msg: `Library access: skipped — Scope/Target columns not present on CRS Group Map`,
+            ok: true,
+          });
         } else {
           const scopedJson = await scopedRes.json();
-          const libRows = ((scopedJson.value ?? []) as Array<{ GroupId?: string; GroupName?: string; Role?: string; Scope?: string; Target?: string }>)
+          const libRows = (
+            (scopedJson.value ?? []) as Array<{
+              GroupId?: string;
+              GroupName?: string;
+              Role?: string;
+              Scope?: string;
+              Target?: string;
+            }>
+          )
             .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "library")
-            .filter((r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "");
+            .filter(
+              (r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "",
+            );
           if (libRows.length === 0) {
-            entries.push({ msg: `Library access: no Library-scope mappings`, ok: true });
+            entries.push({
+              msg: `Library access: no Library-scope mappings`,
+              ok: true,
+            });
           } else {
             // Needed to re-grant after a break — see below. Resolved here rather than
             // threaded out of the site-entry pass so this block stands alone.
-            const groupsNow = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+            const groupsNow = await fetchAllSiteGroups(
+              context.spHttpClient,
+              siteUrl,
+            );
             const entryPid = findSiteEntryGroup(groupsNow)?.id;
             const brokenThisRun = new Set<string>();
             for (const row of libRows) {
@@ -2895,11 +4021,17 @@ export default function FolderManager({
               const roleDefId = defs.find((r) => r.name === levelName)?.id;
               const label = `${row.GroupName || row.GroupId} → ${libDisplayName(lib)}`;
               if (levelName === undefined) {
-                entries.push({ msg: `  ⚠ ${label}: role "${role}" grants nothing (retired or unknown) — skipped`, ok: false });
+                entries.push({
+                  msg: `  ⚠ ${label}: role "${role}" grants nothing (retired or unknown) — skipped`,
+                  ok: false,
+                });
                 continue;
               }
               if (roleDefId === undefined) {
-                entries.push({ msg: `  ⚠ ${label}: no "${levelName}" role definition on site — skipped`, ok: false });
+                entries.push({
+                  msg: `  ⚠ ${label}: no "${levelName}" role definition on site — skipped`,
+                  ok: false,
+                });
                 continue;
               }
               const listRes = await context.spHttpClient.get(
@@ -2908,7 +4040,10 @@ export default function FolderManager({
                 { headers: { Accept: "application/json;odata=nometadata" } },
               );
               if (!listRes.ok) {
-                entries.push({ msg: `  ⚠ ${label}: library "${libDisplayName(lib)}" not found — check the Target value`, ok: false });
+                entries.push({
+                  msg: `  ⚠ ${label}: library "${libDisplayName(lib)}" not found — check the Target value`,
+                  ok: false,
+                });
                 continue;
               }
               const listJson = await listRes.json();
@@ -2934,25 +4069,39 @@ export default function FolderManager({
                 );
                 if (before.ok) {
                   const bj = await before.json();
-                  entryHadAccess = ((bj.value ?? []) as Array<{ PrincipalId?: number }>)
-                    .some((ra) => ra.PrincipalId === entryPid);
+                  entryHadAccess = (
+                    (bj.value ?? []) as Array<{ PrincipalId?: number }>
+                  ).some((ra) => ra.PrincipalId === entryPid);
                 }
               }
-              if (listJson.HasUniqueRoleAssignments !== true && !brokenThisRun.has(listId)) {
+              if (
+                listJson.HasUniqueRoleAssignments !== true &&
+                !brokenThisRun.has(listId)
+              ) {
                 // copyRoleAssignments=false, always. With true, every inherited grant is
                 // copied forward, so the library stays visible to exactly the same people
                 // and the run reports success — a failure that is invisible from the log.
-                const broke = await withThrottleRetry(() => context.spHttpClient.post(
-                  `${listBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
-                  SPHttpClient.configurations.v1,
-                  { headers: { Accept: "application/json;odata=nometadata" } },
-                ));
+                const broke = await withThrottleRetry(() =>
+                  context.spHttpClient.post(
+                    `${listBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                    SPHttpClient.configurations.v1,
+                    {
+                      headers: { Accept: "application/json;odata=nometadata" },
+                    },
+                  ),
+                );
                 if (!broke.ok) {
-                  entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not break inheritance (HTTP ${broke.status}) — nothing granted`, ok: false });
+                  entries.push({
+                    msg: `  ✗ ${libDisplayName(lib)}: could not break inheritance (HTTP ${broke.status}) — nothing granted`,
+                    ok: false,
+                  });
                   continue;
                 }
                 brokenThisRun.add(listId);
-                entries.push({ msg: `  ↳ ${libDisplayName(lib)}: inheritance broken (no permissions copied)`, ok: true });
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}: inheritance broken (no permissions copied)`,
+                  ok: true,
+                });
                 // Two principals go back on, and BOTH are load-bearing.
                 //
                 // Owners: with nothing copied, the only remaining access is site collection
@@ -2960,10 +4109,20 @@ export default function FolderManager({
                 // lose the library.
                 if (fullCtrlId !== undefined) {
                   try {
-                    await addRoleAssignmentToList(listBase, ownersId, fullCtrlId);
-                    entries.push({ msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`, ok: true });
+                    await addRoleAssignmentToList(
+                      listBase,
+                      ownersId,
+                      fullCtrlId,
+                    );
+                    entries.push({
+                      msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`,
+                      ok: true,
+                    });
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                    entries.push({
+                      msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`,
+                      ok: false,
+                    });
                   }
                 }
                 // Site entry: the approval guard resolves the destination folder in
@@ -2976,21 +4135,40 @@ export default function FolderManager({
                   // It did not have access before, so it does not get any now. Logged rather
                   // than silent: on Staging this is the correct and intended outcome, and an
                   // unexplained absence here would look like the restore had failed.
-                  entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} had no access before — not granted (site entry is not library access)`, ok: true });
+                  entries.push({
+                    msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} had no access before — not granted (site entry is not library access)`,
+                    ok: true,
+                  });
                 } else if (entryPid !== undefined && readId !== undefined) {
                   try {
                     await addRoleAssignmentToList(listBase, entryPid, readId);
-                    entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read restored (keeps approval working)`, ok: true });
+                    entries.push({
+                      msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read restored (keeps approval working)`,
+                      ok: true,
+                    });
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not restore ${siteEntryGroupTitle()} — approvals may fail — ${(e as Error).message}`, ok: false });
+                    entries.push({
+                      msg: `  ✗ ${libDisplayName(lib)}: could not restore ${siteEntryGroupTitle()} — approvals may fail — ${(e as Error).message}`,
+                      ok: false,
+                    });
                   }
                 } else {
-                  entries.push({ msg: `  ⚠ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} or "Read" not resolved — approvals may fail until it holds Read here`, ok: false });
+                  entries.push({
+                    msg: `  ⚠ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} or "Read" not resolved — approvals may fail until it holds Read here`,
+                    ok: false,
+                  });
                 }
               }
               try {
-                await addRoleAssignmentToList(listBase, spGroupPrincipalId(row.GroupId ?? ""), roleDefId);
-                entries.push({ msg: `  ↳ ${label} → ${levelName} (library)`, ok: true });
+                await addRoleAssignmentToList(
+                  listBase,
+                  spGroupPrincipalId(row.GroupId ?? ""),
+                  roleDefId,
+                );
+                entries.push({
+                  msg: `  ↳ ${label} → ${levelName} (library)`,
+                  ok: true,
+                });
                 /* The panel is the library the row TARGETS, not a constant. Every library-scope
                    grant was pushed to the Documents feed regardless of its Target, so the 17
                    Staging grants appeared under "Documents group assignments" while the Staging
@@ -3001,18 +4179,31 @@ export default function FolderManager({
                    Falls back to Documents for an unrecognised Target rather than dropping the line:
                    a row aimed at a library that does not exist is already reported as an error
                    above, and losing its progress entry as well would hide the evidence. */
-                const panel: LibTarget = reconLibs().indexOf(lib as LibTarget) > -1 ? (lib as LibTarget) : "Documents";
-                pushAssign(panel, `${libDisplayName(lib)} → ${row.GroupName} (${levelName}, library scope)`, "ok");
+                const panel: LibTarget =
+                  reconLibs().indexOf(lib as LibTarget) > -1
+                    ? (lib as LibTarget)
+                    : "Documents";
+                pushAssign(
+                  panel,
+                  `${libDisplayName(lib)} → ${row.GroupName} (${levelName}, library scope)`,
+                  "ok",
+                );
                 bumpAssigns();
                 await tick();
               } catch (e) {
-                entries.push({ msg: `  ✗ ${label} → ${levelName} FAILED: ${(e as Error).message}`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${label} → ${levelName} FAILED: ${(e as Error).message}`,
+                  ok: false,
+                });
               }
             }
           }
         }
       } catch (e) {
-        entries.push({ msg: `⚠ Library access skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ Library access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       /* ── HC GATING IS CONFIGURED ─────────────────────────────────────────────
@@ -3046,9 +4237,14 @@ export default function FolderManager({
           if (!cfgRes.ok) {
             // Fails OPEN on the read: an unreadable config list proves nothing, and a false alarm
             // here would send an administrator chasing a row that is already there.
-            entries.push({ msg: `⚠ Could not check hcConfidentialityLevel (HTTP ${cfgRes.status}) — HC gating not verified`, ok: false });
+            entries.push({
+              msg: `⚠ Could not check hcConfidentialityLevel (HTTP ${cfgRes.status}) — HC gating not verified`,
+              ok: false,
+            });
           } else {
-            const rows = ((await cfgRes.json()).value ?? []) as Array<{ SettingValue?: string }>;
+            const rows = ((await cfgRes.json()).value ?? []) as Array<{
+              SettingValue?: string;
+            }>;
             const value = (rows[0]?.SettingValue ?? "").trim();
             if (value.length === 0) {
               entries.push({
@@ -3056,12 +4252,18 @@ export default function FolderManager({
                 ok: false,
               });
             } else {
-              entries.push({ msg: `✓ HC gating configured — "${value}" is restricted to cleared uploaders`, ok: true });
+              entries.push({
+                msg: `✓ HC gating configured — "${value}" is restricted to cleared uploaders`,
+                ok: true,
+              });
             }
           }
         }
       } catch (e) {
-        entries.push({ msg: `⚠ HC gating check skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ HC gating check skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       // ── SITE-ENTRY LIBRARY STATE ──────────────────────────────────────────────
@@ -3091,12 +4293,21 @@ export default function FolderManager({
       // matching. Gotcha #12, in a place where the cost of silence is over-exposure.
       try {
         setReconPhase("Checking site-entry library access…");
-        const groupsForEntry = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+        const groupsForEntry = await fetchAllSiteGroups(
+          context.spHttpClient,
+          siteUrl,
+        );
         const entryId = findSiteEntryGroup(groupsForEntry)?.id;
         if (entryId === undefined) {
-          entries.push({ msg: `⚠ ${siteEntryGroupTitle()}: group not found — site-entry library access not checked`, ok: false });
+          entries.push({
+            msg: `⚠ ${siteEntryGroupTitle()}: group not found — site-entry library access not checked`,
+            ok: false,
+          });
         } else if (readId === undefined) {
-          entries.push({ msg: `⚠ Site-entry library access: no "Read" role definition on site — skipped`, ok: false });
+          entries.push({
+            msg: `⚠ Site-entry library access: no "Read" role definition on site — skipped`,
+            ok: false,
+          });
         } else {
           for (const lib of reconLibs()) {
             // SITE_ENTRY_LIBS, not APPROVED_SIDE_LIBS — see the comment on that constant. The HC
@@ -3108,7 +4319,10 @@ export default function FolderManager({
               { headers: { Accept: "application/json;odata=nometadata" } },
             );
             if (!listRes.ok) {
-              entries.push({ msg: `  ⚠ ${libDisplayName(lib)}: library not found (HTTP ${listRes.status}) — site-entry access not checked`, ok: false });
+              entries.push({
+                msg: `  ⚠ ${libDisplayName(lib)}: library not found (HTTP ${listRes.status}) — site-entry access not checked`,
+                ok: false,
+              });
               continue;
             }
             const lj = await listRes.json();
@@ -3133,26 +4347,44 @@ export default function FolderManager({
                  copyRoleAssignments=false, as everywhere else: with true every inherited grant is
                  carried forward, so the library stays readable by exactly the same people and the
                  run reports success — a failure invisible from the log. */
-              const broke = await withThrottleRetry(() => context.spHttpClient.post(
-                `${entryListBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
-                SPHttpClient.configurations.v1,
-                { headers: { Accept: "application/json;odata=nometadata" } },
-              ));
+              const broke = await withThrottleRetry(() =>
+                context.spHttpClient.post(
+                  `${entryListBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ),
+              );
               if (!broke.ok) {
-                entries.push({ msg: `  ✗ ${libDisplayName(lib)}: INHERITS site permissions and could not be secured (HTTP ${broke.status}) — every site member can read this library`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${libDisplayName(lib)}: INHERITS site permissions and could not be secured (HTTP ${broke.status}) — every site member can read this library`,
+                  ok: false,
+                });
                 continue;
               }
-              entries.push({ msg: `  ↳ ${libDisplayName(lib)}: inherited site permissions — inheritance BROKEN (no permissions copied)`, ok: true });
+              entries.push({
+                msg: `  ↳ ${libDisplayName(lib)}: inherited site permissions — inheritance BROKEN (no permissions copied)`,
+                ok: true,
+              });
               /* Owners go straight back on. With nothing copied, the only remaining access is site
                  collection administrators, so an owner who is not also one would lose the library.
                  `typeof`, not `!== undefined`: ownerGroupId is `number | null`, and null slips past
                  an undefined check straight into the request as the string "null". */
               if (fullCtrlId !== undefined) {
                 try {
-                  await addRoleAssignmentToList(entryListBase, ownersId, fullCtrlId);
-                  entries.push({ msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`, ok: true });
+                  await addRoleAssignmentToList(
+                    entryListBase,
+                    ownersId,
+                    fullCtrlId,
+                  );
+                  entries.push({
+                    msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`,
+                    ok: true,
+                  });
                 } catch (e) {
-                  entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                  entries.push({
+                    msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`,
+                    ok: false,
+                  });
                 }
               }
               // Fall through deliberately: the site-entry rule below now applies to a library with
@@ -3166,20 +4398,33 @@ export default function FolderManager({
             if (!raRes.ok) {
               // Never guessed at: an unreadable ACL is not evidence of absence. Acting on it would
               // either re-grant what is already there or remove what nobody could see.
-              entries.push({ msg: `  ⚠ ${libDisplayName(lib)}: could not read permissions (HTTP ${raRes.status}) — site-entry state not enforced`, ok: false });
+              entries.push({
+                msg: `  ⚠ ${libDisplayName(lib)}: could not read permissions (HTTP ${raRes.status}) — site-entry state not enforced`,
+                ok: false,
+              });
               continue;
             }
             const raJson = await raRes.json();
-            const held = ((raJson.value ?? []) as Array<{ PrincipalId?: number; RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }> }>)
-              .filter((ra) => ra.PrincipalId === entryId);
+            const held = (
+              (raJson.value ?? []) as Array<{
+                PrincipalId?: number;
+                RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+              }>
+            ).filter((ra) => ra.PrincipalId === entryId);
 
             if (shouldHold && held.length === 0) {
               try {
                 await addRoleAssignmentToList(entryListBase, entryId, readId);
-                entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read GRANTED (approval resolves destinations as the approver and needs it)`, ok: true });
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read GRANTED (approval resolves destinations as the approver and needs it)`,
+                  ok: true,
+                });
                 bumpAssigns();
               } catch (e) {
-                entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not grant ${siteEntryGroupTitle()} — APPROVALS MAY FAIL — ${(e as Error).message}`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${libDisplayName(lib)}: could not grant ${siteEntryGroupTitle()} — APPROVALS MAY FAIL — ${(e as Error).message}`,
+                  ok: false,
+                });
               }
             } else if (!shouldHold && held.length > 0) {
               // Every binding, not just Read: a hand-made grant may be at any level, and removing
@@ -3188,26 +4433,45 @@ export default function FolderManager({
               for (const ra of held) {
                 for (const binding of ra.RoleDefinitionBindings ?? []) {
                   if (binding.Id === undefined) continue;
-                  const del = await withThrottleRetry(() => context.spHttpClient.post(
-                    `${entryListBase}/roleassignments/removeroleassignment(principalid=${entryId},roledefid=${binding.Id})`,
-                    SPHttpClient.configurations.v1,
-                    { headers: { Accept: "application/json;odata=nometadata" } },
-                  ));
+                  const del = await withThrottleRetry(() =>
+                    context.spHttpClient.post(
+                      `${entryListBase}/roleassignments/removeroleassignment(principalid=${entryId},roledefid=${binding.Id})`,
+                      SPHttpClient.configurations.v1,
+                      {
+                        headers: {
+                          Accept: "application/json;odata=nometadata",
+                        },
+                      },
+                    ),
+                  );
                   if (del.ok) removed++;
-                  else entries.push({ msg: `  ✗ ${libDisplayName(lib)}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`, ok: false });
+                  else
+                    entries.push({
+                      msg: `  ✗ ${libDisplayName(lib)}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`,
+                      ok: false,
+                    });
                 }
               }
               if (removed > 0) {
-                entries.push({ msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} REMOVED (${removed} level(s)) — site entry is a door into the site, not library access`, ok: true });
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} REMOVED (${removed} level(s)) — site entry is a door into the site, not library access`,
+                  ok: true,
+                });
               }
             } else {
-              entries.push({ msg: `  ✓ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} ${shouldHold ? "holds Read" : "has no access"} — correct`, ok: true });
+              entries.push({
+                msg: `  ✓ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} ${shouldHold ? "holds Read" : "has no access"} — correct`,
+                ok: true,
+              });
             }
             await tick();
           }
         }
       } catch (e) {
-        entries.push({ msg: `⚠ Site-entry library access skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ Site-entry library access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       /* ── THE SUBMISSIONS LIST ────────────────────────────────────────────────────
@@ -3231,37 +4495,48 @@ export default function FolderManager({
         const subTitle = titleForNewList(LIST_SUFFIX.submissions);
         const subBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(subTitle)}')`;
         const probe = await context.spHttpClient.get(
-          `${subBase}?$select=Id`, SPHttpClient.configurations.v1,
+          `${subBase}?$select=Id`,
+          SPHttpClient.configurations.v1,
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
         if (probe.status === 404) {
-          const made = await withThrottleRetry(() => context.spHttpClient.post(
-            `${siteUrl}/_api/web/lists`, SPHttpClient.configurations.v1,
-            {
-              headers: {
-                Accept: "application/json;odata=nometadata",
-                "Content-Type": "application/json;odata=nometadata",
-                // SPFx injects 4.0, under which SharePoint cannot infer the entity set for a
-                // JSON-light entry payload. Learned on the audit log, re-learned on the file-type
-                // page. Do NOT restore __metadata here.
-                "odata-version": "",
+          const made = await withThrottleRetry(() =>
+            context.spHttpClient.post(
+              `${siteUrl}/_api/web/lists`,
+              SPHttpClient.configurations.v1,
+              {
+                headers: {
+                  Accept: "application/json;odata=nometadata",
+                  "Content-Type": "application/json;odata=nometadata",
+                  // SPFx injects 4.0, under which SharePoint cannot infer the entity set for a
+                  // JSON-light entry payload. Learned on the audit log, re-learned on the file-type
+                  // page. Do NOT restore __metadata here.
+                  "odata-version": "",
+                },
+                body: JSON.stringify({
+                  Title: subTitle,
+                  BaseTemplate: 100,
+                  Description:
+                    "One row per uploaded file, so an uploader's submission survives the document being deleted.",
+                }),
               },
-              body: JSON.stringify({
-                Title: subTitle,
-                BaseTemplate: 100,
-                Description: "One row per uploaded file, so an uploader's submission survives the document being deleted.",
-              }),
-            },
-          ));
+            ),
+          );
           if (!made.ok) {
-            entries.push({ msg: `⚠ ${subTitle}: could not be created (HTTP ${made.status}) — uploads still work, but a deleted file will vanish from My Submissions as before`, ok: false });
+            entries.push({
+              msg: `⚠ ${subTitle}: could not be created (HTTP ${made.status}) — uploads still work, but a deleted file will vanish from My Submissions as before`,
+              ok: false,
+            });
           } else {
             noteCreatedList(LIST_SUFFIX.submissions, subTitle);
             entries.push({ msg: `  ↳ ${subTitle}: list created ✓`, ok: true });
           }
         } else if (!probe.ok) {
           // Neither present nor absent. Creating on top of that is how a duplicate list appears.
-          entries.push({ msg: `⚠ ${subTitle}: could not check whether it exists (HTTP ${probe.status}) — not created`, ok: false });
+          entries.push({
+            msg: `⚠ ${subTitle}: could not check whether it exists (HTTP ${probe.status}) — not created`,
+            ok: false,
+          });
         }
         /* Columns asserted whether or not this run created the list, and EVERY one attempted rather
            than aborting on the first failure: a run that stopped half way left the requests list
@@ -3294,36 +4569,47 @@ export default function FolderManager({
            because deleting a column takes its data with it and does NOT go to the recycle bin. */
         let haveCols: string[] | undefined;
         try {
-          const fRes = await withThrottleRetry(() => context.spHttpClient.get(
-            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields?$select=InternalName&$top=5000`,
-            SPHttpClient.configurations.v1,
-            { headers: { Accept: "application/json;odata=nometadata" } },
-          ));
+          const fRes = await withThrottleRetry(() =>
+            context.spHttpClient.get(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields?$select=InternalName&$top=5000`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            ),
+          );
           if (fRes.ok) {
             const fData = await fRes.json();
-            haveCols = ((fData.value ?? []) as Array<{ InternalName?: string }>)
-              .map((f) => (f.InternalName ?? "").toLowerCase());
+            haveCols = (
+              (fData.value ?? []) as Array<{ InternalName?: string }>
+            ).map((f) => (f.InternalName ?? "").toLowerCase());
           }
         } catch {
           haveCols = undefined;
         }
         if (haveCols === undefined) {
-          entries.push({ msg: `⚠ ${liveSubTitle}: could not read its columns, so none were created or checked. Re-running is safe and will retry.`, ok: false });
+          entries.push({
+            msg: `⚠ ${liveSubTitle}: could not read its columns, so none were created or checked. Re-running is safe and will retry.`,
+            ok: false,
+          });
         } else {
           for (const c of RECORD_COLUMNS) {
             if (haveCols.indexOf(c.name.toLowerCase()) > -1) continue;
-            const r = await withThrottleRetry(() => context.spHttpClient.post(
-              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields`,
-              SPHttpClient.configurations.v1,
-              {
-                headers: {
-                  Accept: "application/json;odata=nometadata",
-                  "Content-Type": "application/json;odata=nometadata",
-                  "odata-version": "",
+            const r = await withThrottleRetry(() =>
+              context.spHttpClient.post(
+                `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields`,
+                SPHttpClient.configurations.v1,
+                {
+                  headers: {
+                    Accept: "application/json;odata=nometadata",
+                    "Content-Type": "application/json;odata=nometadata",
+                    "odata-version": "",
+                  },
+                  body: JSON.stringify({
+                    Title: c.name,
+                    FieldTypeKind: c.type,
+                  }),
                 },
-                body: JSON.stringify({ Title: c.name, FieldTypeKind: c.type }),
-              },
-            ));
+              ),
+            );
             if (r.ok) colAdded++;
             else colFailed.push(`${c.name} (HTTP ${r.status})`);
           }
@@ -3335,12 +4621,14 @@ export default function FolderManager({
           /* Plain string test, NOT a built regex: the names come from a config array, so a dynamic
              pattern would be flagged by lint and would need escaping for no benefit. "Our name, then
              nothing but digits" is exactly what SharePoint's auto-suffix produces. */
-          const isStray = (n: string): boolean => RECORD_COLUMNS.some((c) => {
-            const base = c.name.toLowerCase();
-            if (n.length <= base.length || n.slice(0, base.length) !== base) return false;
-            const tail = n.slice(base.length);
-            return tail.split("").every((ch) => ch >= "0" && ch <= "9");
-          });
+          const isStray = (n: string): boolean =>
+            RECORD_COLUMNS.some((c) => {
+              const base = c.name.toLowerCase();
+              if (n.length <= base.length || n.slice(0, base.length) !== base)
+                return false;
+              const tail = n.slice(base.length);
+              return tail.split("").every((ch) => ch >= "0" && ch <= "9");
+            });
           const strays = haveCols.filter(isStray);
           if (strays.length > 0) {
             /* ⚠ `ok: true` DELIBERATELY, and this shipped wrong for exactly one build.
@@ -3352,7 +4640,10 @@ export default function FolderManager({
                hand. Caught on SDG's first run with the fix: `Prune skipped — run had 1 error(s)`,
                the one error being this very line. Same reasoning and the same `ok: true` as the
                Full Name column warning above. The ⚠ still puts it in "Needs attention". */
-            entries.push({ msg: `⚠ ${liveSubTitle}: ${strays.length} duplicate column(s) left by earlier runs (e.g. ${strays.slice(0, 3).join(", ")}). They are INERT — nothing reads or writes them — and are safe to delete by hand in list settings. No further run will create more.`, ok: true });
+            entries.push({
+              msg: `⚠ ${liveSubTitle}: ${strays.length} duplicate column(s) left by earlier runs (e.g. ${strays.slice(0, 3).join(", ")}). They are INERT — nothing reads or writes them — and are safe to delete by hand in list settings. No further run will create more.`,
+              ok: true,
+            });
           }
         }
         /* ⚠ `Author` IS INDEXED, AND THIS LIST NEEDS IT MOST. It gains a row per uploaded FILE, so it
@@ -3365,35 +4656,53 @@ export default function FolderManager({
            because there is no column to create. Failure is reported, never fatal: the list works
            perfectly until it is large. */
         try {
-          const idxRes = await withThrottleRetry(() => context.spHttpClient.post(
-            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields/getbyinternalnameortitle('Author')`,
-            SPHttpClient.configurations.v1,
-            {
-              headers: {
-                Accept: "application/json;odata=nometadata",
-                "Content-Type": "application/json;odata=nometadata",
-                "odata-version": "",
-                "X-HTTP-Method": "MERGE",
-                "IF-MATCH": "*",
+          const idxRes = await withThrottleRetry(() =>
+            context.spHttpClient.post(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields/getbyinternalnameortitle('Author')`,
+              SPHttpClient.configurations.v1,
+              {
+                headers: {
+                  Accept: "application/json;odata=nometadata",
+                  "Content-Type": "application/json;odata=nometadata",
+                  "odata-version": "",
+                  "X-HTTP-Method": "MERGE",
+                  "IF-MATCH": "*",
+                },
+                body: JSON.stringify({ Indexed: true }),
               },
-              body: JSON.stringify({ Indexed: true }),
-            },
-          ));
+            ),
+          );
           if (!idxRes.ok) {
-            entries.push({ msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed (HTTP ${idxRes.status}) — My Submissions will start failing on this list past 5,000 rows`, ok: false });
+            entries.push({
+              msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed (HTTP ${idxRes.status}) — My Submissions will start failing on this list past 5,000 rows`,
+              ok: false,
+            });
           }
         } catch (e) {
-          entries.push({ msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed — ${(e as Error).message}`, ok: false });
+          entries.push({
+            msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed — ${(e as Error).message}`,
+            ok: false,
+          });
         }
-        if (colAdded > 0) entries.push({ msg: `  ↳ ${liveSubTitle}: ${colAdded} column(s) created ✓`, ok: true });
+        if (colAdded > 0)
+          entries.push({
+            msg: `  ↳ ${liveSubTitle}: ${colAdded} column(s) created ✓`,
+            ok: true,
+          });
         if (colFailed.length > 0) {
           // NAMED, and it does not claim success: a list missing SubmissionFileId records uploads
           // that can never be joined back to their file, which the page would show as deleted.
-          entries.push({ msg: `⚠ ${liveSubTitle}: these columns could not be added: ${colFailed.join(", ")}. Re-running is safe and will retry them.`, ok: false });
+          entries.push({
+            msg: `⚠ ${liveSubTitle}: these columns could not be added: ${colFailed.join(", ")}. Re-running is safe and will retry them.`,
+            ok: false,
+          });
         }
       } catch (e) {
         // Never fatal. A site with no submissions list behaves exactly as it did before the feature.
-        entries.push({ msg: `⚠ Submissions list check skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ Submissions list check skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       /* ── REQUEST & SUBMISSION LIST ACCESS ────────────────────────────────────────
@@ -3432,9 +4741,13 @@ export default function FolderManager({
         /* BOTH PREFIXES, because the level is named for the site and this is the one lookup with no
            entry in ROLE_TO_PERMISSION to be re-pointed by `applyPermissionPrefix`. Accepting both is
            cheaper than a table entry for a level no ROLE maps to. */
-        const requestDefId = defs.find((r) => r.name === "CRS Request")?.id
-          ?? defs.find((r) => r.name === "DMS Request")?.id;
-        const groupsForReq = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+        const requestDefId =
+          defs.find((r) => r.name === "CRS Request")?.id ??
+          defs.find((r) => r.name === "DMS Request")?.id;
+        const groupsForReq = await fetchAllSiteGroups(
+          context.spHttpClient,
+          siteUrl,
+        );
         const reqEntryId = findSiteEntryGroup(groupsForReq)?.id;
 
         /* Its OWN Group Map read. The page pass reads the same list a few lines below, but inside
@@ -3454,20 +4767,39 @@ export default function FolderManager({
           );
           if (gmRes.ok) {
             const gmJson = await gmRes.json();
-            qualifying = groupsForRequestLists(groupRolesById((gmJson.value ?? []) as Array<{
-              GroupId?: string; GroupName?: string; Role?: string; Scope?: string; Target?: string;
-            }>));
+            qualifying = groupsForRequestLists(
+              groupRolesById(
+                (gmJson.value ?? []) as Array<{
+                  GroupId?: string;
+                  GroupName?: string;
+                  Role?: string;
+                  Scope?: string;
+                  Target?: string;
+                }>,
+              ),
+            );
           }
-        } catch { /* stays undefined — see above */ }
+        } catch {
+          /* stays undefined — see above */
+        }
 
         if (requestDefId === undefined) {
           /* Reported, never approximated. Granting Contribute instead would hand uploaders Delete
              Items on the lists that ARE the record of who asked for and uploaded what. */
-          entries.push({ msg: `⚠ No "CRS Request" permission level on this site, so request and submission list access was NOT set — create it (copy Contribute, untick Delete Items and Delete Versions) and re-run`, ok: false });
+          entries.push({
+            msg: `⚠ No "CRS Request" permission level on this site, so request and submission list access was NOT set — create it (copy Contribute, untick Delete Items and Delete Versions) and re-run`,
+            ok: false,
+          });
         } else if (qualifying === undefined) {
-          entries.push({ msg: `⚠ CRS Group Map could not be read — request and submission list access NOT checked, and nothing was revoked`, ok: false });
+          entries.push({
+            msg: `⚠ CRS Group Map could not be read — request and submission list access NOT checked, and nothing was revoked`,
+            ok: false,
+          });
         } else {
-          for (const suffix of [LIST_SUFFIX.requests, LIST_SUFFIX.submissions]) {
+          for (const suffix of [
+            LIST_SUFFIX.requests,
+            LIST_SUFFIX.submissions,
+          ]) {
             const title = cachedListTitle(suffix);
             const res = await context.spHttpClient.get(
               `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(title)}')?$select=Id,HasUniqueRoleAssignments`,
@@ -3477,28 +4809,42 @@ export default function FolderManager({
             if (res.status === 404) {
               /* NOT an error. The requests list is created when the Requests page is first opened,
                  and a site that has never used either feature is a normal state. */
-              entries.push({ msg: `✓ ${title}: list does not exist yet — nothing to check`, ok: true });
+              entries.push({
+                msg: `✓ ${title}: list does not exist yet — nothing to check`,
+                ok: true,
+              });
               continue;
             }
             if (!res.ok) {
-              entries.push({ msg: `⚠ ${title}: could not be read (HTTP ${res.status}) — access NOT checked`, ok: false });
+              entries.push({
+                msg: `⚠ ${title}: could not be read (HTTP ${res.status}) — access NOT checked`,
+                ok: false,
+              });
               continue;
             }
             const json = await res.json();
             const listBase = `${siteUrl}/_api/web/lists(guid'${json.Id}')`;
             let unique = json.HasUniqueRoleAssignments === true;
             if (!unique) {
-              const broke = await withThrottleRetry(() => context.spHttpClient.post(
-                `${listBase}/breakroleinheritance(copyRoleAssignments=true,clearSubscopes=false)`,
-                SPHttpClient.configurations.v1,
-                { headers: { Accept: "application/json;odata=nometadata" } },
-              ));
+              const broke = await withThrottleRetry(() =>
+                context.spHttpClient.post(
+                  `${listBase}/breakroleinheritance(copyRoleAssignments=true,clearSubscopes=false)`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ),
+              );
               if (!broke.ok) {
-                entries.push({ msg: `✗ ${title}: inherits site permissions and could not be given its own (HTTP ${broke.status}) — uploaders will be refused`, ok: false });
+                entries.push({
+                  msg: `✗ ${title}: inherits site permissions and could not be given its own (HTTP ${broke.status}) — uploaders will be refused`,
+                  ok: false,
+                });
                 continue;
               }
               unique = true;
-              entries.push({ msg: `  ↳ ${title}: inherited site permissions — now has its own (existing access kept)`, ok: true });
+              entries.push({
+                msg: `  ↳ ${title}: inherited site permissions — now has its own (existing access kept)`,
+                ok: true,
+              });
             }
 
             const raRes = await context.spHttpClient.get(
@@ -3509,17 +4855,25 @@ export default function FolderManager({
             if (!raRes.ok) {
               // An unreadable ACL is not evidence of absence. Re-granting blind would be a guess,
               // and revoking blind would remove what nobody could see.
-              entries.push({ msg: `⚠ ${title}: could not read permissions (HTTP ${raRes.status}) — access not enforced, nothing revoked`, ok: false });
+              entries.push({
+                msg: `⚠ ${title}: could not read permissions (HTTP ${raRes.status}) — access not enforced, nothing revoked`,
+                ok: false,
+              });
               continue;
             }
             const raJson = await raRes.json();
             const assignments = (raJson.value ?? []) as Array<{
-              PrincipalId?: number; RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+              PrincipalId?: number;
+              RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
             }>;
             const holdsRequest: Record<number, true> = {};
             for (const ra of assignments) {
               if (ra.PrincipalId === undefined) continue;
-              if ((ra.RoleDefinitionBindings ?? []).some((b) => b.Id === requestDefId)) {
+              if (
+                (ra.RoleDefinitionBindings ?? []).some(
+                  (b) => b.Id === requestDefId,
+                )
+              ) {
                 holdsRequest[ra.PrincipalId] = true;
               }
             }
@@ -3532,7 +4886,10 @@ export default function FolderManager({
               try {
                 pid = spGroupPrincipalId(g.groupId);
               } catch (e) {
-                entries.push({ msg: `  ✗ ${title}: ${g.groupName || g.groupId} — ${(e as Error).message}`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${title}: ${g.groupName || g.groupId} — ${(e as Error).message}`,
+                  ok: false,
+                });
                 failed++;
                 continue;
               }
@@ -3546,7 +4903,10 @@ export default function FolderManager({
                 bumpAssigns();
                 await tick();
               } catch (e) {
-                entries.push({ msg: `  ✗ ${title}: could not grant ${g.groupName || g.groupId} — ${(e as Error).message}`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${title}: could not grant ${g.groupName || g.groupId} — ${(e as Error).message}`,
+                  ok: false,
+                });
                 failed++;
               }
             }
@@ -3558,51 +4918,82 @@ export default function FolderManager({
             });
 
             // ── The site-wide grant comes off, if and only if it is safe ──
-            const entryHeld = reqEntryId === undefined
-              ? []
-              : assignments.filter((ra) => ra.PrincipalId === reqEntryId);
+            const entryHeld =
+              reqEntryId === undefined
+                ? []
+                : assignments.filter((ra) => ra.PrincipalId === reqEntryId);
             if (reqEntryId === undefined) {
-              entries.push({ msg: `⚠ ${title}: ${siteEntryGroupTitle()} not found, so the site-wide grant could not be checked`, ok: false });
+              entries.push({
+                msg: `⚠ ${title}: ${siteEntryGroupTitle()} not found, so the site-wide grant could not be checked`,
+                ok: false,
+              });
             } else if (entryHeld.length === 0) {
-              entries.push({ msg: `✓ ${title}: not readable site-wide ✓`, ok: true });
+              entries.push({
+                msg: `✓ ${title}: not readable site-wide ✓`,
+                ok: true,
+              });
             } else if (qualifying.length === 0) {
               /* Nobody derived. Revoking here would leave the list reachable by NO ONE, on a site
                  whose Group Map simply has no rows yet — and the people who would discover it are
                  uploaders being refused. */
-              entries.push({ msg: `⚠ ${title}: still readable by every site member — no group holds an upload, approve or Head-of-Department role yet, so the site-wide grant was LEFT IN PLACE. Provision groups, then re-run.`, ok: false });
+              entries.push({
+                msg: `⚠ ${title}: still readable by every site member — no group holds an upload, approve or Head-of-Department role yet, so the site-wide grant was LEFT IN PLACE. Provision groups, then re-run.`,
+                ok: false,
+              });
             } else if (failed > 0) {
-              entries.push({ msg: `⚠ ${title}: still readable by every site member — ${failed} group grant(s) failed, so the site-wide grant was LEFT IN PLACE deliberately. Fix those and re-run.`, ok: false });
+              entries.push({
+                msg: `⚠ ${title}: still readable by every site member — ${failed} group grant(s) failed, so the site-wide grant was LEFT IN PLACE deliberately. Fix those and re-run.`,
+                ok: false,
+              });
             } else {
               let removed = 0;
               let removeFailed = false;
               for (const ra of entryHeld) {
                 for (const binding of ra.RoleDefinitionBindings ?? []) {
                   if (binding.Id === undefined) continue;
-                  const del = await withThrottleRetry(() => context.spHttpClient.post(
-                    `${listBase}/roleassignments/removeroleassignment(principalid=${reqEntryId},roledefid=${binding.Id})`,
-                    SPHttpClient.configurations.v1,
-                    { headers: { Accept: "application/json;odata=nometadata" } },
-                  ));
+                  const del = await withThrottleRetry(() =>
+                    context.spHttpClient.post(
+                      `${listBase}/roleassignments/removeroleassignment(principalid=${reqEntryId},roledefid=${binding.Id})`,
+                      SPHttpClient.configurations.v1,
+                      {
+                        headers: {
+                          Accept: "application/json;odata=nometadata",
+                        },
+                      },
+                    ),
+                  );
                   if (del.ok) removed++;
                   else {
                     removeFailed = true;
-                    entries.push({ msg: `  ✗ ${title}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`, ok: false });
+                    entries.push({
+                      msg: `  ✗ ${title}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`,
+                      ok: false,
+                    });
                   }
                 }
               }
               if (removed > 0 && !removeFailed) {
                 // NAMED. Silently removing a grant an administrator may have made by hand is worse
                 // than not removing it, because they go on believing it is there.
-                entries.push({ msg: `  ↳ ${title}: ${siteEntryGroupTitle()} REMOVED (${removed} binding(s)) — the list is no longer readable by every site member`, ok: true });
+                entries.push({
+                  msg: `  ↳ ${title}: ${siteEntryGroupTitle()} REMOVED (${removed} binding(s)) — the list is no longer readable by every site member`,
+                  ok: true,
+                });
               } else if (removeFailed) {
-                entries.push({ msg: `⚠ ${title}: ${siteEntryGroupTitle()} could not be fully removed — the list may still be readable site-wide`, ok: false });
+                entries.push({
+                  msg: `⚠ ${title}: ${siteEntryGroupTitle()} could not be fully removed — the list may still be readable site-wide`,
+                  ok: false,
+                });
               }
             }
           }
         }
       } catch (e) {
         // Never fatal: a missing list, or a throttled read, must not fail the run.
-        entries.push({ msg: `⚠ Request and submission list access skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ Request and submission list access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       // ── PAGE ACCESS PASS ──────────────────────────────────────────────────────
@@ -3626,13 +5017,24 @@ export default function FolderManager({
           { headers: { Accept: "application/json;odata=nometadata" } },
         );
         if (!pgRes.ok) {
-          entries.push({ msg: `Page access: skipped — Scope/Target columns not present on CRS Group Map`, ok: true });
+          entries.push({
+            msg: `Page access: skipped — Scope/Target columns not present on CRS Group Map`,
+            ok: true,
+          });
         } else {
           const pgJson = await pgRes.json();
-          const allRows = (pgJson.value ?? []) as Array<{ GroupId?: string; GroupName?: string; Role?: string; Scope?: string; Target?: string }>;
+          const allRows = (pgJson.value ?? []) as Array<{
+            GroupId?: string;
+            GroupName?: string;
+            Role?: string;
+            Scope?: string;
+            Target?: string;
+          }>;
           const pageRows = allRows
             .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "page")
-            .filter((r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "");
+            .filter(
+              (r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "",
+            );
           /* THE HALF THAT USED TO BE THROWN AWAY (spec 2026-08-19 §1). Page access was granted only
              to groups with a Page row, and nothing creates those rows — bulk provisioning writes
              FOLDER rows. On dcistaging that meant 8 of 120 uploader/approver groups could open the
@@ -3640,7 +5042,10 @@ export default function FolderManager({
              The roles are now derived from the same response. */
           const groupRoles = groupRolesById(allRows);
           if (readId === undefined) {
-            entries.push({ msg: `⚠ Page access: no "Read" role definition on site — skipped`, ok: false });
+            entries.push({
+              msg: `⚠ Page access: no "Read" role definition on site — skipped`,
+              ok: false,
+            });
           } else {
             const PAGES_LIST = "Site Pages";
             const pagesBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(PAGES_LIST)}')`;
@@ -3656,9 +5061,15 @@ export default function FolderManager({
               );
               if (wRes.ok) {
                 const wj = await wRes.json();
-                welcome = ((wj.WelcomePage ?? "") as string).split("/").pop()?.toLowerCase() ?? "";
+                welcome =
+                  ((wj.WelcomePage ?? "") as string)
+                    .split("/")
+                    .pop()
+                    ?.toLowerCase() ?? "";
               }
-            } catch { /* fall back to the constant alone */ }
+            } catch {
+              /* fall back to the constant alone */
+            }
 
             const itemsRes = await context.spHttpClient.get(
               `${pagesBase}/items?$select=Id,FileLeafRef,HasUniqueRoleAssignments&$top=500`,
@@ -3666,22 +5077,40 @@ export default function FolderManager({
               { headers: { Accept: "application/json;odata=nometadata" } },
             );
             if (!itemsRes.ok) {
-              entries.push({ msg: `⚠ Page access: could not read ${PAGES_LIST} (HTTP ${itemsRes.status}) — skipped`, ok: false });
+              entries.push({
+                msg: `⚠ Page access: could not read ${PAGES_LIST} (HTTP ${itemsRes.status}) — skipped`,
+                ok: false,
+              });
             } else {
               const itemsJson = await itemsRes.json();
-              const items = ((itemsJson.value ?? []) as Array<{ Id: number; FileLeafRef?: string; HasUniqueRoleAssignments?: boolean }>)
-                .map((p) => ({ id: p.Id, file: (p.FileLeafRef ?? "").toLowerCase(), unique: p.HasUniqueRoleAssignments === true }));
+              const items = (
+                (itemsJson.value ?? []) as Array<{
+                  Id: number;
+                  FileLeafRef?: string;
+                  HasUniqueRoleAssignments?: boolean;
+                }>
+              ).map((p) => ({
+                id: p.Id,
+                file: (p.FileLeafRef ?? "").toLowerCase(),
+                unique: p.HasUniqueRoleAssignments === true,
+              }));
 
               /* DRIVEN BY THE PAGES, not by the rows. A page whose policy names roles is
                  processed whether or not anyone wrote a row for it — that inversion IS the fix.
                  Hand-made rows still contribute their own targets, so a row aimed at a page the
                  policy says nothing about (a deliberate exception) is still honoured. */
               const derivedFiles = items
-                .filter((p) => p.file !== "" && derivedRolesForPage(p.file).length > 0)
+                .filter(
+                  (p) =>
+                    p.file !== "" && derivedRolesForPage(p.file).length > 0,
+                )
                 .map((p) => p.file);
-              const rowFiles = pageRows.map((r) => (r.Target ?? "").trim().toLowerCase());
+              const rowFiles = pageRows.map((r) =>
+                (r.Target ?? "").trim().toLowerCase(),
+              );
               const files: string[] = [];
-              for (const f of derivedFiles.concat(rowFiles)) if (f !== "" && files.indexOf(f) === -1) files.push(f);
+              for (const f of derivedFiles.concat(rowFiles))
+                if (f !== "" && files.indexOf(f) === -1) files.push(f);
 
               /* ONLY site Owners is protected, matching the lockdown pass below.
                  The site-entry group is deliberately NOT protected: it holds Read on the WEB, so on
@@ -3697,13 +5126,21 @@ export default function FolderManager({
               if (files.length === 0) {
                 // Says so, rather than saying nothing. Silence here reads as "page access was fine",
                 // and on a site whose pages are named so that no rule matches, that is exactly wrong.
-                entries.push({ msg: `Page access: no page on this site carries a role policy, and no Page-scope mapping exists — nothing to grant`, ok: true });
+                entries.push({
+                  msg: `Page access: no page on this site carries a role policy, and no Page-scope mapping exists — nothing to grant`,
+                  ok: true,
+                });
               } else {
-                entries.push({ msg: `Page access: ${files.length} page(s) to assert, from ${groupRoles.length} group(s) with roles and ${pageRows.length} mapping row(s)`, ok: true });
+                entries.push({
+                  msg: `Page access: ${files.length} page(s) to assert, from ${groupRoles.length} group(s) with roles and ${pageRows.length} mapping row(s)`,
+                  ok: true,
+                });
               }
 
               for (const file of files) {
-                const rowsForPage = pageRows.filter((r) => (r.Target ?? "").trim().toLowerCase() === file);
+                const rowsForPage = pageRows.filter(
+                  (r) => (r.Target ?? "").trim().toLowerCase() === file,
+                );
                 if (isForbiddenPageTarget(file) || file === welcome) {
                   // Refused by name, every run, rather than applied once and regretted. The row
                   // is left in place: deleting authored data on the client's behalf is not this
@@ -3712,9 +5149,10 @@ export default function FolderManager({
                      set the welcome page TO the upload form would otherwise be told "0 mapping(s)
                      refused", which reads as a bug in the tool rather than a refusal. */
                   entries.push({
-                    msg: rowsForPage.length > 0
-                      ? `  ⚠ ${file}: the site home page cannot be restricted — ${rowsForPage.length} mapping(s) refused`
-                      : `  ⚠ ${file}: the site home page cannot be restricted — page access NOT applied to it`,
+                    msg:
+                      rowsForPage.length > 0
+                        ? `  ⚠ ${file}: the site home page cannot be restricted — ${rowsForPage.length} mapping(s) refused`
+                        : `  ⚠ ${file}: the site home page cannot be restricted — page access NOT applied to it`,
                     ok: false,
                   });
                   continue;
@@ -3728,7 +5166,10 @@ export default function FolderManager({
                      correctness property rather than a sequencing convention.
                      The row is left in place, as with the welcome page: deleting authored data is
                      not this pass's job. */
-                  entries.push({ msg: `  ⚠ ${file}: administrator-only page — ${rowsForPage.length} mapping(s) refused (it is locked to site owners below)`, ok: false });
+                  entries.push({
+                    msg: `  ⚠ ${file}: administrator-only page — ${rowsForPage.length} mapping(s) refused (it is locked to site owners below)`,
+                    ok: false,
+                  });
                   continue;
                 }
                 const item = items.find((p) => p.file === file);
@@ -3736,43 +5177,74 @@ export default function FolderManager({
                   /* Only a ROW can be wrong here. A derived file name came FROM this list, so it
                      cannot be missing; a row's Target is typed by hand and a typo is worth naming. */
                   if (rowsForPage.length > 0) {
-                    entries.push({ msg: `  ⚠ ${file}: page not found in ${PAGES_LIST} — check the Target value`, ok: false });
+                    entries.push({
+                      msg: `  ⚠ ${file}: page not found in ${PAGES_LIST} — check the Target value`,
+                      ok: false,
+                    });
                   }
                   continue;
                 }
                 const intended = intendedPageGroups(file, groupRoles, pageRows);
-                if (intended.length === 0 && derivedRolesForPage(file).length > 0) {
+                if (
+                  intended.length === 0 &&
+                  derivedRolesForPage(file).length > 0
+                ) {
                   /* WARNED, NOT REFUSED (spec §5). An empty set is correct on a site with no groups
                      yet, and the page still ends up Owners-only — administrator-only until groups
                      exist. Refusing would leave it INHERITING, i.e. readable by every site member,
                      which is worse. This is the exact state dcistaging sat in for two days with
                      nothing reporting it. */
-                  entries.push({ msg: `  ⚠ ${file}: restricted, but no group holds ${derivedRolesForPage(file).join(" or ")} — nobody but site owners can open it`, ok: false });
+                  entries.push({
+                    msg: `  ⚠ ${file}: restricted, but no group holds ${derivedRolesForPage(file).join(" or ")} — nobody but site owners can open it`,
+                    ok: false,
+                  });
                 }
                 const itemBase = `${pagesBase}/items(${item.id})`;
                 if (!item.unique) {
                   // copyRoleAssignments=false, as everywhere else: with true, every inherited
                   // grant is carried forward, so the page stays visible to exactly the same
                   // people and the run reports success.
-                  const broke = await withThrottleRetry(() => context.spHttpClient.post(
-                    `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
-                    SPHttpClient.configurations.v1,
-                    { headers: { Accept: "application/json;odata=nometadata" } },
-                  ));
+                  const broke = await withThrottleRetry(() =>
+                    context.spHttpClient.post(
+                      `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                      SPHttpClient.configurations.v1,
+                      {
+                        headers: {
+                          Accept: "application/json;odata=nometadata",
+                        },
+                      },
+                    ),
+                  );
                   if (!broke.ok) {
-                    entries.push({ msg: `  ✗ ${file}: could not break inheritance (HTTP ${broke.status}) — nothing granted`, ok: false });
+                    entries.push({
+                      msg: `  ✗ ${file}: could not break inheritance (HTTP ${broke.status}) — nothing granted`,
+                      ok: false,
+                    });
                     continue;
                   }
-                  entries.push({ msg: `  ↳ ${file}: inheritance broken (no permissions copied)`, ok: true });
+                  entries.push({
+                    msg: `  ↳ ${file}: inheritance broken (no permissions copied)`,
+                    ok: true,
+                  });
                   // typeof, not !== undefined: ownerGroupId is `number | null` when the
                   // associated owner group could not be resolved, and null would slip past an
                   // undefined check straight into the request as "null".
                   if (fullCtrlId !== undefined) {
                     try {
-                      await addRoleAssignmentToList(itemBase, ownersId, fullCtrlId);
-                      entries.push({ msg: `  ↳ ${file}: site Owners → Full Control restored`, ok: true });
+                      await addRoleAssignmentToList(
+                        itemBase,
+                        ownersId,
+                        fullCtrlId,
+                      );
+                      entries.push({
+                        msg: `  ↳ ${file}: site Owners → Full Control restored`,
+                        ok: true,
+                      });
                     } catch (e) {
-                      entries.push({ msg: `  ✗ ${file}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                      entries.push({
+                        msg: `  ✗ ${file}: could not restore site Owners — ${(e as Error).message}`,
+                        ok: false,
+                      });
                     }
                   }
                 }
@@ -3792,13 +5264,19 @@ export default function FolderManager({
                 if (!raRes.ok) {
                   // FAILS OPEN for this page: stripping what could not be read removes grants
                   // nobody saw. The grants below still run, so a transient read never denies a page.
-                  entries.push({ msg: `  ⚠ ${file}: could not read current permissions (HTTP ${raRes.status}) — nothing removed`, ok: false });
+                  entries.push({
+                    msg: `  ⚠ ${file}: could not read current permissions (HTTP ${raRes.status}) — nothing removed`,
+                    ok: false,
+                  });
                 } else {
                   const raJson = await raRes.json();
                   const assignments = (raJson.value ?? []) as Array<{
                     PrincipalId?: number;
                     Member?: { Title?: string; PrincipalType?: number };
-                    RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+                    RoleDefinitionBindings?: Array<{
+                      Id?: number;
+                      Name?: string;
+                    }>;
                   }>;
                   const current = assignments
                     .filter((ra) => ra.PrincipalId !== undefined)
@@ -3812,26 +5290,45 @@ export default function FolderManager({
                       bindings: ra.RoleDefinitionBindings ?? [],
                     }));
                   for (const c of current) held[c.principalId] = true;
-                  for (const gone of groupsToRemove(intended, current, protectedIds)) {
-                    const full = current.filter((c) => c.principalId === gone.principalId)[0];
+                  for (const gone of groupsToRemove(
+                    intended,
+                    current,
+                    protectedIds,
+                  )) {
+                    const full = current.filter(
+                      (c) => c.principalId === gone.principalId,
+                    )[0];
                     for (const binding of full?.bindings ?? []) {
                       if (binding.Id === undefined) continue;
-                      const del = await withThrottleRetry(() => context.spHttpClient.post(
-                        `${itemBase}/roleassignments/removeroleassignment(principalid=${gone.principalId},roledefid=${binding.Id})`,
-                        SPHttpClient.configurations.v1,
-                        { headers: { Accept: "application/json;odata=nometadata" } },
-                      ));
+                      const del = await withThrottleRetry(() =>
+                        context.spHttpClient.post(
+                          `${itemBase}/roleassignments/removeroleassignment(principalid=${gone.principalId},roledefid=${binding.Id})`,
+                          SPHttpClient.configurations.v1,
+                          {
+                            headers: {
+                              Accept: "application/json;odata=nometadata",
+                            },
+                          },
+                        ),
+                      );
                       if (del.ok) {
                         delete held[gone.principalId];
                         /* NAMED, never counted silently. An administrator who granted this by hand
                            must be able to read why it went — removing it silently is worse than not
                            removing it, because they go on believing it is there. */
-                        const why = derivedRolesForPage(file).length > 0
-                          ? `holds no ${derivedRolesForPage(file).join(" or ")} role`
-                          : `no mapping grants this page`;
-                        entries.push({ msg: `  ⚠ ${file}: removed ${gone.title} ("${binding.Name ?? binding.Id}") — ${why}`, ok: false });
+                        const why =
+                          derivedRolesForPage(file).length > 0
+                            ? `holds no ${derivedRolesForPage(file).join(" or ")} role`
+                            : `no mapping grants this page`;
+                        entries.push({
+                          msg: `  ⚠ ${file}: removed ${gone.title} ("${binding.Name ?? binding.Id}") — ${why}`,
+                          ok: false,
+                        });
                       } else {
-                        entries.push({ msg: `  ✗ ${file}: could not remove ${gone.title} (HTTP ${del.status}) — they can still open this page`, ok: false });
+                        entries.push({
+                          msg: `  ✗ ${file}: could not remove ${gone.title} (HTTP ${del.status}) — they can still open this page`,
+                          ok: false,
+                        });
                       }
                     }
                   }
@@ -3843,7 +5340,10 @@ export default function FolderManager({
                   try {
                     pid = spGroupPrincipalId(g.groupId);
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${label} FAILED: ${(e as Error).message}`, ok: false });
+                    entries.push({
+                      msg: `  ✗ ${label} FAILED: ${(e as Error).message}`,
+                      ok: false,
+                    });
                     continue;
                   }
                   if (held[pid]) {
@@ -3856,7 +5356,10 @@ export default function FolderManager({
                     // granting "CRS Upload" on a page item is a meaningless binding that reads, in
                     // the permissions UI, like an upload right on the page.
                     await addRoleAssignmentToList(itemBase, pid, readId);
-                    entries.push({ msg: `  ↳ ${label} → Read (page, ${g.source === "derived" ? `from ${g.via}` : "mapping row"})`, ok: true });
+                    entries.push({
+                      msg: `  ↳ ${label} → Read (page, ${g.source === "derived" ? `from ${g.via}` : "mapping row"})`,
+                      ok: true,
+                    });
                     /* A PAGE grant has no library, so no panel is right — there are only the four
                        library feeds. Documents is arbitrary but stable, and the line says "page
                        scope" so it cannot be mistaken for a library grant. A fifth panel for pages
@@ -3864,11 +5367,18 @@ export default function FolderManager({
                     // Parked in the Documents panel because a PAGE grant belongs to no library
                     // and there is no panel for one. Prefixed so it cannot be read later as a
                     // grant on the Documents library, which is a different and much wider thing.
-                    pushAssign("Documents", `Site page: ${file} → ${g.groupName || g.groupId} (Read, page scope)`, "ok");
+                    pushAssign(
+                      "Documents",
+                      `Site page: ${file} → ${g.groupName || g.groupId} (Read, page scope)`,
+                      "ok",
+                    );
                     bumpAssigns();
                     await tick();
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${label} FAILED: ${(e as Error).message}`, ok: false });
+                    entries.push({
+                      msg: `  ✗ ${label} FAILED: ${(e as Error).message}`,
+                      ok: false,
+                    });
                   }
                 }
               }
@@ -3876,7 +5386,10 @@ export default function FolderManager({
           }
         }
       } catch (e) {
-        entries.push({ msg: `⚠ Page access skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ Page access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       /* ── ADMIN PAGE LOCKDOWN ────────────────────────────────────────────────────────────
@@ -3918,9 +5431,15 @@ export default function FolderManager({
           );
           if (wRes.ok) {
             const wj = await wRes.json();
-            adminWelcome = ((wj.WelcomePage ?? "") as string).split("/").pop()?.toLowerCase() ?? "";
+            adminWelcome =
+              ((wj.WelcomePage ?? "") as string)
+                .split("/")
+                .pop()
+                ?.toLowerCase() ?? "";
           }
-        } catch { /* fall back to the constant alone */ }
+        } catch {
+          /* fall back to the constant alone */
+        }
 
         const pgItemsRes = await context.spHttpClient.get(
           `${pagesBase}/items?$select=Id,FileLeafRef,HasUniqueRoleAssignments&$top=500`,
@@ -3930,25 +5449,49 @@ export default function FolderManager({
         if (!pgItemsRes.ok) {
           // FAILS OPEN on the READ: there is no page list to act on, and inventing one is not
           // possible. The runbook's manual restriction step stays the backstop.
-          entries.push({ msg: `⚠ Administrator pages: could not read ${PAGES_LIST} (HTTP ${pgItemsRes.status}) — none checked`, ok: false });
+          entries.push({
+            msg: `⚠ Administrator pages: could not read ${PAGES_LIST} (HTTP ${pgItemsRes.status}) — none checked`,
+            ok: false,
+          });
         } else if (fullCtrlId === undefined) {
           // Without Owners to restore, breaking inheritance would leave the page reachable only by
           // site collection administrators — a lockout of every ordinary owner. Refuse instead.
-          entries.push({ msg: `⚠ Administrator pages: site Owners group or "Full Control" not resolved — none locked`, ok: false });
+          entries.push({
+            msg: `⚠ Administrator pages: site Owners group or "Full Control" not resolved — none locked`,
+            ok: false,
+          });
         } else {
           const pgJson2 = await pgItemsRes.json();
-          const adminPageItems = ((pgJson2.value ?? []) as Array<{ Id: number; FileLeafRef?: string; HasUniqueRoleAssignments?: boolean }>)
-            .map((p) => ({ id: p.Id, file: (p.FileLeafRef ?? "").toLowerCase(), unique: p.HasUniqueRoleAssignments === true }))
+          const adminPageItems = (
+            (pgJson2.value ?? []) as Array<{
+              Id: number;
+              FileLeafRef?: string;
+              HasUniqueRoleAssignments?: boolean;
+            }>
+          )
+            .map((p) => ({
+              id: p.Id,
+              file: (p.FileLeafRef ?? "").toLowerCase(),
+              unique: p.HasUniqueRoleAssignments === true,
+            }))
             // Matched by FILE NAME through the same policy the admin screens filter with. On a site
             // holding other content a page called "Configuration.aspx" would match — accepted, and
             // mitigated by logging every lock BY NAME so a wrong one is visible in the run log
             // rather than discovered by whoever lost access. An exact allow-list was rejected: this
             // client renames everything at import, and the list would stop matching silently.
-            .filter((p) => p.file !== "" && !isForbiddenPageTarget(p.file) && p.file !== adminWelcome)
+            .filter(
+              (p) =>
+                p.file !== "" &&
+                !isForbiddenPageTarget(p.file) &&
+                p.file !== adminWelcome,
+            )
             .filter((p) => policyForPage(p.file).adminOnly);
 
           if (adminPageItems.length === 0) {
-            entries.push({ msg: `Administrator pages: none found in ${PAGES_LIST}`, ok: true });
+            entries.push({
+              msg: `Administrator pages: none found in ${PAGES_LIST}`,
+              ok: true,
+            });
           }
 
           for (const page of adminPageItems) {
@@ -3959,24 +5502,38 @@ export default function FolderManager({
               /* copyRoleAssignments=false, as everywhere else: with true every inherited grant is
                  carried forward, so the page stays visible to exactly the same people and the run
                  reports success — a failure invisible from the log. */
-              const broke = await withThrottleRetry(() => context.spHttpClient.post(
-                `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
-                SPHttpClient.configurations.v1,
-                { headers: { Accept: "application/json;odata=nometadata" } },
-              ));
+              const broke = await withThrottleRetry(() =>
+                context.spHttpClient.post(
+                  `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ),
+              );
               if (!broke.ok) {
                 // Reported as STILL OPEN, never as locked. A page reported locked that is not is
                 // the one outcome worse than today's, because it stops anyone looking.
-                entries.push({ msg: `  ✗ ${page.file}: INHERITS site permissions and could not be locked (HTTP ${broke.status}) — every site member can still open it`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${page.file}: INHERITS site permissions and could not be locked (HTTP ${broke.status}) — every site member can still open it`,
+                  ok: false,
+                });
                 continue;
               }
-              entries.push({ msg: `  ↳ ${page.file}: inherited site permissions — LOCKED to site owners`, ok: true });
+              entries.push({
+                msg: `  ↳ ${page.file}: inherited site permissions — LOCKED to site owners`,
+                ok: true,
+              });
               locked = true;
               try {
                 await addRoleAssignmentToList(itemBase, ownersId, fullCtrlId);
-                entries.push({ msg: `  ↳ ${page.file}: site Owners → Full Control restored`, ok: true });
+                entries.push({
+                  msg: `  ↳ ${page.file}: site Owners → Full Control restored`,
+                  ok: true,
+                });
               } catch (e) {
-                entries.push({ msg: `  ✗ ${page.file}: could not restore site Owners — ${(e as Error).message}`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${page.file}: could not restore site Owners — ${(e as Error).message}`,
+                  ok: false,
+                });
               }
             }
             if (!locked) continue;
@@ -3993,7 +5550,10 @@ export default function FolderManager({
             if (!raRes.ok) {
               // FAILS OPEN for THIS page: stripping assignments from a list we could not read would
               // remove grants nobody could see. Unreadable is not evidence of absence.
-              entries.push({ msg: `  ⚠ ${page.file}: could not read permissions (HTTP ${raRes.status}) — left as is`, ok: false });
+              entries.push({
+                msg: `  ⚠ ${page.file}: could not read permissions (HTTP ${raRes.status}) — left as is`,
+                ok: false,
+              });
               continue;
             }
             const raJson2 = await raRes.json();
@@ -4004,35 +5564,51 @@ export default function FolderManager({
             }>;
             let stripped = 0;
             for (const ra of assignments) {
-              if (ra.PrincipalId === ownersId) continue;      // the one principal that stays
+              if (ra.PrincipalId === ownersId) continue; // the one principal that stays
               if (ra.PrincipalId === undefined) continue;
               for (const binding of ra.RoleDefinitionBindings ?? []) {
                 if (binding.Id === undefined) continue;
-                const del = await withThrottleRetry(() => context.spHttpClient.post(
-                  `${itemBase}/roleassignments/removeroleassignment(principalid=${ra.PrincipalId},roledefid=${binding.Id})`,
-                  SPHttpClient.configurations.v1,
-                  { headers: { Accept: "application/json;odata=nometadata" } },
-                ));
+                const del = await withThrottleRetry(() =>
+                  context.spHttpClient.post(
+                    `${itemBase}/roleassignments/removeroleassignment(principalid=${ra.PrincipalId},roledefid=${binding.Id})`,
+                    SPHttpClient.configurations.v1,
+                    {
+                      headers: { Accept: "application/json;odata=nometadata" },
+                    },
+                  ),
+                );
                 if (del.ok) {
                   stripped++;
                   /* Named, never counted silently. An administrator who deliberately granted
                      someone the Audit Log will see it taken away and read why — removing it
                      silently would be worse than not removing it, because they would go on
                      believing the grant was there. */
-                  entries.push({ msg: `  ↳ ${page.file}: removed ${ra.Member?.Title ?? `principal ${ra.PrincipalId}`} ("${binding.Name ?? binding.Id}") — administrator-only page`, ok: true });
+                  entries.push({
+                    msg: `  ↳ ${page.file}: removed ${ra.Member?.Title ?? `principal ${ra.PrincipalId}`} ("${binding.Name ?? binding.Id}") — administrator-only page`,
+                    ok: true,
+                  });
                 } else {
-                  entries.push({ msg: `  ✗ ${page.file}: could not remove ${ra.Member?.Title ?? ra.PrincipalId} (HTTP ${del.status}) — they can still open this page`, ok: false });
+                  entries.push({
+                    msg: `  ✗ ${page.file}: could not remove ${ra.Member?.Title ?? ra.PrincipalId} (HTTP ${del.status}) — they can still open this page`,
+                    ok: false,
+                  });
                 }
               }
             }
             if (page.unique && stripped === 0) {
-              entries.push({ msg: `✓ ${page.file}: administrator-only, already locked — correct`, ok: true });
+              entries.push({
+                msg: `✓ ${page.file}: administrator-only, already locked — correct`,
+                ok: true,
+              });
             }
             await tick();
           }
         }
       } catch (e) {
-        entries.push({ msg: `⚠ Administrator page lockdown skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `⚠ Administrator page lockdown skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       // Ancestor rel-paths of a target, excluding the folder itself and the library root.
@@ -4043,7 +5619,10 @@ export default function FolderManager({
         const parts = relPath.split("/").filter(Boolean);
         const out: string[] = [];
         let cur = "";
-        for (let i = 0; i < parts.length - 1; i++) { cur += `/${parts[i]}`; out.push(cur); }
+        for (let i = 0; i < parts.length - 1; i++) {
+          cur += `/${parts[i]}`;
+          out.push(cur);
+        }
         return out;
       };
       // Full rows, not just term GUIDs: the presence of a row is NOT proof the row is
@@ -4074,7 +5653,11 @@ export default function FolderManager({
         for (const g of dupeGroups) {
           for (const r of g.rows) {
             if (!r.folderUniqueId) continue;
-            const probe = await probeFolderById(context.spHttpClient, siteUrl, r.folderUniqueId);
+            const probe = await probeFolderById(
+              context.spHttpClient,
+              siteUrl,
+              r.folderUniqueId,
+            );
             if (probe.folder) liveIds.add(r.folderUniqueId);
           }
         }
@@ -4094,7 +5677,11 @@ export default function FolderManager({
           }
           for (const dead of verdict.remove) {
             try {
-              await deleteFolderMapRow(context.spHttpClient, siteUrl, dead.itemId);
+              await deleteFolderMapRow(
+                context.spHttpClient,
+                siteUrl,
+                dead.itemId,
+              );
               removed++;
               // NAMED, never counted silently — the same rule as the admin page lockdown.
               entries.push({
@@ -4115,7 +5702,9 @@ export default function FolderManager({
         });
         // Re-read, so everything below sees the repaired list rather than the one we just changed.
         mapRows.length = 0;
-        mapRows.push(...(await loadFolderMapRows(context.spHttpClient, siteUrl)));
+        mapRows.push(
+          ...(await loadFolderMapRows(context.spHttpClient, siteUrl)),
+        );
       }
       const mapByTerm = new Map<string, FolderMapRow>();
       for (const r of mapRows) {
@@ -4132,7 +5721,8 @@ export default function FolderManager({
       const oldNameByTerm = new Map<string, string>();
       for (const r of mapRows) {
         const name = (r.folderUrl ?? "").split("/").pop() ?? "";
-        if (r.termGuid && name) oldNameByTerm.set(r.termGuid.toLowerCase(), name);
+        if (r.termGuid && name)
+          oldNameByTerm.set(r.termGuid.toLowerCase(), name);
       }
       const groupMap = await loadGroupMapForAssign();
       /* Which SP groups actually exist, for the dead-mapping check in the grant loop.
@@ -4187,13 +5777,22 @@ export default function FolderManager({
       // The mirror of ALWAYS_FULL_PASSES: those passes must never be NARROWED by scope, and these two
       // must never be WIDENED beyond it. The spec wrote down one direction and not the other.
       const fullCoverage = coversEverySegment(scopeSegs, scope);
-      const { targets, incomplete: incompleteSegments, incompleteSections, missingAbbrev, collisions, abbrevRows } = await buildProvisionTargets();
+      const {
+        targets,
+        incomplete: incompleteSegments,
+        incompleteSections,
+        missingAbbrev,
+        collisions,
+        abbrevRows,
+      } = await buildProvisionTargets();
       // The segment tier, identified by term-set GUID. Derived from the targets already in
       // hand — a segment container is the one target with no term of its own — rather than
       // re-reading the modes, so the two can never disagree about what "a segment" is.
       // Used by the fan-down to let SEGVIEW, and only SEGVIEW, inherit from this tier.
       const segmentTermSets = new Set<string>(
-        targets.filter((t) => t.termGuid === null).map((t) => t.assignTerm.toLowerCase()),
+        targets
+          .filter((t) => t.termGuid === null)
+          .map((t) => t.assignTerm.toLowerCase()),
       );
       // relPath → the term that folder stands for. Every ancestor folder is itself a
       // target (the segment folder and each department folder both get one), so this
@@ -4203,7 +5802,8 @@ export default function FolderManager({
       // on its own department folder must survive; a unit group's Read on that same
       // folder must not.
       const termByRelPath = new Map<string, string>();
-      for (const t of targets) termByRelPath.set(t.relPath, (t.assignTerm ?? "").toLowerCase());
+      for (const t of targets)
+        termByRelPath.set(t.relPath, (t.assignTerm ?? "").toLowerCase());
       // Role assignments per ancestor path, fetched once. A twelve-unit department
       // would otherwise re-read the same department folder twelve times per library.
       const ancAssignCache = new Map<string, ExistingAssign[]>();
@@ -4219,24 +5819,39 @@ export default function FolderManager({
       // create that merged folder before anyone read the log.
       if (collisions.length > 0) {
         for (const c of collisions) {
-          entries.push({ msg: `✖ COLLISION in ${c.parentPath}: "${c.abbreviation}" is used by ${c.labels.join(" | ")}`, ok: false });
+          entries.push({
+            msg: `✖ COLLISION in ${c.parentPath}: "${c.abbreviation}" is used by ${c.labels.join(" | ")}`,
+            ok: false,
+          });
         }
-        entries.push({ msg: `Nothing was created. Give each of these a distinct abbreviation in ${abbrevListTitle()}, then run again.`, ok: false });
+        entries.push({
+          msg: `Nothing was created. Give each of these a distinct abbreviation in ${abbrevListTitle()}, then run again.`,
+          ok: false,
+        });
         setLog((prev) => [...prev, ...entries]);
-        showToast(`${collisions.length} abbreviation collision(s) — nothing was created.`, false);
+        showToast(
+          `${collisions.length} abbreviation collision(s) — nothing was created.`,
+          false,
+        );
         setBusy(false);
         return;
       }
       // Not fatal: every other term still provisions. But it must be loud, because
       // a unit with no folder has no map row and its uploaders are blocked.
       for (const m of missingAbbrev) {
-        entries.push({ msg: `⚠ SKIPPED (no abbreviation): ${m.label} — add a row to ${abbrevListTitle()} for term ${m.termGuid}`, ok: false });
+        entries.push({
+          msg: `⚠ SKIPPED (no abbreviation): ${m.label} — add a row to ${abbrevListTitle()} for term ${m.termGuid}`,
+          ok: false,
+        });
       }
       // Surface enumeration failures as real errors. Without this they were invisible:
       // the segment just produced no targets, the run looked clean, and prune would
       // then delete every map row for it. See the prune guard below.
       for (const seg of incompleteSegments) {
-        entries.push({ msg: `⚠ could not fully read the term store for ${seg} — folders may be missing and pruning is disabled for this run`, ok: false });
+        entries.push({
+          msg: `⚠ could not fully read the term store for ${seg} — folders may be missing and pruning is disabled for this run`,
+          ok: false,
+        });
       }
       if (targets.length === 0) {
         showToast("No terms found in the term store to provision.", false);
@@ -4275,10 +5890,21 @@ export default function FolderManager({
       if (gridSets.gridMode === "off") {
         // Nothing to pre-create. Year/Document Type folders are made on demand by the
         // upload form, and in Documents by the Auto-route flow as approved files land.
-        entries.push({ msg: `Year × Document Type grid: skipped (recon_gridMode = off) — folders are created on first use`, ok: true });
+        entries.push({
+          msg: `Year × Document Type grid: skipped (recon_gridMode = off) — folders are created on first use`,
+          ok: true,
+        });
       } else {
-        yearLabels    = (await loadReconTops(gridSets.year).catch(() => [] as TermLite[])).map(y => sanitizeFolderSegment(y.label)).filter(Boolean);
-        docTypeLabels = (await loadReconTops(gridSets.docType).catch(() => [] as TermLite[])).map(d => sanitizeFolderSegment(d.label)).filter(Boolean);
+        yearLabels = (
+          await loadReconTops(gridSets.year).catch(() => [] as TermLite[])
+        )
+          .map((y) => sanitizeFolderSegment(y.label))
+          .filter(Boolean);
+        docTypeLabels = (
+          await loadReconTops(gridSets.docType).catch(() => [] as TermLite[])
+        )
+          .map((d) => sanitizeFolderSegment(d.label))
+          .filter(Boolean);
         if (gridSets.gridMode === "currentYear" && yearLabels.length > 0) {
           const thisYear = String(new Date().getFullYear());
           const match = yearLabels.filter((y) => y === thisYear);
@@ -4300,15 +5926,21 @@ export default function FolderManager({
           if (!key) return [];
           const hit = tierLabelCache.get(key);
           if (hit) return hit;
-          const tops: TermLite[] = await loadReconTops(setGuid).catch(() => [] as TermLite[]);
-          const labels = tops.map((tl: TermLite) => sanitizeFolderSegment(tl.label)).filter(Boolean);
+          const tops: TermLite[] = await loadReconTops(setGuid).catch(
+            () => [] as TermLite[],
+          );
+          const labels = tops
+            .map((tl: TermLite) => sanitizeFolderSegment(tl.label))
+            .filter(Boolean);
           tierLabelCache.set(key, labels);
           return labels;
         };
         // forEach into an array first: the SPFx tsconfig does not target ES2015, so
         // `for…of` over a Map is a compile error (same family as gotcha #3 in CLAUDE.md).
         const onDemandEntries: Array<{ setGuid: string; tiers: Level[] }> = [];
-        onDemandTiers.forEach((tiers, setGuid) => onDemandEntries.push({ setGuid, tiers }));
+        onDemandTiers.forEach((tiers, setGuid) =>
+          onDemandEntries.push({ setGuid, tiers }),
+        );
         for (const { setGuid, tiers } of onDemandEntries) {
           const resolved: string[][] = [];
           for (const tier of tiers) {
@@ -4317,7 +5949,8 @@ export default function FolderManager({
             // the chain — so it follows the term set wherever the admin puts the tier.
             if (
               gridSets.gridMode === "currentYear" &&
-              (tier.termSet ?? "").trim().toLowerCase() === (gridSets.year ?? "").trim().toLowerCase() &&
+              (tier.termSet ?? "").trim().toLowerCase() ===
+                (gridSets.year ?? "").trim().toLowerCase() &&
               labels.length > 0
             ) {
               const thisYear = String(new Date().getFullYear());
@@ -4356,7 +5989,8 @@ export default function FolderManager({
       // Per SEGMENT, not per run — each mode may configure a different chain, and the
       // estimate divides elapsed time by ops completed, so counting a different set
       // here than the build loop attempts is what makes the "time left" figure lie.
-      const gridPerLeafFor = (t: ProvTarget): number => gridPlan(gridTiersFor(t)).total;
+      const gridPerLeafFor = (t: ProvTarget): number =>
+        gridPlan(gridTiersFor(t)).total;
       // Resolved once per library, before the estimate, because whether the column
       // exists changes the op count. Absent on a library = that library gets no full
       // names and is told so once, rather than once per folder.
@@ -4369,7 +6003,11 @@ export default function FolderManager({
         if (ct) folderCtIds.set(lib, ct);
         // Names both candidates: "no CRS Folder content type" on a site that still has the
         // DMS-named one would read as a missing artefact rather than a rename half-done.
-        else entries.push({ msg: `⚠ ${libDisplayName(lib)}: no ${FOLDER_CONTENT_TYPE_CANDIDATES.map(n => `"${n}"`).join(" or ")} content type — folders keep the built-in Folder type and the details pane will not show Full Name`, ok: true });
+        else
+          entries.push({
+            msg: `⚠ ${libDisplayName(lib)}: no ${FOLDER_CONTENT_TYPE_CANDIDATES.map((n) => `"${n}"`).join(" or ")} content type — folders keep the built-in Folder type and the details pane will not show Full Name`,
+            ok: true,
+          });
         const f = await loadFullNameField(lib);
         if (f.internalName) fullNameFields.set(lib, f.internalName);
         // ok:true deliberately. This is a warning, not an error: `errorsBeforePrune`
@@ -4378,7 +6016,11 @@ export default function FolderManager({
         // rows look deleted. A missing display column cannot shorten the target list, so
         // gating prune on it would silently disable self-healing over a cosmetic column.
         // The ⚠ still puts it in "Needs attention" where an admin will see it.
-        else entries.push({ msg: `⚠ ${libDisplayName(lib)}: ${f.note ?? "no Full Name column"} — folders will show only their abbreviation`, ok: true });
+        else
+          entries.push({
+            msg: `⚠ ${libDisplayName(lib)}: ${f.note ?? "no Full Name column"} — folders will show only their abbreviation`,
+            ok: true,
+          });
 
         // Does this library moderate? Folders created in a content-approval library arrive
         // PENDING (verified live 2026-08-07: every folder in Approval Document was status 2),
@@ -4402,7 +6044,10 @@ export default function FolderManager({
           );
           if (modRes.ok && (await modRes.json()).EnableModeration === true) {
             moderatedLibs.add(lib);
-            entries.push({ msg: `${libDisplayName(lib)}: content approval is on — provisioned folders will be approved so they stay visible`, ok: true });
+            entries.push({
+              msg: `${libDisplayName(lib)}: content approval is on — provisioned folders will be approved so they stay visible`,
+              ok: true,
+            });
           }
         } catch {
           // Unreadable means "assume not moderated": writing OData__ModerationStatus to a
@@ -4424,7 +6069,9 @@ export default function FolderManager({
           const countKeys = new Set<string>();
           // Ancestors only when fan-out is actually on — a reported-but-not-granted
           // row costs no write, and counting it would inflate the estimate.
-          const terms = gridSets.fanOut ? [t.assignTerm, ...t.ancestorTerms] : [t.assignTerm];
+          const terms = gridSets.fanOut
+            ? [t.assignTerm, ...t.ancestorTerms]
+            : [t.assignTerm];
           for (const term of terms) {
             for (const g of groupMap.get(term.toLowerCase()) ?? []) {
               if (permissionForRole(lib, g.role) === undefined) continue;
@@ -4472,7 +6119,12 @@ export default function FolderManager({
         // Case-insensitive: SharePoint treats sibling names as case-insensitive for
         // uniqueness, so CORU → Coru would collide with itself and report a
         // conflict that is not one.
-        if (!oldName || !wantName || oldName.toLowerCase() === wantName.toLowerCase()) continue;
+        if (
+          !oldName ||
+          !wantName ||
+          oldName.toLowerCase() === wantName.toLowerCase()
+        )
+          continue;
         const parentRel = t.relPath.slice(0, t.relPath.lastIndexOf("/"));
         let newStagingUrl = "";
         for (const lib of renameLibs) {
@@ -4491,8 +6143,12 @@ export default function FolderManager({
             wantName,
           );
           if (renamed.ok) {
-            entries.push({ msg: `  ✎ ${libDisplayName(lib)}${parentRel}: renamed ${oldName} → ${wantName}`, ok: true });
-            if (lib === "Staging") newStagingUrl = renamed.serverRelativeUrl ?? "";
+            entries.push({
+              msg: `  ✎ ${libDisplayName(lib)}${parentRel}: renamed ${oldName} → ${wantName}`,
+              ok: true,
+            });
+            if (lib === "Staging")
+              newStagingUrl = renamed.serverRelativeUrl ?? "";
             await tick();
           } else if (renamed.conflict) {
             // Two terms want one folder name. Forcing it would merge two units'
@@ -4530,7 +6186,10 @@ export default function FolderManager({
         const fanRefusals: string[] = [];
         const root = await getLibraryRoot(lib);
         if (!root) {
-          entries.push({ msg: `${libDisplayName(lib)}: library root not found — skipped`, ok: false });
+          entries.push({
+            msg: `${libDisplayName(lib)}: library root not found — skipped`,
+            ok: false,
+          });
           continue;
         }
         for (const t of targets) {
@@ -4549,8 +6208,12 @@ export default function FolderManager({
               await createFolder(full);
               await breakInheritance(full);
               aclWasReset = true;
-              if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
-              entries.push({ msg: `${folderLabel} — created + locked ✓`, ok: true });
+              if (ownerGroupId !== null && fullCtrlId !== undefined)
+                await addRoleAssignment(full, ownerGroupId, fullCtrlId);
+              entries.push({
+                msg: `${folderLabel} — created + locked ✓`,
+                ok: true,
+              });
               setLastFolder(lib, `${folderLabel} — created + locked`, "ok");
               bumpFolders();
               await tick();
@@ -4580,14 +6243,25 @@ export default function FolderManager({
               if (isUnique !== true) {
                 await breakInheritance(full);
                 aclWasReset = true;
-                if (ownerGroupId !== null && fullCtrlId !== undefined) await addRoleAssignment(full, ownerGroupId, fullCtrlId);
-                const how = isUnique === false ? "existed, locked ✓" : "existed, permissions unreadable — re-locked ✓";
+                if (ownerGroupId !== null && fullCtrlId !== undefined)
+                  await addRoleAssignment(full, ownerGroupId, fullCtrlId);
+                const how =
+                  isUnique === false
+                    ? "existed, locked ✓"
+                    : "existed, permissions unreadable — re-locked ✓";
                 entries.push({ msg: `${folderLabel} — ${how}`, ok: true });
-                setLastFolder(lib, `${folderLabel} — ${isUnique === false ? "existed, locked" : "re-locked"}`, "ok");
+                setLastFolder(
+                  lib,
+                  `${folderLabel} — ${isUnique === false ? "existed, locked" : "re-locked"}`,
+                  "ok",
+                );
                 bumpFolders();
                 await tick();
               } else {
-                entries.push({ msg: `${folderLabel} — already locked, skipped`, ok: true });
+                entries.push({
+                  msg: `${folderLabel} — already locked, skipped`,
+                  ok: true,
+                });
                 setLastFolder(lib, `${folderLabel} — already there`, "skip");
               }
             }
@@ -4616,13 +6290,22 @@ export default function FolderManager({
               if (fullNameFields.has(lib)) step();
               try {
                 const moderated = moderatedLibs.has(lib);
-                const state = await getFolderItemState(full, fullNameField, moderated);
+                const state = await getFolderItemState(
+                  full,
+                  fullNameField,
+                  moderated,
+                );
                 const values: Record<string, string | number> = {};
-                if (fullNameField && state.fullName !== t.fullName) values[fullNameField] = t.fullName;
+                if (fullNameField && state.fullName !== t.fullName)
+                  values[fullNameField] = t.fullName;
                 // Stamp the content type in the SAME merge — no extra request, no extra
                 // throttle cost. Compared case-insensitively because SharePoint is not
                 // consistent about the hex casing it returns.
-                if (wantCtId && (state.contentTypeId ?? "").toLowerCase() !== wantCtId.toLowerCase()) {
+                if (
+                  wantCtId &&
+                  (state.contentTypeId ?? "").toLowerCase() !==
+                    wantCtId.toLowerCase()
+                ) {
                   values.ContentTypeId = wantCtId;
                 }
                 // Moderation status MUST travel in its own merge. SharePoint rejects any
@@ -4651,14 +6334,19 @@ export default function FolderManager({
                       wrote.push(`${FULL_NAME_COLUMN_TITLE} = ${t.fullName}`);
                     }
                     if (values.ContentTypeId !== undefined) {
-                      wrote.push(`content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}`);
+                      wrote.push(
+                        `content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}`,
+                      );
                     }
                   }
                 } catch (e) {
                   // Not fatal, and deliberately ok:true — a label failure must not stop the
                   // folder's ACL work, which is the part that actually controls access, nor
                   // gate the orphan prune.
-                  entries.push({ msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`, ok: true });
+                  entries.push({
+                    msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`,
+                    ok: true,
+                  });
                 }
                 // Re-approve when the folder was already pending, OR when the write above
                 // just re-pended it. Missing that second case is what silently un-approves
@@ -4668,17 +6356,23 @@ export default function FolderManager({
                 // Full Name still needs approving, and skipping it would turn a cosmetic
                 // failure into an access one.
                 const rePended = Object.keys(values).length > 0;
-                const wasPending = state.moderationStatus !== undefined && state.moderationStatus !== 0;
+                const wasPending =
+                  state.moderationStatus !== undefined &&
+                  state.moderationStatus !== 0;
                 if (moderated && (rePended || wasPending)) {
                   try {
-                    await setFolderItemFields(full, { OData__ModerationStatus: 0 });
+                    await setFolderItemFields(full, {
+                      OData__ModerationStatus: 0,
+                    });
                     // Says WHAT was done, not why draft security makes it matter. The old
                     // reason named approver-only draft security, which this project turned OFF
                     // on 2026-08-19 (all libraries are now "any user who can read items") — so
                     // it went stale the same day and asserted a setting the site no longer has.
                     // The stamp itself is still correct and still needed: content approval is on
                     // in both approval libraries, so an unstamped folder stays Pending.
-                    wrote.push("approved (content approval is on in this library)");
+                    wrote.push(
+                      "approved (content approval is on in this library)",
+                    );
                   } catch (e) {
                     // ok:FALSE. An access failure, not a label failure: the folder stays
                     // Pending and its unit cannot reach their own files inside it. It must
@@ -4699,7 +6393,10 @@ export default function FolderManager({
                 // nothing was attempted. ok:true: it changed nothing and must not gate the
                 // orphan prune, but it IS worth surfacing, because a folder whose state is
                 // unreadable is also a folder we did not approve.
-                entries.push({ msg: `  ⚠ ${folderLabel} — could not read folder state, ${FULL_NAME_COLUMN_TITLE} and approval skipped: ${(e as Error).message}`, ok: true });
+                entries.push({
+                  msg: `  ⚠ ${folderLabel} — could not read folder state, ${FULL_NAME_COLUMN_TITLE} and approval skipped: ${(e as Error).message}`,
+                  ok: true,
+                });
               }
             }
             // Map Staging term folders only (the segment container has no term).
@@ -4707,7 +6404,11 @@ export default function FolderManager({
               const existingRow = mapByTerm.get(normalizeTermGuid(t.termGuid));
               if (!existingRow) {
                 // Unmapped term → create the row.
-                const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);
+                const resolved = await resolveFolderByPath(
+                  context.spHttpClient,
+                  siteUrl,
+                  full,
+                );
                 if (resolved) {
                   await writeFolderMapping(context.spHttpClient, siteUrl, {
                     termGuid: t.termGuid,
@@ -4716,7 +6417,10 @@ export default function FolderManager({
                     folderUrl: resolved.serverRelativeUrl,
                     section: t.section,
                   });
-                  entries.push({ msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`, ok: true });
+                  entries.push({
+                    msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`,
+                    ok: true,
+                  });
                 }
               } else {
                 // Mapped already — VERIFY the stored UniqueId instead of assuming it is
@@ -4738,13 +6442,22 @@ export default function FolderManager({
                   // The mapped folder is gone (deleted, then recreated by this run or by
                   // hand). Repoint the row at the folder that is actually there now —
                   // this is the self-heal that the old skip-if-mapped logic prevented.
-                  const resolved = await resolveFolderByPath(context.spHttpClient, siteUrl, full);
+                  const resolved = await resolveFolderByPath(
+                    context.spHttpClient,
+                    siteUrl,
+                    full,
+                  );
                   if (resolved) {
-                    await updateFolderMapping(context.spHttpClient, siteUrl, existingRow.itemId, {
-                      folderUniqueId: resolved.uniqueId,
-                      folderUrl: resolved.serverRelativeUrl,
-                      title: t.label,
-                    });
+                    await updateFolderMapping(
+                      context.spHttpClient,
+                      siteUrl,
+                      existingRow.itemId,
+                      {
+                        folderUniqueId: resolved.uniqueId,
+                        folderUrl: resolved.serverRelativeUrl,
+                        title: t.label,
+                      },
+                    );
                     existingRow.folderUniqueId = resolved.uniqueId;
                     existingRow.folderUrl = resolved.serverRelativeUrl;
                     entries.push({
@@ -4804,8 +6517,8 @@ export default function FolderManager({
               permissionForRole(lib, role) !== undefined &&
               LIBRARY_ROLES[lib].indexOf(role) !== -1;
 
-            const applicable = groupRows.filter(g => accepts(g.role));
-            const fanned = inherited.filter(i => accepts(i.row.role));
+            const applicable = groupRows.filter((g) => accepts(g.role));
+            const fanned = inherited.filter((i) => accepts(i.row.role));
 
             // One list, direct rows first, de-duplicated on group + role. A group
             // holding BOTH a unit row and a department row for the same role would
@@ -4842,7 +6555,9 @@ export default function FolderManager({
               // THE TIER, NOT THE ROLE: `DEL` and `SHARE` are also held by `hou`, whose rows sit at
               // the UNIT tier and are never fanned. Consulting this on a DEPARTMENT-tier row would
               // re-open the leftover-row hole the gate below exists to refuse.
-              const fromSegment = segmentTermSets.has((i.fromTerm ?? "").toLowerCase());
+              const fromSegment = segmentTermSets.has(
+                (i.fromTerm ?? "").toLowerCase(),
+              );
               const cLevelFan = fromSegment && fansFromSegmentTier(i.row.role);
               if (!gridSets.fanOut && i.row.role !== "SEGVIEW" && !cLevelFan) {
                 entries.push({
@@ -4882,7 +6597,8 @@ export default function FolderManager({
                 // An ARRAY with indexOf, not a Set: SPFx's tsconfig has no downlevelIteration,
                 // so a Set cannot be spread or iterated here (CLAUDE.md #3).
                 const refusal = `${g0(i.row)} role ${i.row.role} (${permissionForRole(lib, i.row.role)})`;
-                if (fanRefusals.indexOf(refusal) === -1) fanRefusals.push(refusal);
+                if (fanRefusals.indexOf(refusal) === -1)
+                  fanRefusals.push(refusal);
                 continue;
               }
               toGrant.push({ row: i.row, viaTerm: i.fromTerm });
@@ -4928,7 +6644,10 @@ export default function FolderManager({
             // 2026-08-20 for a newly added department. The tier vocabulary is also segment-specific
             // (Unit / Estate-Mill / Refinery), so naming any one of them here is wrong somewhere.
             if (toGrant.length === 0 && t.isLeaf) {
-              entries.push({ msg: `  ⚠ ${folderLabel} — no group-map groups for this folder (locked admin-only)`, ok: true });
+              entries.push({
+                msg: `  ⚠ ${folderLabel} — no group-map groups for this folder (locked admin-only)`,
+                ok: true,
+              });
             }
             // ONE read replaces up to five writes per folder per library on a re-run.
             //
@@ -4942,9 +6661,13 @@ export default function FolderManager({
             // skipping on that would leave a group silently ungranted on a run reporting
             // success. getRoleAssignments swallows a non-OK status into `[]` itself, which is
             // the same safe direction — it grants — so this only has to catch a throw.
-            let existingAcl: Array<{ principalId: number; roleDefId: number }> | undefined = [];
+            let existingAcl:
+              | Array<{ principalId: number; roleDefId: number }>
+              | undefined = [];
             if (shouldReadExistingAcl(aclWasReset, toGrant.length)) {
-              existingAcl = await getAllRoleBindings(full).catch(() => undefined);
+              existingAcl = await getAllRoleBindings(full).catch(
+                () => undefined,
+              );
             }
             let skippedGrants = 0;
             const grantedPids: Array<{ groupName: string; pid: number }> = [];
@@ -4963,7 +6686,8 @@ export default function FolderManager({
                 // stored string — a check that disagreed with the grant about which principal a
                 // row means would report the wrong group as missing.
                 if (liveGroupIds.has(spGroupPrincipalId(g.groupId))) continue;
-                if (deadNames.indexOf(g.groupName) === -1) deadNames.push(g.groupName);
+                if (deadNames.indexOf(g.groupName) === -1)
+                  deadNames.push(g.groupName);
               }
               if (deadNames.length > 0) {
                 entries.push({
@@ -4978,15 +6702,24 @@ export default function FolderManager({
               // unanswerable from the log, and an unexplained grant is
               // indistinguishable from a bug.
               const arrow = viaTerm ? "↳↓" : "↳";
-              const via = viaTerm ? " (inherited from a parent-tier mapping)" : "";
+              const via = viaTerm
+                ? " (inherited from a parent-tier mapping)"
+                : "";
               // Resolved ONCE, per library. Read straight from ROLE_TO_PERMISSION and an
               // uploader's Documents grant would say "CRS Upload" in the log while the
               // assignment said Read — or worse, actually be CRS Upload.
               const levelName = permissionForRole(lib, g.role);
-              const roleDefId = defs.find(r => r.name === levelName)?.id;
+              const roleDefId = defs.find((r) => r.name === levelName)?.id;
               if (roleDefId === undefined) {
-                entries.push({ msg: `  ⚠ ${g.groupName} — no "${levelName}" role definition on site`, ok: false });
-                pushAssign(lib, `${t.label}: "${levelName}" role missing on site`, "warn");
+                entries.push({
+                  msg: `  ⚠ ${g.groupName} — no "${levelName}" role definition on site`,
+                  ok: false,
+                });
+                pushAssign(
+                  lib,
+                  `${t.label}: "${levelName}" role missing on site`,
+                  "warn",
+                );
                 step();
                 continue;
               }
@@ -5008,24 +6741,42 @@ export default function FolderManager({
                 // this the second is written again AND printed again, so the log showed the same
                 // group → same level twice on one folder and read as a double grant (client,
                 // 2026-08-19: "its basically confusing the client").
-                if (existingAcl) existingAcl.push({ principalId: pid, roleDefId });
+                if (existingAcl)
+                  existingAcl.push({ principalId: pid, roleDefId });
                 grantedPids.push({ groupName: g.groupName, pid });
-                entries.push({ msg: `  ${arrow} ${g.groupName} → ${levelName}${via}`, ok: true });
-                pushAssign(lib, `${t.label} → ${g.groupName} (${levelName})${via}`, "ok");
+                entries.push({
+                  msg: `  ${arrow} ${g.groupName} → ${levelName}${via}`,
+                  ok: true,
+                });
+                pushAssign(
+                  lib,
+                  `${t.label} → ${g.groupName} (${levelName})${via}`,
+                  "ok",
+                );
                 bumpAssigns();
                 await tick();
               } catch (e) {
-                entries.push({ msg: `  ✗ ${g.groupName} → ${levelName} FAILED: ${(e as Error).message}`, ok: false });
+                entries.push({
+                  msg: `  ✗ ${g.groupName} → ${levelName} FAILED: ${(e as Error).message}`,
+                  ok: false,
+                });
                 // Most common cause: the SP group doesn't exist yet (or is a legacy Entra
                 // row). Surface the admin-needs-to-create-it message in the right panel.
-                pushAssign(lib, `Group "${g.groupName}" not found — ask an administrator to create it`, "admin");
+                pushAssign(
+                  lib,
+                  `Group "${g.groupName}" not found — ask an administrator to create it`,
+                  "admin",
+                );
               }
             }
             // One line per FOLDER, never per group: on a settled site this is every group on
             // every folder, and a line each would bury the run's real findings under
             // thousands saying nothing happened.
             if (skippedGrants > 0) {
-              entries.push({ msg: `  ↳ ${folderLabel} — ${skippedGrants} group grant(s) already correct, skipped`, ok: true });
+              entries.push({
+                msg: `  ↳ ${folderLabel} — ${skippedGrants} group grant(s) already correct, skipped`,
+                ok: true,
+              });
             }
             // Ancestor browse Read: granted, so a user can click down to their folder.
             //
@@ -5068,15 +6819,30 @@ export default function FolderManager({
                   // ancestor per run rather than one per unit.
                   const grantKey = `${ancFull}|${gp.pid}`;
                   if (ancGranted.has(grantKey)) continue;
-                  if (existing.some(a => a.principalId === gp.pid && a.roleDefId === readId)) continue;
+                  if (
+                    existing.some(
+                      (a) => a.principalId === gp.pid && a.roleDefId === readId,
+                    )
+                  )
+                    continue;
                   try {
                     await addRoleAssignment(ancFull, gp.pid, readId);
                     ancGranted.add(grantKey);
-                    entries.push({ msg: `  ↳ ${gp.groupName} — Read (browse) on ${anc}`, ok: true });
-                    pushAssign(lib, `${anc} → ${gp.groupName} Read (ancestor browse)`, "ok");
+                    entries.push({
+                      msg: `  ↳ ${gp.groupName} — Read (browse) on ${anc}`,
+                      ok: true,
+                    });
+                    pushAssign(
+                      lib,
+                      `${anc} → ${gp.groupName} Read (ancestor browse)`,
+                      "ok",
+                    );
                     await tick();
                   } catch (e) {
-                    entries.push({ msg: `  ✗ ${gp.groupName} — failed to grant Read on ${anc}: ${(e as Error).message}`, ok: false });
+                    entries.push({
+                      msg: `  ✗ ${gp.groupName} — failed to grant Read on ${anc}: ${(e as Error).message}`,
+                      ok: false,
+                    });
                   }
                 }
               }
@@ -5119,37 +6885,69 @@ export default function FolderManager({
                 `${full}/${plan.lastPath.join("/")}`,
               );
               if (gridProbe.folder) {
-                entries.push({ msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`, ok: true });
-                setLastFolder(lib, `${t.label} grid: already complete, skipped`, "skip");
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`,
+                  ok: true,
+                });
+                setLastFolder(
+                  lib,
+                  `${t.label} grid: already complete, skipped`,
+                  "skip",
+                );
                 // The fast path settles every planned grid step in one probe; the
                 // estimate has to see them land or it keeps counting them as pending.
                 step(gridTotal);
               } else {
-              pushFolder(lib, `${t.label} grid: 0 / ${gridTotal}`, "run");
-              // One walk down the configured chain, replacing the old fixed
-              // Year-then-Document-Type pair. Depth-first and SEQUENTIAL (never
-              // parallel) — a parallel burst is what tripped the 429 throttle.
-              const buildTier = async (parent: string, depth: number): Promise<void> => {
-                if (depth >= plan.tiers.length) return;
-                for (const name of plan.tiers[depth]) {
-                  const made = await ensureFolder(context.spHttpClient, siteUrl, parent, name);
-                  step();
-                  if (made) { grid++; bumpFolders(); }
-                  setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal}`, "run");
-                  // Only pace REAL writes. Charging the throttle delay to a folder that
-                  // already existed is what made a no-op re-run as slow as a first run.
-                  if (made?.created) await tick();
-                  if (!made) continue;
-                  await buildTier(made.serverRelativeUrl, depth + 1);
-                }
-              };
-              await buildTier(full, 0);
+                pushFolder(lib, `${t.label} grid: 0 / ${gridTotal}`, "run");
+                // One walk down the configured chain, replacing the old fixed
+                // Year-then-Document-Type pair. Depth-first and SEQUENTIAL (never
+                // parallel) — a parallel burst is what tripped the 429 throttle.
+                const buildTier = async (
+                  parent: string,
+                  depth: number,
+                ): Promise<void> => {
+                  if (depth >= plan.tiers.length) return;
+                  for (const name of plan.tiers[depth]) {
+                    const made = await ensureFolder(
+                      context.spHttpClient,
+                      siteUrl,
+                      parent,
+                      name,
+                    );
+                    step();
+                    if (made) {
+                      grid++;
+                      bumpFolders();
+                    }
+                    setLastFolder(
+                      lib,
+                      `${t.label} grid: ${grid} / ${gridTotal}`,
+                      "run",
+                    );
+                    // Only pace REAL writes. Charging the throttle delay to a folder that
+                    // already existed is what made a no-op re-run as slow as a first run.
+                    if (made?.created) await tick();
+                    if (!made) continue;
+                    await buildTier(made.serverRelativeUrl, depth + 1);
+                  }
+                };
+                await buildTier(full, 0);
               }
-              entries.push({ msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`, ok: true });
-              setLastFolder(lib, `${t.label} grid: ${grid} / ${gridTotal} ✓`, "ok");
+              entries.push({
+                msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`,
+                ok: true,
+              });
+              setLastFolder(
+                lib,
+                `${t.label} grid: ${grid} / ${gridTotal} ✓`,
+                "ok",
+              );
             }
           } catch (e) {
-            entries.push({ msg: `${libDisplayName(lib)}${t.relPath} — FAILED: ${(e as Error).message}`, ok: false });
+            entries.push({
+              msg: `${libDisplayName(lib)}${t.relPath} — FAILED: ${(e as Error).message}`,
+              ok: false,
+            });
           }
         }
         if (fanRefusals.length > 0) {
@@ -5180,13 +6978,25 @@ export default function FolderManager({
       // group somebody hand-named with our prefix but never actually mapped.
       try {
         setReconPhase("Syncing site-entry group…");
-        const allGroups = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
+        const allGroups = await fetchAllSiteGroups(
+          context.spHttpClient,
+          siteUrl,
+        );
         const entryGroup = findSiteEntryGroup(allGroups);
         if (!entryGroup) {
-          entries.push({ msg: `⚠ ${siteEntryGroupTitle()} not found — run "Set up site entry" first (site-entry sync skipped)`, ok: false });
+          entries.push({
+            msg: `⚠ ${siteEntryGroupTitle()} not found — run "Set up site entry" first (site-entry sync skipped)`,
+            ok: false,
+          });
         } else {
-          const entryMembers = await getGroupMembers(context.spHttpClient, siteUrl, entryGroup.id);
-          const already = new Set(entryMembers.map((m) => m.loginName.toLowerCase()));
+          const entryMembers = await getGroupMembers(
+            context.spHttpClient,
+            siteUrl,
+            entryGroup.id,
+          );
+          const already = new Set(
+            entryMembers.map((m) => m.loginName.toLowerCase()),
+          );
           // GroupId ONLY. That column predates Scope/Target, so this cannot hit the
           // whole-request HTTP 400 that naming a nonexistent $select column causes
           // (CLAUDE.md #11) — no fallback query needed, and every scope is included.
@@ -5198,39 +7008,62 @@ export default function FolderManager({
           );
           if (idRes.ok) {
             const idJson = await idRes.json();
-            for (const r of (idJson.value ?? []) as Array<{ GroupId?: string }>) {
+            for (const r of (idJson.value ?? []) as Array<{
+              GroupId?: string;
+            }>) {
               const n = Number((r.GroupId ?? "").toString().trim());
               if (n > 0 && n % 1 === 0) managedIds.add(n);
             }
           } else {
-            entries.push({ msg: `⚠ site-entry sync: could not read Group Map ids (HTTP ${idRes.status}) — no members synced`, ok: false });
+            entries.push({
+              msg: `⚠ site-entry sync: could not read Group Map ids (HTTP ${idRes.status}) — no members synced`,
+              ok: false,
+            });
           }
           managedIds.delete(entryGroup.id);
           const managedGroups = allGroups.filter((g) => managedIds.has(g.id));
           if (idRes.ok && managedIds.size === 0) {
-            entries.push({ msg: `${siteEntryGroupTitle()}: no mapped groups in Group Map — nothing to sync`, ok: true });
+            entries.push({
+              msg: `${siteEntryGroupTitle()}: no mapped groups in Group Map — nothing to sync`,
+              ok: true,
+            });
           }
           let healed = 0;
           for (const g of managedGroups) {
-            const members = await getGroupMembers(context.spHttpClient, siteUrl, g.id).catch(() => []);
+            const members = await getGroupMembers(
+              context.spHttpClient,
+              siteUrl,
+              g.id,
+            ).catch(() => []);
             for (const m of members) {
               if (already.has(m.loginName.toLowerCase())) continue;
               try {
-                await addGroupMember(context.spHttpClient, siteUrl, entryGroup.id, m.loginName);
+                await addGroupMember(
+                  context.spHttpClient,
+                  siteUrl,
+                  entryGroup.id,
+                  m.loginName,
+                );
                 already.add(m.loginName.toLowerCase());
                 healed++;
-              } catch { /* skip a member that can't be added; not fatal */ }
+              } catch {
+                /* skip a member that can't be added; not fatal */
+              }
             }
           }
           entries.push({
-            msg: healed > 0
-              ? `${siteEntryGroupTitle()}: added ${healed} member(s) missing site entry ✓`
-              : `${siteEntryGroupTitle()}: all mapped-group members already have site entry ✓`,
+            msg:
+              healed > 0
+                ? `${siteEntryGroupTitle()}: added ${healed} member(s) missing site entry ✓`
+                : `${siteEntryGroupTitle()}: all mapped-group members already have site entry ✓`,
             ok: true,
           });
         }
       } catch (e) {
-        entries.push({ msg: `Site-entry sync skipped — ${(e as Error).message}`, ok: false });
+        entries.push({
+          msg: `Site-entry sync skipped — ${(e as Error).message}`,
+          ok: false,
+        });
       }
 
       // ── Prune orphaned Folder Map rows ────────────────────────────────────────
@@ -5293,7 +7126,11 @@ export default function FolderManager({
               continue;
             }
             try {
-              await deleteFolderMapRow(context.spHttpClient, siteUrl, row.itemId);
+              await deleteFolderMapRow(
+                context.spHttpClient,
+                siteUrl,
+                row.itemId,
+              );
               pruned++;
               entries.push({
                 msg: probe.folder
@@ -5309,13 +7146,17 @@ export default function FolderManager({
             }
           }
           entries.push({
-            msg: pruned > 0
-              ? `Folder Map: pruned ${pruned} orphaned row(s) ✓`
-              : `Folder Map: no orphaned rows ✓`,
+            msg:
+              pruned > 0
+                ? `Folder Map: pruned ${pruned} orphaned row(s) ✓`
+                : `Folder Map: no orphaned rows ✓`,
             ok: true,
           });
         } catch (e) {
-          entries.push({ msg: `Prune skipped — ${(e as Error).message}`, ok: false });
+          entries.push({
+            msg: `Prune skipped — ${(e as Error).message}`,
+            ok: false,
+          });
         }
 
         // ── Repair term-GUID orphans ───────────────────────────────────────────
@@ -5345,7 +7186,10 @@ export default function FolderManager({
               !enumeratedTerms.has(r.termGuid.trim().toLowerCase()),
           );
           if (orphanRows.length === 0) {
-            entries.push({ msg: `${abbrevListTitle()}: no orphaned rows ✓`, ok: true });
+            entries.push({
+              msg: `${abbrevListTitle()}: no orphaned rows ✓`,
+              ok: true,
+            });
           } else {
             const plan = planOrphanRepairs(orphanRows, missingAbbrev);
             const groupRows =
@@ -5373,9 +7217,13 @@ export default function FolderManager({
               let groupsFixed = 0;
               for (const g of affected) {
                 try {
-                  await patchListItem(cachedListTitle(LIST_SUFFIX.groupMap), g.itemId, {
-                    UnitTermGuid: rep.term.termGuid,
-                  });
+                  await patchListItem(
+                    cachedListTitle(LIST_SUFFIX.groupMap),
+                    g.itemId,
+                    {
+                      UnitTermGuid: rep.term.termGuid,
+                    },
+                  );
                   groupsFixed++;
                 } catch (e) {
                   entries.push({
@@ -5421,7 +7269,6 @@ export default function FolderManager({
             ok: false,
           });
         }
-
       }
 
       // ── Folders no live term claims: REPORT + QUARANTINE ─────────────────────
@@ -5432,24 +7279,22 @@ export default function FolderManager({
       // `targets`, so on a scoped run it only ever looks inside the segments that were walked and
       // cannot see another segment's folders at all. Gating it too meant strays were never
       // quarantined on a scoped run — and scoped runs are now the normal way to work.
-        //
-        // Reconciliation only ever walks term store → libraries, never the reverse,
-        // so a permanently deleted term leaves its folder behind with broken
-        // inheritance INTACT — still granting Contribute and Design to that unit's
-        // groups. Deleting a term revokes nobody's access; the folder stays
-        // reachable by direct link or by browsing the library. Spec 2026-08-02 §8.
-        //
-        // Report only. NEVER deleted: there are documents behind it.
-        try {
-          setReconPhase("Checking for folders with no term…");
-          const expected = new Set(
-            targets.map((t) => t.relPath.toLowerCase()),
-          );
-          // Descend only into non-leaf targets. Below a leaf sit the Year ×
-          // Document Type grid folders, which have no term by design and would
-          // otherwise be reported as unclaimed — hundreds of false positives.
-          const descendFrom = targets.filter((t) => !t.isLeaf);
-          /* ⚠ A SEGMENT WHOSE TERM WALK FAILED IS NOT DESCENDED INTO, and leaving this out cost a
+      //
+      // Reconciliation only ever walks term store → libraries, never the reverse,
+      // so a permanently deleted term leaves its folder behind with broken
+      // inheritance INTACT — still granting Contribute and Design to that unit's
+      // groups. Deleting a term revokes nobody's access; the folder stays
+      // reachable by direct link or by browsing the library. Spec 2026-08-02 §8.
+      //
+      // Report only. NEVER deleted: there are documents behind it.
+      try {
+        setReconPhase("Checking for folders with no term…");
+        const expected = new Set(targets.map((t) => t.relPath.toLowerCase()));
+        // Descend only into non-leaf targets. Below a leaf sit the Year ×
+        // Document Type grid folders, which have no term by design and would
+        // otherwise be reported as unclaimed — hundreds of false positives.
+        const descendFrom = targets.filter((t) => !t.isLeaf);
+        /* ⚠ A SEGMENT WHOSE TERM WALK FAILED IS NOT DESCENDED INTO, and leaving this out cost a
              false report of SIX live units on 2026-08-20.
 
              `walk` marks the WHOLE segment incomplete on any failure but KEEPS the targets gathered
@@ -5473,27 +7318,32 @@ export default function FolderManager({
 
              Per SEGMENT, not globally: a 503 in GHO must not stop MHO's strays being quarantined,
              or one flaky read would disable the whole pass site-wide. */
-          const skipSections = new Set(
-            (incompleteSections ?? []).map((x) => (x ?? "").trim().toLowerCase()).filter((x) => x.length > 0),
-          );
-          let unclaimed = 0;
-          let unreadable = 0;
-          let skippedIncomplete = 0;
-          for (const lib of reconLibs()) {
-            const root = await getLibraryRoot(lib);
-            if (!root) continue;
-            for (const t of descendFrom) {
-              // Its term list is short, so "not in `expected`" cannot mean "no term claims this".
-              if (skipSections.has((t.section ?? "").trim().toLowerCase())) { skippedIncomplete++; continue; }
-              const names = await listSubfolders(`${root}${t.relPath}`);
-              if (names === undefined) {
-                unreadable++;
-                continue;
-              }
-              for (const name of names) {
-                if (expected.has(`${t.relPath}/${name}`.toLowerCase())) continue;
-                unclaimed++;
-                /* ── QUARANTINE (register #19, spec 2026-08-19) ────────────────────────────
+        const skipSections = new Set(
+          (incompleteSections ?? [])
+            .map((x) => (x ?? "").trim().toLowerCase())
+            .filter((x) => x.length > 0),
+        );
+        let unclaimed = 0;
+        let unreadable = 0;
+        let skippedIncomplete = 0;
+        for (const lib of reconLibs()) {
+          const root = await getLibraryRoot(lib);
+          if (!root) continue;
+          for (const t of descendFrom) {
+            // Its term list is short, so "not in `expected`" cannot mean "no term claims this".
+            if (skipSections.has((t.section ?? "").trim().toLowerCase())) {
+              skippedIncomplete++;
+              continue;
+            }
+            const names = await listSubfolders(`${root}${t.relPath}`);
+            if (names === undefined) {
+              unreadable++;
+              continue;
+            }
+            for (const name of names) {
+              if (expected.has(`${t.relPath}/${name}`.toLowerCase())) continue;
+              unclaimed++;
+              /* ── QUARANTINE (register #19, spec 2026-08-19) ────────────────────────────
                    ⚠ THIS USED TO BE REPORT-ONLY, and its own message stated the problem: "its
                    permissions are unchanged". Unchanged means the folder INHERITS from the segment
                    folder above it — and that folder deliberately grants Read to every group in the
@@ -5507,108 +7357,120 @@ export default function FolderManager({
                    Nothing is deleted, ever — the folder may hold the only copy of real documents,
                    and deleting a term revokes nobody's access. Quarantine removes the accidental
                    AUDIENCE, never the content. */
-                const strayPath = `${root}${t.relPath}/${name}`;
-                const label = `${libDisplayName(lib)}${t.relPath}/${name}`;
-                /* Counted, and UNKNOWN is not zero. An empty stray is a ten-second tidy-up; one
+              const strayPath = `${root}${t.relPath}/${name}`;
+              const label = `${libDisplayName(lib)}${t.relPath}/${name}`;
+              /* Counted, and UNKNOWN is not zero. An empty stray is a ten-second tidy-up; one
                    holding documents is a small migration, and the difference decides what the
                    administrator does next. Reporting an uncountable folder as empty would invite
                    somebody to delete it. */
-                let docs = "an unknown number of";
-                try {
-                  const cRes = await withThrottleRetry(() => context.spHttpClient.get(
+              let docs = "an unknown number of";
+              try {
+                const cRes = await withThrottleRetry(() =>
+                  context.spHttpClient.get(
                     `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?$select=ItemCount&@f='${encodeServerRelativePath(strayPath)}'`,
                     SPHttpClient.configurations.v1,
-                    { headers: { Accept: "application/json;odata=nometadata" } },
-                  ));
-                  if (cRes.ok) {
-                    const cj = await cRes.json();
-                    if (typeof cj.ItemCount === "number") docs = String(cj.ItemCount);
-                  }
-                } catch { /* count stays unknown — the exposure is real either way */ }
-
-                // ⚠ REUSES getHasUniquePerms — it did NOT, and the copy never answered true.
-                //
-                // The bespoke version asked the same URL with `Accept: application/json;odata=nometadata`
-                // instead of `application/json`, and read `HasUniqueRoleAssignments` off the result. It
-                // silently returned false on every run, so a folder quarantined three times running was
-                // reported as newly quarantined three times (site, 2026-08-20).
-                //
-                // The shared helper is proven by the whole run above it: every `already locked, skipped`
-                // line is that same call answering correctly. One question, one implementation — the
-                // second copy is exactly the one that goes wrong, because nothing else depends on it.
-                //
-                // `null` means the read failed, which is NOT "already quarantined": breaking inheritance
-                // again is harmless, and claiming a folder is contained when we could not check is not.
-                let already = false;
-                try {
-                  already = (await getHasUniquePerms(strayPath)) === true;
-                } catch { /* treated as not yet quarantined; breaking again is harmless */ }
-
-                if (already) {
-                  // Idempotent by construction: the folder's own ACL is the record, so nothing is
-                  // stored anywhere and a later run simply re-reports it.
-                  entries.push({
-                    msg: `  ⚠ ALREADY QUARANTINED: ${label} — no live term maps to this folder. It holds ${docs} item(s). Move them somewhere real, then delete the folder.`,
-                    ok: false,
-                  });
-                  continue;
+                    {
+                      headers: { Accept: "application/json;odata=nometadata" },
+                    },
+                  ),
+                );
+                if (cRes.ok) {
+                  const cj = await cRes.json();
+                  if (typeof cj.ItemCount === "number")
+                    docs = String(cj.ItemCount);
                 }
-                try {
-                  await breakInheritance(strayPath);
-                  if (fullCtrlId !== undefined) {
-                    await addRoleAssignment(strayPath, ownersId, fullCtrlId);
-                  }
-                  entries.push({
-                    msg: `  ⚠ QUARANTINED: ${label} — no live term maps to this folder. Inheritance broken; only site owners can open it now. It holds ${docs} item(s). Nothing was deleted.`,
-                    ok: false,
-                  });
-                } catch (e) {
-                  // Reported as STILL EXPOSED, never as quarantined — the same rule as the admin
-                  // page lockdown. A folder we failed to secure must not read as secured.
-                  entries.push({
-                    msg: `  ✗ STILL EXPOSED: ${label} — no live term maps to it and it could NOT be secured (${(e as Error).message}). Everyone in this segment can still open it.`,
-                    ok: false,
-                  });
+              } catch {
+                /* count stays unknown — the exposure is real either way */
+              }
+
+              // ⚠ REUSES getHasUniquePerms — it did NOT, and the copy never answered true.
+              //
+              // The bespoke version asked the same URL with `Accept: application/json;odata=nometadata`
+              // instead of `application/json`, and read `HasUniqueRoleAssignments` off the result. It
+              // silently returned false on every run, so a folder quarantined three times running was
+              // reported as newly quarantined three times (site, 2026-08-20).
+              //
+              // The shared helper is proven by the whole run above it: every `already locked, skipped`
+              // line is that same call answering correctly. One question, one implementation — the
+              // second copy is exactly the one that goes wrong, because nothing else depends on it.
+              //
+              // `null` means the read failed, which is NOT "already quarantined": breaking inheritance
+              // again is harmless, and claiming a folder is contained when we could not check is not.
+              let already = false;
+              try {
+                already = (await getHasUniquePerms(strayPath)) === true;
+              } catch {
+                /* treated as not yet quarantined; breaking again is harmless */
+              }
+
+              if (already) {
+                // Idempotent by construction: the folder's own ACL is the record, so nothing is
+                // stored anywhere and a later run simply re-reports it.
+                entries.push({
+                  msg: `  ⚠ ALREADY QUARANTINED: ${label} — no live term maps to this folder. It holds ${docs} item(s). Move them somewhere real, then delete the folder.`,
+                  ok: false,
+                });
+                continue;
+              }
+              try {
+                await breakInheritance(strayPath);
+                if (fullCtrlId !== undefined) {
+                  await addRoleAssignment(strayPath, ownersId, fullCtrlId);
                 }
+                entries.push({
+                  msg: `  ⚠ QUARANTINED: ${label} — no live term maps to this folder. Inheritance broken; only site owners can open it now. It holds ${docs} item(s). Nothing was deleted.`,
+                  ok: false,
+                });
+              } catch (e) {
+                // Reported as STILL EXPOSED, never as quarantined — the same rule as the admin
+                // page lockdown. A folder we failed to secure must not read as secured.
+                entries.push({
+                  msg: `  ✗ STILL EXPOSED: ${label} — no live term maps to it and it could NOT be secured (${(e as Error).message}). Everyone in this segment can still open it.`,
+                  ok: false,
+                });
               }
             }
           }
-          if (unreadable > 0) {
-            entries.push({
-              msg: `  ⚠ could not list ${unreadable} folder(s) while checking for unclaimed folders — that part of the tree was not checked`,
-              ok: false,
-            });
-          }
-          // SAID OUT LOUD. A pass that quietly checked less than the admin thinks it did is how
-          // "no strays were reported" gets read as "there are no strays".
-          if (skippedIncomplete > 0) {
-            entries.push({
-              msg: `  ⚠ unclaimed-folder check skipped for ${(incompleteSections ?? []).join(", ")} — its term store could not be fully read, so a folder missing from the term list is NOT evidence of a stray. Re-run once the term store responds.`,
-              ok: false,
-            });
-          }
-          /* THE LIMIT, STATED. The walk descends only into non-leaf targets, because below a leaf
+        }
+        if (unreadable > 0) {
+          entries.push({
+            msg: `  ⚠ could not list ${unreadable} folder(s) while checking for unclaimed folders — that part of the tree was not checked`,
+            ok: false,
+          });
+        }
+        // SAID OUT LOUD. A pass that quietly checked less than the admin thinks it did is how
+        // "no strays were reported" gets read as "there are no strays".
+        if (skippedIncomplete > 0) {
+          entries.push({
+            msg: `  ⚠ unclaimed-folder check skipped for ${(incompleteSections ?? []).join(", ")} — its term store could not be fully read, so a folder missing from the term list is NOT evidence of a stray. Re-run once the term store responds.`,
+            ok: false,
+          });
+        }
+        /* THE LIMIT, STATED. The walk descends only into non-leaf targets, because below a leaf
              sit the Year / Document Type folders the upload form creates on demand — they have no
              term BY DESIGN, and reporting them would be hundreds of false positives. So a stray
              created directly inside a unit is indistinguishable from a legitimate on-demand folder
              and must stay undetected. Silence here is how "reconciliation checks for stray folders"
              comes to be read as ALL stray folders. */
+        entries.push({
+          msg: `  Unclaimed-folder check covers segment and department levels only — a folder created directly inside a unit cannot be told apart from the Year / Document Type folders the upload form creates.`,
+          ok: true,
+        });
+        if (unclaimed === 0 && unreadable === 0) {
           entries.push({
-            msg: `  Unclaimed-folder check covers segment and department levels only — a folder created directly inside a unit cannot be told apart from the Year / Document Type folders the upload form creates.`,
+            msg: `Folders: every folder maps to a live term ✓`,
             ok: true,
           });
-          if (unclaimed === 0 && unreadable === 0) {
-            entries.push({ msg: `Folders: every folder maps to a live term ✓`, ok: true });
-          }
-        } catch (e) {
-          entries.push({
-            msg: `Unclaimed-folder check skipped — ${(e as Error).message}`,
-            ok: false,
-          });
         }
+      } catch (e) {
+        entries.push({
+          msg: `Unclaimed-folder check skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
 
       setLog(entries);
-      const failed = entries.filter(e => !e.ok).length;
+      const failed = entries.filter((e) => !e.ok).length;
 
       // ONE row per run, carrying the whole log. Two reasons that is worth more than it looks: the
       // on-screen log is lost the moment anyone navigates away, and one row per FOLDER would bury
@@ -5628,7 +7490,7 @@ export default function FolderManager({
         summary:
           `Reconciliation — ${targets.length} folder(s) reconciled` +
           (failed > 0 ? `, ${failed} error(s)` : ", no errors"),
-        details: entries.map(e => `${e.ok ? "✓" : "✗"} ${e.msg}`),
+        details: entries.map((e) => `${e.ok ? "✓" : "✗"} ${e.msg}`),
       }).catch(() => undefined);
 
       showToast(
@@ -5653,58 +7515,163 @@ export default function FolderManager({
     if (!panel.open) return null;
     return (
       <div style={s.permPanel}>
-        <p style={s.permTitle}>{node.isNew ? "Assign groups" : "Permissions"}</p>
+        <p style={s.permTitle}>
+          {node.isNew ? "Assign groups" : "Permissions"}
+        </p>
         {panel.loading ? (
           <p style={{ fontSize: 12, color: "#666", margin: 0 }}>Loading…</p>
         ) : (
           <>
             {!node.isNew && (
               <>
-                <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: ".05em", color: "#555", margin: "0 0 6px" }}>
+                <p
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    textTransform: "uppercase" as const,
+                    letterSpacing: ".05em",
+                    color: "#555",
+                    margin: "0 0 6px",
+                  }}
+                >
                   Current assignments
                 </p>
                 {panel.existing.length === 0 ? (
-                  <p style={{ fontSize: 12, color: "#888", margin: "0 0 10px", fontStyle: "italic" }}>
+                  <p
+                    style={{
+                      fontSize: 12,
+                      color: "#888",
+                      margin: "0 0 10px",
+                      fontStyle: "italic",
+                    }}
+                  >
                     {panel.isUnique === false
                       ? "This folder inherits permissions from its parent — no unique assignments are set at the folder level. Add groups below to break inheritance and assign explicit access."
                       : "No groups assigned to this folder yet. Add groups below."}
                   </p>
                 ) : (
-                  panel.existing.map(a => (
-                    <div key={a.uid} style={{ ...s.assignRow, opacity: a.kept ? 1 : .45 }}>
-                      <span style={{ ...s.chip, ...(a.kept ? {} : { textDecoration: "line-through" } as React.CSSProperties) }}>
-                        <span style={s.chipName} title={a.title}>{a.title}</span>
+                  panel.existing.map((a) => (
+                    <div
+                      key={a.uid}
+                      style={{ ...s.assignRow, opacity: a.kept ? 1 : 0.45 }}
+                    >
+                      <span
+                        style={{
+                          ...s.chip,
+                          ...(a.kept
+                            ? {}
+                            : ({
+                                textDecoration: "line-through",
+                              } as React.CSSProperties)),
+                        }}
+                      >
+                        <span style={s.chipName} title={a.title}>
+                          {a.title}
+                        </span>
                       </span>
-                      <select style={s.roleSelect} value={a.roleDefId} disabled={busy || !a.kept}
-                        onChange={e => permSetExistingRole(node.id, a.uid, Number(e.target.value))}>
-                        {roleDefs.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                      <select
+                        style={s.roleSelect}
+                        value={a.roleDefId}
+                        disabled={busy || !a.kept}
+                        onChange={(e) =>
+                          permSetExistingRole(
+                            node.id,
+                            a.uid,
+                            Number(e.target.value),
+                          )
+                        }
+                      >
+                        {roleDefs.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
                       </select>
-                      {a.kept
-                        ? <button style={s.chipX} disabled={busy} title="Remove" onClick={() => permToggleKept(node.id, a.uid)}>✕</button>
-                        : <button style={s.undoLink} disabled={busy} onClick={() => permToggleKept(node.id, a.uid)}>Undo</button>
-                      }
+                      {a.kept ? (
+                        <button
+                          style={s.chipX}
+                          disabled={busy}
+                          title="Remove"
+                          onClick={() => permToggleKept(node.id, a.uid)}
+                        >
+                          ✕
+                        </button>
+                      ) : (
+                        <button
+                          style={s.undoLink}
+                          disabled={busy}
+                          onClick={() => permToggleKept(node.id, a.uid)}
+                        >
+                          Undo
+                        </button>
+                      )}
                     </div>
                   ))
                 )}
               </>
             )}
 
-            <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: ".05em", color: "#555", margin: "10px 0 6px" }}>
+            <p
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                textTransform: "uppercase" as const,
+                letterSpacing: ".05em",
+                color: "#555",
+                margin: "10px 0 6px",
+              }}
+            >
               {node.isNew ? "Groups (required)" : "Add groups"}
             </p>
-            {panel.pending.map(a => (
+            {panel.pending.map((a) => (
               <div key={a.uid} style={s.assignRow}>
-                <span style={s.chip}><span style={s.chipName} title={a.group.displayName}>{a.group.displayName}</span></span>
-                <select style={s.roleSelect} value={a.roleDefId} disabled={busy}
-                  onChange={e => permSetPendingRole(node.id, a.uid, Number(e.target.value))}>
-                  {roleDefs.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                <span style={s.chip}>
+                  <span style={s.chipName} title={a.group.displayName}>
+                    {a.group.displayName}
+                  </span>
+                </span>
+                <select
+                  style={s.roleSelect}
+                  value={a.roleDefId}
+                  disabled={busy}
+                  onChange={(e) =>
+                    permSetPendingRole(node.id, a.uid, Number(e.target.value))
+                  }
+                >
+                  {roleDefs.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
                 </select>
-                <button style={s.chipX} disabled={busy} onClick={() => permRemovePending(node.id, a.uid)}>✕</button>
+                <button
+                  style={s.chipX}
+                  disabled={busy}
+                  onClick={() => permRemovePending(node.id, a.uid)}
+                >
+                  ✕
+                </button>
               </div>
             ))}
-            <GroupSearch disabled={busy} placeholder={node.isNew ? "Add group (required)…" : "Search for a group to add…"} onSearch={searchGroups} onPick={g => permAddGroup(node.id, g)} />
+            <GroupSearch
+              disabled={busy}
+              placeholder={
+                node.isNew
+                  ? "Add group (required)…"
+                  : "Search for a group to add…"
+              }
+              onSearch={searchGroups}
+              onPick={(g) => permAddGroup(node.id, g)}
+            />
 
-            <p style={{ fontSize: 11, color: "#888", marginTop: 8, marginBottom: 0 }}>
+            <p
+              style={{
+                fontSize: 11,
+                color: "#888",
+                marginTop: 8,
+                marginBottom: 0,
+              }}
+            >
               {node.isNew
                 ? "This folder and its permissions will be created when you click Update."
                 : "Changes are applied when you click Update below."}
@@ -5715,33 +7682,55 @@ export default function FolderManager({
     );
   };
 
-  const renderAddForm = (mode: Mode, parentNode: FolderNode | null): React.ReactElement => (
+  const renderAddForm = (
+    mode: Mode,
+    parentNode: FolderNode | null,
+  ): React.ReactElement => (
     <div style={{ paddingTop: 8 }}>
-      <button style={s.addFolderBtn} disabled={busy}
-        onClick={() => addNewChild(mode, parentNode ? parentNode.id : null)}>
+      <button
+        style={s.addFolderBtn}
+        disabled={busy}
+        onClick={() => addNewChild(mode, parentNode ? parentNode.id : null)}
+      >
         {`+ ${parentNode ? "Add subfolder" : "Add folder"}`}
       </button>
     </div>
   );
 
-  const renderNode = (node: FolderNode, mode: Mode, depth: number): React.ReactElement => {
+  const renderNode = (
+    node: FolderNode,
+    mode: Mode,
+    depth: number,
+  ): React.ReactElement => {
     const isOpen = !!expandedIds[node.id];
-    const changed = !node.isNew && !node.isDeleted && node.newName.trim() !== "" && node.newName.trim() !== node.name;
-    const permCount = node.perm.existing.filter(a => a.kept).length + node.perm.pending.length;
-    const noPendingChanges = !node.perm.existing.some(a => !a.kept) && node.perm.pending.length === 0;
+    const changed =
+      !node.isNew &&
+      !node.isDeleted &&
+      node.newName.trim() !== "" &&
+      node.newName.trim() !== node.name;
+    const permCount =
+      node.perm.existing.filter((a) => a.kept).length +
+      node.perm.pending.length;
+    const noPendingChanges =
+      !node.perm.existing.some((a) => !a.kept) &&
+      node.perm.pending.length === 0;
     const permLabel = (() => {
       const arrow = node.perm.open ? "▴" : "▾";
       if (node.isNew) return `Groups ${arrow}`;
       if (!node.perm.loaded) return `Permissions ${arrow}`;
-      if (node.perm.isUnique === false && noPendingChanges) return `Permissions (inherited) ${arrow}`;
+      if (node.perm.isUnique === false && noPendingChanges)
+        return `Permissions (inherited) ${arrow}`;
       return `Permissions (${permCount} group${permCount !== 1 ? "s" : ""}) ${arrow}`;
     })();
 
     return (
       <div key={node.id}>
         <div style={depth === 0 ? s.parentRow : s.childRow}>
-          <button style={s.chevBtn}
-            onClick={() => { toggleExpand(node).catch(() => undefined); }}
+          <button
+            style={s.chevBtn}
+            onClick={() => {
+              toggleExpand(node).catch(() => undefined);
+            }}
             title={isOpen ? "Collapse" : "Expand subfolders"}
           >
             {isOpen ? "▾" : "▸"}
@@ -5749,47 +7738,76 @@ export default function FolderManager({
           <span style={{ fontSize: depth === 0 ? 16 : 14, flexShrink: 0 }}>
             {node.isNew ? "🆕" : depth === 0 ? "📁" : "📂"}
           </span>
-          <input className="fm-in" type="text" value={node.newName} disabled={busy || node.isDeleted}
+          <input
+            className="fm-in"
+            type="text"
+            value={node.newName}
+            disabled={busy || node.isDeleted}
             placeholder={node.isNew ? "New folder name" : undefined}
-            onChange={e => updateNode(node.id, n => ({ ...n, newName: e.target.value }))}
+            onChange={(e) =>
+              updateNode(node.id, (n) => ({ ...n, newName: e.target.value }))
+            }
             style={{
               ...s.renameIn,
               fontWeight: depth === 0 && !node.isNew ? 600 : 400,
-              borderColor: (changed || node.isNew) ? "#0f6c3f" : "#c8c8c8",
+              borderColor: changed || node.isNew ? "#0f6c3f" : "#c8c8c8",
               textDecoration: node.isDeleted ? "line-through" : undefined,
               color: node.isDeleted ? "#a4262c" : undefined,
-              opacity: node.isDeleted ? .6 : 1,
+              opacity: node.isDeleted ? 0.6 : 1,
             }}
           />
           {node.childrenLoaded && node.children.length > 0 && (
-            <span style={s.badge}>{node.children.length} subfolder{node.children.length !== 1 ? "s" : ""}</span>
+            <span style={s.badge}>
+              {node.children.length} subfolder
+              {node.children.length !== 1 ? "s" : ""}
+            </span>
           )}
           {changed && <span style={s.wasLabel}>was: {node.name}</span>}
-          {node.isNew && <span style={{ ...s.wasLabel, color: "#0f6c3f" }}>new — not yet created</span>}
-          {node.isDeleted && <span style={{ ...s.wasLabel, color: "#a4262c" }}>marked for deletion</span>}
+          {node.isNew && (
+            <span style={{ ...s.wasLabel, color: "#0f6c3f" }}>
+              new — not yet created
+            </span>
+          )}
+          {node.isDeleted && (
+            <span style={{ ...s.wasLabel, color: "#a4262c" }}>
+              marked for deletion
+            </span>
+          )}
 
           {!node.isDeleted && (
             <button
               style={{ ...s.permBtn, ...(node.perm.open ? s.permBtnOpen : {}) }}
-              onClick={() => { togglePermPanel(node).catch(() => undefined); }}
+              onClick={() => {
+                togglePermPanel(node).catch(() => undefined);
+              }}
             >
               {permLabel}
             </button>
           )}
           {node.isNew && (
-            <button style={{ ...s.permBtn, color: "#a4262c", borderColor: "#a4262c" }} disabled={busy}
-              onClick={() => discardNode(node.id)}>
+            <button
+              style={{ ...s.permBtn, color: "#a4262c", borderColor: "#a4262c" }}
+              disabled={busy}
+              onClick={() => discardNode(node.id)}
+            >
               Discard
             </button>
           )}
           {!node.isNew && !node.isDeleted && !node.confirmingDelete && (
-            <button style={{ ...s.permBtn, color: "#a4262c", borderColor: "#a4262c" }} disabled={busy}
-              onClick={() => requestDelete(node.id)}>
+            <button
+              style={{ ...s.permBtn, color: "#a4262c", borderColor: "#a4262c" }}
+              disabled={busy}
+              onClick={() => requestDelete(node.id)}
+            >
               Delete
             </button>
           )}
           {!node.isNew && node.isDeleted && (
-            <button style={s.undoLink} disabled={busy} onClick={() => undoDelete(node.id)}>
+            <button
+              style={s.undoLink}
+              disabled={busy}
+              onClick={() => undoDelete(node.id)}
+            >
               Undo
             </button>
           )}
@@ -5797,9 +7815,24 @@ export default function FolderManager({
 
         {node.confirmingDelete && (
           <div style={s.confirmBar}>
-            <span>Delete &quot;{node.name}&quot; and everything inside it? This moves it to the site Recycle Bin.</span>
-            <button style={s.dangerBtn} disabled={busy} onClick={() => confirmDelete(node.id)}>Yes, delete</button>
-            <button style={s.ghostBtn} disabled={busy} onClick={() => cancelDelete(node.id)}>Cancel</button>
+            <span>
+              Delete &quot;{node.name}&quot; and everything inside it? This
+              moves it to the site Recycle Bin.
+            </span>
+            <button
+              style={s.dangerBtn}
+              disabled={busy}
+              onClick={() => confirmDelete(node.id)}
+            >
+              Yes, delete
+            </button>
+            <button
+              style={s.ghostBtn}
+              disabled={busy}
+              onClick={() => cancelDelete(node.id)}
+            >
+              Cancel
+            </button>
           </div>
         )}
 
@@ -5807,7 +7840,8 @@ export default function FolderManager({
 
         {!node.isDeleted && (
           <div style={s.childrenPane}>
-            {isOpen && node.children.map(child => renderNode(child, mode, depth + 1))}
+            {isOpen &&
+              node.children.map((child) => renderNode(child, mode, depth + 1))}
             {renderAddForm(mode, node)}
           </div>
         )}
@@ -5836,9 +7870,10 @@ export default function FolderManager({
       {!hideTabs && <h2 style={s.h2}>Folder Administration</h2>}
       {!hideTabs && (
         <p style={s.subtitle}>
-          The tabs run left to right in the order the work happens: add a segment, name the folders
-          its terms produce, shape the levels beneath Unit, move what is already filed, then build
-          the tree. Who can see a folder is set on the <strong>Folder Access</strong> page.
+          The tabs run left to right in the order the work happens: add a
+          segment, name the folders its terms produce, shape the levels beneath
+          Unit, move what is already filed, then build the tree. Who can see a
+          folder is set on the <strong>Folder Access</strong> page.
         </p>
       )}
 
@@ -5860,25 +7895,36 @@ export default function FolderManager({
         `Staging` and `Documents` are gone (client, 2026-08-12: "I am honestly not using it"). They
         were a manual folder tree — reconciliation and the Folder Access page now cover it from data.
       */}
-      <div style={{ ...s.toggleWrap, ...(hideTabs ? { display: "none" } : {}) }}>
+      <div
+        style={{ ...s.toggleWrap, ...(hideTabs ? { display: "none" } : {}) }}
+      >
         <div style={s.seg}>
-          {([
-            ["NewSegment",     "New segment"],
-            ["Abbreviations",  "Term Abbreviations"],
-            ["Levels",         "Folder levels"],
-            ["Migrate",        "Move existing folders"],
-            ["Reconciliation", "Folder Reconciliation"],
-          ] as Array<[Tab, string]>).map(([t, label], i, arr) => (
-            <button key={t}
+          {(
+            [
+              ["NewSegment", "New segment"],
+              ["Abbreviations", "Term Abbreviations"],
+              ["Levels", "Folder levels"],
+              ["Migrate", "Move existing folders"],
+              ["Reconciliation", "Folder Reconciliation"],
+            ] as Array<[Tab, string]>
+          ).map(([t, label], i, arr) => (
+            <button
+              key={t}
               onClick={() => {
                 if (t === tab) return;
                 // An unsaved edit refuses the switch rather than losing it — see `dirty`.
-                if (dirty) { setTabBlocked(true); return; }
+                if (dirty) {
+                  setTabBlocked(true);
+                  return;
+                }
                 setTabBlocked(false);
                 setTab(t);
-                setReconConfirm(false);
               }}
-              style={{ ...s.segBtn, ...(i === arr.length - 1 ? { borderRight: "none" } : {}), ...(tab === t ? s.segActive : {}) }}
+              style={{
+                ...s.segBtn,
+                ...(i === arr.length - 1 ? { borderRight: "none" } : {}),
+                ...(tab === t ? s.segActive : {}),
+              }}
             >
               {label}
             </button>
@@ -5887,8 +7933,18 @@ export default function FolderManager({
       </div>
 
       {tabBlocked && (
-        <div style={{ fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5, ...NOTICE_ATTENTION }}>
-          Finish or clear what you are editing first — leaving this tab would lose it.
+        <div
+          style={{
+            fontSize: 13,
+            padding: "10px 12px",
+            borderRadius: 6,
+            marginBottom: 16,
+            lineHeight: 1.5,
+            ...NOTICE_ATTENTION,
+          }}
+        >
+          Finish or clear what you are editing first — leaving this tab would
+          lose it.
         </div>
       )}
 
@@ -5905,6 +7961,7 @@ export default function FolderManager({
             // switch — same shape as StructureManager's onStructureDirtyChange, below.
             if (onAbbreviationsDirtyChange) onAbbreviationsDirtyChange(d);
           }}
+          registerSave={onAbbreviationsRegisterSave}
           onMissingChange={onAbbreviationsMissingChange}
           onLoadingChange={onAbbreviationsLoadingChange}
           initialSegmentKey={abbreviationsInitialSegmentKey}
@@ -5935,7 +7992,10 @@ export default function FolderManager({
         <SegmentCreator
           context={context}
           siteUrl={siteUrl}
-          onDirtyChange={(d) => { setDirty(d); if (!d) setTabBlocked(false); }}
+          onDirtyChange={(d) => {
+            setDirty(d);
+            if (!d) setTabBlocked(false);
+          }}
           onCreated={onSegmentCreated}
           // Inverted here, once: the prop that travels is "hide", the prop SegmentCreator takes is
           // "allow", and both defaults must mean the button is shown.
@@ -5944,146 +8004,399 @@ export default function FolderManager({
         />
       ) : tab === "Reconciliation" ? (
         <div>
-          <p style={{ fontSize: 13, color: "#444", lineHeight: 1.5, margin: "0 0 16px" }}>
-            Build the folder tree from the <strong>term store</strong> in both{" "}
-            <strong>Staging</strong> and <strong>Documents</strong>. Every level
-            (segment → department → unit) is created if missing and{" "}
-            <strong>locked</strong> (inheritance broken) so nobody can see a folder
-            until its group is assigned. Groups are then{" "}
-            <strong>auto-assigned from CRS Group Map</strong> by role (MEMBER → Read,
-            UPL → Contribute, APR → Design; Documents gets viewer/MEMBER groups only).
-            Below each unit, the <strong>Year × Document Type</strong> folders are created on
-            first use by the upload form (set <code>recon_gridMode</code> on CRS Config to
-            pre-create them instead). They inherit the unit folder permissions either way.
-            Staging folders are also mapped for rename-proof upload routing. Safe to re-run:
-            existing folders and mappings are not duplicated, and role assignments already in
-            place are skipped rather than re-issued. A tier with no group-map rows is flagged
-            in the log. The run states which segments it covered at the top of its log.
-          </p>
-          {reconConfirm && scopeSegs !== undefined && scopeSegs.length > 1 && (
+          {/* ⚠ THE TECHNICAL PARAGRAPH IS GONE (client, 2026-09-06: *"Change and follow the exact
+              layout and exact copy"*). It described the whole mechanism — broken inheritance, role
+              mapping, `recon_gridMode`, the grid — to an admin whose question at that moment is
+              only "what will pressing this do to my site". None of it was wrong; all of it was for
+              a different reader.
+              ⚠ NOTHING IT DESCRIBED HAS CHANGED. The run still locks every folder it creates, still
+              grants from CRS Group Map, and is still safe to re-run. That behaviour is documented in
+              the code and in the run's own log, which names every folder and every grant. */}
+          {/* ⚠ SUPPRESSED INSIDE A GUIDED FLOW, where the step prints its own hint immediately above
+              this — the client's screenshot showed both, one under the other, saying the same thing
+              twice. `hideTabs` is the only signal this component has for "I am embedded in a flow",
+              and it is exactly true in that case. Standalone (All tools) still needs this line: there
+              is no step hint there, and without it the screen opens with no description at all. */}
+          {!hideTabs && (
+            <p
+              style={{
+                fontSize: 13,
+                color: "#444",
+                lineHeight: 1.5,
+                margin: "0 0 16px",
+              }}
+            >
+              Create folders and enable group access.
+            </p>
+          )}
+          {scopeSegs !== undefined && scopeSegs.length > 1 && (
             /* SELECTIVE RECONCILIATION (register #18). Shown only where it can save anything — one
                segment has nothing to choose between. Every box starts TICKED: the safe default is
                today's behaviour, and defaulting to a subset would make the first run after an unseen
                manual edit skip the segment that needed it.
                ⚠ An unticked segment is NOT "clean" — nothing here inspects the site. It covers less,
                that is all, and the copy says so. */
-            <div style={{ margin: "4px 0 8px", padding: "10px 12px", background: "#fff", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12 }}>
-              <div style={{ fontWeight: 600, color: "#0f6c3f", marginBottom: 6 }}>
-                Which business segments should this run cover?
+            <div
+              style={{
+                margin: "4px 0 8px",
+                padding: "10px 12px",
+                background: "#fff",
+                border: "1px solid #cfe4d8",
+                borderRadius: 4,
+                fontSize: 12,
+              }}
+            >
+              {/* Heading and "Select all" on ONE line, to the client's design (2026-09-06). The
+                  count rule sits beside the heading rather than under the list, because it is a
+                  property of the choice and not a message about the current state. */}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  marginBottom: 8,
+                }}
+              >
+                <div
+                  style={{ fontWeight: 600, color: "#1b1b1b", fontSize: 13 }}
+                >
+                  Select business segments to run{" "}
+                  <span
+                    style={{
+                      fontWeight: 400,
+                      color: "#8a8886",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    (min. 1 segment)
+                  </span>
+                </div>
+                <button
+                  style={s.ghostBtn}
+                  disabled={busy}
+                  onClick={() => setScopePicked(undefined)}
+                >
+                  Select all
+                </button>
               </div>
+              {/* ⚠ THE FILTER NARROWS THE LIST, NEVER THE RUN. An unticked segment is excluded
+                  because it is unticked, not because it is hidden — so typing here can never
+                  silently shrink what a run covers. `runScope` reads `scopePicked`, which this does
+                  not touch. */}
+              <input
+                type="search"
+                value={scopeFilter}
+                disabled={busy}
+                placeholder="Search segments"
+                onChange={(e) => setScopeFilter(e.target.value)}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "7px 10px",
+                  marginBottom: 8,
+                  border: "1px solid #c8c8c8",
+                  borderRadius: 4,
+                  font: "inherit",
+                  fontSize: 12,
+                }}
+              />
               {/* ⚠ SAYS WHEN THIS LIST IS NOT YOUR CONFIGURATION. The built-in fallback contains a
                   PLACEHOLDER segment whose term-set GUID is stale, so running against it walks a term
                   set that does not exist and can create a folder tree for a segment nobody made.
                   Silent until 2026-08-21, when it offered four segments on a site with two. */}
               {modeSource !== "config" && (
-                <div style={{ margin: "0 0 8px", padding: "8px 10px", background: "#fff9f0", border: "1px solid #f3e3c3", borderRadius: 4, color: "#6b4a12", lineHeight: 1.5 }}>
-                  <strong>These are built-in segments, not your configuration.</strong>{" "}
+                <div
+                  style={{
+                    margin: "0 0 8px",
+                    padding: "8px 10px",
+                    background: "#fff9f0",
+                    border: "1px solid #f3e3c3",
+                    borderRadius: 4,
+                    color: "#6b4a12",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong>
+                    These are built-in segments, not your configuration.
+                  </strong>{" "}
                   {modeSource === "empty"
                     ? "The CRS Config list has no `mode` rows, so there is nothing to reconcile — create a segment first."
                     : modeSource === "no-sortorder"
                       ? "The mode rows were read without their SortOrder column, so the order below may not match your configuration."
                       : "The CRS Config list could not be read, so this is a hardcoded list."}{" "}
-                  One of them — <strong>Upstream Malaysia Head Office</strong> — is a placeholder with
-                  a term set that does not exist on this site. <strong>Do not run this</strong> until
-                  the segment list matches the Term Abbreviations screen.
+                  One of them — <strong>Upstream Malaysia Head Office</strong> —
+                  is a placeholder with a term set that does not exist on this
+                  site. <strong>Do not run this</strong> until the segment list
+                  matches the Term Abbreviations screen.
                 </div>
               )}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 18px", marginBottom: 8 }}>
-                {scopeSegs.map((seg) => {
-                  const on = scopePicked === undefined || scopePicked.has(seg.key);
-                  return (
-                    <label key={seg.key} style={{ display: "flex", alignItems: "center", gap: 6, cursor: busy ? "default" : "pointer" }}>
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        disabled={busy}
-                        onChange={() => {
-                          const next = new Set(scopePicked ?? scopeSegs.map((x) => x.key));
-                          if (next.has(seg.key)) next.delete(seg.key); else next.add(seg.key);
-                          setScopePicked(next);
+              {/* One segment per ROW, to the client's design. Scrolls past a handful rather than
+                  growing the page — nothing in here is absolutely positioned, so a scroll container
+                  cannot clip anything (the trap that has bitten three other screens). */}
+              <div
+                style={{
+                  maxHeight: 168,
+                  overflowY: "auto",
+                  border: "1px solid #edebe9",
+                  borderRadius: 4,
+                  marginBottom: 8,
+                }}
+              >
+                {scopeSegs
+                  .filter(
+                    (seg) =>
+                      (seg.stagingFolder ?? "")
+                        .toLowerCase()
+                        .indexOf(scopeFilter.trim().toLowerCase()) !== -1,
+                  )
+                  .map((seg) => {
+                    const on =
+                      scopePicked === undefined || scopePicked.has(seg.key);
+                    return (
+                      <label
+                        key={seg.key}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "7px 10px",
+                          borderBottom: "1px solid #f3f2f1",
+                          cursor: busy ? "default" : "pointer",
                         }}
-                      />
-                      <span>{seg.stagingFolder}</span>
-                    </label>
-                  );
-                })}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          disabled={busy}
+                          onChange={() => {
+                            const next = new Set(
+                              scopePicked ?? scopeSegs.map((x) => x.key),
+                            );
+                            if (next.has(seg.key)) next.delete(seg.key);
+                            else next.add(seg.key);
+                            setScopePicked(next);
+                          }}
+                        />
+                        <span>{seg.stagingFolder}</span>
+                      </label>
+                    );
+                  })}
+                {/* An empty list after typing is the filter's doing, not a missing configuration —
+                    said plainly, or it reads as the segments having disappeared. */}
+                {scopeSegs.filter(
+                  (seg) =>
+                    (seg.stagingFolder ?? "")
+                      .toLowerCase()
+                      .indexOf(scopeFilter.trim().toLowerCase()) !== -1,
+                ).length === 0 && (
+                  <div style={{ padding: "10px 12px", color: "#666" }}>
+                    No segment matches &ldquo;{scopeFilter.trim()}&rdquo;. Clear
+                    the box to see them all.
+                  </div>
+                )}
               </div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                <button style={s.ghostBtn} disabled={busy} onClick={() => setScopePicked(undefined)}>Select all</button>
-                <span style={{ color: runScope().refused ? "#a4262c" : "#666" }}>
-                  {runScope().refused ?? `This run will cover ${runScope().label}.`}
-                </span>
+              {/* The refusal still has to be visible: with nothing ticked the run button is greyed,
+                  and a disabled button states that something is wrong without saying what. */}
+              <div
+                style={{
+                  color: runScope().refused ? "#a4262c" : "#666",
+                  marginBottom: 6,
+                }}
+              >
+                {runScope().refused ??
+                  `This run will cover ${runScope().label}.`}
               </div>
               <div style={{ color: "#666", marginTop: 6, lineHeight: 1.45 }}>
-                Leaving a segment out only means this run does not look at it — it does not mean that
-                segment is up to date. Site-wide checks (site entry, library permissions, page access,
-                administrator pages) always run in full.
+                Leaving a segment out only means this run does not look at it —
+                it does not mean that segment is up to date. Site-wide checks
+                (site entry, library permissions, page access, administrator
+                pages) always run in full.
               </div>
             </div>
           )}
-          {reconConfirm ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "4px 0 8px", padding: "8px 10px", background: "#f0f7f2", border: "1px solid #cfe4d8", borderRadius: 4, fontSize: 12, color: "#0f6c3f" }}>
-              <span>
-                Create + lock the term-store folder tree in <strong>Staging</strong> and <strong>Documents</strong>, then auto-assign groups from CRS Group Map by role. Safe to re-run.
-                <br />
-                <strong>Keep this tab open until it finishes.</strong> The run happens in your browser — refreshing, closing the tab or navigating away stops it partway. Nothing is lost and you can simply run it again, but do re-run before letting users in: a folder interrupted at the wrong moment stays unlocked until the next run.
+          {/* ── The client's green panel (2026-09-06) ─────────────────────────────────────────
+              REPLACES THE TWO-STAGE CONFIRM. Pressing "Update folder structure" used to open a bar
+              that asked again; the design has one button and the segments already on screen, so it
+              runs on the press.
+
+              ⚠ THAT IS ACCEPTABLE ONLY BECAUSE RECONCILIATION IS IDEMPOTENT. The confirm was
+              INFORMATIONAL, never protective - a second run of a finished segment writes nothing and
+              costs one read per folder. If anything destructive is ever added to this run, the
+              confirm has to come back.
+
+              ⚠ "KEEP THIS TAB OPEN" IS CARRIED OVER AND MUST STAY. It is the one sentence here that
+              is not decoration: the run happens in the browser, and a folder interrupted between
+              creation and locking stays INHERITING until the next run. It lost the confirm bar it
+              used to live in, not its reason. */}
+          <div
+            style={{
+              margin: "4px 0 8px",
+              padding: "14px 16px",
+              background: "rgba(235, 244, 231, 1)",
+              borderRadius: 6,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+              {/* The mark from the client's design. WHITE on the green disc, per *"the icon is also
+                  white"* — so it is drawn with `stroke="#fff"` rather than inheriting. */}
+              <span
+                style={{
+                  flexShrink: 0,
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  background: "#0f6c3f",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                aria-hidden="true"
+              >
+                <svg width="16" height="16" viewBox="0 0 14 15" fill="none">
+                  <path
+                    d="M12.1307 12.1307C9.52722 14.7342 5.30612 14.7342 2.70262 12.1307C0.0991263 9.52722 0.099126 5.30612 2.70262 2.70262C5.30612 0.0991262 9.52722 0.0991262 12.1307 2.70262M12.75 0.75V3.35C12.75 3.38682 12.7202 3.41667 12.6833 3.41667H10.0833"
+                    stroke="#fff"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
               </span>
-              {/* Greyed when refused, not merely inert. The inline green survived `disabled`, so
-                  an empty segment tick list produced a button that looked live and did nothing —
-                  which reads as a broken page, and the admin's next move is to reload rather than
-                  tick a segment. The reason already renders above it. */}
-              <button style={{ ...s.btn, padding: "5px 14px", fontSize: 12, background: (busy || runScope().refused !== undefined) ? "#b6c6bd" : "#0f6c3f", color: "#fff", border: "none", flexShrink: 0, cursor: (busy || runScope().refused !== undefined) ? "not-allowed" : "pointer" }} disabled={busy || runScope().refused !== undefined} onClick={() => { runReconciliation().catch(() => undefined); }}>
-                {busy ? "Running…" : "Yes, run reconciliation"}
-              </button>
-              <button style={s.ghostBtn} disabled={busy} onClick={() => setReconConfirm(false)}>Cancel</button>
+              <div>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    color: "#0f6c3f",
+                    fontSize: 14,
+                    marginBottom: 4,
+                  }}
+                >
+                  Update folder structure
+                </div>
+                <div
+                  style={{ color: "#3d4b42", fontSize: 12.5, lineHeight: 1.5 }}
+                >
+                  Run folder reconciliation to refresh the database with newly
+                  added items and apply the latest group assignments, roles, and
+                  permissions.
+                  <br />
+                  <strong>Keep this tab open until it finishes.</strong> The run
+                  happens in your browser — refreshing, closing the tab or
+                  navigating away stops it partway. Nothing is lost and you can
+                  run it again, but do re-run before letting users in: a folder
+                  interrupted at the wrong moment stays unlocked until the next
+                  run.
+                </div>
+              </div>
             </div>
-          ) : (
-            <button
-              onClick={() => {
-                setReconConfirm(true);
-                // Read once, when the bar opens. Cheap — the mode rows are one list read, and the
-                // expensive per-segment term walk is deliberately NOT done here (spec §4.1).
-                loadReconModes()
-                  .then((m) => setScopeSegs(m.map((x) => ({ key: x.termSetGuid, stagingFolder: x.stagingFolder }))))
-                  .catch(() => setScopeSegs(undefined));
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                marginTop: 12,
+                marginLeft: 40,
+                flexWrap: "wrap",
               }}
-              disabled={busy}
-              style={{ ...s.btn, background: "#0f6c3f", color: "#fff", border: "none" }}
             >
-              Run reconciliation
-            </button>
-          )}
+              {/* Greyed when refused, not merely inert. The inline green survived `disabled`, so an
+                  empty segment tick list produced a button that looked live and did nothing — which
+                  reads as a broken page, and the admin's next move is to reload rather than tick a
+                  segment. The reason renders beside the picker above. */}
+              <button
+                /* ⚠ NO ICON INSIDE THE BUTTON — the design has the mark ONCE, on the disc at the top
+                   left of the panel, and repeating it in the button is what threw the row out of
+                   line: the taller content pushed the label off the baseline of the "Usually a few
+                   minutes" note beside it (client, 2026-09-06). The earlier instruction that "the
+                   icon is also white" is satisfied by the disc, which is where the icon lives. */
+                style={{
+                  ...s.btn,
+                  background:
+                    busy || runScope().refused !== undefined
+                      ? "#b6c6bd"
+                      : "#0f6c3f",
+                  color: "#fff",
+                  border: "none",
+                  cursor:
+                    busy || runScope().refused !== undefined
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+                disabled={busy || runScope().refused !== undefined}
+                onClick={() => {
+                  runReconciliation().catch(() => undefined);
+                }}
+              >
+                {busy ? "Running…" : "Update folder structure"}
+              </button>
+              <span style={{ fontSize: 12, color: "#5f6f62" }}>
+                Usually a few minutes — longer for larger segments
+              </span>
+            </div>
+          </div>
 
           {(reconRunning ||
-            folderFeeds.Staging.length > 0 || folderFeeds.Documents.length > 0 ||
-            assignFeeds.Staging.length > 0 || assignFeeds.Documents.length > 0) && (
+            folderFeeds.Staging.length > 0 ||
+            folderFeeds.Documents.length > 0 ||
+            assignFeeds.Staging.length > 0 ||
+            assignFeeds.Documents.length > 0) && (
             <div style={{ marginTop: 18 }}>
               <style>{"@keyframes fmspin{to{transform:rotate(360deg)}}"}</style>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  marginBottom: 10,
+                }}
+              >
                 {reconRunning && (
-                  <span style={{ display: "inline-block", width: 16, height: 16, border: "2px solid #cfe4d8", borderTopColor: "#0f6c3f", borderRadius: "50%", animation: "fmspin 0.8s linear infinite" }} />
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 16,
+                      height: 16,
+                      border: "2px solid #cfe4d8",
+                      borderTopColor: "#0f6c3f",
+                      borderRadius: "50%",
+                      animation: "fmspin 0.8s linear infinite",
+                    }}
+                  />
                 )}
                 <strong style={{ fontSize: 13, color: "#0f6c3f" }}>
-                  {reconRunning ? (reconPhase || "Working…") : "Reconciliation complete"}
+                  {reconRunning
+                    ? reconPhase || "Working…"
+                    : "Reconciliation complete"}
                   {reconRunning && (
-                    <span style={{ marginLeft: 8, fontWeight: 400, color: "#8a5a00" }}>
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        fontWeight: 400,
+                        color: "#8a5a00",
+                      }}
+                    >
                       — keep this tab open; leaving stops the run
                     </span>
                   )}
                 </strong>
                 <span style={{ fontSize: 12, color: "#666" }}>
-                  {reconCounts.folders} folders created · {reconCounts.assigns} groups assigned
+                  {reconCounts.folders} folders created · {reconCounts.assigns}{" "}
+                  groups assigned
                 </span>
                 {(() => {
                   // reconDone, NOT reconCounts: the estimate must divide by steps
                   // ATTEMPTED. reconCounts only rises when something changed, so on a
                   // re-run it sits near zero against a full planned total and the
                   // estimate runs away — the "~197m left" on a three-minute re-run.
-                  const elapsedMs = reconStartMs ? Math.max(0, reconNow - reconStartMs) : 0;
+                  const elapsedMs = reconStartMs
+                    ? Math.max(0, reconNow - reconStartMs)
+                    : 0;
                   if (!reconRunning) {
                     // Final line after a run completes.
                     return reconStartMs ? (
-                      <span style={{ fontSize: 12, color: "#666" }}>· took {fmtDur(elapsedMs)}</span>
+                      <span style={{ fontSize: 12, color: "#666" }}>
+                        · took {fmtDur(elapsedMs)}
+                      </span>
                     ) : null;
                   }
                   const remainingOps = Math.max(0, reconPlanned - reconDone);
@@ -6091,24 +8404,60 @@ export default function FolderManager({
                   // 25, not 5: the first steps are all cheap "already there" skips, and
                   // extrapolating a whole run from them under-reads it as badly as the
                   // old counter over-read it.
-                  const remainMs = reconDone >= 25
-                    ? remainingOps * (elapsedMs / reconDone)
-                    : remainingOps * (RECON_WRITE_DELAY_MS + RECON_EST_HTTP_MS)
-                      + Math.floor(reconPlanned / RECON_BATCH_SIZE) * RECON_COOLDOWN_MS;
-                  const pct = reconPlanned > 0
-                    ? Math.min(100, Math.round((reconDone / reconPlanned) * 100))
-                    : 0;
+                  const remainMs =
+                    reconDone >= 25
+                      ? remainingOps * (elapsedMs / reconDone)
+                      : remainingOps *
+                          (RECON_WRITE_DELAY_MS + RECON_EST_HTTP_MS) +
+                        Math.floor(reconPlanned / RECON_BATCH_SIZE) *
+                          RECON_COOLDOWN_MS;
+                  const pct =
+                    reconPlanned > 0
+                      ? Math.min(
+                          100,
+                          Math.round((reconDone / reconPlanned) * 100),
+                        )
+                      : 0;
                   return (
-                    <span style={{ fontSize: 12, color: "#0f6c3f", fontWeight: 600 }}>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "#0f6c3f",
+                        fontWeight: 600,
+                      }}
+                    >
                       · {pct}% · ~{fmtDur(remainMs)} left
-                      <span style={{ color: "#999", fontWeight: 400 }}> ({fmtDur(elapsedMs)} elapsed{reconPlanned > 0 ? `, ${reconDone}/${reconPlanned} steps` : ""})</span>
+                      <span style={{ color: "#999", fontWeight: 400 }}>
+                        {" "}
+                        ({fmtDur(elapsedMs)} elapsed
+                        {reconPlanned > 0
+                          ? `, ${reconDone}/${reconPlanned} steps`
+                          : ""}
+                        )
+                      </span>
                     </span>
                   );
                 })()}
               </div>
               {reconPlanned > 0 && reconRunning && (
-                <div style={{ height: 6, borderRadius: 4, background: "#ececec", overflow: "hidden", marginBottom: 12 }}>
-                  <div style={{ height: "100%", background: "#0f6c3f", borderRadius: 4, transition: "width .3s ease", width: `${Math.min(100, (reconDone / reconPlanned) * 100)}%` }} />
+                <div
+                  style={{
+                    height: 6,
+                    borderRadius: 4,
+                    background: "#ececec",
+                    overflow: "hidden",
+                    marginBottom: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      height: "100%",
+                      background: "#0f6c3f",
+                      borderRadius: 4,
+                      transition: "width .3s ease",
+                      width: `${Math.min(100, (reconDone / reconPlanned) * 100)}%`,
+                    }}
+                  />
                 </div>
               )}
               {/* One row per library, two panels each. Grouping by library rather than
@@ -6118,26 +8467,93 @@ export default function FolderManager({
                 <div key={lib} style={{ marginBottom: 14 }}>
                   {/* The title, not the key — `key={lib}` above stays the key, because a React key
                       must be a stable identifier and two libraries could in principle share a title. */}
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#0f6c3f", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>{libDisplayName(lib)}</div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#0f6c3f",
+                      textTransform: "uppercase",
+                      letterSpacing: ".05em",
+                      marginBottom: 6,
+                    }}
+                  >
+                    {libDisplayName(lib)}
+                  </div>
                   {/* flexWrap + flex-basis makes the two panels sit side-by-side on wide
                       screens and stack on narrow (mobile) — no media query needed. */}
                   <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-                    {([
-                      { title: `${libDisplayName(lib)} folders`, feed: folderFeeds[lib] },
-                      { title: `${libDisplayName(lib)} group assignments`, feed: assignFeeds[lib] },
-                    ] as const).map((panel) => (
-                      <div key={panel.title} style={{ flex: "1 1 280px", minWidth: 0, border: "1px solid #e5e5e5", borderRadius: 4, overflow: "hidden" }}>
-                        <div style={{ padding: "6px 10px", background: "#f7f7f7", fontSize: 12, fontWeight: 600, color: "#444", borderBottom: "1px solid #eee" }}>{panel.title}</div>
+                    {(
+                      [
+                        {
+                          title: `${libDisplayName(lib)} folders`,
+                          feed: folderFeeds[lib],
+                        },
+                        {
+                          title: `${libDisplayName(lib)} group assignments`,
+                          feed: assignFeeds[lib],
+                        },
+                      ] as const
+                    ).map((panel) => (
+                      <div
+                        key={panel.title}
+                        style={{
+                          flex: "1 1 280px",
+                          minWidth: 0,
+                          border: "1px solid #e5e5e5",
+                          borderRadius: 4,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            padding: "6px 10px",
+                            background: "#f7f7f7",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: "#444",
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          {panel.title}
+                        </div>
                         {/* overflowX:auto lets the client slide left/right to read full paths;
                             rows keep nowrap (no ellipsis clip) so the whole message is reachable. */}
-                        <div style={{ maxHeight: 220, overflowY: "auto", overflowX: "auto", padding: "4px 0" }}>
+                        <div
+                          style={{
+                            maxHeight: 220,
+                            overflowY: "auto",
+                            overflowX: "auto",
+                            padding: "4px 0",
+                          }}
+                        >
                           {panel.feed.length === 0 ? (
-                            <div style={{ padding: "6px 10px", fontSize: 12, color: "#aaa" }}>—</div>
+                            <div
+                              style={{
+                                padding: "6px 10px",
+                                fontSize: 12,
+                                color: "#aaa",
+                              }}
+                            >
+                              —
+                            </div>
                           ) : (
                             panel.feed.map((it, i) => (
-                              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "3px 10px", fontSize: 12, color: it.status === "admin" ? "#b45309" : "#333" }}>
+                              <div
+                                key={i}
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 8,
+                                  padding: "3px 10px",
+                                  fontSize: 12,
+                                  color:
+                                    it.status === "admin" ? "#b45309" : "#333",
+                                }}
+                              >
                                 {progIcon(it.status)}
-                                <span style={{ whiteSpace: "nowrap" }}>{it.text}</span>
+                                <span style={{ whiteSpace: "nowrap" }}>
+                                  {it.text}
+                                </span>
                               </div>
                             ))
                           )}
@@ -6164,7 +8580,6 @@ export default function FolderManager({
               `.../ListItemAllFields/roleassignments`, and a library ROOT has no `ListItemAllFields` —
               it needs the LIST-scoped `lists(guid'...')/roleassignments`, whose removal takes BOTH
               the principal id and the role-definition id, unlike the folder-scope call. */}
-
         </div>
       ) : loading ? (
         <p style={{ fontSize: 13, color: "#666" }}>Loading folders…</p>
@@ -6173,30 +8588,44 @@ export default function FolderManager({
            `Staging`/`Documents` tabs. Kept compiling so its removal is a separate, reviewable
            change rather than a 200-line deletion buried in a tab restructure. */
         <>
-          {sections.length === 0 && (tree[NEW_TOP_LEVEL] ?? []).length === 0 && (
-            <p style={{ fontSize: 13, color: "#999" }}>
-              No top-level folders under {libTarget} yet — create the first one below.
-            </p>
-          )}
+          {sections.length === 0 &&
+            (tree[NEW_TOP_LEVEL] ?? []).length === 0 && (
+              <p style={{ fontSize: 13, color: "#999" }}>
+                No top-level folders under {libTarget} yet — create the first
+                one below.
+              </p>
+            )}
 
-          {sections.map(mode => {
+          {sections.map((mode) => {
             const open = modeOpen[mode] !== false; // sections default to open
             const nodes = tree[mode] ?? [];
             return (
               <div key={mode} style={{ marginBottom: 28 }}>
-                <div style={s.secHeader} onClick={() => setModeOpen(prev => ({ ...prev, [mode]: open ? false : true }))}>
+                <div
+                  style={s.secHeader}
+                  onClick={() =>
+                    setModeOpen((prev) => ({
+                      ...prev,
+                      [mode]: open ? false : true,
+                    }))
+                  }
+                >
                   <span style={s.ico}>{open ? "▾" : "▸"}</span>
                   <p style={s.secTitle}>{mode}</p>
-                  {nodes.length > 0 && <span style={s.badge}>{nodes.length}</span>}
+                  {nodes.length > 0 && (
+                    <span style={s.badge}>{nodes.length}</span>
+                  )}
                 </div>
 
                 {open && (
                   <>
                     {nodes.length === 0 ? (
-                      <p style={{ fontSize: 13, color: "#999" }}>No folders found under {libTarget}/{mode}.</p>
+                      <p style={{ fontSize: 13, color: "#999" }}>
+                        No folders found under {libTarget}/{mode}.
+                      </p>
                     ) : (
                       <div style={s.scrollPane}>
-                        {nodes.map(node => renderNode(node, mode, 0))}
+                        {nodes.map((node) => renderNode(node, mode, 0))}
                       </div>
                     )}
 
@@ -6210,16 +8639,25 @@ export default function FolderManager({
           {/* New top-level folders staged for creation directly under the library root */}
           {(tree[NEW_TOP_LEVEL] ?? []).length > 0 && (
             <div style={{ marginBottom: 20 }}>
-              <p style={s.secTitle}>New top-level folder{(tree[NEW_TOP_LEVEL] ?? []).length !== 1 ? "s" : ""}</p>
+              <p style={s.secTitle}>
+                New top-level folder
+                {(tree[NEW_TOP_LEVEL] ?? []).length !== 1 ? "s" : ""}
+              </p>
               <div style={s.scrollPane}>
-                {(tree[NEW_TOP_LEVEL] ?? []).map(node => renderNode(node, NEW_TOP_LEVEL, 0))}
+                {(tree[NEW_TOP_LEVEL] ?? []).map((node) =>
+                  renderNode(node, NEW_TOP_LEVEL, 0),
+                )}
               </div>
             </div>
           )}
 
           {libRoot && (
             <div style={{ paddingTop: 4 }}>
-              <button style={s.addFolderBtn} disabled={busy} onClick={addTopLevel}>
+              <button
+                style={s.addFolderBtn}
+                disabled={busy}
+                onClick={addTopLevel}
+              >
                 + Add top-level folder
               </button>
             </div>
@@ -6229,13 +8667,33 @@ export default function FolderManager({
 
       {treeTab && (
         <div style={s.actions}>
-          <button onClick={() => loadTree().catch(() => undefined)} disabled={busy || loading}
-            style={{ ...s.btn, marginRight: "auto", background: "#fff", color: "#0f6c3f", border: "1px solid #0f6c3f" }}>
+          <button
+            onClick={() => loadTree().catch(() => undefined)}
+            disabled={busy || loading}
+            style={{
+              ...s.btn,
+              marginRight: "auto",
+              background: "#fff",
+              color: "#0f6c3f",
+              border: "1px solid #0f6c3f",
+            }}
+          >
             Refresh
           </button>
-          <button onClick={() => { handleUpdate().catch(() => undefined); }}
+          <button
+            onClick={() => {
+              handleUpdate().catch(() => undefined);
+            }}
             disabled={busy || loading || !hasChanges}
-            style={{ ...s.btn, background: !busy && !loading && hasChanges ? "#0f6c3f" : "#9bbfaa", color: "#fff", border: "none", cursor: !busy && !loading && hasChanges ? "pointer" : "default" }}>
+            style={{
+              ...s.btn,
+              background:
+                !busy && !loading && hasChanges ? "#0f6c3f" : "#9bbfaa",
+              color: "#fff",
+              border: "none",
+              cursor: !busy && !loading && hasChanges ? "pointer" : "default",
+            }}
+          >
             {busy ? "Updating…" : "Update"}
           </button>
         </div>
@@ -6243,8 +8701,10 @@ export default function FolderManager({
 
       {/* The log belongs to the run that produced it. Ungated it would sit under the mounted
           structure screens too, where a stale reconciliation report reads as that screen's output. */}
-      {(tab === "Reconciliation" || treeTab) && log.length > 0 && (() => {
-        /* The log is split by WHERE and by SEVERITY, because those answer different
+      {(tab === "Reconciliation" || treeTab) &&
+        log.length > 0 &&
+        (() => {
+          /* The log is split by WHERE and by SEVERITY, because those answer different
            questions: "what happened in Documents" and "what do I have to fix".
            Warnings and Errors are filtered VIEWS, so an entry appears both in its
            library tab and in its severity tab — that is the point of triage.
@@ -6254,14 +8714,16 @@ export default function FolderManager({
            are pushed with ok:true so they cannot gate the orphan prune, and a
            missing abbreviation is pushed with ok:false. The glyph is the author's
            actual intent; the flag is a control signal. */
-        const isError = (e: LogEntry): boolean => /✗|FAILED|✖/.test(e.msg) || (!e.ok && !/⚠|\?/.test(e.msg));
-        const isWarning = (e: LogEntry): boolean => !isError(e) && /⚠|(^|\s)\?\s/.test(e.msg);
-        const errors = log.filter(isError);
-        const warnings = log.filter(isWarning);
-        // An entry naming both libraries belongs to both; one naming neither (the
-        // prune, orphan repair and site-entry passes) is reachable only from All,
-        // which is why All exists and is the default.
-        /* ⚠ THE TABS WERE HARDCODED "Documents" AND "Staging", AND `Staging` MATCHED NOTHING.
+          const isError = (e: LogEntry): boolean =>
+            /✗|FAILED|✖/.test(e.msg) || (!e.ok && !/⚠|\?/.test(e.msg));
+          const isWarning = (e: LogEntry): boolean =>
+            !isError(e) && /⚠|(^|\s)\?\s/.test(e.msg);
+          const errors = log.filter(isError);
+          const warnings = log.filter(isWarning);
+          // An entry naming both libraries belongs to both; one naming neither (the
+          // prune, orphan repair and site-entry passes) is reachable only from All,
+          // which is why All exists and is the default.
+          /* ⚠ THE TABS WERE HARDCODED "Documents" AND "Staging", AND `Staging` MATCHED NOTHING.
            Found live 2026-08-19: a from-scratch run that built hundreds of `Approval Document/…`
            folders reported `Staging (0)`. The library was renamed in 2026-08-06 and this literal
            silently stopped matching — gotcha #12 again, in the one place whose whole job is telling
@@ -6272,89 +8734,130 @@ export default function FolderManager({
            `Documents` is a SUBSTRING of `HC Documents`, so a plain indexOf would file every HC line
            under Documents as well. An occurrence preceded by "HC " belongs to the HC library and to
            that one only. */
-        const mentionsLib = (msg: string, name: string): boolean => {
-          const hc = name.indexOf("HC ") === 0;
-          let i = msg.indexOf(name);
-          while (i !== -1) {
-            if (hc || !(i >= 3 && msg.slice(i - 3, i) === "HC ")) return true;
-            i = msg.indexOf(name, i + 1);
-          }
-          return false;
-        };
-        const forLib = (lib: string): LogEntry[] => log.filter((e) => mentionsLib(e.msg, lib));
-        const tabs: Array<{ key: string; rows: LogEntry[] }> = [
-          { key: "All", rows: log },
-          // Driven by reconLibs(), so a site without the HC pair shows two library tabs and a site
-          // with it shows four — never a tab for a library that does not exist.
-          ...reconLibs().map((l) => ({ key: libDisplayName(l), rows: forLib(libDisplayName(l)) })),
-          { key: "Warnings", rows: warnings },
-          { key: "Errors", rows: errors },
-        ];
-        const active = tabs.find((t) => t.key === logTab) ?? tabs[0];
-        const colourOf = (e: LogEntry): string =>
-          isError(e) ? "#d13438" : isWarning(e) ? "#b45309" : "#0f6c3f";
-        const glyphOf = (e: LogEntry): string =>
-          isError(e) ? "✗" : isWarning(e) ? "⚠" : "✓";
-        // Most messages were written with their own leading glyph, from before the
-        // renderer added one — hence "⚠ ⚠ Documents/…". Strip it at RENDER only:
-        // isError/isWarning classify by reading that glyph out of the text, so
-        // removing it from the stored message would silently demote every warning
-        // to a success. Leading spaces are preserved because indentation is how
-        // per-folder detail lines are nested under their folder.
-        const textOf = (e: LogEntry): string =>
-          e.msg.replace(/^(\s*)[✓⚠✗✖]\s*/, "$1");
-        return (
-          <div style={s.logBox}>
-            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-              {tabs.map((t) => {
-                const on = t.key === active.key;
-                const alert = (t.key === "Errors" && t.rows.length > 0)
-                  ? "#d13438"
-                  : (t.key === "Warnings" && t.rows.length > 0) ? "#b45309" : undefined;
-                return (
-                  <button
-                    key={t.key}
-                    onClick={() => setLogTab(t.key)}
-                    style={{
-                      padding: "5px 12px", borderRadius: 14, fontSize: 12, fontWeight: 600,
-                      cursor: "pointer", fontFamily: "inherit",
-                      border: `1px solid ${on ? (alert ?? "#0f6c3f") : "#d8d8d8"}`,
-                      background: on ? (alert ?? "#0f6c3f") : "#fff",
-                      color: on ? "#fff" : (alert ?? "#555"),
-                    }}
-                  >
-                    {t.key} ({t.rows.length})
-                  </button>
-                );
-              })}
+          const mentionsLib = (msg: string, name: string): boolean => {
+            const hc = name.indexOf("HC ") === 0;
+            let i = msg.indexOf(name);
+            while (i !== -1) {
+              if (hc || !(i >= 3 && msg.slice(i - 3, i) === "HC ")) return true;
+              i = msg.indexOf(name, i + 1);
+            }
+            return false;
+          };
+          const forLib = (lib: string): LogEntry[] =>
+            log.filter((e) => mentionsLib(e.msg, lib));
+          const tabs: Array<{ key: string; rows: LogEntry[] }> = [
+            { key: "All", rows: log },
+            // Driven by reconLibs(), so a site without the HC pair shows two library tabs and a site
+            // with it shows four — never a tab for a library that does not exist.
+            ...reconLibs().map((l) => ({
+              key: libDisplayName(l),
+              rows: forLib(libDisplayName(l)),
+            })),
+            { key: "Warnings", rows: warnings },
+            { key: "Errors", rows: errors },
+          ];
+          const active = tabs.find((t) => t.key === logTab) ?? tabs[0];
+          const colourOf = (e: LogEntry): string =>
+            isError(e) ? "#d13438" : isWarning(e) ? "#b45309" : "#0f6c3f";
+          const glyphOf = (e: LogEntry): string =>
+            isError(e) ? "✗" : isWarning(e) ? "⚠" : "✓";
+          // Most messages were written with their own leading glyph, from before the
+          // renderer added one — hence "⚠ ⚠ Documents/…". Strip it at RENDER only:
+          // isError/isWarning classify by reading that glyph out of the text, so
+          // removing it from the stored message would silently demote every warning
+          // to a success. Leading spaces are preserved because indentation is how
+          // per-folder detail lines are nested under their folder.
+          const textOf = (e: LogEntry): string =>
+            e.msg.replace(/^(\s*)[✓⚠✗✖]\s*/, "$1");
+          return (
+            <div style={s.logBox}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                  marginBottom: 10,
+                }}
+              >
+                {tabs.map((t) => {
+                  const on = t.key === active.key;
+                  const alert =
+                    t.key === "Errors" && t.rows.length > 0
+                      ? "#d13438"
+                      : t.key === "Warnings" && t.rows.length > 0
+                        ? "#b45309"
+                        : undefined;
+                  return (
+                    <button
+                      key={t.key}
+                      onClick={() => setLogTab(t.key)}
+                      style={{
+                        padding: "5px 12px",
+                        borderRadius: 14,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        border: `1px solid ${on ? (alert ?? "#0f6c3f") : "#d8d8d8"}`,
+                        background: on ? (alert ?? "#0f6c3f") : "#fff",
+                        color: on ? "#fff" : (alert ?? "#555"),
+                      }}
+                    >
+                      {t.key} ({t.rows.length})
+                    </button>
+                  );
+                })}
+              </div>
+              {active.rows.length === 0 ? (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color:
+                      active.key === "Errors" || active.key === "Warnings"
+                        ? "#0f6c3f"
+                        : "#999",
+                  }}
+                >
+                  {active.key === "Errors"
+                    ? "No errors. 🎉"
+                    : active.key === "Warnings"
+                      ? "No warnings — every folder got a group."
+                      : "Nothing logged for this view."}
+                </div>
+              ) : (
+                // Scrolls rather than growing the page: a full run logs thousands of
+                // lines and the tab bar has to stay reachable.
+                <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                  {active.rows.map((entry, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        fontSize: 12,
+                        color: colourOf(entry),
+                        marginBottom: 4,
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {glyphOf(entry)} {textOf(entry)}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            {active.rows.length === 0 ? (
-              <div style={{ fontSize: 12, color: active.key === "Errors" || active.key === "Warnings" ? "#0f6c3f" : "#999" }}>
-                {active.key === "Errors"
-                  ? "No errors. 🎉"
-                  : active.key === "Warnings"
-                    ? "No warnings — every folder got a group."
-                    : "Nothing logged for this view."}
-              </div>
-            ) : (
-              // Scrolls rather than growing the page: a full run logs thousands of
-              // lines and the tab bar has to stay reachable.
-              <div style={{ maxHeight: 420, overflowY: "auto" }}>
-                {active.rows.map((entry, i) => (
-                  <div key={i} style={{ fontSize: 12, color: colourOf(entry), marginBottom: 4, wordBreak: "break-word" }}>
-                    {glyphOf(entry)} {textOf(entry)}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })()}
+          );
+        })()}
 
       {toast && (
-        <div style={{ ...s.toast, background: toast.error ? "#d13438" : "#0f6c3f" }}>
+        <div
+          style={{
+            ...s.toast,
+            background: toast.error ? "#d13438" : "#0f6c3f",
+          }}
+        >
           {toast.message}
-          <button onClick={() => setToast(null)} style={s.toastClose}>✕</button>
+          <button onClick={() => setToast(null)} style={s.toastClose}>
+            ✕
+          </button>
         </div>
       )}
     </section>

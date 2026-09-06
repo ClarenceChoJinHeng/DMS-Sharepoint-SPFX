@@ -13,7 +13,6 @@ import { Toast, ToastKind } from "../../../shared/toast";
 import {
   AbbrevRowDraft,
   changedRows,
-  folderNameFor,
   groupRowsByParent,
   hasBlockingProblem,
   renamingRows,
@@ -78,7 +77,12 @@ const s: Record<string, React.CSSProperties> = {
    */
   row: {
     display: "grid",
-    gridTemplateColumns: "minmax(0, 1fr) 150px max-content minmax(0, 170px)",
+    /* ⚠ THE FIELD SITS BESIDE THE TERM NAME (client, 2026-09-06: *"Move ALL text fields and place
+       it beside the folder title"*). It used to be pushed right by a `1fr` label column, so on a
+       wide screen the box a code goes in was half a screen away from the term it names.
+       A FIXED label column rather than `max-content`, so every input still lines up: with
+       `max-content` the boxes would step in and out with the length of each term. */
+    gridTemplateColumns: "minmax(0, 260px) 200px minmax(0, 1fr)",
     alignItems: "center",
     columnGap: 12,
     rowGap: 4,
@@ -98,12 +102,28 @@ const s: Record<string, React.CSSProperties> = {
   problem: { fontSize: 11, lineHeight: 1.5, marginTop: 3, gridColumn: "1 / -1" },
   hint: { fontSize: 11, color: "#8a8886", marginTop: 3, lineHeight: 1.5 },
   pathHint: { fontSize: 11, color: "#8a8886", fontFamily: "Consolas, monospace" },
+  /* The asterisk beside every term. `#a4262c` is this project's danger red, the same one the field
+     errors and the attention banners use, so "required" reads the same everywhere. */
+  req: { color: "#a4262c", fontWeight: 700 },
 };
 
 export interface AbbreviationManagerProps {
   context: WebPartContext;
   siteUrl: string;
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Hands this screen's own `save()` to the host, so a guided flow's **Next** can save before it
+   * advances (client, 2026-09-06 — the Save button is gone).
+   *
+   * ⚠ REGISTERED, NOT RE-IMPLEMENTED. The host must call THE SAME function the screen would have
+   * called: it validates, writes, re-baselines the rows and reports into the panel the admin is
+   * looking at. A second write path in the runner would be a second definition of what saving means,
+   * and the drifting copy would be the one nobody tests.
+   *
+   * Called with `undefined` on unmount, so a host holding the reference cannot save a screen that is
+   * no longer there.
+   */
+  registerSave?: (save: (() => Promise<boolean>) | undefined) => void;
   /**
    * How many terms currently have no folder code, or `undefined` when that is not knowable.
    *
@@ -139,6 +159,7 @@ export default function AbbreviationManager({
   context,
   siteUrl,
   onDirtyChange,
+  registerSave,
   onMissingChange,
   onLoadingChange,
   initialSegmentKey,
@@ -357,27 +378,36 @@ export default function AbbreviationManager({
   const setCode = (termGuid: string, value: string): void =>
     setRows(rows.map((r) => (r.termGuid === termGuid ? { ...r, abbreviation: value } : r)));
 
-  const sameAsName = (termGuid: string): void =>
-    setRows(rows.map((r) => (r.termGuid === termGuid ? { ...r, abbreviation: r.label } : r)));
+  /* ⚠ `sameAsName` AND `sameAsNameForLevel` ARE DELETED (client, 2026-09-06: *"remove those
+     buttons. force client to type"*). They filled a row, or every empty row of a level, from the
+     term's own name.
 
-  /**
-   * Fill every EMPTY row of a level from its term name.
-   *
-   * Empty only, deliberately: overwriting codes the client already chose would silently discard
-   * authored data and, worse, rename live folders on the next reconciliation run.
-   */
-  const sameAsNameForLevel = (level: string): void =>
-    setRows(
-      rows.map((r) =>
-        r.level === level && r.abbreviation.trim() === "" ? { ...r, abbreviation: r.label } : r,
-      ),
-    );
+     Deleted rather than parked: an unused function is a lint warning, and this project has learned
+     twice that something kept alive doing exactly the withdrawn thing gets wired back up. Both were
+     one line — `{ ...r, abbreviation: r.label }` — so restoring either is trivial if the client
+     changes their mind.
+
+     ⚠ WHAT WENT WITH THEM IS NOT ONLY CONVENIENCE. "Same as term name" stored the literal folder
+     name, which meant skip-not-guess, sibling uniqueness and rename-on-change all applied to it for
+     free. Typing the same value by hand gets the same treatment, so nothing is weaker — it is
+     slower, which is what was asked for. */
 
   /* ── Save ──────────────────────────────────────────────────────────────────── */
 
-  const save = async (): Promise<void> => {
+  /**
+   * Write the changed rows. Answers whether the step may move on.
+   *
+   * ⚠ IT RETURNS A VERDICT NOW, because the flow's Next calls it (see `registerSave`) and must NOT
+   * advance on a failure — the codes are in component state and nowhere else, so a step change
+   * would lose them silently. `false` for a refusal as well as an error: a sibling collision is not
+   * an exception, and reconciliation would abort on it three steps later.
+   */
+  const save = async (): Promise<boolean> => {
     const seg = segment();
-    if (!seg || blocked) return;
+    // Nothing to save is SUCCESS — an admin who changed nothing must still be able to walk on.
+    if (!seg) return false;
+    if (blocked) return false;
+    if (!dirty) return true;
     setBusy(true);
     setResult(undefined);
     try {
@@ -482,12 +512,26 @@ export default function AbbreviationManager({
           // succeeded and must not be made to look otherwise.
           (auditOk ? "" : " (This change could not be recorded in the audit log.)"),
       });
+      return true;
     } catch (e) {
       setResult({ ok: false, text: (e as Error).message });
+      return false;
     } finally {
       setBusy(false);
     }
   };
+
+  /* ⚠ RE-REGISTERED ON EVERY RENDER, AND AN EMPTY DEP ARRAY WOULD BE THE BUG. `save` closes over
+     `rows`, so a reference captured once would go on writing the codes as they were when the screen
+     mounted — the stale-closure trap that has already cost this project a reconciliation run's
+     permissions and an evening of diagnosis. Registering each render keeps the host holding the
+     CURRENT closure; the cleanup clears it so a host cannot save a screen that is no longer there. */
+  useEffect(() => {
+    if (registerSave) registerSave(save);
+    return () => {
+      if (registerSave) registerSave(undefined);
+    };
+  });
 
   const seg = segment();
   const missing = rows.filter((r) => r.abbreviation.trim() === "").length;
@@ -567,21 +611,11 @@ export default function AbbreviationManager({
             </option>
           ))}
         </select>
-        {seg && (
-          <div style={s.hint}>
-            Top folder <strong>{seg.stagingFolder || "(not set)"}</strong> — that one is set on the
-            segment itself, not here.
-          </div>
-        )}
+        {/* The "top folder is set on the segment, not here" hint came off on the client's
+            instruction (2026-09-06), along with the below-Unit note and the missing-code banner.
+            The screen now says one thing: every field is required. */}
       </div>
 
-      {seg && seg.belowNames.length > 0 && (
-        <div style={{ ...s.msg, ...s.info }}>
-          <strong>{seg.belowNames.join(", ")}</strong> need no abbreviation — those folders are named
-          from the term itself (<span style={s.pathHint}>2026</span>,{" "}
-          <span style={s.pathHint}>Tax Return</span>) and are created when someone uploads.
-        </div>
-      )}
 
       {treeLoading ? (
         <p style={{ fontSize: 13, color: "#605e5c" }}>Reading the term store&hellip;</p>
@@ -595,21 +629,14 @@ export default function AbbreviationManager({
         </div>
       ) : (
         <>
-          {missing > 0 && (
-            <div style={{ ...s.msg, ...s.warn }}>
-              {missing} term{missing === 1 ? "" : "s"} still {missing === 1 ? "has" : "have"} no
-              abbreviation. Reconciliation skips those — no folder is created, and nobody in that unit
-              can upload.
-            </div>
-          )}
 
           {/* SCROLLS (client, 2026-08-18): 7 departments plus 60 units is 67 rows, so Save sat far
               below the fold and the warning banner above scrolled out of sight while an admin worked
               through the list.
 
-              Everything that must stay visible is OUTSIDE this box — the missing-abbreviation
-              warning, the collision banner and Save — so the only thing scrolling is the rows
-              themselves. Safe to cap unconditionally, unlike the group list on Folder Access: these
+              Everything that must stay visible is OUTSIDE this box — the collision banner and the
+              rename warning — so the only thing scrolling is the rows themselves. (The Save button
+              it used to keep out of the box is gone; Next saves.) Safe to cap unconditionally, unlike the group list on Folder Access: these
               rows hold text boxes and buttons, and nothing absolutely positioned that a scroll
               container could clip.
 
@@ -619,18 +646,13 @@ export default function AbbreviationManager({
           {seg.levelNames.map((levelName) => {
             const levelRows = rows.filter((r) => r.level === levelName);
             if (levelRows.length === 0) return null;
-            const emptyHere = levelRows.filter((r) => r.abbreviation.trim() === "").length;
             return (
               <div key={levelName} style={{ marginBottom: 18 }}>
                 <div style={s.tierHead}>
                   <span>
                     {levelName} ({levelRows.length})
                   </span>
-                  {emptyHere > 0 && (
-                    <button style={s.ghost} onClick={() => sameAsNameForLevel(levelName)}>
-                      Use term names for the {emptyHere} empty one{emptyHere === 1 ? "" : "s"}
-                    </button>
-                  )}
+
                 </div>
                 {/* GROUPED UNDER THE PARENT TERM (client, 2026-08-17). A flat `UNIT (63)` list is
                     alphabetical across the whole segment, so `Tax` sat between `SDGI` and `Treasury`
@@ -648,39 +670,45 @@ export default function AbbreviationManager({
                         <span style={s.parentCount}>
                           {g.rows.length} {levelName.toLowerCase()}
                           {g.rows.length === 1 ? "" : "s"}
-                          {g.rows.filter((x) => x.abbreviation.trim() === "").length > 0
-                            ? ` · ${g.rows.filter((x) => x.abbreviation.trim() === "").length} without a code`
-                            : ""}
+
                         </span>
                       </div>
                     ) : undefined}
                     {g.rows.map((r) => {
                   const p = problems[r.termGuid];
-                  const name = folderNameFor(r.abbreviation);
                   return (
                     <div key={r.termGuid} style={s.row}>
-                      <span style={{ fontSize: 13 }}>{r.label}</span>
+                      {/* ⚠ THE ASTERISK IS NOT DECORATION — every code is REQUIRED now (client,
+                          2026-09-06: *"ensure it is a mandatory to fill in"*), and Next is held
+                          while any is blank. It marks the term, not the box, because the box has no
+                          label of its own. */}
+                      <span style={{ fontSize: 13 }}>
+                        {r.label} <span style={s.req}>*</span>
+                      </span>
                       <input
                         style={{ ...s.input, ...(p && p.error ? s.inputBad : {}) }}
                         value={r.abbreviation}
                         placeholder="code"
+                        /* ⚠ 20 CHARACTERS (client's cap). A folder code is a SHORT stand-in for a
+                           term — `GHO`, `CORU` — and the whole point of the list is that a path
+                           stays readable. `maxLength` refuses the 21st keystroke rather than
+                           reporting the problem afterwards, which is the right shape for a limit
+                           somebody meets while typing. */
+                        maxLength={20}
                         onChange={(e) => setCode(r.termGuid, e.target.value)}
                       />
-                      <button style={s.ghost} onClick={() => sameAsName(r.termGuid)}>
-                        Same as term name
-                      </button>
-                      <span style={s.pathHint}>
-                        {name ? `/${name}` : ""}
-                        {/* The row's own rename marker. The footer counts renames and names none of
-                            them, and the `was X → Y` detail only ever appeared in the save summary,
-                            i.e. after committing — so this is the only place the admin can find the
-                            changed row BEFORE the folder moves. */}
-                        {p && p.note ? (
-                          <span style={{ display: "block", color: "#7a4f00", fontWeight: 600 }}>
-                            ✎ {p.note}
-                          </span>
-                        ) : undefined}
-                      </span>
+                      {/* ⚠ "Same as term name" AND THE `/code` PREVIEW BOTH REMOVED (client,
+                          2026-09-06: *"remove those buttons. force client to type"*). The rename
+                          marker stays — it is the ONLY place an admin can see that this edit will
+                          move a live folder, and it appears BEFORE they commit rather than in the
+                          save summary afterwards. */}
+                      {p && p.note ? (
+                        <span style={{ fontSize: 11, color: "#7a4f00", fontWeight: 600 }}>
+                          ✎ {p.note}
+                        </span>
+                      ) : (
+                        <span />
+                      )}
                       {p && (p.error || p.warn) && (
                         <div style={{ ...s.problem, color: p.error ? "#a4262c" : "#7a4f00" }}>
                           {p.error ?? p.warn}
@@ -696,20 +724,24 @@ export default function AbbreviationManager({
           })}
           </div>
 
+          {/* ⚠ THE SAVE BUTTON IS GONE, AND NEXT SAVES INSTEAD (client, 2026-09-06: *"Remove Save
+              button, after System Admin keyed in the abbreviation, click Next for clear instruction
+              to proceed to the next page"*).
+
+              Two controls for one intention was the problem: an admin who typed the codes and
+              pressed Next was told to press Save first — a gate explaining a button a foot away,
+              which reads as the page arguing with itself.
+
+              ⚠ SAVING IS STILL A REAL STEP, NOT AN AUTOSAVE. `registerSave` hands this component's
+              own `save()` up to the flow runner, which awaits it and advances ONLY if it succeeded.
+              A failed write therefore holds the step with its own message rather than moving on and
+              losing the codes — which is the outcome the removed warning existed to prevent.
+
+              ⚠ AND A COLLISION STILL BLOCKS. `save()` refuses while two siblings would share a
+              name, so Next refuses too: reconciliation would abort on it anyway, and it must not be
+              possible to walk past a state that stops the run three steps later. */}
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 8 }}>
-            <button
-              style={!dirty || blocked || busy ? s.off : s.btn}
-              disabled={!dirty || blocked || busy}
-              onClick={() => {
-                save().catch(() => undefined); // save() reports its own failures into `result`
-              }}
-            >
-              {busy
-                ? "Saving…"
-                : dirty
-                  ? `Save ${pending.length} change${pending.length === 1 ? "" : "s"}`
-                  : "Save"}
-            </button>
+            {busy && <span style={{ fontSize: 12, color: "#605e5c" }}>Saving&hellip;</span>}
             {blocked && (
               <span style={{ fontSize: 12, color: "#a4262c" }}>
                 Two folders would share a name — fix the rows in red first.

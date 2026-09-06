@@ -9887,3 +9887,78 @@ A result row read `01/Oct/2024` for a file uploaded minutes earlier.
   the permissions reason queues an ACL-only re-crawl that does not help. It marks items for the NEXT
   SCHEDULED crawl; it does not run on demand.
 - **Progress is measured by the COUNT climbing past 23, never by whether one file appears.**
+
+## TWO REPLACE DEFECTS, ONE REPORTED AND ONE FOUND WHILE LOOKING (2026-09-06, 1.0.429.0)
+Client: *"when there is two files needing of file replacement I might need to click twice, is that
+real?"* Real, and it is not the dialog's fault.
+- **THE REPORTED ONE: TWO SETS, ONE NAME, ONE FOLDER — AND ONLY ONE DOCUMENT CAN SURVIVE.** Both sets
+  clash on the approved side, Yes consents to both, **Set 1 uploads fine — and Set 1's own upload
+  becomes what Set 2 collides with**, now as `both`, which needs a staging consent Set 2 never had.
+  Second dialog. Whatever is answered, the second lands on the first.
+  - **⚠ THE SECOND DIALOG SAYS "Set 1" AND IT IS SET 2.** `batchLabel` is `Set ${i + 1}` over the
+    **remaining** batches, so a set is renumbered the moment an earlier one empties. It reads as the
+    same file coming back and is not — that relabelling is what confirmed the mechanism.
+  - **FIXED BY REFUSING IT UP FRONT** — `sameDestinationDuplicates` (pure, 8 tests). Same folder AND
+    same composed name across two sets ⇒ an error that HOLDS Upload, naming both sets.
+  - **⚠ NOT `duplicateAcrossBatches`, WHICH STAYS AS IT IS.** That asks whether one file on disk was
+    picked twice — harmless in two different folders, and its note rightly says *"it will be filed in
+    each place."* This asks whether two files reach ONE ADDRESS, which is never harmless. The old
+    note is suppressed while the error shows, or one document would be called allowed and forbidden
+    in the same breath.
+  - **HC-NESS IS PART OF THE ADDRESS**, folded into the key by the caller: one path with two
+    confidentiality levels is two libraries and no clash. The level goes through
+    `confidentialityLabel` first — the dropdown's raw value is a term id.
+  - **It refuses ON THE CLICK, not by greying Upload**, per the standing rule: a disabled primary
+    button says something is wrong and not what, and its tooltip only appears on hover.
+- **⚠⚠ THE ONE FOUND WHILE READING: A COLLEAGUE'S PENDING DRAFT COULD NEVER BE REPLACED, AT ALL.**
+  `decideClash` returned `overwrite: consented && inStaging`, and `inStaging` comes from
+  `Files('name')?$select=Exists` — which **Draft Item Security trims to a 404** for somebody else's
+  draft. So the single case the whole `hidden` branch exists for answered *"not there"*, left
+  `overwrite` false, and the retry failed identically. **Pressing Yes re-asked for ever.**
+  - **It converged until 2026-09-04 only because the dialog also offered a RENAME.** When that became
+    Yes/No the path became a loop, and nothing noticed it had been leaning on that escape.
+  - **FIXED: `overwrite` now keys on the CONSENT, never on the check** (`mayReplaceStaging`).
+    `overwrite=true` on a name that really is absent simply creates it, so honouring a consent costs
+    nothing when the check was right.
+  - **THIS RESTORES THE 2026-08-28 RULE, IT DOES NOT WIDEN IT.** Client, asked directly:
+    *"clarencechojinheng an uploader and chocheetuck an uploader under the same unit, yes they can
+    override each other files during upload."* The permission was never in question — only whether
+    the file happened to be visible to the person exercising it.
+  - **An approved-side consent still NEVER overwrites**, and **Bulk Upload still never overwrites
+    anything** (`allowStagingReplace: false` gates the early return too). Both pinned by exhaustive
+    sweeps over all sixteen input combinations.
+  - **⚠ THE INVARIANT TEST HAD TO MOVE, and its old form is the record of the bug**: it demanded
+    `overwrite ⇒ inStaging`, i.e. it pinned the defect. It now demands `overwrite ⇒ replaceStaging`.
+  - **⚠ KNOWN DEGRADATION: the displaced record reads `Deleted`, not `Cancelled`.**
+    `displacedFileId` is read from the file about to be overwritten, and that file is invisible to
+    the person overwriting it — so My Submissions cannot say *"replaced by a newer upload"* for this
+    case. Version history on both approval libraries is the recovery, and **the person who lost the
+    draft is never notified.**
+- **Verified**: `tsc` clean, lint clean of new warnings, 49 suites / 0 failed (`uploadBatches` 73 →
+  84), bundle grepped. **NOT site-tested** — the test that matters is two accounts in one unit, the
+  second replacing the first's pending draft and it actually landing.
+
+## ⏭ A REPLACED **PENDING** DRAFT IS LOGGED NOWHERE — RUNBOOK WRITTEN, FLOW NOT BUILT (2026-09-06)
+Runbook: **`docs/superpowers/specs/2026-09-06-staging-replacement-audit-runbook.md`.** Power Automate
+only, no code change. Read it rather than re-deriving — the findings below are the ones that decide
+its shape.
+- **THE GAP:** an uploader pressing **Yes** on the replace dialog destroys a colleague's pending
+  draft via `Files/Add(overwrite=true)`, and **no audit row is written.** `Auto-route` logs the
+  `Documents` case only.
+- **⚠ IT CANNOT BE A LIBRARY TRIGGER.** An overwrite keeps the same item, so there is no create
+  event — and every ordinary upload also has `Modified` seconds after `Created`, because the form
+  uploads and then tags. The two are indistinguishable from the library. **The flow triggers on
+  `CRS Submissions`**, whose `ReplacedAt`/`ReplacedBy` are already written by `markRecordReplaced`
+  (`Form.tsx:3141`) — the one code path that watched the overwrite happen.
+- **⚠⚠ ONE WRITER: THE `Replaced` `Create item` MUST COME OUT OF `Auto-route` AND `HC Auto Route`
+  FIRST.** `ReplacedAt` is set on three occasions (the form's staging replace, the approval-page
+  clash branch, and `StampReplacedRecord` inside the routing flows), so a flow on that list fires for
+  all three — and the routing flows already log two of them. **`LibraryTitle` cannot separate them**
+  (the record names where the file was UPLOADED, which is the approval library in both cases) and
+  neither can the actor (replacer and approver are frequently the same person). ⚠ **`StampReplacedRecord`
+  STAYS** — it writes the column both My Submissions and this flow depend on.
+- **⚠ `HasKey` BEFORE THE DEDUPE READ.** A blank `ItemUniqueId` makes the filter
+  `ItemUniqueId eq ''`, which matches every other blank-id row — the poisoned-dedupe trap that made
+  one audit flow stop writing entirely on 2026-08-23.
+- **`EventType: "Replaced"` is already registered** in `auditLog.ts`, so the row is filterable in the
+  viewer's Action dropdown from the first one written.

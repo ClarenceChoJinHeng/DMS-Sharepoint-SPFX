@@ -88,6 +88,7 @@ import {
   duplicateAcrossBatches,
   nextAvailableName,
   nextId,
+  sameDestinationDuplicates,
   stagedTotals,
   summarise,
   uploadableBatches,
@@ -1905,6 +1906,47 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const crossBatchDupes = duplicateAcrossBatches(batches);
 
   /**
+   * Sets that would write ONE name into ONE folder - where the second upload destroys the first.
+   *
+   * Client, 2026-09-06, after staging one document into two sets with the same destination and
+   * meeting a second Replace dialog: *"ensure it is showing an error."* What they had found is not
+   * a fault in the dialog - it is that the first set's own upload becomes the thing the second set
+   * collides with, and no answer to that dialog can leave two documents behind.
+   *
+   * WARN: A FUNCTION, NOT A RENDER-TIME CONST. `handleUpload` refuses on the SAME rule, and it runs
+   * against `override` batches the clash dialog hands it rather than component state - a value
+   * computed here would describe the list as it was BEFORE that call, which is the trap `listBase`
+   * already paid for on StagingAccess.
+   *
+   * WARN: HC-NESS IS PART OF THE ADDRESS. Two files on one path with different confidentiality land
+   * in DIFFERENT libraries and do not collide, so the routing answer is folded into the key. The
+   * level is compared through `confidentialityLabel` first, because the dropdown's raw value is a
+   * term id - the same mistake that put a GUID in the `legallyPrivilegedFor` config row.
+   *
+   * WARN: `finalName` ONLY, never `file.name`. The saved name is composed from project, vendor,
+   * document name and date, so two different documents legitimately collide and two copies of one
+   * file legitimately do not. A file with no composed name yet is skipped by the rule itself.
+   */
+  const destinationClashesFor = (
+    list: Batch[],
+  ): ReturnType<typeof sameDestinationDuplicates> => {
+    const ctx = hcContext();
+    const rows: Array<{ dest: string; name: string; setLabel: string }> = [];
+    (list ?? []).forEach((b, i) => {
+      (b.files ?? []).forEach((sf) => {
+        const level = confidentialityLabel(sf.meta.confidentiality ?? "");
+        rows.push({
+          dest: `${(b.pathLabels ?? []).join("/")}|${isHcLevel(level, ctx) ? "hc" : ""}`,
+          name: sf.finalName ?? "",
+          setLabel: `Set ${i + 1}`,
+        });
+      });
+    });
+    return sameDestinationDuplicates(rows);
+  };
+  const destClashes = destinationClashesFor(batches);
+
+  /**
    * The only protection staged work has.
    *
    * A `File` cannot be serialised, so there is no draft to restore and no localStorage fallback — a
@@ -2005,19 +2047,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
        batch model is for. Said in the toast so the way forward is obvious. */
     const room = Math.max(0, MAX_FILES_PER_BATCH - acc.length);
     if (room === 0) {
+      /* WARN: THE COUNTS ARE GONE FROM THE WORDS, NOT FROM THE BEHAVIOUR (client's copy,
+         2026-09-06). The pick is still truncated to what fits and the rest is still dropped - the
+         toast simply no longer recites how many. If anyone reports "it silently lost files", this
+         is why: the numbers moved out of the message, not the files out of the set. */
       showToast(
-        `This set already holds the maximum of ${MAX_FILES_PER_BATCH} documents. ` +
-          `Save it and add another set for the rest.`,
+        `Up to ${MAX_FILES_PER_BATCH} documents per upload. Save and upload another set.`,
         "error",
       );
       if (fileRef.current) fileRef.current.value = "";
       return;
     }
     if (picked.length > room) {
-      const left = picked.length - room;
       showToast(
-        `A set holds at most ${MAX_FILES_PER_BATCH} documents — ${room} added, ` +
-          `${left} not added. Save this set and add another for the rest.`,
+        `Up to ${MAX_FILES_PER_BATCH} documents per upload. Save and upload another set.`,
         "error",
       );
       picked.length = room;
@@ -2172,25 +2215,21 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         applyEditor(short[0].meta);
         setActiveFileId(short[0].id);
       }
-      const parts: string[] = [];
-      if (destMissing.length > 0)
-        parts.push(`choose ${listPhrase(destMissing)}`);
-      if (short.length > 0) {
-        parts.push(
-          short.length === files.length && files.length > 1
-            ? `fill in the details for all ${files.length} documents`
-            : `fill in the details for ${short.length} document${short.length === 1 ? "" : "s"}`,
-        );
-      }
-      // Mark the actual BOXES from here on. The toast names a count and the row badge names the
-      // field, but neither puts anything on the empty control — so the one thing the uploader has
-      // to touch looked identical to the fields they had already filled in.
+      // Mark the actual BOXES from here on. The row badge names the field, but neither it nor the
+      // toast puts anything on the empty control — so the one thing the uploader has to touch
+      // looked identical to the fields they had already filled in.
       setShowErrors(true);
+      /* WARN: THE TOAST NO LONGER NAMES WHAT IS MISSING (client's copy, 2026-09-06), so the RED
+         MARKING IS NOW THE ONLY THING THAT SAYS WHICH FIELDS. `setShowErrors(true)` above is what
+         paints them and the per-field messages under each control are what name them - remove
+         either and this message becomes unactionable rather than merely terse.
+
+         The sentence that used to be built here ("choose Year and Document Type and fill in the
+         details for all 20 documents") is gone with it. What still happens regardless of the words:
+         `setIncompleteIds` badges the rows, and the block above OPENS and focuses the first
+         incomplete one, so "marked in red" always has somewhere to start. */
       showToast(
-        `Before saving this set, ${parts.join(" and ")}.` +
-          (short.length > 0
-            ? " The fields that need attention are marked in red below."
-            : ""),
+        "Some details are missing. Please complete the fields marked in red.",
         "error",
       );
       return false;
@@ -3193,7 +3232,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
              destination folder, which answers `denied` for an uploader however they got here — so
              "an uploader only cannot auto approve" needs no persona branch and cannot drift from
              the ACLs. */
-          const clashNow = !replaceApproved && (await approvedClashInfo()).clash;
+          const clashNow =
+            !replaceApproved && (await approvedClashInfo()).clash;
           if (clashNow) {
             console.warn(
               "Self-approve skipped: a same-named document already exists on the approved side.",
@@ -3335,6 +3375,28 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (source.length === 0) {
       showToast(
         "Nothing to upload yet. Add documents and save a set first.",
+        "error",
+      );
+      return;
+    }
+
+    /* WARN: REFUSED HERE, NOT ONLY SHOWN ON THE PAGE. Two sets writing one name into one folder can
+       only ever leave one document, so letting the run start means destroying staged work to
+       discover that. The banner above the Upload button says the same thing; this is what makes it
+       binding.
+
+       Computed from `source`, so the clash dialog's Proceed - which re-runs with `override` batches
+       that state has not caught up with - is judged on what it is actually about to send.
+
+       It says what is wrong ON THE CLICK rather than grey-ing the button out: a disabled primary
+       button states that something is wrong and not what, and its tooltip only appears on hover, so
+       the one person who needs the message never sees it. */
+    const sameDest = destinationClashesFor(source);
+    if (sameDest.length > 0) {
+      const first = sameDest[0];
+      showToast(
+        `${first.sets.join(" and ")} would both save "${first.name}" into the same folder - one ` +
+          `would replace the other. Rename one, or send them to different folders.`,
         "error",
       );
       return;
@@ -4192,7 +4254,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         /* .over fires on dragover — without a visible change there is no confirmation
            the browser will accept the drop, and users let go over the wrong element. */
         .dms-dropzone.over { border-color: #0f6c3f; border-style: solid; background: #e2efe7; }
-        .dms-dropzone.has-file { flex-direction: row; gap: 16px; padding: 16px; background: rgba(235, 244, 231, 1); border: 1px dashed rgba(0, 104, 74, 1); }
+        /* WARN: justify-content flex-start OVERRIDES THE BASE RULE'S center, and it is here because
+           removing "Add more documents" (2026-09-06) took away the only child carrying a
+           margin-left of auto. That margin was what spread the row across the full width and left
+           READY / name / size sitting at the left edge; without it they collapsed into the middle,
+           which the client reported as the section having moved.
+           WARN: NO BACKTICKS ANYWHERE IN THIS BLOCK - it is a JS template literal, and one backtick
+           ends it. The failure is reported as a JSX error hundreds of lines away. */
+        .dms-dropzone.has-file { flex-direction: row; justify-content: flex-start; gap: 16px; padding: 16px; background: rgba(235, 244, 231, 1); border: 1px dashed rgba(0, 104, 74, 1); }
         .dms-dropzone-icon { width: 32px; height: 32px; color: #0f6c3f; }
         .dms-dropzone .name { font-weight: 600; color: black; }
         .dms-dropzone .size { color: black; font-size: 12px; }
@@ -4319,8 +4388,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-batch-no { font-weight: 600; font-size: 12.5px; }
         .dms-batch-path { font-size: 12px; color: #4a5a50; flex: 1 1 200px; word-break: break-word; }
         .dms-batch-count { font-size: 11.5px; color: #6b7a71; }
-        .dms-batch-files { margin: 8px 0 0; padding-left: 18px; background: rgba(243, 242, 241, 1); font-size: 12px; color: rgba(50, 49, 48, 1); border-radius: 6px;}
-        .dms-batch-files p { margin-bottom: 10px; font-size: 14px; color: rgba(50, 49, 48, 1);  }
+        .dms-batch-files { margin: 15px 0 0; padding: 10px 15px; background: rgba(243, 242, 241, 1); font-size: 12px; color: rgba(50, 49, 48, 1); border-radius: 6px;}
+        .dms-batch-files p { margin-bottom: 10px; font-size: 14px; font-weight: 600; color: rgba(50, 49, 48, 1);  }
+        /* The size beside the name (client, 2026-09-06). Lighter and unbolded so the FILENAME stays
+           what the eye lands on - the size is context, not the thing being identified. Same grey as
+           the card's own meta line, so the two read as one family. */
+        .dms-batch-size { margin-left: 10px; font-weight: 400; color: rgba(156, 163, 175, 1); }
         .dms-batch-err { display: block; color: #a4262c; font-style: normal; font-size: 11.5px; }
         .dms-batch-warn { margin: 8px 0 0; font-size: 11.5px; color: #8a4b00; line-height: 1.5; }
         .dms-batch-note { margin: 8px 0 0; font-size: 11.5px; color: #5f6f80; line-height: 1.5; }
@@ -4344,9 +4417,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-batchcard-icon:disabled { opacity: .4; cursor: not-allowed; }
         /* One row, left content and right metadata (client's design, 2026-09-04). It was
            flex-wrap with a gap, so three items reflowed in whatever order the width allowed. */
-        .dms-batchcard-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-top: 8px; font-size: 12px; color: #6b7a71; }
-        .dms-batchcard-meta + .dms-batchcard-meta { margin-top: 4px; }
-        .dms-batchcard-side { color: #0f6c3f; }
+        .dms-batchcard-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; margin-top: 8px; font-size: 14px; color: rgba(156, 163, 175, 1); }
+        .dms-batchcard-meta + .dms-batchcard-meta { margin-top: 9px; }
+        .dms-batchcard-side { color: rgba(0, 104, 74, 1); }
         /* The path is the line a reader scans for, so it takes the weight in the design. */
         .dms-batchcard-path { color: #1b1b1b; font-weight: 600; word-break: break-word; }
         /* Numbered steps inside the open card. Plain dark text, not the green section
@@ -4466,11 +4539,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             lineHeight: 1.5,
           }}
         >
-          <strong>Uploads are paused.</strong>{" "}
+          {/* WARN: IT STRIPPED THE WRONG HALF AND PRINTED THE FIRST SENTENCE TWICE - the banner read
+              "Upload is temporarily disabled. Upload is temporarily disabled." (client, 2026-09-06).
+              The bold lead IS the opening sentence of the shared message, so what has to come off is
+              the LEAD, not the tail. Derived from the constant either way, so the sentence has ONE
+              source and this banner cannot drift from Bulk Upload's. */}
+          <strong>Upload is temporarily disabled.</strong>{" "}
           {UPLOAD_PAUSE_MESSAGE.replace(
-            "Uploads are paused while an administrator reorganises the document folders. ",
+            "Upload is temporarily disabled.",
             "",
-          )}
+          ).trim()}
         </div>
       ) : undefined}
 
@@ -4635,7 +4713,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     than guessing: a segment removed from config while a set was staged would
                     otherwise be labelled as the wrong category. */}
                 <div className="dms-batchcard-meta">
-                  <span>
+                  <span style={{ color: "rgba(50, 49, 48, 1)" }}>
                     Upload to{" "}
                     <strong className="dms-batchcard-side">
                       {(() => {
@@ -4665,7 +4743,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     {b.pathLabels.join(" > ")}
                   </span>
                   {/* "docs", not "files": the design's word, and the one the count actually means. */}
-                  <span>
+                  <span style={{ color: "rgba(50, 49, 48, 1)" }}>
                     {b.files.length} doc{b.files.length === 1 ? "" : "s"}
                   </span>
                 </div>
@@ -4686,6 +4764,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     {b.files.map((sf) => (
                       <p key={sf.id}>
                         <span>{sf.finalName ?? sf.file.name}</span>
+                        {/* Beside the name, to the client's mockup (2026-09-06). The SAME
+                            `formatFileSize` the open editor's rows use — two renderings of one
+                            file's size is the kind of inconsistency that gets reported as a bug in
+                            whichever card the uploader happened to read second. */}
+                        <span className="dms-batch-size">
+                          {formatFileSize(sf.file.size)}
+                        </span>
                         {sf.error && (
                           <em className="dms-batch-err">{sf.error}</em>
                         )}
@@ -4707,7 +4792,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               again.
             </p>
           )}
-          {crossBatchDupes.length > 0 && (
+          {/* WARN: AN ERROR, NOT A NOTE, AND IT HOLDS THE UPLOAD. Every other message here describes
+              something recoverable; this one describes work that cannot all survive. Two sets
+              writing one name into one folder end as ONE document however the replace dialog is
+              answered, because the first set's own upload becomes what the second collides with. */}
+          {destClashes.length > 0 && (
+            <p className="dms-batch-warn">
+              {destClashes.map((c) => (
+                <span key={c.name} style={{ display: "block" }}>
+                  {c.sets.join(" and ")} would both save{" "}
+                  <strong>{c.name}</strong> into the same folder - the second
+                  would replace the first, leaving one document.
+                </span>
+              ))}
+              Rename one of them, or send them to different folders, then press
+              Upload again.
+            </p>
+          )}
+          {/* Suppressed while the error above is showing: one document named in both would be told
+              it is "allowed" and forbidden in the same breath. The note remains correct on its own
+              terms - a file staged into two DIFFERENT folders really is filed in each place. */}
+          {destClashes.length === 0 && crossBatchDupes.length > 0 && (
             <p className="dms-batch-note">
               The same document appears in more than one batch:{" "}
               {crossBatchDupes.join(", ")}. That is allowed - it will be filed
@@ -4808,21 +4913,22 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 resetForm();
               }}
             >
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 16 16"
+              {/* ⚠ THE THIRD BIN, AND THE ONE THAT WAS MISSED (client, 2026-09-06: *"You forgot to
+                  change the trash icon"*). The saved-card bin and the Delete File button were both
+                  swapped to the client's `Icon.png` on 2026-09-04; this one — the OPEN card's
+                  discard — was a hand-drawn SVG and stayed behind, which is why it looked different
+                  from the other two on the same screen.
+
+                  Grep for `data:image/png` in this file before assuming the set is complete: there
+                  are FOUR inline PNGs here, two info marks and two bins, plus this one. */}
+              <img
+                src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABIAAAAWCAYAAADNX8xBAAAACXBIWXMAAAsTAAALEwEAmpwYAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAOdEVYdFNvZnR3YXJlAEZpZ21hnrGWYwAAAW1JREFUeAHdlV1OwkAQx2eGHoAjwAnUG+AJoPoIBKqNiU/iCdATGJ5MBFIs+igrJ9AbyA3kBuAzsutM+UgotJZgYsI/2d3OdueXmUl3ihChdlfVDUIBDByyOeYxADQdt3TyuOk8btpsddUbLzmGjPnEYL6dmzvcnJft27APrUXy3K/PnHQjNYWsW7aPZUy+IcvgoWFQs6tyv4KM1lVxcMunNcexx4v9S8cecqrOLCpdCPshp/HJawZ2kDH62uIU+hzYVageSRXUEckaBRZHZeYF3kri1/R7r/JMsKMQcBQLkto1/ZdalB1WXEQZRMrH2IlBW+n/QfeeyvwJKKw9BlnBbILGlV59pRuA1keUnVqcR/0VLDItGpkmOLoo2okuLt+xDiJWiKhwVsz3aRYQBB2PNKjWU68SB/A8lW776k4g0rcEsoxI9OCrKiF4kFQGBpMp2NLwVkAi+cgs0lUkOoC1mi0BQyB6d0v5lZ/ADw75iaduaQgFAAAAAElFTkSuQmCC"
+                width={14}
+                height={14}
+                alt=""
                 aria-hidden="true"
-              >
-                <path
-                  d="M3 4h10M6.5 4V2.5h3V4M4.5 4l.6 9h5.8l.6-9"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.4"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
+                style={{ display: "block", opacity: busy ? 0.4 : 1 }}
+              />
             </button>
           </div>
 
@@ -5134,6 +5240,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 {draftFiles.length > 0 ? (
                   <>
                     <span className="dms-filecard-ready">READY</span>
+                    {/* "in this batch" was dropped and then RESTORED the same day at the client's
+                        request. Left as it was. */}
                     <span className="name">
                       {draftFiles.length} document
                       {draftFiles.length === 1 ? "" : "s"} in this batch
@@ -5143,9 +5251,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                         draftFiles.reduce((n, x) => n + x.file.size, 0),
                       )}
                     </span>
-                    <span className="dms-link dms-filecard-action">
-                      Add more documents
-                    </span>
+                    {/* WARN: THE LINK IS HIDDEN, THE WAY IN IS NOT (client, 2026-09-06: "Can you
+                        hide it?"). This whole row is a <label> wrapping the file input, so clicking
+                        anywhere on it still opens the picker and dropping files on it still works -
+                        which is why removing the words costs nothing. Do NOT "tidy" the label away
+                        later without giving the card another way to add files. */}
                   </>
                 ) : (
                   <>
@@ -5342,7 +5452,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 saveBatch();
               }}
             >
-              Save batch
+              {/* "Save batch" -> "Save" (client, 2026-09-06). The button sits inside the set's own
+                  card, so what it saves is not in question; its `title` still says "Save this set"
+                  for anyone who hovers. */}
+              Save
             </button>
           </div>
         </div>
@@ -5450,11 +5563,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           }}
           disabled={busy || deptLoading}
         >
-          {busy
-            ? "Uploading…"
-            : stagedNow.files > 0
-              ? "Upload all sets"
-              : "Upload"}
+          {/* "Upload all sets" -> "Upload" (client, 2026-09-06), so both states now read the same.
+              The branch is kept rather than collapsed: it is the one place that knows whether
+              anything is staged, and a future label that needs to differ has somewhere to go. */}
+          {busy ? "Uploading…" : "Upload"}
         </button>
       </div>
 
@@ -5662,7 +5774,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                      they clicked Yes and the upload still sat Pending. */
                   const approved = new Set<string>(
                     clashRows
-                      .filter((r) => r.where === "approved" || r.where === "both")
+                      .filter(
+                        (r) => r.where === "approved" || r.where === "both",
+                      )
                       .map((r) => r.fileId),
                   );
                   const pending = new Set<string>(

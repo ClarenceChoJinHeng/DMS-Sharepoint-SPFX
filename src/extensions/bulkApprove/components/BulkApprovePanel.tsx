@@ -310,7 +310,12 @@ function BulkApprovePanel(p: PanelProps): React.ReactElement {
                      library. */
                   ? `Approved documents are automatically moved to ${
                       destTitle.trim().toLowerCase() === documentsLibraryTitle().trim().toLowerCase()
-                        ? "Document"
+                        /* ⚠ "Documents", PLURAL, and it deliberately does NOT match the library's
+                           own title (client, 2026-09-06: *"missing an s"*). The live title is
+                           `Restricted & Confidential Document` — singular — but "moved to Document"
+                           reads as a typo, and **Documents** is what the left-hand navigation calls
+                           it, so it is the name the approver actually recognises. */
+                        ? "Documents"
                         : destTitle
                     } after approval.`
                   : "Rejected documents stay in this library, so the uploader can see the comment and fix them."}

@@ -22,6 +22,7 @@ import {
   nextId,
   resetIds,
   resolveUploadName,
+  sameDestinationDuplicates,
   stagedTotals,
   summarise,
   uploadableBatches,
@@ -398,6 +399,85 @@ describe("duplicateAcrossBatches", () => {
   });
 });
 
+describe("sameDestinationDuplicates", () => {
+  const row = (
+    dest: string,
+    name: string,
+    setLabel: string,
+  ): { dest: string; name: string; setLabel: string } => ({ dest, name, setLabel });
+
+  it("reports one name two sets would write into one folder", () => {
+    const out = sameDestinationDuplicates([
+      row("GLP/Alpha/2024", "aa - aaa - aaaa - 05-09-26.pdf", "Set 1"),
+      row("GLP/Alpha/2024", "aa - aaa - aaaa - 05-09-26.pdf", "Set 2"),
+    ]);
+    expect(out).toEqual([
+      { name: "aa - aaa - aaaa - 05-09-26.pdf", sets: ["Set 1", "Set 2"] },
+    ]);
+  });
+
+  /* The distinction from `duplicateAcrossBatches`, pinned: one name in two PLACES is fine, and its
+     own note already says so. Only one address can destroy a document. */
+  it("says nothing when the same name goes to different folders", () => {
+    expect(
+      sameDestinationDuplicates([
+        row("GLP/Alpha/2024", "x.pdf", "Set 1"),
+        row("GLP/Alpha/2025", "x.pdf", "Set 2"),
+      ]),
+    ).toEqual([]);
+  });
+
+  /* A file routed to the HC pair does not collide with one routed to the normal pair, which is why
+     the caller folds HC-ness into `dest` rather than comparing paths alone. */
+  it("treats a different library as a different destination", () => {
+    expect(
+      sameDestinationDuplicates([
+        row("GLP/Alpha/2024", "x.pdf", "Set 1"),
+        row("GLP/Alpha/2024|hc", "x.pdf", "Set 2"),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("leaves a collision inside one set to collisionsWithin", () => {
+    expect(
+      sameDestinationDuplicates([
+        row("GLP/Alpha/2024", "x.pdf", "Set 1"),
+        row("GLP/Alpha/2024", "x.pdf", "Set 1"),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("matches case-insensitively, as SharePoint file names are", () => {
+    const out = sameDestinationDuplicates([
+      row("d", "Report.PDF", "Set 1"),
+      row("d", "report.pdf", "Set 2"),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].sets).toEqual(["Set 1", "Set 2"]);
+  });
+
+  it("names every set involved, not just the first two", () => {
+    const out = sameDestinationDuplicates([
+      row("d", "x.pdf", "Set 1"),
+      row("d", "x.pdf", "Set 2"),
+      row("d", "x.pdf", "Set 3"),
+    ]);
+    expect(out[0].sets).toEqual(["Set 1", "Set 2", "Set 3"]);
+  });
+
+  // A file whose name has not been composed yet cannot be judged - the same reason `nameSettled`
+  // gates the within-batch check. Blank must never read as "they all clash".
+  it("ignores a blank name", () => {
+    expect(
+      sameDestinationDuplicates([row("d", "", "Set 1"), row("d", "  ", "Set 2")]),
+    ).toEqual([]);
+  });
+
+  it("is empty for nothing staged", () => {
+    expect(sameDestinationDuplicates([])).toEqual([]);
+  });
+});
+
 describe("batchesNeedingRepick", () => {
   const gho = batch("b1", [staged("f1", "a.pdf")], { segmentKey: "mode_gho", chainSignature: "A|B" });
   const nbpol = batch("b2", [staged("f2", "b.pdf")], { segmentKey: "mode_nbpol", chainSignature: "C|D" });
@@ -524,6 +604,18 @@ describe("decideClash", () => {
     expect(viaStaging).toEqual({ where: "both", consented: true, overwrite: true });
   });
 
+  /* ⚠ THE INVISIBLE DRAFT — the case the whole `hidden` branch exists for, and the one that could
+     never be replaced until 2026-09-06. `inStaging` is false here NOT because the folder is empty
+     but because Draft Item Security hid a colleague's pending file from the pre-check. The consent
+     has already been given, so it must be honoured; an overwrite of a name that really is absent
+     simply creates it. */
+  it("overwrites on a staging consent even when the pre-check saw nothing", () => {
+    const d = decideClash({ ...base, replaceStaging: true });
+    expect(d.where).toBeUndefined();
+    expect(d.consented).toBe(true);
+    expect(d.overwrite).toBe(true);
+  });
+
   /* ── Bulk Upload ─────────────────────────────────────────────────────────── */
 
   it("never lets Bulk Upload overwrite a pending draft, however it consents", () => {
@@ -549,6 +641,16 @@ describe("decideClash", () => {
     expect(d.overwrite).toBe(false);
   });
 
+  /* ⚠ THE EARLY RETURN HONOURS CONSENT NOW (2026-09-06), so Bulk Upload has to be pinned on that
+     branch too - it is the one that fires for an invisible draft, and Bulk Upload must reach it and
+     still refuse. Without `allowStagingReplace` gating the early return as well, a consent handed
+     in there would overwrite on the screen whose whole rule is that it never does. */
+  it("never lets Bulk Upload overwrite when the pre-check saw nothing", () => {
+    const d = decideClash({ ...base, replaceStaging: true, allowStagingReplace: false });
+    expect(d.where).toBeUndefined();
+    expect(d.overwrite).toBe(false);
+  });
+
   /* Bulk Upload keeps the approved-side offer — that path overwrites nothing, so the reason to
      withhold it does not apply. Its clash table differs from the form's in exactly one row. */
   it("still lets Bulk Upload send an approved-side replacement", () => {
@@ -563,18 +665,37 @@ describe("decideClash", () => {
     expect(d.overwrite).toBe(true);
   });
 
-  /* An overwrite is only ever produced by a staging clash. Pinned as an invariant rather than a case,
-     because it is the property that makes every other path non-destructive. */
-  it("produces overwrite=true only when a pending draft is actually in the way", () => {
+  /* ⚠ THE INVARIANT MOVED ON 2026-09-06, AND THIS TEST IS THE RECORD OF WHY.
+     It used to demand `inStaging` as well, on the reasoning that an overwrite is only ever produced
+     by a real staging clash. That made the rule depend on a CHECK rather than on a decision - and
+     the check is blind to a colleague's pending draft, which is the single case the `hidden` branch
+     exists to handle. Requiring it there meant Yes could never replace such a file.
+
+     What must stay true, and is what makes every other path non-destructive, is that an overwrite
+     needs the uploader's STAGING consent. An approved-side consent can never produce one. */
+  it("produces overwrite=true only where the uploader consented to replace a draft", () => {
     for (const inStaging of [true, false]) {
       for (const inApproved of [true, false]) {
         for (const replaceStaging of [true, false]) {
           for (const replaceApproved of [true, false]) {
             const d = decideClash({ inStaging, inApproved, replaceStaging, replaceApproved });
-            if (d.overwrite) {
-              expect(inStaging).toBe(true);
-              expect(replaceStaging).toBe(true);
-            }
+            if (d.overwrite) expect(replaceStaging).toBe(true);
+          }
+        }
+      }
+    }
+  });
+
+  /* The same sweep for Bulk Upload, where the answer is simply never. */
+  it("never produces overwrite=true for Bulk Upload, in any combination", () => {
+    for (const inStaging of [true, false]) {
+      for (const inApproved of [true, false]) {
+        for (const replaceStaging of [true, false]) {
+          for (const replaceApproved of [true, false]) {
+            const d = decideClash({
+              inStaging, inApproved, replaceStaging, replaceApproved, allowStagingReplace: false,
+            });
+            expect(d.overwrite).toBe(false);
           }
         }
       }

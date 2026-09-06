@@ -59,15 +59,55 @@ describe("the flows", () => {
   });
 
   it("makes Add a department or unit the tail of Add a new segment", () => {
-    // The everyday job is steps 2-5 of the big one. If these ever diverge, one of them is wrong.
+    /* The everyday job is the tail of the big one. If these ever diverge, one of them is wrong.
+       ⚠ THE OFFSET CHANGED WITH THE 2026-09-06 REDESIGN and the invariant got STRONGER: `addUnit`
+       lost its instruction step, so it is now EXACTLY the tail rather than the tail plus one. */
     const big = flow("newSegment").steps.map((s) => s.id);
     const small = flow("addUnit").steps.map((s) => s.id);
-    expect(small.slice(1)).toEqual(big.slice(2));
+    expect(small).toEqual(big.slice(2));
   });
 
-  it("does NOT offer reconciliation in the structure flow", () => {
-    // Reconciliation walks the term tree, not Levels. Offering it invites a run that does nothing.
-    expect(flow("structure").steps.map((s) => s.id)).not.toContain("reconcile");
+  it("keeps Add a department or unit and Rename at two steps", () => {
+    // Pinned because the client asked for exactly two (2026-09-06), and because a third would
+    // silently re-introduce the instruction screen the redesign removed.
+    expect(flow("addUnit").steps.map((s) => s.id)).toEqual(["abbreviations", "reconcile"]);
+    expect(flow("rename").steps.map((s) => s.id)).toEqual(["abbreviations", "reconcile"]);
+  });
+
+  it("keeps the abbreviations step id stable however the flow labels it", () => {
+    /* ⚠ THE LABEL VARIES, THE ID MUST NOT. `NEXT_GATED_STEPS` keys on the id, and it is what stops
+       an admin reaching reconciliation with terms that have no code — the one silent failure on this
+       screen (recon skips the term, creates no folder, and reports success). */
+    for (const f of ["addUnit", "rename", "newSegment"]) {
+      expect(flow(f).steps.filter((s) => s.id === "abbreviations")).toHaveLength(1);
+    }
+    expect(step("addUnit", "abbreviations").label).toBe("Create Term Abbreviation");
+    expect(step("rename", "abbreviations").label).toBe("Rename Term Abbreviation");
+  });
+
+  it("has no Power Automate step in the structure flow", () => {
+    // Removed 2026-09-06 (five steps to four). Pinned so it is not quietly restored: what it said is
+    // recorded at the removal site in folderFlows.ts and is a real operational caveat.
+    expect(flow("structure").steps.map((s) => s.id)).not.toContain("pauseFlows");
+    // Five: the four the client's rail shows, plus the reconciliation step they asked for on top.
+    expect(flow("structure").steps).toHaveLength(5);
+  });
+
+  /* ⚠ THIS TEST ONCE ASSERTED THE OPPOSITE, AND THE REASON IT DID IS WORTH KEEPING.
+     Reconciliation walks the TERM TREE, not `Levels`, so a change to the levels below Unit gives it
+     nothing to do — offering it invited an hour-long run that changes nothing, which is why it was
+     excluded by design. The client asked for it anyway on 2026-09-06, having been shown that: it
+     goes in as its own step, immediately before uploads resume, on the reading that re-asserting
+     permissions before letting people back in is worth a run regardless. */
+  it("offers reconciliation in the structure flow, just before uploads resume", () => {
+    const ids = flow("structure").steps.map((s) => s.id);
+    expect(ids).toEqual([
+      "pauseUploads",
+      "levels",
+      "migrate",
+      "reconcile",
+      "resumeUploads",
+    ]);
   });
 
   it("puts abbreviations before reconciliation everywhere both appear", () => {
@@ -157,10 +197,14 @@ describe("isLocked — THE client's rule: never stop them doing the work", () =>
     // `runRecon.reconcile` carries the same lock because it is the SAME step object — one definition,
     // not a lock-free copy. It can never fire there: the flow has no abbreviations screen, so the count
     // stays `undefined`, and unknown never gates.
+    /* `structure.reconcile` joined the list on 2026-09-06 for the same reason `runRecon.reconcile`
+       is on it: the SAME step object, lock included, rather than a lock-free copy. It cannot fire
+       there either — the structure flow has no abbreviations screen, so the count stays `undefined`
+       and unknown never gates. */
     expect(locked).toEqual([
       "newSegment.abbreviations", "newSegment.reconcile",
-      "addUnit.reconcile", "structure.migrate", "rename.reconcile",
-      "runRecon.reconcile", "retire.delete",
+      "addUnit.reconcile", "structure.migrate", "structure.reconcile",
+      "rename.reconcile", "runRecon.reconcile", "retire.delete",
     ]);
   });
 
@@ -189,10 +233,19 @@ describe("stepState", () => {
     expect(stepState(step("newSegment", "termSet"), { segmentExists: false })).toBe("unknown");
   });
 
-  it("marks the term-store step done ONLY because the flow asked for a subject", () => {
-    expect(stepState(step("addUnit", "addTerm"), { subjectFound: true })).toBe("done");
-    expect(stepState(step("addUnit", "addTerm"), { subjectFound: false })).toBe("todo");
-    expect(stepState(step("addUnit", "addTerm"), {})).toBe("unknown");
+  /* ⚠ NO FLOW CONTAINS `addTerm` OR `renameTerm` SINCE 2026-09-06, so this is tested against a
+     literal step rather than through a flow. The arms are kept in `stepState` because the steps
+     could return; if they never do, the `subjectFound` fact and these arms go together. */
+  it("marks a term-store step done ONLY because the flow asked for a subject", () => {
+    const parked: FlowStep = {
+      id: "addTerm",
+      label: "Add the term",
+      hint: "",
+      screen: { kind: "outside" },
+    };
+    expect(stepState(parked, { subjectFound: true })).toBe("done");
+    expect(stepState(parked, { subjectFound: false })).toBe("todo");
+    expect(stepState(parked, {})).toBe("unknown");
   });
 
   it("marks abbreviations done only at zero missing, and unknown when unwalked", () => {
@@ -201,10 +254,10 @@ describe("stepState", () => {
     expect(stepState(step("addUnit", "abbreviations"), {})).toBe("unknown");
   });
 
-  it("leaves migration and the Power Automate step permanently unknown", () => {
-    // A migration leaves no marker, and Power Automate is unreachable from here.
+  it("leaves migration permanently unknown", () => {
+    // A migration leaves no marker anywhere, so nothing can report it as done.
+    // (The Power Automate step this also covered was removed on 2026-09-06.)
     expect(stepState(step("structure", "migrate"), { pendingLevels: true })).toBe("unknown");
-    expect(stepState(step("structure", "pauseFlows"), { segmentExists: true })).toBe("unknown");
   });
 });
 
@@ -374,19 +427,22 @@ describe("blocksNext", () => {
   });
 
   it("NEVER blocks on an advisory step, however definite the fact looks", () => {
-    // `groupsExist` is read by the NAMING CONVENTION, which suggestGroupName only suggests — so a
-    // hand-named group reads as absent. Gating on it would stop an admin who had already done the work,
-    // which is the exact failure the whole fail-open design exists to avoid.
-    expect(blocksNext(step("newSegment", "groups"), { groupsExist: false })).toBe("");
+    /* ⚠ `reconcile` STANDS IN FOR "AN ADVISORY STEP" NOW. These assertions named `groups`, which
+       left both flows on 2026-09-06 — so the point they make needs a step that is still there.
+       `groupsExist` is read by the NAMING CONVENTION, which suggestGroupName only suggests, so a
+       hand-named group reads as absent; gating on it would stop an admin who had already done the
+       work, which is the exact failure the fail-open design exists to avoid. */
+    expect(blocksNext(step("newSegment", "reconcile"), { groupsExist: false })).toBe("");
     // Loading gates the abbreviation step ONLY. It is set for the whole flow, so any other step
     // reading it would be held every time an admin opened the abbreviations screen.
-    expect(blocksNext(step("newSegment", "groups"), { abbreviationsLoading: true })).toBe("");
+    expect(blocksNext(step("newSegment", "reconcile"), { abbreviationsLoading: true })).toBe("");
     expect(blocksNext(step("newSegment", "createSegment"), { abbreviationsLoading: true, segmentExists: true })).toBe("");
-    // A typed subject that merely differs in spelling must cost help, never progress.
-    expect(blocksNext(step("addUnit", "addTerm"), { subjectFound: false })).toBe("");
-    // Creating the groups is advisory too: the naming convention is only a SUGGESTION, so a
-    // hand-named group reads as absent and gating it would trap someone who did the work.
-    expect(blocksNext(step("newSegment", "groups"), { groupsExist: false })).toBe("");
+    // A subject that merely differs in spelling must cost help, never progress. Asserted on the
+    // reconciliation step since the instruction step it used to name was removed on 2026-09-06.
+    expect(blocksNext(step("addUnit", "reconcile"), { subjectFound: false })).toBe("");
+    // Reconciliation is advisory too — it is the step an admin most often arrives having already
+    // run, and holding it would trap exactly them.
+    expect(blocksNext(step("newSegment", "reconcile"), { foldersExist: false })).toBe("");
   });
 
   it("gates exactly two step ids, across every flow — pinned so a new gate must be deliberate", () => {
@@ -467,8 +523,8 @@ describe("blocksNext — the blank name", () => {
     // `subjectGiven` is set for the whole flow, so every step sees it. Only createSegment may use it —
     // Term Abbreviations must gate on missing codes alone.
     expect(blocksNext(step("newSegment", "abbreviations"), { subjectGiven: false })).toBe("");
-    expect(blocksNext(step("newSegment", "groups"), { subjectGiven: false })).toBe("");
-    expect(blocksNext(step("addUnit", "addTerm"), { subjectGiven: false })).toBe("");
+    expect(blocksNext(step("newSegment", "reconcile"), { subjectGiven: false })).toBe("");
+    expect(blocksNext(step("addUnit", "reconcile"), { subjectGiven: false })).toBe("");
   });
 });
 
@@ -556,7 +612,6 @@ describe("scopeFactsToFlow — segment facts must not tick a subject-scoped flow
   it("those steps then read `unknown`, never `done`", () => {
     const out = scopeFactsToFlow(pick("addUnit"), provisioned);
     const byId = (id: string): FlowStep => pick("addUnit").steps.filter((x) => x.id === id)[0];
-    expect(stepState(byId("groups"), out)).toBe("unknown");
     expect(stepState(byId("reconcile"), out)).toBe("unknown");
   });
 

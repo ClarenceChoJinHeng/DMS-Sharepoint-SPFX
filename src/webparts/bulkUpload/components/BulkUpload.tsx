@@ -682,14 +682,25 @@ export default function BulkUpload({
   const [results, setResults] = useState<FileResult[] | null>(null);
   const [live, setLive] = useState<LiveFile[] | null>(null);
   const [toast, setToast] = useState<{
+    /**
+     * An optional bold first line (client's design, 2026-09-06).
+     *
+     * OPTIONAL so every existing `showToast` call is untouched - only the messages the client gave a
+     * heading pass one. A title on every toast would turn one-line confirmations into two.
+     */
+    title?: string;
     message: string;
     type: ToastType;
   } | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = (message: string, type: ToastType): void => {
+  const showToast = (
+    message: string,
+    type: ToastType,
+    title?: string,
+  ): void => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToast({ message, type });
+    setToast({ message, type, title });
     toastTimerRef.current = setTimeout(() => setToast(null), 5000);
   };
 
@@ -1579,7 +1590,7 @@ export default function BulkUpload({
       const room = MAX_FILES - prev.length;
       if (room <= 0) {
         showToast(
-          `You can upload at most ${MAX_FILES} files at once. Remove some first.`,
+          `Up to ${MAX_FILES} documents per upload. Save this upload to continue`,
           "error",
         );
         return prev;
@@ -1631,11 +1642,16 @@ export default function BulkUpload({
             ).file.name,
         );
       if (dupes.length > 0) {
+        /* WARN: THE COPY NO LONGER SAYS THEY CAN ALL BE UPLOADED, AND THEY STILL CAN (client's
+           wording, 2026-09-06). Nothing about the behaviour moved: the duplicates are staged, and
+           the later ones are offered a free name at upload time by `nextAvailableName`. The message
+           now asks the uploader to check rather than explaining the mechanism - so if anyone reads
+           this as a refusal, it is not one. */
         showToast(
-          `More than one file is called ${dupes.join(", ")}. They can all be uploaded — the later ` +
-            `${dupes.length === 1 ? "one is" : "ones are"} offered a free name when you upload — but ` +
-            `check this is not the same document picked twice.`,
+          `${dupes.join(", ")} appears more than once. Please check that the files are different ` +
+            `documents before uploading.`,
           "notice",
+          "Duplicate file names detected.",
         );
       }
       return next;
@@ -3201,9 +3217,17 @@ export default function BulkUpload({
            exists for only one confidentiality level: when it is absent, date and
            level fall back to an even split, so the row does not reflow around a
            control that is not there. */
-        .dms-detail-row { display: flex; gap: 24px; align-items: flex-end; flex-wrap: wrap; }
+        /* WARN: flex-start, NOT flex-end (client, 2026-09-06: "pls line them up properly"). Bottom
+           alignment lines the fields up on whatever sits LOWEST, so a field carrying a hint under
+           its input - Keyword's "Max. 50 characters" - pushed its own label and box upward and out
+           of line with the two beside it. Top alignment lines up the LABELS, which is what the eye
+           reads across, and lets a hint hang below without moving anything. */
+        .dms-detail-row { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
         .dms-detail-row > .dms-field { flex: 1 1 200px; min-width: 0; }
-        .dms-lp { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 38px; margin-bottom: 16px; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+        /* WARN: the 20px top margin REPLACES what bottom-alignment used to do for this control. It
+           has no label of its own, so with the row switched to flex-start it rode up to the top of
+           the row while every field beside it started one label-height lower. */
+        .dms-lp { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; height: 38px; margin-top: 20px; margin-bottom: 16px; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
         .dms-lp input { accent-color: #0f6c3f; width: 16px; height: 16px; margin: 0; cursor: pointer; }
         /* Info tooltips sit on the LABEL, beside the field name. They used to be
            absolutely positioned against the select's right edge, which had to be
@@ -4356,6 +4380,14 @@ export default function BulkUpload({
 
       {toast && (
         <div className={`dms-toast ${toast.type}`} role="alert">
+          {/* The heading renders only when one was passed, so an untitled toast keeps its exact
+              current single-line shape. `display: block` rather than a <p>, which would inherit the
+              page's paragraph margins inside a fixed-size toast. */}
+          {toast.title && (
+            <strong style={{ display: "block", marginBottom: 4 }}>
+              {toast.title}
+            </strong>
+          )}
           {toast.message}
           <button
             className="dms-toast-close"

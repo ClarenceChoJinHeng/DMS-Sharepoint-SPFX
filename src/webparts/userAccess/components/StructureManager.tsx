@@ -856,7 +856,10 @@ export default function StructureManager({
           <div style={s.path}>{pathPreview(seg, draft)}</div>
         </div>
 
-        <p style={s.label}>Fixed levels — these carry folder permissions and cannot be changed here</p>
+        {/* ⚠ THE EXPLANATION IS GONE, THE RULE IS NOT (client, 2026-09-06: *"Remove ALL COMPONENTS /
+            TEXTS with red slash"*). These levels still carry the folder permissions and still cannot
+            be edited here — the padlock beside each one is now the only thing that says so. */}
+        <p style={s.label}>Fixed levels</p>
         {draft.slice(0, first).map((l, i) => (
           <div style={{ ...s.tierRow, ...s.tierLock }} key={`p${i}`}>
             {/* Drawn, not the padlock EMOJI it replaced: an emoji renders in the platform's own
@@ -875,7 +878,9 @@ export default function StructureManager({
           </div>
         ))}
 
-        <p style={s.label}>Folders below Unit — these inherit the unit&rsquo;s permissions</p>
+        {/* Same removal as "Fixed levels" above. The inheritance is unchanged: everything below Unit
+            takes the unit folder's ACL, which is why these need no abbreviation, group or mapping. */}
+        <p style={s.label}>Folders below Unit</p>
         {onDemand.length === 0 && (
           <p style={{ fontSize: 12, color: "#8a8886", margin: "0 0 8px", lineHeight: 1.5 }}>
             None — uploads would stop at the Unit folder. Add at least one level.
@@ -922,27 +927,23 @@ export default function StructureManager({
           </button>
         ) : (
           <div style={{ ...s.card, marginTop: 12 }}>
-            <label style={s.label} htmlFor="sm-label">Folder level name</label>
-            <input
-              id="sm-label"
-              style={s.input}
-              value={adding.label}
-              onChange={(e) => setAdding({ ...adding, label: e.target.value })}
-              placeholder="e.g. SubUnit"
-            />
-            <p style={s.hint}>
-              Shown above the dropdown on the upload form. Its column will be{" "}
-              <strong>{columnNameFor(adding.label) || "—"}</strong>, created automatically in both
-              libraries.
-            </p>
+            {/* ⚠ THE CHOICE COMES FIRST NOW (client's design, 2026-09-06), and that ordering is
+                better than it looks: it decides whether a Term set ID field appears at all, so
+                asking for the name first meant the form changed shape UNDER the admin after they had
+                already filled something in.
 
-            <span style={s.label}>Where its values come from</span>
+                ⚠ THE LABELS CHANGED, THE MEANING DID NOT. "Sub unit" is still the tier whose values
+                are terms authored UNDER each unit, and "Shared folder term" is still the one that
+                needs a term set. The stored discriminator is unchanged: a below-Unit tier with no
+                `termSet` is per-unit. Rename these two if you like; do not let them come to mean
+                anything else. */}
+            <span style={s.label}>Folder setup</span>
             {/* An EXPLICIT choice, not a blank field (client, 2026-08-17: "can you add a button call
                 have subunit?"). The stored discriminator is the absence of `termSet`, so this used to
                 be expressed by leaving a text box empty — undiscoverable, and the wrong guess is
                 silent: paste any other set's ID and every unit is offered every other unit's
                 subunits, with nothing on screen to say so. */}
-            <div style={{ display: "grid", gap: 8, marginBottom: 4 }}>
+            <div style={{ display: "grid", gap: 8, marginBottom: 14 }}>
               <label style={s.radioRow} htmlFor="sm-src-unit">
                 <input
                   id="sm-src-unit"
@@ -955,13 +956,10 @@ export default function StructureManager({
                   onChange={() => setAdding({ ...adding, fromUnit: true, termSetGuid: "" })}
                 />
                 <span>
-                  <strong>Under each Unit</strong> in the term store — every unit offers its own.
+                  <strong>Sub unit</strong>
                   <br />
                   <span style={s.radioHint}>
-                    This is <strong>SubUnit</strong>. Author the terms under each unit; a unit with
-                    none simply never shows the dropdown, so nothing here has to be configured per
-                    unit. No abbreviation, no group and no permissions — the folders inherit the
-                    Unit&rsquo;s access.
+                    Create sub unit folder under each unit.
                   </span>
                 </span>
               </label>
@@ -974,14 +972,31 @@ export default function StructureManager({
                   onChange={() => setAdding({ ...adding, fromUnit: false })}
                 />
                 <span>
-                  <strong>One shared list</strong> for every unit — from a term set.
+                  <strong>Shared folder term</strong>
                   <br />
                   <span style={s.radioHint}>
-                    Like Year and Document Type. Every unit is offered the same options.
+                    Apply the same list of options to all unit folders.
                   </span>
                 </span>
               </label>
             </div>
+
+            <label style={s.label} htmlFor="sm-label">Folder level name</label>
+            <input
+              id="sm-label"
+              style={s.input}
+              value={adding.label}
+              onChange={(e) => setAdding({ ...adding, label: e.target.value })}
+              placeholder="Folder Name"
+            />
+            {/* ⚠ THE COLUMN NAME IS NO LONGER SHOWN (client, 2026-09-06), AND IT WAS NOT DECORATION.
+                `ensureTextColumn` SKIPS a column that already exists whatever its TYPE, so a level
+                named into an existing column binds to it silently — that is how a re-added `Year`
+                once wrote a bare label into a taxonomy field and every upload in the segment stopped
+                tagging. `builtInTierFor` guards the two known cases (Year, Document Type) by name;
+                nothing guards a collision with a column the client added themselves, and the derived
+                name is no longer on screen for anyone to notice it.
+                `columnNameFor` is still what CREATES the column — only the preview is gone. */}
             {!adding.fromUnit && (
               <>
                 <label style={s.label} htmlFor="sm-set">Term set ID</label>
@@ -1019,10 +1034,11 @@ export default function StructureManager({
                 </option>
               ))}
             </select>
-            <p style={s.hint}>
-              Position decides how many folders exist. Near the top, one folder per unit; at the
-              bottom, one for every Year and Document Type combination.
-            </p>
+            {/* ⚠ THE COST OF POSITION IS NO LONGER STATED (client, 2026-09-06) AND IT IS REAL.
+                Near the top means one folder per unit; at the bottom means one for every Year and
+                Document Type combination — the same level placed last can multiply the folder count
+                by the size of two term sets. Nothing enforces a limit, so a badly placed level is
+                discovered as a slow reconciliation rather than as an error. */}
 
             <div style={{ marginTop: 14 }}>
               <button
@@ -1090,18 +1106,25 @@ export default function StructureManager({
           <div style={s.segRow}>
             <div style={{ flex: "1 1 300px" }}>
               <div style={s.segName}>{row.label}</div>
-              <div style={s.path}>{pathPreview(row, row.chain)}</div>
-              {row.pending !== undefined && (
-                // Show the live shape AND the staged one. A single line could only show one,
-                // and either choice misleads: the live path hides that a change is waiting,
-                // the staged path claims a shape uploads are not using.
-                /* The staged chain, in the same shape as the live one directly above it — the two
-                   are meant to be COMPARED, and a sentence in front of one of them makes that
-                   harder. The `change pending` badge beside the name is what says which is which. */
-                <div style={{ ...s.path, color: "#8a4b00", marginTop: 2 }}>
-                  {pathPreview(row, row.pending)}
-                </div>
-              )}
+              {/* ONE LINE, NOT TWO (client, 2026-09-06: *"no need to duplicate"*). It used to print
+                  the live chain and the staged one stacked so the two could be compared - and the
+                  common case is a change that alters ONE level, which rendered as two nearly
+                  identical lines and read as a display fault rather than a comparison.
+
+                  ⚠ WITH A CHANGE PENDING THIS SHOWS THE PENDING SHAPE, WHICH IS NOT WHAT UPLOADS
+                  ARE USING. That is exactly why it is red, and why the `Change pending` badge sits
+                  beside the name: between them they say "this is the shape you asked for, and it is
+                  not live yet". Remove either and the line becomes a statement about the CURRENT
+                  structure that stays false until the migration applies it. */}
+              <div
+                style={
+                  row.pending === undefined
+                    ? s.path
+                    : { ...s.path, color: "#a4262c" }
+                }
+              >
+                {pathPreview(row, row.pending ?? row.chain)}
+              </div>
             </div>
             <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 10 }}>
               <span

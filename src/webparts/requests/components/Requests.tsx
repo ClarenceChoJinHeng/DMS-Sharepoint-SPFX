@@ -2648,7 +2648,11 @@ export default function Requests({
               <p
                 style={{ fontSize: 11.5, color: "#a4262c", margin: "4px 0 0" }}
               >
-                Type a reason before rejecting — the requester needs to see why.
+                {/* The client's wording (2026-09-06), matching the uploader-side dialogs so one
+                    rule reads the same on both screens. The sentence it replaces explained WHY a
+                    reason is needed; the requester still sees the note, so nothing is lost but the
+                    lecture. */}
+                Reasoning is required
               </p>
             )}
             <div style={s.actions}>
