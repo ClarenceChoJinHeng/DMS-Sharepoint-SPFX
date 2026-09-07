@@ -718,3 +718,50 @@ export function stepUsesSegment(step: FlowStep): boolean {
   if (step.screen.kind === "tab" && step.screen.tab === "structure") return false;
   return true;
 }
+
+/**
+ * The lowest step whose Next is currently blocked, or `steps.length` when none is.
+ *
+ * Nothing PAST this index may be reached from the rail. Extracted from `FolderAdmin` on 2026-09-07
+ * because the rule lived inline in the component, where nothing could test it — and the first
+ * version of it shipped with a gap nobody could have caught by reading the JSX.
+ */
+export function firstBlockedStepIndex(steps: FlowStep[], facts: FlowFacts): number {
+  const list = steps ?? [];
+  for (let i = 0; i < list.length; i++) {
+    if (blocksNext(list[i], facts).length > 0) return i;
+  }
+  return list.length;
+}
+
+/**
+ * May the rail navigate to step `i`?
+ *
+ * THREE conditions, and each is load-bearing:
+ *
+ *   - `i <= maxIdx` — earned progress (1.0.332.0). The rail never jumps ahead of where the admin has
+ *     actually walked.
+ *   - `i <= firstBlocked` — the gate. Without it the rail is a SECOND ROUTE PAST IT, which is what the
+ *     client found within the hour of the uploads gate shipping: uploads switched back on, Next
+ *     correctly refusing, and steps 2 and 3 still clickable because `maxIdx` remembered them.
+ *   - `i <= idx` — everything at or behind where the admin stands stays reachable. Without it a fact
+ *     turning false strands them on a later step, unable even to go BACK to the one that needs
+ *     fixing. That is the opposite of what the gate wants.
+ *
+ * ⚠ THE THIRD CONDITION HAS A KNOWN, ACCEPTED COST, AND IT IS WORTH UNDERSTANDING BEFORE CHANGING IT.
+ * At the END of the structure flow the admin turns uploads back ON — which is the correct final
+ * state, and which makes step 1 block again. Stepping BACK from there then narrows what is reachable
+ * to where they now stand, so the already-walked steps ahead grey out. They are not trapped: Next
+ * still advances, because `levels`/`migrate`/`reconcile` are not themselves gated. The rail is simply
+ * more conservative than Next in that one window.
+ *
+ * Widening it (say, `i <= maxIdx` alone once a step has been visited) would restore the original
+ * bypass, since the bypass WAS a visited step. Narrowing it (dropping `i <= idx`) strands people.
+ * This is the middle, and the tests below pin all three behaviours.
+ */
+export function isStepReachable(
+  i: number,
+  at: { maxIdx: number; idx: number; firstBlocked: number },
+): boolean {
+  return i <= at.maxIdx && (i <= at.firstBlocked || i <= at.idx);
+}

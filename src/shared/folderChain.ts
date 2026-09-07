@@ -31,7 +31,11 @@ export interface ChainSplit {
 
 /** Why a chain was rejected. `undefined` from `validateChain` means it is usable. */
 export interface ChainError {
-  code: "empty" | "prefix-not-contiguous" | "duplicate-column";
+  code:
+    | "empty"
+    | "prefix-not-contiguous"
+    | "duplicate-column"
+    | "per-unit-not-contiguous";
   /** Admin-facing. Names the offending tier so a config row can be fixed without a developer. */
   message: string;
 }
@@ -69,6 +73,46 @@ export function validateChain(levels: Level[]): ChainError | undefined {
         message:
           `"${lvl.label}" is a permissioned tier but sits below "${firstOnDemand}", which is not. ` +
           `Every permissioned tier must come first in the chain.`,
+      };
+    }
+  }
+
+  /* ⚠ PER-UNIT TIERS MUST BE CONTIGUOUS TOO — the same rule as the permissioned prefix, one level
+     down, and its absence cost a whole segment's migration on 2026-09-07.
+
+     A below-Unit tier with NO `termSet` is a PER-UNIT tier: its options are the children of the term
+     ABOVE it, cascading down the segment's own term tree from the unit's term. That only means
+     anything while every tier above it in the below-Unit run is also per-unit. Put one beneath a
+     SHARED-LIST tier and the lookup asks the segment's term set for the children of a term that
+     lives in a different set entirely — it 404s, the option list comes back `undefined`, and the
+     migrator reports every unit as "some of its folder values could not be read from the term
+     store" while naming nothing.
+
+     That is exactly what Buah did: `Clarence Kiwi` (no termSet) sat fourth, below `State`, `Year`
+     and `Document Type`, all of which have one. Seven units x six libraries, all unreadable, and the
+     Folder levels screen had saved it without a word.
+
+     ⚠ REFUSED RATHER THAN REORDERED. Moving the tier would change where documents are filed, and an
+     admin who put it fourth may have meant a shared list and forgotten the ID — the two repairs are
+     opposite, so this names the problem and lets them choose.
+
+     ⚠ THE PERMISSIONED TIERS ARE SKIPPED ENTIRELY. They have no `termSet` either — they draw from
+     the segment set by definition — so counting them here would reject every valid chain. */
+  let firstShared: string | undefined;
+  for (const lvl of levels) {
+    if (isPermissioned(lvl)) continue;
+    const hasSet = (lvl.termSet ?? "").trim().length > 0;
+    if (hasSet) {
+      if (firstShared === undefined) firstShared = lvl.label;
+      continue;
+    }
+    if (firstShared !== undefined) {
+      return {
+        code: "per-unit-not-contiguous",
+        message:
+          `"${lvl.label}" takes its values from the terms under each unit, but it sits below ` +
+          `"${firstShared}", which uses its own term set. A per-unit level only works directly ` +
+          `under Unit, or under other per-unit levels — move it up, or give it a term set of its own.`,
       };
     }
   }

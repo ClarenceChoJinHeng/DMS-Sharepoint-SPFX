@@ -5,7 +5,9 @@ import {
   FlowFacts,
   FlowStep,
   blocksNext,
+  firstBlockedStepIndex,
   firstIncompleteStep,
+  isStepReachable,
   flowById,
   isLocked,
   labelMatches,
@@ -654,5 +656,139 @@ describe("scopeFactsToFlow — segment facts must not tick a subject-scoped flow
   it("survives an undefined flow and undefined facts", () => {
     expect(scopeFactsToFlow(undefined, provisioned).groupsExist).toBe(true);
     expect(scopeFactsToFlow(pick("addUnit"), {} as FlowFacts)).toEqual({});
+  });
+});
+
+/**
+ * The rail's reachability rule, end to end over the real "Change the folder structure" flow.
+ *
+ * Extracted from FolderAdmin on 2026-09-07 so it could be tested at all. The bug that prompted it
+ * shipped and was found by the client within the hour, and no test could have caught it while the
+ * rule lived inline in the component's JSX.
+ */
+describe("the rail cannot walk past a blocked step", () => {
+  const steps = flow("structure").steps;
+  // pauseUploads, levels, migrate, reconcile, resumeUploads
+  const PAUSE = 0, LEVELS = 1, MIGRATE = 2, RECONCILE = 3, RESUME = 4;
+
+  it("blocks at step 1 while uploads are on, and nowhere while they are paused", () => {
+    expect(firstBlockedStepIndex(steps, { uploadsPaused: false })).toBe(PAUSE);
+    expect(firstBlockedStepIndex(steps, { uploadsPaused: true })).toBe(steps.length);
+  });
+
+  it("does not block on an UNKNOWN pause state — an unreadable config traps nobody", () => {
+    expect(firstBlockedStepIndex(steps, {})).toBe(steps.length);
+  });
+
+  /* THE REPORTED BUG (client, 2026-09-07): *"I can bypass two the next steps on the side panel even
+     if the sharepoint status is on"*. They had walked to step 3 while paused, then switched uploads
+     back on. Next correctly refused; the rail still offered steps 2 and 3, because `maxIdx`
+     remembers where you have been and nothing consulted the gate. */
+  it("refuses the reported bypass: walked to step 3, uploads switched back on", () => {
+    const firstBlocked = firstBlockedStepIndex(steps, { uploadsPaused: false });
+    const at = { maxIdx: MIGRATE, idx: PAUSE, firstBlocked };
+    expect(isStepReachable(PAUSE, at)).toBe(true);
+    expect(isStepReachable(LEVELS, at)).toBe(false);
+    expect(isStepReachable(MIGRATE, at)).toBe(false);
+  });
+
+  it("still allows every walked step once uploads are paused", () => {
+    const firstBlocked = firstBlockedStepIndex(steps, { uploadsPaused: true });
+    const at = { maxIdx: MIGRATE, idx: PAUSE, firstBlocked };
+    expect(isStepReachable(LEVELS, at)).toBe(true);
+    expect(isStepReachable(MIGRATE, at)).toBe(true);
+  });
+
+  it("never offers a step the admin has not yet reached", () => {
+    // Earned progress (1.0.332.0) survives the new cap: nothing beyond maxIdx, blocked or not.
+    const at = { maxIdx: LEVELS, idx: LEVELS, firstBlocked: steps.length };
+    expect(isStepReachable(MIGRATE, at)).toBe(false);
+    expect(isStepReachable(RECONCILE, at)).toBe(false);
+  });
+
+  /* ⚠ THE CONDITION THAT KEEPS BACKWARD NAVIGATION FREE. Without `i <= idx`, a fact turning false
+     while the admin stands on a later step strands them there — unable even to reach the step that
+     needs fixing, which is the opposite of what the gate wants. */
+  it("lets an admin standing past the block still reach every earlier step", () => {
+    const firstBlocked = firstBlockedStepIndex(steps, { uploadsPaused: false });
+    const at = { maxIdx: RESUME, idx: RECONCILE, firstBlocked };
+    for (const i of [PAUSE, LEVELS, MIGRATE, RECONCILE]) {
+      expect(isStepReachable(i, at)).toBe(true);
+    }
+  });
+
+  /* ⚠ THE KNOWN, ACCEPTED COST, PINNED SO IT IS A DECISION RATHER THAN A SURPRISE.
+     At the END of the flow the admin turns uploads back ON — the correct final state — which makes
+     step 1 block again. Stepping BACK from there narrows the rail to where they now stand, so
+     already-walked steps ahead grey out. They are NOT trapped: Next still advances, because levels,
+     migrate and reconcile are not themselves gated. Widening this restores the bypass above. */
+  it("greys already-walked steps ahead once uploads are back on and the admin steps back", () => {
+    const firstBlocked = firstBlockedStepIndex(steps, { uploadsPaused: false });
+    const at = { maxIdx: RESUME, idx: LEVELS, firstBlocked };
+    expect(isStepReachable(LEVELS, at)).toBe(true);
+    expect(isStepReachable(MIGRATE, at)).toBe(false);
+    // ...and Next is what carries them forward again, so this is conservative, not a dead end.
+    expect(blocksNext(steps[LEVELS], { uploadsPaused: false })).toBe("");
+  });
+
+  it("caps nothing on a flow with no gated step at all", () => {
+    // runRecon is a single reconciliation step: no gate, so the rail behaves exactly as before.
+    const rr = flow("runRecon").steps;
+    expect(firstBlockedStepIndex(rr, { uploadsPaused: false })).toBe(rr.length);
+  });
+});
+
+describe("the structure flow, step by step", () => {
+  const steps = flow("structure").steps;
+
+  it("runs pause -> levels -> migrate -> reconcile -> resume", () => {
+    expect(steps.map((x) => x.id)).toEqual([
+      "pauseUploads", "levels", "migrate", "reconcile", "resumeUploads",
+    ]);
+  });
+
+  it("holds the migrate step until a chain is actually staged", () => {
+    // The one lock that matters here: migrating with nothing pending moves folders to no purpose.
+    expect(isLocked(step("structure", "migrate"), { pendingLevels: false })).toBe(true);
+    expect(isLocked(step("structure", "migrate"), { pendingLevels: true })).toBe(false);
+    expect(isLocked(step("structure", "migrate"), {})).toBe(false);
+  });
+
+  /* ⚠ RECONCILE CARRIES AN ABBREVIATIONS LOCK AND THIS FLOW HAS NO ABBREVIATIONS STEP. That is
+     deliberate — the same RECONCILE object serves several flows — and it is inert here because
+     nothing sets the count, so it stays undefined and undefined never locks. Pinned so that reusing
+     the object stays safe. */
+  it("never locks reconciliation in a flow that cannot know the abbreviation count", () => {
+    expect(isLocked(step("structure", "reconcile"), {})).toBe(false);
+  });
+
+  it("gates ONLY the pause step for Next, across the whole flow", () => {
+    const all: FlowFacts = {
+      segmentExists: false, groupsExist: false, foldersExist: false,
+      abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
+      uploadsPaused: false,
+    };
+    const gated = steps.filter((x) => blocksNext(x, all).length > 0).map((x) => x.id);
+    expect(gated).toEqual(["pauseUploads"]);
+  });
+
+  /* Both pause steps read one fact in OPPOSITE directions, and a rail that ticked the closing step
+     while the site was still paused would confirm the wrong thing. */
+  it("ticks the two pause steps in opposite directions", () => {
+    expect(stepState(step("structure", "pauseUploads"), { uploadsPaused: true })).toBe("done");
+    expect(stepState(step("structure", "resumeUploads"), { uploadsPaused: true })).toBe("todo");
+    expect(stepState(step("structure", "pauseUploads"), { uploadsPaused: false })).toBe("todo");
+    expect(stepState(step("structure", "resumeUploads"), { uploadsPaused: false })).toBe("done");
+    expect(stepState(step("structure", "pauseUploads"), {})).toBe("unknown");
+    expect(stepState(step("structure", "resumeUploads"), {})).toBe("unknown");
+  });
+
+  /* The segment picker must not stand in front of a step that spends no segment — the rule the
+     site-wide upload pause walked into twice. */
+  it("asks for a segment only on the steps that use one", () => {
+    expect(stepUsesSegment(step("structure", "pauseUploads"))).toBe(false);
+    expect(stepUsesSegment(step("structure", "resumeUploads"))).toBe(false);
+    expect(stepUsesSegment(step("structure", "migrate"))).toBe(true);
+    expect(stepUsesSegment(step("structure", "reconcile"))).toBe(true);
   });
 });

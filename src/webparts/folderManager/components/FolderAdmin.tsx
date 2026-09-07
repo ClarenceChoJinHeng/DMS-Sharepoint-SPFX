@@ -39,8 +39,10 @@ import {
   FlowFacts,
   FlowStep,
   blocksNext,
+  firstBlockedStepIndex,
   firstIncompleteStep,
   isLocked,
+  isStepReachable,
   lockReason,
 } from "../../../shared/folderFlows";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
@@ -1070,13 +1072,7 @@ export default function FolderAdmin({
    *
    * `steps.length` when nothing blocks, so the cap is inert on a clean flow.
    */
-  let firstBlockedIdx = steps.length;
-  for (let i = 0; i < steps.length; i++) {
-    if (blocksNext(steps[i], effectiveFacts).length > 0) {
-      firstBlockedIdx = i;
-      break;
-    }
-  }
+  const firstBlockedIdx = firstBlockedStepIndex(steps, effectiveFacts);
   const blockedReason = firstBlockedIdx < steps.length
     ? blocksNext(steps[firstBlockedIdx], effectiveFacts)
     : "";
@@ -1585,7 +1581,11 @@ export default function FolderAdmin({
                everything at or behind where you stand stays clickable — without it, a fact turning
                false while an admin is on a later step would strand them there, unable even to go
                BACK to the step that needs fixing, which is the opposite of what the gate wants. */
-            const reachable = i <= maxIdx && (i <= firstBlockedIdx || i <= idx);
+            const reachable = isStepReachable(i, {
+              maxIdx,
+              idx,
+              firstBlocked: firstBlockedIdx,
+            });
             return (
               <button
                 key={st.id}

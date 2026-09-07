@@ -10442,3 +10442,84 @@ store"*, and `7 unit(s) need a value chosen before anything can move`. Not a bad
   answering *"Full control of this site, granted by SharePoint rather than by a mapping row"*. **A QA
   deck is a snapshot of the build it was captured against; check the current source before building a
   fix for anything in one.**
+
+## ⚠⚠ THE MIGRATOR SKIPPED EVERY FOLDER NAMED `Forms` — SILENT, FOR A MONTH (2026-09-07, 1.0.461.0)
+Found by pulling on a discrepancy the client noticed: five pending files under
+`ApprovalDocument/GHO/GCA/EG/2024`, but the scan listed only four of their folders.
+- **`childFolders` FILTERED `f.Name !== "Forms"` AT EVERY DEPTH**, with no comment. The client has a
+  Document Type genuinely named **Forms**, so `2024/Forms` and the document inside it were invisible
+  to the scan: never listed, never moved, and `2024` could therefore never empty — leaving the chain
+  **pending for ever, on a run reporting success.** Silent in both directions.
+- **⚠ THE FILTER COULD NEVER HAVE DONE ITS JOB.** SharePoint's system `Forms` folder lives at
+  `<library>/Forms`, a SIBLING of the segment folder; the walk starts at `<library>/<stagingFolder>`
+  and only ever descends, so it can never reach it. **The only thing the filter ever excluded was
+  real user data.**
+- **THE COMMIT THAT ADDED IT (`0d8b343`, 2026-08-11) EXPLAINS EVERY OTHER DECISION IN THAT FILE AND
+  NOT THIS ONE.** No comment on the line either. Best reconstruction: a defensive reflex, correct for
+  a helper enumerating from a library root, applied to one that never does. **It looks obviously
+  right in isolation, which is why it survived review and a month of use** — and it was harmless
+  until the day someone added a term called Forms, with nothing connecting the two events.
+- **THE TRANSFERABLE RULE: A NAME-BASED FILTER CANNOT TELL A SYSTEM OBJECT FROM USER DATA.** `Forms`,
+  `Attachments`, `_cts` are all names a client may legitimately use. Exclude a system object **by
+  PATH, at the one place it exists** — never by name at every depth.
+- **The one other instance in the codebase is CORRECT** (`FolderManager.tsx:781`, `isSystemFolder`):
+  it enumerates from the library ROOT, which is exactly where the system folder is. Right filter,
+  right scope. Checked, left alone.
+
+## PER-UNIT TIERS MUST BE CONTIGUOUS — `validateChain` ENFORCES IT NOW (2026-09-07, 1.0.463.0)
+The rule whose absence produced Buah's unreadable migration. Client: *"put the validateChain I
+suppose."*
+- **A below-Unit tier with NO `termSet` is a PER-UNIT tier** — its options are the children of the
+  term ABOVE it, cascading down the segment's own tree from the unit term. **That only means anything
+  while every below-Unit tier above it is also per-unit.**
+- **Buah's chain put `Clarence Kiwi` (no termSet) fourth**, below `State`, `Year` and `Document
+  Type`, all of which have one. The lookup then asked the SEGMENT term set for the children of a
+  Document Type term — a term in a different set — which fails, so the option list came back
+  `undefined` and all 7 units x 6 libraries reported *"some of its folder values could not be read
+  from the term store"*, naming nothing. The Folder levels screen had saved it without a word.
+- **`per-unit-not-contiguous` REFUSES, and names both tiers.** Same shape as the existing
+  `prefix-not-contiguous` rule, one level down.
+  - **⚠ REFUSED RATHER THAN REORDERED.** Moving the tier changes where documents are filed, and an
+    admin who put it fourth may have meant a shared list and forgotten the ID — **the two repairs are
+    opposite**, so the message names the fault and lets them choose.
+  - **⚠ THE PERMISSIONED TIERS ARE SKIPPED ENTIRELY.** They have no `termSet` either — they draw from
+    the segment set by definition — so a rule that counted them would reject EVERY valid chain in the
+    system. Pinned by test.
+  - **A blank or whitespace `termSet` counts as per-unit, not as a shared list** — the 2026-08-26 SDG
+    incident, where GHO's `Year` carried `"termSet": ""` and both upload forms silently hid the tier.
+  - `prefix-not-contiguous` keeps priority when a chain is broken both ways: that one would silently
+    widen access, so it is the one to report.
+- **⚠⚠ IT BLOCKS UPLOADS, NOT JUST SAVES — CHECK EVERY LIVE SEGMENT BEFORE DEPLOYING.**
+  `validateChain` is called at UPLOAD time in both web parts (`Form.tsx:2262`,
+  `BulkUpload.tsx:2822`), so a segment whose live `Levels` has this shape stops accepting documents
+  the moment this ships.
+  - **It breaks nothing that worked**: such a segment's cascade already fails the same way, so the
+    tier's option list is already empty and the upload already refuses — this just fails earlier with
+    a message that names the cause. But the SYMPTOM changes, and it will be reported as new.
+  - **⚠ MHO IS THE ONE TO CHECK.** Its pending chain ended `... / Year / Document Type / Tes1111`;
+    if `Tes1111` carries no `termSet` it is exactly this shape. Read `mode_minamas_head_office`'s
+    `Levels` before deploying. GHO, GLP and Trinergy Office were read and are clean; Buah was
+    repaired on site by removing the tier.
+
+## THE FLOW WAS AUDITED, AND THE RAIL RULE IS TESTABLE NOW (2026-09-07, 1.0.462.0)
+Client: *"check the entire change folder structure flow and make a test."* 14 new tests on the flow
+(79 -> 93) and 7 on the chain; suite 1,713/0.
+- **⚠ THE AUDIT IS CODE-ONLY AND MUST NOT BE READ AS A PASS.** There are no UI tests in this project,
+  and **three of the four bugs found that evening were only findable by clicking.**
+- **`firstBlockedStepIndex` and `isStepReachable` MOVED OUT OF `FolderAdmin` INTO `folderFlows.ts`.**
+  The rail's reachability rule lived inline in the component's JSX, where nothing could test it — and
+  the first version of it shipped with a gap that only surfaced by reasoning through the end of the
+  flow.
+- **⚠ THE ACCEPTED COST, NOW PINNED BY TEST RATHER THAN LEFT AS A SURPRISE.** At the END of the flow
+  the admin turns uploads back ON — the correct final state — which makes step 1 block again.
+  Stepping BACK from there narrows the rail to where they now stand, so already-walked steps ahead
+  grey out. **They are not trapped: Next still advances**, because `levels`/`migrate`/`reconcile` are
+  not themselves gated. Widening the rule restores the bypass it was written to close; narrowing it
+  strands people. This is the middle.
+- **Everything else checked clean**: step order, the migrate lock, reconciliation's abbreviation lock
+  being inert here (no abbreviations step ⇒ count undefined ⇒ never locks), only `pauseUploads`
+  gating Next across the whole flow, the two pause steps ticking in opposite directions, and the
+  segment picker staying off steps that spend no segment.
+- **A mechanical check worth repeating: every `s.<key>` style reference resolves** across all four
+  flow screens (41/25/0/28 used, none missing). That trap — a missing key yields `undefined` and
+  renders unstyled with a GREEN BUILD — has bitten four files in this project.

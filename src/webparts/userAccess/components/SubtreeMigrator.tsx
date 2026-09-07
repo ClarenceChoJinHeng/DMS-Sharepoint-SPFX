@@ -431,7 +431,21 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     if (!res.ok) return [];
     const data = await res.json();
     return ((data.value ?? []) as Array<{ Name?: string; ServerRelativeUrl?: string }>)
-      .filter((f) => (f.Name ?? "") !== "" && f.Name !== "Forms")
+      /* ⚠ THE `Forms` EXCLUSION IS GONE (2026-09-07), AND IT WAS SKIPPING REAL DOCUMENTS.
+         It read `f.Name !== "Forms"` and was plainly meant to skip SharePoint's own system folder —
+         but that folder lives at `<library>/Forms`, a SIBLING of the segment folder, and this walk
+         starts at `<library>/<stagingFolder>` and only ever descends. So the exclusion could never
+         reach the system folder, and the one thing it did reach was a Document Type the client had
+         genuinely named **Forms**.
+
+         Found on site: `ApprovalDocument/GHO/GCA/EG/2024/Forms` held a pending upload, the scan
+         listed every sibling of it and not Forms, so that document would never have been migrated —
+         and `2024` could never empty, leaving the chain pending for ever. Silent in both directions:
+         nothing reported the folder, and nothing reported the file.
+
+         If a system folder ever DOES need excluding, exclude it by PATH at the library root, never
+         by name at every depth — a name filter cannot tell a system folder from a term. */
+      .filter((f) => (f.Name ?? "") !== "")
       .map((f) => ({ name: f.Name as string, url: f.ServerRelativeUrl as string }));
   };
 

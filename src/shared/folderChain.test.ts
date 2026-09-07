@@ -347,3 +347,81 @@ describe("builtInTierFor — re-adding Year or Document Type restores the built-
     for (const t of builtInOnDemandTiers(YEAR_SET, DOCTYPE_SET)) expect(t.tidCol).toBeUndefined();
   });
 });
+
+/**
+ * Per-unit tiers must be contiguous, exactly as permissioned ones are.
+ *
+ * Buah, 2026-09-07: `Clarence Kiwi` had no `termSet` — making it per-unit — and sat fourth, below
+ * `State`, `Year` and `Document Type`, all of which have one. The option lookup then asked the
+ * SEGMENT term set for the children of a Document Type term, which 404s, so all seven units in all
+ * six libraries reported "some of its folder values could not be read from the term store" and the
+ * migration could not run. Nothing had refused the chain when it was saved.
+ */
+describe("validateChain — per-unit tiers", () => {
+  const dept: Level = { label: "Department", column: "Department", labelCol: "Department", tidCol: "DepartmentTid" };
+  const unit: Level = { label: "Unit", column: "Unit", labelCol: "Unit", tidCol: "UnitTid" };
+  const shared = (label: string, termSet: string): Level =>
+    ({ label, column: label, labelCol: label, termSet, permissioned: false });
+  const perUnit = (label: string): Level =>
+    ({ label, column: label, labelCol: label, tidCol: label + "Tid", permissioned: false });
+
+  it("refuses Buah's real chain, naming both tiers", () => {
+    const err = validateChain([
+      dept, unit,
+      shared("State", "0339484f-2315-445d-887f-83534153a905"),
+      shared("Year", "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf"),
+      shared("Document Type", "866c5754-258e-401f-8685-03d20ae59b1d"),
+      perUnit("Clarence Kiwi"),
+    ]);
+    expect(err?.code).toBe("per-unit-not-contiguous");
+    expect(err?.message).toContain("Clarence Kiwi");
+    // Names the tier it sits below, so the admin can see which end to fix.
+    expect(err?.message).toContain("State");
+  });
+
+  it("accepts a per-unit tier directly below Unit", () => {
+    // The SubUnit shape: authored under each unit term, first below the permissioned prefix.
+    expect(validateChain([
+      dept, unit,
+      perUnit("SubUnit"),
+      shared("Year", "023a866a-…"),
+      shared("Document Type", "866c5754-…"),
+    ])).toBeUndefined();
+  });
+
+  it("accepts several per-unit tiers in a row", () => {
+    // A genuine cascade down the segment's own tree: each takes the children of the one above.
+    expect(validateChain([dept, unit, perUnit("SubUnit"), perUnit("Team")])).toBeUndefined();
+  });
+
+  it("accepts a chain of shared-list tiers only", () => {
+    expect(validateChain([
+      dept, unit,
+      shared("Year", "023a866a-…"),
+      shared("Document Type", "866c5754-…"),
+    ])).toBeUndefined();
+  });
+
+  /* ⚠ THE PERMISSIONED TIERS HAVE NO `termSet` EITHER — they draw from the segment set by
+     definition — so a rule that counted them would reject every valid chain in the system. */
+  it("does not count the permissioned prefix as per-unit", () => {
+    expect(validateChain([dept, unit, shared("Year", "023a866a-…")])).toBeUndefined();
+  });
+
+  it("treats a blank or whitespace termSet as per-unit, not as a shared list", () => {
+    /* The 2026-08-26 SDG incident: GHO's Year carried `"termSet": ""`, which IS the per-unit
+       discriminator, and both upload forms hid the tier. A blank string must never read as
+       "has a term set". */
+    const blank: Level = { label: "Year", column: "Year", labelCol: "Year", termSet: "", permissioned: false };
+    const err = validateChain([dept, unit, shared("State", "0339484f-…"), blank]);
+    expect(err?.code).toBe("per-unit-not-contiguous");
+    expect(err?.message).toContain("Year");
+  });
+
+  it("still refuses a permissioned tier below a non-permissioned one, first", () => {
+    // The older rule keeps priority — a chain broken both ways reports the permissioned fault,
+    // which is the one that would silently widen access.
+    const err = validateChain([dept, shared("Year", "023a866a-…"), unit, perUnit("SubUnit")]);
+    expect(err?.code).toBe("prefix-not-contiguous");
+  });
+});
