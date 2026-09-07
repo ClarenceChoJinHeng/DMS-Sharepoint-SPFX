@@ -33,6 +33,7 @@ import { writeAudit } from "../../../shared/spAuditLog";
 import { EVENT } from "../../../shared/auditLog";
 import { normalizeRoleValue } from "../../../shared/groupMapModel";
 import { isSystemAdmin } from "../../../shared/spGroups";
+import { closeOnBackdrop } from "../../../shared/backdropClose";
 import {
   RequestRow,
   RequestStatus,
@@ -260,19 +261,13 @@ const s: Record<string, React.CSSProperties> = {
     border: "1px solid #c7c7c7",
     borderRadius: 4,
   },
-  /* ⚠ BLACK, AND ONLY IN THIS DIALOG — the client's mockup shows a black Approve here while the
-     Approve on every request CARD stays green (`s.approve`). Deliberately not unified: the mockup is
-     of this dialog, and changing the cards too would be a redesign nobody asked for. Raise it if the
-     two ever need to match. */
-  approveDark: {
-    padding: "6px 18px",
-    fontSize: 12.5,
-    background: "#1b1b1b",
-    color: "#fff",
-    border: "1px solid #1b1b1b",
-    borderRadius: 4,
-    cursor: "pointer",
-  },
+  /* `approveDark` (a black Approve, `#1b1b1b`) LIVED HERE AND IS DELETED. It came from a mockup that
+     drew this dialog's Approve black while the Approve on every request CARD stayed green, and the
+     comment then said to raise it if the two ever needed to match. The client raised it, 2026-09-07:
+     *"ensure the Approve button is green."* The dialog uses `s.approve` now, so there is one green
+     Approve everywhere and no second definition to drift.
+     Removed rather than parked: an unused style is a lint warning and this project holds a zero-new-
+     warning baseline. */
   warn: {
     border: "1px solid #f2c9a0",
     background: "#fff8f0",
@@ -1668,13 +1663,20 @@ export default function Requests({
    * a loading state at all. Blank from the very start is the bundle; blank after something showed is
    * the hooks.
    */
-  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  /* ⚠ ONE KEY, NOT A MAP OF BOOLEANS — the sections are an ACCORDION now (client, 2026-09-07:
+     *"please make it by default is collapse. AND. when i expand either one, the other one will auto
+     collapse"*). Holding "which one is open" in a single value is what makes that true by
+     construction: there is nowhere to record a second open section, so no combination of clicks can
+     produce one. A `Record` plus a close-the-others loop would leave the rule to be remembered by
+     every future caller of `toggle`.
+     `undefined` means all closed, which is the landing state. */
+  const [openSection, setOpenSection] = useState<string | undefined>(undefined);
 
-  /* Which page each section is on, keyed the same way as `openSections` ("Deletion", "Share",
+  /* Which page each section is on, keyed the same way as `openSection` ("Deletion", "Share",
      "shared"). A RECORD rather than one number because `typeSection` is ONE function rendering TWO
      sections — a single page state would move Deletion and Share together, which reads as the wrong
      list responding to the click.
-     ⚠ DECLARED HERE, ABOVE THE EARLY RETURN, for the reason spelled out on `openSections` — a hook
+     ⚠ DECLARED HERE, ABOVE THE EARLY RETURN, for the reason spelled out on `openSection` — a hook
      below it blanks the entire web part. That shipped once today already. */
   const [sectionPage, setSectionPage] = useState<Record<string, number>>({});
 
@@ -1747,23 +1749,30 @@ export default function Requests({
    * *"now we will have three accordion dropdown instead. One accordion dropdown for Deletion and one
    * for Share and one for Documents with Shared Access."*
    *
-   * ⚠ ALL THREE OPEN BY DEFAULT, and that is not a style choice. A collapsed section can HIDE
-   * PENDING WORK — the same rule that keeps the status filter from ever hiding a Pending row, and
-   * that made "Waiting for you" announce what its text filter had hidden. Opening closed would mean
-   * an approver could load this page, see three tidy headers, and miss four requests waiting on
-   * them. Collapsing is then their own deliberate act, and the pending count stays in the header
-   * while it is shut, so the work is still announced.
+   * ⚠⚠ THEY START CLOSED, AND ONLY ONE OPENS AT A TIME — client, 2026-09-07: *"when i first land,
+   * please make it by default is collapse. AND when i expand either one, the other one will auto
+   * collapse."* **THIS REVERSES THE RULE THIS COMMENT USED TO STATE**, which was that all three open
+   * by default because *a collapsed section can HIDE PENDING WORK* — the same reasoning that stops
+   * the status filter ever hiding a Pending row.
    *
-   * ⚠ `openSections` ITSELF IS DECLARED WITH THE OTHER HOOKS, ABOVE THE EARLY RETURN — see the note
-   * there. Only these two plain helpers live at this point, because nothing below the return may
+   * ⚠ WHAT MAKES THE REVERSAL SAFE IS THE PENDING COUNT IN THE HEADER, and it is the whole
+   * mitigation: a shut section still reads `7 pending`, so an approver landing here is told there is
+   * work without opening anything. **That count must never be moved inside the section body** — do
+   * that and this page can genuinely hide work behind a tidy header, which is the state the original
+   * rule existed to prevent.
+   *
+   * ⚠ `openSection` ITSELF IS DECLARED WITH THE OTHER HOOKS, ABOVE THE EARLY RETURN — see the note
+   * there. Only these plain helpers live at this point, because nothing below the return may
    * introduce a hook.
    */
-  const isOpen = (key: string): boolean => openSections[key] !== false;
+  const isOpen = (key: string): boolean => openSection === key;
   const pageOf = (key: string): number => sectionPage[key] ?? 0;
   const setPage = (key: string, n: number): void =>
     setSectionPage((prev) => ({ ...prev, [key]: n }));
+  /* Opening a section closes whichever was open, because only one key can be held. Pressing the open
+     one closes it, leaving all of them shut — the landing state, reachable again deliberately. */
   const toggle = (key: string): void =>
-    setOpenSections((prev) => ({ ...prev, [key]: prev[key] === false }));
+    setOpenSection((prev) => (prev === key ? undefined : key));
 
   /** The header of an accordion: chevron, title, and whatever the section wants to show beside it. */
   const accordionHead = (
@@ -1928,13 +1937,20 @@ export default function Requests({
       (r.itemName ?? "").toLowerCase().indexOf(q) !== -1
     );
   };
+  /* ⚠⚠ THE OUTCOME FILTER NOW HIDES PENDING ROWS, AND IT DID NOT BEFORE.
+     The clause `r.status === "Pending" ||` used to sit at the front of this predicate so that no
+     display control could ever hide outstanding work. The client read the result as the control being
+     broken — *"When I select approve or reject it doesnt filter to show approve or reject"* — which it
+     looks exactly like: choose `Approved`, and five pending rows stay on screen.
+     ⚠ WHAT MAKES THE REMOVAL SAFE IS THAT PENDING WORK IS ANNOUNCED TWICE, OUTSIDE THIS FILTER:
+       1. the section header's `N pending` pill is built from `allPending`, which is NEVER filtered, and
+       2. `hiddenPending` prints "N pending requests are hidden by the filter and still need a
+          decision — press Clear" inside the open section.
+     **Both must stay.** Take either away and this page can hide an unanswered request behind a filter
+     somebody set and forgot, which is the state the original clause existed to prevent. */
   const applyFilters = (list: RequestRow[]): RequestRow[] =>
     list.filter(
-      (r) =>
-        (r.status === "Pending" ||
-          statusFilter === "All" ||
-          r.status === statusFilter) &&
-        matchesText(r),
+      (r) => (statusFilter === "All" || r.status === statusFilter) && matchesText(r),
     );
 
   /* ⚠ A FILE IS KEPT IF *ANY* RECIPIENT MATCHES, AND ITS RECIPIENT LIST IS NEVER NARROWED. Filtering
@@ -1974,7 +1990,7 @@ export default function Requests({
     return (
       <div style={s.card}>
         {/* The pending count stays in the HEADER, so it is still announced while the section is
-            collapsed — see `openSections` for why that matters. Amber, matching `PILL.Pending`, so
+            collapsed — see `openSection` for why that matters. Amber, matching `PILL.Pending`, so
             the header and the cards below it agree about what "pending" looks like. */}
         {accordionHead(
           t,
@@ -1990,9 +2006,12 @@ export default function Requests({
           <p style={s.quiet}>Nothing here yet.</p>
         ) : (
           <>
-            {/* ⚠ SAYS SO OUT LOUD, same rule as the pre-merge "Waiting for you" box: a filter that
-                hides pending work must never look like the work is done. Text can hide a pending row
-                (as before); status never can — see `applyFilters`. */}
+            {/* ⚠⚠ THIS LINE IS NOW LOAD-BEARING, NOT A COURTESY. Same rule as the pre-merge "Waiting
+                for you" box: a filter that hides pending work must never look like the work is done.
+                **Both** the text box and the outcome dropdown can hide a pending row since
+                2026-09-07 — this used to say "status never can", which stopped being true when the
+                outcome filter was made to actually filter. Together with the header's unfiltered
+                `N pending` pill, this is the whole reason that change was safe. */}
             {hiddenPending > 0 && (
               <p style={s.quiet}>
                 {hiddenPending} pending request{hiddenPending === 1 ? "" : "s"}{" "}
@@ -2037,10 +2056,22 @@ export default function Requests({
   const requestsFilterBar = ((): React.ReactElement | null => {
     const anyRow = ofType("Deletion").length + ofType("Share").length > 0;
     if (!anyRow) return null;
+    /* ⚠ `Cancelled` AND `Failed` ARE KEPT OUT OF THE PICKER (client, 2026-09-07: *"idk what is
+       cancelled or failed is doing there, remove it"*). Both are real stored statuses and their ROWS
+       still appear under `All outcomes` — this removes the ability to filter TO them, not the rows.
+       ⚠ THE ONE WORTH RE-RAISING IS `Failed`: it means the approver said yes and the deletion or
+       share then DID NOT HAPPEN, so it is the status somebody most needs to find. After this it can
+       only be found by reading `All`. `Cancelled` is the requester withdrawing, which is genuinely
+       not an approver's concern.
+       An exclusion list, not a hand-written option list: `STATUS_ORDER` stays derived from
+       `REQUEST_STATUSES`, so a status added later still reaches the picker rather than vanishing —
+       the property that comment exists to protect. */
+    const HIDE_FROM_PICKER: RequestStatus[] = ["Cancelled", "Failed"];
     const present = STATUS_ORDER.filter(
       (v) =>
-        decidedOf("Deletion").some((r) => r.status === v) ||
-        decidedOf("Share").some((r) => r.status === v),
+        HIDE_FROM_PICKER.indexOf(v) === -1 &&
+        (decidedOf("Deletion").some((r) => r.status === v) ||
+          decidedOf("Share").some((r) => r.status === v)),
     );
     const filtering = statusFilter !== "All" || whoFilter.trim().length > 0;
     return (
@@ -2074,10 +2105,13 @@ export default function Requests({
             Clear
           </button>
         )}
-        {/* ⚠ SAID OUT LOUD. The outcome list holds no pending rows, so the dropdown cannot narrow
-            pending work — without this line, setting it to `Approved` and watching pending items stay
-            put reads as the control being broken. */}
-        <span style={s.small}>Outcome applies to decided requests only.</span>
+        {/* The note *"Outcome applies to decided requests only."* LIVED HERE AND IS GONE. It existed
+            to explain why pending rows stayed put when the dropdown was set to `Approved` — and it
+            failed at that job: the client read the behaviour as broken anyway. The filter narrows
+            pending rows now (see `applyFilters`), so the sentence is also no longer true. What
+            replaces it is `hiddenPending`, printed INSIDE the open section, which names how many
+            pending requests the filter is hiding and says they still need a decision — the same fact
+            said where it applies rather than as a caption on the control. */}
       </div>
     );
   })();
@@ -2557,12 +2591,15 @@ export default function Requests({
         rejected · {tally.Revoked} revoked · {tally.Failed} failed
       </p>
 
+      {/* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. A note is REQUIRED
+          on every decision here, so the old onClick lost a typed rejection reason the moment the
+          approver selected any of it and released outside the dialog. */}
       {deciding && (
         <div
           style={s.modalBg}
-          onClick={() => {
+          onMouseDown={closeOnBackdrop(() => {
             if (!busy) setDeciding(undefined);
-          }}
+          })}
         >
           <div style={s.modal} onClick={(e) => e.stopPropagation()}>
             <p style={{ ...s.head, fontSize: 16, margin: "0 0 4px" }}>
@@ -2574,22 +2611,30 @@ export default function Requests({
                 cannot reconstruct once the dialog is open. Adding information the mockup left out is
                 the safe direction; say so if it is unwanted. */}
             <p style={s.modalFile}>{deciding.row.itemName}</p>
-            {/* ⚠ APPROVE KEEPS `decisionSummary`, WHICH ALREADY IS THE MOCKUP'S SENTENCE — *"This
-                file will be moved to the recycle bin, where it can be restored for 93 days."* It must
-                never be replaced by a fixed string: for a SHARE it names the recipients and the
-                permission instead, and a hardcoded recycle-bin line would describe the wrong action
-                entirely.
-                ⚠ 93 DAYS, NOT THE 90 IN THE MOCKUP — the same conflict settled twice already
-                (2026-08-30 and 2026-09-03: *"stay 93, they might not know that is why they say 90"*).
-                SharePoint's site recycle bin really is 93, and that number is the only thing making an
-                approved deletion reversible.
-                REJECT now takes the mockup's prompt. It replaces *"X will not be touched, and Y will
-                see your note"* — both facts still true, but the prompt is what the approver needs at
-                the moment they are being asked to type. */}
+            {/* ⚠ THE SUMMARY IS SHOWN FOR A SHARE ONLY, AND THE ASYMMETRY IS DELIBERATE.
+                Client, 2026-09-07: *"remove the wording 'This file will be moved to the recycle bin,
+                where it can be restored for 93 days.'"* — that is exactly what `decisionSummary`
+                returns for a DELETION, so the deletion branch is gone.
+
+                ⚠ IT IS NOT GONE FOR A SHARE, because the share branch is a different sentence doing
+                a different job: *"X will be able to view Y, with no expiry date."* It is the only
+                place the RECIPIENT and the expiry are confirmed before access is granted, and an
+                approver who cannot see who they are granting to is being asked to decide blind. The
+                client quoted the deletion wording; removing the share line as well would drop
+                something they did not ask about. Say so if it is also unwanted.
+
+                ⚠ AND `decisionSummary` ITSELF IS UNTOUCHED — it still feeds the outcome banner after
+                a decision (`Approved. …`), which for a deletion is the one remaining place the
+                93-day recycle-bin fact is stated. Do not "tidy" that away to match this dialog. */}
+            {deciding.approve && deciding.row.type === "Share" && (
+              <p style={{ fontSize: 13, margin: "0 0 4px" }}>
+                {decisionSummary(deciding.row)}
+              </p>
+            )}
+            {/* Unconditional now: a reason is required on BOTH decisions (2026-09-07), so the prompt
+                belongs on both. The client's deck drew it on the Reject dialog only. */}
             <p style={{ fontSize: 13, margin: "0 0 4px" }}>
-              {deciding.approve
-                ? decisionSummary(deciding.row)
-                : "Please provide your reasoning below."}
+              Please provide your reasoning below.
             </p>
             {deciding.approve &&
               deciding.row.type === "Share" &&
@@ -2624,11 +2669,16 @@ export default function Requests({
                 fontWeight: 600,
               }}
             >
-              {deciding.approve ? "Note (optional)" : "Reason"}
+              {/* ⚠ "Reason", NOT "Note (optional)", ON BOTH DECISIONS. A reason is required to
+                  approve as well as to reject — client, 2026-09-07: *"if they want to reject or
+                  approve in delete and share, they must provide a reason"*, restating an instruction
+                  first given on 2026-09-06. Labelling the approve path "optional" was the visible
+                  half of the code only ever gating Reject. */}
+              Reason
             </label>
             <textarea
               style={
-                !deciding.approve && showNoteError && note.trim() === ""
+                showNoteError && note.trim() === ""
                   ? {
                       ...s.noteArea,
                       borderColor: "#a4262c",
@@ -2642,9 +2692,9 @@ export default function Requests({
                 if (showNoteError) setShowNoteError(false);
               }}
             />
-            {/* Shown only after a rejection was ATTEMPTED with nothing typed — never on open, which
+            {/* Shown only after a decision was ATTEMPTED with nothing typed — never on open, which
                 would mark a dialog nobody has used yet as being in error. */}
-            {!deciding.approve && showNoteError && note.trim() === "" && (
+            {showNoteError && note.trim() === "" && (
               <p
                 style={{ fontSize: 11.5, color: "#a4262c", margin: "4px 0 0" }}
               >
@@ -2661,13 +2711,16 @@ export default function Requests({
                   busy || !canDecide(deciding.row, scope)
                     ? s.off
                     : deciding.approve
-                      ? s.approveDark
+                      ? s.approve
                       : s.reject
                 }
                 disabled={busy || !canDecide(deciding.row, scope)}
                 onClick={() => {
-                  /* ⚠ REJECT ONLY. An approval with no note proceeds — see the label comment. */
-                  if (!deciding.approve && note.trim() === "") {
+                  /* ⚠ BOTH DECISIONS. An approval with no reason no longer proceeds — client,
+                     2026-09-07. This gate read `!deciding.approve && …` and was the actual defect:
+                     the instruction covered approve and reject, CLAUDE.md recorded both, and only
+                     the reject half was ever built. */
+                  if (note.trim() === "") {
                     setShowNoteError(true);
                     return;
                   }

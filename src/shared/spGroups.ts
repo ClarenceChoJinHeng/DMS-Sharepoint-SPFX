@@ -14,6 +14,7 @@ import {
 } from "./spGroupsFilter";
 
 export { SpGroup, SpGroupMember, PersonPick, DUPLICATE_GROUP, filterSelectableGroups } from "./spGroupsFilter";
+import { withThrottleRetry } from "./throttleRetry";
 
 const GET_HEADERS = { Accept: "application/json;odata=nometadata" };
 const POST_HEADERS = {
@@ -60,19 +61,13 @@ const fail = async (label: string, res: SPHttpClientResponse): Promise<never> =>
  *
  * The request is passed as a THUNK rather than as a URL, so the retry cannot drift from the
  * original call — a second copy of the request would be a second thing to keep correct.
+ *
+ * ⚠ THE IMPLEMENTATION MOVED TO `shared/throttleRetry.ts` (2026-09-07) AND IS IMPORTED, NOT COPIED.
+ * It was private to this file while group writes were its only caller; CRS Search had no retry at
+ * all, so a single 503 from `_api/search/query` reached a user as a red *"One library could not be
+ * searched"* banner over a status SharePoint had asked us to retry. This comment stays because it is
+ * the record of why the helper exists; the rule itself now has one definition.
  */
-const withThrottleRetry = async (
-  send: () => Promise<SPHttpClientResponse>,
-): Promise<SPHttpClientResponse> => {
-  let res = await send();
-  for (let attempt = 0; (res.status === 429 || res.status === 503) && attempt < 5; attempt++) {
-    const ra = Number(res.headers.get("Retry-After"));
-    const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
-    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
-    res = await send();
-  }
-  return res;
-};
 
 export async function fetchAllSiteGroups(sp: SPHttpClient, siteUrl: string): Promise<SpGroup[]> {
   const res = await sp.get(
@@ -119,29 +114,41 @@ export async function fetchAllGroupMembers(
   siteUrl: string,
 ): Promise<Record<number, SpGroupMember[]> | undefined> {
   const out: Record<number, SpGroupMember[]> = {};
-  /* ⚠ PAGED, and it was not before — which is the likeliest reason the CSV export came back with
-     "not known" in every People and Members cell on 2026-08-30 while the group list on the same
-     screen showed the members perfectly.
-
-     `$top=5000` caps ONE page; it does not promise one page. Expanding `Users` across ~700 groups
-     produces a large response, and SharePoint answers a partial set with an `odata.nextLink`
-     rather than an error — or refuses the whole thing. Following the link is the only way to be
-     sure the index describes the whole site, and an INCOMPLETE index here is worse than none: the
-     export would state a group has nobody in it, and a spreadsheet saying a unit's approver group
-     is empty gets acted on. Same family as memory `sp-capped-read-reads-as-absent`.
-
-     Bounded at 20 pages so a paging bug cannot spin for ever; hitting the cap returns `undefined`
-     rather than a short answer, for the reason above. */
-  let url: string | undefined =
-    `${siteUrl}/_api/web/sitegroups?$select=Id,Users/Id,Users/Title,Users/Email,Users/LoginName`
-    + `&$expand=Users&$top=500`;
+  /**
+   * ⚠⚠ PAGED BY ID, NOT BY `odata.nextLink`, AND THE HISTORY IS THE REASON.
+   *
+   * The link version failed TWICE in one day, silently both times. `odata.nextLink` is an OData
+   * ANNOTATION: `nometadata` strips it, so the loop saw no continuation, stopped after one page and
+   * returned a 500-group index that looked complete — a group holding `chocheetuck4` reported "No
+   * member" while the same group read on its own showed him, with nothing logged anywhere. Switching
+   * to `minimalmetadata` did not produce the link either, which is where guessing at metadata levels
+   * stopped being worth it.
+   *
+   * Keyset paging needs no annotation and nothing can strip it: order by `Id`, take a page, then ask
+   * for the groups whose `Id` is greater than the last one seen. It is also SELF-TERMINATING in a way
+   * that cannot lie — a page shorter than the page size IS the end, and a full page always asks
+   * again. Nothing in the response is depended on beyond the rows themselves.
+   *
+   * ⚠ `$orderby=Id` IS LOAD-BEARING. Without a guaranteed order, "greater than the last id I saw"
+   * skips groups — the same silent short index by a different route.
+   *
+   * Bounded at 20 pages so a paging bug cannot spin for ever; hitting the cap returns `undefined`
+   * rather than a short answer, because every caller renders a missing group as "nobody in it" and a
+   * spreadsheet saying a unit's approver group is empty gets acted on. Same family as memory
+   * `sp-capped-read-reads-as-absent`.
+   */
+  const PAGE = 500;
+  let afterId = 0;
   let pages = 0;
+  let more = true;
   try {
-    while (url && pages < 20) {
+    while (more && pages < 20) {
       pages += 1;
-      const next: string = url;
+      const url =
+        `${siteUrl}/_api/web/sitegroups?$select=Id,Users/Id,Users/Title,Users/Email,Users/LoginName`
+        + `&$expand=Users&$orderby=Id&$filter=Id gt ${afterId}&$top=${PAGE}`;
       const res = await withThrottleRetry(() =>
-        sp.get(next, SPHttpClient.configurations.v1, { headers: GET_HEADERS }),
+        sp.get(url, SPHttpClient.configurations.v1, { headers: GET_HEADERS }),
       );
       if (!res.ok) {
         /* ⚠ SAID OUT LOUD. This used to fail silently, so the only symptom was a column reading
@@ -155,21 +162,29 @@ export async function fetchAllGroupMembers(
         return undefined;
       }
       const data = await res.json();
-      for (const g of (data.value ?? []) as Array<{
+      const rows = (data.value ?? []) as Array<{
         Id: number;
         Users?: Array<{ Id: number; Title: string; Email?: string; LoginName: string }>;
-      }>) {
+      }>;
+      for (const g of rows) {
         out[g.Id] = (g.Users ?? []).map((u) => ({
           id: u.Id,
           title: u.Title,
           email: u.Email ?? "",
           loginName: u.LoginName,
         }));
+        if (g.Id > afterId) afterId = g.Id;
       }
-      url = typeof data["odata.nextLink"] === "string" ? data["odata.nextLink"] : undefined;
+      /* A short page is the end of the collection. A full one always asks again — even when it turns
+         out to have been the last, which costs one empty request and never a missing group. */
+      more = rows.length === PAGE;
     }
-    if (url) {
-      console.error("[CRS] fetchAllGroupMembers: more than 20 pages of site groups — refusing a partial index.");
+    if (more) {
+      console.error(
+        `[CRS] fetchAllGroupMembers: still more site groups after ${pages} pages of ${PAGE} — `
+        + "refusing a partial index. Member counts and the CSV's People/Members columns will read "
+        + "\"not known\".",
+      );
       return undefined;
     }
     return out;

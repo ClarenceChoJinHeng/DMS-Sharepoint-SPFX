@@ -9047,12 +9047,25 @@ shipped and bundle-verified.
   (previously crammed onto one line with "Uploaded ... path"), which moved to a separate line below.
   Chip background is now the client's exact `rgba(255, 225, 159, 1)`. Added 🗑/📤 icons before the
   text (only Deletion was in the reference image; Share's icon is a reasonable guess, flagged as such).
-- **⚠ A NOTE IS NOW REQUIRED FOR EVERY DECISION ON `Requests.tsx`, APPROVE OR REJECT** — client's own
+- **⚠ A REASON IS REQUIRED ON EVERY DECISION ON `Requests.tsx` — APPROVE *AND* REJECT.** Client's own
   capitals: *"IF APPROVER WANTS TO REJECT A REQUEST ... APPROVER MUST INCLUDE THE REASON ... ELSE
   SYSTEM DOESN'T ALLOW TO PROCEED."* **THIS REVERSES the 2026-08-30 design**, whose own comment
-  argued an approval "needs none" — that argument is superseded, not wrong for its time. Gated the
-  same way every other required-field check in this codebase is: never on load, only after a
-  decision was attempted with nothing typed (`showNoteError`, reset every time the dialog reopens).
+  argued an approval "needs none" — superseded, not wrong for its time. Gated the same way every
+  other required-field check in this codebase is: never on load, only after a decision was attempted
+  with nothing typed (`showNoteError`, reset every time the dialog reopens).
+  - **⚠⚠ ONLY THE REJECT HALF WAS ACTUALLY BUILT, AND IT TOOK A DAY AND TWO WRONG TURNS TO SETTLE.**
+    This entry recorded both halves on 2026-09-06; the code shipped `!deciding.approve &&` on all four
+    gates and labelled the approve path `Note (optional)`. The client hit it from the other end
+    (*"huh weird i can approve a share request without typing a reason"*), **and I read the mismatch
+    the wrong way round** — assumed the DOC had overstated it, and edited this line down to
+    "reject only". The client corrected that within the hour: *"I swear I remember I told you ... they
+    must provide a reason? Why did you revert it?"* Both halves are built now.
+  - **THE LESSON IS THE DIAGNOSTIC ORDER, and it is the opposite of this file's usual warning.** The
+    standing rule is that CLAUDE.md goes stale and the code is the truth — so when they disagree the
+    reflex is to trust the code. **That reflex is only right for claims about SITE STATE.** For a
+    claim about what the CLIENT ASKED FOR, this file is the record and the code is the thing that may
+    be incomplete. **Ask which kind of claim it is before deciding which side is wrong**, and where it
+    is an instruction, check the transcript rather than inferring from the code.
   The dialog's copy also now matches the client's exact mockup: title stays "Approve/Reject this
   request?", body for a REJECT reads `"{filename} will not be touched, and {requestedBy} will see
   your note."` (APPROVE keeps the existing `decisionSummary()`, which already states the real
@@ -9962,3 +9975,249 @@ its shape.
   one audit flow stop writing entirely on 2026-08-23.
 - **`EventType: "Replaced"` is already registered** in `auditLog.ts`, so the row is filterable in the
   viewer's Action dropdown from the first one written.
+
+## ⚠⚠ `/sitegroups` HAS NO CONTINUATION LINK AT ANY METADATA LEVEL — MEMBER COUNTS READ "No member" (2026-09-07, 1.0.443.0)
+Client: *"I am in a group yet it shows no members"*, on `MHO_Treasury_Account Payable_UPLOADER`. REST
+confirmed group **1177** holds `chocheetuck4`, and **nothing was logged anywhere** — so the read had
+"succeeded".
+- **`fetchAllGroupMembers` PAGED ON `odata.nextLink`, AND THAT LINK NEVER ARRIVES ON THIS ENDPOINT.**
+  It is an OData **annotation**, and `Accept: odata=nometadata` strips annotations — so the loop saw no
+  continuation, stopped after **500 of 766** groups, and returned an index that looked complete.
+  **Switching to `minimalmetadata` produced no link either**, which is where guessing at metadata
+  levels stopped being worth it: `/sitegroups` is **not a list**, so it appears to support no
+  server-driven paging at all — `$top` simply truncates.
+- **⚠ `?? []` IS WHAT MADE IT SILENT, and it was at THREE call sites in `GroupManager.tsx`.**
+  `(memberIndex[g.id] ?? []).length` cannot tell *"this group is not in the index"* from *"this group
+  is empty"* — **empty ≠ unknown**, in the place where the wrong answer is a screen stating a unit's
+  uploader group has nobody in it. A `membersOf` helper returns `undefined` for a missing group and the
+  badge is three-state.
+  - **THE DANGEROUS ONE WAS NOT THE BADGE: `peopleAtRisk` GUARDS THE BULK DELETE.** It names the
+    groups that hold members before deleting them, and a group missing from the index read as safe —
+    so the warning that exists to stop irreversible membership loss was silenced by the same `??`.
+    Unknown now counts as at-risk.
+- **NOW KEYSET-PAGED: `$orderby=Id&$filter=Id gt <last>&$top=500`.** It depends on no annotation,
+  survives any metadata setting, and **cannot truncate silently** — a short page IS the end and a full
+  page always asks again. `$orderby=Id` is load-bearing: without a guaranteed order, "greater than the
+  last id I saw" skips groups.
+- **⚠ `/items` PAGING IS NOT AFFECTED AND MUST NOT BE "FIXED" TO MATCH.** `BulkGroupProvisioner`'s
+  Group Map read and `spAuditLog`'s count walk both page a LIST with `odata.nextLink`, which is real
+  there and verified working. Two different endpoints, one of which is not a list.
+- **Verified**: `tsc` clean, `eslint` clean on the file, suite green (0 FAIL), 33 warnings — the
+  baseline. Packaged as `1.0.443.0` via `npm run build`; the shipped bundle grepped for the keyset URL.
+  **NOT yet site-tested** — the test is the badge on `MHO_Treasury_Account Payable_UPLOADER` reading
+  **1 person**, and the group list showing counts rather than mapping counts throughout.
+
+## ⚠⚠ SELECTING TEXT IN A DIALOG CLOSED IT — FIVE DIALOGS, TWO OF THEM LOSING TYPED WORK (2026-09-07, 1.0.444.0)
+Client, on the share-request dialog: *"Each time I highlight something on the popup it closes."*
+- **THE CAUSE IS A BROWSER RULE THAT MAKES `stopPropagation` USELESS HERE.** Every dialog closed on
+  the BACKDROP's `onClick`, with `onClick={(e) => e.stopPropagation()}` on the dialog to stop an
+  inside click bubbling out. That looks airtight and is not: **a browser dispatches `click` on the
+  nearest COMMON ANCESTOR of where the mouse went down and where it came up.** Press inside the
+  dialog, drag to select, release a few pixels outside — the click is dispatched on the BACKDROP, the
+  dialog's handler never runs because the event never passes through it, and the dialog shuts.
+- **⚠ TWO OF THE FIVE HOLD TYPED TEXT, so this silently destroyed work:** the approver's decision
+  dialog (a note is REQUIRED on every decision since 1.0.375.0) and Group Management's bulk delete
+  (which demands the word `DELETE` typed out). Selecting any of that text to re-read or correct it
+  threw the whole dialog away.
+- **FIXED IN ONE PLACE — `shared/backdropClose.ts`, wired to `onMouseDown`.** A drag that starts
+  inside the dialog has its mousedown INSIDE it, so `e.target === e.currentTarget` is false and
+  nothing closes. No ref, no state, no timing window.
+  - **The guard is `target === currentTarget`, NOT `stopPropagation`**, so it also survives a caller
+    who omits the inner handler — the failure being guarded against is precisely a handler that was
+    assumed to run and did not.
+  - **Five call sites, one definition**: `MySubmissions` (share/delete request), `Requests`
+    (decision), `accessMemberUi` (member popup), `GroupManager` (single delete, bulk delete). Each
+    keeps its own close condition (`!sending`, `!busy`, unconditional) verbatim inside the callback.
+  - `StructureManager` and `SubtreeMigrator` render `modalBg` with **no** backdrop handler at all and
+    were never affected.
+- **Cost, accepted:** the dialog now closes on PRESS rather than release, so pressing the backdrop and
+  dragging back inside still closes it. That gesture has no meaning; selecting text does.
+- **⚠ THE GENERAL RULE, worth applying to any new dialog: a backdrop that closes on `onClick` is a
+  text-selection bug waiting to be reported.** Use `closeOnBackdrop` and `onMouseDown`.
+- **Verified**: `tsc` clean, `eslint` clean of new warnings (three pre-existing `max-lines`), suite
+  green (0 FAIL), 33 warnings — the baseline. Packaged as `1.0.444.0` via `npm run build`; all three
+  shipped bundles grepped for the `target === currentTarget` guard. **NOT yet site-tested.**
+
+## ⚠ QUICK SEARCH CALLED THE OWNERS GROUP "Grants nothing yet", IN RED (2026-09-07, 1.0.445.0)
+Client: *"Why does the group says, Grants nothing yet — this group has no access rows."*
+- **THE SENTENCE WAS LITERALLY TRUE AND COMPLETELY WRONG IN EFFECT.** `Guthrie Central Repository
+  System Owners` holds **Full Control on the WEB**, granted by SharePoint at site scope — so nothing
+  in `CRS Group Map` describes it and `unmapped` was correctly `true`. The lookup then rendered the
+  **widest access anybody on this site can hold** in the error style, beside a person's name.
+- **`siteEntry` HAD ALREADY ESTABLISHED THE RULE AND NOBODY EXTENDED IT.** `CRS_SITE_MEMBERS` is in
+  the same position (Read on the web, no rows) and was given a hint rather than the red line in an
+  earlier pass, with a comment saying red *"reads as something being wrong with the person's access
+  when nothing is"*. **A group whose access comes from somewhere other than a mapping row is a NORMAL
+  state** — that is a category, not two special cases, and the second member of it was missed.
+- **`GroupAccess.owners`, matched on the ID and never the title.** This client renames everything at
+  import, so a title match would silently stop recognising the group and put the red message back.
+  `fetchOwnersGroup` resolves it from `AssociatedOwnerGroup`, which a rename never touches, and
+  `GroupManager` already held that value for the administrators card.
+  - **`undefined` flags NOTHING** — the group simply reports as unmapped again, which is what it did
+    before. Understating is the safe direction: flagging the wrong group as owners would tell an admin
+    that a unit's uploader group holds full control of the site.
+  - Tested FIRST in `describeGroupAccess`, ahead of `unmapped`, which is what actually fixes it.
+- **⚠ AND THE SAME LINE MISCOUNTED: `unmappedCount` NOW EXCLUDES BOTH.** It read *"In 3 groups on this
+  site · 2 of them grant nothing"* about somebody who could open the site AND administer it. That
+  count exists to answer *"why can this person not get in"*, and neither of those two is ever the
+  reason.
+- **Verified**: `tsc` clean, `eslint` clean of new warnings, `userAccess` **25 passed** (3 new: the
+  owners flag, the unresolved-id fallback, and the count exclusion), suite green, 33 warnings — the
+  baseline.
+
+## THE AUDIT LOG FILTER IS TWO ROWS, AND THE EXPORT CAPTION IS FLUSH WITH THE BUTTONS (2026-09-07, 1.0.445.0)
+Client: *"Can you move the Action to be on the same row as From date. Ensure the export what is shown
+is align with the buttons."*
+- **THE CAUSE WAS `gridColumn: "1 / -1"` ON THE DATE PAIR.** The grid was already the two columns the
+  design calls for, but the Date block spanned both of them, so Action was pushed onto a row of its
+  own and the panel stood three rows tall. Removing the span gives Date | Action, then Person |
+  Keyword — the client's mockup exactly, with no explicit placement, because **the DOM order IS the
+  reading order**.
+- Halving Date's width is safe because `pairRow` wraps: From/To fall onto two lines inside their own
+  column on a narrow page rather than forcing the panel to scroll sideways.
+- **`actionsNote` is `textAlign: right` + `alignSelf: stretch`.** It was centred, which left it proud
+  of the buttons above and reading as a stray line rather than a caption on Export. **`alignSelf` is
+  what makes "right" mean the button edge** — without it the span is only as wide as its own text and
+  has nothing to align against.
+- **NOT yet site-tested.**
+
+## THE REQUESTS SECTIONS ARE A TRUE ACCORDION NOW — CLOSED ON LANDING, ONE OPEN AT A TIME (2026-09-07, 1.0.446.0)
+Client: *"when i first land, please make it by default is collapse. AND when i expand either one, the
+other one will auto collapse."*
+- **⚠⚠ THIS REVERSES THE 2026-09-04 RULE, WHICH WAS A SAFETY ARGUMENT RATHER THAN A STYLE ONE.** All
+  three sections opened by default because *a collapsed section can HIDE PENDING WORK* — the same
+  reasoning that stops the status filter ever hiding a Pending row. An approver could otherwise load
+  the page, see tidy headers and miss four requests waiting on them.
+- **⚠ WHAT MAKES THE REVERSAL SAFE IS THE PENDING COUNT IN THE HEADER, and it is the entire
+  mitigation.** A shut section still reads `7 pending`, so someone landing on the page is told there
+  is work without opening anything — the client's screenshot shows exactly that. **That count must
+  never be moved inside the section body.** Do that and this page can genuinely hide work behind a
+  tidy header, which is the state the original rule existed to prevent.
+- **ONE KEY, NOT A MAP OF BOOLEANS.** `openSection: string | undefined` replaces
+  `openSections: Record<string, boolean>`, which is what makes "only one at a time" true **by
+  construction**: there is nowhere to record a second open section, so no sequence of clicks can
+  produce one. A `Record` plus a close-the-others loop would leave the rule to be remembered by every
+  future caller of `toggle`.
+- `undefined` is all-closed — the landing state, and reachable again by pressing the open section,
+  which closes it rather than doing nothing.
+- **⚠ THE STATE STAYS DECLARED ABOVE THE EARLY RETURN.** The comment there records that this exact
+  `useState` shipped below it once and blanked the whole web part (React #310). Changing its type
+  does not change where it may live.
+- **Verified**: `tsc` clean, `eslint` clean of new warnings (the pre-existing `max-lines` only), suite
+  green (0 FAIL), 33 warnings — the baseline. Packaged as `1.0.446.0` via `npm run build`; the shipped
+  bundle grepped for the new toggle and confirmed the old boolean-map form is gone. **NOT yet
+  site-tested.**
+
+## THE DECISION DIALOG: A REASON ON BOTH DECISIONS, A GREEN APPROVE, NO RECYCLE-BIN LINE (2026-09-07, 1.0.449.0)
+Three client items across two messages, all on `Requests.tsx`'s one decision dialog — which serves
+Delete AND Share, so each change lands on both.
+- **⚠⚠ A REASON IS REQUIRED TO APPROVE AS WELL AS TO REJECT, and this had been RECORDED AS DONE
+  SINCE 2026-09-06 WHILE ONLY HALF WAS BUILT.** All four gates shipped as `!deciding.approve && …`
+  and the label read `Note (optional)` on an approval. Client: *"I swear I remember I told you for an
+  approver if they want to reject or approve in delete and share, they must provide a reason? Why did
+  you revert it?"* Nothing was reverted — the approve half never existed.
+  - **⚠ AND THE FIRST ATTEMPT TO RESOLVE IT MADE THINGS WORSE.** The client hit it from the other end
+    an hour earlier (*"huh weird i can approve a share request without typing a reason"*) and **the
+    mismatch was read the wrong way round**: the DOC was assumed to have overstated the rule, and
+    this file was edited down to "reject only". That is the entry the client then corrected.
+  - **THE DIAGNOSTIC RULE, and it is the inverse of this file's usual warning.** The standing rule is
+    that CLAUDE.md goes stale and the code is the truth — **which is only right for claims about SITE
+    STATE.** For a claim about WHAT THE CLIENT ASKED FOR, this file is the record and the CODE is the
+    thing that may be incomplete. **Establish which kind of claim it is before deciding which side is
+    wrong**, and for an instruction, check the transcript rather than inferring from the code.
+- **THE APPROVE BUTTON IS GREEN, AND `approveDark` IS DELETED.** It was `#1b1b1b`, from a mockup that
+  drew this dialog's Approve black while every request CARD kept a green one; the comment on it said
+  to raise it if the two ever needed to match. The client raised it. The dialog uses `s.approve` now —
+  one green Approve everywhere, no second definition to drift. Removed rather than parked, because an
+  unused style is a lint warning against a zero-new-warning baseline.
+- **⚠ THE DELETION SUMMARY IS GONE FROM THE DIALOG; THE SHARE SUMMARY IS NOT.** Client: *"remove the
+  wording 'This file will be moved to the recycle bin, where it can be restored for 93 days.'"* — that
+  is exactly what `decisionSummary` returns for a **Deletion**, so that branch no longer renders.
+  - **The SHARE branch is a different sentence doing a different job** — *"X will be able to view Y,
+    with no expiry date."* It is the only place the recipient and the expiry are confirmed **before**
+    access is granted, and an approver who cannot see who they are granting to is deciding blind. The
+    client quoted the deletion wording; dropping the share line too would remove something they did
+    not ask about. **Flagged to them rather than assumed.**
+  - **⚠ `decisionSummary` ITSELF IS UNTOUCHED and still feeds the outcome banner** (`Approved. …`),
+    which for a deletion is now the ONLY place the 93-day recycle-bin fact is stated. Do not tidy that
+    away to match the dialog.
+- The *"Please provide your reasoning below."* prompt is unconditional now, since the requirement is.
+  On an approval it renders BENEATH the share summary rather than instead of it — without it, the
+  first time an approver learns a reason is required is a red error after they press Approve.
+- **Verified**: `tsc` clean, `eslint` clean of new warnings, suite green, 33 warnings — the baseline.
+  Packaged as `1.0.449.0` via `npm run build`; the shipped bundle confirmed to carry no black button
+  and to have kept the banner sentence. **NOT yet site-tested** — press Approve with an empty Reason
+  on both a Delete and a Share request and expect the red refusal.
+
+## ✅ MEMBERS CANNOT SHARE, AND THE APPROVER ROUTE STILL WORKS — VERIFIED END TO END (2026-09-07)
+Client: *"client wants to mak sure a normal member cannot share."* Fixed with TWO SITE SETTINGS, not
+code — a web part cannot intercept SharePoint's native Share control (settled 2026-07-23, and not
+re-openable).
+- **`Site permissions → Sharing settings → "Only site owners can share files, folders, and the
+  site."`** A member's Share button does not disappear — SharePoint offers no way to hide it — but it
+  can no longer grant. **Both degraded outcomes were observed:** a principal WITHOUT access produced
+  *"Request sent … to view Home"* (an access request to the owners), and someone WITH access got a
+  plain notification email reading *"This invite will only work for you and people with existing
+  access."* **That sentence is the tell that nothing was granted.**
+- **External sharing is OFF as well, and it is a SEPARATE wall that applies to owners too** — the
+  dialog reads *"You can only share within your organization."* So the honest summary is narrower
+  than "internal only": **a member cannot grant access to anyone at all**, and **nobody, owners
+  included, can share outside**.
+- **✅ THE RISK THIS CREATED IS CLEARED: the sanctioned CRS route survives it.** `performShare` runs
+  `ShareObject` in the APPROVER'S session, and a Head of Unit is **not** a site owner — they hold
+  `CRS Share`, which contains Manage Permissions. PIC raised → HoU approved →
+  `fikri@trinergydigital.com` opened the document. **This was unverified and could have broken the
+  whole share feature silently.**
+- **✅ AND THE GRANT IS SCOPED TO THE DOCUMENT, not the folder.** The recipient sees the file and, on
+  its parent folder, **"Unknown render failure"** — security trimming intact, matching the 2026-08-21
+  result exactly. Worth reusing as the check: *file opens, folder above it refuses.*
+- **⚠ TEST WITH REAL TENANT ACCOUNTS, NOT THE GMAIL GUESTS.** `tenantDomains` is unset on this site,
+  so `MySubmissions` falls back to the SIGNED-IN user's own domain — a gmail PIC therefore reads a
+  `@trinergydigital.com` recipient as EXTERNAL and the dialog refuses it, while gmail→gmail passes the
+  app gate and is then refused by SharePoint. Wrong in both directions. **Set `tenantDomains` (one
+  CRS Config row: `trinergydigital.com` here, `sdguthrie.com` on SDG)** and the guesswork goes.
+- **⚠ RESIDUAL, worth telling the client:** a member can still EMAIL a link, and the filename travels
+  in that email even though the access does not. Nothing prevents that.
+- **⏭ NOT BUILT, now unblocked: reconciliation asserting `MembersCanShare = false` every run**, so the
+  setting cannot drift back and SDG inherits it rather than relying on somebody remembering. Held
+  until the approver path was proven; it is proven. Same pattern as the HC config-row and admin-page
+  assertions.
+
+## ⚠ A 503 FROM THE SEARCH API REACHED A USER AS A RED BANNER — NOTHING RETRIED (2026-09-07, 1.0.451.0)
+Client: a search produced *"One library could not be searched: Restricted & Confidential Document
+(HTTP 503). Anything filed there is missing from these results."*
+- **503 IS "SERVICE UNAVAILABLE" — TRANSIENT BY DEFINITION, and SharePoint expects the caller to come
+  back.** `DocumentSearch.tsx` had **no retry of any kind**, so `runSearch` recorded the library as
+  failed on the first answer and the banner went up. Nothing was wrong with the site, the query or
+  the code path; the request simply should have been repeated.
+- **THE TELL THAT NARROWED IT IN ONE LOOK: only ONE of the six libraries failed, and it is the only
+  one that goes through `_api/search/query`.** The two approval libraries read through REST `$filter`
+  and succeeded. A permissions or site-level problem would have hit those too. **That library is named
+  in the banner because `libraryLabel("Documents")` resolves the live title** — both the KQL search
+  and the separate 24-hour REST recency read carry `library: "Documents"`, so the label alone does not
+  say which of the two failed; the status does.
+- **`withThrottleRetry` LIFTED OUT OF `spGroups.ts` INTO `shared/throttleRetry.ts`** and wrapped
+  around `DocumentSearch`'s `jsonGet` — so the KQL search AND the REST reads beside it now retry
+  429/503, honour `Retry-After`, and fall back to capped exponential backoff over five attempts.
+  Applied at `jsonGet` rather than to the one search call, because every read on that page can be
+  throttled.
+- **⚠ EVERY OTHER STATUS STILL FAILS FIRST TIME, and that list is the whole judgement.** 400 is a
+  malformed query, 403 is permissions, 404 is the library — retrying any of them asks the same
+  unanswerable question twice while hiding the real status. Only 429 and 503 are retried.
+- **The banner's WORDING was never the problem and is unchanged.** *"The search could not be
+  completed, so this is **not** a statement that nothing matched"* is exactly right; it just should
+  not have been reached over a blip.
+- **⚠⚠ SEVEN COPIES OF THIS LOGIC EXIST AND ONLY TWO USE THE SHARED ONE.** `dmsFolderMap.ts` holds
+  **SIX** inline retry loops and `FolderManager.tsx` a seventh. **Deliberately NOT converted**: those
+  files carry the folder-creation and permission-granting code that is the most site-verified in the
+  project, several of their loops do more than a plain retry, and rewriting them inside a change about
+  a search banner is the wrong risk. **Worth its own reviewable change** — until then a change to the
+  retry rule has to be made in three places.
+- **⚠ THE CHEAP DIAGNOSTIC FOR NEXT TIME, and it comes before any theory: press Search again.** A 503
+  that clears on a retry is throttling; one that repeats is not, and then the correlation ID is what
+  matters. Same lesson as the stale-tab checks — ask the cheapest question first.
+- **Verified**: `tsc` clean, `eslint` clean on all three files, suite green, **33 itemised warnings —
+  the baseline, none on the changed files** (Heft's own summary read 37 because it lints
+  incrementally and `spGroups.ts` has 16 importers). Packaged as `1.0.451.0`; both affected bundles
+  grepped for the retry. **NOT yet site-tested** — and it cannot be tested on demand, since it only
+  shows when SharePoint throttles.

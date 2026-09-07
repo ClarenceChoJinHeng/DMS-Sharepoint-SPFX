@@ -64,6 +64,7 @@ import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { PAGE_ACCESS_LINK, resolveLink } from "../../../shared/adminPages";
 import { readSitePages } from "../../../shared/backToSettings";
+import { closeOnBackdrop } from "../../../shared/backdropClose";
 
 type Props = {
   context: WebPartContext;
@@ -1500,12 +1501,41 @@ export default function GroupManager({
    * nothing rather than claiming every group is empty, and the dialog's standing warning about
    * membership loss covers the unknown case.
    */
-  const peopleAtRisk =
-    memberIndex === undefined
-      ? []
-      : groups
-          .filter((g) => selected[g.id] && (memberIndex[g.id] ?? []).length > 0)
-          .map((g) => g.title);
+  /**
+   * The members of one group as the index knows them — `undefined` when the index does not carry
+   * that group at all.
+   *
+   * ⚠⚠ THIS DISTINCTION WAS BEING ERASED BY `?? []` AT EVERY CALL SITE, AND IT IS THE WHOLE BUG
+   * (client, 2026-09-07: *"I am in a group yet it shows no members"*). A group MISSING from the
+   * index and a group IN the index with nobody in it are different facts, and `?? []` made them the
+   * same one — so an unindexed group reported "No member", was left out of the delete warning, and
+   * exported as `0`.
+   *
+   * Verified live: `MHO_Treasury_Account Payable_UPLOADER` (id 1177) holds `chocheetuck4`, and
+   * `fetchAllGroupMembers` logged NO error — so the read succeeded and simply did not describe that
+   * group. On a site with 766 groups read 500 at a time, a page that is not followed leaves every
+   * group beyond the first absent. Same family as memory `sp-capped-read-reads-as-absent`: a short
+   * read is indistinguishable from the thing being missing unless something keeps them apart.
+   *
+   * `memberIndex === undefined` (the whole read failed) answers `undefined` too — the same meaning
+   * to every caller: not known.
+   */
+  const membersOf = (id: number): SpGroupMember[] | undefined =>
+    memberIndex === undefined ? undefined : memberIndex[id];
+
+  /**
+   * ⚠ AN UNKNOWN GROUP COUNTS AS AT RISK, and that asymmetry is deliberate. Membership is the only
+   * irreversible part of deleting a group — the group itself comes back from bulk provisioning in
+   * one press. Naming a group that turns out to be empty costs the admin a glance; omitting one that
+   * had people in it loses them with no way back.
+   */
+  const peopleAtRisk = groups
+    .filter((g) => {
+      if (!selected[g.id]) return false;
+      const m = membersOf(g.id);
+      return m === undefined || m.length > 0;
+    })
+    .map((g) => g.title);
 
   /**
    * CSV of the groups CURRENTLY SHOWN — an inventory, deliberately not the full access list.
@@ -1552,8 +1582,9 @@ export default function GroupManager({
               .join("; ");
       // undefined — the read failed — must NOT export as 0 and an empty cell: a spreadsheet saying
       // a unit's approver group has nobody in it is acted on.
-      const people =
-        memberIndex === undefined ? undefined : (memberIndex[g.id] ?? []);
+      // `membersOf` keeps "not in the index" as `undefined`, so a group the read did not describe
+      // exports as "not known" rather than as 0 — see its note.
+      const people = membersOf(g.id);
       lines.push(
         [
           csvCell(g.title),
@@ -1988,6 +2019,12 @@ export default function GroupManager({
                     // rendering it later needs no change here.
                     tierChain: () => [],
                   },
+                  /* The owners group holds Full Control on the WEB and therefore has no Group Map
+                     rows — without this it read "Grants nothing yet", in red, about the widest
+                     access on the site. `owners` is already resolved for the administrators card
+                     above; `undefined` when that read failed, which simply restores the old
+                     behaviour rather than mislabelling some other group. */
+                  owners?.id,
                 );
                 return (
                   <>
@@ -2019,13 +2056,20 @@ export default function GroupManager({
                         {/* The site-entry group is a NORMAL state, so it is a hint, not the red
                           "grants nothing" — it was rendering as an error because it has no rows,
                           which reads as something being wrong with the person's access. */}
-                        {g.siteEntry && (
+                        {/* Owners is tested BEFORE unmapped for the same reason the site-entry group
+                          is: it has no mapping rows because its Full Control comes from SharePoint at
+                          web scope, so the red "grants nothing" was describing the widest access on
+                          the site as no access at all. */}
+                        {g.owners && (
                           <p style={s.lkSum}>{describeGroupAccess(g)}</p>
                         )}
-                        {!g.siteEntry && g.unmapped && (
+                        {!g.owners && g.siteEntry && (
+                          <p style={s.lkSum}>{describeGroupAccess(g)}</p>
+                        )}
+                        {!g.owners && !g.siteEntry && g.unmapped && (
                           <p style={s.err}>{describeGroupAccess(g)}</p>
                         )}
-                        {!g.siteEntry && !g.unmapped && g.persona && (
+                        {!g.owners && !g.siteEntry && !g.unmapped && g.persona && (
                           <p style={s.lkPersona}>{g.persona.label}</p>
                         )}
                         {/* ⚠ NEVER `describeGroupAccess` here. With no persona it returns the joined
@@ -2448,18 +2492,25 @@ export default function GroupManager({
 
                       ⚠ An UNREADABLE member index falls back to the mapping badge rather than
                       showing `0 people`, which would report every group on the site as empty. */}
-                  {memberIndex !== undefined &&
-                    (() => {
-                      const n = (memberIndex[g.id] ?? []).length;
-                      // "No member" (client's mockup, 2026-09-03), was "nobody in it yet".
-                      return n === 0 ? (
-                        <span style={s.badge}>No member</span>
-                      ) : (
-                        <span style={s.mapped}>
-                          {n} {n === 1 ? "person" : "people"}
-                        </span>
-                      );
-                    })()}
+                  {(() => {
+                    const m = membersOf(g.id);
+                    /* ⚠ THREE STATES, NOT TWO. `undefined` means the index does not describe this
+                       group — either the whole read failed, or it succeeded and did not reach this
+                       group. Both are "not known", and rendering either as "No member" is what the
+                       client caught on 2026-09-07 with a group that demonstrably had someone in it.
+                       Nothing is shown for the unknown case rather than a badge: the mapping badge
+                       below already covers a group with no rows, and a third badge saying "not
+                       known" on most of a 766-group list would be noise. */
+                    if (m === undefined) return undefined;
+                    // "No member" (client's mockup, 2026-09-03), was "nobody in it yet".
+                    return m.length === 0 ? (
+                      <span style={s.badge}>No member</span>
+                    ) : (
+                      <span style={s.mapped}>
+                        {m.length} {m.length === 1 ? "person" : "people"}
+                      </span>
+                    );
+                  })()}
                   {/* Kept, but only in the state that MATTERS and in plain words: a group with no
                       rows grants nothing, whoever is in it. The count is dropped from the happy
                       path — it is in the CSV for anyone who needs the number. */}
@@ -2499,8 +2550,9 @@ export default function GroupManager({
       </div>
 
       {/* ── Delete confirmation ────────────────────────────────────────── */}
+      {/* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. */}
       {deleting !== undefined && (
-        <div style={s.modalBg} onClick={() => setDeleting(undefined)}>
+        <div style={s.modalBg} onMouseDown={closeOnBackdrop(() => setDeleting(undefined))}>
           <div style={s.modal} onClick={(e) => e.stopPropagation()}>
             <p style={{ ...s.head, fontSize: 15 }}>
               Delete &quot;{deleting.title}&quot;?
@@ -2594,12 +2646,15 @@ export default function GroupManager({
       )}
 
       {/* Bulk delete confirmation */}
+      {/* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. This dialog demands
+          the word DELETE be typed out, and the old onClick threw that text away the moment the admin
+          selected any of it and released outside the dialog. */}
       {bulkOpen && (
         <div
           style={s.modalBg}
-          onClick={() => {
+          onMouseDown={closeOnBackdrop(() => {
             if (!busy) setBulkOpen(false);
-          }}
+          })}
         >
           <div style={s.modal} onClick={(e) => e.stopPropagation()}>
             <p style={{ ...s.head, fontSize: 15 }}>

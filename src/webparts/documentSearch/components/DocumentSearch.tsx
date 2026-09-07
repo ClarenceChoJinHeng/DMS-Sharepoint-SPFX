@@ -71,6 +71,7 @@ import {
 import { isSystemAdmin } from "../../../shared/spGroups";
 // One palette for every attention banner — the client asked for the Retire-a-segment colour.
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+import { withThrottleRetry } from "../../../shared/throttleRetry";
 
 /* ─────────────────────────────── Term set ids ─────────────────────────────── */
 
@@ -573,12 +574,18 @@ export default function DocumentSearch({
     headers?: Record<string, string>,
   ): Promise<{ ok: boolean; status: number; body: RawRow }> => {
     try {
-      const res: SPHttpClientResponse = await sp.get(
-        url,
-        SPHttpClient.configurations.v1,
-        {
+      /* ⚠ RETRIED ON 429/503, and its absence reached a user (2026-09-07): a search produced
+         *"One library could not be searched: Restricted & Confidential Document (HTTP 503)"* in red.
+         503 is Service Unavailable — transient, and SharePoint expects the caller to come back — but
+         nothing here retried, so a single blip was reported as a permanent failure.
+         `_api/search/query` is the most exposed call in the project for this: it is throttled harder
+         than ordinary list reads and fires on every press of Search. Wrapped at `jsonGet` rather than
+         at that one call, because the REST reads beside it can be throttled just the same.
+         Every other status still fails FIRST TIME, deliberately — see `withThrottleRetry`. */
+      const res: SPHttpClientResponse = await withThrottleRetry(() =>
+        sp.get(url, SPHttpClient.configurations.v1, {
           headers: headers ?? { Accept: "application/json;odata=nometadata" },
-        },
+        }),
       );
       if (!res.ok) return { ok: false, status: res.status, body: {} };
       return {

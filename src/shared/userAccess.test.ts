@@ -131,6 +131,37 @@ describe("summarizeUserAccess", () => {
     expect(describeGroupAccess(s.groups[0])).toContain("Opens the site");
   });
 
+  // The owners group holds Full Control on the WEB, so it has no mapping rows and never will. It
+  // read "Grants nothing yet", in red, about the widest access on the site (client, 2026-09-07).
+  it("flags the owners group instead of calling it unmapped", () => {
+    const s = summarizeUserAccess([g(3, "Guthrie Central Repository System Owners")], [], resolve, 3);
+    expect(s.groups[0].owners).toBe(true);
+    expect(describeGroupAccess(s.groups[0])).toContain("Full control");
+    expect(describeGroupAccess(s.groups[0])).not.toContain("Grants nothing");
+  });
+
+  // Matched on the ID, never the title — this client renames everything at import, and a title match
+  // would silently stop recognising the group and put the red message back.
+  it("does not flag owners when the id was not resolved", () => {
+    const s = summarizeUserAccess([g(3, "Guthrie Central Repository System Owners")], [], resolve);
+    expect(s.groups[0].owners).toBe(false);
+    expect(describeGroupAccess(s.groups[0])).toContain("Grants nothing yet");
+  });
+
+  // The count answers "why can this person not get in", and neither of these two is ever the reason.
+  // Counting them produced "3 groups on this site · 2 of them grant nothing" about somebody who
+  // could open the site AND administer it.
+  it("excludes the site-entry and owners groups from the grants-nothing count", () => {
+    const s = summarizeUserAccess(
+      [g(1, siteEntryGroupTitle()), g(3, "Owners"), g(9, "GHO_GF_TAX_EMPLOYEE")],
+      [],
+      resolve,
+      3,
+    );
+    expect(s.groups).toHaveLength(3);
+    expect(s.unmappedCount).toBe(1);
+  });
+
   // Joining on the NAME would break on a rename (the id survives, the stored GroupName goes stale)
   // and on two groups renamed alike.
   it("joins rows on the group id, never the title", () => {
@@ -177,6 +208,7 @@ describe("describeGroupAccess", () => {
     places: [],
     unmapped: false,
     siteEntry: false,
+    owners: false,
   };
 
   it("prefers the persona label", () => {

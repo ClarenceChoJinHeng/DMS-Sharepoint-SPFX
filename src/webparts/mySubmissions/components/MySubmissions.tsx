@@ -93,6 +93,7 @@ import { EVENT } from "../../../shared/auditLog";
 // matters is invisible until it bites — SharePoint serves an Office file as a DOWNLOAD, so a raw
 // URL in an iframe renders nothing at all.
 import { previewTarget } from "../../../shared/filePreview";
+import { closeOnBackdrop } from "../../../shared/backdropClose";
 
 /* ⚠ THE LITERAL `"Documents"` USED TO LIVE HERE, AND IT IS WHAT BROKE THIS PAGE ON 2026-08-28.
    The client retitled that library to `Restricted & Confidential Document`, every `getbytitle`
@@ -530,6 +531,17 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
      blank form covered in errors reads as broken rather than as unfinished. */
   const fieldProblem = (field: "reason" | "shareWith"): string | undefined =>
     problems.filter((p) => fieldForMessage(p) === field)[0];
+  /* ⚠ A FIELD'S MESSAGE IS DROPPED THE MOMENT ITS VALUE CHANGES, and its absence was reported by the
+     client (2026-09-07): the dialog showed *"Reasoning is required"* in red **under a box containing
+     "Test"**, because `problems` was only ever cleared when the dialog reopened.
+     An error that outlives the thing it describes is worse than no error — it reads as the form being
+     broken, and the fix it names has already been made.
+     Per FIELD, never the whole array: clearing everything would take a still-valid message off a
+     DIFFERENT input, and the general refusals (an archived document, a pending file, a blocked
+     external recipient) cannot be fixed by typing at all. Same rule the upload form settled on, and
+     the same shape as the approver dialog's `if (showNoteError) setShowNoteError(false)`. */
+  const clearFieldProblem = (field: "reason" | "shareWith"): void =>
+    setProblems((prev) => prev.filter((p) => fieldForMessage(p) !== field));
   const generalProblems = problems.filter((p) => fieldForMessage(p) === undefined);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string | undefined>(undefined);
@@ -1756,6 +1768,13 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       const base = shareWith.replace(/\s+$/, "");
       setShareWith(base.length > 0 ? base + "\n" + clean : clean);
     }
+    /* Answers "no recipient", so that message goes with the change — see `clearFieldProblem`.
+       Cleared even when the address was already in the list: the person has acted on the error, and
+       re-adding a duplicate is exactly the move somebody makes when told a recipient is missing.
+       ⚠ It does NOT clear the blocked-external refusal, which `fieldForMessage` deliberately assigns
+       to no field: that one is a statement about site POLICY rather than about this input, and
+       `validateDraft` re-evaluates it on the next submit. */
+    clearFieldProblem("shareWith");
     setPeopleQ("");
     setPeopleHits([]);
   };
@@ -1780,8 +1799,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
        truth — the chip list and the external check both read this, so what is displayed and what is
        validated can never diverge. */
     const shareRecipients = parseRecipients(shareWith);
+    /* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. Selecting text in this
+       dialog and releasing a few pixels outside it dispatches the click on the backdrop, which used
+       to shut the dialog and throw away the typed reason and recipients. */
     return (
-      <div style={s.modalBg} onClick={() => { if (!sending) setAsking(undefined); }}>
+      <div style={s.modalBg} onMouseDown={closeOnBackdrop(() => { if (!sending) setAsking(undefined); })}>
             <div style={s.modal} onClick={(e) => e.stopPropagation()}>
               {/* Client's wording, 2026-08-30: the title states the ACTION being requested rather
                   than narrating it. */}
@@ -1841,7 +1863,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                   ...(fieldProblem("reason") ? s.fieldBad : {}),
                 }}
                 value={reason}
-                onChange={(e) => setReason(e.target.value)}
+                onChange={(e) => {
+                  setReason(e.target.value);
+                  clearFieldProblem("reason");
+                }}
               />
               {fieldProblem("reason") !== undefined && (
                 <p style={s.fieldErr}>{fieldProblem("reason")}</p>

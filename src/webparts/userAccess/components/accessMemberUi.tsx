@@ -17,6 +17,7 @@ import { SPHttpClient } from "@microsoft/sp-http";
 import { SpGroup } from "../../../shared/spGroupsFilter";
 import { getGroupMembers } from "../../../shared/spGroups";
 import { MemberMap, loadOf, memberCountLabel, memberLabel, sortMembers } from "../../../shared/accessMembers";
+import { closeOnBackdrop } from "../../../shared/backdropClose";
 
 const m: Record<string, React.CSSProperties> = {
   toggle: { border: "none", background: "transparent", padding: 0, color: "#0f6c3f", fontSize: 12, cursor: "pointer", textAlign: "left" },
@@ -168,8 +169,10 @@ export function MemberCountWithPopup(props: {
         expandable={true}
         onToggle={() => setOpen(true)}
       />
+      {/* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. Copying an address
+          out of this list is the main reason it is opened, and selecting one used to shut it. */}
       {open && (
-        <div style={m.modalBg} onClick={() => setOpen(false)}>
+        <div style={m.modalBg} onMouseDown={closeOnBackdrop(() => setOpen(false))}>
           <div style={m.modal} onClick={(e) => e.stopPropagation()}>
             <p style={m.head}>{props.group.title}</p>
             {load.state === "loading" && <div style={m.no}>Loading members&hellip;</div>}

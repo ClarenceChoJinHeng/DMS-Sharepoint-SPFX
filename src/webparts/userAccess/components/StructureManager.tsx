@@ -12,6 +12,10 @@ import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+import {
+  existingColumnReason,
+  reservedColumnReason,
+} from "../../../shared/tierColumnGuard";
 
 /**
  * Folder Structure — add, reorder and remove the folder levels BENEATH Unit.
@@ -244,6 +248,14 @@ export default function StructureManager({
   const [baseline, setBaseline] = useState<string>("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [adding, setAdding] = useState<DraftTier | undefined>(undefined);
+  /**
+   * Why the last Add was refused, shown beside the button.
+   *
+   * Set ONLY by a failed Add — never on load or while typing. Marking a name as clashing while it is
+   * half-typed would flag every level on its way to a valid name, which is how a form comes to feel
+   * like it is arguing with you.
+   */
+  const [addError, setAddError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ text: string; ok: boolean } | undefined>(undefined);
   // The Year / Document Type term sets, so a segment still running on the built-in pair can
@@ -607,16 +619,85 @@ export default function StructureManager({
 
   const removeTier = (index: number): void => setDraft(draft.filter((_l, i) => i !== index));
 
-  const addTier = (): void => {
+  /**
+   * The type of an existing column, or `undefined` when there is none.
+   *
+   * ⚠ THROWS WHEN THE LIST COULD NOT BE READ, and the caller must not turn that into `undefined`.
+   * "No such column" is safe; "we could not look" is not, and they are otherwise the same value —
+   * the trap `existingColumnReason` documents.
+   *
+   * ⚠ `$filter`ed server-side, NEVER a `$top` over the whole field collection. A document library
+   * carries hundreds of fields and a newly added one sorts LAST, so a capped read would report the
+   * very column being asked about as absent. That has bitten five reads in this project.
+   *
+   * Asked of the approved-side library, which carries the fullest schema — every tier column plus
+   * Remark, Keyword, the submission stamps and the rest. A collision on one of the OTHER libraries
+   * and not this one is possible in principle and is not checked: it would cost a request per
+   * library, and the schemas are created together by this same screen.
+   */
+  const readFieldType = async (internalName: string): Promise<string | undefined> => {
+    const lib = documentsLibraryTitle();
+    const url =
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib)}')/fields` +
+      `?$select=InternalName,TypeAsString&$filter=InternalName eq '${encodeURIComponent(internalName)}'`;
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      url,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = ((await res.json()).value ?? []) as Array<{ TypeAsString?: string }>;
+    return rows.length === 0 ? undefined : rows[0].TypeAsString ?? "";
+  };
+
+  const addTier = async (): Promise<void> => {
     if (!adding) return;
     const label = adding.label.trim();
     const col = columnNameFor(label);
     if (!label || !col) return;
+    setAddError(undefined);
     // Re-adding `Year` or `Document Type` restores the BUILT-IN shape, never a derived one.
     // Those columns already exist as managed metadata, and a derived `tidCol` makes every
     // writer treat them as plain text — which fails the tagging call on every document.
     // See builtInTierFor.
     const builtIn = builtInTierFor(label, legacySets.year, legacySets.docType);
+
+    /* ── Is this column safe to bind to? ──────────────────────────────────────
+       `ensureTextColumn` SKIPS a column that already exists whatever its TYPE, so a level whose
+       name derives an existing column binds to it silently — no error, and a whole segment stops
+       tagging. Client, 2026-09-06: *"put an error? force them to create a new column with new name
+       instead of binding to the same one if it already exist?"*
+
+       ⚠ EXEMPT FOR A BUILT-IN TIER, and that exemption is required rather than convenient. `Year`
+       and `Document Type` ARE taxonomy columns and MUST be reused — checking them would refuse the
+       one case `builtInTierFor` exists to make safe.
+
+       ⚠ FAILS CLOSED on an unreadable read, against this codebase's usual direction. Everywhere
+       else a failed read costs a form for a minute; here it would restore exactly the silent bind
+       this check exists to prevent. Adding a level is a deliberate admin action, so a retry costs
+       seconds — and the message says to retry rather than leaving a dead button. */
+    if (!builtIn) {
+      const reserved = reservedColumnReason(col);
+      if (reserved) {
+        setAddError(reserved);
+        return;
+      }
+      let existing: string | undefined;
+      try {
+        existing = await readFieldType(col);
+      } catch (e) {
+        setAddError(
+          `Could not check whether a column called "${col}" already exists (${(e as Error).message}). ` +
+            `Press Add again — the level was not added.`,
+        );
+        return;
+      }
+      const clash = existingColumnReason(col, existing);
+      if (clash) {
+        setAddError(clash);
+        return;
+      }
+    }
     const tier: Level = builtIn ?? {
       label,
       column: col,
@@ -1044,12 +1125,30 @@ export default function StructureManager({
               <button
                 style={canAddTier(adding, setCheck) ? s.btn : s.off}
                 disabled={!canAddTier(adding, setCheck)}
-                onClick={addTier}
+                // `addTier` is async now — it asks the site whether the derived column already
+                // exists. The rejection is swallowed here because every failure path inside it
+                // already sets `addError`; an unhandled rejection would show nothing at all.
+                onClick={() => { addTier().catch(() => undefined); }}
               >
                 Add
               </button>{" "}
-              <button style={s.ghost} onClick={() => setAdding(undefined)}>Cancel</button>
+              <button
+                style={s.ghost}
+                // Clearing the refusal matters: it names a column, and leaving it on screen after
+                // the form is dismissed would describe a level that no longer exists.
+                onClick={() => { setAdding(undefined); setAddError(undefined); }}
+              >
+                Cancel
+              </button>
             </div>
+            {/* BESIDE THE BUTTON, not as a toast. It names the column and what already owns it, and
+                the fix is to edit the field a few pixels above — a message that fades takes the name
+                with it. */}
+            {addError !== undefined && (
+              <div style={{ ...s.msg, ...s.err, marginTop: 12, marginBottom: 0 }}>
+                {addError}
+              </div>
+            )}
           </div>
         )}
 

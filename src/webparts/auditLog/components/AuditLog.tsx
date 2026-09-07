@@ -160,7 +160,14 @@ const s: Record<string, React.CSSProperties> = {
   filterFields: {
     flex: "1 1 520px",
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    /* ⚠ EXACTLY TWO COLUMNS (client's design, 2026-09-07): Date | Action, then Person | Keyword.
+       `auto-fit` was giving three or four columns on a wide page and one on a narrow one, so the
+       pairing the design depends on only held at certain widths.
+       The DOM order IS the reading order — Date, Action, Person, Keyword — so the rows come out as
+       drawn with no explicit placement. Reorder those four and the design breaks silently.
+       `minmax(0, 1fr)` rather than a pixel floor: a grid track defaults to `min-content`, which a
+       long placeholder would push wider than its share, forcing the panel to scroll sideways. */
+    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     gap: 14,
   },
   filterActions: {
@@ -170,12 +177,26 @@ const s: Record<string, React.CSSProperties> = {
     gap: 8,
     minWidth: 130,
   },
-  actionsNote: { fontSize: 10.5, color: "#8a8886", textAlign: "center" },
+  /* Flush with the RIGHT edge of the button stack (client, 2026-09-07: *"Ensure the export what is
+     shown is align with the buttons"*). It was centred, which left it sitting proud of the buttons
+     above and reading as a stray line rather than a caption on Export.
+     `alignSelf: stretch` is what makes "right" mean the button edge: without it the span is only as
+     wide as its own text and has nothing to align against. */
+  actionsNote: {
+    fontSize: 10.5,
+    color: "#8a8886",
+    textAlign: "right",
+    alignSelf: "stretch",
+  },
+  /* ⚠ NO `gridColumn: "1 / -1"` — the Date pair occupies ONE column, so Action lands beside it
+     (client, 2026-09-07: *"Can you move the Action to be on the same row as From date"*). Spanning
+     both columns pushed Action onto a row of its own and made the panel three rows tall.
+     Halving its width is safe because `pairRow` wraps: From/To fall onto two lines inside their own
+     column on a narrow page rather than forcing the panel to scroll sideways. */
   fieldPair: {
     display: "flex",
     flexDirection: "column",
     gap: 4,
-    gridColumn: "1 / -1",
   },
   pairRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
   pairTag: {

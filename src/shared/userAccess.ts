@@ -85,6 +85,19 @@ export interface GroupAccess {
    * an admin seeing it listed would otherwise count it as access to documents.
    */
   siteEntry: boolean;
+  /**
+   * The site's OWNERS group.
+   *
+   * ⚠ IT HAS NO GROUP MAP ROWS AND IT NEVER WILL — SharePoint grants it **Full Control on the WEB**,
+   * which is a site permission rather than a folder grant, so nothing in `CRS Group Map` describes
+   * it. Without this flag it fell to `unmapped` and the lookup said *"Grants nothing yet — this
+   * group has no access rows"*, **in red**, about the widest access anybody on the site can hold.
+   * Reported by the client 2026-09-07.
+   *
+   * Same reasoning as `siteEntry` beside it: a group whose access comes from somewhere other than a
+   * mapping row is a NORMAL state, not a finding, and must not be rendered as one.
+   */
+  owners: boolean;
 }
 
 /** Everything known about one person's access. */
@@ -164,6 +177,20 @@ export function summarizeUserAccess(
     segmentLabel: (termSetGuid: string) => string;
     tierChain: (termGuid: string) => string[];
   },
+  /**
+   * The site owners group's id, when the caller could resolve it.
+   *
+   * ⚠ AN ID, NEVER THE TITLE. This client renames everything at import — the owners group reads
+   * "Guthrie Central Repository System Owners" on the live site — so a title match would silently
+   * stop recognising it and the group would go back to reading "grants nothing" in red.
+   * `fetchOwnersGroup` resolves it from `AssociatedOwnerGroup`, which a rename never touches.
+   *
+   * `undefined` when that read failed, and then no group is flagged — the group simply reports as
+   * unmapped again, which is what it did before this existed. Understating is the safe direction:
+   * flagging the WRONG group as owners would tell an admin a unit's uploader group holds full
+   * control of the site.
+   */
+  ownerGroupId?: number,
 ): UserAccessSummary {
   const byGroup: Record<number, AccessRow[]> = {};
   for (const r of rows ?? []) {
@@ -211,12 +238,18 @@ export function summarizeUserAccess(
       places,
       unmapped: mine.length === 0,
       siteEntry: isSiteEntryGroupTitle(g.title),
+      owners: typeof ownerGroupId === "number" && g.id === ownerGroupId,
     });
   }
 
   return {
     groups: out,
-    unmappedCount: out.filter((x) => x.unmapped).length,
+    /* ⚠ THE SITE-ENTRY AND OWNERS GROUPS ARE EXCLUDED, and leaving them in is how this line came to
+       contradict the rows beneath it. Both legitimately hold no mapping rows — one grants Read on
+       the web, the other Full Control — so counting them produced "3 groups on this site · 2 of them
+       grant nothing" about a person who could open the site AND administer it. The count exists to
+       answer "why can this person not get in", and neither of those two is ever the reason. */
+    unmappedCount: out.filter((x) => x.unmapped && !x.siteEntry && !x.owners).length,
     none: out.length === 0,
   };
 }
@@ -228,6 +261,10 @@ export function summarizeUserAccess(
  * guess, and never blank: a row with no description reads as a failed load.
  */
 export function describeGroupAccess(g: GroupAccess): string {
+  /* ⚠ OWNERS IS TESTED FIRST, AHEAD OF `unmapped`, AND THE ORDER IS THE FIX. This group holds no
+     mapping rows and never will — its Full Control comes from SharePoint at web scope — so the
+     `unmapped` branch below would otherwise claim the widest access on the site grants nothing. */
+  if (g.owners) return "Full control of this site, granted by SharePoint rather than by a mapping row.";
   if (g.siteEntry) return "Opens the site. No document access on its own.";
   if (g.unmapped) return "Grants nothing yet — this group has no access rows.";
   if (g.persona) return g.persona.label;
