@@ -5270,7 +5270,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                         is noise, and the toast already explains the limit when a pick exceeds it. */}
                     {draftFiles.length < MAX_FILES_PER_BATCH && (
                       <span className="dms-filecard-action dms-link">
-                        + Add more documents
+                        Add more documents
                       </span>
                     )}
                   </>
