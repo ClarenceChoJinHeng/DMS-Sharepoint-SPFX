@@ -5251,11 +5251,28 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                         draftFiles.reduce((n, x) => n + x.file.size, 0),
                       )}
                     </span>
-                    {/* WARN: THE LINK IS HIDDEN, THE WAY IN IS NOT (client, 2026-09-06: "Can you
-                        hide it?"). This whole row is a <label> wrapping the file input, so clicking
-                        anywhere on it still opens the picker and dropping files on it still works -
-                        which is why removing the words costs nothing. Do NOT "tidy" the label away
-                        later without giving the card another way to add files. */}
+                    {/* ⚠ RESTORED 2026-09-07, ONE DAY AFTER BEING HIDDEN (client, 2026-09-06: *"Can
+                        you hide it?"*, then 2026-09-07: *"Can you add back the 'Add more documents'
+                        button? The button will only be hidden IF there's already 20 files"*).
+
+                        The hide was defensible on its own terms — the whole row is a click target,
+                        so the words were redundant — but nothing on screen SAID so, and an uploader
+                        with 18 documents staged had no visible way to add the 19th.
+
+                        ⚠ IT IS THE ONLY CHILD CARRYING `margin-left: auto`, which is what spreads
+                        READY / name / size to the left edge. Removing it collapsed the row into the
+                        middle, and `.dms-dropzone.has-file` gained a `justify-content: flex-start`
+                        override to compensate. That override is now redundant but HARMLESS, and is
+                        left alone deliberately: it also holds the layout at 20 files, when this
+                        span is gone again.
+
+                        Hidden at the cap rather than disabled — a control that cannot do anything
+                        is noise, and the toast already explains the limit when a pick exceeds it. */}
+                    {draftFiles.length < MAX_FILES_PER_BATCH && (
+                      <span className="dms-filecard-action dms-link">
+                        + Add more documents
+                      </span>
+                    )}
                   </>
                 ) : (
                   <>

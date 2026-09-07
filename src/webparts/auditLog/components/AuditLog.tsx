@@ -791,7 +791,12 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
           <AuditLogoIcon />
         </span>
         <div>
-          <p style={s.introHead}>What can you do with the Audit Log?</p>
+          {/* ⚠ THE HEADING IS REMOVED, THE BODY IS NOT (client, 2026-09-07, marking just that line
+              REMOVE). The paragraph below still says what the log is and — the load-bearing half —
+              that records are written automatically and cannot be edited or deleted from this page,
+              which is the tamper-resistance claim the whole list exists to make.
+              `s.introHead` is left in the style record on purpose: it costs nothing, and deleting a
+              style to match one removal is how the next heading added here loses its formatting. */}
           <p style={s.introBody}>
             Track activities and changes across the system, including document
             actions, access changes, and folder updates. Records are written
