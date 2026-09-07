@@ -10523,3 +10523,75 @@ Client: *"check the entire change folder structure flow and make a test."* 14 ne
 - **A mechanical check worth repeating: every `s.<key>` style reference resolves** across all four
   flow screens (41/25/0/28 used, none missing). That trap — a missing key yields `undefined` and
   renders unstyled with a GREEN BUILD — has bitten four files in this project.
+
+## FOLDER STRUCTURE — PARKED 2026-09-07, AND WHAT TOMORROW'S WALKTHROUGH MUST COVER
+Client: *"This is getting confusing, can we just pause here for now... tomorrow you will talk to me
+how each flow works, I need to know every scenario that will happen."* **GHO's migration COMPLETED
+and its chain is LIVE** (14 documents moved, 27 empty folders tidied, `Document Type / Year`); the
+pause is still on and MHO has not been migrated.
+- **⚠ THE STATE TO RESUME FROM, so nobody has to reconstruct it:**
+  - **GHO — DONE.** Chain applied, badge should read `IN USE`. One stray left alone:
+    `Archive/GHO/GF/TAX/2024/Term Sheet/Archive 2` holds `TEST - TEST - Non Highly COnfidential -
+    19-08-26.pdf`, whose folder matches no level. Move by hand or leave; it blocks nothing.
+  - **⚠ UPLOADS ARE STILL PAUSED SITE-WIDE** (`uploadsPaused = yes`). Step 5 was never reached. **On a
+    live site this is the state that quietly accepts no documents behind a banner making it look
+    deliberate** — resume it, or migrate MHO first and then resume.
+  - **MHO — not started.** Its live `Levels` is clean (Department, Unit, Year+termSet, Document
+    Type+termSet). ⚠ Its PENDING chain reportedly ends `... / Year / Document Type / Tes1111`; if
+    `Tes1111` has no `termSet` its scan will fail exactly as Buah's did.
+  - **Buah — repaired on site** by removing `Clarence Kiwi`; its scan now reads "Nothing to move".
+- **EVERY SCENARIO THE WALKTHROUGH HAS TO ANSWER**, because these are the ones that actually came up:
+  1. **Reorder** (GHO's case) — no values asked for, both tier values already in the path. Moves
+     files, tidies empties, applies the chain. Re-tags **0** documents, correctly: a reorder changes
+     no tier's VALUE.
+  2. **Add a level** — one value chosen **per UNIT, per missing tier**, not per file and not per
+     folder. `⚠ ONE VALUE PER UNIT IS THE ONLY GRANULARITY THERE IS`; the per-folder override is
+     specced and unbuilt, and the client accepted per-unit on 2026-09-07.
+  3. **Remove a level** — folders collapse together; a filename collision raises a rename form
+     rather than overwriting.
+  4. **Strays** — a folder matching no level is reported and NEVER moved. Since 1.0.465.0 a
+     stray-only scan says so instead of demanding a value it cannot offer.
+  5. **Uploads during the window** — the loop that cost three days. Now gated at step 1.
+- **⚠ AND THE ONE THING THE FLOW STILL CANNOT DO: MOVE DOCUMENTS BETWEEN SEGMENTS.** The Retire
+  flow's step 1 says *"Move anything worth keeping somewhere else first"* and mounts the SAME
+  migrator, which only re-shapes within one segment. There is no cross-segment move tool anywhere;
+  the only route is by hand in SharePoint. Say this plainly rather than letting it be discovered.
+
+## THREE SMALL FOLDER-STRUCTURE FIXES BEFORE THE PAUSE (2026-09-07, 1.0.464-466)
+- **MOVING DOTS ON THE IN-PROGRESS BUTTONS** (client: *"can you add like the ... the dots
+  moving?"*). Applied to all FOUR — Checking, Check document tags, Applying, Working — because
+  leaving three static while one animates reads as the others having hung.
+  - **⚠ SVG WITH SMIL, NOT CSS.** This file styles with inline objects and **inline styles cannot
+    carry `@keyframes`** — the same reason `GroupManager`'s spinner is an SVG with `animateTransform`.
+    It also avoids a `<style>` template literal, which is where the backtick trap keeps biting.
+- **⚠ A STRAY-ONLY SCAN WAS A DEAD END (1.0.465.0), FOUND BY THE CLIENT THE MOMENT GHO FINISHED.**
+  The screen had two states — "N folders to rebuild" or "N units need a value chosen" — and assumed
+  no moves meant values were awaited. **The third case is that everything left is a STRAY**, which by
+  design has no dropdown, so the admin was told to choose a value, given nothing to choose it with,
+  and handed a disabled Rebuild. Now a third heading and hint say the migration is finished and the
+  listed folders must be moved by hand.
+  - **The discriminator is `needingChoice`**, which counts plans with missing tiers — `totalMoves === 0`
+    alone cannot tell the two apart.
+- **AND THE ORPHANED " Turn the two flows back on." IS GONE from the result summary.** The line
+  telling an admin to PAUSE those flows was removed from that screen hours earlier at the client's
+  request, so this was instructing them to restore something nothing had asked them to stop. **An
+  instruction whose counterpart no longer exists reads as a step they missed.**
+- **YEAR AND DOCUMENT TYPE ARE NOW FIXED (1.0.466.0)** — the 2026-09-06 decision, finally built.
+  Client, confirming the scope: *"We just need to cater for folder structure that will be infront of
+  year and in betwen and after."*
+  - `isFixedBelowUnitTier` in `folderChain.ts`, matching **the same way `builtInTierFor` matches** —
+    by label OR sanitized column, case- and whitespace-insensitive. Two answers to "is this the
+    built-in Year tier" is how one screen locks it while another offers Remove.
+  - **⚠ ONLY THEIR OWN CONTROLS ARE DISABLED.** Every other tier keeps ↑ / ↓ / Remove, which is what
+    makes before/between/after work: add the level, then move it into position. Moving a custom tier
+    past Year shifts Year's index and that is fine — **the pair can never change order relative to
+    EACH OTHER, because neither can be moved directly.**
+  - **Remove is ABSENT rather than greyed** on those two: a disabled control that can never act
+    invites repeated clicking, and the meta line already says why it is not there.
+  - **⚠ A UI RULE, NOT A VALIDITY RULE.** `validateChain` still accepts a chain without them —
+    segments predating the decision exist, and refusing their chain would take their uploads down to
+    enforce a preference. Pinned by test.
+  - **⚠ IDENTITY IS THE NAME, NOT THE TERM SET.** A Year re-added carrying a different term set is
+    still Year, because the column behind it is keyed on the name.
+- **Verified**: `tsc --noEmit` clean, suite **1720/0** (7 new), 33 warnings — the baseline.
+  **NOT site-tested.**

@@ -152,6 +152,42 @@ interface UnitScan {
   unresolved?: string;
 }
 
+/**
+ * Three dots that fade in turn, for a button whose work takes a while.
+ *
+ * Client, 2026-09-07: *"can you add like the ... the dots moving?"* — a static "Checking…" on a
+ * scan that walks every folder in six libraries gives no sign it is still alive, and a run that
+ * looks dead is one somebody reloads mid-way.
+ *
+ * ⚠ SVG WITH SMIL, NOT A CSS ANIMATION, AND THAT IS THE HOUSE PATTERN RATHER THAN A PREFERENCE.
+ * This file styles everything with inline objects, and **inline styles cannot carry `@keyframes`**
+ * — the same reason `GroupManager`'s spinner is an SVG with `animateTransform`. Adding a stylesheet
+ * for three dots would also mean a `<style>` template literal, which is where the backtick trap in
+ * this codebase keeps biting.
+ *
+ * `aria-hidden` because the button's own text already says "Checking"; a screen reader announcing
+ * three animated dots adds nothing.
+ */
+function MovingDots(): React.ReactElement {
+  // Staggered by a third of the cycle each, so one dot is always at full opacity.
+  const delays = ["0s", "0.32s", "0.64s"];
+  return (
+    <svg width="18" height="6" viewBox="0 0 18 6" aria-hidden="true" style={{ marginLeft: 4 }}>
+      {delays.map((begin, i) => (
+        <circle key={begin} cx={3 + i * 6} cy="3" r="2" fill="currentColor" opacity="0.25">
+          <animate
+            attributeName="opacity"
+            values="0.25;1;0.25"
+            dur="0.96s"
+            begin={begin}
+            repeatCount="indefinite"
+          />
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
 export interface SubtreeMigratorProps {
   context: WebPartContext;
   siteUrl: string;
@@ -1051,7 +1087,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
    * result instead, so the trade is visible rather than silent.
    */
   const finishPending = async (seg: SegmentRow): Promise<string> => {
-    if (!seg.pending) return " Turn the two flows back on.";
+    if (!seg.pending) return "";
     let outstanding = 0;
     let strays = 0;
     try {
@@ -1093,8 +1129,13 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
       (strays > 0
         ? ` ${strays} folder(s) were left alone because their names match no folder level; they are ` +
           `listed above and still need a decision.`
-        : "") +
-      ` Turn the two flows back on.`
+        : "")
+      /* ⚠ " Turn the two flows back on." WAS APPENDED HERE AND IS GONE (2026-09-07). It referred to
+         Auto-route and the folder-approval flow, and the line telling an admin to pause them was
+         removed from this screen at the client's request the same day — so this was instructing them
+         to restore something nothing had asked them to stop. An instruction whose counterpart no
+         longer exists reads as a step they missed. Pausing those flows was always OPTIONAL; the
+         reasoning is recorded at the removal site above. */
     );
   };
 
@@ -1427,7 +1468,14 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
           disabled={!chosen || scanning || running}
           onClick={scan}
         >
-          {scanning ? "Checking…" : "Check for existing files in the old folder structure"}
+          {scanning ? (
+            <>
+              Checking
+              <MovingDots />
+            </>
+          ) : (
+            "Check for existing files in the old folder structure"
+          )}
         </button>
       </div>
 
@@ -1448,7 +1496,14 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
             harmless and changes only what disagrees.
           </p>
           <button style={running ? s.off : s.ghost} disabled={running} onClick={runTagsOnly}>
-            {running ? "Checking…" : "Check document tags"}
+            {running ? (
+              <>
+                Checking
+                <MovingDots />
+              </>
+            ) : (
+              "Check document tags"
+            )}
           </button>
         </div>
       )}
@@ -1484,7 +1539,14 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                 .catch(() => undefined);
             }}
           >
-            {running ? "Applying…" : "Apply the new structure"}
+            {running ? (
+              <>
+                Applying
+                <MovingDots />
+              </>
+            ) : (
+              "Apply the new structure"
+            )}
           </button>
         </div>
       )}
@@ -1494,14 +1556,37 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
           <h3 style={{ fontSize: 15, margin: "0 0 4px" }}>
             {/* "0 folder(s) to rebuild" is true but useless: it reads as "nothing to do" when the
                 real state is "waiting for you". Lead with what is being asked for. */}
+            {/* ⚠ THREE STATES, NOT TWO. The `else` branch used to assume that no moves meant values
+                were being waited for — but there is a third case, and the client hit it the moment
+                a migration finished: everything left is a STRAY, a folder whose name matches no
+                level in the chain. A stray can never be given a value (there is no dropdown, by
+                design — the tool refuses to guess where it belongs), so the screen told the admin to
+                choose a value, offered nothing to choose, and disabled Rebuild. A dead end.
+                `needingChoice` is what separates them: it counts plans with missing tiers. */}
             {totalMoves > 0
               ? `${totalMoves} folder(s) to rebuild across ${groups.length} unit(s)`
-              : `${groups.length} unit(s) need a value chosen before anything can move`}
+              : needingChoice > 0
+                ? `${groups.length} unit(s) need a value chosen before anything can move`
+                : "Nothing left to move — but some folders could not be placed automatically"}
           </h3>
           <p style={s.hint}>
-            Documents move into the shape the structure describes. Approved documents stay approved,
-            and the only folders deleted are ones left completely empty.
-            {needingChoice > 0 && ` ${needingChoice} folder(s) are waiting on a value for a new level.`}
+            {totalMoves === 0 && needingChoice === 0 ? (
+              /* The stray-only state. Says what to DO — nothing here is a button, so an admin left
+                 with the generic "documents move into the shape..." blurb has no idea the screen is
+                 finished with them. */
+              <>
+                The migration is finished. The folder(s) listed below have names that match no level
+                in this segment&rsquo;s structure, so the tool will not guess where they belong —
+                move them into a real folder by hand if you want them filed, or leave them. Neither
+                blocks anything.
+              </>
+            ) : (
+              <>
+                Documents move into the shape the structure describes. Approved documents stay
+                approved, and the only folders deleted are ones left completely empty.
+                {needingChoice > 0 && ` ${needingChoice} folder(s) are waiting on a value for a new level.`}
+              </>
+            )}
           </p>
 
           {groups.map((group) => {
@@ -1768,7 +1853,14 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
               disabled={!canRun || running}
               onClick={() => setConfirm(true)}
             >
-              {running ? "Working…" : `Rebuild ${totalMoves} folder(s)`}
+              {running ? (
+                <>
+                  Working
+                  <MovingDots />
+                </>
+              ) : (
+                `Rebuild ${totalMoves} folder(s)`
+              )}
             </button>
             {unresolvedCount + badNames > 0 && (
               <span style={{ ...s.hint, marginLeft: 10, color: "#a4262c" }}>
@@ -1777,8 +1869,15 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                   : "Settle the filename clashes first."}
               </span>
             )}
+            {/* ⚠ THE SAME THREE-WAY SPLIT AS THE HEADING. "Choose a value for at least one unit"
+                beside a list containing only STRAYS is an instruction that cannot be followed —
+                there is no control to follow it with. */}
             {conflicts.length === 0 && totalMoves === 0 && (
-              <span style={{ ...s.hint, marginLeft: 10 }}>Choose a value for at least one unit.</span>
+              <span style={{ ...s.hint, marginLeft: 10 }}>
+                {needingChoice > 0
+                  ? "Choose a value for at least one unit."
+                  : "Nothing to rebuild — the folders below have to be moved by hand."}
+              </span>
             )}
           </div>
         </div>

@@ -5,6 +5,7 @@ import {
   builtInTierFor,
   decideTier,
   effectiveOnDemandTiers,
+  isFixedBelowUnitTier,
   gridPlan,
   isPermissioned,
   needsLegacyBelowUnit,
@@ -423,5 +424,60 @@ describe("validateChain — per-unit tiers", () => {
     // which is the one that would silently widen access.
     const err = validateChain([dept, shared("Year", "023a866a-…"), unit, perUnit("SubUnit")]);
     expect(err?.code).toBe("prefix-not-contiguous");
+  });
+});
+
+/**
+ * Year and Document Type are fixed below-Unit tiers (client, 2026-09-06 / 2026-09-07): they cannot
+ * be moved or removed, while every other tier can be added, moved or removed around them.
+ */
+describe("isFixedBelowUnitTier", () => {
+  const lvl = (label: string, column?: string): Level =>
+    ({ label, column: column ?? label, labelCol: column ?? label, permissioned: false });
+
+  it("recognises the two fixed tiers by label", () => {
+    expect(isFixedBelowUnitTier(lvl("Year"))).toBe(true);
+    expect(isFixedBelowUnitTier(lvl("Document Type"))).toBe(true);
+  });
+
+  /* The sanitized column is what an admin retyping the level from a config row would produce, and
+     `builtInTierFor` already matches it — the two must agree, or one screen locks the tier and the
+     other offers Remove. */
+  it("recognises Document Type by its sanitized column name too", () => {
+    expect(isFixedBelowUnitTier(lvl("Doc Type", "DocumentType"))).toBe(true);
+  });
+
+  it("is case- and whitespace-insensitive", () => {
+    expect(isFixedBelowUnitTier(lvl("  document   type  "))).toBe(true);
+    expect(isFixedBelowUnitTier(lvl("YEAR"))).toBe(true);
+  });
+
+  it("does not claim an ordinary tier", () => {
+    for (const label of ["State", "SubUnit", "Clarence Kiwi", "Archive", "Yearly", "Document"]) {
+      expect(isFixedBelowUnitTier(lvl(label))).toBe(false);
+    }
+  });
+
+  /* ⚠ THE IDENTITY IS THE NAME, NOT THE TERM SET. A tier removed and re-added through the form comes
+     back carrying whatever term set the admin typed, and it is STILL the fixed Year tier — the
+     column behind it is keyed on the name. */
+  it("still recognises Year when it carries a different term set", () => {
+    expect(isFixedBelowUnitTier({
+      label: "Year", column: "Year", labelCol: "Year",
+      termSet: "some-other-guid", permissioned: false,
+    })).toBe(true);
+  });
+
+  it("answers false for a blank or missing label", () => {
+    expect(isFixedBelowUnitTier({ label: "", column: "", labelCol: "" } as Level)).toBe(false);
+  });
+
+  /* ⚠ IT IS A UI RULE, NOT A VALIDITY RULE. Segments predating the decision may have no Year at all,
+     and refusing their chain would take their uploads down to enforce a preference. */
+  it("does not make validateChain reject a chain without the fixed tiers", () => {
+    const dept: Level = { label: "Department", column: "Department", labelCol: "Department", tidCol: "DepartmentTid" };
+    const unit: Level = { label: "Unit", column: "Unit", labelCol: "Unit", tidCol: "UnitTid" };
+    const state: Level = { label: "State", column: "State", labelCol: "State", termSet: "guid", permissioned: false };
+    expect(validateChain([dept, unit, state])).toBeUndefined();
   });
 });

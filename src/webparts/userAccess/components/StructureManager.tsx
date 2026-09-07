@@ -4,7 +4,7 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
 import {
-  builtInTierFor, effectiveOnDemandTiers, splitChain, validateChain,
+  builtInTierFor, effectiveOnDemandTiers, isFixedBelowUnitTier, splitChain, validateChain,
 } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
 import { allLibraryTitles, cachedHcLibraries, cachedListTitle, documentsLibraryTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
@@ -969,6 +969,19 @@ export default function StructureManager({
         )}
         {onDemand.map((l, k) => {
           const i = first + k;
+          /* ⚠ YEAR AND DOCUMENT TYPE ARE FIXED (client, 2026-09-06: *"enforce Year and DocType to not
+             move or be deleted"*, confirmed 2026-09-07). They are managed-metadata columns bound to
+             SITE-WIDE term sets and every segment shares them, so removing one takes a tier out of
+             the path for a column that still exists and still holds values — and re-adding it by hand
+             is what produced the 1.0.195.0 corruption (an ordinary `tidCol` derived onto a taxonomy
+             column, after which every document in the segment failed to tag).
+
+             ⚠ ONLY THEIR OWN CONTROLS ARE DISABLED — every OTHER tier keeps ↑ / ↓ / Remove, which is
+             what makes the client's actual requirement work: a new level can be placed **before,
+             between, or after** the pair by adding it and moving it into position. Moving a custom
+             tier past Year shifts Year's index, and that is fine — the two can never change order
+             relative to EACH OTHER, because neither can be moved directly. */
+          const fixed = isFixedBelowUnitTier(l);
           return (
             <div style={s.tierRow} key={`d${i}`}>
               <span style={s.tierName}>{l.label}</span>
@@ -976,20 +989,31 @@ export default function StructureManager({
                 {l.termSet !== undefined ? "own list of values" : "values come from the level above"}
                 {" · column: "}
                 {l.labelCol ?? l.column}
+                {fixed && " · fixed — cannot be moved or removed"}
               </span>
               <span style={{ flex: "0 0 auto" }}>
-                <button style={s.iconBtn} disabled={k === 0} onClick={() => moveTier(i, -1)} title="Move up">
+                <button
+                  style={s.iconBtn}
+                  disabled={fixed || k === 0}
+                  onClick={() => moveTier(i, -1)}
+                  title={fixed ? "Year and Document Type stay where they are." : "Move up"}
+                >
                   &#8593;
                 </button>
                 <button
                   style={s.iconBtn}
-                  disabled={k === onDemand.length - 1}
+                  disabled={fixed || k === onDemand.length - 1}
                   onClick={() => moveTier(i, 1)}
-                  title="Move down"
+                  title={fixed ? "Year and Document Type stay where they are." : "Move down"}
                 >
                   &#8595;
                 </button>
-                <button style={s.danger} onClick={() => removeTier(i)}>Remove</button>
+                {/* Absent rather than greyed: a disabled Remove on a level that can NEVER be removed
+                    is a control that will never do anything, and the meta line above already says
+                    why it is not there. Greying it invites repeated clicking. */}
+                {!fixed && (
+                  <button style={s.danger} onClick={() => removeTier(i)}>Remove</button>
+                )}
               </span>
             </div>
           );

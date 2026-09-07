@@ -371,3 +371,34 @@ export function buildOnDemandSegments(
   }
   return { segments, missing };
 }
+
+/**
+ * Is this below-Unit tier one of the two the client has fixed — Year or Document Type?
+ *
+ * Client, 2026-09-06 and again 2026-09-07: *"an update that we enforce Year and DocType to not move
+ * or be deleted"*, then *"We just need to cater for folder structure that will be infront of year
+ * and in betwen and after"*. So the pair is immovable and undeletable, and every OTHER tier may be
+ * added, moved or removed around them — before, between, or after.
+ *
+ * ⚠ MATCHED THE SAME WAY `builtInTierFor` MATCHES, and deliberately so: by LABEL or by sanitized
+ * COLUMN, case-insensitively, with runs of whitespace folded. Two different answers to "is this the
+ * built-in Year tier?" is how one screen would lock it and another let it be deleted.
+ *
+ * ⚠ IT DOES NOT LOOK AT `termSet`. A tier removed and re-added through the form comes back with the
+ * admin's own term set if they typed one, and it is STILL the fixed Year tier — the identity is the
+ * name, which is what the column behind it is keyed on.
+ *
+ * This is a UI rule, not a validity rule: `validateChain` does NOT reject a chain without them.
+ * Segments predating the decision exist, and refusing to load their chain would take their uploads
+ * down to enforce a preference.
+ */
+export function isFixedBelowUnitTier(level: Level): boolean {
+  const key = (level?.label ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (!key) return false;
+  const col = (level?.column ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  for (const tier of builtInOnDemandTiers("", "")) {
+    if (key === tier.label.toLowerCase()) return true;
+    if (col && col === (tier.column ?? "").toLowerCase()) return true;
+  }
+  return false;
+}
