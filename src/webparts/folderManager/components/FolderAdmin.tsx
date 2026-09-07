@@ -351,6 +351,15 @@ const s: Record<string, React.CSSProperties> = {
     marginBottom: 14,
   },
   label: { display: "block", fontWeight: 600, fontSize: 12, margin: "0 0 4px" },
+  /* The always-visible segment switcher, above a step's own content. Separated by a rule rather than
+     boxed, so it reads as a setting for the step below rather than as part of it.
+     ⚠ `s` IS A `Record<string, CSSProperties>`: a key that does not exist yields `undefined` and the
+     element renders unstyled with a GREEN BUILD. Every style referenced in the JSX must be here. */
+  segSwitch: {
+    margin: "0 0 16px",
+    paddingBottom: 14,
+    borderBottom: "1px solid #ebebeb",
+  },
   select: {
     width: "100%",
     maxWidth: 420,
@@ -1595,6 +1604,48 @@ export default function FolderAdmin({
           {locked && (
             <div style={s.lockBox}>
               <strong>Not ready yet.</strong> {lockReason(step, effectiveFacts)}
+            </div>
+          )}
+
+          {/* ⚠ THE CHOSEN SEGMENT STAYS CHANGEABLE (client, 2026-09-07: *"I accidentally selected buah
+              and now I can't reselect another"*). `needsPick` is `needsSegment && !segment`, so the
+              picker below vanished the moment anything was chosen — and the only way back was
+              `< Back to Folder Management`, which clears `segKey` on both leave and open. That escape
+              exists, but it reads like abandoning the whole flow rather than correcting one field.
+
+              Rendered HERE rather than inside `renderStep` so it sits ABOVE the step's own content and
+              is not one of the mutually exclusive branches below.
+
+              ⚠ IT MUST NOT APPEAR ON A STEP THAT SPENDS NO SEGMENT — `stepUsesSegment` again, the rule
+              that the site-wide upload pause walked into twice. Offering a segment picker above the
+              pause toggle asks for a value that step cannot use.
+
+              ⚠ AND CHANGING IT RESETS `maxIdx` TO THE CURRENT STEP. Forward navigation is earned by
+              walking the flow (1.0.332.0); that progress was earned against the OLD segment, so
+              carrying it would let an admin jump to a step they have never done for the segment now
+              selected. The facts effect re-reads on its own — it keys on `segKey` — so the ticks and
+              gates correct themselves. */}
+          {!locked && !needsPick && active.needsSegment && stepUsesSegment(step) && (
+            <div style={s.segSwitch}>
+              <label style={s.label}>Segment</label>
+              <select
+                style={s.select}
+                value={segKey}
+                onChange={(e) => {
+                  setSegKey(e.target.value);
+                  setMaxIdx(idx);
+                }}
+              >
+                {(segments ?? []).map((x) => (
+                  <option key={x.key} value={x.key}>
+                    {x.label}
+                  </option>
+                ))}
+              </select>
+              <p style={s.hint}>
+                Change this to work on a different segment. The steps you have
+                already passed are re-checked for whichever one you pick.
+              </p>
             </div>
           )}
 

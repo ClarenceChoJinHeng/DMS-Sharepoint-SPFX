@@ -10320,3 +10320,39 @@ it doesnt"*. Those two statements cannot both be true, and neither was a coincid
   **NOT yet site-tested** — the test is: load step 1 with uploads ON, confirm Next is blocked; press
   the toggle; confirm Next releases **without reloading the page**; then hard-refresh a few times and
   confirm the red banner no longer appears.
+
+## THE CHOSEN SEGMENT IS CHANGEABLE MID-FLOW, AND THE POWER AUTOMATE LINE IS GONE (2026-09-07, 1.0.455.0)
+Two small changes to Change the folder structure, both from live use during the GHO recovery.
+- **⚠ PICKING A SEGMENT WAS A ONE-WAY DOOR** (client: *"I accidentally selected buah and now I can't
+  reselect another"*). `needsPick` is `active.needsSegment && !segment`, so the picker vanished the
+  moment anything was chosen and the only escape was `< Back to Folder Management` — which does clear
+  `segKey` (on leave AND on open, since 2026-09-06) but reads like abandoning the whole flow rather
+  than correcting one field. A **Segment** dropdown now sits above the step's own content.
+  - **Rendered in the runner, not in `renderStep`**, so it sits ABOVE the step and is not one of that
+    function's mutually exclusive branches.
+  - **⚠ GATED ON `stepUsesSegment`, THE RULE THE PAUSE STEP WALKED INTO TWICE.** A segment picker above
+    the site-wide upload toggle asks for a value that step cannot spend. Third time this rule has
+    earned its keep — do not substitute a `kind !== "outside"` literal for it.
+  - **⚠ CHANGING THE SEGMENT RESETS `maxIdx` TO THE CURRENT STEP.** Forward navigation is EARNED by
+    walking the flow (1.0.332.0), and that progress was earned against the OLD segment — carrying it
+    would let an admin jump to a step they have never done for the segment now selected. The facts
+    effect re-reads on its own, because it keys on `segKey`, so every tick and gate corrects itself
+    with no reload.
+  - **⚠ `s.segSwitch` HAD TO BE DECLARED** — `s` is a `Record<string, CSSProperties>`, so a key that
+    does not exist yields `undefined` and the element renders unstyled with a GREEN BUILD. Fourth file
+    in this project to meet that trap.
+- **THE POWER AUTOMATE CAVEAT IS REMOVED FROM THE UI ENTIRELY** (client: *"can you remove this?"*).
+  Its own flow step went on 2026-09-06 and this quiet line under the uploads warning was the last
+  place it was said anywhere on screen.
+  - **⚠ SO THE CONSEQUENCE IT NAMED IS NOW TOLD TO NOBODY, and it is real:** pausing Auto-route and
+    the folder-approval flow before a migration is OPTIONAL and no safety matter — leaving them on
+    damages nothing, since Auto-route reads moderation status and takes the False branch for a moved
+    pending file — but a migration produces **hundreds of no-op runs**, and an **exhausted daily quota
+    means the next real approval is never routed, silently**. Preserved as a comment at the removal
+    site. **Do not re-add it to the screen without the client asking**; the runbook
+    (`2026-08-08-auto-route-flow-and-draft-isolation.md` §5.6) is the better home.
+- **Verified**: `tsc --noEmit` clean, `eslint` clean on both files (`FolderAdmin`'s pre-existing
+  `mapRows` warning only), suite **1692/0**, 33 warnings — the baseline. Shipped bundle grepped: the
+  switcher's hint present once, the Power Automate sentence **0 occurrences**. **NOT site-tested** —
+  switch from Buah to Group Head Office on step 3 and confirm the scan re-runs against GHO rather
+  than showing Buah's "could not be read from the term store" rows.

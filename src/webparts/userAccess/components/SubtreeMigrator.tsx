@@ -1311,16 +1311,19 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
         <strong>Uploads must be turned off before continuing.</strong> Go back to Step 1 to turn off
         uploads.
       </div>
-      {/* ⚠ THE POWER AUTOMATE CAVEAT, KEPT DELIBERATELY THOUGH IT IS NOT IN THE CLIENT'S MOCKUP.
-          Its own step was removed on 2026-09-06, so this is the LAST place it is said anywhere. It
-          is not a safety warning — leaving the flows on damages nothing — but a migration produces
-          hundreds of no-op Auto-route runs, and an exhausted daily quota means the next real
-          approval is never routed, SILENTLY. Demoted to a quiet line rather than dropped; say the
-          word and it goes. */}
-      <p style={{ fontSize: 11.5, color: "#5f6f80", margin: "-4px 0 14px", lineHeight: 1.5 }}>
-        Optional: pausing Auto-route and the folder-approval flow first avoids a large number of
-        flow runs that do nothing. Turn them back on afterwards.
-      </p>
+      {/* ⚠ THE POWER AUTOMATE CAVEAT IS GONE FROM THE UI ENTIRELY (client, 2026-09-07: *"can you
+          remove this?"*), AND THIS COMMENT IS NOW THE ONLY RECORD OF IT. Its own flow step went on
+          2026-09-06 and this quiet line was the last place it was said anywhere on screen.
+
+          What it said, so it is not lost: pausing Auto-route and the folder-approval flow before a
+          migration is OPTIONAL and no safety matter — leaving them running damages nothing, because
+          Auto-route reads moderation status and takes the False branch for a moved pending file. But
+          a migration produces hundreds of no-op runs, and an EXHAUSTED DAILY QUOTA means the next
+          real approval is never routed, silently. That consequence is now told to nobody.
+
+          Do not re-add it here without the client asking. If it ever needs saying again, the runbook
+          (2026-08-08-auto-route-flow-and-draft-isolation.md §5.6) is the better home for it than a
+          screen an admin reads while mid-migration. */}
 
       {/* An editable dropdown here is only right when THIS screen is picking the segment — when a
           guided flow already asked and pre-selected it (`initialSegmentKey`), an interactive select
