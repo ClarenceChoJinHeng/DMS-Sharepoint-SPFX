@@ -445,19 +445,49 @@ describe("blocksNext", () => {
     expect(blocksNext(step("newSegment", "reconcile"), { foldersExist: false })).toBe("");
   });
 
-  it("gates exactly two step ids, across every flow — pinned so a new gate must be deliberate", () => {
+  it("gates exactly three step ids, across every flow — pinned so a new gate must be deliberate", () => {
     const gated: string[] = [];
     for (const f of FLOWS) {
       for (const st of f.steps) {
-        // Every fact false at once: anything gateable will gate.
+        /* Every fact false at once: anything gateable will gate.
+           ⚠ A FACT MISSING FROM HERE MAKES THIS SWEEP BLIND TO ITS GATE. `uploadsPaused` was absent
+           until 2026-09-07, so adding the pauseUploads gate would have left this test passing
+           unchanged — the one test whose whole job is to make a new gate deliberate. Any field added
+           to FlowFacts belongs in this object. */
         const all: FlowFacts = {
           segmentExists: false, groupsExist: false,
           foldersExist: false, abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
+          uploadsPaused: false,
         };
         if (blocksNext(st, all).length > 0 && gated.indexOf(st.id) === -1) gated.push(st.id);
       }
     }
-    expect(gated.sort()).toEqual(["abbreviations", "createSegment"]);
+    expect(gated.sort()).toEqual(["abbreviations", "createSegment", "pauseUploads"]);
+  });
+
+  /* GHO, 2026-09-04: the structure change was staged, the migration started at 16:36, and a file
+     arrived at 16:37 — one minute in, into a folder the scan had already passed. Four people kept
+     filing for three days, so the tidy never met an empty folder and the chain never applied.
+     `uploadsPaused` read `no` throughout, and the flow let the admin walk past step 1 regardless. */
+  it("holds Next while uploads are still on, and lets go the moment they are paused", () => {
+    const st = step("structure", "pauseUploads");
+    expect(blocksNext(st, { uploadsPaused: false })).toContain("still switched on");
+    expect(blocksNext(st, { uploadsPaused: true })).toBe("");
+  });
+
+  it("does NOT hold Next when the pause state could not be read", () => {
+    // Same rule as every other gate here: unknown is not a lock. An unreadable config list must never
+    // trap an admin mid-flow, and this one cannot even be worked around from another screen.
+    expect(blocksNext(step("structure", "pauseUploads"), {})).toBe("");
+  });
+
+  it("never holds the closing Enable Upload step, though it reads the same fact", () => {
+    /* ⚠ `resumeUploads` READS `uploadsPaused` IN THE OPPOSITE DIRECTION: its `todo` means uploads are
+       STILL PAUSED, which is precisely the state an admin arrives in. Gating it would trap them on the
+       last step of the flow with no way to finish. */
+    const st = step("structure", "resumeUploads");
+    expect(blocksNext(st, { uploadsPaused: true })).toBe("");
+    expect(blocksNext(st, { uploadsPaused: false })).toBe("");
   });
 
   it("asks Add a new segment for the segment's NAME, which is what makes the gate answerable", () => {

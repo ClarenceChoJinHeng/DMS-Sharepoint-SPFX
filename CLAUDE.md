@@ -10221,3 +10221,60 @@ Client: a search produced *"One library could not be searched: Restricted & Conf
   incrementally and `spGroups.ts` has 16 importers). Packaged as `1.0.451.0`; both affected bundles
   grepped for the retry. **NOT yet site-tested** — and it cannot be tested on demand, since it only
   shows when SharePoint throttles.
+
+## ⚠⚠ GHO WAS STUCK CHANGE PENDING FOR THREE DAYS BECAUSE STEP 1 WAS SKIPPED (2026-09-07, 1.0.452.0)
+Reported as *"the 2024 stays outside"* after Reene changed GHO's folder structure on 2026-09-04.
+Diagnosed end to end from the site; **the migration tool was never at fault.**
+- **THE SEQUENCE, ESTABLISHED FROM TIMESTAMPS: Reene started the move at 16:36 and a file arrived at
+  16:37** — one minute in, into a folder the scan had already walked past. Four people (ckyan90,
+  Crystal Kong, chocheetuck4, Nur Alesya) went on filing into GHO for three days; one upload landed
+  14 minutes before the diagnosis. `uploadsPaused` read **`no`** in `CRS Config` throughout.
+- **SO `2024` "STAYS OUTSIDE" BECAUSE IT IS NEVER EMPTY WHEN THE TIDY RUNS**, and a non-empty folder
+  cannot be removed. The chain then never applies, because the staged-apply guard demands a FRESH scan
+  with no drift left and every run finds the newest arrivals. **It cannot resolve itself however many
+  times the move is run** — a run reporting `113 moved, 149 tidied, 0 problems` is honest and still
+  leaves the segment pending.
+- **⚠ TWO WRONG THEORIES WERE BUILT BEFORE THE DATA ARRIVED, AND THE SECOND WAS MINE.** The first was
+  a scan-or-move bug; the second was *"113 documents is too many for a post-scan race, so the move
+  never ran"* — plausible arithmetic, and wrong, because a reorder legitimately re-places the whole
+  segment. **Opening `2024` settled it in one screenshot**: six subfolders, three of them created
+  within five hours by three different people. Ask for the observation before the explanation.
+- **THE ONLY DEFECT IS THAT NOTHING STOPPED IT.** `blocksNext` gated `createSegment` and
+  `abbreviations` only, so **step 1 "Temporarily disable uploads" was advisory** — and the screen was
+  already saying so in red (*"Uploads must be turned off before continuing"*) while the flow let the
+  admin walk straight past. **`pauseUploads` is now the third gated step.**
+  - **It is the one preparation step whose omission makes every LATER step futile**, on a run that
+    reports success every time. Nothing else in the flow has that property, which is why this is a
+    gate and the rest stay advice.
+  - **`stepState` needed no change** — it already answered `todo` for a known-false and `unknown` for
+    an unreadable config, so the gate fires only on a positive "not done" and an unreadable
+    `CRS Config` still traps nobody.
+  - **⚠ `resumeUploads` IS DELIBERATELY NOT GATED, though it reads the same fact in reverse.** Its
+    `todo` means uploads are STILL paused — exactly the state an admin arrives in — so gating it
+    would trap them on the closing step with no way to finish. Pinned by test.
+  - **⚠ AND THE EXHAUSTIVE SWEEP THAT EXISTS TO MAKE A NEW GATE DELIBERATE WAS BLIND TO IT.** That
+    test walks every step of every flow with *every fact false* and asserts the gated set — but its
+    facts object never listed `uploadsPaused`, so adding this gate left it passing unchanged.
+    **Any field added to `FlowFacts` belongs in that object**, or the guard silently stops guarding.
+- **RECOVERY IS OPERATIONAL, NOT A DEPLOY:** stop the uploaders → `uploadsPaused` = `yes` → Check +
+  Rebuild → confirm `2024` is gone and the badge reads `IN USE` → `uploadsPaused` = `no`. **Buah and
+  MHO are `CHANGE PENDING` too and the pause is site-wide**, so clear all three in one window.
+- **⚠ BUAH IS A DIFFERENT FAULT AND MUST NOT BE CONFLATED WITH THIS ONE.** Its step 3 reports *"7
+  unit(s) need a value chosen"* with *"some of its folder values could not be read from the term
+  store"* on every unit in all six libraries. In `tierOptionsFor` an `undefined` option list means a
+  READ FAILED, and the failure **cascades to every tier beneath it** — so one below-Unit tier with an
+  unresolvable term set (`State` or `Clarence Kiwi`) flags them all. The scan then refuses to place
+  anything in that unit, which is the fail-safe working. **Diagnose by reading `mode_buah`'s `Levels`
+  / `PendingLevels` JSON and checking each tier's `termSet`.** Likely the documented gap in the
+  Folder levels screen: a malformed or 404 term set ID blocks Add, but an **unreachable term store
+  only WARNS**, so a GUID typed during an outage saves clean and surfaces later, elsewhere.
+- **⚠ AND THE BACKTICK TRAP FIRED AGAIN WRITING THIS ENTRY — SIXTH TIME, FIRST TIME IN A SHELL.** A
+  `python -c "..."` in double quotes lets **bash expand every backtick inside it as a command
+  substitution**, so a doc entry full of `code spans` was silently shredded into
+  `command not found` lines and nothing was written. The five earlier instances were backticks inside
+  a `<style>` template literal; this is the same character in a different escape context. **Write
+  prose to a file and `cat` it; never pass Markdown through a double-quoted shell argument.**
+- **Verified**: `tsc --noEmit` clean, `eslint` clean on both changed files, suite **1692/0** (3 new
+  tests), 33 warnings — the baseline, none new. **NOT yet site-tested** — open the Change the folder
+  structure flow with uploads on and confirm Next is held with the reason beside it, then pause and
+  confirm it releases.

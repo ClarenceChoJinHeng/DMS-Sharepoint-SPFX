@@ -459,8 +459,13 @@ export function lockReason(step: FlowStep, facts: FlowFacts): string {
  *   - `folderAccess` is a definitive read, but an admin may deliberately map groups after building the
  *     folders. Ordering is advice there, not a prerequisite.
  *
- * That leaves the two where `todo` means the next step CANNOT work: no segment row to code against, and
- * a term with no code that reconciliation would silently skip.
+ * That leaves the three where `todo` means the next step CANNOT work: no segment row to code against,
+ * a term with no code that reconciliation would silently skip, and uploads still running against the
+ * folders a migration is about to move.
+ *
+ * ⚠ `resumeUploads` IS DELIBERATELY ABSENT, though it reads the same fact. Its `todo` is the state an
+ * admin ARRIVES in — uploads are still paused, which is why they are on that step at all — so gating it
+ * would trap them on the closing step of the flow with no way to finish.
  */
 const NEXT_GATED_STEPS: Record<string, string> = {
   createSegment:
@@ -469,6 +474,21 @@ const NEXT_GATED_STEPS: Record<string, string> = {
   abbreviations:
     "Some terms still have no folder code. Reconciliation skips those silently and creates no folder " +
     "for them, so finish here first.",
+  /* ⚠ ADDED 2026-09-07, AFTER THIS EXACT STEP WAS SKIPPED ON A LIVE SITE AND COST THREE DAYS.
+     GHO's structure change was staged on 2026-09-04; the migration was started at 16:36 and a file
+     arrived at 16:37 — one minute in, into a folder the scan had already walked past. Four people went
+     on filing into the segment for three days, so `2024` was never empty when the tidy ran, the fresh
+     scan always found new drift, and the chain could never apply. `uploadsPaused` read `no` throughout.
+
+     The screen already SAID so, in red: "Uploads must be turned off before continuing." It was a
+     warning, and the flow let the admin walk straight past it. This is the one preparation step whose
+     omission does not merely risk a worse outcome — it makes every later step in the flow futile, on a
+     run that reports success every time. Nothing else in this flow has that property, which is why
+     this is a gate and the rest are advice. */
+  pauseUploads:
+    "Uploads are still switched on. Turn them off above before continuing — a document uploaded during " +
+    "the migration lands in the old folder shape, and one that arrives after its folder has been " +
+    "scanned is never moved, which leaves the change stuck pending however many times you run it.",
 };
 
 /**
