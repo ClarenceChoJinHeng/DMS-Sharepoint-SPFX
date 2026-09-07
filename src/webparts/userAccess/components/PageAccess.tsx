@@ -1,3 +1,4 @@
+import { SCROLL_X, TABLE_MIN } from "../../../shared/responsive";
 // Page Access tab — who may open each page in Site Pages.
 //
 // READ-ONLY since 2026-09-02 (spec docs/superpowers/specs/2026-09-02-access-pages-read-only-design.md).
@@ -90,7 +91,11 @@ const s: Record<string, React.CSSProperties> = {
   head:     { fontWeight: 600, fontSize: 13, margin: "0 0 8px" },
   label:    { display: "block", fontWeight: 600, fontSize: 12, margin: "0 0 4px" },
   select:   { width: "100%", maxWidth: 420, boxSizing: "border-box", padding: "7px 10px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff" },
-  table:    { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 },
+  /* Responsive, 2026-09-07: the table keeps its own width so nothing changes on a desktop;
+     TABLE_MIN is a FLOOR against crushed columns and `tableWrap` takes the scroll. The scroll
+     belongs on the WRAPPER -- `display: block` on a table breaks column alignment. */
+  tableWrap: { ...SCROLL_X },
+  table:    { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8, ...TABLE_MIN },
   th:       { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:       { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "middle" },
   yes:      { color: "#0f6c3f", fontWeight: 600 },
@@ -483,35 +488,37 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                    than being clipped by it, unlike Group Management's people picker or the upload
                    form's info tooltips. Checked before capping the height. */
                 <div style={s.scroller}>
-                  <table style={s.table}>
-                    <thead>
-                      <tr>
-                        <th style={s.th}>Group</th>
-                        <th style={s.th}>People</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {visible.length === 0 ? (
+                  <div style={s.tableWrap}>
+                    <table style={s.table}>
+                      <thead>
                         <tr>
-                          <td style={s.td} colSpan={2}>
-                            <span style={s.no}>No group matches that filter.</span>
-                          </td>
+                          <th style={s.th}>Group</th>
+                          <th style={s.th}>People</th>
                         </tr>
-                      ) : (
-                        visible.map((g) => (
-                          <tr key={g.id}>
-                            <td style={s.td}>{g.title}</td>
-                            {/* Member COUNT, click to see who — `MemberCountWithPopup` reuses
-                                the same `members` map already read from `useGroupMembers`, so
-                                there is still only one fetch per group. */}
-                            <td style={s.td}>
-                              <MemberCountWithPopup group={g} members={members} />
+                      </thead>
+                      <tbody>
+                        {visible.length === 0 ? (
+                          <tr>
+                            <td style={s.td} colSpan={2}>
+                              <span style={s.no}>No group matches that filter.</span>
                             </td>
                           </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+                        ) : (
+                          visible.map((g) => (
+                            <tr key={g.id}>
+                              <td style={s.td}>{g.title}</td>
+                              {/* Member COUNT, click to see who — `MemberCountWithPopup` reuses
+                                  the same `members` map already read from `useGroupMembers`, so
+                                  there is still only one fetch per group. */}
+                              <td style={s.td}>
+                                <MemberCountWithPopup group={g} members={members} />
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </>

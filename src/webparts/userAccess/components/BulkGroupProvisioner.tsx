@@ -1,3 +1,4 @@
+import { SCROLL_X, TABLE_MIN } from "../../../shared/responsive";
 // Bulk group provisioning — every group a segment needs, in one run.
 //
 // Spec: docs/superpowers/specs/2026-08-18-group-creation-and-bulk-provisioning-design.md §5
@@ -269,7 +270,12 @@ const s: Record<string, React.CSSProperties> = {
   },
   /** The grey line under each role name. */
   tickHint: { display: "block", fontSize: 12, color: "#6b6b6b", marginTop: 2 },
+  /* Responsive, 2026-09-07: the table keeps its own width so nothing changes on a desktop;
+     TABLE_MIN is a FLOOR against crushed columns and `tableWrap` takes the scroll. The scroll
+     belongs on the WRAPPER -- `display: block` on a table breaks column alignment. */
+  tableWrap: { ...SCROLL_X },
   table: {
+    ...TABLE_MIN,
     width: "100%",
     borderCollapse: "collapse",
     fontSize: 12.5,
@@ -1174,46 +1180,48 @@ export default function BulkGroupProvisioner({
           </div>
           {tableOpen && (
             <div style={s.scroll}>
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    <th style={s.th}>Group</th>
-                    <th style={s.th}>Scope</th>
-                    <th style={s.th}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {plan.groups.map((g) => (
-                    <tr key={g.name}>
-                      <td style={s.td}>{g.name}</td>
-                      <td style={{ ...s.td, fontFamily: "inherit" }}>
-                        {g.scope}
-                      </td>
-                      {/* THREE statuses. "Already there under its old name" is the one that carries
-                          information the admin cannot get anywhere else: the unit is provisioned, so
-                          nothing will be created — AND its groups no longer match the folder code,
-                          which is the thing they may want to tidy. */}
-                      <td
-                        style={{
-                          ...s.td,
-                          fontFamily: "inherit",
-                          color: g.existingName
-                            ? "#8a4b00"
-                            : g.exists
-                              ? "#605e5c"
-                              : "#0f6c3f",
-                        }}
-                      >
-                        {g.existingName
-                          ? `already there as ${g.existingName}`
-                          : g.exists
-                            ? "already exists"
-                            : "new"}
-                      </td>
+              <div style={s.tableWrap}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>Group</th>
+                      <th style={s.th}>Scope</th>
+                      <th style={s.th}>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {plan.groups.map((g) => (
+                      <tr key={g.name}>
+                        <td style={s.td}>{g.name}</td>
+                        <td style={{ ...s.td, fontFamily: "inherit" }}>
+                          {g.scope}
+                        </td>
+                        {/* THREE statuses. "Already there under its old name" is the one that carries
+                            information the admin cannot get anywhere else: the unit is provisioned, so
+                            nothing will be created — AND its groups no longer match the folder code,
+                            which is the thing they may want to tidy. */}
+                        <td
+                          style={{
+                            ...s.td,
+                            fontFamily: "inherit",
+                            color: g.existingName
+                              ? "#8a4b00"
+                              : g.exists
+                                ? "#605e5c"
+                                : "#0f6c3f",
+                          }}
+                        >
+                          {g.existingName
+                            ? `already there as ${g.existingName}`
+                            : g.exists
+                              ? "already exists"
+                              : "new"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
           {existingRows !== undefined && (

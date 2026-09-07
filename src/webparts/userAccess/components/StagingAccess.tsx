@@ -1,3 +1,4 @@
+import { SCROLL_X, TABLE_MIN } from "../../../shared/responsive";
 // Staging Library Access tab — which groups may OPEN the Staging library.
 //
 // The problem it explains: folder grants alone are not enough to reach a library. SharePoint
@@ -63,7 +64,11 @@ const s: Record<string, React.CSSProperties> = {
   intro:    { fontSize: 13, color: "#444", margin: "0 0 16px" },
   card:     { border: "1px solid #e1e1e1", borderRadius: 6, padding: 16, marginBottom: 20, background: "#fafafa" },
   head:     { fontWeight: 600, fontSize: 13, margin: "0 0 8px" },
-  table:    { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 },
+  /* Responsive, 2026-09-07: the table keeps its own width so nothing changes on a desktop;
+     TABLE_MIN is a FLOOR against crushed columns and `tableWrap` takes the scroll. The scroll
+     belongs on the WRAPPER -- `display: block` on a table breaks column alignment. */
+  tableWrap: { ...SCROLL_X },
+  table:    { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8, ...TABLE_MIN },
   th:       { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:       { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "middle" },
   yes:      { color: "#0f6c3f", fontWeight: 600 },
@@ -475,58 +480,60 @@ export default function StagingAccess({ context, siteUrl, library }: Props): Rea
                 whose member editor's people picker IS absolutely positioned and clipped by a scroll
                 cap for exactly that reason. No such case exists here. */}
             <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    <th style={s.th}>Group</th>
-                    <th style={s.th}>Role</th>
-                    <th style={s.th}>People</th>
-                    <th style={s.th} title="What the library's permissions actually say right now.">
-                      Current access
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.length === 0 ? (
+              <div style={s.tableWrap}>
+                <table style={s.table}>
+                  <thead>
                     <tr>
-                      <td style={s.td} colSpan={4}>
-                        <span style={s.no}>No group matches that filter.</span>
-                      </td>
+                      <th style={s.th}>Group</th>
+                      <th style={s.th}>Role</th>
+                      <th style={s.th}>People</th>
+                      <th style={s.th} title="What the library's permissions actually say right now.">
+                        Current access
+                      </th>
                     </tr>
-                  ) : (
-                    visible.map((g) => {
-                      const liveGrant = liveByPid.get(g.id);
-                      // Limited Access alone is not library access — it is auto-granted because
-                      // the group holds a folder inside. Saying "Limited Access" here invited
-                      // exactly the wrong conclusion, so it is named for what it means.
-                      const folderOnly =
-                        liveGrant !== undefined && liveGrant.levels.every((n) => n === "Limited Access");
-                      return (
-                        <tr key={g.id}>
-                          <td style={s.td}>{g.title}</td>
-                          <td style={s.td}>{roleFromGroupName(g.title)}</td>
-                          {/* A read-only count, click to see who — kept from the removed
-                              per-person editor because knowing an "allowed" group is empty is worth
-                              seeing on its own. Adding or removing a member is done on Group
-                              Management now. */}
-                          <td style={s.td}>
-                            <MemberCountWithPopup group={g} members={members} />
-                          </td>
-                          <td style={s.td}>
-                            {live === undefined
-                              ? <span style={s.no}>unknown</span>
-                              : liveGrant === undefined
-                                ? <span style={s.no}>none</span>
-                                : folderOnly
-                                  ? <span style={s.folderOnly}>their folders only</span>
-                                  : <span style={s.yes}>{liveGrant.levels.filter((n) => n !== "Limited Access").join(", ") || "granted"}</span>}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {visible.length === 0 ? (
+                      <tr>
+                        <td style={s.td} colSpan={4}>
+                          <span style={s.no}>No group matches that filter.</span>
+                        </td>
+                      </tr>
+                    ) : (
+                      visible.map((g) => {
+                        const liveGrant = liveByPid.get(g.id);
+                        // Limited Access alone is not library access — it is auto-granted because
+                        // the group holds a folder inside. Saying "Limited Access" here invited
+                        // exactly the wrong conclusion, so it is named for what it means.
+                        const folderOnly =
+                          liveGrant !== undefined && liveGrant.levels.every((n) => n === "Limited Access");
+                        return (
+                          <tr key={g.id}>
+                            <td style={s.td}>{g.title}</td>
+                            <td style={s.td}>{roleFromGroupName(g.title)}</td>
+                            {/* A read-only count, click to see who — kept from the removed
+                                per-person editor because knowing an "allowed" group is empty is worth
+                                seeing on its own. Adding or removing a member is done on Group
+                                Management now. */}
+                            <td style={s.td}>
+                              <MemberCountWithPopup group={g} members={members} />
+                            </td>
+                            <td style={s.td}>
+                              {live === undefined
+                                ? <span style={s.no}>unknown</span>
+                                : liveGrant === undefined
+                                  ? <span style={s.no}>none</span>
+                                  : folderOnly
+                                    ? <span style={s.folderOnly}>their folders only</span>
+                                    : <span style={s.yes}>{liveGrant.levels.filter((n) => n !== "Limited Access").join(", ") || "granted"}</span>}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </>
         )}

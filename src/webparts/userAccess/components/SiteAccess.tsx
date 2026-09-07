@@ -1,3 +1,4 @@
+import { SCROLL_X, TABLE_MIN } from "../../../shared/responsive";
 // Site Access tab — who can open the site at all, and the membership that makes it work.
 //
 // This is the layer everything else sits on. A folder grant gives a user Limited Access up the
@@ -50,7 +51,11 @@ const s: Record<string, React.CSSProperties> = {
   intro:    { fontSize: 13, color: "#444", margin: "0 0 16px" },
   card:     { border: "1px solid #e1e1e1", borderRadius: 6, padding: 16, marginBottom: 20, background: "#fafafa" },
   head:     { fontWeight: 600, fontSize: 13, margin: "0 0 8px" },
-  table:    { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8 },
+  /* Responsive, 2026-09-07: the table keeps its own width so nothing changes on a desktop;
+     TABLE_MIN is a FLOOR against crushed columns and `tableWrap` takes the scroll. The scroll
+     belongs on the WRAPPER -- `display: block` on a table breaks column alignment. */
+  tableWrap: { ...SCROLL_X },
+  table:    { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8, ...TABLE_MIN },
   th:       { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:       { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "middle" },
   okBox:    { marginBottom: 16, padding: "10px 12px", border: "1px solid #b7dcc4", background: "#f3faf5", borderRadius: 4, fontSize: 12, color: "#0f6c3f", lineHeight: 1.5 },
@@ -365,29 +370,31 @@ export default function SiteAccess({ context, siteUrl }: Props): React.ReactElem
                     </div>
                   ) : (
                     <div style={SCROLLER}>
-                      <table style={s.table}>
-                        <thead>
-                          <tr>
-                            <th style={s.th}>Name</th>
-                            <th style={s.th}>Members</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {shown.map((g) => {
-                            const asGroup = allGroups?.find((sg) => sg.id === g.principalId);
-                            return (
-                              <tr key={g.principalId}>
-                                <td style={s.td}>{g.title || g.principalId}</td>
-                                <td style={s.td}>
-                                  {asGroup
-                                    ? <MemberCountWithPopup group={asGroup} members={groupMembers} />
-                                    : <span style={s.no}>—</span>}
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                      <div style={s.tableWrap}>
+                        <table style={s.table}>
+                          <thead>
+                            <tr>
+                              <th style={s.th}>Name</th>
+                              <th style={s.th}>Members</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {shown.map((g) => {
+                              const asGroup = allGroups?.find((sg) => sg.id === g.principalId);
+                              return (
+                                <tr key={g.principalId}>
+                                  <td style={s.td}>{g.title || g.principalId}</td>
+                                  <td style={s.td}>
+                                    {asGroup
+                                      ? <MemberCountWithPopup group={asGroup} members={groupMembers} />
+                                      : <span style={s.no}>—</span>}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
                   );
                 })()}

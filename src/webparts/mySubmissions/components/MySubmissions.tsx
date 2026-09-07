@@ -1,3 +1,4 @@
+import { SCROLL_X, TABLE_MIN, WRAP_ROW, BREAK_LONG, FIT } from "../../../shared/responsive";
 // My Submissions — what happened to the files I uploaded.
 //
 // Spec: docs/superpowers/specs/2026-08-14-my-submissions-design.md
@@ -141,8 +142,10 @@ const TABS = ["Submissions", "All", "Pending", "Approved", "Rejected", "Archive"
 const s: Record<string, React.CSSProperties> = {
   // Capped and centred like the other full-page screens, so a wide monitor does not stretch the
   // rows into unreadable ribbons.
-  wrap:     { fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px" },
-  headRow:  { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 },
+  /* FIT is the `maxWidth: 100%` + `border-box` ceiling. Without it the 1100 below is a floor
+     as well as a cap on any container narrower than 1100, and the whole page scrolls. */
+  wrap:     { fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px", ...FIT },
+  headRow:  { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, ...WRAP_ROW },
   h2:       { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   headRefresh: {
     border: "1px solid #c7c7c7", background: "#fff", borderRadius: 4, cursor: "pointer",
@@ -152,11 +155,16 @@ const s: Record<string, React.CSSProperties> = {
   tabs:     { display: "flex", gap: 4, borderBottom: "1px solid #edebe9", marginBottom: 16, flexWrap: "wrap" },
   tab:      { background: "none", border: "none", borderBottom: "2px solid transparent", color: "#605e5c", fontSize: 13, fontFamily: "inherit", padding: "8px 14px", cursor: "pointer", marginBottom: -1 },
   tabOn:    { borderBottom: "2px solid #0f6c3f", color: "#0f6c3f", fontWeight: 700 },
-  table:    { width: "100%", borderCollapse: "collapse", fontSize: 13 },
+  /* Responsive, 2026-09-07. The table keeps `width: 100%` so nothing changes on a desktop;
+     TABLE_MIN is a FLOOR that stops columns being crushed on a phone, and `tableWrap` below
+     takes the horizontal scroll. The scroll must be on the WRAPPER -- `display: block` on a
+     table stops it establishing a table formatting context and the columns stop lining up. */
+  table:    { width: "100%", borderCollapse: "collapse", fontSize: 13, ...TABLE_MIN },
+  tableWrap: { ...SCROLL_X },
   th:       { textAlign: "left", padding: "8px 10px", borderBottom: "2px solid #edebe9", fontWeight: 600, color: "#555", fontSize: 12 },
   td:       { padding: "9px 10px", borderBottom: "1px solid #f4f4f4", verticalAlign: "top" },
   link:     { color: "#0f6cbd", textDecoration: "none", fontWeight: 600 },
-  trail:    { fontSize: 12, color: "#605e5c" },
+  trail:    { fontSize: 12, color: "#605e5c", ...BREAK_LONG },
   badge:    { display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 10, whiteSpace: "nowrap" },
   bPending: { color: "#7a5c00", background: "#fff4ce", border: "1px solid #f2d98c" },
   bOk:      { color: "#0f6c3f", background: "#e7f4ec", border: "1px solid #b7dcc4" },
@@ -2700,47 +2708,49 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                 {current.reference || "Grouped by folder and date — uploaded before submissions were recorded"}
                 {" — "}{formatSubmittedAt(current.at)}
               </p>
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    {/* "Set", not "Batch" (client, 2026-09-06) — matching what the upload form calls
-                        it, so one thing has one name across the two screens.
-                        ⚠ DISPLAY ONLY. `BatchId` and `BatchRef` are columns on all four libraries
-                        and on `CRS Submissions`, and every stored value keeps the old name — this
-                        renames the word on screen and nothing else. */}
-                    <th style={s.th}>Set &mdash; where these files went</th>
-                    <th style={s.th}>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {current.batches.map((b) => (
-                    <tr key={b.reference || submissionKey(b.files[0])}>
-                      <td style={s.td}>
-                        {/* ⚠ THIS DOES NOT LOAD THE DETAILS, DELIBERATELY. The effect near the top
-                            watches `openBatch` and loads them — because level 1 opens a bulk run's
-                            batch directly and forgot to, which left every card reading "Reading the
-                            details…" for ever. One route in, one loader. */}
-                        <button
-                          style={s.nameBtn}
-                          onClick={() => setOpenBatch(b.reference || "—")}
-                        >
-                          {trailText(folderTrail(b.files[0]?.fileRef ?? "", libs)) || "—"}
-                        </button>
-                        {/* ⚠ THE BATCH REFERENCE (`BAT-20260827-WFDZ`) IS NO LONGER SHOWN (client,
-                            2026-08-30: *"User will be confused with this info"*). It is still
-                            STORED and still what groups these files — only the display is gone. The
-                            SUBMISSION reference above is kept: that is the one an uploader quotes to
-                            their approver, which is the whole reason references are readable rather
-                            than GUIDs. A batch is an internal subdivision of it. */}
-                        <div style={s.trail}>
-                          {b.files.length} file{b.files.length === 1 ? "" : "s"}
-                        </div>
-                      </td>
-                      <td style={s.td}>{countLine(b.files)}</td>
+              <div style={s.tableWrap}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      {/* "Set", not "Batch" (client, 2026-09-06) — matching what the upload form calls
+                          it, so one thing has one name across the two screens.
+                          ⚠ DISPLAY ONLY. `BatchId` and `BatchRef` are columns on all four libraries
+                          and on `CRS Submissions`, and every stored value keeps the old name — this
+                          renames the word on screen and nothing else. */}
+                      <th style={s.th}>Set &mdash; where these files went</th>
+                      <th style={s.th}>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {current.batches.map((b) => (
+                      <tr key={b.reference || submissionKey(b.files[0])}>
+                        <td style={s.td}>
+                          {/* ⚠ THIS DOES NOT LOAD THE DETAILS, DELIBERATELY. The effect near the top
+                              watches `openBatch` and loads them — because level 1 opens a bulk run's
+                              batch directly and forgot to, which left every card reading "Reading the
+                              details…" for ever. One route in, one loader. */}
+                          <button
+                            style={s.nameBtn}
+                            onClick={() => setOpenBatch(b.reference || "—")}
+                          >
+                            {trailText(folderTrail(b.files[0]?.fileRef ?? "", libs)) || "—"}
+                          </button>
+                          {/* ⚠ THE BATCH REFERENCE (`BAT-20260827-WFDZ`) IS NO LONGER SHOWN (client,
+                              2026-08-30: *"User will be confused with this info"*). It is still
+                              STORED and still what groups these files — only the display is gone. The
+                              SUBMISSION reference above is kept: that is the one an uploader quotes to
+                              their approver, which is the whole reason references are readable rather
+                              than GUIDs. A batch is an internal subdivision of it. */}
+                          <div style={s.trail}>
+                            {b.files.length} file{b.files.length === 1 ? "" : "s"}
+                          </div>
+                        </td>
+                        <td style={s.td}>{countLine(b.files)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           );
         }
@@ -2760,75 +2770,77 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             )}
             {/* PAGED, not scrolled (client, 2026-09-04). The 60vh box is gone; the pager below
                 states the total, which the scroll box never did. */}
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  <th style={s.th}>Submission</th>
-                  <th style={s.th}>Sets</th>
-                  {/* ⚠ THE "Upload" COLUMN IS GONE (client, 2026-09-03: "you forgot to remove the
-                      upload column, add Bulk tagging beside the folder name"). It read `Batch` on
-                      almost every row — the ordinary case, saying nothing — so a whole column was
-                      spent distinguishing the rare one. The `Bulk` chip moved INLINE beside the
-                      folder path in the Submission cell, and `Batch` is now simply the unmarked
-                      default. Supersedes the 2026-08-30 note that put this column beside Batches. */}
-                  <th style={s.th}>Files</th>
-                  <th style={s.th}>Status</th>
-                  <th style={s.th}>Uploaded</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pg_submissions.slice.map((g) => {
-                  /* ⚠ THE ROW IS LABELLED BY ITS DESTINATION, NOT BY A REFERENCE OR A FILE NAME
-                     (client, 2026-08-22, sketching it: `GHO › GF › TAX › 2024 › Term Sheet`).
-                     A reference is what you QUOTE to an approver; a path is what you RECOGNISE, and
-                     recognising the one you want is the whole job of this list. The reference stays,
-                     below and in monospace, for the quoting. */
-                  const where = trailText(folderTrail(g.batches[0]?.files[0]?.fileRef ?? "", libs));
-                  const more = g.batches.length - 1;
-                  return (
-                  <tr key={keyOf(g)}>
-                    <td style={s.td}>
-                      <button
-                        style={s.nameBtn}
-                        onClick={() => {
-                          setOpenSubmission(keyOf(g));
-                          /* ⚠ A BULK RUN HAS ONE DESTINATION, so its batch level lists exactly one
-                             row - a click that answers nothing. Opening the batch at the same time
-                             takes the reader straight to the files (client, 2026-08-28: *"it will
-                             open the second page immediately ... because there isn't any
-                             batches"*). */
-                          setOpenBatch(isBulkGroup(g) ? g.batches[0]?.reference || "—" : undefined);
-                        }}
-                      >
-                        {where || g.files[0]?.name || "—"}
-                        {/* Named rather than silently showing only the first: a submission that went
-                            to three places must not look like one that went to one. */}
-                        {more > 0 && ` + ${more} more destination${more === 1 ? "" : "s"}`}
-                      </button>
-                      {/* ⚠ ONLY BULK IS TAGGED (client, 2026-09-03). A batch upload is the ordinary
-                          way files arrive here, so marking it said nothing; the tag now marks the
-                          exception, beside the path it belongs to rather than in a column of its
-                          own. `isBulkGroup` is unchanged — this is where its answer is shown, not
-                          what it answers. */}
-                      {isBulkGroup(g) && <span style={s.bulkChip}>Bulk</span>}
-                      {g.inferred ? (
-                        /* Said plainly. These rows are grouped by folder and day because nothing on
-                           them records the upload — a good guess, and the screen must not pass it
-                           off as a recorded submission. */
-                        <div style={s.trail}>Grouped by folder and date &mdash; uploaded before submissions were recorded</div>
-                      ) : (
-                        <div style={s.refLine}>{g.reference}</div>
-                      )}
-                    </td>
-                    <td style={s.td}>{g.batches.length}</td>
-                    <td style={s.td}>{g.files.length}</td>
-                    <td style={s.td}>{countLine(g.files)}</td>
-                    <td style={s.td}>{formatSubmittedAt(g.at)}</td>
+            <div style={s.tableWrap}>
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    <th style={s.th}>Submission</th>
+                    <th style={s.th}>Sets</th>
+                    {/* ⚠ THE "Upload" COLUMN IS GONE (client, 2026-09-03: "you forgot to remove the
+                        upload column, add Bulk tagging beside the folder name"). It read `Batch` on
+                        almost every row — the ordinary case, saying nothing — so a whole column was
+                        spent distinguishing the rare one. The `Bulk` chip moved INLINE beside the
+                        folder path in the Submission cell, and `Batch` is now simply the unmarked
+                        default. Supersedes the 2026-08-30 note that put this column beside Batches. */}
+                    <th style={s.th}>Files</th>
+                    <th style={s.th}>Status</th>
+                    <th style={s.th}>Uploaded</th>
                   </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {pg_submissions.slice.map((g) => {
+                    /* ⚠ THE ROW IS LABELLED BY ITS DESTINATION, NOT BY A REFERENCE OR A FILE NAME
+                       (client, 2026-08-22, sketching it: `GHO › GF › TAX › 2024 › Term Sheet`).
+                       A reference is what you QUOTE to an approver; a path is what you RECOGNISE, and
+                       recognising the one you want is the whole job of this list. The reference stays,
+                       below and in monospace, for the quoting. */
+                    const where = trailText(folderTrail(g.batches[0]?.files[0]?.fileRef ?? "", libs));
+                    const more = g.batches.length - 1;
+                    return (
+                    <tr key={keyOf(g)}>
+                      <td style={s.td}>
+                        <button
+                          style={s.nameBtn}
+                          onClick={() => {
+                            setOpenSubmission(keyOf(g));
+                            /* ⚠ A BULK RUN HAS ONE DESTINATION, so its batch level lists exactly one
+                               row - a click that answers nothing. Opening the batch at the same time
+                               takes the reader straight to the files (client, 2026-08-28: *"it will
+                               open the second page immediately ... because there isn't any
+                               batches"*). */
+                            setOpenBatch(isBulkGroup(g) ? g.batches[0]?.reference || "—" : undefined);
+                          }}
+                        >
+                          {where || g.files[0]?.name || "—"}
+                          {/* Named rather than silently showing only the first: a submission that went
+                              to three places must not look like one that went to one. */}
+                          {more > 0 && ` + ${more} more destination${more === 1 ? "" : "s"}`}
+                        </button>
+                        {/* ⚠ ONLY BULK IS TAGGED (client, 2026-09-03). A batch upload is the ordinary
+                            way files arrive here, so marking it said nothing; the tag now marks the
+                            exception, beside the path it belongs to rather than in a column of its
+                            own. `isBulkGroup` is unchanged — this is where its answer is shown, not
+                            what it answers. */}
+                        {isBulkGroup(g) && <span style={s.bulkChip}>Bulk</span>}
+                        {g.inferred ? (
+                          /* Said plainly. These rows are grouped by folder and day because nothing on
+                             them records the upload — a good guess, and the screen must not pass it
+                             off as a recorded submission. */
+                          <div style={s.trail}>Grouped by folder and date &mdash; uploaded before submissions were recorded</div>
+                        ) : (
+                          <div style={s.refLine}>{g.reference}</div>
+                        )}
+                      </td>
+                      <td style={s.td}>{g.batches.length}</td>
+                      <td style={s.td}>{g.files.length}</td>
+                      <td style={s.td}>{countLine(g.files)}</td>
+                      <td style={s.td}>{formatSubmittedAt(g.at)}</td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
             <Pager page={pg_submissions} onPage={(n) => setPage("submissions", n)} label="submissions" />
           </div>
         );
@@ -2845,55 +2857,57 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           )}
           {myRequestList.length > 0 && (
             <>
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  <th style={s.th}>File</th>
-                  <th style={s.th}>Asked for</th>
-                  <th style={s.th}>Status</th>
-                  <th style={s.th}>Raised</th>
-                  <th style={s.th} />
-                </tr>
-              </thead>
-              <tbody>
-                {pg_requests.slice.map((rq) => {
-                  const on = new Date(rq.at);
-                  return (
-                    <tr key={rq.id}>
-                      <td style={s.td}>{rq.itemName || <em style={{ color: "#605e5c" }}>unnamed</em>}</td>
-                      <td style={s.td}>{rq.type === "Share" ? "Share" : "Deletion"}</td>
-                      <td style={s.td}>
-                        <span style={badgeFor(rq.status === "Cancelled" ? "Rejected" : rq.status)}>
-                          {rq.status}
-                        </span>
-                        {rq.decidedBy ? (
-                          <div style={{ fontSize: 11, color: "#605e5c", marginTop: 2 }}>by {rq.decidedBy}</div>
-                        ) : null}
-                        {rq.note ? (
-                          <div style={{ fontSize: 11, color: "#605e5c", marginTop: 2 }}>&ldquo;{rq.note}&rdquo;</div>
-                        ) : null}
-                      </td>
-                      <td style={s.td}>{isNaN(on.getTime()) ? "—" : formatSubmittedOn(on)}</td>
-                      <td style={s.td}>
-                        {/* Only the requester's own PENDING rows, and this list only ever holds their
-                            own. Cancelling a DECIDED request is refused by canCancel: it could not
-                            un-recycle a file or take back a share, so offering it would promise
-                            something the button cannot do. */}
-                        {rq.status === "Pending" ? (
-                          <button
-                            style={cancelling === rq.id ? s.askOff : s.askBtn}
-                            disabled={cancelling !== undefined}
-                            onClick={() => { cancelRequest(rq).catch(() => undefined); }}
-                          >
-                            {cancelling === rq.id ? "Cancelling…" : "Cancel"}
-                          </button>
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div style={s.tableWrap}>
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    <th style={s.th}>File</th>
+                    <th style={s.th}>Asked for</th>
+                    <th style={s.th}>Status</th>
+                    <th style={s.th}>Raised</th>
+                    <th style={s.th} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {pg_requests.slice.map((rq) => {
+                    const on = new Date(rq.at);
+                    return (
+                      <tr key={rq.id}>
+                        <td style={s.td}>{rq.itemName || <em style={{ color: "#605e5c" }}>unnamed</em>}</td>
+                        <td style={s.td}>{rq.type === "Share" ? "Share" : "Deletion"}</td>
+                        <td style={s.td}>
+                          <span style={badgeFor(rq.status === "Cancelled" ? "Rejected" : rq.status)}>
+                            {rq.status}
+                          </span>
+                          {rq.decidedBy ? (
+                            <div style={{ fontSize: 11, color: "#605e5c", marginTop: 2 }}>by {rq.decidedBy}</div>
+                          ) : null}
+                          {rq.note ? (
+                            <div style={{ fontSize: 11, color: "#605e5c", marginTop: 2 }}>&ldquo;{rq.note}&rdquo;</div>
+                          ) : null}
+                        </td>
+                        <td style={s.td}>{isNaN(on.getTime()) ? "—" : formatSubmittedOn(on)}</td>
+                        <td style={s.td}>
+                          {/* Only the requester's own PENDING rows, and this list only ever holds their
+                              own. Cancelling a DECIDED request is refused by canCancel: it could not
+                              un-recycle a file or take back a share, so offering it would promise
+                              something the button cannot do. */}
+                          {rq.status === "Pending" ? (
+                            <button
+                              style={cancelling === rq.id ? s.askOff : s.askBtn}
+                              disabled={cancelling !== undefined}
+                              onClick={() => { cancelRequest(rq).catch(() => undefined); }}
+                            >
+                              {cancelling === rq.id ? "Cancelling…" : "Cancel"}
+                            </button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
             <Pager page={pg_requests} onPage={(n) => setPage("requests", n)} label="requests" />
             </>
           )}
@@ -2949,154 +2963,156 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
 
       {shown.length > 0 && (
         <>
-        <table style={s.table}>
-          <thead>
-            <tr>
-              <th style={s.th}>File</th>
-              <th style={s.th}>Status</th>
-              <th style={s.th}>Uploaded</th>
-              <th style={s.th} />
-            </tr>
-          </thead>
-          <tbody>
-            {pg_rows.slice.map((r) => (
-              /* ⚠ KEYED BY `mergedKey`, NOT `submissionKey`. The latter is `library#itemId`, and a
-                 record row's item id belongs to a DIFFERENT list — so two records could collide with
-                 each other and with a live document, and React would silently drop a row. */
-              <tr key={mergedKey(r)} style={r.recordState ? s.goneRow : undefined}>
-                <td style={s.td}>
-                  {/* ⚠ A GONE FILE IS NOT A BUTTON. There is nothing to open: no preview, no Open
-                      file, and the detail view would read the item live and find nothing. Branching
-                      on `recordState` BEFORE anything else is the rule the whole record rests on. */}
-                  {r.recordState ? (
-                    <span style={s.goneName}>{r.name}</span>
-                  ) : (
-                    /* A button, not a link. It opens the detail view INSIDE this page — the client's
-                       request, and the fix for a click that used to land the uploader in the
-                       document library. The file itself is still one click further, from there. */
-                    <button style={s.nameBtn} onClick={() => openRow(r)}>
-                      {r.name}
-                    </button>
-                  )}
-                  {/* ⚠ THE SAME NAME CAN EXIST IN BOTH LIBRARIES — one upload classified Highly
-                      Confidential, one not — and without this they are indistinguishable here: same
-                      name, same tier path, same status. An uploader raising a deletion was choosing
-                      blind, and only the recycle bin's Original location revealed which went. */}
-                  {isHcRow(r.library, hcSegs) && <span style={s.hcTag}>HC</span>}
-                {isArchivedRow(r.library, arcSegs) && <span style={s.arcTag}>Archived</span>}
-                  <div style={s.trail}>{trailText(folderTrail(r.fileRef, libs)) || "—"}</div>
-                  {r.status === "Rejected" && (
-                    <div style={s.comment}>
-                      {r.comment
-                        ? `Reason: ${r.comment}`
-                        : "No reason was recorded. Ask your approver what needs changing."}
-                    </div>
-                  )}
-                </td>
-                <td style={s.td}>
-                  {/* ⚠ NEVER THE APPROVAL BADGE FOR A GONE FILE. `status` is `Pending` on a record
-                      row only because `Submission` demands a value; showing it would tell an uploader
-                      a destroyed document is awaiting approval. `unknown` is its own answer — the
-                      libraries could not all be read, so this says so rather than claiming either. */}
-                  {r.recordState === "deleted" ? (
-                    <span style={s.goneBadge}>Deleted</span>
-                  ) : r.recordState === "cancelled" ? (
-                    <span style={s.cancelBadge}>Cancelled</span>
-                  ) : r.recordState === "archived" ? (
-                    <span style={s.archivedBadge}>Archived</span>
-                  ) : r.recordState === "unknown" ? (
-                    <span style={s.unsureBadge}>Not checked</span>
-                  ) : (
-                    <span style={badgeFor(r.status)}>{r.status}</span>
-                  )}
-                  {/* A REQUEST is not a document status, so it gets its own quiet tag rather than
-                      replacing the badge — a file can be Approved AND have a deletion pending, and
-                      collapsing the two would hide whichever mattered less to whoever wrote the
-                      code. Only PENDING is shown: a decided request is history, and the detail view
-                      carries the outcome and the approver's note. */}
-                  {myRequests[(r.uniqueId ?? "").toLowerCase()]?.status === "Pending" && (
-                    // "asked" -> "requested" (client, 2026-09-03) — same fact, the word the rest of
-                    // this screen already uses ("Your approver must approve this request").
-                    <span style={s.askedTag}>
-                      {myRequests[(r.uniqueId ?? "").toLowerCase()].type === "Share"
-                        ? "Share Requested"
-                        : "Deletion Requested"}
-                    </span>
-                  )}
-                </td>
-                <td style={s.td}>{formatSubmittedAt(r.created)}</td>
-                {/* ── Ask from the ROW ────────────────────────────────────────────────
-                    Client, 2026-08-20: "put a button beside the uploaded for each file so its
-                    easier to share or delete instead of going into each file manually."
-
-                    Same rules as the detail view, from the same places, so the two routes cannot
-                    diverge: deletion on every file, share on APPROVED files only, and nothing at all
-                    while a request is already pending — a second request for one file gives the Head
-                    of Unit two rows for one decision.
-
-                    Pressing one loads that file's tier metadata, because routing to the right
-                    approver reads the document's own `<Base>Tid` fields and this list does not carry
-                    them (FieldValuesAsText is a per-ITEM endpoint). The dialog's Send button waits
-                    for it rather than sending with nothing, which would route on a blank unit. */}
-                <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }}>
-                  {/* ⚠ NO REQUEST BUTTONS ON A GONE FILE. A deletion request for a document that is
-                      already gone is meaningless, and a share request would be APPROVED by a Head of
-                      Unit and then fail in their own session — after the requester was told it was
-                      being handled. The approval executes against the document, and there is none. */}
-                  {/* ⚠ NOTHING IS RENDERED FOR A GONE ROW, and the empty branch is doing the work.
-                      The words "no longer here" / "replaced" / "in the archive" are gone (client,
-                      2026-09-03) — each repeated, in the next column, what the row's own badge
-                      already says. What must NOT be lost is the branch itself: a gone row gets no
-                      Delete and no Share button. For an archived file that is not merely tidiness —
-                      `validateDraft` REFUSES a deletion or share request against one outright
-                      (2026-08-22), because every role holds only Read on the archive and an approved
-                      request would fail in the approver's own session days later. */}
-                  {/* ⚠ EMPTY WHILE A REQUEST IS PENDING, NOT the word "requested" (client,
-                      2026-09-03). The chip beside the file name already says `Deletion Requested` /
-                      `Share Requested`, so this column was the same fact a third time. The BRANCH
-                      stays and is what matters: while a request is open the Delete and Share buttons
-                      must not be offered, or the uploader raises a second row for a decision the
-                      approver has not made yet — which is exactly what the 2026-08-20 "you already
-                      asked" work exists to prevent. */}
-                  {r.recordState ? undefined : myRequests[(r.uniqueId ?? "").toLowerCase()]?.status === "Pending" ? undefined : (
-                    <>
-                      <button
-                        style={requestsUnavailable === undefined && r.uniqueId ? s.rowBtn : s.rowBtnOff}
-                        disabled={requestsUnavailable !== undefined || !r.uniqueId}
-                        title={requestsUnavailable ?? "Ask your Approver to delete this file"}
-                        onClick={() => {
-                          setProblems([]);
-                          setAskRow(r);
-                          setFieldText(undefined);
-                          setAsking("Deletion");
-                          loadFieldText(r).catch(() => setFieldText({}));
-                        }}
-                      >
-                        Delete
+        <div style={s.tableWrap}>
+          <table style={s.table}>
+            <thead>
+              <tr>
+                <th style={s.th}>File</th>
+                <th style={s.th}>Status</th>
+                <th style={s.th}>Uploaded</th>
+                <th style={s.th} />
+              </tr>
+            </thead>
+            <tbody>
+              {pg_rows.slice.map((r) => (
+                /* ⚠ KEYED BY `mergedKey`, NOT `submissionKey`. The latter is `library#itemId`, and a
+                   record row's item id belongs to a DIFFERENT list — so two records could collide with
+                   each other and with a live document, and React would silently drop a row. */
+                <tr key={mergedKey(r)} style={r.recordState ? s.goneRow : undefined}>
+                  <td style={s.td}>
+                    {/* ⚠ A GONE FILE IS NOT A BUTTON. There is nothing to open: no preview, no Open
+                        file, and the detail view would read the item live and find nothing. Branching
+                        on `recordState` BEFORE anything else is the rule the whole record rests on. */}
+                    {r.recordState ? (
+                      <span style={s.goneName}>{r.name}</span>
+                    ) : (
+                      /* A button, not a link. It opens the detail view INSIDE this page — the client's
+                         request, and the fix for a click that used to land the uploader in the
+                         document library. The file itself is still one click further, from there. */
+                      <button style={s.nameBtn} onClick={() => openRow(r)}>
+                        {r.name}
                       </button>
-                      {r.status === "Approved" && (
+                    )}
+                    {/* ⚠ THE SAME NAME CAN EXIST IN BOTH LIBRARIES — one upload classified Highly
+                        Confidential, one not — and without this they are indistinguishable here: same
+                        name, same tier path, same status. An uploader raising a deletion was choosing
+                        blind, and only the recycle bin's Original location revealed which went. */}
+                    {isHcRow(r.library, hcSegs) && <span style={s.hcTag}>HC</span>}
+                  {isArchivedRow(r.library, arcSegs) && <span style={s.arcTag}>Archived</span>}
+                    <div style={s.trail}>{trailText(folderTrail(r.fileRef, libs)) || "—"}</div>
+                    {r.status === "Rejected" && (
+                      <div style={s.comment}>
+                        {r.comment
+                          ? `Reason: ${r.comment}`
+                          : "No reason was recorded. Ask your approver what needs changing."}
+                      </div>
+                    )}
+                  </td>
+                  <td style={s.td}>
+                    {/* ⚠ NEVER THE APPROVAL BADGE FOR A GONE FILE. `status` is `Pending` on a record
+                        row only because `Submission` demands a value; showing it would tell an uploader
+                        a destroyed document is awaiting approval. `unknown` is its own answer — the
+                        libraries could not all be read, so this says so rather than claiming either. */}
+                    {r.recordState === "deleted" ? (
+                      <span style={s.goneBadge}>Deleted</span>
+                    ) : r.recordState === "cancelled" ? (
+                      <span style={s.cancelBadge}>Cancelled</span>
+                    ) : r.recordState === "archived" ? (
+                      <span style={s.archivedBadge}>Archived</span>
+                    ) : r.recordState === "unknown" ? (
+                      <span style={s.unsureBadge}>Not checked</span>
+                    ) : (
+                      <span style={badgeFor(r.status)}>{r.status}</span>
+                    )}
+                    {/* A REQUEST is not a document status, so it gets its own quiet tag rather than
+                        replacing the badge — a file can be Approved AND have a deletion pending, and
+                        collapsing the two would hide whichever mattered less to whoever wrote the
+                        code. Only PENDING is shown: a decided request is history, and the detail view
+                        carries the outcome and the approver's note. */}
+                    {myRequests[(r.uniqueId ?? "").toLowerCase()]?.status === "Pending" && (
+                      // "asked" -> "requested" (client, 2026-09-03) — same fact, the word the rest of
+                      // this screen already uses ("Your approver must approve this request").
+                      <span style={s.askedTag}>
+                        {myRequests[(r.uniqueId ?? "").toLowerCase()].type === "Share"
+                          ? "Share Requested"
+                          : "Deletion Requested"}
+                      </span>
+                    )}
+                  </td>
+                  <td style={s.td}>{formatSubmittedAt(r.created)}</td>
+                  {/* ── Ask from the ROW ────────────────────────────────────────────────
+                      Client, 2026-08-20: "put a button beside the uploaded for each file so its
+                      easier to share or delete instead of going into each file manually."
+
+                      Same rules as the detail view, from the same places, so the two routes cannot
+                      diverge: deletion on every file, share on APPROVED files only, and nothing at all
+                      while a request is already pending — a second request for one file gives the Head
+                      of Unit two rows for one decision.
+
+                      Pressing one loads that file's tier metadata, because routing to the right
+                      approver reads the document's own `<Base>Tid` fields and this list does not carry
+                      them (FieldValuesAsText is a per-ITEM endpoint). The dialog's Send button waits
+                      for it rather than sending with nothing, which would route on a blank unit. */}
+                  <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }}>
+                    {/* ⚠ NO REQUEST BUTTONS ON A GONE FILE. A deletion request for a document that is
+                        already gone is meaningless, and a share request would be APPROVED by a Head of
+                        Unit and then fail in their own session — after the requester was told it was
+                        being handled. The approval executes against the document, and there is none. */}
+                    {/* ⚠ NOTHING IS RENDERED FOR A GONE ROW, and the empty branch is doing the work.
+                        The words "no longer here" / "replaced" / "in the archive" are gone (client,
+                        2026-09-03) — each repeated, in the next column, what the row's own badge
+                        already says. What must NOT be lost is the branch itself: a gone row gets no
+                        Delete and no Share button. For an archived file that is not merely tidiness —
+                        `validateDraft` REFUSES a deletion or share request against one outright
+                        (2026-08-22), because every role holds only Read on the archive and an approved
+                        request would fail in the approver's own session days later. */}
+                    {/* ⚠ EMPTY WHILE A REQUEST IS PENDING, NOT the word "requested" (client,
+                        2026-09-03). The chip beside the file name already says `Deletion Requested` /
+                        `Share Requested`, so this column was the same fact a third time. The BRANCH
+                        stays and is what matters: while a request is open the Delete and Share buttons
+                        must not be offered, or the uploader raises a second row for a decision the
+                        approver has not made yet — which is exactly what the 2026-08-20 "you already
+                        asked" work exists to prevent. */}
+                    {r.recordState ? undefined : myRequests[(r.uniqueId ?? "").toLowerCase()]?.status === "Pending" ? undefined : (
+                      <>
                         <button
                           style={requestsUnavailable === undefined && r.uniqueId ? s.rowBtn : s.rowBtnOff}
                           disabled={requestsUnavailable !== undefined || !r.uniqueId}
-                          title={requestsUnavailable ?? "Ask your Approver to share this file"}
+                          title={requestsUnavailable ?? "Ask your Approver to delete this file"}
                           onClick={() => {
                             setProblems([]);
                             setAskRow(r);
                             setFieldText(undefined);
-                            setAsking("Share");
+                            setAsking("Deletion");
                             loadFieldText(r).catch(() => setFieldText({}));
                           }}
                         >
-                          Share
+                          Delete
                         </button>
-                      )}
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                        {r.status === "Approved" && (
+                          <button
+                            style={requestsUnavailable === undefined && r.uniqueId ? s.rowBtn : s.rowBtnOff}
+                            disabled={requestsUnavailable !== undefined || !r.uniqueId}
+                            title={requestsUnavailable ?? "Ask your Approver to share this file"}
+                            onClick={() => {
+                              setProblems([]);
+                              setAskRow(r);
+                              setFieldText(undefined);
+                              setAsking("Share");
+                              loadFieldText(r).catch(() => setFieldText({}));
+                            }}
+                          >
+                            Share
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <Pager page={pg_rows} onPage={(n) => setPage("rows", n)} label="documents" />
         </>
       )}

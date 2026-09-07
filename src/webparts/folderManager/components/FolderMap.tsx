@@ -5,6 +5,7 @@ import { IFolderManagerProps } from "./IFolderManagerProps";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 
+import { SCROLL_X, TABLE_MIN } from "../../../shared/responsive";
 // Title is RESOLVED — the client renames the list to "CRS Folder Map" at import.
 const LIST_NAME = (): string => cachedListTitle(LIST_SUFFIX.folderMap);
 const LIST_ENC  = (): string => encodeURIComponent(LIST_NAME());
@@ -36,7 +37,11 @@ const s: Record<string, React.CSSProperties> = {
   segActive:  { background: "#0f6c3f", color: "#fff" },
   note:       { fontSize: 12, color: "#666", background: "#f7f7f7", border: "1px solid #e0e0e0", borderRadius: 4, padding: "8px 12px", marginBottom: 20 },
   errNote:    { fontSize: 12, color: "#a4262c", background: "#fdf3f3", border: "1px solid #f4c2c2", borderRadius: 4, padding: "10px 14px", marginBottom: 20 },
-  table:      { width: "100%", borderCollapse: "collapse" as const, marginBottom: 24 },
+  /* Responsive, 2026-09-07: the table keeps its own width so nothing changes on a desktop;
+     TABLE_MIN is a FLOOR against crushed columns and `tableWrap` takes the scroll. The scroll
+     belongs on the WRAPPER -- `display: block` on a table breaks column alignment. */
+  tableWrap: { ...SCROLL_X },
+  table:      { width: "100%", borderCollapse: "collapse" as const, marginBottom: 24, ...TABLE_MIN },
   th:         { fontSize: 11, fontWeight: 700, textTransform: "uppercase" as const, letterSpacing: ".06em", color: "#555", borderBottom: "2px solid #e0e0e0", padding: "6px 10px", textAlign: "left" as const },
   td:         { padding: "9px 10px", fontSize: 13, borderBottom: "1px solid #f0f0f0", verticalAlign: "middle" as const },
   arrow:      { color: "#bbb", fontSize: 16, textAlign: "center" as const, width: 32, padding: "9px 4px" },
@@ -308,36 +313,38 @@ export default function FolderMap({ context }: IFolderManagerProps): React.React
               No mappings yet for this mode — the term label will be used as the folder name.
             </p>
           ) : (
-            <table style={s.table}>
-              <thead>
-                <tr>
-                  <th style={s.th}>Term Label (Term Store)</th>
-                  <th style={{ ...s.th, ...s.arrow }} />
-                  <th style={s.th}>Folder Name (SharePoint)</th>
-                  <th style={{ ...s.th, width: 80 }} />
-                </tr>
-              </thead>
-              <tbody>
-                {modeEntries.map((entry) => (
-                  <tr key={entry.id}>
-                    <td style={s.td}>
-                      <span style={s.termBadge}>{entry.termLabel}</span>
-                    </td>
-                    <td style={{ ...s.td, ...s.arrow }}>→</td>
-                    <td style={s.td}>{entry.folderName}</td>
-                    <td style={s.td}>
-                      <button
-                        onClick={() => deleteEntry(entry.id, entry.termLabel)}
-                        disabled={saving}
-                        style={{ ...s.deleteBtn, ...(saving ? { opacity: .5 } : {}) }}
-                      >
-                        Remove
-                      </button>
-                    </td>
+            <div style={s.tableWrap}>
+              <table style={s.table}>
+                <thead>
+                  <tr>
+                    <th style={s.th}>Term Label (Term Store)</th>
+                    <th style={{ ...s.th, ...s.arrow }} />
+                    <th style={s.th}>Folder Name (SharePoint)</th>
+                    <th style={{ ...s.th, width: 80 }} />
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {modeEntries.map((entry) => (
+                    <tr key={entry.id}>
+                      <td style={s.td}>
+                        <span style={s.termBadge}>{entry.termLabel}</span>
+                      </td>
+                      <td style={{ ...s.td, ...s.arrow }}>→</td>
+                      <td style={s.td}>{entry.folderName}</td>
+                      <td style={s.td}>
+                        <button
+                          onClick={() => deleteEntry(entry.id, entry.termLabel)}
+                          disabled={saving}
+                          style={{ ...s.deleteBtn, ...(saving ? { opacity: .5 } : {}) }}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
           {/* Add new mapping */}
