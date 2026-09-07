@@ -156,6 +156,20 @@ export interface SubtreeMigratorProps {
   context: WebPartContext;
   siteUrl: string;
   /**
+   * Whether uploads are paused site-wide, as the HOST already knows it.
+   *
+   * ⚠ ONLY `true` HIDES THE WARNING. `undefined` — the standalone mount, or a config list that could
+   * not be read — keeps showing it, because a reminder nobody needed costs a glance while a missing
+   * one costs a migration that can never finish.
+   *
+   * Reported on site 2026-09-07: *"the error keeps showing for some reason even after I off the
+   * upload"*. The banner was rendered UNCONDITIONALLY — a permanent reminder wearing the costume of
+   * a state. That is the same mistake already recorded against StagingAccess's "Unable to verify
+   * current permissions": a state drawn as a static sibling tells the admin something is wrong on
+   * every visit and trains them to ignore it on the day it is true.
+   */
+  uploadsPaused?: boolean;
+  /**
    * True while this screen is SCANNING or MOVING, so a host can hold its own navigation.
    *
    * Both phases run entirely in this page, so unmounting the component stops them part-way. The
@@ -190,7 +204,7 @@ export interface SubtreeMigratorProps {
   initialSegmentKey?: string;
 }
 
-export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, initialSegmentKey }: SubtreeMigratorProps): React.ReactElement {
+export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, initialSegmentKey, uploadsPaused }: SubtreeMigratorProps): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [segments, setSegments] = useState<SegmentRow[]>([]);
@@ -1300,17 +1314,27 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
   return (
     <div>
       {/* The client's banner (2026-09-06). It replaces the Power Automate warning that stood here.
-          ⚠ IT IS NOT A GATE. Nothing on this screen reads the pause state, so a migration CAN still
-          be run with uploads on — and doing so is the loop the pause exists to prevent: a file
-          filed mid-migration lands in the OLD shape and, if it arrives after its folder was scanned,
-          is never moved, which keeps the pending chain from ever applying. If this ever needs to
-          BLOCK rather than warn, the fact to read is `uploadsPaused`, which the guided flow already
-          computes for its own rail. */}
-      <div style={{ ...s.msg, ...s.warn }}>
-        <span aria-hidden="true" style={{ marginRight: 6 }}>&#9888;</span>
-        <strong>Uploads must be turned off before continuing.</strong> Go back to Step 1 to turn off
-        uploads.
-      </div>
+
+          ⚠ IT IS STILL NOT A GATE — this screen refuses nothing, so a migration CAN be run with
+          uploads on, and doing so is the loop the pause exists to prevent: a file filed
+          mid-migration lands in the OLD shape and, if it arrives after its folder was scanned, is
+          never moved, so the pending chain can never apply. The BLOCK now lives one level up, in the
+          guided flow's `blocksNext` on step 1 (1.0.452.0). Reaching this screen with uploads on is
+          therefore only possible from the standalone Migrate tab, which has no step 1 — which is
+          exactly why the warning is still worth rendering here.
+
+          ⚠ AND IT IS CONDITIONAL NOW. It was rendered unconditionally, so it went on demanding that
+          uploads be turned off after they had been (reported on site 2026-09-07). Only a KNOWN-paused
+          state hides it: `undefined` — the standalone mount, or an unreadable config — still shows
+          it, because a needless reminder costs a glance and a missing one costs the whole
+          migration. */}
+      {uploadsPaused !== true && (
+        <div style={{ ...s.msg, ...s.warn }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>&#9888;</span>
+          <strong>Uploads must be turned off before continuing.</strong> Go back to Step 1 to turn off
+          uploads.
+        </div>
+      )}
       {/* ⚠ THE POWER AUTOMATE CAVEAT IS GONE FROM THE UI ENTIRELY (client, 2026-09-07: *"can you
           remove this?"*), AND THIS COMMENT IS NOW THE ONLY RECORD OF IT. Its own flow step went on
           2026-09-06 and this quiet line was the last place it was said anywhere on screen.

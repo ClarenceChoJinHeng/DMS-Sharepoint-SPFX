@@ -1059,6 +1059,28 @@ export default function FolderAdmin({
   const needsPick = active.needsSegment && !segment;
   const locked = isLocked(step, effectiveFacts);
 
+  /**
+   * The lowest step whose Next is currently blocked. Nothing PAST it may be reached from the rail.
+   *
+   * ⚠ WITHOUT THIS THE RAIL IS A SECOND ROUTE PAST THE GATE, and the client found it within the hour
+   * (2026-09-07): uploads switched back ON, Next correctly held on step 1 — and steps 2 and 3 still
+   * clickable in the side panel, because `reachable` was `i <= maxIdx` alone. `maxIdx` records the
+   * furthest step ever REACHED, so once you have walked forward the rail keeps offering those steps
+   * whatever the facts have since become. A gate on one control and not the other is not a gate.
+   *
+   * `steps.length` when nothing blocks, so the cap is inert on a clean flow.
+   */
+  let firstBlockedIdx = steps.length;
+  for (let i = 0; i < steps.length; i++) {
+    if (blocksNext(steps[i], effectiveFacts).length > 0) {
+      firstBlockedIdx = i;
+      break;
+    }
+  }
+  const blockedReason = firstBlockedIdx < steps.length
+    ? blocksNext(steps[firstBlockedIdx], effectiveFacts)
+    : "";
+
   const renderStep = (st: FlowStep): React.ReactElement => {
     // The segment picker stands in front of every step that HAS a subject: without it the screens below
     // have none, and half of them would show the wrong one.
@@ -1428,6 +1450,11 @@ export default function FolderAdmin({
             // screen must not ask a second time. Same principle as `stepUsesSegment`: if the flow
             // knows, it does not ask.
             migrateInitialSegmentKey={segment?.key}
+            /* The same fact `blocksNext` gates step 1 on, so the migrate screen's warning and the
+               flow's own gate can never disagree about whether uploads are on. Read from
+               `effectiveFacts` rather than `baseFacts` for exactly that reason — it is what the gate
+               reads. `undefined` still shows the warning; only a known-paused state hides it. */
+            migrateUploadsPaused={effectiveFacts.uploadsPaused}
             abbreviationsInitialSegmentKey={segment?.key}
           />
         )}
@@ -1552,7 +1579,13 @@ export default function FolderAdmin({
                ⚠ THE CONSEQUENCE TO WATCH: an admin who did step 3 outside the tool last week must
                now click through 1 and 2 to reach it. That was the original argument for a clickable
                rail, and it is now the client's cost to carry rather than ours to prevent. */
-            const reachable = i <= maxIdx;
+            /* ⚠ THREE CONDITIONS, AND THE LAST ONE KEEPS BACKWARD NAVIGATION FREE.
+               `i <= maxIdx` is the earned-progress rule (1.0.332.0). `i <= firstBlockedIdx` is the
+               new cap, so the rail cannot walk past a step whose Next is held. And `i <= idx` means
+               everything at or behind where you stand stays clickable — without it, a fact turning
+               false while an admin is on a later step would strand them there, unable even to go
+               BACK to the step that needs fixing, which is the opposite of what the gate wants. */
+            const reachable = i <= maxIdx && (i <= firstBlockedIdx || i <= idx);
             return (
               <button
                 key={st.id}
@@ -1569,7 +1602,13 @@ export default function FolderAdmin({
                     ? "Wait for the run to finish."
                     : reachable
                       ? undefined
-                      : "Finish the step you are on first."
+                      : /* The gate's OWN reason when a gate is what holds it, so the rail and the
+                           Next button never explain the same refusal two different ways. Falls back
+                           to the earned-progress wording when nothing is blocked and the step is
+                           simply ahead of where the admin has walked. */
+                        i > firstBlockedIdx && blockedReason
+                        ? blockedReason
+                        : "Finish the step you are on first."
                 }
                 onClick={() => setStepIdx(i)}
               >
@@ -1601,12 +1640,6 @@ export default function FolderAdmin({
           <h3 style={s.stepHead}>{step.label}</h3>
           <p style={s.stepHint}>{step.hint}</p>
 
-          {locked && (
-            <div style={s.lockBox}>
-              <strong>Not ready yet.</strong> {lockReason(step, effectiveFacts)}
-            </div>
-          )}
-
           {/* ⚠ THE CHOSEN SEGMENT STAYS CHANGEABLE (client, 2026-09-07: *"I accidentally selected buah
               and now I can't reselect another"*). `needsPick` is `needsSegment && !segment`, so the
               picker below vanished the moment anything was chosen — and the only way back was
@@ -1615,6 +1648,13 @@ export default function FolderAdmin({
 
               Rendered HERE rather than inside `renderStep` so it sits ABOVE the step's own content and
               is not one of the mutually exclusive branches below.
+
+              ⚠⚠ AND ABOVE THE LOCK BOX, NOT BELOW IT — AND NOT GATED ON `!locked`. That gate was the
+              first build and it recreated the very trap this control exists to remove: picking a
+              segment whose step is LOCKED (Group Led Project has no pending change, so the migrate
+              step reads "Not ready yet") hid the switcher, leaving the admin stuck on that segment
+              with no way back but leaving the flow. **The state where you most need to change segment
+              is precisely the one where the step cannot proceed.** Reported on site within minutes.
 
               ⚠ IT MUST NOT APPEAR ON A STEP THAT SPENDS NO SEGMENT — `stepUsesSegment` again, the rule
               that the site-wide upload pause walked into twice. Offering a segment picker above the
@@ -1625,12 +1665,21 @@ export default function FolderAdmin({
               carrying it would let an admin jump to a step they have never done for the segment now
               selected. The facts effect re-reads on its own — it keys on `segKey` — so the ticks and
               gates correct themselves. */}
-          {!locked && !needsPick && active.needsSegment && stepUsesSegment(step) && (
+          {!needsPick && active.needsSegment && stepUsesSegment(step) && (
             <div style={s.segSwitch}>
               <label style={s.label}>Segment</label>
+              {/* ⚠ HELD BY `runBusy`, THE SAME PADLOCK AS THE RAIL, BACK AND NEXT — and it was the one
+                  control left out of it (client, 2026-09-07: *"I notice I can select when the Group
+                  Head office is running the scan"*).
+                  Switching mid-run does not stop the scan — `SubtreeMigrator` keeps its own `chosen`
+                  and its pre-select effect refuses to override one already made — so the run carries
+                  on against the OLD segment while the flow header names the NEW one. Nothing breaks;
+                  the screen simply states two different segments at once, and the admin has no way to
+                  tell which the result belongs to. */}
               <select
-                style={s.select}
+                style={{ ...s.select, ...(runBusy ? s.off : {}) }}
                 value={segKey}
+                disabled={runBusy}
                 onChange={(e) => {
                   setSegKey(e.target.value);
                   setMaxIdx(idx);
@@ -1643,9 +1692,19 @@ export default function FolderAdmin({
                 ))}
               </select>
               <p style={s.hint}>
-                Change this to work on a different segment. The steps you have
-                already passed are re-checked for whichever one you pick.
+                {runBusy
+                  ? "You cannot change segment while this step is running — the run would carry on against the segment it started with."
+                  : "Change this to work on a different segment. The steps you have already passed are re-checked for whichever one you pick."}
               </p>
+            </div>
+          )}
+
+          {/* BELOW the switcher deliberately: the lock is a fact about THIS segment, so an admin
+              reading "Not ready yet" needs the control that changes the segment already in view
+              above it, not hidden behind it. */}
+          {locked && (
+            <div style={s.lockBox}>
+              <strong>Not ready yet.</strong> {lockReason(step, effectiveFacts)}
             </div>
           )}
 

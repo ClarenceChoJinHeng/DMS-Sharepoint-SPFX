@@ -10356,3 +10356,89 @@ Two small changes to Change the folder structure, both from live use during the 
   switcher's hint present once, the Power Automate sentence **0 occurrences**. **NOT site-tested** —
   switch from Buah to Group Head Office on step 3 and confirm the scan re-runs against GHO rather
   than showing Buah's "could not be read from the term store" rows.
+
+## THE GATE HAD THREE HOLES AND A CONTRADICTION — FOUR FIXES IN ONE EVENING (2026-09-07, 1.0.456-459)
+All four found by the client within the hour of `1.0.452.0` shipping, while running the GHO recovery.
+Each is the same shape: **adding a gate turns every OTHER route forward into a hole.**
+- **⚠ THE SEGMENT SWITCHER WAS HIDDEN ON A LOCKED STEP (1.0.456.0).** It was gated `!locked`, so
+  picking a segment whose step turns out to be locked — Group Led Project has no pending change, so
+  the migrate step reads *"Not ready yet"* — hid the control and stranded the admin on that segment.
+  **The state where you most need to change segment is precisely the one where the step cannot
+  proceed.** Reported minutes after the switcher shipped, i.e. the fix for the one-way door
+  reintroduced the one-way door. It renders ABOVE the lock box now, ungated.
+- **⚠ THE MIGRATE SCREEN'S RED BANNER WAS UNCONDITIONAL (1.0.457.0).** *"Uploads must be turned off
+  before continuing"* had **no condition at all** — a permanent reminder wearing the costume of a
+  state, so it went on demanding uploads be turned off after they had been. **Third instance of that
+  exact mistake**, after StagingAccess's *"Unable to verify current permissions"* (2026-08-15) and the
+  mock it came from: a state drawn as a static sibling tells the admin something is wrong on every
+  visit and trains them to ignore it on the day it is true.
+  - Fixed by threading `migrateUploadsPaused` through `FolderAdmin` -> `IFolderManagerProps` ->
+    `FolderManager` -> `SubtreeMigrator`, read from `effectiveFacts` — **the same value `blocksNext`
+    gates step 1 on**, so the banner and the gate can never disagree.
+  - **⚠ ONLY `true` HIDES IT.** `undefined` still shows it, because the standalone Migrate tab has no
+    step 1 and no reader of its own — there the warning is the only thing that says it.
+- **⚠ THE SWITCHER WAS LIVE DURING A RUN (1.0.458.0).** Changing segment mid-scan does not stop or
+  corrupt the run — `SubtreeMigrator` keeps its own `chosen` and its pre-select effect refuses to
+  override one already made — so the GHO scan carried on correctly **while the header and the switcher
+  both said Buah**. The page stated two segments at once with no way to tell which the result belonged
+  to. Now held by `runBusy`, the same padlock that already held the rail, Back, Next and the back
+  band; it was the one control left out of it.
+- **⚠⚠ THE RAIL WAS A SECOND ROUTE PAST THE GATE (1.0.459.0), AND THIS IS THE ONE WORTH REMEMBERING.**
+  `reachable` was `i <= maxIdx` alone. `maxIdx` records the furthest step ever REACHED, so an admin who
+  had walked to step 3 while uploads were paused could switch uploads back ON, watch Next correctly
+  refuse — and still click straight to steps 2 and 3 in the side panel. **A gate on one control and
+  not the other is not a gate.**
+  - Capped at `firstBlockedIdx`, the lowest step whose `blocksNext` is non-empty, and the disabled
+    step's tooltip carries **the gate's own reason** so the rail and the button never explain one
+    refusal two different ways.
+  - **⚠ `i <= idx` IS KEPT IN THE CONDITION AND IS NOT REDUNDANT.** Without it, a fact turning false
+    while an admin stands on a later step would strand them there — unable even to go BACK to the step
+    that needs fixing, which is the opposite of what the gate wants.
+- **THE STANDING RULE THIS EVENING ESTABLISHED: when you add a gate, enumerate every control that can
+  advance or bypass the flow and gate them together.** Next, the rail, the segment switcher and the
+  screen's own banner were four independent answers to one question, and shipping the gate on one of
+  them made the other three wrong in three different ways.
+- **Verified**: `tsc --noEmit` clean, `eslint` clean of new warnings, suite **1692/0**, 33 warnings —
+  the baseline. Packaged `1.0.459.0`; bundle grepped for each control. **Site-verified: the gate holds
+  and releases (1.0.452/453). The rail cap, the conditional banner and the run-hold are NOT yet
+  site-tested.**
+
+## BUAH'S MIGRATION FAILED BECAUSE A PER-UNIT TIER SAT UNDER SHARED-LIST TIERS (2026-09-07)
+Every unit in all six libraries reported *"some of its folder values could not be read from the term
+store"*, and `7 unit(s) need a value chosen before anything can move`. Not a bad GUID — structural.
+- **`Clarence Kiwi` HAD NO `termSet` AT ALL**, while `State`, `Year` and `Document Type` all had one.
+  **An absent `termSet` on a below-Unit tier IS the discriminator for a PER-UNIT tier**: its options
+  are the children of the term above, cascading from the unit's own term.
+- **⚠ BUT IT SAT FOURTH, BENEATH THREE SHARED-LIST TIERS.** So `tierOptionsFor` took `Document Type`'s
+  terms as its parents and asked Buah's SEGMENT set for their children — terms that live in a
+  different set entirely. The read fails, `failed = true`, the option list is `undefined`, and the
+  unit is reported unreadable. `PendingLevels` moved it above `Document Type`, which changes nothing:
+  `Year` is a shared set too.
+- **A per-unit tier only works as the FIRST tier below Unit, or beneath other per-unit tiers** — the
+  only position where the cascade genuinely starts at the unit term.
+- **⚠ THE MISSING RULE: `validateChain` REFUSES A PERMISSIONED TIER BELOW A NON-PERMISSIONED ONE
+  ("permissioned tiers must be a contiguous prefix") AND HAS NO EQUIVALENT FOR PER-UNIT TIERS**, which
+  have exactly the same requirement one level down. The Folder levels screen accepted this chain
+  silently and it surfaced days later, on a different screen, as a term-store error naming nothing.
+  **NOT BUILT.**
+- Resolved on site by removing `Clarence Kiwi` from the chain, after which the scan read *"Nothing to
+  move"*. ⚠ Removing a tier does NOT clear its column values, and the column is never deleted — so any
+  document already tagged keeps a `ClarenceKiwi` value with no folder to match.
+
+## TWO CLIENT QA ITEMS, AND ONE THAT WAS ALREADY FIXED (2026-09-07, 1.0.460.0)
+- **"+ Add more documents" is RESTORED on the upload form**, hidden only at `MAX_FILES_PER_BATCH`
+  (20) — reversing the previous day's *"Can you hide it?"*. The hide was defensible (the whole row is
+  a click target) but nothing on screen said so, and an uploader with 18 staged had no visible way to
+  add the 19th. ⚠ **It is the only child carrying `margin-left: auto`**, which is what spreads
+  READY / name / size to the left edge; the `justify-content: flex-start` override added to
+  compensate is now redundant but is KEPT, because it holds the layout at 20 files when the span is
+  hidden again.
+- **The Audit Log's "What can you do with the Audit Log?" heading is removed**, body kept — the
+  paragraph still carries the tamper-resistance claim (*records are written automatically and cannot
+  be edited or deleted from this page*), which is the whole point of the list.
+- **⚠ THE THIRD ITEM NEEDED NO CHANGE AND IS WORTH RECORDING AS A PROCESS LESSON.** The deck flagged
+  Quick Search reporting the owners group as *"Grants nothing yet"* in red — **already fixed in
+  1.0.451.0**, with `owners?.id` wired through at `GroupManager.tsx` and `describeGroupAccess`
+  answering *"Full control of this site, granted by SharePoint rather than by a mapping row"*. **A QA
+  deck is a snapshot of the build it was captured against; check the current source before building a
+  fix for anything in one.**

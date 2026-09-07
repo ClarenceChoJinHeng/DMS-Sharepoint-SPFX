@@ -100,6 +100,16 @@ export interface IFolderManagerProps {
    */
   migrateInitialSegmentKey?: string;
   /**
+   * Whether uploads are paused site-wide, passed through to the migration screen's warning banner.
+   *
+   * ⚠ ONLY `true` SUPPRESSES IT. The flow knows this already — it is the fact `blocksNext` gates step
+   * 1 on — while the migration screen has no reader of its own, so its banner was rendered
+   * unconditionally and went on demanding uploads be turned off after they had been (reported on
+   * site 2026-09-07). Omitted from the standalone Migrate tab on purpose: no step 1 exists there, so
+   * the warning is the only thing that says it.
+   */
+  migrateUploadsPaused?: boolean;
+  /**
    * Same fix as `migrateInitialSegmentKey`, extended to the Abbreviations tab — found live 2026-08-26
    * on the "Rename or re-code a folder" flow: the flow already asks which segment (it's in the step
    * header), but the Abbreviations screen still opened on its own blank "Select a segment..." and made

@@ -1267,6 +1267,7 @@ export default function FolderManager({
   onMigrateRunningChange,
   onMigratePendingChange,
   migrateInitialSegmentKey,
+  migrateUploadsPaused,
   abbreviationsInitialSegmentKey,
   onAbbreviationsDirtyChange,
   onAbbreviationsRegisterSave,
@@ -7985,6 +7986,7 @@ export default function FolderManager({
           onRunningChange={onMigrateRunningChange}
           onPendingChange={onMigratePendingChange}
           initialSegmentKey={migrateInitialSegmentKey}
+          uploadsPaused={migrateUploadsPaused}
         />
       ) : tab === "NewSegment" ? (
         // Same dirty guard: a half-typed segment costs more to retype than a level edit, and
