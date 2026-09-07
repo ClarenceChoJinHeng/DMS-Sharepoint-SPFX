@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { LIST_SUFFIX, cachedListTitle } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
 import {
   UPLOAD_PAUSE_SETTING,
   uploadsArePaused,
@@ -28,11 +29,30 @@ export interface IUploadPauseToggleProps {
   siteUrl: string;
   /** `pause` opens the flow; `resume` closes it and is worded as the thing still outstanding. */
   mode: "pause" | "resume";
+  /**
+   * The live pause state, reported up whenever this screen learns it.
+   *
+   * ⚠ WITHOUT THIS THE GUIDED FLOW CONTRADICTS ITS OWN PANEL. `FolderAdmin` reads the setting once,
+   * in its facts effect, and since 1.0.452.0 `blocksNext` holds Next while it reads `false`. Flip the
+   * toggle and nothing told it — so the gate went on saying "Uploads are still switched on" beneath a
+   * panel that had just paused them, and only a full page reload cleared it (reported on site
+   * 2026-09-07). The toggle's own Refresh button does not help: it re-reads this panel and not the
+   * fact the gate consults.
+   *
+   * Called after a successful READ as well as a successful write, because the mount-time read is
+   * itself newer than the facts effect's when this screen is re-entered.
+   *
+   * Never called on a failure. A failed read says nothing about the setting, and reporting a guess
+   * would put the gate back to claiming uploads are on when nobody knows.
+   *
+   * Optional so the standalone mount, and any future one, needs nothing.
+   */
+  onChanged?: (paused: boolean) => void;
 }
 
 type Load = "loading" | "ok" | "error";
 
-export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, siteUrl, mode }) => {
+export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, siteUrl, mode, onChanged }) => {
   const [paused, setPaused] = useState<boolean | undefined>(undefined);
   const [load, setLoad] = useState<Load>("loading");
   const [busy, setBusy] = useState<boolean>(false);
@@ -46,6 +66,14 @@ export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, 
   const read = async (): Promise<void> => {
     setLoad("loading");
     try {
+      /* ⚠ AWAITED HERE, INSIDE THE READER — NOT LEFT TO A MOUNT EFFECT SOMEWHERE ELSE.
+         `listUrl()` calls `cachedListTitle`, which answers the LEGACY `DMS Config` until priming
+         settles. On a CRS site that 404s, so this screen showed "Could not read the current setting"
+         intermittently — a pure race, which is why clearing the cache changed whether it appeared
+         (reported on site 2026-09-07). Same defect as the reconciliation segment picker in
+         1.0.207.0, and the same rule: every screen that builds a list URL must prime in its own
+         reader. Cheap after the first call — `primeNames` caches. */
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${listUrl()}/items?$select=Id,SettingValue&${filter}`,
         SPHttpClient.configurations.v1,
@@ -55,8 +83,12 @@ export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, 
       const rows = ((await res.json()).value ?? []) as Array<{ Id: number; SettingValue?: string }>;
       // No row at all is a VALID state meaning "not paused" — the setting has simply never been
       // used on this site. Distinct from a failed read, which says nothing and shows an error.
-      setPaused(rows.length > 0 ? uploadsArePaused(rows[0].SettingValue) : false);
+      const now = rows.length > 0 ? uploadsArePaused(rows[0].SettingValue) : false;
+      setPaused(now);
       setLoad("ok");
+      // Only on a read that actually answered — see `onChanged`. The two early exits above report
+      // nothing, so the flow's fact stays unknown and the gate stays open.
+      if (onChanged) onChanged(now);
     } catch {
       setLoad("error");
     }
@@ -68,6 +100,9 @@ export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, 
     setBusy(true);
     setNote(undefined);
     try {
+      // Primed here too, for the same reason as `read` — and it matters more: a write against the
+      // legacy title fails, and the admin is told "Uploads are UNCHANGED" for what is a naming race.
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
       const find: SPHttpClientResponse = await context.spHttpClient.get(
         `${listUrl()}/items?$select=Id&${filter}`,
         SPHttpClient.configurations.v1,
@@ -99,6 +134,9 @@ export const UploadPauseToggle: React.FC<IUploadPauseToggleProps> = ({ context, 
       );
       if (!res.ok) throw new Error(`HTTP ${res.status} — ${(await res.text()).slice(0, 200)}`);
       setPaused(next);
+      // After the write SUCCEEDED, never before it. The catch below reports nothing, so a failed
+      // write leaves the flow's fact as it was rather than claiming a change that did not land.
+      if (onChanged) onChanged(next);
       setNote(next
         ? "Uploads are paused. Nobody can file a document until you turn this back on."
         : "Uploads are on again.");

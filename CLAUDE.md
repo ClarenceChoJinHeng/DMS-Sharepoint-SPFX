@@ -10278,3 +10278,45 @@ Diagnosed end to end from the site; **the migration tool was never at fault.**
   tests), 33 warnings — the baseline, none new. **NOT yet site-tested** — open the Change the folder
   structure flow with uploads on and confirm Next is held with the reason beside it, then pause and
   confirm it releases.
+
+## ⚠ THE NEW GATE CONTRADICTED ITS OWN PANEL — TWO FAULTS, BOTH INTERMITTENT (2026-09-07, 1.0.453.0)
+Reported within minutes of `1.0.452.0`: step 1 showed **"Could not read the current setting"** in red
+while Next was blocked saying **"Uploads are still switched on"** — and *"sometime it happens sometime
+it doesnt"*. Those two statements cannot both be true, and neither was a coincidence.
+- **⚠ FAULT 1 — `UploadPauseToggle` NEVER AWAITED `primeNames`.** `listUrl()` calls `cachedListTitle`,
+  which answers the LEGACY `DMS Config` until priming settles; on a CRS site that 404s, `read()` sets
+  `error`, and the red banner appears. **A pure race, which is why clearing the cache changed it.**
+  Fixed by awaiting `primeNames` inside `read()` AND inside `write()` — a write against the legacy
+  title fails and tells the admin *"Uploads are UNCHANGED"* for what is a naming race.
+  - **THIRD INSTANCE OF THE 1.0.207.0 RACE** (reconciliation's segment picker, then `GroupManager`'s
+    `loadModes`). The rule it produced is now paid for a third time: **every screen that builds a list
+    URL must await `primeNames` INSIDE ITS OWN READER**, never rely on a mount effect elsewhere having
+    got there first. `FolderAdmin`'s own facts effect already did (line ~606), which is exactly why
+    the two disagreed.
+- **⚠ FAULT 2 — THE GATE READ A STALE FACT, AND THIS ONE WAS CAUSED BY 1.0.452.0.**
+  `UploadPauseToggle` had **no callback of any kind** in its props, so flipping the toggle never told
+  `FolderAdmin`. Its `baseFacts.uploadsPaused` kept the value read at mount, so: page loads with
+  uploads on ⇒ `false` ⇒ admin pauses ⇒ **Next still blocked, claiming uploads are on.**
+  - **FIFTH INSTANCE of "a screen that reads a list at mount lies about any run beside it"** — after
+    the guided-flow rail, `GroupManager`'s mapping badges, the segment picker's Refresh and
+    `GroupMembersEditor`'s member counts.
+  - **⚠ THE TOGGLE'S OWN Refresh BUTTON DOES NOT HELP AND LOOKS LIKE IT SHOULD.** It re-reads the
+    PANEL, not the fact the gate consults — so it clears the red banner and leaves Next blocked. The
+    only workaround before this fix was a full page reload.
+  - Fixed with an optional `onChanged` that updates **the one fact**, never `reload` — bumping that
+    counter re-runs three list reads to answer a question the callback already answered. Same shape as
+    `GroupMembersEditor`'s `onChanged` calling `reloadMembers` rather than `reload`.
+  - **Called after a successful READ as well as a successful write**, because the mount-time read is
+    itself newer than the facts effect's when the step is re-entered. **Never on a failure** — a
+    failed read says nothing, and reporting a guess would put the gate back to claiming uploads are
+    on when nobody knows.
+- **THE GENERAL LESSON, AND IT IS ABOUT ADDING GATES RATHER THAN ABOUT THIS ONE: a gate makes a
+  previously-invisible staleness into a DEAD END.** `uploadsPaused` had been stale since the pause
+  step was written on 2026-08-19; for a fortnight the only cost was a rail tick reading `todo` a
+  moment longer than it should. Turning that fact into something that BLOCKS turned a cosmetic lag
+  into a blocked flow. **Before gating on a fact, check every path that can change it reports back.**
+- **Verified**: `tsc --noEmit` clean, `eslint` clean on both changed files (`FolderAdmin`'s
+  pre-existing `mapRows` warning only), suite **1692/0**, 33 warnings — the baseline, none new.
+  **NOT yet site-tested** — the test is: load step 1 with uploads ON, confirm Next is blocked; press
+  the toggle; confirm Next releases **without reloading the page**; then hard-refresh a few times and
+  confirm the red banner no longer appears.

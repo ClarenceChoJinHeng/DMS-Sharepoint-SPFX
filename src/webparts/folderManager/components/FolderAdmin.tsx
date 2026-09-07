@@ -1206,6 +1206,18 @@ export default function FolderAdmin({
             context={context}
             siteUrl={siteUrl}
             mode={st.id === "resumeUploads" ? "resume" : "pause"}
+            /* ⚠ UPDATES THE ONE FACT, NEVER `reload`. Bumping the reload counter would re-run the
+               whole facts effect — three list reads — to answer a question this callback has already
+               answered. Same reasoning as `GroupMembersEditor`'s `onChanged` calling `reloadMembers`
+               rather than `reload`: re-reading everything to learn one thing is what makes a page
+               feel broken.
+
+               Without this the gate added in 1.0.452.0 contradicted the panel above it: the facts
+               effect reads the setting once, so pausing with the toggle left `uploadsPaused` at
+               `false` and Next stayed blocked saying uploads were on, clearable only by reloading the
+               page (reported on site 2026-09-07). The toggle only ever calls this after a read or
+               write that actually succeeded, so a failure still leaves the fact as it was. */
+            onChanged={(paused) => setBaseFacts((f) => ({ ...f, uploadsPaused: paused }))}
           />
         );
       }
