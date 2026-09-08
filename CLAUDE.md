@@ -7385,7 +7385,15 @@ should only ever appear once in a list's life. The live field list held **`Submi
 - **Verified**: `tsc --noEmit` clean, full suite **1608/0**, `FolderManager.tsx` lint unchanged from
   its own baseline (3 `no-new-null`, 1 `max-lines`; Heft's total moved 31 → 35 only because it lints
   incrementally and this file had not changed before). Packaged as `1.0.383.0`, bundle grepped.
-  **NOT yet run on a site** — the next run should report **0 columns created** and name the strays.
+  **✅ VERIFIED LIVE 2026-09-08, on MHO** — the run reported **0 columns created** and named them:
+  *"CRS Submissions: 216 duplicate column(s) left by earlier runs (e.g. submissionref0, batchref0,
+  submissionfileid0). They are INERT — nothing reads or writes them — and are safe to delete by hand
+  in list settings. No further run will create more."* So the naive loop is gone and the count has
+  stopped growing. **216 strays remain and are still worth deleting by hand**; the warning recurs on
+  every run until they are.
+  - ⚠ **The warning printed TWICE in one run's log.** Not investigated — it may be the assertion
+    running once per pass rather than a defect, and it costs a duplicate line rather than a duplicate
+    column. Worth a glance if anyone is in that code.
 
 ## THE UPLOAD FORM TITLES ITSELF AGAIN, AND THE INSTRUCTIONS FOLLOW THE OPEN BATCH (2026-09-03, 1.0.382.0)
 Client: *"client wants the Upload Document title to be inside the Upload Form now"*, and the
