@@ -11169,4 +11169,121 @@ segment..."*: *"Weird I can click next without picking segment"*.
 - **Verified**: `tsc --noEmit` clean, `eslint` clean of new warnings (`FolderAdmin`'s pre-existing
   `mapRows` only), `folderFlows` **93 -> 98**, full suite **0 failures**. Packaged **1.0.476.0** via
   `npm run build` (470 KB, the production shape); shipped `folder-manager-web-part` bundle grepped —
-  new message **1**, dead hatch **0**. **NOT site-tested.**
+  new message **1**, dead hatch **0**. ✅ **Site-verified 2026-09-08** — see the entry at the end.
+
+## ✅ "CHANGE THE FOLDER STRUCTURE" IS VERIFIED END TO END, WITH A PER-UNIT TIER (2026-09-08, 1.0.475-487)
+The first complete run of that flow by a person following the rail, on ClarenceDMSTesting/MHO, adding
+a **`Sub Unit`** per-unit level. **Nine defects were found by walking it** — most of them only
+findable by clicking, which is what this project has no tests for.
+- **THE RESULT:** `MHO / Department / Unit / [Sub Unit] / Year / Document Type`, live. **14 documents
+  moved, 35 empty folders tidied, 14 tagged**, across **all six libraries** including the archive
+  pair. `tagged` matching `moved` is the tell that this was an ADD rather than a reorder — a reorder
+  correctly tags 0.
+- **WHAT IT PROVES BEYOND "IT RAN":** per-unit values genuinely differ per unit (`Expatriate
+  Formalities Subunit` for one, `General Admin Subnuit` for the other, with the other 47 units
+  skipping the tier entirely and nothing configured); the fullwidth `＆` survived; filenames with
+  `@`, parentheses and runs of spaces survived; and one file went to `2026/Tax Return` while the rest
+  went to `2024/…`.
+- **Reconciliation afterwards: 0 errors.** Archive folders read `2 group grant(s) already correct` —
+  `C_LEVEL_GLOBAL` plus that segment's C-Level, so the 2026-09-02 narrowing holds. `Folders: every
+  folder maps to a live term ✓`, and the two ORPHAN prunes correctly reported themselves **skipped on
+  a scoped run** (the 2026-08-19 data-loss guard). ⚠ A scoped run can therefore only ever produce ONE
+  of the three closing ✓ lines — do not read the other two as missing.
+
+### ⚠⚠ THE MIGRATOR MATCHED UNITS ON A STORED ADDRESS THAT ROTS (1.0.483.0) — the real find
+~30 of MHO's 49 units reported *"its folder is not in the Folder Map, so the values that belong under
+it cannot be read"* while every row sat in the list intact.
+- **A Folder Map row's `FolderUrl` is written once and then DELIBERATELY never refreshed.** While the
+  stored `folderUniqueId` still resolves, reconciliation reports *"row still valid"* and leaves the
+  address alone — because repointing by path would abandon a real folder for a freshly created empty
+  one. **So reconciliation can never clear this**, which is why it had to be fixed in the tool.
+- **Renaming a DEPARTMENT to its abbreviation is what breaks it.** `Corporate Communication` to `CC`
+  leaves every unit row beneath it naming the old department for ever: the unit's own name never
+  changed, so nothing re-derives its path. The migrator keyed on that path tail.
+- **⚠ AND KEYING ON `folderUniqueId` DIRECTLY DOES NOT WORK — the trap in the obvious fix.** The map
+  maps only the APPROVAL library's folders (`lib === "Staging"` in reconciliation) while the scan
+  walks all six, and the tail deliberately drops the library segment so ONE row serves all of them.
+  So the tail stays the shared key and is now **derived from the live folders**: walk the approval
+  library to unit depth, read each folder's current address AND its `UniqueId` in the same request,
+  match id to term, record address to term. ~21 extra reads per scan.
+- **⚠ EVERY OTHER CONSUMER WAS ALREADY SAFE, checked rather than assumed.** `resolveMappedFolder`
+  tries the UniqueId FIRST and falls back to the stored path only when the id read was inconclusive,
+  warning when it does — so uploads and HC clearance were never exposed. The migrator was the one
+  consumer trusting the address directly.
+- **The message named the wrong problem and is now two.** *"not in the Folder Map"* reads as "nobody
+  ever mapped this unit" and sends an admin to reconcile; the rows were present and the LOOKUP was at
+  fault. Now an absent row says so **and names reconciliation**, while an unreadable list gets its
+  own sentence — because *"we could not ask"* and *"the answer is no"* are different facts and only
+  one is worth acting on.
+
+### ⚠ SAVING A STRUCTURE CHANGE LEFT THE NEXT STEP DENYING IT EXISTED (1.0.481.0)
+Step 3 read *"There is no pending structure change to move to"* about the change just saved.
+- **FIFTH INSTANCE of "a screen that reads a list at mount lies about any run beside it"** —
+  `FolderAdmin` copies `pendingLevels` out of a segment list read on `[siteUrl, reload]`.
+- **⚠ AND THE EXISTING FIX COULD NOT HELP, which is the subtle part.** That flow already re-reads its
+  facts on every step change (`stepIdx` in the deps, added 2026-08-19 for this very class of bug) —
+  but the effect **copies** the flag rather than re-reading it, so re-running the consumer re-copied
+  the stale value. **Re-reading a derived fact cannot fix staleness that lives in the upstream read.**
+- Fixed with `onStructureSaved` bumping `reload`, which re-runs the read that OWNS the fact. Not a
+  second `PendingLevels` read in the facts effect: that would be two answers to one question, and the
+  drifting one would be the one the lock consults. Checked that the bump cannot move the admin —
+  `setStepIdx` lives only in `openFlow`, a user action.
+
+### ⚠ "THE MIGRATION IS FINISHED" WAS SAID OVER UNITS NEVER ASSESSED (1.0.482.0)
+A **FOURTH** state the 2026-09-07 three-state fix could not see: a unit whose options could not be
+READ has no moves and no `needingChoice`, yet still reaches `groups` — so it fell into the stray-only
+branch, which claims the migration is finished and blocks nothing. Both false: `groups.length > 0` is
+exactly what stops the Apply card rendering, so `CHANGE PENDING` was stuck with Rebuild disabled too.
+**A dead end with a reassuring message, which is what that branch exists to prevent.**
+
+### Two new gates, and one reversal
+- **`reconcile` cannot be skipped (1.0.486.0)**, at the client's request and **not** because the step
+  is required — their words, kept in the rule: *"I actually told them its needed even though it isn't
+  but its good to run it anyways."* Without that note somebody later reads a gate and infers a
+  dependency that does not exist.
+  - **⚠ GATED ON A RUN HAVING FINISHED, NEVER ON ONE HAVING SUCCEEDED.** In `structure` this step sits
+    before `resumeUploads`, so a success requirement would keep the site refusing uploads for as long
+    as reconciliation kept failing.
+  - **⚠ FINISH IS GATED TOO** — `reconcile` is the LAST step in four of the five flows that have it,
+    so Next alone would enforce it in `structure` and nowhere else. **The Back band stays open**,
+    which is what keeps it an insistence rather than a cage.
+  - Answered in `blocksNext` directly, never through `stepState`: that also feeds
+    `firstIncompleteStep`, so teaching it "todo" would open four flows on their last step.
+  - ⚠ SESSION-SCOPED — a refresh asks for the run again. Idempotent, so safe; the durable
+    alternatives can each fail silently, which would strand the flow over a read.
+- **`resumeUploads` NOW GATES FINISH (1.0.487.0), REVERSING A DELIBERATE EXCLUSION.** Its old reason —
+  *"its `todo` is the state an admin arrives in, so gating would trap them"* — is kept in place rather
+  than deleted, because both halves became false: the Back band is an open exit, and the toggle
+  satisfying the gate is **on that step**. Meanwhile uploads sat off site-wide for a day and a half
+  because this step was never reached.
+  - **⚠ ONE FACT, TWO OPPOSITE READINGS**, so no single facts object can leave both pause steps
+    un-gated — which is why the exhaustive sweep cannot cover this one and it needs its own test, and
+    why the reconcile-leak test had to stop asserting both are ungated.
+  - The rail is unaffected: `firstBlockedStepIndex` reports the LAST index, and `isStepReachable`
+    allows `i <= firstBlocked`.
+- **`migrate` gates on a segment being picked (1.0.476.0)** — reported as *"Weird I can click next
+  without picking segment"*. Keyed on a step PROPERTY (`stepUsesSegment`), not a step id, so the test
+  asserts the two agree step for step. `segmentChosen` is three states in one optional boolean, so an
+  unreadable segment list gates nothing.
+
+### The Sub Unit screen, from five rounds of client feedback
+- **A per-unit level can only be added where the contiguity rule allows (1.0.475.0)** — the dropdown
+  offered three slots on GHO's chain and two produced a chain `validateChain` then refuses. ⚠ Hiding
+  the options alone would have been WORSE: a `<select>` whose value matches no option renders the
+  first while state keeps the old number, so the screen would say one thing and Add do another. Three
+  routes could leave a stale slot, including the form's own default.
+- **It is refused where no unit has terms under it (1.0.475.0/477.0).** ⚠ The tier's NAME is not
+  checkable at all — a per-unit tier's options are the children of the term above, whatever they are
+  called. Only "does any unit have children" is answerable. **Partial is the designed shape and is
+  never refused**; only a definite zero is, and an unreachable term store warns. The count is
+  reported (*"2 of 49 units have sub unit terms"*), which is information the admin has no other way
+  to get.
+- **One slot means no control (1.0.478.0)**, stated as text — the treatment already settled for the
+  migrate screen's segment picker. ⚠ **Not hardcoded to "always under Unit"**: a second per-unit tier
+  may sit above or below the first, so the control returns when there is a real choice.
+- **Slot 0 is named for its ANCHOR, not its neighbour (1.0.479.0)** — *"Directly under Unit"*, and
+  never the literal "Unit": it is the deepest permissioned tier, so `Estate/Mill` on Upstream Ops.
+  *"Before Year"* was true only because Year happened to be first.
+- **An info icon explains that the name is permanent (1.0.480.0)**, carrying the live derived column
+  names so a typo is visible — ⚠ **in the panel, not under the field**, because a standing preview was
+  removed at the client's request on 2026-09-06 and re-adding one would reverse that.
