@@ -357,6 +357,8 @@ const s: Record<string, React.CSSProperties> = {
   /* Sits on the label row, so it reads as help for THAT field rather than as a page-level action —
      the term set ID is the one value on this form that has to be fetched from somewhere else. */
   labelLink: { fontSize: 12, fontWeight: 400, marginLeft: "auto" },
+  resultList: { margin: "6px 0 0", paddingLeft: 18 },
+  resultItem: { marginTop: 3 },
   /* The `↻ Refresh` treatment My Submissions established, at label-row scale (12px, to sit beside
      `labelLink` rather than tower over it). Sits AFTER the Term Store link so the row reads in the
      order the work happens: open the store, fix the set, re-check. */
@@ -448,7 +450,14 @@ export default function StructureManager({
    */
   const [addError, setAddError] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ text: string; ok: boolean } | undefined>(undefined);
+  /* `text` is the headline; `lines` are the bullets under it.
+     ⚠ THE MESSAGE USED TO BE ONE PARAGRAPH and it ran to ~600 characters, naming all twelve
+     created columns (client, 2026-09-09: *"Wow that message is long.. what are you trying to
+     convey?"*). Nobody needs the list — it is two columns times six libraries — and the one fact
+     that matters, that the change is NOT live yet, was buried in the middle of it. */
+  const [result, setResult] = useState<
+    { text: string; ok: boolean; lines?: string[] } | undefined
+  >(undefined);
   // The Year / Document Type term sets, so a segment still running on the built-in pair can
   // be shown the levels it is EFFECTIVELY using rather than an empty list.
   const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
@@ -1217,7 +1226,11 @@ export default function StructureManager({
       //    harmless orphan, whereas a chain naming a missing column breaks every upload
       //    in the segment — and validateUpdateListItem returns HTTP 200 with
       //    HasException, so that failure is not even loud.
-      const created: string[] = [];
+      /* ⚠ ARRAYS, NOT `Set`. Spreading a Set is TS2802 at this tsconfig target — the same ES-level
+         limitation that makes `Promise.allSettled` unavailable in this project. An `indexOf` guard
+         dedupes without needing the iteration protocol. */
+      const createdCols: string[] = [];
+      const createdLibs: string[] = [];
       for (const tier of splitChain(draft).onDemand) {
         const cols: Array<[string, string]> = [];
         // ensureTextColumn skips a column that already exists, whatever its type — so the
@@ -1229,7 +1242,10 @@ export default function StructureManager({
         for (const [internal, display] of cols) {
           // Four libraries once the site has HC — see allLibraryTitles.
           for (const lib of allLibraryTitles()) {
-            if (await ensureTextColumn(lib, internal, display)) created.push(`${internal} (${lib})`);
+            if (await ensureTextColumn(lib, internal, display)) {
+            if (createdCols.indexOf(internal) < 0) createdCols.push(internal);
+            if (createdLibs.indexOf(lib) < 0) createdLibs.push(lib);
+          }
           }
         }
       }
@@ -1304,31 +1320,29 @@ export default function StructureManager({
             : p,
         ),
       );
-      setResult({
-        ok: true,
-        text:
-          `Structure saved for ${seg.label}.` +
-          (created.length > 0 ? ` Created ${created.length} column(s): ${created.join(", ")}.` : "") +
-          (staged
-            ? ` It is NOT live yet — this segment already has documents filed, so uploads carry on` +
-              ` exactly as before. Open "Move existing folders" to move the existing folders into` +
-              ` the new shape; the new structure goes live at the end of that, so nobody ever sees` +
-              ` a half-changed library.`
-            : sameAsLive
-            ? ` The folder shape is unchanged, so there is nothing to migrate and the segment is not` +
-              ` marked as having a pending change.`
-            : ` Uploads use the new shape as soon as people reload the form — no reconciliation run` +
-              ` is needed, because folders below Unit are created on demand and inherit the unit's` +
-              ` permissions.`) +
-          // New columns are created on the items but NOT added to any view, because adding them
-          // there would reshape every view the client arranged — for every level anyone ever adds.
-          // Invisible columns look exactly like the save having failed, so say it here instead.
-          (created.length > 0
-            ? ` The new columns are not shown in any library view yet — that is deliberate, so` +
-              ` existing views keep the layout you set. Add them where you want them using the` +
-              ` view's "Show or hide columns".`
-            : ""),
-      });
+      /* SHORT, AND THE FIRST BULLET IS THE ONE THAT MATTERS. An admin who reads nothing else must
+         still learn whether this is live. Everything explanatory moved below it, and the twelve
+         created columns collapsed to what they are and where they went — the LIST was the bulk of
+         the old message and answered a question nobody asks. */
+      const lines: string[] = [];
+      if (staged) {
+        lines.push("Not live yet. Uploads carry on in the old shape.");
+        lines.push('Next: step 3, "Move existing folders". The new shape goes live at the end of it.');
+      } else if (sameAsLive) {
+        lines.push("Nothing changed in the folder shape, so there is nothing to migrate.");
+      } else {
+        lines.push("Live now. Uploads use the new shape once people reload the form.");
+      }
+      if (createdCols.length > 0) {
+        const libs = createdLibs.length;
+        lines.push(
+          `Added ${createdCols.join(" and ")} to ${libs} ${libs === 1 ? "library" : "libraries"}.`,
+        );
+        // Kept, shortened: an invisible new column looks exactly like the save having failed, so
+        // the deliberate part has to be said somewhere.
+        lines.push('Hidden in library views on purpose — add them with "Show or hide columns".');
+      }
+      setResult({ ok: true, text: `Saved for ${seg.label}.`, lines });
 
       // STAGED vs LIVE is the load-bearing part of this record. A row saying only "structure
       // changed" would imply uploads had moved to the new shape when, for a segment in use, they
@@ -1351,8 +1365,8 @@ export default function StructureManager({
             : "Written to Levels. Uploads use the new shape as soon as people reload the form.",
           `Old chain: ${(seg.pending ?? seg.chain).map((l) => l.label).join(" → ")}`,
           `New chain: ${draft.map((l) => l.label).join(" → ")}`,
-          created.length > 0
-            ? `Columns created: ${created.join(", ")}`
+          createdCols.length > 0
+            ? `Columns created: ${createdCols.join(", ")} in ${createdLibs.join(", ")}`
             : "No columns created — every one it needs already existed.",
           staged
             ? "Goes live at the end of the folder migration, not before."
@@ -1396,6 +1410,23 @@ export default function StructureManager({
     saveStructure().catch(() => undefined);
   };
 
+  /**
+   * The save/failure box. ONE definition — it renders at two places (inside the editor and under
+   * the segment list), and two copies would drift the moment either grew a bullet.
+   */
+  const resultBox = (r: { text: string; ok: boolean; lines?: string[] }): React.ReactElement => (
+    <div style={{ ...s.msg, ...(r.ok ? s.ok : s.err) }}>
+      <div>{r.text}</div>
+      {r.lines !== undefined && r.lines.length > 0 && (
+        <ul style={s.resultList}>
+          {r.lines.map((l) => (
+            <li key={l} style={s.resultItem}>{l}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
   /* ---------- Render ---------------------------------------------------- */
 
   if (loading) return <p style={{ fontSize: 13, color: "#605e5c" }}>Loading folder structure&hellip;</p>;
@@ -1417,7 +1448,7 @@ export default function StructureManager({
     const perUnitTaken = perUnitTierExists(onDemand);
     return (
       <>
-        {result !== undefined && <div style={{ ...s.msg, ...(result.ok ? s.ok : s.err) }}>{result.text}</div>}
+        {result !== undefined && resultBox(result)}
 
         <div style={s.card}>
           <div style={s.segName}>{seg.label}</div>
@@ -1893,7 +1924,7 @@ export default function StructureManager({
 
   return (
     <>
-      {result !== undefined && <div style={{ ...s.msg, ...(result.ok ? s.ok : s.err) }}>{result.text}</div>}
+      {result !== undefined && resultBox(result)}
       {segments.length === 0 && (
         <div style={{ ...s.msg, ...s.warn }}>
           No business segments are configured, so there is no structure to edit. Segments exist as{" "}

@@ -11416,3 +11416,24 @@ change in the structure"*. One click, two separate defects.
   local to the component and this project has no UI tests, which is why nine defects came out of the
   client walking this one screen. **The extractable half is the comparison** — a pure
   `chainMatchesLive(live, draft, legacySets)` in `folderChain.ts` would be testable and is not built.
+
+## THE SAVE MESSAGE IS FOUR SHORT BULLETS, NOT A 600-CHARACTER PARAGRAPH (2026-09-09, 1.0.495.0)
+Client, on the box that appeared after staging MHO's Sub Unit change: *"Wow that message is long.. what
+are you trying to convey?? can you just make it simple in bullet point and like very short?"*
+- **⚠ IT NAMED ALL TWELVE CREATED COLUMNS**, which is two columns times six libraries for ONE added
+  level — a list answering a question nobody asks — and **the one fact that matters was buried in the
+  middle of it**: that the change is NOT live yet. An admin who reads only the first line must still
+  learn that, and in the old shape the first line was the column list.
+- **`result` GAINED AN OPTIONAL `lines: string[]`; `text` STAYS THE HEADLINE.** The error path passes
+  no `lines` and renders exactly as before, so nothing about a failed save changed.
+- **⚠ ONE `resultBox` HELPER, because the box renders at TWO mount points** (inside the editor, and
+  under the segment list). They were two identical inline copies; a bullet added to one would have
+  silently missed the other.
+- **The column list collapsed to what and where** — `Added X and Y to 6 libraries` — and the
+  deliberate part is kept as its own bullet, because **an invisible new column looks exactly like the
+  save having failed**, which is why that sentence existed at all. **The audit row keeps the full
+  detail**, columns and libraries both: that is a record, not a toast.
+- **⚠ `Set` CANNOT BE SPREAD AT THIS TSCONFIG TARGET — `TS2802`, caught by `tsc`, not by lint.** The
+  first version used `new Set<string>()` and `[...createdCols]`, which compiles in most projects and
+  not in this one; it is the same ES-level limitation that makes `Promise.allSettled` unavailable here
+  (gotcha #3). Plain arrays with an `indexOf` guard dedupe with no iteration protocol.
