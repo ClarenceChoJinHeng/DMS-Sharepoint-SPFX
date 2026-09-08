@@ -11701,3 +11701,29 @@ available, if they did not move anything and rebuild folders the file and folder
 - **The Rebuild reason is a WHOLE-SCAN count and names the unit total**, because with three units a
   page the folders still waiting are usually on another page — a reason describing only the visible
   cards would send the admin looking on the wrong one.
+
+## ⚠⚠ THE MIGRATION'S OWN SUCCESS DESTROYED ITS RESULT LOG (2026-09-09, 1.0.503.0)
+Client, the first time anyone completed a migration on the new builds: *"I can't give you the log,
+after I finish running it immediately becomes like this for step 3"* — the step showing
+*"Not ready yet. There is no pending structure change to move to."*
+- **⚠ THE RUN SUCCEEDED. That screen IS the success**: `activatePending` cleared `PendingLevels`,
+  `onMigrateApplied` re-read the segment list, `pendingLevels` went false, and the step's own lock
+  fired. Next opened correctly. **Do not diagnose this as a failed migration.**
+- **THE DEFECT IS THAT THE LOCK REPLACES THE SCREEN** — `{!locked && renderStep(step)}` — so the
+  migrator unmounted and took with it the only record of what moved, what was tidied, what was tagged
+  and which folders were left as strays. **An admin gets one chance to read that.**
+- **⚠⚠ I INTRODUCED IT WITH 1.0.497.0's REFRESH SIGNAL, AND THAT IS THE LESSON.** Before
+  `onMigrateApplied` bumped `reload`, the fact stayed stale and the screen survived; **making the gate
+  release correctly is what started destroying the evidence.** The general shape: **a lock whose fact
+  the step's own success changes must not be allowed to hide that step's result.** The migrate step is
+  the only one in the flow with that property — `segmentExists` and `abbreviationsComplete` are not
+  changed by the screens they guard.
+- **FIXED WITH `appliedFor`, THE SEGMENT WHOSE MIGRATION FINISHED DURING THIS VISIT.** The lock is
+  suppressed for `step.id === "migrate"` when it matches the current `segKey`, so the log stays on
+  screen with Next open beside it.
+  - **Set BEFORE the re-read**, since `reload` is what flips the fact that would fire the lock.
+  - **Keyed to the segment and cleared on entering or leaving the flow**, because it means *"a
+    migration just finished here"* — true of one segment for one visit. The switcher can change
+    segment mid-flow, and the previous segment's result must not unlock the new one's lock.
+  - Everything else about the lock is unchanged: a first visit with no pending change renders exactly
+    as before.

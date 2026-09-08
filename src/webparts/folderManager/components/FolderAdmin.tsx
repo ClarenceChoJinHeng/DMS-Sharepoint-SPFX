@@ -664,6 +664,28 @@ export default function FolderAdmin({
    * it — so the flow would end with a half-applied structure and people filing into it.
    */
   const [migratePending, setMigratePending] = useState(false);
+  /**
+   * The segment whose migration finished during THIS visit to the flow.
+   *
+   * ⚠⚠ IT EXISTS BECAUSE THE MIGRATE STEP'S OWN SUCCESS FIRES ITS OWN LOCK, and that lock REPLACES
+   * the screen (`{!locked && renderStep(step)}`) — so the moment a migration applied the chain,
+   * `pendingLevels` flipped to false, the lock rendered, the migrator unmounted and **the run's own
+   * result log was destroyed**. Reported the first time anyone completed one on 1.0.502.0: *"I can't
+   * give you the log, after I finish running it immediately becomes like this."*
+   *
+   * That log is the only record of what moved, what was tidied, what was tagged and which folders
+   * were left as strays — and an admin gets one chance to read it.
+   *
+   * ⚠ INTRODUCED BY 1.0.497.0's REFRESH SIGNAL. Before `onMigrateApplied` bumped `reload`, the fact
+   * stayed stale and the screen survived; making the gate release correctly is what started
+   * destroying the evidence. **A lock whose fact the step's own success changes must not hide that
+   * step's result.**
+   *
+   * Keyed to the SEGMENT, and cleared on entering or leaving the flow: it means "a migration just
+   * finished here", which is true of one segment for one visit. The switcher can change segment
+   * mid-flow, and the previous segment's result must not unlock the new one's lock.
+   */
+  const [appliedFor, setAppliedFor] = useState<string | undefined>(undefined);
 
   /**
    * Hold navigation while a run is in flight, and RE-READ THE FACTS when it ends.
@@ -1003,6 +1025,7 @@ export default function FolderAdmin({
      goes through `leaveFlow` first. */
   const openFlow = (f: Flow): void => {
     setFlow(f);
+    setAppliedFor(undefined);
     setReconRan(false);
     reconStarted.current = false;
     setAllTools(false);
@@ -1013,6 +1036,7 @@ export default function FolderAdmin({
 
   const leaveFlow = (): void => {
     setFlow(undefined);
+    setAppliedFor(undefined);
     setReconRan(false);
     reconStarted.current = false;
     setBaseFacts({});
@@ -1196,7 +1220,11 @@ export default function FolderAdmin({
   const steps = active.steps;
   const step = steps[idx];
   const needsPick = active.needsSegment && !segment;
-  const locked = isLocked(step, effectiveFacts);
+  /* ⚠ THE MIGRATE STEP STAYS UNLOCKED AFTER ITS OWN RUN — see `appliedFor`. Everything else about
+     the lock is unchanged: on a first visit with no pending change it renders exactly as before. */
+  const locked =
+    isLocked(step, effectiveFacts) &&
+    !(step.id === "migrate" && appliedFor !== undefined && appliedFor === segKey);
 
   /**
    * The lowest step whose Next is currently blocked. Nothing PAST it may be reached from the rail.
@@ -1589,7 +1617,12 @@ export default function FolderAdmin({
                `migrate` gate reads. The cheap-facts effect only COPIES it, so bumping `reload` is
                what makes Next open the moment the migration switches the new shape on. Same reason
                and same shape as `onStructureSaved` above. */
-            onMigrateApplied={() => setReload((n) => n + 1)}
+            onMigrateApplied={() => {
+              // Remember it BEFORE the re-read: `reload` is what flips `pendingLevels` to false and
+              // therefore what would fire this step's own lock.
+              setAppliedFor(segKey);
+              setReload((n) => n + 1);
+            }}
             // The flow already asked which segment, and prints it in the header — so the migration
             // screen must not ask a second time. Same principle as `stepUsesSegment`: if the flow
             // knows, it does not ask.
