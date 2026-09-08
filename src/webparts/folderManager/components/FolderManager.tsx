@@ -879,6 +879,7 @@ const s: Record<string, React.CSSProperties> = {
   segActive: { background: "#0f6c3f", color: "#fff" },
   secHeader: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 8,
     cursor: "pointer",
@@ -913,6 +914,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   parentRow: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 8,
     padding: "6px 0",
@@ -1070,6 +1072,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   actions: {
     display: "flex",
+    flexWrap: "wrap",
     justifyContent: "flex-end",
     gap: 10,
     marginTop: 16,
@@ -1122,6 +1125,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   confirmBar: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 10,
     margin: "4px 0 8px",
@@ -8054,6 +8058,7 @@ export default function FolderManager({
               <div
                 style={{
                   display: "flex",
+                  flexWrap: "wrap",
                   alignItems: "center",
                   justifyContent: "space-between",
                   gap: 12,
@@ -8160,6 +8165,7 @@ export default function FolderManager({
                         key={seg.key}
                         style={{
                           display: "flex",
+                          flexWrap: "wrap",
                           alignItems: "center",
                           gap: 8,
                           padding: "7px 10px",
@@ -8347,6 +8353,7 @@ export default function FolderManager({
               <div
                 style={{
                   display: "flex",
+                  flexWrap: "wrap",
                   alignItems: "center",
                   gap: 10,
                   marginBottom: 10,
@@ -8544,6 +8551,7 @@ export default function FolderManager({
                                 key={i}
                                 style={{
                                   display: "flex",
+                                  flexWrap: "wrap",
                                   alignItems: "center",
                                   gap: 8,
                                   padding: "3px 10px",

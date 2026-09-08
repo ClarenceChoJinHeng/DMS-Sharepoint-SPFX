@@ -209,6 +209,7 @@ const s: Record<string, React.CSSProperties> = {
      Settings cards use, so the two pages read as one system. */
   intro: {
     display: "flex",
+    flexWrap: "wrap",
     gap: 14,
     alignItems: "flex-start",
     marginBottom: 18,
@@ -331,6 +332,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   headWho: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,

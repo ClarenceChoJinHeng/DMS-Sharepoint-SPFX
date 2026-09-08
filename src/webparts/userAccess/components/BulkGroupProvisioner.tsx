@@ -249,6 +249,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   tick: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "flex-start",
     gap: 10,
     fontSize: 13,

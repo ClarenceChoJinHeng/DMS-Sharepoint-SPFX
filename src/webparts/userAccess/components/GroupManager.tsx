@@ -217,6 +217,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   row: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 10,
     padding: "8px 10px",
@@ -1684,6 +1685,7 @@ export default function GroupManager({
             style={{
               ...s.hint,
               display: "flex",
+              flexWrap: "wrap",
               alignItems: "center",
               gap: 6,
               cursor: "pointer",

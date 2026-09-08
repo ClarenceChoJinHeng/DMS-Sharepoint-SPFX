@@ -142,6 +142,7 @@ const s: Record<string, React.CSSProperties> = {
   /* The footer: step count left, arrow right — `marginTop: auto` is what pins it down. */
   cardFoot: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "space-between",
     marginTop: 16,
@@ -163,6 +164,7 @@ const s: Record<string, React.CSSProperties> = {
      fifth tile in the same grid invites it to be clicked as casually as the others. */
   cardDanger: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "flex-start",
     gap: 10,
     width: "100%",
@@ -249,6 +251,7 @@ const s: Record<string, React.CSSProperties> = {
   railItem: {
     position: "relative",
     display: "flex",
+    flexWrap: "wrap",
     gap: 12,
     width: "100%",
     textAlign: "left",
