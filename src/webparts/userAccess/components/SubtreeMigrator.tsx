@@ -105,6 +105,11 @@ const s: Record<string, React.CSSProperties> = {
   fileList: { fontSize: 11, color: "#0f6c3f", wordBreak: "break-word", paddingLeft: 24 },
   // One folder = one block, separated so the path/action/files grouping is visible at a glance.
   entry:    { padding: "6px 0", borderTop: "1px solid #f0f0f0" },
+  /* The FIRST entry under a library heading (client, 2026-09-08: "ensure the first border top always
+     have border: 1px solid black"). It is what separates the heading from its list; the hairline
+     between entries stays faint, so one strong rule per library reads as a section break instead of
+     six identical lines. */
+  entry1:   { padding: "6px 0", borderTop: "1px solid #000" },
   btn:      { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   ghost:    { background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   off:      { background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "not-allowed" },
@@ -1546,7 +1551,12 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
               <strong>
                 {[seg.stagingFolder || seg.label, ...seg.chain.map((l) => `[${l.label}]`)].join(" / ")}
               </strong>
-              . Waiting to be applied:{" "}
+              .
+              {/* ⚠ A REAL BREAK, NOT A MARGIN. These are two chains of five or six levels each; run
+                  together they wrap into one block and which chain is which is lost — the whole
+                  point of the line is telling the live shape from the pending one. */}
+              <br />
+              Waiting to be applied:{" "}
               <strong>
                 {[seg.stagingFolder || seg.label, ...(seg.pending ?? []).map((l) => `[${l.label}]`)].join(" / ")}
               </strong>
@@ -1780,7 +1790,9 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                         nothing on the line said "folder". An empty leaf is completely normal — its
                         documents were approved and routed away, leaving the folder behind — and
                         whether a line holds documents is exactly what decides if it matters. */}
-                    {plansFor(row).map((p) => {
+                    {plansFor(row).map((p, pi) => {
+                      // The first row carries the section rule; every other one a hairline.
+                      const rowStyle = pi === 0 ? s.entry1 : s.entry;
                       // Stated on EVERY line, including zero. `empty` is the common, harmless case
                       // and must read as such rather than as a missing number.
                       const count = p.leaf.files.length;
@@ -1795,7 +1807,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                       const names = p.leaf.files.map((f) => f.split("/").pop() ?? f);
                       if (p.strays.length > 0) {
                         return (
-                          <div key={p.leaf.path} style={s.entry}>
+                          <div key={p.leaf.path} style={rowStyle}>
                             <div style={s.pathLine}>{p.leaf.path}</div>
                             <div style={{ ...s.action, color: "#7a4f00" }}>
                               {holds} — &quot;{p.strays.join(", ")}&quot; matches no folder level, will
@@ -1807,7 +1819,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                       }
                       if (p.to === undefined) {
                         return (
-                          <div key={p.leaf.path} style={s.entry}>
+                          <div key={p.leaf.path} style={rowStyle}>
                             <div style={s.pathLine}>{p.leaf.path}</div>
                             <div style={{ ...s.action, color: "#7a4f00" }}>
                               {holds} — needs a value chosen above
@@ -1818,7 +1830,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                       }
                       if (p.to === p.leaf.path) return null;
                       return (
-                        <div key={p.leaf.path} style={s.entry}>
+                        <div key={p.leaf.path} style={rowStyle}>
                           <div style={s.pathLine}>{p.leaf.path}</div>
                           <div style={s.action}>
                             {holds} &rarr; {p.to.slice(row.unitPath.length + 1)}
