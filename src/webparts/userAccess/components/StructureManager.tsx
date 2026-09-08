@@ -1449,7 +1449,19 @@ export default function StructureManager({
                   <>
                     <label style={s.label}>Position</label>
                     <p style={{ ...s.hint, marginTop: 0 }}>
-                      <strong>{name(slots[0])}</strong>
+                      {/* ⚠ SLOT 0 IS NAMED FOR ITS ANCHOR, NOT ITS NEIGHBOUR (client, 2026-09-08:
+                          *"it says before Year but another Shared Folder Term is before year as
+                          well"*). "Before Year" is true only because Year happens to be first
+                          today; the actual rule is "first level below Unit", so the moment anything
+                          is inserted the sentence stops describing the rule while staying
+                          technically true. The anchor cannot move — the contiguity rule closes slot
+                          0 to every shared-list tier — so this stays correct for the life of the
+                          chain.
+
+                          The comparative labels stay in the DROPDOWN branch, where "Before Year /
+                          Between Year and Document Type / After Document Type" is one ordered list
+                          and consistency across its options is what makes it readable. */}
+                      <strong>{slots[0] === 0 ? `Directly under ${unitLabel(draft)}` : name(slots[0])}</strong>
                       {" — "}
                       {adding.fromUnit
                         ? "a sub unit level takes its values from the terms under each unit, so this " +
