@@ -59,6 +59,11 @@ interface SegmentRow {
   chainError?: string;
   /** Whether documents are already filed under this segment. Drives the warning. */
   hasDocuments?: boolean;
+  /**
+   * The segment's own term set. Read separately (see `loadSegmentTermSets`) and therefore optional:
+   * absent means the sub unit check cannot run, which warns rather than blocking.
+   */
+  termSetGuid?: string;
 }
 
 /** The in-progress "add a level" form. */
@@ -93,6 +98,20 @@ interface DraftTier {
  * `unknown` is deliberately NOT treated as bad. A 500 or a dropped connection says
  * nothing about the ID, and refusing to save on it would block a correct one.
  */
+/**
+ * What we know about whether any unit in this segment has sub unit terms under it.
+ *
+ * `none` is the only state that blocks Add, and it is the only one that is a definite negative:
+ * the walk finished, every unit term was read, and not one of them has a child. Everything else —
+ * a failed read, a capped walk, a segment with no term set recorded — is `unknown` and warns.
+ */
+type UnitCheck =
+  | { state: "idle" }
+  | { state: "checking" }
+  | { state: "none"; units: number }
+  | { state: "some"; withTerms: number; units: number }
+  | { state: "unknown" };
+
 type SetCheck =
   | { state: "blank" }
   | { state: "malformed" }
@@ -122,6 +141,37 @@ function columnNameFor(label: string): string {
 }
 
 /** The verdict, in the admin's language. Never shows the GUID back — they can see it. */
+function unitCheckMessage(c: UnitCheck, unitLabel: string): string {
+  switch (c.state) {
+    case "checking":
+      return `Checking whether any ${unitLabel.toLowerCase()} has sub unit terms under it…`;
+    case "none":
+      return (
+        `No ${unitLabel.toLowerCase()} in this segment has any terms authored under it, so a sub ` +
+        `unit level would never appear for anybody — every ${unitLabel.toLowerCase()} would ` +
+        `file straight into the next level down. Author the sub unit terms under each ` +
+        `${unitLabel.toLowerCase()} in the term store first, then add this level.`
+      );
+    case "some":
+      // The COUNT is the useful part, and the admin has no other way to get it: it says at a glance
+      // whether the terms were authored where they meant to author them. `some` is never a warning -
+      // a partial spread is the designed shape, not a problem to report.
+      return (
+        `${c.withTerms} of ${c.units} ${unitLabel.toLowerCase()}s have sub unit terms under them. ` +
+        `The level is only offered where they exist; the rest file one level shallower, which needs ` +
+        `no configuration.`
+      );
+    case "unknown":
+      return (
+        `Could not check whether sub unit terms exist — the term store did not answer, or this ` +
+        `segment has no term set recorded. Adding the level is still allowed; if no ` +
+        `${unitLabel.toLowerCase()} has terms under it, the level simply never appears.`
+      );
+    default:
+      return "";
+  }
+}
+
 function setCheckMessage(c: SetCheck): string {
   switch (c.state) {
     case "checking":
@@ -161,14 +211,18 @@ function setCheckStyle(c: SetCheck): React.CSSProperties {
  * for the reason on `SetCheck`. `checking` blocks for the few hundred ms it lasts, so a
  * fast click cannot outrun the verdict.
  */
-function canAddTier(adding: DraftTier, check: SetCheck): boolean {
+function canAddTier(adding: DraftTier, check: SetCheck, unitCheck: UnitCheck): boolean {
   const label = adding.label.trim();
   if (!label || !columnNameFor(label)) return false;
-  // A per-unit tier has no ID to validate, so the term-set verdict must not gate it. Without this
+  // A per-unit tier has no ID to validate, so the TERM-SET verdict must not gate it. Without this
   // the two could disagree: `setCheck` is computed from whatever is in the GUID field, and a
   // "notfound" left over from a paste before the toggle would keep Add disabled with a message
   // about a term set the admin can no longer see.
-  if (adding.fromUnit) return true;
+  //
+  // What DOES gate it is the unit walk, and only its one definite negative. `checking` blocks for
+  // as long as the walk lasts, so a fast click cannot outrun the verdict; `unknown` never blocks,
+  // because an unreachable term store says nothing about whether the terms are there.
+  if (adding.fromUnit) return unitCheck.state !== "none" && unitCheck.state !== "checking";
   // A SHARED-LIST tier must actually name a set. Blank is not neutral here — it is the stored
   // discriminator for per-unit, so saving it would silently produce the other kind of tier from a
   // screen that says "one shared list".
@@ -269,6 +323,7 @@ export default function StructureManager({
   // be shown the levels it is EFFECTIVELY using rather than an empty list.
   const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
   const [setCheck, setSetCheck] = useState<SetCheck>({ state: "blank" });
+  const [unitCheck, setUnitCheck] = useState<UnitCheck>({ state: "idle" });
 
   const editingSegment = (): SegmentRow | undefined => segments.filter((x) => x.key === editing)[0];
 
@@ -302,6 +357,37 @@ export default function StructureManager({
     return out;
   };
 
+  /**
+   * The segment term-set GUID per config item id.
+   *
+   * ⚠ ITS OWN REQUEST, for the reason `loadPendingChains` above states: a `$select` naming a column
+   * this site does not have returns 400 for the WHOLE query, and the main segment read failing is
+   * the one that takes this screen down with "Could not read the configuration". `TermSetGuid` is
+   * written by `SegmentCreator`, so a hand-authored `mode` row can legitimately lack it.
+   *
+   * A missing GUID is `undefined`, never blank-and-usable: it means the sub unit check cannot run,
+   * which reads as `unknown` and therefore warns rather than blocking.
+   */
+  const loadSegmentTermSets = async (): Promise<Record<number, string>> => {
+    const out: Record<number, string> = {};
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+          `/items?$select=Id,TermSetGuid&$filter=ConfigType eq 'mode'&$top=200`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out;
+      for (const r of ((await res.json()).value ?? []) as Array<Record<string, unknown>>) {
+        const raw = r.TermSetGuid;
+        if (typeof raw === "string" && raw.trim() !== "") out[Number(r.Id)] = raw.trim();
+      }
+    } catch {
+      // Unreadable: every segment reads as "no GUID", so the check reports unknown and warns.
+    }
+    return out;
+  };
+
   const loadSegments = async (): Promise<SegmentRow[]> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
       `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
@@ -317,6 +403,7 @@ export default function StructureManager({
     if (!res.ok) throw new Error(`the configuration list returned HTTP ${res.status}`);
     const data = await res.json();
     const pending = await loadPendingChains();
+    const termSets = await loadSegmentTermSets();
     const rows = ((data.value ?? []) as Array<{
       Id: number; Title?: string; ModeLabel?: string; StagingFolder?: string; Levels?: string;
     }>).map((r) => {
@@ -331,6 +418,7 @@ export default function StructureManager({
       };
       const staged = pending[r.Id];
       if (staged && staged.length > 0) row.pending = staged;
+      if (termSets[r.Id]) row.termSetGuid = termSets[r.Id];
       // A row whose chain does not validate is shown but NOT editable: saving would
       // rewrite a structure nobody has seen, and the fix may lie outside this screen.
       if (err) row.chainError = err.message;
@@ -396,6 +484,104 @@ export default function StructureManager({
       count = 0; // reported as "0 terms" below, which is a warning and not a block
     }
     return { state: "found", name, count };
+  };
+
+  /**
+   * Do the units in this segment actually HAVE sub unit terms authored under them?
+   *
+   * ⚠ THE TIER'S NAME CANNOT BE VALIDATED AND THIS DOES NOT TRY TO. A per-unit tier's options are
+   * the CHILDREN of the term above it, whatever those children happen to be called — the label only
+   * names the tier and derives its column. So "does `Sub unit` exist in the term store" is not a
+   * question with an answer. What IS answerable, and is the thing worth knowing, is whether any unit
+   * term has children at all: if none does, the tier can never appear for anybody, which is the same
+   * silent-skip shape that filed an HC document onto a unit folder on 2026-09-08.
+   *
+   * ⚠ PARTIAL IS THE DESIGNED SHAPE AND MUST NEVER BE REFUSED. Some units have sub units and some do
+   * not, and they are unit-specific — that is exactly why they are authored under each unit rather
+   * than in a flat set of their own, and why optionality needs no configuration. Only a definite
+   * ZERO is refusable.
+   *
+   * ⚠ AND AN UNREACHABLE TERM STORE WARNS, NEVER BLOCKS. That is already this screen's rule for a
+   * shared-list ID: malformed and 404 block Add, a resolvable-but-empty set and an unreachable store
+   * warn only. An outage must not stop an admin authoring a legitimate tier.
+   *
+   * Bounded at `UNIT_WALK_CAP` requests, `UNIT_WALK_CONCURRENCY` at a time — GHO is 8 departments
+   * and 62 units, so ~71 reads, in the same range as the abbreviation screen's own tree walk.
+   * Hitting the cap is `unknown`, never "none": an incomplete walk that answered zero would refuse a
+   * tier on a segment too large to check.
+   */
+  const UNIT_WALK_CAP = 400;
+  const UNIT_WALK_CONCURRENCY = 8;
+
+  const childIds = async (url: string): Promise<string[] | undefined> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      url, SPHttpClient.configurations.v1, { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return undefined;
+    const rows = (((await res.json()).value ?? []) as Array<{ id?: string }>);
+    return rows.map((r) => r.id ?? "").filter((id) => id !== "");
+  };
+
+  const checkUnitTerms = async (guid: string, permissioned: number): Promise<UnitCheck> => {
+    if (!guid || permissioned < 1) return { state: "unknown" };
+    let spent = 0;
+    const setBase = `${siteUrl}/_api/v2.1/termStore/sets/${guid}`;
+
+    // Descend to the terms at the LAST permissioned tier — the Unit level. `permissioned` is the
+    // count of those tiers, so the set's own children are level 1 and Unit is level `permissioned`.
+    let level = await childIds(`${setBase}/children?$select=id`);
+    spent++;
+    if (level === undefined) return { state: "unknown" };
+
+    for (let depth = 1; depth < permissioned; depth++) {
+      const next: string[] = [];
+      let failed = false;
+      let i = 0;
+      const parents = level;
+      const workers = Array.from(
+        { length: Math.min(UNIT_WALK_CONCURRENCY, parents.length) },
+        async () => {
+          while (i < parents.length) {
+            const id = parents[i++];
+            if (spent >= UNIT_WALK_CAP) { failed = true; return; }
+            spent++;
+            const kids = await childIds(`${setBase}/terms/${id}/children?$select=id`);
+            // ⚠ ONE UNREADABLE BRANCH ABANDONS THE WHOLE ANSWER, deliberately. Counting it as "no
+            // children" would report a SHALLOWER tree than exists — the same reasoning as the
+            // segment depth check, where too-shallow is the silent direction.
+            if (kids === undefined) { failed = true; return; }
+            for (const k of kids) next.push(k);
+          }
+        },
+      );
+      await Promise.all(workers);
+      if (failed) return { state: "unknown" };
+      level = next;
+    }
+
+    if (level.length === 0) return { state: "unknown" }; // no unit terms at all: not this check's business
+    const units = level;
+    let withKids = 0;
+    let failed = false;
+    let i = 0;
+    const workers = Array.from(
+      { length: Math.min(UNIT_WALK_CONCURRENCY, units.length) },
+      async () => {
+        while (i < units.length) {
+          const id = units[i++];
+          if (spent >= UNIT_WALK_CAP) { failed = true; return; }
+          spent++;
+          const kids = await childIds(`${setBase}/terms/${id}/children?$select=id`);
+          if (kids === undefined) { failed = true; return; }
+          if (kids.length > 0) withKids++;
+        }
+      },
+    );
+    await Promise.all(workers);
+    if (failed) return { state: "unknown" };
+    return withKids === 0
+      ? { state: "none", units: units.length }
+      : { state: "some", withTerms: withKids, units: units.length };
   };
 
   /**
@@ -611,6 +797,63 @@ export default function StructureManager({
   }, [dirty]);
 
   const permissionedCount = (chain: Level[]): number => splitChain(chain).permissioned.length;
+
+  /**
+   * What the DEEPEST permissioned tier is actually called, for the sub unit messages.
+   *
+   * ⚠ NEVER THE LITERAL "unit". The admin names the permissioned tiers at onboarding, so this is
+   * `Estate/Mill` on Upstream Ops, `Buah Number` on Buah and `Department` on SDGI. Hardcoding
+   * "unit" is the same mistake as the hardcoded Department/Unit rows in the approver's detail panel,
+   * which read blank on every segment that names its tiers differently.
+   */
+  const unitLabel = (chain: Level[]): string => {
+    const perm = splitChain(chain).permissioned;
+    return perm.length > 0 ? perm[perm.length - 1].label : "unit";
+  };
+
+
+  /**
+   * Run the sub unit walk when, and only when, a per-unit tier is actually being authored.
+   *
+   * ⚠ DRIVEN FROM AN EFFECT, NOT FROM THE RADIO'S onChange. There are two routes into the per-unit
+   * state - opening the form (which defaults to it) and toggling back to it - and a handler on one
+   * of them starts from zero on the other. That is the "a new route into an existing path silently
+   * starts from zero" trap this project has now paid for three times, most recently on the two
+   * clash-dialog failure paths. One effect covers every route, including a third added later.
+   *
+   * ⚠ ABOVE EVERY EARLY RETURN. This component returns early for `loadError` and again for the
+   * editing branch, and a hook declared below either renders a different number of hooks on the
+   * pass after loading finishes - "Rendered more hooks than during the previous render" - which
+   * blanks the whole web part with no error UI. Four screens in this project have paid for that.
+   *
+   * Keyed on the segment and the toggle, never on the label or the position: retyping the tier's
+   * name has no bearing on whether the terms exist, and re-walking 71 reads per keystroke would
+   * make the field unusable.
+   */
+  useEffect(() => {
+    const seg = editingSegment();
+    if (!adding || !adding.fromUnit || !seg) {
+      setUnitCheck({ state: "idle" });
+      return;
+    }
+    if (!seg.termSetGuid) {
+      // No term set recorded for this segment, so the walk has no root. Unknown, which warns.
+      setUnitCheck({ state: "unknown" });
+      return;
+    }
+    let stale = false;
+    setUnitCheck({ state: "checking" });
+    checkUnitTerms(seg.termSetGuid, permissionedCount(draft))
+      .then((r) => { if (!stale) setUnitCheck(r); })
+      .catch(() => { if (!stale) setUnitCheck({ state: "unknown" }); });
+    return () => { stale = true; };
+    /* `adding?.fromUnit` is `true | false | undefined`, and `undefined` uniquely means the form is
+       closed - so it covers open/closed on its own and no second dep is needed for it.
+       `draft` is deliberately ABSENT: the permissioned prefix renders locked on this screen, so the
+       depth this walk descends to cannot change while the form is open, and depending on the draft
+       would re-walk ~71 reads on every tier edit. */
+  }, [editing, adding?.fromUnit]);
+
 
   /** Move a below-Unit level. Bounded to the below-Unit region — the prefix cannot move. */
   const moveTier = (index: number, delta: number): void => {
@@ -1136,6 +1379,17 @@ export default function StructureManager({
               </>
             )}
 
+            {/* ⚠ SHOWN ONLY FOR A PER-UNIT TIER. For a shared list the walk never runs and the
+                state is `idle`, so there is nothing to say — and a stale count from a previous
+                toggle must not sit under a field it does not describe. `some` renders in the
+                ordinary hint tone, not the warning one: a partial spread is the designed shape,
+                and colouring it amber would train people to ignore the state that matters. */}
+            {adding.fromUnit && unitCheck.state !== "idle" && (
+              <p style={unitCheck.state === "none" ? { ...s.msg, ...s.warn } : s.hint}>
+                {unitCheckMessage(unitCheck, unitLabel(draft))}
+              </p>
+            )}
+
             <label style={s.label} htmlFor="sm-pos">Position</label>
             <select
               id="sm-pos"
@@ -1177,8 +1431,8 @@ export default function StructureManager({
 
             <div style={{ marginTop: 14 }}>
               <button
-                style={canAddTier(adding, setCheck) ? s.btn : s.off}
-                disabled={!canAddTier(adding, setCheck)}
+                style={canAddTier(adding, setCheck, unitCheck) ? s.btn : s.off}
+                disabled={!canAddTier(adding, setCheck, unitCheck)}
                 // `addTier` is async now — it asks the site whether the derived column already
                 // exists. The rejection is swallowed here because every failure path inside it
                 // already sets `addError`; an unhandled rejection would show nothing at all.
