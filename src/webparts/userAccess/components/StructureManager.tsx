@@ -1417,39 +1417,65 @@ export default function StructureManager({
               </p>
             )}
 
-            <label style={s.label} htmlFor="sm-pos">Position</label>
-            <select
-              id="sm-pos"
-              style={s.input}
-              value={String(adding.position)}
-              onChange={(e) => setAdding({ ...adding, position: Number(e.target.value) })}
-            >
-              {allowedTierPositions(onDemand, adding.fromUnit).map((p) => (
-                <option key={p} value={String(p)}>
-                  {onDemand.length === 0
-                    ? "First level below Unit"
-                    : p === 0
-                      ? `Before ${onDemand[0].label}`
-                      : p === onDemand.length
-                        ? `After ${onDemand[onDemand.length - 1].label}`
-                        : `Between ${onDemand[p - 1].label} and ${onDemand[p].label}`}
-                </option>
-              ))}
-            </select>
-            {/* ⚠ SAID ONLY WHEN THE CHOICE IS GONE, never as a permanent note. A single-option
-                dropdown with no explanation reads as a broken control — the admin looks for the
-                other positions they had yesterday. Rendering this unconditionally would be the
-                "Unable to verify current permissions" mistake again: a state drawn as a static
-                sibling stops being read at all. */}
-            {allowedTierPositions(onDemand, adding.fromUnit).length === 1 && onDemand.length > 0 && (
-              <p style={s.hint}>
-                {adding.fromUnit
-                  ? "A sub unit level takes its values from the terms under each unit, so it only " +
-                    "works directly under Unit. That is the one position offered."
-                  : "A shared level cannot sit above a sub unit level — the sub unit cascades from " +
-                    "the Unit term, and a shared list in between breaks that lookup."}
-              </p>
-            )}
+            {/* ⚠ THE LABEL FOR ONE SLOT, DERIVED ONCE AND USED BY BOTH BRANCHES BELOW. Two copies
+                of this expression would be two answers to "what is this position called", and the
+                one that drifts is the branch nobody looks at. */}
+            {(() => {
+              const slots = allowedTierPositions(onDemand, adding.fromUnit);
+              const name = (p: number): string =>
+                onDemand.length === 0
+                  ? "First level below Unit"
+                  : p === 0
+                    ? `Before ${onDemand[0].label}`
+                    : p === onDemand.length
+                      ? `After ${onDemand[onDemand.length - 1].label}`
+                      : `Between ${onDemand[p - 1].label} and ${onDemand[p].label}`;
+
+              /* ⚠ ONE SLOT ⇒ NO CONTROL (client, 2026-09-08: *"what is the point of the Dropdown
+                 being able to select, just disable it since it will always be under Unit"*).
+
+                 Stated as text rather than DISABLED, which is the treatment this project already
+                 settled on for the migrate screen's segment picker — client, 2026-09-06: *"You
+                 haven't remove the select... just put a message indicator is enough."* A greyed
+                 control still reads as something to interact with, and its reason only appears on
+                 hover.
+
+                 ⚠ BUT NOT HARDCODED TO "under Unit", because it is NOT always one slot: once a
+                 per-unit tier exists, a SECOND one may legitimately go above or below it, and a
+                 shared-list tier gains every slot from the end of the per-unit run downwards. The
+                 control disappears when there is nothing to decide and comes back when there is. */
+              if (slots.length === 1) {
+                return (
+                  <>
+                    <label style={s.label}>Position</label>
+                    <p style={{ ...s.hint, marginTop: 0 }}>
+                      <strong>{name(slots[0])}</strong>
+                      {" — "}
+                      {adding.fromUnit
+                        ? "a sub unit level takes its values from the terms under each unit, so this " +
+                          "is the only place it works."
+                        : "a shared level cannot sit above a sub unit level, which cascades from the " +
+                          "Unit term."}
+                    </p>
+                  </>
+                );
+              }
+              return (
+                <>
+                  <label style={s.label} htmlFor="sm-pos">Position</label>
+                  <select
+                    id="sm-pos"
+                    style={s.input}
+                    value={String(adding.position)}
+                    onChange={(e) => setAdding({ ...adding, position: Number(e.target.value) })}
+                  >
+                    {slots.map((p) => (
+                      <option key={p} value={String(p)}>{name(p)}</option>
+                    ))}
+                  </select>
+                </>
+              );
+            })()}
             {/* ⚠ THE COST OF POSITION IS NO LONGER STATED (client, 2026-09-06) AND IT IS REAL.
                 Near the top means one folder per unit; at the bottom means one for every Year and
                 Document Type combination — the same level placed last can multiply the folder count
