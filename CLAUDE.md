@@ -11287,3 +11287,57 @@ exactly what stops the Apply card rendering, so `CHANGE PENDING` was stuck with 
 - **An info icon explains that the name is permanent (1.0.480.0)**, carrying the live derived column
   names so a typo is visible — ⚠ **in the panel, not under the field**, because a standing preview was
   removed at the client's request on 2026-09-06 and re-adding one would reverse that.
+
+## ONE SUB UNIT PER UNIT, A MOVE THAT ASKS `validateChain`, AND A NESTED SET IS NOW REFUSED (2026-09-08/09, 1.0.488-491)
+Four builds from the client walking the Shared-folder-term half of the Folder levels screen, after the
+Sub Unit migration. All four are in `StructureManager.tsx` and `folderChain.ts`.
+- **ONE SUB UNIT PER UNIT (1.0.488.0)**, on the client's own reasoning: *"from what I understand there
+  will be only one subunit for each unit."* `allowedTierPositions` returns **always `[0]`** for a
+  per-unit tier, and `perUnitTierExists` refuses a second one outright.
+  - **⚠ IT REMOVED A DEFECT RATHER THAN NEEDING ONE FIXED.** With two per-unit tiers possible, slot 0
+    was named *"Directly under <Unit>"* and slot 1 *"Between Sub Unit and Year"* — and the second was
+    only correct while exactly one existed. One slot means the label can never be wrong.
+  - **⚠ THE INVARIANT TEST HAD TO BECOME ONE-DIRECTIONAL, and that is the record of a real
+    distinction.** It asserted that the allowed slots and `validateChain` agree in BOTH directions;
+    the UI rule is now STRICTER than the validity rule, so it asserts only *"never offers a slot
+    validateChain would refuse"*. **The shared-list half keeps both directions in its own test** —
+    that is the direction which protects a live segment, since a slot wrongly withheld there would
+    stop an admin adding a tier the chain accepts. Same UI-vs-validity split as `isFixedBelowUnitTier`.
+- **⚠ SUB UNIT COULD BE MOVED BELOW YEAR WITH THE ↑ / ↓ BUTTONS (1.0.489.0)** — reported live. The
+  position rules gated ADDING and nothing gated MOVING, so the chain could be walked straight into the
+  `per-unit-not-contiguous` shape that made Buah's migration unreadable.
+  - **`canMoveBelowUnitTier` ASKS `validateChain` ABOUT THE PROSPECTIVE CHAIN** — it builds the array
+    the move would produce and offers it up — rather than re-deriving the rule. A second definition of
+    "is this chain legal" is how the buttons and the save would come to disagree, and the drifting copy
+    would be the one nobody tests.
+  - **Guards BOTH BUTTONS AND `moveTier` ITSELF.** Disabling a button is not a rule; the handler is
+    reachable from anywhere and the standing lesson from 2026-09-07 is that gating one control and not
+    another is not gating at all.
+- **A NESTED TERM SET WAS SILENTLY IGNORED, THEN WARNED ABOUT, AND IS NOW REFUSED (1.0.490.0 ->
+  1.0.491.0).** The client's `Minamas Archive 2` has two top-level terms with `test` nested under one,
+  and the screen said *"Found — 2 values"* and enabled Add: a shared level only ever offers
+  `sets/{guid}/children`, so `test` could never appear as a folder.
+  - **`nested` COMES FROM A SEPARATE REQUEST WHOSE FAILURE CHANGES NOTHING.** Folding `childrenCount`
+    into the existing children read risks the whole `$select` being rejected on a tenant that does not
+    expose it — which would report a perfectly good set as having **0 terms**, turning a missing
+    warning into a false one. `undefined` means **not established**, never none.
+  - **⚠ IT SHIPPED AS WARN-AND-ALLOW AND WAS REVERSED THE NEXT DAY** (*"isn't it better to force that
+    the Add doesn't work untill they completely ensure the Term level follows the Year?"*). The
+    original reasoning — a set with depth is still usable as a flat list, and the nested terms may
+    belong to another consumer of the same set — is sound and is simply not the client's rule: the set
+    must match Year's shape before it is used.
+  - **⚠ `?? 0` IS WHAT KEEPS THE REFUSAL SAFE.** Only a definite positive blocks, so a tenant that
+    never reports `childrenCount` can still add a flat set. Blocking on unknown would take shared
+    levels away entirely on such a tenant, over a field nobody controls.
+  - **The colour moved amber -> RED with the behaviour.** Red is what blocks Add here (malformed,
+    notfound); amber is warn-and-allow (empty set, unreachable store). Leaving it amber beside a
+    disabled button puts a "you may continue" colour on the one verdict that stops the admin.
+  - **The message ends by naming the fix** (*"Ensure that the Term Set is only one level."*) instead of
+    offering to proceed — an offer beside a disabled button is how a screen reads as broken.
+- **⚠ A PROCESS FINDING WORTH MORE THAN ANY OF THEM: `npx heft test --clean` AFTER `npm run build`
+  REPLACES `release/assets` WITH DEBUG OUTPUT.** 1.25 MB unhashed, where production is ~285 KB hashed.
+  So a grep there reads an artefact that never shipped, and it looks exactly like a successful check.
+  **Verify inside the `.sppkg`:** `unzip -p sharepoint/solution/sd-gatrie.sppkg
+  ClientSideAssets/<bundle>_<hash>.js | grep -c "<string>"`. Same family as the September lesson that
+  `heft package-solution` does not build — **the package is the fact; every other artefact is a
+  by-product.**

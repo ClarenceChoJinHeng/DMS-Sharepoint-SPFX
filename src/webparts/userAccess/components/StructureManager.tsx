@@ -124,7 +124,13 @@ type SetCheck =
    * terms can never appear — the client hit this with a set whose second term had a child: the screen
    * said *"Found — 2 values"*, enabled Add, and would have ignored the nested term for ever
    * (2026-09-08: *"it doesn't really show an error or refuse if the Shared folder term Term structure
-   * is not the same as Year"*). Reported, never blocked — see the message.
+   * is not the same as Year"*).
+   *
+   * ⚠ IT REFUSES ADD SINCE 2026-09-09, at the client's instruction (*"isn't it better to force that
+   * the Add doesn't work until they completely ensure the Term level follows the Year"*) — reversing
+   * the warn-and-allow it shipped with a day earlier. Only a DEFINITE positive blocks: `undefined`
+   * allows, because a tenant that does not report `childrenCount` must not lose the ability to add a
+   * perfectly flat set.
    */
   | { state: "found"; name: string; count: number; nested?: number }
   | { state: "notfound" }
@@ -229,20 +235,19 @@ function setCheckMessage(c: SetCheck): string {
           "or the dropdown will be empty and block them.";
       }
       const found = `Found "${c.name}" — ${c.count} ${c.count === 1 ? "value" : "values"}.`;
-      /* ⚠ SAID, NOT REFUSED. A shared level offers the TOP level of its set and nothing below, so a
-         nested term contributes one option and hides its own children — the client's set had a term
-         with a child and the screen called it two clean values. But a set with depth is still
-         perfectly USABLE as a flat list, and refusing it would block a working configuration over a
-         term that may belong to some other consumer of the same set. Warn-and-allow, the same as an
-         empty set and an unreachable store.
+      /* A shared level offers the TOP level of its set and nothing below, so a nested term
+         contributes one option and hides its own children — the client's set had a term with a child
+         and the screen called it two clean values.
+         ⚠ THIS MESSAGE IS PAIRED WITH THE REFUSAL IN `canAddTier`, and the two read the same
+         condition. It ends by naming the fix rather than offering to proceed, because proceeding is
+         no longer possible: an offer beside a disabled button is how a screen reads as broken.
          `undefined` says nothing at all: the tenant may not report `childrenCount`, and "we could
          not establish it" must not read as "there is none". */
       if (c.nested === undefined || c.nested === 0) return found;
       return (
         `${found} ⚠ ${c.nested} of them ${c.nested === 1 ? "has" : "have"} terms nested underneath. ` +
         "A shared level only ever offers the top level — like Year and Document Type — so those " +
-        "nested terms will never appear as folders. Flatten the set, or use it knowing only the top " +
-        "level is used."
+        "nested terms will never appear as folders. Ensure that the Term Set is only one level."
       );
     }
     default:
@@ -251,11 +256,16 @@ function setCheckMessage(c: SetCheck): string {
 }
 
 function setCheckStyle(c: SetCheck): React.CSSProperties {
-  if (c.state === "notfound" || c.state === "malformed") return { color: "#a4262c" };
+  // Red is what BLOCKS Add, amber is what merely warns — so a nested set moved from amber to red
+  // when it started blocking. Keeping it amber beside a disabled button would put a "you may
+  // continue" colour on the one verdict that stops the admin.
   if (
-    c.state === "unknown" ||
-    (c.state === "found" && (c.count === 0 || (c.nested ?? 0) > 0))
+    c.state === "notfound" || c.state === "malformed" ||
+    (c.state === "found" && (c.nested ?? 0) > 0)
   ) {
+    return { color: "#a4262c" };
+  }
+  if (c.state === "unknown" || (c.state === "found" && c.count === 0)) {
     return { color: "#7a4f00" };
   }
   if (c.state === "found") return { color: "#0f6c3f" };
@@ -290,6 +300,14 @@ function canAddTier(
   // discriminator for per-unit, so saving it would silently produce the other kind of tier from a
   // screen that says "one shared list".
   if (!normalizeGuid(adding.termSetGuid)) return false;
+  // ⚠ A NESTED SET IS REFUSED (2026-09-09, client's instruction). A shared level only ever offers the
+  // top level, so depth is silently discarded — and the client's rule is that such a set must be
+  // flattened before it is used, not used in the knowledge that part of it is ignored.
+  //
+  // `?? 0` is what keeps this safe: `nested` is `undefined` when the depth could not be established
+  // (the read failed, or the tenant does not report `childrenCount`), and unknown must never block —
+  // otherwise a tenant that never reports the field could add no shared level at all.
+  if (check.state === "found" && (check.nested ?? 0) > 0) return false;
   return check.state !== "malformed" && check.state !== "notfound" && check.state !== "checking";
 }
 
