@@ -863,7 +863,19 @@ export function firstBlockedStepIndex(steps: FlowStep[], facts: FlowFacts): numb
  */
 export function isStepReachable(
   i: number,
-  at: { maxIdx: number; idx: number; firstBlocked: number },
+  at: { maxIdx: number; idx: number; firstBlocked: number; complete?: boolean },
 ): boolean {
+  /* ⚠ A FINISHED FLOW GOES NOWHERE BUT FORWARD OUT OF ITSELF (client, 2026-09-09: *"once the at the
+     last step its on then block from going back"*). `complete` means the LAST step is reached and
+     uploads are back ON — the flow has done its job, and the one thing left is Finish.
+     ⚠ THE RAIL HAD TO BE GATED TOO, NOT JUST THE BACK BUTTON. From step 5 with uploads on, the
+     clause `i <= at.idx` — which exists so a fact turning false cannot strand anyone — evaluates
+     TRUE for the migrate step, so the rail was a second route straight back to a screen whose
+     Rebuild is not gated on uploads. Gating one control and not the other is not a gate.
+     ⚠ NOBODY IS TRAPPED: Finish is enabled (nothing blocks on the last step once uploads are on) and
+     the "Back to Folder Management" band is untouched. Two exits, neither of them backwards.
+     ⚠ AND IT IS `=== true`, so an UNREADABLE config never sets it — unknown gates nothing here as
+     everywhere else. */
+  if (at.complete === true) return i === at.idx;
   return i <= at.maxIdx && (i <= at.firstBlocked || i <= at.idx);
 }

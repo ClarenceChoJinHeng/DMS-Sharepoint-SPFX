@@ -888,6 +888,22 @@ describe("the rail cannot walk past a blocked step", () => {
     expect(blocksNext(steps[LEVELS], { uploadsPaused: false })).toBe("");
   });
 
+  /* ⚠ Client, 2026-09-09: *"once the at the last step its on then block from going back"*. The Back
+     button alone would not have done it — from step 5 with uploads on, `i <= at.idx` evaluates true
+     for the migrate step, whose Rebuild is NOT gated on uploads. */
+  it("a finished flow offers only the step it is on", () => {
+    const at = { maxIdx: RESUME, idx: RESUME, firstBlocked: 0, complete: true };
+    expect(isStepReachable(RESUME, at)).toBe(true);
+    for (const i of [0, LEVELS, MIGRATE]) expect(isStepReachable(i, at)).toBe(false);
+  });
+
+  it("leaves reachability untouched when the flow is not complete", () => {
+    // `complete` absent and `complete: false` must both behave exactly as before.
+    const base = { maxIdx: RESUME, idx: RESUME, firstBlocked: 0 };
+    expect(isStepReachable(MIGRATE, base)).toBe(true);
+    expect(isStepReachable(MIGRATE, { ...base, complete: false })).toBe(true);
+  });
+
   it("caps nothing on a flow with no gated step at all", () => {
     // runRecon is a single reconciliation step: no gate, so the rail behaves exactly as before.
     const rr = flow("runRecon").steps;

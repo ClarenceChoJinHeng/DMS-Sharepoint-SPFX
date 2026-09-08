@@ -11727,3 +11727,32 @@ after I finish running it immediately becomes like this for step 3"* — the ste
     segment mid-flow, and the previous segment's result must not unlock the new one's lock.
   - Everything else about the lock is unchanged: a first visit with no pending change renders exactly
     as before.
+
+## A FINISHED FLOW CANNOT GO BACK (2026-09-09, 1.0.504.0)
+Client, having reached step 5 and switched uploads on: *"I notice something if the upload is on on last
+step I can go back to previous step... once the at the last step its on then block from going back."*
+- **THE HOLE THEY FOUND IS REAL, AND IT IS THAT THE PAUSE GATE IS FORWARD-ONLY.** `blocksNext` holds
+  step 1 so nobody walks FORWARD with uploads on — but coming BACK lands on the migrate screen, whose
+  **Rebuild is not gated on uploads at all**. The banner there says so in its own comment: *"IT IS
+  STILL NOT A GATE — this screen refuses nothing, so a migration CAN be run with uploads on."*
+- **⚠⚠ THE BACK BUTTON ALONE WOULD NOT HAVE CLOSED IT — the rail was the second route.**
+  `isStepReachable` is `i <= maxIdx && (i <= firstBlocked || i <= idx)`, and from step 5 the
+  `i <= at.idx` clause — which exists precisely so a fact turning false cannot strand anyone —
+  evaluates **true** for the migrate step. **Gating one control and not the other is not a gate**, the
+  standing lesson from 2026-09-07 where three separate holes shipped that way in one evening.
+- **ONE RULE, `flowComplete`, READ BY BOTH.** Last step reached AND `uploadsPaused === false`.
+  `isStepReachable` gained an optional `complete` flag and returns `i === at.idx` when set, so the
+  windowing stays a pure tested rule rather than a condition patched into the caller.
+- **⚠ `=== false` MEANS KNOWN-ON.** `undefined` is an unreadable config and gates nothing, `true` means
+  still paused and the closing step is not done. Unknown never gates, as everywhere.
+- **⚠ NOBODY IS TRAPPED, and that is what makes this acceptable at all:** **Finish** is enabled (nothing
+  blocks the last step once uploads are on) and the **Back to Folder Management** band is untouched.
+  Two exits, neither of them backwards — and the reason beside the greyed Back names both, because an
+  unexplained dead button is the defect this project has now shipped three times.
+- **⚠ THE ALTERNATIVE WAS REJECTED FOR A CONCRETE REASON, not a preference.** Blocking Back whenever
+  uploads are on — the wider reading of the request — **deadlocks the way in**: with uploads on, Back is
+  the route to step 1, which is where you turn them off. An admin opening the flow on a normal site
+  would reach step 2 and have no way back to the control that satisfies the condition.
+- **⚠ STILL OPEN, and it is the stronger fix: gate `canRun` on `uploadsPaused`.** That would make the
+  migrate screen's red banner TRUE rather than advisory and close the hazard by whatever route step 3
+  is reached, including the standalone Migrate tab which has no step 1 at all. Offered and not chosen.

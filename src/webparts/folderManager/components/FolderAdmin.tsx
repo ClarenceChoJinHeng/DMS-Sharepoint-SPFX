@@ -1222,6 +1222,18 @@ export default function FolderAdmin({
   const needsPick = active.needsSegment && !segment;
   /* ⚠ THE MIGRATE STEP STAYS UNLOCKED AFTER ITS OWN RUN — see `appliedFor`. Everything else about
      the lock is unchanged: on a first visit with no pending change it renders exactly as before. */
+  /**
+   * The flow has done its job: the last step is reached and uploads are back ON.
+   *
+   * ⚠ `=== false` MEANS KNOWN-ON. `undefined` is an unreadable config and must gate nothing — the
+   * universal rule here — and `true` means still paused, i.e. the closing step is not done.
+   *
+   * Read by the rail AND by Back, from one place: gating one and not the other is not a gate, and
+   * from step 5 the rail's `i <= idx` clause offered the migrate step straight back.
+   */
+  const flowComplete =
+    idx >= steps.length - 1 && effectiveFacts.uploadsPaused === false;
+
   const locked =
     isLocked(step, effectiveFacts) &&
     !(step.id === "migrate" && appliedFor !== undefined && appliedFor === segKey);
@@ -1791,6 +1803,7 @@ export default function FolderAdmin({
               maxIdx,
               idx,
               firstBlocked: firstBlockedIdx,
+              complete: flowComplete,
             });
             return (
               <button
@@ -1931,9 +1944,13 @@ export default function FolderAdmin({
             return (
               <>
                 <div style={s.navBar}>
+                  {/* ⚠ HELD ON A FINISHED FLOW — see `flowComplete`. Uploads are back on, so the
+                      migration is over; going back would put an admin on a screen whose Rebuild is
+                      NOT gated on uploads, with the site accepting documents. Finish and the "Back to
+                      Folder Management" band are the two exits, so nobody is trapped. */}
                   <button
-                    style={idx === 0 || runBusy ? s.off : s.ghost}
-                    disabled={idx === 0 || runBusy}
+                    style={idx === 0 || runBusy || flowComplete ? s.off : s.ghost}
+                    disabled={idx === 0 || runBusy || flowComplete}
                     onClick={() => setStepIdx(Math.max(0, idx - 1))}
                   >
                     Back
@@ -2028,6 +2045,16 @@ export default function FolderAdmin({
                   )}
                 {/* Its own reason, again: "a run is in progress" would be wrong — nothing is running,
                     the admin simply has not pressed the button yet. */}
+                {/* An unexplained greyed Back is the dead-button defect again; it also names the
+                    two ways out, because "you cannot go back" without them reads as a trap. */}
+                {flowComplete && !runBusy && (
+                  <div style={s.hint}>
+                    Uploads are back on, so this run is finished — going back is closed off, because
+                    the earlier steps move folders and the site is accepting documents again. Press{" "}
+                    <strong>Finish</strong>, or leave with <strong>Back to Folder Management</strong>.
+                    To change the structure again, start the flow afresh and turn uploads off first.
+                  </div>
+                )}
                 {migratePending && !runBusy && (
                   <div style={s.hint}>
                     There are folders still to rebuild. Run them first — moving
