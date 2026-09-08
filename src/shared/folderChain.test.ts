@@ -5,7 +5,10 @@ import {
   builtInTierFor,
   decideTier,
   effectiveOnDemandTiers,
+  allowedTierPositions,
+  clampTierPosition,
   isFixedBelowUnitTier,
+  leadingPerUnitCount,
   gridPlan,
   isPermissioned,
   needsLegacyBelowUnit,
@@ -479,5 +482,121 @@ describe("isFixedBelowUnitTier", () => {
     const unit: Level = { label: "Unit", column: "Unit", labelCol: "Unit", tidCol: "UnitTid" };
     const state: Level = { label: "State", column: "State", labelCol: "State", termSet: "guid", permissioned: false };
     expect(validateChain([dept, unit, state])).toBeUndefined();
+  });
+});
+
+/* ── Where a new below-Unit tier may go ────────────────────────────────────── */
+
+describe("allowedTierPositions", () => {
+  const perUnit = (label: string): Level => ({ label, column: label, permissioned: false });
+  const shared = (label: string): Level => ({
+    label, column: label, permissioned: false, termSet: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
+  });
+
+  /* GHO's live shape, and the one the client was looking at: Year and Document Type both carry a
+     term set, so a per-unit tier has exactly ONE valid home and the dropdown must collapse to it. */
+  const ghoBelowUnit = [shared("Year"), shared("Document Type")];
+
+  it("gives a per-unit tier only the slot directly under Unit when every existing tier is shared", () => {
+    expect(allowedTierPositions(ghoBelowUnit, true)).toEqual([0]);
+  });
+
+  it("lets a shared-list tier go anywhere when there is no per-unit run to sit above", () => {
+    expect(allowedTierPositions(ghoBelowUnit, false)).toEqual([0, 1, 2]);
+  });
+
+  it("lets a second per-unit tier join the run but not follow the shared ones", () => {
+    const withSub = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    expect(allowedTierPositions(withSub, true)).toEqual([0, 1]);
+  });
+
+  it("keeps a shared-list tier from being inserted above an existing per-unit tier", () => {
+    const withSub = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    // 0 is absent: that slot would put a shared list between Unit and the tier cascading from it.
+    expect(allowedTierPositions(withSub, false)).toEqual([1, 2, 3]);
+  });
+
+  it("offers the first slot to either kind when nothing is below Unit yet", () => {
+    expect(allowedTierPositions([], true)).toEqual([0]);
+    expect(allowedTierPositions([], false)).toEqual([0]);
+  });
+
+  /* A blank or whitespace `termSet` IS the per-unit discriminator — the 2026-08-26 shape, where
+     GHO's Year carried `"termSet": ""` and both upload forms silently hid the tier. Reading it as a
+     shared list here would let a per-unit tier be placed below it. */
+  it("counts a blank or whitespace term set as per-unit, not as a shared list", () => {
+    const blank: Level = { label: "Year", column: "Year", permissioned: false, termSet: "  " };
+    expect(leadingPerUnitCount([blank, shared("Document Type")])).toBe(1);
+    expect(allowedTierPositions([blank, shared("Document Type")], false)).toEqual([1, 2]);
+  });
+
+  /* ⚠ THE PERMISSIONED TIERS HAVE NO TERM SET EITHER. Counting them would report every chain as
+     leading with per-unit tiers and hand a shared-list tier the wrong slots. */
+  it("does not count permissioned tiers, which never carry a term set", () => {
+    const dept: Level = { label: "Department", column: "Department" };
+    const unitLvl: Level = { label: "Unit", column: "Unit" };
+    // Handed a WHOLE chain it counts the two permissioned tiers and answers 2 - which would tell a
+    // shared-list tier it may not take slot 0 or 1 of a below-Unit run that has no per-unit tier at
+    // all. That is the mistake this signature exists to make impossible to write by accident.
+    expect(leadingPerUnitCount([dept, unitLvl, shared("Year")])).toBe(2);
+    // Handed the below-Unit run, which is what every caller passes, it answers correctly.
+    expect(leadingPerUnitCount([shared("Year")])).toBe(0);
+  });
+
+  /* ⚠ THE INVARIANT, AND THE ONLY TEST THAT PROVES THE DROPDOWN AND THE REFUSAL AGREE: inserting
+     at an allowed slot must produce a chain `validateChain` accepts, and every slot left OUT must
+     be one it refuses. Anything else means the UI is offering a trap or hiding a valid choice. */
+  it.each([
+    ["per-unit", true],
+    ["shared-list", false],
+  ])("agrees with validateChain for a %s tier at every slot", (_kind, fromUnit) => {
+    const fixed: Level[] = [
+      { label: "Department", column: "Department" },
+      { label: "Unit", column: "Unit" },
+    ];
+    const belowUnit = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    const added = fromUnit ? perUnit("New") : shared("New");
+    const ok = allowedTierPositions(belowUnit, fromUnit as boolean);
+
+    for (let p = 0; p <= belowUnit.length; p++) {
+      const run = belowUnit.slice(0, p).concat([added], belowUnit.slice(p));
+      const err = validateChain(fixed.concat(run));
+      if (ok.indexOf(p) === -1) {
+        expect(err?.code).toBe("per-unit-not-contiguous");
+      } else {
+        expect(err).toBeUndefined();
+      }
+    }
+  });
+});
+
+describe("clampTierPosition", () => {
+  const perUnit = (label: string): Level => ({ label, column: label, permissioned: false });
+  const shared = (label: string): Level => ({
+    label, column: label, permissioned: false, termSet: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
+  });
+  const gho = [shared("Year"), shared("Document Type")];
+
+  /* THE EXACT DEFAULT THE ADD FORM SHIPPED WITH — `position: onDemand.length`, which rendered as
+     "After Document Type" with "Sub unit" already selected. The worst slot, pre-chosen. */
+  it("snaps the form's own default down to the only slot a per-unit tier may take", () => {
+    expect(clampTierPosition(gho, true, gho.length)).toBe(0);
+  });
+
+  it("leaves a slot alone when it is already allowed", () => {
+    expect(clampTierPosition(gho, false, 1)).toBe(1);
+    expect(clampTierPosition(gho, true, 0)).toBe(0);
+  });
+
+  it("pulls a shared-list tier down to the end of the per-unit run rather than above it", () => {
+    const withSub = [perUnit("Sub unit"), shared("Year")];
+    expect(clampTierPosition(withSub, false, 0)).toBe(1);
+  });
+
+  it("never returns a slot outside the allowed range, whatever it is handed", () => {
+    for (const bad of [-5, 99, NaN, 1.7]) {
+      const p = clampTierPosition(gho, true, bad);
+      expect(allowedTierPositions(gho, true).indexOf(p)).not.toBe(-1);
+    }
   });
 });

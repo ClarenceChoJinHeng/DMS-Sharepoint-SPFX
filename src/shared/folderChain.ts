@@ -402,3 +402,74 @@ export function isFixedBelowUnitTier(level: Level): boolean {
   }
   return false;
 }
+
+/**
+ * How many tiers at the START of the below-Unit run are PER-UNIT (no term set of their own).
+ *
+ * Takes the below-Unit run — `splitChain().onDemand` — not a whole chain. The permissioned tiers
+ * have no `termSet` either, because they draw from the segment's own set by definition, so counting
+ * them would report every chain as leading with per-unit tiers.
+ */
+export function leadingPerUnitCount(onDemand: Level[]): number {
+  let n = 0;
+  for (const lvl of onDemand) {
+    if ((lvl.termSet ?? "").trim().length > 0) break;
+    n++;
+  }
+  return n;
+}
+
+/**
+ * Which insertion slots a new below-Unit tier may take, given what is already there and which kind
+ * of tier it is. A slot `p` means "at index p of the below-Unit run".
+ *
+ * ⚠ THIS IS `per-unit-not-contiguous` SAID BEFORE THE FACT INSTEAD OF AFTER IT. That rule already
+ * refuses a per-unit tier sitting below a shared-list one — it is what caught Buah's
+ * `Clarence Kiwi` — but it refuses at SAVE and UPLOAD time, so the Position dropdown went on
+ * offering slots that produce a chain the same code then rejects. Three options, two of them
+ * traps, with the WORST of them (last) pre-selected.
+ *
+ * The rule removes the choice rather than warning about it afterwards, which is the same reasoning
+ * that took the per-unit/shared toggle away from `Year` and `Document Type`: an admin cannot act on
+ * a refusal they meet two screens later, and a chain saved in that shape reads as working right up
+ * until a migration reports every unit as unreadable.
+ *
+ * ⚠ IT NEVER RETURNS AN EMPTY LIST. A per-unit tier can always take slot 0, and a shared-list tier
+ * can always go at the end, so the dropdown can never render with nothing in it — which would be a
+ * dead end rather than a guard.
+ */
+export function allowedTierPositions(onDemand: Level[], fromUnit: boolean): number[] {
+  const n = leadingPerUnitCount(onDemand);
+  const out: number[] = [];
+  if (fromUnit) {
+    // Anywhere inside the per-unit run, or immediately after it — every one of those keeps the run
+    // contiguous with Unit. Slot `n` is "last of the per-unit tiers", not "after the shared ones".
+    for (let p = 0; p <= n; p++) out.push(p);
+  } else {
+    // At or after the end of the per-unit run. Going above one would put a shared list between Unit
+    // and a tier that cascades from it, which is the failure this exists to prevent.
+    for (let p = n; p <= onDemand.length; p++) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Snap a chosen slot into the ones this kind of tier may actually take.
+ *
+ * ⚠ HIDING THE INVALID OPTIONS IS NOT ENOUGH ON ITS OWN, and leaving this out would have shipped a
+ * worse bug than the one it fixes. A `<select>` whose `value` matches no option renders showing the
+ * FIRST one while the state behind it keeps the old number — so the screen would say "Before Year"
+ * and Add would still insert after Document Type. Three routes can leave a stale slot behind: the
+ * form's own default, and each of the two Folder-setup radios.
+ *
+ * The allowed slots are always a CONTIGUOUS range, so clamping into it is exact rather than a
+ * guess, and it keeps the admin's intent — "as deep as you are allowed" — instead of resetting to
+ * the top.
+ */
+export function clampTierPosition(onDemand: Level[], fromUnit: boolean, position: number): number {
+  const ok = allowedTierPositions(onDemand, fromUnit);
+  const first = ok[0];
+  const last = ok[ok.length - 1];
+  if (!Number.isFinite(position)) return first;
+  return Math.min(Math.max(Math.floor(position), first), last);
+}

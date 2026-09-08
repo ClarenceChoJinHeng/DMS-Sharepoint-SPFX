@@ -4,7 +4,8 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
 import {
-  builtInTierFor, effectiveOnDemandTiers, isFixedBelowUnitTier, splitChain, validateChain,
+  allowedTierPositions, builtInTierFor, clampTierPosition, effectiveOnDemandTiers,
+  isFixedBelowUnitTier, splitChain, validateChain,
 } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
 import { allLibraryTitles, cachedHcLibraries, cachedListTitle, documentsLibraryTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
@@ -200,6 +201,12 @@ const s: Record<string, React.CSSProperties> = {
   btn:       { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   ghost:     { background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   danger:    { background: "#fff", color: "#a4262c", border: "1px solid #e6b3b5", borderRadius: 4, padding: "4px 9px", fontSize: 12, cursor: "pointer" },
+  /* The SAME red, at DIALOG scale. `danger` above is sized for the inline Remove button on a tier
+     row - 4px/9px at 12px - and the discard dialog was using it beside `ghost` and `btn`, which are
+     7px/14px at 13px. Three buttons in one row at two different sizes (client, 2026-09-08: "The
+     discard button is not the same size"). Derived from `danger` rather than restated, so the red
+     has one definition and only the metrics differ. */
+  dangerLg:  { ...{ background: "#fff", color: "#a4262c", border: "1px solid #e6b3b5", borderRadius: 4, cursor: "pointer" }, padding: "7px 14px", fontSize: 13 },
   iconBtn:   { background: "#fff", border: "1px solid #c8c8c8", borderRadius: 4, padding: "3px 8px", fontSize: 12, cursor: "pointer", marginRight: 4 },
   off:       { background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "not-allowed" },
   tierRow:   { display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 8, background: "#fafafa", marginBottom: 8, fontSize: 13, flexWrap: "wrap" },
@@ -1025,7 +1032,10 @@ export default function StructureManager({
             // Defaults to per-unit, because SubUnit is the tier the client is actually adding and
             // the shared-list kind (Year, Document Type) already exists on every segment.
             onClick={() =>
-              setAdding({ label: "", fromUnit: true, termSetGuid: "", position: onDemand.length })
+              setAdding({
+                label: "", fromUnit: true, termSetGuid: "",
+                position: clampTierPosition(onDemand, true, onDemand.length),
+              })
             }
           >
             + Add folder level
@@ -1058,7 +1068,10 @@ export default function StructureManager({
                   // Clearing the GUID is deliberate, not tidiness: a half-typed ID that survived the
                   // toggle would be saved the moment anyone switched back, producing a shared-list
                   // tier from a screen the admin last saw set to per-unit.
-                  onChange={() => setAdding({ ...adding, fromUnit: true, termSetGuid: "" })}
+                  onChange={() => setAdding({
+                    ...adding, fromUnit: true, termSetGuid: "",
+                    position: clampTierPosition(onDemand, true, adding.position),
+                  })}
                 />
                 <span>
                   <strong>Sub unit</strong>
@@ -1074,7 +1087,10 @@ export default function StructureManager({
                   type="radio"
                   name="sm-src"
                   checked={!adding.fromUnit}
-                  onChange={() => setAdding({ ...adding, fromUnit: false })}
+                  onChange={() => setAdding({
+                    ...adding, fromUnit: false,
+                    position: clampTierPosition(onDemand, false, adding.position),
+                  })}
                 />
                 <span>
                   <strong>Shared folder term</strong>
@@ -1127,7 +1143,7 @@ export default function StructureManager({
               value={String(adding.position)}
               onChange={(e) => setAdding({ ...adding, position: Number(e.target.value) })}
             >
-              {Array.from({ length: onDemand.length + 1 }, (_x, p) => (
+              {allowedTierPositions(onDemand, adding.fromUnit).map((p) => (
                 <option key={p} value={String(p)}>
                   {onDemand.length === 0
                     ? "First level below Unit"
@@ -1139,6 +1155,20 @@ export default function StructureManager({
                 </option>
               ))}
             </select>
+            {/* ⚠ SAID ONLY WHEN THE CHOICE IS GONE, never as a permanent note. A single-option
+                dropdown with no explanation reads as a broken control — the admin looks for the
+                other positions they had yesterday. Rendering this unconditionally would be the
+                "Unable to verify current permissions" mistake again: a state drawn as a static
+                sibling stops being read at all. */}
+            {allowedTierPositions(onDemand, adding.fromUnit).length === 1 && onDemand.length > 0 && (
+              <p style={s.hint}>
+                {adding.fromUnit
+                  ? "A sub unit level takes its values from the terms under each unit, so it only " +
+                    "works directly under Unit. That is the one position offered."
+                  : "A shared level cannot sit above a sub unit level — the sub unit cascades from " +
+                    "the Unit term, and a shared list in between breaks that lookup."}
+              </p>
+            )}
             {/* ⚠ THE COST OF POSITION IS NO LONGER STATED (client, 2026-09-06) AND IT IS REAL.
                 Near the top means one folder per unit; at the bottom means one for every Year and
                 Document Type combination — the same level placed last can multiply the folder count
@@ -1204,7 +1234,7 @@ export default function StructureManager({
                 <button style={s.btn} onClick={() => saveStructure().catch(() => undefined)}>
                   Save them
                 </button>{" "}
-                <button style={s.danger} onClick={cancelEdit}>
+                <button style={s.dangerLg} onClick={cancelEdit}>
                   Discard
                 </button>
               </div>
