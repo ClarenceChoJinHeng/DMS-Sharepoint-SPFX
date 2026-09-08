@@ -10595,3 +10595,56 @@ pause is still on and MHO has not been migrated.
     still Year, because the column behind it is keyed on the name.
 - **Verified**: `tsc --noEmit` clean, suite **1720/0** (7 new), 33 warnings — the baseline.
   **NOT site-tested.**
+
+## THE MOBILE PASS — RESPONSIVE WITHOUT MEDIA QUERIES, AND THREE DESKTOP SLIPS (2026-09-07, 1.0.467.0)
+Client: *"work on the mobile design for each webpart... Do not change the function, or copies or
+anything just ensure its responsive"*, then twice more: *"ensure you did not touch the desktop
+design"*. **Six commits, `1aec09f`..`fb69a13`. Reasoned CSS only — NOT verified on a device.**
+- **⚠ THE CONSTRAINT THAT SHAPES ALL OF IT: 33 OF THE 35 COMPONENTS CANNOT TAKE A MEDIA QUERY.**
+  They style with inline `Record<string, CSSProperties>` objects, and **inline styles cannot carry
+  `@media`** — the same limitation that made `GroupManager`'s spinner an SVG with `animateTransform`.
+  Only `Form.tsx` and `BulkUpload.tsx` render a `<style>` block.
+  - **AND A BREAKPOINT WOULD BE THE WRONG TOOL HERE ANYWAY.** A SharePoint web part is sized by the
+    page SECTION it sits in, not the viewport — a two-column section on a desktop can be narrower
+    than a phone in landscape, so a `max-width` query gets it exactly backwards. Hence no `vw` units
+    either: `100%` and `minmax(0, …)` measure what actually constrains the content.
+- **WHAT WAS DONE, all in `shared/responsive.ts` + application:**
+  - **All 10 tables** (6 components) sit in an `overflow-x` wrapper and carry `min-width: 560`.
+    ⚠ **The scroll MUST be on the wrapper**: `display: block` on a `<table>` stops it establishing a
+    table formatting context, every row then sizes its cells independently, and the columns stop
+    lining up — which reads as a data bug, not a CSS one.
+  - **33 flex rows** given `flex-wrap: wrap`. Skipped: single-child centring containers
+    (`justify-content: center`, fixed overlays, the circular avatars) and column-direction flex.
+  - **8 fixed grid tracks** wrapped in `minmax(0, N)`, including the approval screen's
+    `196px … 280px` which overflowed any container under ~500px and took the whole page sideways.
+  - **11 monospace styles** given `overflow-wrap: break-word` — paths, GUIDs, group names.
+  - **The two upload forms** stack their field grids and radio groups inside their EXISTING media
+    queries (480px / 640px).
+- **⚠⚠ THREE DESKTOP CHANGES SLIPPED IN, AND THE CLIENT ASKING TWICE IS WHAT SURFACED THEM.** All
+  reverted in `1d65179` / `fb69a13`. Each looked like a responsive fix and was not:
+  1. **`box-sizing: border-box` on My Submissions' page shell** moves its 24px padding INSIDE the
+    1100px cap — **narrowing the content column by 48px on every desktop.** And the theory behind it
+    was wrong: **`max-width` means "no wider than", so a pixel-capped shell ALREADY fits a phone.**
+    There was nothing to fix. The `FIT` helper is deleted rather than parked, with the wrong theory
+    recorded at the removal site.
+  2. **`gap: 8` added to an Approval Document row** alongside its wrap — a spacing change nobody
+    asked for, and the wrap does not need it.
+  3. **`overflow-wrap: anywhere` in `BREAK_LONG`** — it also shrinks an element's intrinsic
+    MIN-CONTENT size, so a flex item or grid track sized by its content gets narrower on EVERY
+    screen. Narrowed to `break-word`, which breaks a word only when it would actually overflow the
+    line and leaves intrinsic sizing alone. **That distinction is the whole difference between a
+    responsive fix and a layout change.**
+- **WHY THE REST PROVABLY CANNOT MOVE A DESKTOP, stated as mechanism rather than assurance:**
+  `flex-wrap: wrap` is inert while a row fits; `minmax(0, 150px)` and `150px` are the same track
+  wherever 150px fits; a table wrapper only scrolls when the table exceeds it; and every upload-form
+  rule sits inside a query that cannot apply above its breakpoint.
+- **⚠ ONE BEHAVIOUR CHANGE DISCLOSED AND DELIBERATELY KEPT: `TABLE_MIN` is 560.** In a SharePoint
+  section narrower than that, a table now SCROLLS where it previously squeezed. That is a desktop
+  change in one configuration. Judged an improvement; it is the client's call, and dropping the floor
+  is a one-line change.
+- **⚠ STILL NOT DONE, so nobody reads this as finished:** nothing is verified on a real device or in
+  dev-tools at 360px — it is reasoned CSS. The highest-value ten minutes is the upload form and the
+  approval page at phone width. The approval grid **compresses rather than stacking**, which needs a
+  flex rebuild of three children plus the conditional two-column override to fix properly.
+- **Verified**: `tsc --noEmit` clean, suite **1720/0**, 33 warnings — the baseline, none new. Every
+  commit's diff read line by line to confirm nothing but responsive properties changed.
