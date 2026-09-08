@@ -11756,3 +11756,30 @@ step I can go back to previous step... once the at the last step its on then blo
 - **⚠ STILL OPEN, and it is the stronger fix: gate `canRun` on `uploadsPaused`.** That would make the
   migrate screen's red banner TRUE rather than advisory and close the hazard by whatever route step 3
   is reached, including the standalone Migrate tab which has no step 1 at all. Offered and not chosen.
+
+## THE FOLDER-DUMP SCRIPT HANDLES AN OPTIONAL LEVEL NOW (2026-09-09)
+Pointed at MHO after its migration. `scripts/dump-segment-folders.js` assumed a FIXED chain depth,
+and MHO's `Sub Unit` is per-unit — present for some units, absent for others.
+- **⚠ A NAIVE `CHAIN` EDIT WOULD HAVE BEEN WORSE THAN NOT RUNNING IT.** A leaf now sits at 5 levels
+  (no sub unit) or 6 (with one), so a fixed depth reports **every unit without a sub unit as
+  MISPLACED** — burying the real findings in false positives. `CHAIN` takes
+  `{ name, optional: true }` entries and derives `MIN_DEPTH` / `MAX_DEPTH` from them.
+- **⚠ THE POSITIONAL YEAR CHECK HAD TO GO ENTIRELY.** It compared `depth` to `CHAIN.indexOf("Year")`,
+  which cannot be right for both a unit with a Sub Unit and one without. Replaced by a LEAF-RELATIVE
+  rule — the last two segments of a document's folder are always `<Year>/<Document Type>` — which is
+  position-independent and strictly stronger: it catches a wrong order at ANY depth.
+- **⚠ AND IT RENAMED `NOT A YEAR` TO `WRONG SHAPE`, because an optional level makes two causes
+  indistinguishable from the tree alone:** a branch still in the old order, or a leftover from an
+  older chain sitting at a depth the optional level makes LEGAL (`…/2024/Legal Opinion/Archive 1` is
+  six levels down, exactly like a valid leaf under a unit that has a sub unit). Telling them apart
+  needs the Sub Unit and Archive-2 term lists, which this script deliberately does not read. **The
+  note names both rather than asserting one** — both need the folder opening, which is all the report
+  is for.
+- **⚠⚠ TESTED AGAINST A SYNTHETIC TREE BEFORE BEING RUN LIVE, AND IT CAUGHT TWO REAL DEFECTS — one of
+  them fatal.** `SHAPE` was used in the header log ABOVE its own `const`, a temporal-dead-zone
+  `ReferenceError` that would have thrown on line one of the run; the derivations are now declared in
+  the Configure block. And the harness's own first expectation was WRONG about the depth-6 leftover,
+  which is what surfaced the ambiguity above. **Second time this script's header rule has paid for
+  itself: run it against a fake tree, never reason about it.**
+  - The harness seeds five faults plus TWO correct branches — a unit with a sub unit and one without —
+    and asserts the exact problem set, so a false positive on either fails the test.
