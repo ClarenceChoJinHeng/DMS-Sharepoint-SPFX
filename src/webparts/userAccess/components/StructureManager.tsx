@@ -5,7 +5,7 @@ import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
 import {
   allowedTierPositions, builtInTierFor, clampTierPosition, effectiveOnDemandTiers,
-  isFixedBelowUnitTier, splitChain, validateChain,
+  isFixedBelowUnitTier, perUnitTierExists, splitChain, validateChain,
 } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
 import { allLibraryTitles, cachedHcLibraries, cachedListTitle, documentsLibraryTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
@@ -238,9 +238,13 @@ function setCheckStyle(c: SetCheck): React.CSSProperties {
  * for the reason on `SetCheck`. `checking` blocks for the few hundred ms it lasts, so a
  * fast click cannot outrun the verdict.
  */
-function canAddTier(adding: DraftTier, check: SetCheck, unitCheck: UnitCheck): boolean {
+function canAddTier(
+  adding: DraftTier, check: SetCheck, unitCheck: UnitCheck, perUnitTaken: boolean,
+): boolean {
   const label = adding.label.trim();
   if (!label || !columnNameFor(label)) return false;
+  // One sub unit per unit — a second per-unit tier is refused rather than offered a slot.
+  if (adding.fromUnit && perUnitTaken) return false;
   // A per-unit tier has no ID to validate, so the TERM-SET verdict must not gate it. Without this
   // the two could disagree: `setCheck` is computed from whatever is in the GUID field, and a
   // "notfound" left over from a paste before the toggle would keep Add disabled with a message
@@ -1241,6 +1245,7 @@ export default function StructureManager({
   if (seg) {
     const first = permissionedCount(draft);
     const onDemand = draft.slice(first);
+    const perUnitTaken = perUnitTierExists(onDemand);
     return (
       <>
         {result !== undefined && <div style={{ ...s.msg, ...(result.ok ? s.ok : s.err) }}>{result.text}</div>}
@@ -1503,7 +1508,19 @@ export default function StructureManager({
                 toggle must not sit under a field it does not describe. `some` renders in the
                 ordinary hint tone, not the warning one: a partial spread is the designed shape,
                 and colouring it amber would train people to ignore the state that matters. */}
-            {adding.fromUnit && unitCheck.state !== "idle" && (
+            {/* ⚠ SHOWN INSTEAD OF THE TERM COUNT, not beside it. That count walks to the UNIT level,
+                which is the right level for the FIRST per-unit tier and the wrong one for a second —
+                so leaving it on screen here would put a true-but-irrelevant number under a control
+                that cannot be used. Name the refusal and point at the alternative. */}
+            {adding.fromUnit && perUnitTaken && (
+              <p style={{ ...s.msg, ...s.warn }}>
+                This segment already has a sub unit level (
+                {onDemand.filter((l) => !(l.termSet ?? "").trim())[0]?.label}). There is one sub unit
+                per unit, so a second one would have nothing to draw its values from. Choose{" "}
+                <strong>Shared folder term</strong> instead, or remove the existing level first.
+              </p>
+            )}
+            {adding.fromUnit && !perUnitTaken && unitCheck.state !== "idle" && (
               <p style={unitCheck.state === "none" ? { ...s.msg, ...s.warn } : s.hint}>
                 {unitCheckNote(unitCheck, unitLabel(draft), seg.label, siteUrl)}
               </p>
@@ -1588,8 +1605,8 @@ export default function StructureManager({
 
             <div style={{ marginTop: 14 }}>
               <button
-                style={canAddTier(adding, setCheck, unitCheck) ? s.btn : s.off}
-                disabled={!canAddTier(adding, setCheck, unitCheck)}
+                style={canAddTier(adding, setCheck, unitCheck, perUnitTaken) ? s.btn : s.off}
+                disabled={!canAddTier(adding, setCheck, unitCheck, perUnitTaken)}
                 // `addTier` is async now — it asks the site whether the derived column already
                 // exists. The rejection is swallowed here because every failure path inside it
                 // already sets `addError`; an unhandled rejection would show nothing at all.

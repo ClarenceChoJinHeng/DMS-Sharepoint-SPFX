@@ -442,9 +442,23 @@ export function allowedTierPositions(onDemand: Level[], fromUnit: boolean): numb
   const n = leadingPerUnitCount(onDemand);
   const out: number[] = [];
   if (fromUnit) {
-    // Anywhere inside the per-unit run, or immediately after it — every one of those keeps the run
-    // contiguous with Unit. Slot `n` is "last of the per-unit tiers", not "after the shared ones".
-    for (let p = 0; p <= n; p++) out.push(p);
+    /* ⚠ ALWAYS EXACTLY SLOT 0 — THERE IS ONE SUB UNIT PER UNIT (client, 2026-09-08: *"from what I
+       understand there will be only one subunit for each unit. so there is not really needed for
+       Between Sub Unit and Year for Sub unit"*), which is what the SubUnit design has said since
+       2026-08-10: one fixed tier, `Unit -> SubUnit -> Year -> Document Type`.
+
+       It previously offered slots `0..n`, so with a per-unit tier already present it invited a
+       SECOND one nested under the first. `validateChain` permits that — a per-unit tier under
+       another per-unit tier is contiguous — and the cascade would handle it, but nobody needs it,
+       and offering it made the term check LIE: `checkUnitTerms` walks to the UNIT level, so it
+       answered "2 of 49 units have sub unit terms" about a slot whose real question is "do any SUB
+       UNIT terms have children". Wrong level, presented as an answer.
+
+       ⚠ SO THIS IS A UI RULE, STRICTER THAN THE VALIDITY RULE, exactly as `isFixedBelowUnitTier`
+       is. `validateChain` still accepts a hand-authored chain with two per-unit tiers, because
+       refusing one would take a segment's uploads down to enforce a preference. Adding the second
+       is refused by `canAddTier` (see `perUnitTierExists`), not by pretending the slot is invalid. */
+    out.push(0);
   } else {
     // At or after the end of the per-unit run. Going above one would put a shared list between Unit
     // and a tier that cascades from it, which is the failure this exists to prevent.
@@ -466,6 +480,17 @@ export function allowedTierPositions(onDemand: Level[], fromUnit: boolean): numb
  * guess, and it keeps the admin's intent — "as deep as you are allowed" — instead of resetting to
  * the top.
  */
+/**
+ * Does this below-Unit run already have a per-unit tier?
+ *
+ * There is one sub unit per unit, so a second one is refused at Add rather than offered a slot. Kept
+ * separate from `allowedTierPositions` because it is a REFUSAL with a reason, not a geometry
+ * question — the admin needs to be told why, and a silently missing option cannot do that.
+ */
+export function perUnitTierExists(onDemand: Level[]): boolean {
+  return leadingPerUnitCount(onDemand) > 0;
+}
+
 export function clampTierPosition(onDemand: Level[], fromUnit: boolean, position: number): number {
   const ok = allowedTierPositions(onDemand, fromUnit);
   const first = ok[0];

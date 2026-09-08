@@ -7,6 +7,7 @@ import {
   effectiveOnDemandTiers,
   allowedTierPositions,
   clampTierPosition,
+  perUnitTierExists,
   isFixedBelowUnitTier,
   leadingPerUnitCount,
   gridPlan,
@@ -505,9 +506,17 @@ describe("allowedTierPositions", () => {
     expect(allowedTierPositions(ghoBelowUnit, false)).toEqual([0, 1, 2]);
   });
 
-  it("lets a second per-unit tier join the run but not follow the shared ones", () => {
+  /* ⚠ REVERSED 2026-09-08. It used to expect [0, 1] — a SECOND per-unit tier nested under the first,
+     which `validateChain` permits and nobody needs: there is one sub unit per unit. Offering that slot
+     also made the term check lie, since it walks to the UNIT level and would have answered about the
+     wrong one. A second per-unit tier is refused by `perUnitTierExists` with a reason, not by hiding a
+     slot that is technically valid. */
+  it("offers a per-unit tier the same single slot however many tiers exist", () => {
     const withSub = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
-    expect(allowedTierPositions(withSub, true)).toEqual([0, 1]);
+    expect(allowedTierPositions(withSub, true)).toEqual([0]);
+    expect(perUnitTierExists(withSub)).toBe(true);
+    expect(perUnitTierExists([shared("Year")])).toBe(false);
+    expect(perUnitTierExists([])).toBe(false);
   });
 
   it("keeps a shared-list tier from being inserted above an existing per-unit tier", () => {
@@ -543,29 +552,39 @@ describe("allowedTierPositions", () => {
     expect(leadingPerUnitCount([shared("Year")])).toBe(0);
   });
 
-  /* ⚠ THE INVARIANT, AND THE ONLY TEST THAT PROVES THE DROPDOWN AND THE REFUSAL AGREE: inserting
-     at an allowed slot must produce a chain `validateChain` accepts, and every slot left OUT must
-     be one it refuses. Anything else means the UI is offering a trap or hiding a valid choice. */
+  const FIXED: Level[] = [
+    { label: "Department", column: "Department" },
+    { label: "Unit", column: "Unit" },
+  ];
+
+  /* ⚠ ONE-DIRECTIONAL SINCE 2026-09-08: every slot OFFERED must produce a chain `validateChain`
+     accepts. It is no longer "and every slot left out is one it refuses", because the per-unit rule
+     is now deliberately STRICTER than the validity rule — slot 1 for a second per-unit tier is
+     perfectly valid and simply not offered. Same split as `isFixedBelowUnitTier`: a UI rule, not a
+     validity rule, so a hand-authored chain is never broken by a preference. */
   it.each([
     ["per-unit", true],
     ["shared-list", false],
-  ])("agrees with validateChain for a %s tier at every slot", (_kind, fromUnit) => {
-    const fixed: Level[] = [
-      { label: "Department", column: "Department" },
-      { label: "Unit", column: "Unit" },
-    ];
+  ])("never offers a %s tier a slot validateChain would refuse", (_kind, fromUnit) => {
     const belowUnit = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
     const added = fromUnit ? perUnit("New") : shared("New");
-    const ok = allowedTierPositions(belowUnit, fromUnit as boolean);
-
-    for (let p = 0; p <= belowUnit.length; p++) {
+    for (const p of allowedTierPositions(belowUnit, fromUnit as boolean)) {
       const run = belowUnit.slice(0, p).concat([added], belowUnit.slice(p));
-      const err = validateChain(fixed.concat(run));
-      if (ok.indexOf(p) === -1) {
-        expect(err?.code).toBe("per-unit-not-contiguous");
-      } else {
-        expect(err).toBeUndefined();
-      }
+      expect(validateChain(FIXED.concat(run))).toBeUndefined();
+    }
+  });
+
+  /* The half that IS still bidirectional, and the one protecting a live segment: a shared-list tier
+     must never be offered a slot above the per-unit run, and every slot it is NOT offered must be one
+     `validateChain` refuses. That is the rule that caught Buah. */
+  it("offers a shared-list tier exactly the slots validateChain accepts", () => {
+    const belowUnit = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    const ok = allowedTierPositions(belowUnit, false);
+    for (let p = 0; p <= belowUnit.length; p++) {
+      const run = belowUnit.slice(0, p).concat([shared("New")], belowUnit.slice(p));
+      const err = validateChain(FIXED.concat(run));
+      if (ok.indexOf(p) === -1) expect(err?.code).toBe("per-unit-not-contiguous");
+      else expect(err).toBeUndefined();
     }
   });
 });
