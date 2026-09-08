@@ -1522,7 +1522,22 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     needingChoice += plansFor(r).filter((p) => p.missingTiers.length > 0).length;
     if (r.unresolved !== undefined) unreadableUnits++;
   }
-  const canRun = totalMoves > 0 && unresolvedCount === 0 && badNames === 0;
+  /* ⚠⚠ EVERY FOLDER MUST HAVE A VALUE BEFORE ANYTHING MOVES (client, 2026-09-09: *"ensure all is
+     selected for the file movement then only the Rebuild folders button is available, if they did not
+     move anything and rebuild folders the file and folder will go astray"*).
+     `needingChoice === 0` is the new half. Before it, Rebuild lit up as soon as ONE move was planned
+     — so a run could move 49 folders and leave a library untouched, and `finishPending`'s fresh scan
+     would then count those folders as outstanding and REFUSE to switch the new shape on. The result
+     is a segment stuck on CHANGE PENDING after a run that reported success: the exact loop that cost
+     three days on GHO.
+     ⚠ STRAYS ARE DELIBERATELY NOT COUNTED HERE. `needingChoice` counts plans with `missingTiers`;
+     a stray also has `to === undefined` but cannot be resolved by this tool at all, so gating on that
+     would hold the flow for ever — the same rule `finishPending` follows when it counts strays
+     separately from outstanding folders.
+     ⚠ AND IT CANNOT DEADLOCK: a tier whose options could not be READ makes its unit `unresolved`,
+     which `unresolvedCount` already blocks on and which renders no dropdown to be stuck at. */
+  const canRun =
+    totalMoves > 0 && needingChoice === 0 && unresolvedCount === 0 && badNames === 0;
 
   /** Units grouped by tail, so one set of pickers serves both libraries. */
   const groups: Array<{ tail: string; rows: UnitScan[] }> = [];
@@ -1862,8 +1877,13 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                               );
                             }}
                           >
-                            {/* "this library", not "this unit": the choice no longer reaches the others. */}
-                            <option value="">Leave this library alone</option>
+                            {/* ⚠ IT READS AS UNCHOSEN, NOT AS A CHOICE, and that changed with the
+                                Rebuild gate. It said "Leave this library alone" — but a dropdown only
+                                appears when this library HAS folders missing a value, and leaving those
+                                behind now blocks Rebuild outright (and blocked activation even before
+                                it). So the option promised something that was never a viable end
+                                state; naming it for what it is stops it reading as a way to skip. */}
+                            <option value="">Choose a value&hellip;</option>
                             {opts.map((o) => (
                               <option key={o.id} value={o.id}>{o.label}</option>
                             ))}
@@ -2082,13 +2102,26 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                   : "Settle the filename clashes first."}
               </span>
             )}
+            {/* ⚠ A WHOLE-SCAN COUNT, which is what makes this safe under pagination: the folders
+                still waiting are usually on another page, and a reason that only described the
+                visible cards would send the admin looking on the wrong one. It names the page count
+                too, because with three units a page "8 folders" alone does not say where to look. */}
+            {conflicts.length === 0 && needingChoice > 0 && totalMoves > 0 && (
+              <span style={{ ...s.hint, marginLeft: 10, color: "#7a4f00" }}>
+                {needingChoice} folder(s) across {unitPages.total} unit(s) still have no value chosen.
+                Every one needs a value before anything moves — a library left unchosen stays in the
+                old shape, and the new structure then cannot be switched on.
+              </span>
+            )}
             {/* ⚠ THE SAME THREE-WAY SPLIT AS THE HEADING. "Choose a value for at least one unit"
                 beside a list containing only STRAYS is an instruction that cannot be followed —
                 there is no control to follow it with. */}
             {conflicts.length === 0 && totalMoves === 0 && (
               <span style={{ ...s.hint, marginLeft: 10 }}>
                 {needingChoice > 0
-                  ? "Choose a value for at least one unit."
+                  /* ⚠ NO LONGER "at least one": every folder needs a value now, so an instruction to
+                     answer one would leave the button greyed after it was followed. */
+                  ? "Choose a value for every folder listed — each library has its own."
                   : "Nothing to rebuild — the folders below have to be moved by hand."}
               </span>
             )}

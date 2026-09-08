@@ -11670,3 +11670,34 @@ EXACTLY TWO PERMISSIONED LEVELS"* — while only the FLOOR was enforced.
   or reload.
 - The hint's *"At least two are required"* is now *"Exactly two"*. Two tests pin the ceiling, including
   that it names the Top folder name.
+
+## REBUILD IS HELD UNTIL EVERY FOLDER HAS A VALUE (2026-09-09, 1.0.502.0)
+Client: *"ensure all is selected for the file movement then only the Rebuild folders button is
+available, if they did not move anything and rebuild folders the file and folder will go astray"*.
+- **`canRun` GAINED `needingChoice === 0`.** Before it, Rebuild lit up as soon as ONE move was
+  planned — the screenshot showed **Rebuild 49 folder(s)** live beside a library reading *"3 documents
+  — needs a value chosen above"*.
+- **⚠ THE OUTCOME IS NOT "ASTRAY", IT IS WORSE IN A QUIETER WAY — and the client was right about the
+  end state.** Nothing is misfiled: the unchosen library simply stays in the old shape. But
+  `finishPending`'s fresh scan then counts those folders as **outstanding** and **REFUSES to switch
+  the new shape on** — so the run moves 49 folders, reports success, and leaves the segment on
+  `CHANGE PENDING` with no way out but choosing the rest and running again. That is exactly the loop
+  that cost three days on GHO.
+- **⚠ STRAYS ARE DELIBERATELY NOT COUNTED.** `needingChoice` counts plans with `missingTiers`; a stray
+  also has `to === undefined` but **cannot be resolved by this tool at all**, so gating on that would
+  hold the flow for ever. Same split `finishPending` already makes when it counts strays separately
+  from outstanding folders.
+- **⚠ IT CANNOT DEADLOCK.** A tier whose options could not be READ makes its unit `unresolved`, which
+  `unresolvedCount` already blocks on and which renders no dropdown to be stuck at.
+- **⚠⚠ AND IT CHANGED WHAT ONE OPTION CAN HONESTLY MEAN: `Leave this library alone` IS NOW
+  `Choose a value…`.** A dropdown only ever appears when that library HAS folders missing a value — so
+  "leave it alone" was never a viable end state even before this gate, because activation already
+  refused. It read as a way to skip a library and led to a dead end.
+- **⚠⚠ THIRD CORRECTION OF ONE SENTENCE IN A DAY.** `FolderAdmin`'s hint told the admin to *"set that
+  library to Leave this unit alone"* (until 1.0.499.0), then *"Leave this library alone"* (until now),
+  and the advice to skip is gone entirely because skipping is no longer possible. **An option label is
+  a STRING, so nothing type-checks the sentence that names it** — after renaming a user-facing option,
+  grep every bundle for the old label. That is how all three were caught.
+- **The Rebuild reason is a WHOLE-SCAN count and names the unit total**, because with three units a
+  page the folders still waiting are usually on another page — a reason describing only the visible
+  cards would send the admin looking on the wrong one.

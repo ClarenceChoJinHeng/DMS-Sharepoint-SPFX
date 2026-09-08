@@ -1999,14 +1999,15 @@ export default function FolderAdmin({
                   <div style={s.hint}>
                     There are folders still to rebuild. Run them first — moving
                     on now would leave the segment half-changed and the next
-                    step turns uploads back on over it. If you meant to skip
-                    one, set that library to{" "}
-                    {/* ⚠ NAMES THE OPTION THAT ACTUALLY EXISTS. It read "Leave this unit alone"
-                        until 1.0.499.0, when the choice moved from per-unit to per-library — an
-                        instruction to use a control that is not there is the dead-escape-hatch
-                        defect this project has already paid for twice. Caught by grepping the
-                        shipped bundle for the old string, not by the compiler. */}
-                    <strong>Leave this library alone</strong> and check again.
+                    step turns uploads back on over it. Choose a value for every
+                    library listed, then run the rebuild.
+                    {/* ⚠ THE ADVICE TO SKIP A LIBRARY IS GONE, because skipping is no longer possible:
+                        1.0.502.0 holds Rebuild until every folder has a value. It read "set that
+                        library to Leave this unit alone" until 1.0.499.0 and "Leave this library
+                        alone" until now — THIRD correction of the same sentence in one day, each time
+                        because it named a control or an action that had moved. An option label is a
+                        string, so nothing type-checks the sentence that names it: grep every bundle
+                        for the old label after renaming one. */}
                   </div>
                 )}
                 {/* Its own message, not folded into the run padlock: the fix is a click away on this
