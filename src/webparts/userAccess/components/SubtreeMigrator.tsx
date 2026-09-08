@@ -482,16 +482,21 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
    * gotcha #9: a long encoded path in a quoted literal returns HTTP 400, which reads as a missing
    * folder, and these are the deepest paths in the system.
    */
-  const childFolders = async (path: string): Promise<Array<{ name: string; url: string }>> => {
+  const childFolders = async (
+    path: string,
+  ): Promise<Array<{ name: string; url: string; uniqueId: string }>> => {
     const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Folders?$select=Name,ServerRelativeUrl` +
+      // ⚠ `UniqueId` IS THE RENAME-PROOF KEY, and it rides along in this request for nothing. See
+      // the Folder Map index in `collectScans`: a folder's stored ADDRESS goes stale the moment any
+      // ancestor is renamed, and its UniqueId never does.
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Folders?$select=Name,ServerRelativeUrl,UniqueId` +
         `&@f='${encodeServerRelativePath(path)}'&$orderby=Name`,
       SPHttpClient.configurations.v1,
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
     if (!res.ok) return [];
     const data = await res.json();
-    return ((data.value ?? []) as Array<{ Name?: string; ServerRelativeUrl?: string }>)
+    return ((data.value ?? []) as Array<{ Name?: string; ServerRelativeUrl?: string; UniqueId?: string }>)
       /* ⚠ THE `Forms` EXCLUSION IS GONE (2026-09-07), AND IT WAS SKIPPING REAL DOCUMENTS.
          It read `f.Name !== "Forms"` and was plainly meant to skip SharePoint's own system folder —
          but that folder lives at `<library>/Forms`, a SIBLING of the segment folder, and this walk
@@ -507,7 +512,11 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
          If a system folder ever DOES need excluding, exclude it by PATH at the library root, never
          by name at every depth — a name filter cannot tell a system folder from a term. */
       .filter((f) => (f.Name ?? "") !== "")
-      .map((f) => ({ name: f.Name as string, url: f.ServerRelativeUrl as string }));
+      .map((f) => ({
+        name: f.Name as string,
+        url: f.ServerRelativeUrl as string,
+        uniqueId: f.UniqueId ?? "",
+      }));
   };
 
   /**
@@ -648,6 +657,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     tiers: Level[],
     unitTermId: string | undefined,
     segmentSet: string,
+    mapUnreadable?: boolean,
   ): Promise<{ options: Array<TermLite[] | undefined>; note?: string }> => {
     const out: Array<TermLite[] | undefined> = [];
     for (let i = 0; i < tiers.length; i++) {
@@ -658,9 +668,21 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
       }
       if (i === 0) {
         if (!unitTermId) {
+          /* ⚠ TWO CAUSES, TWO MESSAGES. This said only "its folder is not in the Folder Map" — which
+             reads as "nobody ever mapped this unit" and sends an admin to reconcile or re-provision.
+             On MHO the rows were all present and the LOOKUP was at fault, so the message named the
+             wrong problem entirely (2026-09-08). Now that the lookup is rename-proof, an absent row
+             is the honest reading of a miss — so it says so AND names the fix — while an unreadable
+             list gets its own sentence, because "we could not ask" and "the answer is no" are
+             different facts and only one of them is worth acting on. */
           return {
             options: out,
-            note: "its folder is not in the Folder Map, so the values that belong under it cannot be read",
+            note: mapUnreadable
+              ? "the Folder Map could not be read, so the term behind this folder is unknown — " +
+                "nothing is wrong with this unit as far as we can tell; try the check again"
+              : "this folder has no Folder Map row, so the term behind it cannot be found and the " +
+                "values that belong under it cannot be read. Run Folder Reconciliation on this " +
+                "segment, then check again",
           };
         }
         out.push(await termChildren(segmentSet, unitTermId));
@@ -729,17 +751,53 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     }
 
     // Unit folder -> its term, so a cascading tier can read that unit's own values. Keyed on the
-    // last (permissioned + 1) path segments, identical in both libraries.
+    // last (permissioned + 1) path segments, identical in every library.
     const depth = Math.max(1, permissioned.length);
     const tailOf = (path: string): string =>
       path.split("/").slice(-(depth + 1)).join("/").toLowerCase();
+    const bareId = (id: string): string => id.replace(/[{}]/g, "").trim().toLowerCase();
+
+    /* ⚠ BUILT FROM THE LIVE FOLDERS, NOT FROM THE ROW'S STORED `FolderUrl` — and reading that field
+       was a real bug, found on MHO 2026-09-08.
+
+       A Folder Map row's address is written once and then DELIBERATELY never refreshed: while the
+       stored `folderUniqueId` still resolves, reconciliation reports "row still valid" and leaves it
+       alone, because repointing by path would abandon a real folder for a freshly created empty one.
+       So renaming a DEPARTMENT to its abbreviation (`Corporate Communication` -> `CC`) leaves every
+       unit row beneath it naming the old department for ever — the unit's own name never changed, so
+       nothing re-derives its path. The tail lookup then missed for ~30 of MHO's 49 units, and each
+       reported "its folder is not in the Folder Map" while its row was sitting there intact.
+
+       ⚠ AND KEYING ON `folderUniqueId` DIRECTLY DOES NOT WORK, which is the trap here: the map only
+       maps the APPROVAL library's folders (`lib === "Staging"` in reconciliation), while this scan
+       walks all six. The tail deliberately drops the library segment so ONE row serves all of them.
+       So the tail stays the shared key — it is just derived from where the folders ARE. */
     const termByTail: Record<string, string> = {};
+    let mapUnreadable = false;
     try {
+      const termByUid: Record<string, string> = {};
       for (const row of await loadFolderMapRows(context.spHttpClient, siteUrl)) {
-        if (row.folderUrl && row.termGuid) termByTail[tailOf(row.folderUrl)] = row.termGuid;
+        if (row.folderUniqueId && row.termGuid) termByUid[bareId(row.folderUniqueId)] = row.termGuid;
+      }
+      const staging = libraryTargets().filter((t) => t.key === "Staging")[0];
+      if (staging) {
+        let level = [{ url: `${webPath}/${staging.urlSegment}/${seg.stagingFolder}` }];
+        for (let d = 0; d < depth; d++) {
+          const next: Array<{ url: string }> = [];
+          for (const node of level) next.push(...(await childFolders(node.url)));
+          level = next;
+        }
+        for (const unit of level) {
+          const term = termByUid[bareId((unit as { uniqueId?: string }).uniqueId ?? "")];
+          if (term) termByTail[tailOf(unit.url)] = term;
+        }
       }
     } catch {
-      // Only cascading tiers need it; those units are reported as unresolved.
+      /* ⚠ REPORTED AS UNREADABLE, NOT AS EMPTY. An empty index and a failed read produce the same
+         missing lookups but mean opposite things — "nobody mapped this unit, go and reconcile" vs
+         "we could not ask". Telling an admin to reconcile over a throttled read sends them to do
+         work that changes nothing. */
+      mapUnreadable = true;
     }
 
     /* DERIVED, never a literal — see `libraryTargets`. Two libraries on a site without the HC pair,
@@ -772,8 +830,8 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
       }
       for (const unit of level) {
         const tail = tailOf(unit.url);
-        const target = await tierOptionsFor(tiers, termByTail[tail], setGuid);
-        const removed = await tierOptionsFor(gone, termByTail[tail], setGuid);
+        const target = await tierOptionsFor(tiers, termByTail[tail], setGuid, mapUnreadable);
+        const removed = await tierOptionsFor(gone, termByTail[tail], setGuid, mapUnreadable);
         const unreadable = target.options.filter((o) => o === undefined).length > 0;
         const eff = effectiveTiers(target.options.map((o) => (o ?? []).map((t) => t.label)));
         const optionsByTier: Record<number, TermLite[]> = {};
