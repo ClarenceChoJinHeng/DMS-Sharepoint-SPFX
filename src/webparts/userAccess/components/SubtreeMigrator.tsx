@@ -4,6 +4,10 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD } from "../../../shared/formModel";
 import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
+import { paginate, Pager } from "../../../shared/pagination";
+
+/** Unit cards per page (the client's number, 2026-09-09). Three keeps the page to a screen or two. */
+const UNITS_PER_PAGE = 3;
 import {
   backfillNeeds,
   Collision,
@@ -313,6 +317,11 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
   const [dest, setDest] = useState<Record<string, Record<number, Destination | undefined>>>({});
   /** Resolved collisions: new file name, keyed by SOURCE file path. */
   const [renames, setRenames] = useState<Record<string, string>>({});
+  /* Which page of unit cards is showing (client, 2026-09-09: *"it is too long, can we use reuse the
+     pagination to show three cards and then next pagination?"*). A card holds up to six library
+     sections now, each with its own heading, dropdown and folder list, so twelve of them is a very
+     long page. */
+  const [unitPage, setUnitPage] = useState(0);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<Array<{ text: string; ok: boolean }>>([]);
   const [done, setDone] = useState<string | undefined>(undefined);
@@ -900,6 +909,9 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     // Cleared alongside the state, or a second run's audit row would carry the first run's lines.
     logBuffer.current = [];
     setDone(undefined);
+    // Back to the first page: `paginate` clamps, so a stale page can never render empty, but landing
+    // half way down a fresh result reads as a broken screen.
+    setUnitPage(0);
     try {
       const { rows, files } = await collectScans(seg);
       setScans(rows);
@@ -1520,6 +1532,16 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     else groups.push({ tail: row.tail, rows: [row] });
   }
 
+  /* ⚠ THREE CARDS A PAGE, AND EVERY AGGREGATE ABOVE THEM IS STILL WHOLE-SCAN — which is what makes
+     paging this safe. `shared/pagination` carries the rule in its own header: *paging must never hide
+     outstanding work without saying so*, and the pager's total is the safety rather than decoration.
+     Here the heading ("12 unit(s) need a value chosen"), the folders-waiting count and the Rebuild
+     button's own count are all computed from `scans`, never from what is rendered — so a choice made
+     on page 1 and a unit still unanswered on page 4 are both accounted for while off screen.
+     ⚠ AND THE CHOICES THEMSELVES SURVIVE PAGING: `dest` is component state keyed per library, not
+     tied to the rendered card. */
+  const unitPages = paginate(groups, unitPage, UNITS_PER_PAGE);
+
   return (
     <div>
       {/* The client's banner (2026-09-06). It replaces the Power Automate warning that stood here.
@@ -1760,7 +1782,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
             )}
           </p>
 
-          {groups.map((group) => {
+          {unitPages.slice.map((group) => {
             return (
               <div key={group.tail} style={s.card}>
                 <div style={s.unitName}>{group.tail}</div>
@@ -1912,6 +1934,10 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
               </div>
             );
           })}
+
+          {/* `units`, not `folders`: a card IS a unit, and the folder counts are stated in the
+              summary above and on the Rebuild button. */}
+          <Pager page={unitPages} onPage={setUnitPage} label="units" />
 
           {conflicts.length > 0 && (
             <div style={{ marginTop: 20 }}>

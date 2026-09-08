@@ -11613,3 +11613,33 @@ and give them more flexibility?"*, then — shown a per-unit default with per-li
   "use the list of steps" hatches). **Found by grepping the SHIPPED BUNDLE for the old string, not by
   the compiler** — the option label is a string, so nothing type-checks the sentence that names it.
   **After renaming any user-facing option, grep every bundle for the old label.**
+
+## THE MIGRATION'S UNIT CARDS ARE PAGINATED, THREE A PAGE (2026-09-09, 1.0.500.0)
+Client, on the per-library pickers landing: *"we got to make this more user friendly, it is too long,
+can we use reuse the pagination to show three cards and then next pagination?"* — the direct cost of
+1.0.499.0, where a card went from one dropdown to as many as six, each with its own heading, label
+and folder list.
+- **`shared/pagination`'s `paginate` + `Pager`, REUSED, NOT REBUILT.** That module is in-memory
+  slicing for lists already loaded, which is exactly this — `scans` is fully in hand once the check
+  has run. **It is NOT the Audit Log's pager** and must not be merged with it: that one pages on the
+  SERVER through continuation tokens.
+- **⚠⚠ WHAT MAKES PAGING THIS SCREEN SAFE IS THAT EVERY AGGREGATE ABOVE THE CARDS IS ALREADY
+  WHOLE-SCAN.** The module's own header carries the rule — *paging must never hide outstanding work
+  without saying so* — and here the heading (*"12 unit(s) need a value chosen"*), the
+  folders-waiting count and the Rebuild button's own count are all computed from `scans`, never from
+  what is rendered. So a value chosen on page 1 and a unit still unanswered on page 4 are both
+  accounted for while off screen. **Had any of those counted the rendered slice instead, an admin
+  would set three units and be told the work was done.**
+- **⚠ THE CHOICES SURVIVE PAGING** because `dest` is component state keyed per library, not tied to
+  the rendered card. Nothing about a page boundary can lose an answer.
+- **⚠ THE PAGE RESETS ON A NEW SCAN.** `paginate` clamps, so a stale page can never render empty —
+  but landing half way down a fresh result reads as a broken screen.
+- **The label is `units`, not `folders`:** a card IS a unit, and the folder counts are already stated
+  in the summary and on the Rebuild button. A pager reading *"Showing 1 to 3 of 12 folders"* over
+  three cards holding fifty folders between them would be simply false.
+- **⚠ THE 360px PER-CARD SCROLLER IS KEPT, and it is now doing a different job.** It was added
+  2026-09-08 when a card held one dropdown OUTSIDE the box and only folder lists inside; the box now
+  holds the controls too, so reaching the sixth library's dropdown still means scrolling within the
+  card. Pagination fixes the length of the PAGE, not that. **Flagged to the client rather than
+  silently widened** — the cheap alternative is a short scroller per library with its heading and
+  dropdown outside it, so all six controls stay visible.
