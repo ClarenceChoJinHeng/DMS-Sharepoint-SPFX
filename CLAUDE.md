@@ -11093,3 +11093,58 @@ ensure if subunit exist no other new shared folder term can go above subunit"*
   three-state fact (not chosen / chosen / list unreadable) gated ahead of the step-id allow-list,
   because gating an unreadable segment list would strand an admin who cannot pick one — and it must
   cap the rail too, or the side panel is a second route past it.
+  **✅ BUILT THE SAME DAY in 1.0.476.0 — see the entry at the end of this file.**
+
+## NEXT IS HELD ON A SEGMENT STEP UNTIL A SEGMENT IS PICKED (2026-09-08, 1.0.476.0)
+Client, on step 3 of Change the folder structure with the picker still reading *"Select a
+segment..."*: *"Weird I can click next without picking segment"*.
+- **THE CAUSE:** `blocksNext` gates three step ids — `createSegment`, `abbreviations`,
+  `pauseUploads` — and **`migrate` is not one of them**, while `needsPick` makes the picker **REPLACE
+  that step's whole content**. So there was no scan, no Rebuild and no Apply behind it, and Next sat
+  live underneath.
+- **⚠ WHY IT MATTERS RATHER THAN BEING COSMETIC: walking on reaches step 5, which turns uploads back
+  ON over a chain that was never applied.** Nothing is written by pressing Next; the cost is that the
+  flow lets an admin *finish* without doing the one thing it exists for, on a run that reports
+  success every time. **That is the same property that made `pauseUploads` a gate rather than
+  advice** — and the same shape as the three-day GHO loop.
+- **⚠ NOT KEYED ON A STEP ID, and checked BEFORE `NEXT_GATED_STEPS`.** "No segment picked" is not a
+  property of one step; it is true of **every** step that spends a segment, so an entry in that
+  allow-list could only ever cover one of them. The rule **IS `stepUsesSegment`**, so the exhaustive
+  sweep asserts the two agree **step for step** rather than pinning a list of ids a later step could
+  slip past.
+- **`segmentChosen` IS THREE STATES IN ONE OPTIONAL BOOLEAN**, copying `subjectGiven`: `true`
+  picked; `false` none picked **and the list read fine**, so the admin simply has not answered;
+  `undefined` the list could not be read, or the flow is not about one segment.
+  - **⚠ THE `undefined` CASE IS WHY IT IS NOT TWO FIELDS.** An unreadable segment list leaves nothing
+    to pick FROM, so gating on it would strand an admin with no way forward at all — and *"unknown
+    never gates"* is already the universal rule here, so one optional boolean carries the whole thing
+    with no special branch.
+- **⚠⚠ THE RAIL IS CAPPED BY THE SAME RULE IN THE SAME BREATH**, because `firstBlockedStepIndex`
+  reads `blocksNext`. **Gating Next alone would leave the side panel as a second route straight past
+  it** — which is exactly how three separate holes shipped on 2026-09-07, and the standing rule from
+  it: *when you add a gate, enumerate every control that can advance or bypass the flow and gate them
+  together.*
+  - In the structure flow it holds **migrate** and **reconcile**. `firstBlocked` is 2, and
+    `isStepReachable` leaves **migrate itself reachable** — which it must be, since that is where the
+    picker lives. `resumeUploads` is untouched because it shares the `pauseUploads` SCREEN id, so
+    `stepUsesSegment` already answers false for it; `levels` is untouched because the Folder levels
+    screen lists every segment itself.
+- **The message names the PICKER, never *"jump straight on from the list of steps"*** — pinned by
+  test. That escape hatch was true while the rail navigated freely and became false when it was
+  locked forward on 2026-08-30, and a gate pointing at a control that does nothing reads as a broken
+  page.
+- **⚠ AND THE SAME DEAD HATCH WAS STILL LIVE IN A SIBLING STRING, found by grepping the shipped
+  bundle for it.** Flow 1's unreadable-list hint ended *"carry on, and use the list of steps to move
+  between them"* — false since the rail was locked. It names **Refresh list** now and states that
+  Next is not held, which is what the fail-open case above actually does. **The 2026-08-30 fix
+  corrected the gate message and missed its neighbour**; a grep for the phrase would have found both.
+- **⚠ THE EXHAUSTIVE SWEEP LISTS `segmentChosen` DELIBERATELY AS `undefined`.** The standing rule is
+  that any field added to `FlowFacts` belongs in that object or the sweep silently stops guarding —
+  but this gate is keyed on a step PROPERTY, so folding it into the "exactly N step ids" pin would
+  fill that list with steps whose gate has nothing to do with the allow-list. It gets **its own
+  exhaustive sweep** immediately below, over every step of every flow, plus a fail-open sweep
+  asserting `undefined` gates nothing anywhere.
+- **Verified**: `tsc --noEmit` clean, `eslint` clean of new warnings (`FolderAdmin`'s pre-existing
+  `mapRows` only), `folderFlows` **93 -> 98**, full suite **0 failures**. Packaged **1.0.476.0** via
+  `npm run build` (470 KB, the production shape); shipped `folder-manager-web-part` bundle grepped —
+  new message **1**, dead hatch **0**. **NOT site-tested.**
