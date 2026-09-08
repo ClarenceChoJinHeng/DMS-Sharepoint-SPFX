@@ -3300,6 +3300,12 @@ export default function BulkUpload({
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         @media (max-width: 640px) {
           .dms-grid, .dms-grid-3 { grid-template-columns: 1fr; }
+          /* The Business Segment / Group-Led Project switch. Two long labels side by side wrap
+             mid-word on a phone; stacked they stay readable. Matches the upload form, which does
+             the same at its own breakpoint.
+             NO BACKTICKS IN THIS BLOCK - one ends the template literal, and the error is reported
+             as JSX hundreds of lines away. */
+          .dms-radio-group { flex-direction: column; align-items: flex-start; gap: 10px; }
           .dms-toast { left: 12px; right: 12px; min-width: unset; top: 12px; }
         }
       `}</style>

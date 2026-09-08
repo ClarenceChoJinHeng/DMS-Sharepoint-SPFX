@@ -4506,6 +4506,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-popup-btn.cancel { background: #fff; color: #0f6c3f; border: 1px solid #0f6c3f; }
         .dms-popup-btn.cancel:hover { background: #f0f6f2; }
         @media (max-width: 480px) {
+          /* THE FORM GRIDS COLLAPSE TO ONE COLUMN ON A PHONE (responsive pass, 2026-09-07).
+             They use fr units, so they never OVERFLOWED -- but 1.8fr 0.9fr 1.3fr inside a 360px
+             screen is a Unit picker about 110px wide, which cannot show a unit name. Fields stack
+             instead.
+             NO BACKTICKS ANYWHERE IN THIS BLOCK - it is a JS template literal and one ends it, with
+             the error reported as JSX hundreds of lines away.
+             This sits INSIDE the existing 480px query, so the desktop is untouched by construction:
+             the rules cannot apply above 480px at all. */
+          .dms-grid, .dms-grid-2, .dms-grid-3 { grid-template-columns: 1fr; }
+          /* The radio group is the Business Segment / Group-Led Project switch. Two long labels
+             side by side wrap mid-word on a phone; stacked they stay readable. */
+          .dms-radio-group { flex-direction: column; gap: 10px; }
           .dms-popup { padding: 28px 20px 24px; border-radius: 12px; }
           .dms-popup-svg { width: 88px; height: 88px; }
           .dms-popup-title { font-size: 18px; }
