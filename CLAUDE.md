@@ -11069,6 +11069,20 @@ ensure if subunit exist no other new shared folder term can go above subunit"*
   `$select` naming a column this site lacks 400s the WHOLE query, and the main segment read failing
   is what puts *"Could not read the configuration"* on this screen. A hand-authored `mode` row can
   legitimately lack it, since the column is written by `SegmentCreator`.
+- **⚠ THE REFUSAL WORDING IS THE CLIENT'S OWN, AND THE FIRST VERSION FAILED THE ONLY TEST THAT
+  MATTERS (2026-09-08, 1.0.477.0).** They read it and asked *"What does this mean?"* — which is the
+  answer. *"has any terms authored under it"* is term-store jargon, and the person who meets it next
+  is further from the term store than they are. It now **names the segment** (this screen lists five)
+  and **links the Term Store**.
+  - **⚠ THE LINK IS THE CLASSIC, SITE-LEVEL `termstoremanager.aspx` — third mount point, same URL,
+    same reason.** The MODERN one (`/_layouts/15/SiteAdmin.aspx#/termStoreAdminCenter`) is the TENANT
+    admin centre and answers *"Access denied — you don't have access to this admin center
+    operation"* to a site collection administrator. The client hit that wall themselves on
+    2026-08-30. Built from `siteUrl`, never hardcoded.
+  - **It opens in a new tab, and that is not cosmetic**: this screen holds an unsaved-changes guard,
+    so same-tab navigation would either prompt or lose the half-filled Add form.
+  - `unitCheckMessage` became `unitCheckNote` returning a `ReactNode`, since only the `none` case
+    carries a link and the caller should not have to know which it got.
 - **⚠ THE MESSAGES NAME THE DEEPEST PERMISSIONED TIER, NEVER THE LITERAL "unit"** — `Estate/Mill` on
   Upstream Ops, `Buah Number` on Buah, `Department` on SDGI. Hardcoding "unit" is the mistake that
   leaves the approver's detail panel blank on every segment naming its tiers differently.
