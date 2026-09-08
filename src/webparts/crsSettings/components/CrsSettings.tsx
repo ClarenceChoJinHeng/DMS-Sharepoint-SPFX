@@ -36,7 +36,16 @@ export interface CrsSettingsProps {
 }
 
 const s: Record<string, React.CSSProperties> = {
-  wrap:      { fontFamily: '"Segoe UI", system-ui, sans-serif', color: "#242424", padding: "4px 0 24px" },
+  /* The Upload Form's page shell (client, 2026-09-04: *"the same padding spacing that the upload
+     form is using ... they do not want the pages to stick at the wall"*, and again 2026-09-08). This
+     page had `4px 0 24px` — a top and a bottom and NO SIDES — so its cards met the window edge while
+     every other CRS page stood 24px clear of it.
+     ⚠ NO `maxWidth` AND NO `margin: 32px auto`, DELIBERATELY, THOUGH EVERY OTHER PAGE CARRYING THIS
+     PADDING HAS BOTH. A cap here would be a real desktop change rather than a padding one: the card
+     grid is `auto-fit minmax(min(100%, 380px), 1fr)`, so on a wide screen it currently spreads to
+     three or four columns and a 1100px cap would silently drop it to two. The client asked for the
+     padding; the columns are a separate decision. */
+  wrap:      { fontFamily: '"Segoe UI", system-ui, sans-serif', color: "#242424", padding: "0 24px 48px" },
   head:      { padding: "0 0 18px", borderBottom: "1px solid #eceaea", marginBottom: 22 },
   h1:        { margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: "-0.01em" },
   sub:       { margin: "6px 0 0", fontSize: 13.5, color: "#5f5f5f" },
