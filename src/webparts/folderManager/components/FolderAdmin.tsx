@@ -599,6 +599,24 @@ export default function FolderAdmin({
    */
   const [runBusy, setRunBusy] = useState(false);
   /**
+   * A reconciliation run has FINISHED during this visit, so the reconcile step may be left.
+   *
+   * ⚠ DERIVED FROM THE RUNNING FLAG GOING TRUE THEN FALSE, which is why the ref is needed:
+   * `onReconRunningChange` is also called with `false` before anything has run, and treating that
+   * as a completion would satisfy the gate without a run.
+   *
+   * ⚠ FINISHED, NOT SUCCEEDED — see `reconcileRan` in folderFlows. In the structure flow this step
+   * sits before the one that switches uploads back ON, so a success requirement would keep the site
+   * refusing uploads for as long as reconciliation kept failing.
+   */
+  const [reconRan, setReconRan] = useState(false);
+  const reconStarted = React.useRef(false);
+  const onReconRunning = (running: boolean): void => {
+    setRunBusy(running);
+    if (running) reconStarted.current = true;
+    else if (reconStarted.current) setReconRan(true);
+  };
+  /**
    * The Folder levels screen holds unsaved edits.
    *
    * Worse here than the tab-switch case it already guards: the NEXT step reads `PendingLevels`,
@@ -896,6 +914,11 @@ export default function FolderAdmin({
       ...(flow?.needsSegment !== true || segments === undefined
         ? {}
         : { segmentChosen: segment !== undefined }),
+      /* Set for every flow that HAS the step, and deliberately after `scopeFactsToFlow`: this one is
+         about the session rather than the segment, so the add/rename narrowing must not drop it. */
+      ...(flow && flow.steps.filter((st) => st.id === "reconcile").length > 0
+        ? { reconcileRan: reconRan }
+        : {}),
     };
     if (!flow || flow.asksSubject !== "newSegment") return facts;
     // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
@@ -903,7 +926,7 @@ export default function FolderAdmin({
     // The list read fine, so "nothing picked" is the admin not having answered — not a failure.
     if (!segment) return { ...facts, subjectGiven: false };
     return { ...facts, subjectGiven: true, segmentExists: true };
-  }, [flow, baseFacts, segments, segment, abbrevMissing, abbrevLoading]);
+  }, [flow, baseFacts, segments, segment, abbrevMissing, abbrevLoading, reconRan]);
 
   /** Open a flow on the first thing left to do. */
   /* ⚠ `segKey` IS CLEARED ON BOTH TRANSITIONS (client, 2026-09-06: leaving the structure flow and
@@ -917,6 +940,8 @@ export default function FolderAdmin({
      goes through `leaveFlow` first. */
   const openFlow = (f: Flow): void => {
     setFlow(f);
+    setReconRan(false);
+    reconStarted.current = false;
     setAllTools(false);
     setSubject("");
     setSegKey("");
@@ -925,6 +950,8 @@ export default function FolderAdmin({
 
   const leaveFlow = (): void => {
     setFlow(undefined);
+    setReconRan(false);
+    reconStarted.current = false;
     setBaseFacts({});
     setSegKey("");
     setStepIdx(0);
@@ -1474,7 +1501,7 @@ export default function FolderAdmin({
             onAbbreviationsLoadingChange={setAbbrevLoading}
             // Reconciliation gets the SAME padlock as a bulk group run: it lives in the page, has no
             // resume, and takes an hour at the client's scale — leaving the step stops it mid-folder.
-            onReconRunningChange={setRunBusy}
+            onReconRunningChange={onReconRunning}
             // THE SAME padlock, deliberately. The migration's scan and its move both run in this
             // page with no resume, so leaving the step throws the work away — identical to
             // reconciliation and to a bulk group run. One reason to hold navigation, one
@@ -1843,13 +1870,21 @@ export default function FolderAdmin({
                     {abbrevSaving ? "Saving…" : "Next"}
                   </button>
                   {last && (
+                    /* ⚠ FINISH IS GATED TOO, and it has to be: `reconcile` is the LAST step in four
+                       of the five flows that have it, so gating Next alone would enforce the run in
+                       the structure flow and nowhere else.
+
+                       ⚠ THE BACK BAND STAYS OPEN, which is what keeps this an insistence rather than
+                       a cage. It calls the same `leaveFlow` and is held only by `runBusy` and an
+                       unsaved edit — so nobody is ever trapped in a flow by a reconciliation they
+                       cannot get to complete. Do not gate that band on this. */
                     <button
                       style={
-                        runBusy || structureDirty
+                        runBusy || structureDirty || blocked.length > 0
                           ? s.off
                           : s.ghost
                       }
-                      disabled={runBusy || structureDirty}
+                      disabled={runBusy || structureDirty || blocked.length > 0}
                       onClick={leaveFlow}
                     >
                       Finish
@@ -1859,11 +1894,18 @@ export default function FolderAdmin({
                 {/* The reason sits BESIDE the disabled button, never only in a tooltip: a greyed button
                     with no explanation reads as a broken page, and the admin's next move is to reload
                     rather than to finish the step. */}
-                {!last &&
-                  blocked.length > 0 &&
+                {/* ⚠ NO LONGER `!last`. Finish is gated now, so the last step can carry a reason —
+                    and suppressing it there would grey out the flow's own way of saying "done" with
+                    no explanation, which is the broken-page reading this hint exists to prevent. */}
+                {blocked.length > 0 &&
                   !runBusy &&
                   !structureDirty &&
-                  !migratePending && <div style={s.hint}>{blocked}</div>}
+                  !migratePending && (
+                    <div style={s.hint}>
+                      {blocked}
+                      {last && " Once it has run, press Finish. You can also leave with Back to Folder Management."}
+                    </div>
+                  )}
                 {/* Its own reason, again: "a run is in progress" would be wrong — nothing is running,
                     the admin simply has not pressed the button yet. */}
                 {migratePending && !runBusy && (

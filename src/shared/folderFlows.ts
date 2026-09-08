@@ -126,6 +126,22 @@ export interface FlowFacts {
    * with no special branch.
    */
   segmentChosen?: boolean;
+  /**
+   * Has a reconciliation run FINISHED during this visit to the flow?
+   *
+   * ⚠ FINISHED, NOT SUCCEEDED, and that distinction is the whole safety of the gate it feeds. In the
+   * structure flow `reconcile` sits before `resumeUploads` — so gating on SUCCESS would leave
+   * uploads switched off site-wide for as long as reconciliation kept failing, and the admin could
+   * not reach the step that turns them back on. A run that ends with errors satisfies this; the
+   * errors are on screen for them to read. The client's ask was "ensure they run it", which is
+   * exactly what this asks.
+   *
+   * ⚠ SESSION-SCOPED, so a page refresh clears it and the run is asked for again. Accepted rather
+   * than solved: reconciliation is idempotent, so a second run is safe, and the durable
+   * alternatives (an audit row, a stored marker) can each fail silently — which would strand the
+   * flow over a read rather than over the work.
+   */
+  reconcileRan?: boolean;
 }
 
 const RECONCILE: FlowStep = {
@@ -503,6 +519,16 @@ const NEXT_GATED_STEPS: Record<string, string> = {
     "Uploads are still switched on. Turn them off above before continuing — a document uploaded during " +
     "the migration lands in the old folder shape, and one that arrives after its folder has been " +
     "scanned is never moved, which leaves the change stuck pending however many times you run it.",
+  /* ⚠ ENFORCED AT THE CLIENT'S REQUEST (2026-09-08), AND NOT BECAUSE THE STEP IS TECHNICALLY
+     REQUIRED — they were explicit: *"I actually told them its needed even though it isn't but its
+     good to run it anyways"*. Reconciliation reads no `Levels` and manages no below-Unit folder, so
+     a structure change does not depend on it; what it does is assert the columns, the grants and the
+     page ACLs, which is worth doing after any of these flows.
+
+     Gated on a run having FINISHED, never on one having SUCCEEDED — see `reconcileRan`. */
+  reconcile:
+    "Folder Reconciliation has not been run yet. Press Run on the panel above — it re-checks this " +
+    "segment's folders, columns and group access, and it is safe to run as many times as you like.",
 };
 
 /**
@@ -542,6 +568,11 @@ export function blocksNext(step: FlowStep, facts: FlowFacts): string {
 
   const reason = NEXT_GATED_STEPS[step.id];
   if (!reason) return "";
+
+  /* ⚠ ANSWERED HERE RATHER THAN THROUGH `stepState`, deliberately. That function also feeds
+     `firstIncompleteStep`, which decides where a flow OPENS — teaching it that reconcile is "todo"
+     until a run happens would open four of the five flows on their last step. */
+  if (step.id === "reconcile") return f.reconcileRan === false ? reason : "";
   if (step.id === "abbreviations" && f.abbreviationsLoading === true) {
     return "Still reading the term store — the codes are being checked. This clears on its own.";
   }

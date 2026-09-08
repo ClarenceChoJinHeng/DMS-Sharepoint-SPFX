@@ -460,6 +460,9 @@ describe("blocksNext", () => {
           segmentExists: false, groupsExist: false,
           foldersExist: false, abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
           uploadsPaused: false,
+          /* Enforced at the client's request on 2026-09-08 even though the step is not technically
+             required — see NEXT_GATED_STEPS.reconcile. */
+          reconcileRan: false,
           /* ⚠ LISTED, AND DELIBERATELY `undefined`. The no-segment gate is the one rule here that is
              keyed on a STEP PROPERTY rather than a step id, so folding it into this "exactly N ids"
              pin would muddy both: the id list would fill with steps whose gate has nothing to do
@@ -469,7 +472,40 @@ describe("blocksNext", () => {
         if (blocksNext(st, all).length > 0 && gated.indexOf(st.id) === -1) gated.push(st.id);
       }
     }
-    expect(gated.sort()).toEqual(["abbreviations", "createSegment", "pauseUploads"]);
+    expect(gated.sort()).toEqual([
+      "abbreviations", "createSegment", "pauseUploads", "reconcile",
+    ]);
+  });
+
+  describe("reconciliation not run", () => {
+    it("holds the step until a run has finished", () => {
+      const st = step("structure", "reconcile");
+      expect(blocksNext(st, { reconcileRan: false })).toContain("has not been run yet");
+      expect(blocksNext(st, { reconcileRan: true })).toBe("");
+    });
+
+    /* ⚠ `undefined` NEVER GATES, as everywhere else here — a flow whose reconciliation screen has
+       never been mounted has not reported anything, and that is not the same as "not run". */
+    it("gates nothing when the flow never reported", () => {
+      expect(blocksNext(step("structure", "reconcile"), {})).toBe("");
+    });
+
+    /* It is the LAST step of four of the five flows that have it, which is why Finish had to be
+       gated in the runner as well — Next alone would enforce it in `structure` only. */
+    it("applies in every flow that has the step", () => {
+      for (const id of ["newSegment", "addUnit", "rename", "runRecon", "structure"]) {
+        expect(blocksNext(step(id, "reconcile"), { reconcileRan: false }).length).toBeGreaterThan(0);
+      }
+    });
+
+    /* ⚠ AND IT MUST NOT LEAK ONTO THE STEP THAT TURNS UPLOADS BACK ON. In `structure`, reconcile
+       sits immediately before `resumeUploads`; if this gate reached that step too, a segment whose
+       reconciliation would not complete could never have its uploads switched back on. */
+    it("does not hold any other step in the structure flow", () => {
+      for (const id of ["pauseUploads", "levels", "migrate", "resumeUploads"]) {
+        expect(blocksNext(step("structure", id), { reconcileRan: false })).toBe("");
+      }
+    });
   });
 
   /* Reported by the client 2026-09-08, on the migrate step: Next was clickable with the picker still
