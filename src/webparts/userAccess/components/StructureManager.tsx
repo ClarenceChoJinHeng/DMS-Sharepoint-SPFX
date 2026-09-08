@@ -279,6 +279,15 @@ const s: Record<string, React.CSSProperties> = {
      segment, and two identical amber pills side by side read as one repeated badge rather than two
      different facts. */
   badgePending: { background: "#fdf1e7", color: "#8a4b00", border: "1px solid #f0d5a8" },
+  /* ⚠ THE PANEL IS ABSOLUTELY POSITIONED, and that is only safe because nothing on this form is a
+     scroll container — the file's one `overflow` is `s.modal`, a dialog this form never renders
+     inside. A scroll cap has clipped an absolutely positioned child on three other screens in this
+     project (Group Management's people picker, the upload form's two info panels, the member-add
+     dropdown), so re-check this if a scroller is ever added here. */
+  labelRow:  { display: "flex", alignItems: "center", gap: 5, marginTop: 14 },
+  infoWrap:  { position: "relative", display: "inline-flex", alignItems: "center" },
+  infoBtn:   { display: "inline-flex", background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 1, color: "#605e5c" },
+  infoPanel: { position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 30, width: 300, maxWidth: "80vw", padding: 14, background: "#fff", border: "1px solid #e1e1e1", borderRadius: 10, boxShadow: "0 4px 16px rgba(0,0,0,.12)", fontSize: 12.5, lineHeight: 1.55, color: "#323130", fontWeight: 400, textAlign: "left" },
   btn:       { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   ghost:     { background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
   danger:    { background: "#fff", color: "#a4262c", border: "1px solid #e6b3b5", borderRadius: 4, padding: "4px 9px", fontSize: 12, cursor: "pointer" },
@@ -351,6 +360,10 @@ export default function StructureManager({
   const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
   const [setCheck, setSetCheck] = useState<SetCheck>({ state: "blank" });
   const [unitCheck, setUnitCheck] = useState<UnitCheck>({ state: "idle" });
+  /* The "why this name is permanent" panel. Opened on hover AND on click: hover does not
+     exist on a touch screen, and this is the one explanation on the form that has to be
+     reachable without a mouse. Declared with the other hooks, above every early return. */
+  const [nameInfo, setNameInfo] = useState(false);
 
   const editingSegment = (): SegmentRow | undefined => segments.filter((x) => x.key === editing)[0];
 
@@ -1372,7 +1385,63 @@ export default function StructureManager({
               </label>
             </div>
 
-            <label style={s.label} htmlFor="sm-label">Folder level name</label>
+            <span style={s.labelRow}>
+              <label style={{ ...s.label, marginTop: 0 }} htmlFor="sm-label">Folder level name</label>
+              {/* ⚠ THE NEUTRAL INFO AFFORDANCE, NOT A RED WARNING — matching the upload form's own
+                  icon, which is what the client meant by "like how upload form works". A red mark
+                  sitting beside a label on a form nobody has filled in yet reads as an error state,
+                  and this project's own rule is that colouring an untouched form red is how people
+                  stop reading red. The CAUTION is in the panel; the icon only says there is
+                  something here to read.
+
+                  ⚠ Form.tsx draws the same affordance from a base64 PNG behind CSS `:hover`. This
+                  file has no <style> block, so hover is React state instead — and adding one just
+                  for this would walk into the backtick-in-a-template-literal trap that has broken
+                  the build five times. Unifying the two icons is worth its own change. */}
+              <span
+                style={s.infoWrap}
+                onMouseEnter={() => setNameInfo(true)}
+                onMouseLeave={() => setNameInfo(false)}
+              >
+                <button
+                  type="button"
+                  style={s.infoBtn}
+                  aria-expanded={nameInfo}
+                  aria-label="Why the folder level name is permanent"
+                  onClick={() => setNameInfo(!nameInfo)}
+                  onFocus={() => setNameInfo(true)}
+                  onBlur={() => setNameInfo(false)}
+                >
+                  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                    <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                    <circle cx="8" cy="4.6" r="0.95" fill="currentColor" />
+                    <path d="M8 7v5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                </button>
+                {nameInfo && (
+                  <span style={s.infoPanel} role="tooltip">
+                    <strong>This name is permanent in practice.</strong> It becomes the level&rsquo;s
+                    label on the upload form and in the folder chain, and it creates the columns{" "}
+                    {/* ⚠ THE DERIVED COLUMN NAME LIVES HERE, NOT UNDER THE FIELD. A standing preview
+                        was removed on the client's request (2026-09-06) and re-adding one would
+                        reverse that; behind the icon it answers "what is it tied to" — which is what
+                        they asked for — and it is also the one thing that makes a typo visible,
+                        since the name is what the column is called for ever. */}
+                    {columnNameFor(adding.label) ? (
+                      <>
+                        <code>{columnNameFor(adding.label)}</code> and{" "}
+                        <code>{columnNameFor(adding.label)}Tid</code>
+                      </>
+                    ) : (
+                      <>it derives</>
+                    )}{" "}
+                    in all four libraries. A column&rsquo;s internal name is fixed when it is created
+                    and can never be changed, and removing the level later deletes neither the column
+                    nor the values already written to it. Type the name you want to keep.
+                  </span>
+                )}
+              </span>
+            </span>
             <input
               id="sm-label"
               style={s.input}
