@@ -11522,3 +11522,24 @@ on a segment plainly reading `CHANGE PENDING`.
   so every step sees it — the same pin `subjectGiven` needed).
 - **Two existing test comments went stale in the same change** and were corrected rather than left:
   both described `migrate` as *"a step with no gate of its own"*.
+
+## ✅ THE MIGRATE GATE IS VERIFIED LIVE — AND SITE CONTENTS IS NOT PROOF THE TAB HAS THE BUILD (2026-09-09)
+Step 3 on MHO with `Minasmas Archive 2` staged: **Next is greyed** with its reason beside it, and the
+lock box is gone. 1.0.497.0 working.
+- **⚠ IT TOOK TWO ROUNDS OF "still the same" TO GET HERE, AND BOTH WERE A STALE BUNDLE.** Site Contents
+  reported **Version: 1.0.497.0** while the tab was still serving a pre-1.0.495.0 bundle — so **the
+  installed-version check that this file already insists on is NECESSARY AND NOT SUFFICIENT.** It
+  reports the PACKAGE; it says nothing about what a tab has loaded. Only clearing the cache fixed it;
+  an ordinary refresh did not.
+- **THE TECHNIQUE THAT SETTLED IT IS WORTH REUSING: date the running build from a STRING on screen.**
+  The save message read *"It is NOT live yet"* — wording that 1.0.495.0 replaced — and a grep of BOTH
+  bundles inside the `.sppkg` returned **0** occurrences. A string the installed package does not
+  contain cannot be rendered by it, so the tab was provably older, with no need to guess.
+  - Earlier screenshots were dated the same way: `↻ Re-check` present (≥1.0.492.0) **and** the
+    Add-form hint present (<1.0.494.0) placed that tab at 492/493 — which is why two padlock fixes
+    tested as "unchanged". **Ask what build a screenshot is of before treating it as evidence.**
+- **⚠ `StructureManager` COMPILES INTO TWO BUNDLES** — `user-access-web-parts` for the standalone web
+  part and `folder-manager-web-part` via `FolderManager`'s import — so verifying one is verifying
+  half. Grep both.
+- **Still unverified:** Next staying greyed WHILE the scan runs (1.0.496.0's derived padlock), the
+  `choiceNow` gate, and whether `onMigrateApplied` releases Next after a Rebuild without a reload.
