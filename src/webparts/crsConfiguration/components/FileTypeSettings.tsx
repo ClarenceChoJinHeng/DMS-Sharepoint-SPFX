@@ -61,12 +61,12 @@ const s: Record<string, React.CSSProperties> = {
   ok: { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
   info: { background: "#f3f2f1", border: "1px solid #e1dfdd", color: "#323130" },
   head: {
-    display: "grid", gridTemplateColumns: "84px minmax(0,1fr) 92px 84px", columnGap: 12,
+    display: "grid", gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px) minmax(0,84px)", columnGap: 12,
     padding: "0 10px 8px", fontSize: 12, fontWeight: 600, color: "#605e5c",
     borderBottom: "1px solid #edebe9",
   },
   row: {
-    display: "grid", gridTemplateColumns: "84px minmax(0,1fr) 92px 84px", columnGap: 12, rowGap: 4,
+    display: "grid", gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px) minmax(0,84px)", columnGap: 12, rowGap: 4,
     alignItems: "center", padding: "10px", borderBottom: "1px solid #f3f2f1",
   },
   /** Quiet by default — removing a type is rarer than toggling one, so it must not compete. */
@@ -650,13 +650,13 @@ export default function FileTypeSettings({
             {/* THREE columns here, not the shared four: this panel is read-only (the column is
                 missing, so these come from the code) and can never carry a Remove. Inheriting the
                 four-column grid would reserve an empty 84px gutter on every row. */}
-            <div style={{ ...s.head, gridTemplateColumns: "84px minmax(0,1fr) 92px" }}>
+            <div style={{ ...s.head, gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px)" }}>
               <span>Extension</span>
               <span>Description</span>
               <span />
             </div>
             {normalizeFileTypes(FALLBACK_FILE_TYPES).map((ext) => (
-              <div key={ext} style={{ ...s.row, gridTemplateColumns: "84px minmax(0,1fr) 92px" }}>
+              <div key={ext} style={{ ...s.row, gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px)" }}>
                 <span>
                   <span style={s.badge}>{badgeFor(ext)}</span>
                 </span>

@@ -82,7 +82,7 @@ const s: Record<string, React.CSSProperties> = {
        wide screen the box a code goes in was half a screen away from the term it names.
        A FIXED label column rather than `max-content`, so every input still lines up: with
        `max-content` the boxes would step in and out with the length of each term. */
-    gridTemplateColumns: "minmax(0, 260px) 200px minmax(0, 1fr)",
+    gridTemplateColumns: "minmax(0, 260px) minmax(0, 200px) minmax(0, 1fr)",
     alignItems: "center",
     columnGap: 12,
     rowGap: 4,

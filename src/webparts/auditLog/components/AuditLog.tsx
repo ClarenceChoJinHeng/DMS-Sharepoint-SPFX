@@ -305,7 +305,7 @@ const s: Record<string, React.CSSProperties> = {
        read together. An empty 40px track separates only the pair that needed it.
        The head and the row MUST carry the same template — they are separate grids, and a column added
        to one and not the other misaligns every heading from its column. */
-    gridTemplateColumns: "150px 150px minmax(0,1fr) 40px 160px",
+    gridTemplateColumns: "minmax(0,150px) minmax(0,150px) minmax(0,1fr) minmax(0,40px) minmax(0,160px)",
     columnGap: 12,
     padding: "0 10px 8px",
     fontSize: 12,
@@ -315,7 +315,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   row: {
     display: "grid",
-    gridTemplateColumns: "150px 150px minmax(0,1fr) 40px 160px",
+    gridTemplateColumns: "minmax(0,150px) minmax(0,150px) minmax(0,1fr) minmax(0,40px) minmax(0,160px)",
     columnGap: 12,
     padding: "10px",
     borderBottom: "1px solid #f3f2f1",

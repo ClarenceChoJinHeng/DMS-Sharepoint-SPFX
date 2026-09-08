@@ -181,7 +181,7 @@ const s: Record<string, React.CSSProperties> = {
   backLink: { background: "none", border: "none", padding: 0, font: "inherit", fontSize: 14, fontWeight: 600, color: "#0f6c3f", cursor: "pointer" },
   // minmax(0, 1fr) on the preview column: a bare 1fr floors at the iframe's min-content width, so
   // the preview could never give ground. Learned on the approval page.
-  detailGrid:  { display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 20, alignItems: "start" },
+  detailGrid:  { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 300px)", gap: 20, alignItems: "start" },
   sectionTitle:{ fontSize: 14, fontWeight: 600, color: "#201f1e", marginBottom: 10 },
   detailRow:   { marginBottom: 12 },
   detailLabel: { fontSize: 11, fontWeight: 600, color: "#605e5c", textTransform: "uppercase", letterSpacing: 0.3 },
