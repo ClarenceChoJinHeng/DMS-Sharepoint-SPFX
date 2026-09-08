@@ -59,7 +59,32 @@ const s: Record<string, React.CSSProperties> = {
   warn:     { ...NOTICE_ATTENTION },
   ok:       { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
   card:     { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
-  unitName: { fontSize: 14, fontWeight: 600, color: "#1b1b1b", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
+  /* 17px, not 14 (client, 2026-09-08, having tried it in devtools first). This is the only line
+     that says WHICH UNIT a wall of paths belongs to, and at 14px it read as another path rather
+     than as the heading over them - the more so now the list beneath it scrolls, because the
+     heading is the one fixed thing an admin scrolls back to. */
+  unitName: { fontSize: 17, fontWeight: 600, color: "#1b1b1b", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
+  /* THE PER-UNIT FOLDER LIST SCROLLS (client, 2026-09-08: *"put overscroll for each section, it
+     is too long"*). GHO alone scanned 131 folders across 5 units, each entry a path, an action
+     and its filenames - thousands of pixels of one page, with the Rebuild button somewhere past
+     the end of it.
+
+     WARN: THE HEADING AND THE TIER DROPDOWNS STAY OUTSIDE THIS BOX, and that is not tidiness.
+     Those selects are what decide the plan for every folder listed below them; scrolled away
+     with the list, an admin reads "needs a value chosen above" with the control that sets it off
+     screen. Same rule the abbreviation editor follows - only the rows move.
+
+     WARN: SAFE HERE ONLY BECAUSE NOTHING INSIDE IS ABSOLUTELY POSITIONED. A scroll container
+     clips such a child, which has already cost this project three screens (the people picker,
+     the upload form info panels, the member-add dropdown). The only fixed element in this file
+     is the rename dialog, which renders far outside these groups. Re-check before adding a
+     popover to a folder row. A native select is unaffected - the browser draws its list outside
+     the DOM flow.
+
+     overscroll-behavior: contain stops the PAGE scrolling on when the box hits its end, which
+     matters with five of these stacked. 360px is one number, tuned to show several entries; it
+     is a cap, so a short unit still renders at its own height and does not scroll at all. */
+  scroller: { maxHeight: 360, overflowY: "auto", overscrollBehavior: "contain", paddingRight: 6, marginTop: 4 },
   move:     { fontSize: 12, color: "#605e5c", fontFamily: "Consolas, monospace", wordBreak: "break-all", padding: "4px 0" },
   // The full server-relative path, under the summary line. Quieter than the line above it because it
   // is for confirming WHICH folder, not for reading at a glance.
@@ -1352,9 +1377,14 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
   }
   let totalMoves = 0;
   let needingChoice = 0;
+  /* ⚠ A FOURTH STATE the 2026-09-07 three-state fix could not see: a unit whose options could not
+     be READ has no moves and no `needingChoice`, yet reaches `groups` — so it fell into the
+     stray-only branch, which wrongly claims the migration is finished. See CLAUDE.md, 2026-09-08. */
+  let unreadableUnits = 0;
   for (const r of scans ?? []) {
     totalMoves += movesOf(r).length;
     needingChoice += plansFor(r).filter((p) => p.missingTiers.length > 0).length;
+    if (r.unresolved !== undefined) unreadableUnits++;
   }
   const canRun = totalMoves > 0 && unresolvedCount === 0 && badNames === 0;
 
@@ -1567,10 +1597,22 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
               ? `${totalMoves} folder(s) to rebuild across ${groups.length} unit(s)`
               : needingChoice > 0
                 ? `${groups.length} unit(s) need a value chosen before anything can move`
-                : "Nothing left to move — but some folders could not be placed automatically"}
+                : unreadableUnits > 0
+                  ? `${unreadableUnits} unit(s) could not be checked — the new shape cannot go live yet`
+                  : "Nothing left to move — but some folders could not be placed automatically"}
           </h3>
           <p style={s.hint}>
-            {totalMoves === 0 && needingChoice === 0 ? (
+            {totalMoves === 0 && needingChoice === 0 && unreadableUnits > 0 ? (
+              /* ⚠ SAYS IT BLOCKS, because it does. Names neither Rebuild nor Apply: both are
+                 unavailable here, and pointing at a dead control reads as a broken page. */
+              <>
+                The unit(s) listed below could not be checked — the reason is on each one. Until
+                they can be, the pending structure <strong>cannot be applied</strong>: nothing has
+                been assessed, so switching the new shape on would leave their documents in the old
+                one while new uploads used the new one. Fix the reason given, then press{" "}
+                <strong>Check for existing files</strong> again.
+              </>
+            ) : totalMoves === 0 && needingChoice === 0 ? (
               /* The stray-only state. Says what to DO — nothing here is a button, so an admin left
                  with the generic "documents move into the shape..." blurb has no idea the screen is
                  finished with them. */
@@ -1656,6 +1698,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                   );
                 })}
 
+                <div style={s.scroller}>
                 {group.rows.map((row) => (
                   <div key={row.lib.key + row.unitPath} style={{ marginTop: 10 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: "#605e5c" }}>
@@ -1722,6 +1765,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                     })}
                   </div>
                 ))}
+                </div>
               </div>
             );
           })}
