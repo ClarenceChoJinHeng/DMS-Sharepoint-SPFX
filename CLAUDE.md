@@ -11341,3 +11341,31 @@ Sub Unit migration. All four are in `StructureManager.tsx` and `folderChain.ts`.
   ClientSideAssets/<bundle>_<hash>.js | grep -c "<string>"`. Same family as the September lesson that
   `heft package-solution` does not build — **the package is the fact; every other artefact is a
   by-product.**
+
+## THE TERM SET ID CAN BE RE-CHECKED WITHOUT RETYPING IT (2026-09-09, 1.0.492.0)
+Client, on the nested-set refusal they had just tested: *"It would be nice to add a refresh button
+beside the Term Set ID input so user can refresh the error to recheck the term set."*
+- **⚠ THE GAP EXISTS BECAUSE THE FIX HAPPENS IN ANOTHER TAB.** The check is a debounced effect keyed on
+  the TYPED value, so an admin who follows the *Open the Term Store* link (deliberately `target=
+  "_blank"`, so the half-filled Add form survives), flattens the set there and comes back finds a
+  field that has not changed and a verdict nothing will re-ask. The only routes were editing the GUID
+  to make it dirty, or Cancel and re-open the form.
+  - **Sixth instance of "a screen that reads once lies about anything changed beside it"**, and the
+    first where the change is made in another tab rather than by a run on the same page. **The
+    refusal shipping the day before is what made it matter** — a warning left an admin able to press
+    Add anyway, where a refusal leaves them stuck behind a stale verdict.
+- **IT BUMPS A COUNTER THAT THE EXISTING EFFECT READS AS A DEP; it does NOT call `checkTermSet`.** A
+  second caller would be a second definition of what a verdict means — the debounce, the `stale`
+  guard that discards a reply about an earlier GUID, and the `unknown` fallback all live in that
+  effect — and the drifting copy would be the rarely-pressed one.
+  - **⚠ A COUNTER, NEVER A BOOLEAN.** A flag has to be cleared after use, and a missed clear is a
+    button that works exactly once.
+  - The 400ms debounce applies to a manual press too. Harmless, and it keeps `checking` on screen
+    long enough for the click to register.
+- **⚠ OFFERED ONLY WHERE THE VERDICT CAME FROM THE SERVER** (`setCheckIsRecheckable`). `blank` and
+  `malformed` are decided locally from the field itself, so re-asking cannot change either — and a
+  button that visibly does nothing is how the ones that DO work stop being trusted.
+- **Disabled while checking rather than hidden.** Hiding it reflows the row, which moves the *Open the
+  Term Store* link out from under the cursor of an admin reaching for it.
+- Mirrors My Submissions' `↻ Refresh` at label-row scale, and sits AFTER the link so the row reads in
+  the order the work happens: **open the store, fix the set, re-check.**

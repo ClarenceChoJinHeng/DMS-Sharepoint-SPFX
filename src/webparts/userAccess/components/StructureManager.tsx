@@ -255,6 +255,20 @@ function setCheckMessage(c: SetCheck): string {
   }
 }
 
+/**
+ * Whether a re-check is worth offering.
+ *
+ * ⚠ ONLY WHERE THE VERDICT CAME FROM THE SERVER. `blank` and `malformed` are decided locally from
+ * the field itself, so re-asking cannot change either — a button there would be a control that
+ * visibly does nothing, which is how the ones that DO work stop being trusted.
+ */
+function setCheckIsRecheckable(c: SetCheck): boolean {
+  return (
+    c.state === "checking" || c.state === "found" ||
+    c.state === "notfound" || c.state === "unknown"
+  );
+}
+
 function setCheckStyle(c: SetCheck): React.CSSProperties {
   // Red is what BLOCKS Add, amber is what merely warns — so a nested set moved from amber to red
   // when it started blocking. Keeping it amber beside a disabled button would put a "you may
@@ -343,6 +357,11 @@ const s: Record<string, React.CSSProperties> = {
   /* Sits on the label row, so it reads as help for THAT field rather than as a page-level action —
      the term set ID is the one value on this form that has to be fetched from somewhere else. */
   labelLink: { fontSize: 12, fontWeight: 400, marginLeft: "auto" },
+  /* The `↻ Refresh` treatment My Submissions established, at label-row scale (12px, to sit beside
+     `labelLink` rather than tower over it). Sits AFTER the Term Store link so the row reads in the
+     order the work happens: open the store, fix the set, re-check. */
+  recheckBtn: { border: "1px solid #c7c7c7", background: "#fff", borderRadius: 4, cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "3px 8px", color: "#0f6c3f", fontWeight: 400 },
+  recheckOff: { border: "1px solid #e1dfdd", background: "#f3f2f1", borderRadius: 4, cursor: "not-allowed", fontSize: 12, lineHeight: 1, padding: "3px 8px", color: "#a19f9d", fontWeight: 400 },
   infoBtn:   { display: "inline-flex", background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 1, color: "#605e5c" },
   infoPanel: { position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 30, width: 300, maxWidth: "80vw", padding: 14, background: "#fff", border: "1px solid #e1e1e1", borderRadius: 10, boxShadow: "0 4px 16px rgba(0,0,0,.12)", fontSize: 12.5, lineHeight: 1.55, color: "#323130", fontWeight: 400, textAlign: "left" },
   btn:       { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
@@ -434,6 +453,11 @@ export default function StructureManager({
   // be shown the levels it is EFFECTIVELY using rather than an empty list.
   const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
   const [setCheck, setSetCheck] = useState<SetCheck>({ state: "blank" });
+  /* Bumped by the Re-check button, and read by the term-set effect purely as a trigger.
+     ⚠ IT IS A COUNTER RATHER THAN A BOOLEAN, so a second press while a check is already settled
+     still changes the value and still re-runs the effect. A flag would need clearing afterwards,
+     and a missed clear is a button that works once. */
+  const [recheck, setRecheck] = useState(0);
   const [unitCheck, setUnitCheck] = useState<UnitCheck>({ state: "idle" });
   /* The "why this name is permanent" panel. Opened on hover AND on click: hover does not
      exist on a touch screen, and this is the one explanation on the form that has to be
@@ -823,6 +847,17 @@ export default function StructureManager({
   // Check the term set ID as it is typed. Debounced, and `stale` discards a slow reply
   // that lands after the field has moved on — otherwise a verdict about an earlier,
   // half-typed GUID would sit under the field looking like a verdict about this one.
+  //
+  // ⚠ `recheck` IS A DEP SO THE BUTTON RE-RUNS THIS EFFECT, rather than calling `checkTermSet`
+  // itself. A second caller would be a second definition of what a verdict means — the debounce,
+  // the `stale` guard and the `unknown` fallback all live here — and the drifting copy would be the
+  // rarely-pressed one. The 400ms debounce applies to a manual press too, which is harmless and
+  // keeps `checking` on screen long enough for the click to register.
+  //
+  // It exists because the fix happens SOMEWHERE ELSE: the Term Store link opens a new tab, so an
+  // admin edits the set there and comes back to a field that has not changed — and nothing else
+  // would re-ask. Sixth instance of "a screen that reads once lies about anything changed beside
+  // it", and the first where the change is deliberately made in another tab.
   const typedSet = adding === undefined ? "" : adding.termSetGuid;
   useEffect(() => {
     const guid = normalizeGuid(typedSet);
@@ -849,7 +884,7 @@ export default function StructureManager({
       stale = true;
       clearTimeout(timer);
     };
-  }, [typedSet]);
+  }, [typedSet, recheck]);
 
   /**
    * The folder path a chain produces, with level names in brackets where a real value
@@ -1594,6 +1629,21 @@ export default function StructureManager({
                   >
                     Open the Term Store
                   </a>
+                  {/* Offered only where the verdict came from the server — see
+                      `setCheckIsRecheckable`. Disabled WHILE checking rather than hidden: hiding it
+                      moves the Term Store link as the row reflows, so the control an admin is
+                      reaching for jumps out from under the cursor. */}
+                  {setCheckIsRecheckable(setCheck) && (
+                    <button
+                      type="button"
+                      style={setCheck.state === "checking" ? s.recheckOff : s.recheckBtn}
+                      disabled={setCheck.state === "checking"}
+                      title="Check this term set again — use it after editing the set in the Term Store"
+                      onClick={() => setRecheck((n) => n + 1)}
+                    >
+                      {setCheck.state === "checking" ? "…" : "↻ Re-check"}
+                    </button>
+                  )}
                 </span>
                 <input
                   id="sm-set"
