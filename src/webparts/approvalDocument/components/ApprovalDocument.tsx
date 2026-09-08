@@ -126,12 +126,21 @@ const s = {
   // [DDMMYY] — so they are long by design and ran to three enormous lines.
   // overflowWrap breaks a single unspaced run rather than letting it overhang.
   docTitle:    { margin: "0 0 6px", fontSize: 22, lineHeight: 1.3, fontWeight: 600, color: "#201f1e", overflowWrap: "break-word" as const } as React.CSSProperties,
-  docMeta:     { fontSize: 13, color: "#605e5c", display: "flex", gap: 8, alignItems: "center", marginBottom: 24 } as React.CSSProperties,
+  docMeta:     { fontSize: 13, color: "#605e5c", display: "flex", gap: 8, alignItems: "center", marginBottom: 24, flexWrap: "wrap" as const } as React.CSSProperties,
   dot:         { color: "#c8c6c4" } as React.CSSProperties,
   // minmax(0, 1fr) on the centre column: a bare 1fr floors at the iframe's
   // min-content width, so the preview could never give ground. Narrower rails +
   // a tighter gap hand ~70px back to the preview.
-  grid:        { display: "grid", gridTemplateColumns: "196px minmax(0, 1fr) 280px", gap: 16, alignItems: "start" } as React.CSSProperties,
+  /* ⚠ THE OUTER TRACKS ARE `minmax(0, …)` FOR MOBILE, AND THE DESKTOP IS UNCHANGED BY IT.
+     A bare `196px` track is a FLOOR as well as a size, so on a container narrower than
+     196 + 280 + gaps the grid overflowed and took the whole SharePoint page sideways with it.
+     `minmax(0, 196px)` still resolves to exactly 196px whenever there is room — which on a
+     desktop there always is — and can compress below it when there is not.
+     ⚠ IT COMPRESSES RATHER THAN STACKING. Stacking without a media query would mean rebuilding
+     this as a wrapping flex row, which also means restyling the three children AND the
+     conditional two-column override at the element (1.0.243.0). Not worth that risk on the
+     approval screen for a layout that is at least usable and no longer breaks the page. */
+  grid:        { display: "grid", gridTemplateColumns: "minmax(0, 196px) minmax(0, 1fr) minmax(0, 280px)", gap: 16, alignItems: "start" } as React.CSSProperties,
   sectionTitle:{ fontSize: 14, fontWeight: 600, color: "#201f1e", marginBottom: 12 } as React.CSSProperties,
   avatar:      { width: 36, height: 36, borderRadius: "50%", background: "#0f6cbd", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 } as React.CSSProperties,
   authorName:  { fontWeight: 600, fontSize: 14, color: "#201f1e" } as React.CSSProperties,
@@ -151,7 +160,7 @@ const s = {
   textarea:    { width: "100%", height: 122, maxHeight: 122, padding: "6px 8px", fontSize: 13, border: "1px solid #8a8886", borderRadius: 2, resize: "vertical" as const, fontFamily: "inherit", boxSizing: "border-box" as const, color: "#201f1e" } as React.CSSProperties,
   charCount:   { fontSize: 12, color: "#605e5c", textAlign: "right" as const, marginTop: 2, marginBottom: 12 } as React.CSSProperties,
   publishLabel:{ fontSize: 13, fontWeight: 600, marginBottom: 6 } as React.CSSProperties,
-  publishRow:  { display: "flex", alignItems: "center", gap: 6, marginBottom: 20 } as React.CSSProperties,
+  publishRow:  { display: "flex", alignItems: "center", gap: 6, marginBottom: 20, flexWrap: "wrap" as const } as React.CSSProperties,
   publishValue:{ color: "#0f6cbd", fontSize: 13 } as React.CSSProperties,
   btnApprove:  { width: "100%", padding: "10px 0", marginBottom: 8, background: "#107c10", color: "#fff", border: "none", borderRadius: 4, fontSize: 14, fontWeight: 600, cursor: "pointer" } as React.CSSProperties,
   btnSendBack: { width: "100%", padding: "10px 0", marginBottom: 8, background: "#fff", color: "#201f1e", border: "1px solid #8a8886", borderRadius: 4, fontSize: 14, fontWeight: 600, cursor: "pointer" } as React.CSSProperties,
@@ -1263,7 +1272,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         {/* Left — Uploaded by + Details */}
         <div>
           <div style={s.sectionTitle}>Uploaded by</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 28 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 28, flexWrap: "wrap" }}>
             <div style={s.avatar}>{initials(item.Author.Title)}</div>
             <div>
               <div style={s.authorName}>{item.Author.Title}</div>
@@ -1387,7 +1396,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             approval controls away from a real approver; the 403 at submit is still the backstop. */}
         {approveRight !== "denied" && (
         <div style={s.panel}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
             <span style={s.panelTitle}>Approval</span>
           </div>
           {/* ⚠ A DECIDED DOCUMENT GETS A READ-ONLY SUMMARY, NOT THE SAME FORM DISABLED (client's
@@ -1422,7 +1431,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Approval status</div>
                 {radioOptions.map(({ val, label }) => (
                   <label key={val} style={{ display: "block", marginBottom: 10, cursor: "pointer" }}>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                       <input
                         type="radio"
                         name="decision"

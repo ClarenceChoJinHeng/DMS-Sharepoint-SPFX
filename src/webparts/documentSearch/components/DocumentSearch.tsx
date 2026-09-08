@@ -220,6 +220,7 @@ const s: Record<string, React.CSSProperties> = {
        bar to the width of the words in it. */
     minHeight: 275,
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
   },
   /* ⚠ THE DARKENING OVERLAY IS GONE (client, 2026-09-01): `rgba(6, 42, 26, .55)` over the banner.
@@ -263,6 +264,7 @@ const s: Record<string, React.CSSProperties> = {
   /* The pill. `overflow: hidden` is what clips the button's square corners to the rounded end. */
   heroBar: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     background: "#fff",
     borderRadius: 6,
@@ -274,6 +276,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "0 10px 0 14px",
     color: "#8a8886",
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
   },
   heroInput: {
@@ -357,6 +360,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   advActions: {
     display: "flex",
+    flexWrap: "wrap",
     justifyContent: "flex-end",
     alignItems: "center",
     gap: 14,
@@ -445,6 +449,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   row: {
     display: "flex",
+    flexWrap: "wrap",
     gap: 12,
     alignItems: "flex-start",
     padding: "12px 10px",
@@ -508,6 +513,7 @@ const s: Record<string, React.CSSProperties> = {
   panel: { flex: "0 1 340px", minWidth: 260 },
   dRow: {
     display: "flex",
+    flexWrap: "wrap",
     gap: 10,
     padding: "6px 0",
     borderBottom: "1px solid #f5f5f5",

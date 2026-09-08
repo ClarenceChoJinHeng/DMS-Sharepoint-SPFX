@@ -172,6 +172,7 @@ const s: Record<string, React.CSSProperties> = {
      it and would have cost keyboard focus and `aria-expanded`, so the button stays and simply fills. */
   accHead: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 8,
     width: "100%",
@@ -303,6 +304,7 @@ const s: Record<string, React.CSSProperties> = {
   // client's mockup, 2026-09-03: Delete and Share are one page now, not two tabs to click between.
   sectionHead: {
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     gap: 8,
     fontSize: 15,
@@ -311,6 +313,7 @@ const s: Record<string, React.CSSProperties> = {
   },
   topBar: {
     display: "flex",
+    flexWrap: "wrap",
     justifyContent: "space-between",
     alignItems: "center",
     margin: "0 0 16px",
@@ -368,6 +371,7 @@ const s: Record<string, React.CSSProperties> = {
     background: "rgba(0,0,0,.4)",
     zIndex: 100,
     display: "flex",
+    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
