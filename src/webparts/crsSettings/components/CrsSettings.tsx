@@ -65,7 +65,7 @@ const s: Record<string, React.CSSProperties> = {
   warnNote:  { fontSize: 11, color: "#8a4b00", marginTop: 4, lineHeight: 1.4 },
   danger:    { marginBottom: 20, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 8, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
   loading:   { fontSize: 13, color: "#8a8886", padding: "8px 0" },
-  mono:      { fontFamily: "Consolas, monospace", fontSize: 11 },
+  mono:      { fontFamily: "Consolas, monospace", fontSize: 11, overflowWrap: "break-word" },
 };
 
 /** One clickable row, or a disabled one naming the page to create. */

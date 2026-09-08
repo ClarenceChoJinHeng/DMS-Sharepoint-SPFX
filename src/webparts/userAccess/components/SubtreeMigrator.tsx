@@ -59,7 +59,7 @@ const s: Record<string, React.CSSProperties> = {
   warn:     { ...NOTICE_ATTENTION },
   ok:       { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
   card:     { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
-  unitName: { fontSize: 14, fontWeight: 600, color: "#1b1b1b", fontFamily: "Consolas, monospace" },
+  unitName: { fontSize: 14, fontWeight: 600, color: "#1b1b1b", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
   move:     { fontSize: 12, color: "#605e5c", fontFamily: "Consolas, monospace", wordBreak: "break-all", padding: "4px 0" },
   // The full server-relative path, under the summary line. Quieter than the line above it because it
   // is for confirming WHICH folder, not for reading at a glance.
@@ -79,9 +79,9 @@ const s: Record<string, React.CSSProperties> = {
   off:      { background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "not-allowed" },
   label:    { display: "block", fontSize: 12, fontWeight: 600, color: "#323130", margin: "10px 0 4px" },
   input:    { width: "100%", boxSizing: "border-box", padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4 },
-  small:    { boxSizing: "border-box", padding: "5px 8px", fontSize: 12, border: "1px solid #c8c8c8", borderRadius: 4, fontFamily: "Consolas, monospace" },
+  small:    { boxSizing: "border-box", padding: "5px 8px", fontSize: 12, border: "1px solid #c8c8c8", borderRadius: 4, fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
   hint:     { fontSize: 11, color: "#8a8886", marginTop: 3, lineHeight: 1.5 },
-  log:      { fontSize: 12, fontFamily: "Consolas, monospace", maxHeight: 320, overflowY: "auto", border: "1px solid #e1e1e1", borderRadius: 6, padding: "8px 10px", background: "#fafafa" },
+  log:      { fontSize: 12, fontFamily: "Consolas, monospace", maxHeight: 320, overflowY: "auto", border: "1px solid #e1e1e1", borderRadius: 6, padding: "8px 10px", background: "#fafafa", overflowWrap: "break-word" },
   logRow:   { padding: "2px 0", wordBreak: "break-all" },
   badge:    { fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10, marginLeft: 8 },
   modalBg:  { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },

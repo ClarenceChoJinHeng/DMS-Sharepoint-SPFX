@@ -63,7 +63,7 @@ const s: Record<string, React.CSSProperties> = {
   dangerBox:{ marginBottom: 16, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 4, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
   hint:     { fontSize: 11, color: "#666", marginTop: 8, lineHeight: 1.45 },
   no:       { color: "#8a8886" },
-  mono:     { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666" },
+  mono:     { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666", overflowWrap: "break-word" },
 };
 
 /* Shared filter-bar look, matching the Requests page (Requests.tsx FIL_*) — one set of styles for

@@ -101,7 +101,7 @@ const s: Record<string, React.CSSProperties> = {
   // one column would hide the half that says which other row to look at.
   problem: { fontSize: 11, lineHeight: 1.5, marginTop: 3, gridColumn: "1 / -1" },
   hint: { fontSize: 11, color: "#8a8886", marginTop: 3, lineHeight: 1.5 },
-  pathHint: { fontSize: 11, color: "#8a8886", fontFamily: "Consolas, monospace" },
+  pathHint: { fontSize: 11, color: "#8a8886", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
   /* The asterisk beside every term. `#a4262c` is this project's danger red, the same one the field
      errors and the attention banners use, so "required" reads the same everywhere. */
   req: { color: "#a4262c", fontWeight: 700 },

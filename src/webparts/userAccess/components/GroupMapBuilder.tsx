@@ -173,7 +173,7 @@ const s: Record<string, React.CSSProperties> = {
   delBtn:     { padding: "3px 10px", fontSize: 12, color: "#a4262c", border: "1px solid #a4262c", borderRadius: 4, background: "#fff", cursor: "pointer" },
   ghost:      { padding: "3px 10px", fontSize: 12, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
   toast:      { position: "fixed", bottom: 20, right: 20, padding: "10px 16px", borderRadius: 6, color: "#fff", fontSize: 13, zIndex: 50, boxShadow: "0 4px 14px rgba(0,0,0,.18)" },
-  mono:       { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666" },
+  mono:       { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666", overflowWrap: "break-word" },
   staleBadge: { display: "inline-block", marginLeft: 8, padding: "1px 7px", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em", color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3", borderRadius: 10, verticalAlign: "middle" },
 };
 

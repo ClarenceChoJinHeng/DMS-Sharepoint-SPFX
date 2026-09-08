@@ -90,8 +90,14 @@ export function autoGrid(min: number, gap = 14): CSSProperties {
  * when there is no other option, so ordinary prose still wraps at spaces.
  */
 export const BREAK_LONG: CSSProperties = {
-  overflowWrap: "anywhere",
-  wordBreak: "break-word",
+  /* ⚠ `break-word`, NEVER `anywhere`, AND THE DIFFERENCE IS A DESKTOP CHANGE.
+     `overflow-wrap: anywhere` also shrinks an element's intrinsic MIN-CONTENT size, so a flex item
+     or grid track sized by its content becomes narrower — on every screen, not just a phone. This
+     pass must not move a desktop layout, and `break-word` breaks the word only when it would
+     actually overflow the line, leaving intrinsic sizing alone.
+     `wordBreak` is dropped with it: `word-break: break-word` is a deprecated alias of exactly this
+     and adds nothing. */
+  overflowWrap: "break-word",
 };
 
 /* ⚠ THERE IS DELIBERATELY NO `FIT` / PAGE-SHELL HELPER HERE, AND IT WAS TRIED AND REMOVED THE

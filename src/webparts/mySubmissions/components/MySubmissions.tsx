@@ -272,7 +272,7 @@ const s: Record<string, React.CSSProperties> = {
   backBtn:  { background: "none", border: "none", padding: 0, marginBottom: 12, fontSize: 13, fontFamily: "inherit", color: "#0b6a3a", cursor: "pointer" },
   card:     { border: "1px solid #e1dfdd", borderRadius: 6, padding: "12px 14px", marginBottom: 16, background: "#faf9f8" },
   cardHead: { fontSize: 13, fontWeight: 600, color: "#3b3a39", margin: "0 0 6px" },
-  refLine:  { fontSize: 12, color: "#605e5c", marginTop: 6, fontFamily: "Consolas, monospace" },
+  refLine:  { fontSize: 12, color: "#605e5c", marginTop: 6, fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
   /* The read-only upload form (2026-08-22). Two columns so a batch's five or six destination fields
      read as a filled-in form rather than a long ladder; one column below 720px via `minmax`. */
   grid2:    { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px 24px" },

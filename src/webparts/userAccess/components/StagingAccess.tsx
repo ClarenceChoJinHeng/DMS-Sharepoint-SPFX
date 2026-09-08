@@ -95,7 +95,7 @@ const s: Record<string, React.CSSProperties> = {
   noteWarn: { border: "1px solid #f1b0b3", background: "#fdf3f4", color: "#a4262c" },
   noteTitle:{ fontWeight: 600, margin: "0 0 3px", fontSize: 12.5 },
   hint:     { fontSize: 11, color: "#666", marginTop: 8, lineHeight: 1.45 },
-  mono:     { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666" },
+  mono:     { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666", overflowWrap: "break-word" },
   folderOnly:{ color: "#8a8886", fontStyle: "italic" },
 };
 

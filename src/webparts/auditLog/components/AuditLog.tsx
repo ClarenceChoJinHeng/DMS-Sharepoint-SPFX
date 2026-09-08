@@ -358,7 +358,7 @@ const s: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     gap: 6,
   },
-  when: { fontSize: 12, color: "#323130", fontFamily: "Consolas, monospace" },
+  when: { fontSize: 12, color: "#323130", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
   type: { fontSize: 12, fontWeight: 600, color: "#0f6c3f" },
   title: { fontSize: 13, color: "#1b1b1b", wordBreak: "break-word" },
   path: {

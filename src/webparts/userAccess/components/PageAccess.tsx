@@ -100,7 +100,7 @@ const s: Record<string, React.CSSProperties> = {
   td:       { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "middle" },
   yes:      { color: "#0f6c3f", fontWeight: 600 },
   no:       { color: "#8a8886", fontWeight: 600 },
-  mono:     { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666" },
+  mono:     { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666", overflowWrap: "break-word" },
   drift:    { fontSize: 11, color: "#8a4b00", marginTop: 2 },
   policyBox:{ marginBottom: 12, padding: "8px 10px", border: "1px solid #d6e8dc", background: "#f6fbf8", borderRadius: 4, fontSize: 12, color: "#265", lineHeight: 1.5 },
   adminBox: { marginBottom: 12, padding: "8px 10px", border: "1px solid #cfd8e3", background: "#f4f7fb", borderRadius: 4, fontSize: 12, color: "#2b3f56", lineHeight: 1.5 },
