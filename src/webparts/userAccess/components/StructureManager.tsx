@@ -141,16 +141,43 @@ function columnNameFor(label: string): string {
 }
 
 /** The verdict, in the admin's language. Never shows the GUID back — they can see it. */
-function unitCheckMessage(c: UnitCheck, unitLabel: string): string {
+/**
+ * The sub unit verdict, as something to render.
+ *
+ * A NODE rather than a string, because the `none` case has to carry a LINK. Everything else is
+ * plain text, so the caller does not have to care which it got.
+ *
+ * ⚠ THE TERM STORE LINK GOES TO THE CLASSIC, SITE-LEVEL PAGE (`termstoremanager.aspx`), and that is
+ * load-bearing rather than incidental — this is its third mount point in the project, all three the
+ * same URL for the same reason. An admin looking for the term store naturally reaches the MODERN one
+ * (`/_layouts/15/SiteAdmin.aspx#/termStoreAdminCenter`), which is the TENANT admin centre and
+ * answers "Access denied — you don't have access to this admin center operation" to a site
+ * collection administrator, because it is gated on being a SharePoint Administrator for the whole
+ * tenant. The client hit that wall themselves on 2026-08-30. Built from `siteUrl`, never hardcoded.
+ */
+function unitCheckNote(
+  c: UnitCheck, unitLabel: string, segLabel: string, siteUrl: string,
+): React.ReactNode {
   switch (c.state) {
     case "checking":
       return `Checking whether any ${unitLabel.toLowerCase()} has sub unit terms under it…`;
     case "none":
+      /* ⚠ THE CLIENT'S OWN WORDING (2026-09-08), and shorter than what it replaced for a reason:
+         they read the first version and asked what it meant. "authored under it" is term-store
+         jargon, and the person who meets this next is further from the term store than they are. It
+         NAMES THE SEGMENT, because this screen lists five and the message is about one of them. */
       return (
-        `No ${unitLabel.toLowerCase()} in this segment has any terms authored under it, so a sub ` +
-        `unit level would never appear for anybody — every ${unitLabel.toLowerCase()} would ` +
-        `file straight into the next level down. Author the sub unit terms under each ` +
-        `${unitLabel.toLowerCase()} in the term store first, then add this level.`
+        <>
+          {segLabel} does not have any sub units under its {unitLabel} terms yet. Add one in the{" "}
+          <a
+            href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Term Store
+          </a>{" "}
+          first, then you can add a Sub unit level here.
+        </>
       );
     case "some":
       // The COUNT is the useful part, and the admin has no other way to get it: it says at a glance
@@ -1386,7 +1413,7 @@ export default function StructureManager({
                 and colouring it amber would train people to ignore the state that matters. */}
             {adding.fromUnit && unitCheck.state !== "idle" && (
               <p style={unitCheck.state === "none" ? { ...s.msg, ...s.warn } : s.hint}>
-                {unitCheckMessage(unitCheck, unitLabel(draft))}
+                {unitCheckNote(unitCheck, unitLabel(draft), seg.label, siteUrl)}
               </p>
             )}
 
