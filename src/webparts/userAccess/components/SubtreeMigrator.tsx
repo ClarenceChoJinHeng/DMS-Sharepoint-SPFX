@@ -64,6 +64,12 @@ const s: Record<string, React.CSSProperties> = {
      than as the heading over them - the more so now the list beneath it scrolls, because the
      heading is the one fixed thing an admin scrolls back to. */
   unitName: { fontSize: 17, fontWeight: 600, color: "#1b1b1b", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
+  /* The library heading inside a unit card (client, 2026-09-08: 16px and black). It was 12px in
+     #605e5c — the same tone as the folder lines beneath it, so it read as one of them rather than as
+     the thing that separates six libraries' worth of folders from each other.
+     `#1b1b1b` is `unitName`'s black, not a new one: the unit heading above stays a step larger at
+     17px, so the two still read as a hierarchy rather than as two headings of equal weight. */
+  libName:  { fontSize: 16, fontWeight: 600, color: "#1b1b1b" },
   /* THE PER-UNIT FOLDER LIST SCROLLS (client, 2026-09-08: *"put overscroll for each section, it
      is too long"*). GHO alone scanned 131 folders across 5 units, each entry a path, an action
      and its filenames - thousands of pixels of one page, with the Rebuild button somewhere past
@@ -1759,7 +1765,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                 <div style={s.scroller}>
                 {group.rows.map((row) => (
                   <div key={row.lib.key + row.unitPath} style={{ marginTop: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: "#605e5c" }}>
+                    <div style={s.libName}>
                       {row.lib.title}
                       {row.unresolved && (
                         <span style={{ ...s.badge, background: "#fff4e5", color: "#7a4f00" }}>
