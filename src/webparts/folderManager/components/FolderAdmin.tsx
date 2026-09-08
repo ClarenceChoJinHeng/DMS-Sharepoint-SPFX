@@ -597,7 +597,21 @@ export default function FolderAdmin({
    * abbreviations a refusal rather than a "discard?" prompt. It is also temporary and self-clearing,
    * and the step itself offers Stop, so nobody is held longer than they choose to be.
    */
-  const [runBusy, setRunBusy] = useState(false);
+  /* ⚠⚠ ONE STATE PER SOURCE, DERIVED INTO ONE PADLOCK — never one shared boolean.
+     Three independent runs report into this: reconciliation, the migration scan/move, and a bulk
+     group run. With a single `runBusy` the LAST reporter won, and one of them re-asserted its value
+     on EVERY RENDER (`onReconRunning` was a fresh function identity each render, and
+     `FolderManager`'s effect depends on that identity) — so the migration scan set it true and the
+     next render immediately pushed `false` back over it.
+     Client, 2026-09-09: *"next is available when I am running this, that is dangerous"*. The
+     migrate padlock had therefore NEVER held in the guided flow, on a step whose scan and move both
+     run in the page with NO RESUME: pressing Next threw the work away silently.
+     Deriving the padlock means a source can only ever report about ITSELF, so no source can release
+     another's lock however often it re-reports. */
+  const [reconBusy, setReconBusy] = useState(false);
+  const [migrateBusy, setMigrateBusy] = useState(false);
+  const [groupBusy, setGroupBusy] = useState(false);
+  const runBusy = reconBusy || migrateBusy || groupBusy;
   /**
    * A reconciliation run has FINISHED during this visit, so the reconcile step may be left.
    *
@@ -611,11 +625,16 @@ export default function FolderAdmin({
    */
   const [reconRan, setReconRan] = useState(false);
   const reconStarted = React.useRef(false);
-  const onReconRunning = (running: boolean): void => {
-    setRunBusy(running);
+  /* ⚠ `useCallback` IS LOAD-BEARING, NOT TIDINESS. `FolderManager`'s effect lists this callback in
+     its deps, so a fresh identity each render re-fires it on every render — which is how a stale
+     `false` kept landing on top of another source's `true`. Stable identity, so it fires only when
+     `reconRunning` actually changes. Empty deps: it touches only a ref and two setState functions,
+     all of which are stable. */
+  const onReconRunning = React.useCallback((running: boolean): void => {
+    setReconBusy(running);
     if (running) reconStarted.current = true;
     else if (reconStarted.current) setReconRan(true);
-  };
+  }, []);
   /**
    * The Folder levels screen holds unsaved edits.
    *
@@ -1340,7 +1359,7 @@ export default function FolderAdmin({
           <BulkGroupProvisioner
             context={context}
             siteUrl={siteUrl}
-            onBusyChange={setRunBusy}
+            onBusyChange={setGroupBusy}
             onRunComplete={onRunComplete}
           />
           {/* ⚠ `RolesReference` REMOVED AGAIN HERE (2026-09-02, client's confirmed call, same
@@ -1506,7 +1525,7 @@ export default function FolderAdmin({
             // page with no resume, so leaving the step throws the work away — identical to
             // reconciliation and to a bulk group run. One reason to hold navigation, one
             // implementation of holding it, one message.
-            onMigrateRunningChange={setRunBusy}
+            onMigrateRunningChange={setMigrateBusy}
             // NOT the padlock: unsaved edits are not a run, and holding Back would trap someone who
             // opened the screen by mistake. It gates NEXT only, with its own reason.
             onStructureDirtyChange={setStructureDirty}

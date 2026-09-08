@@ -926,9 +926,26 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
   // state and must not trap the flow. It reports false again the moment the run finishes, so the gate
   // releases itself rather than needing anyone to clear it.
   const pendingNow = (scans ?? []).reduce((n, r) => n + movesOf(r).length, 0);
+  /* ⚠ A SCAN THAT FOUND WORK IT CANNOT PLAN YET IS STILL PENDING, and counting MOVES alone missed
+     it. A newly added level has no value chosen, so every plan is `missingTiers` and `pendingNow` is
+     0 — meaning the gate that exists to stop an admin walking past an unfinished migration was open
+     for precisely the state the migration STARTS in (client, 2026-09-09, on a scan reporting 4 units
+     needing a value beside a live Next).
+     `0 moves` means either "nothing to do" or "cannot work out what to do yet", and only the first
+     may release the gate. Empty is not unknown, again.
+     ⚠ A STRAY-ONLY SCAN STILL RELEASES IT, deliberately: a stray cannot be resolved by this tool at
+     all, so blocking on one would hold the flow for ever. */
+  const choiceNow = (scans ?? []).reduce(
+    (n, r) => n + plansFor(r).filter((pl) => pl.missingTiers.length > 0).length,
+    0,
+  );
   useEffect(() => {
-    if (onPendingChange) onPendingChange(scans !== undefined && pendingNow > 0 && done === undefined);
-  }, [scans, pendingNow, done]);
+    if (onPendingChange) {
+      onPendingChange(
+        scans !== undefined && done === undefined && (pendingNow > 0 || choiceNow > 0),
+      );
+    }
+  }, [scans, pendingNow, choiceNow, done]);
 
   /**
    * Collisions as they stand BEFORE any rename — the stable list the form renders.

@@ -11437,3 +11437,52 @@ are you trying to convey?? can you just make it simple in bullet point and like 
   first version used `new Set<string>()` and `[...createdCols]`, which compiles in most projects and
   not in this one; it is the same ES-level limitation that makes `Promise.allSettled` unavailable here
   (gotcha #3). Plain arrays with an `indexOf` guard dedupe with no iteration protocol.
+
+## ⚠⚠ THE MIGRATE PADLOCK HAD NEVER HELD — THREE RUNS WROTE ONE BOOLEAN (2026-09-09, 1.0.496.0)
+Client, with the scan mid-flight and Next green: *"next is available when I am running this, that is
+dangerous"*. Correct, and the wiring was complete end to end — `onRunningChange` -> `FolderManager` ->
+`onMigrateRunningChange` -> `setRunBusy`, with `runBusy` in Next's own disabled condition. **Every link
+was right and the padlock still did not hold.**
+- **THE CAUSE IS TWO DEFECTS THAT ONLY BITE TOGETHER.**
+  1. **Three independent runs reported into ONE `runBusy` boolean** — reconciliation, the migration
+     scan/move, and a bulk group run — so whichever reported LAST won, and a source could release a
+     lock it knew nothing about.
+  2. **`onReconRunning` was a fresh function identity on every render**, and `FolderManager`'s effect
+     lists that callback in its deps — so it re-fired on **every render** and pushed `reconRunning`
+     (`false`, on the migrate step) back into the shared state.
+  Together: the scan set `runBusy` true, that re-render gave the callback a new identity, the effect
+  re-fired, and `false` landed on top. **Every render undid the lock**, so it was never observably
+  held for more than one frame.
+- **⚠ THE COST IS REAL, NOT COSMETIC.** The scan and the move both run in the page with **no resume**,
+  which is the whole reason that padlock exists — so pressing Next mid-scan threw the work away
+  **silently**. It also cannot be reached from the standalone Migrate tab, which passes no callbacks,
+  so this was specific to the guided flow.
+- **FIXED BY DERIVING THE PADLOCK: one state per source** (`reconBusy` / `migrateBusy` / `groupBusy`)
+  and `runBusy = reconBusy || migrateBusy || groupBusy`. **A source can then only ever report about
+  ITSELF**, so no amount of re-reporting can release another's lock — the property is structural
+  rather than a rule someone has to remember. `useCallback` on `onReconRunning` fixes the
+  every-render re-fire as well, and is load-bearing rather than tidiness.
+- **⚠ THE GENERAL RULE: A SHARED BOOLEAN WRITTEN BY N SOURCES IS NOT A PADLOCK, IT IS A RACE.** The
+  code read as correct at every single link, which is why review never caught it; it can only be seen
+  by asking *"who else writes this, and when do they re-assert it?"*
+- **⚠ AND A CALLBACK PROP IN A `useEffect` DEP ARRAY MAKES THAT EFFECT FIRE EVERY RENDER unless the
+  caller memoises it.** Worth grepping for: `onReconRunningChange` was the one that bit, and the same
+  shape is available to every other report-upward prop in this project.
+
+### The second defect the same screen showed: `0 moves` released the Next gate
+Reported in the same breath — a scan listing **4 units needing a value**, `Rebuild 0 folder(s)`
+disabled, and **Next green**.
+- **`onPendingChange` COUNTED PLANNED MOVES ONLY.** A newly added level has no value chosen yet, so
+  every plan is `missingTiers` and `pendingNow` is **0** — meaning the gate that exists to stop an
+  admin walking past an unfinished migration was open **for precisely the state a migration starts
+  in**. It would close only once they had already chosen a value, i.e. after the risk had passed.
+- **`0 moves` MEANS EITHER "nothing to do" OR "cannot work out what to do yet", AND ONLY THE FIRST MAY
+  RELEASE THE GATE.** Empty is not unknown, in a new place. It now also counts plans with missing
+  tiers, reusing the same `plansFor` the display already uses so the gate and the screen cannot
+  disagree.
+- **⚠ A STRAY-ONLY SCAN STILL RELEASES IT, deliberately** — a stray cannot be resolved by this tool at
+  all, so blocking on one would hold the flow for ever. That is the same rule the 2026-09-07
+  three-state fix and the 2026-09-08 fourth state were both written around.
+- **⚠ THE COUNT COULD NOT MOVE TO WHERE `needingChoice` IS ALREADY COMPUTED**, because that sits below
+  two early returns (`loading`, `loadError`) and a hook may not follow them. Computed beside
+  `pendingNow` instead.
