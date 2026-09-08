@@ -502,8 +502,18 @@ describe("blocksNext", () => {
        sits immediately before `resumeUploads`; if this gate reached that step too, a segment whose
        reconciliation would not complete could never have its uploads switched back on. */
     it("does not hold any other step in the structure flow", () => {
-      for (const id of ["pauseUploads", "levels", "migrate", "resumeUploads"]) {
+      // The two steps with no gate of their own: anything here can only come from the reconcile gate.
+      for (const id of ["levels", "migrate"]) {
         expect(blocksNext(step("structure", id), { reconcileRan: false })).toBe("");
+      }
+      /* ⚠ THE TWO PAUSE STEPS CANNOT BE CHECKED THE SAME WAY: they read `uploadsPaused` in opposite
+         directions, so whichever value is passed, one of them gates for its OWN reason. What matters
+         is that the reason is never the reconcile one. */
+      for (const paused of [true, false]) {
+        for (const id of ["pauseUploads", "resumeUploads"]) {
+          expect(blocksNext(step("structure", id), { reconcileRan: false, uploadsPaused: paused }))
+            .not.toContain("Folder Reconciliation");
+        }
       }
     });
   });
@@ -574,13 +584,33 @@ describe("blocksNext", () => {
     expect(blocksNext(step("structure", "pauseUploads"), {})).toBe("");
   });
 
-  it("never holds the closing Enable Upload step, though it reads the same fact", () => {
-    /* ⚠ `resumeUploads` READS `uploadsPaused` IN THE OPPOSITE DIRECTION: its `todo` means uploads are
-       STILL PAUSED, which is precisely the state an admin arrives in. Gating it would trap them on the
-       last step of the flow with no way to finish. */
+  /* ⚠ THIS TEST USED TO PIN THE OPPOSITE — "never holds the closing Enable Upload step" — on the
+     reasoning that its `todo` is the state an admin arrives in, so gating would trap them. Reversed
+     2026-09-08 at the client's request, because both halves of that reason had become false: the Back
+     band is an open exit, and the toggle satisfying the gate is on that very step. Meanwhile uploads
+     sat off site-wide for a day and a half because this step was never reached. */
+  it("holds the closing step until uploads are back on", () => {
     const st = step("structure", "resumeUploads");
-    expect(blocksNext(st, { uploadsPaused: true })).toBe("");
+    expect(blocksNext(st, { uploadsPaused: true })).toContain("still switched off");
     expect(blocksNext(st, { uploadsPaused: false })).toBe("");
+  });
+
+  /* ⚠ AN UNREADABLE SETTING MUST NOT HOLD IT. This is the closing step of the flow and the only
+     control that turns uploads back on — holding it over a throttled config read would be the one
+     failure worse than the one the gate prevents. */
+  it("does not hold the closing step when the setting could not be read", () => {
+    expect(blocksNext(step("structure", "resumeUploads"), {})).toBe("");
+  });
+
+  /* ⚠ ONE FACT, TWO OPPOSITE READINGS, so no single facts object can gate both pause steps — which is
+     why the exhaustive sweep above cannot cover this one and it needs its own test. */
+  it("gates the two pause steps in opposite directions", () => {
+    expect(blocksNext(step("structure", "pauseUploads"), { uploadsPaused: true })).toBe("");
+    expect(blocksNext(step("structure", "resumeUploads"), { uploadsPaused: true }).length)
+      .toBeGreaterThan(0);
+    expect(blocksNext(step("structure", "pauseUploads"), { uploadsPaused: false }).length)
+      .toBeGreaterThan(0);
+    expect(blocksNext(step("structure", "resumeUploads"), { uploadsPaused: false })).toBe("");
   });
 
   it("asks Add a new segment for the segment's NAME, which is what makes the gate answerable", () => {
@@ -762,9 +792,13 @@ describe("the rail cannot walk past a blocked step", () => {
   // pauseUploads, levels, migrate, reconcile, resumeUploads
   const PAUSE = 0, LEVELS = 1, MIGRATE = 2, RECONCILE = 3, RESUME = 4;
 
-  it("blocks at step 1 while uploads are on, and nowhere while they are paused", () => {
+  it("blocks at step 1 while uploads are on, and at the closing step while they are paused", () => {
     expect(firstBlockedStepIndex(steps, { uploadsPaused: false })).toBe(PAUSE);
-    expect(firstBlockedStepIndex(steps, { uploadsPaused: true })).toBe(steps.length);
+    /* ⚠ WAS `steps.length` UNTIL 2026-09-08, when the closing step gained its own gate. It now
+       reports RESUME, and that CANNOT narrow the rail: `isStepReachable` allows `i <= firstBlocked`,
+       and RESUME is the last index — so every step stays reachable and nobody is trapped by it. That
+       is what makes gating the closing step safe as well as correct. */
+    expect(firstBlockedStepIndex(steps, { uploadsPaused: true })).toBe(RESUME);
   });
 
   it("does not block on an UNKNOWN pause state — an unreadable config traps nobody", () => {

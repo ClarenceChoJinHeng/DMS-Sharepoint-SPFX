@@ -493,9 +493,18 @@ export function lockReason(step: FlowStep, facts: FlowFacts): string {
  * a term with no code that reconciliation would silently skip, and uploads still running against the
  * folders a migration is about to move.
  *
- * ⚠ `resumeUploads` IS DELIBERATELY ABSENT, though it reads the same fact. Its `todo` is the state an
- * admin ARRIVES in — uploads are still paused, which is why they are on that step at all — so gating it
- * would trap them on the closing step of the flow with no way to finish.
+ * ⚠ `resumeUploads` WAS DELIBERATELY ABSENT UNTIL 2026-09-08, and the reason it was excluded no longer
+ * holds. It read: *its `todo` is the state an admin ARRIVES in, so gating it would trap them on the
+ * closing step with no way to finish.* Both halves of that have since become false:
+ *   - **The Back band is an open exit.** It calls the same `leaveFlow` and is held only by a run in
+ *     flight or an unsaved edit, so nobody is trapped in a flow by a gate on Finish.
+ *   - **The toggle that satisfies the gate is ON that step**, one click away — unlike a gate whose fix
+ *     lives on another screen.
+ * And the failure it prevents is not hypothetical: uploads were off site-wide from 2026-09-07 to
+ * 2026-09-08 because this step was never reached, so nobody could file anything for a day and a half.
+ * Client, on seeing it: *"I think its best you enforce the upload to be turn on then only finish or
+ * not everyone cannot upload."* The old reason is kept above rather than deleted, so the same argument
+ * is recognisable if anyone makes it again.
  */
 const NEXT_GATED_STEPS: Record<string, string> = {
   createSegment:
@@ -529,6 +538,13 @@ const NEXT_GATED_STEPS: Record<string, string> = {
   reconcile:
     "Folder Reconciliation has not been run yet. Press Run on the panel above — it re-checks this " +
     "segment's folders, columns and group access, and it is safe to run as many times as you like.",
+  /* Gated through the ordinary `stepState` fallthrough, which already reads this fact in the mirror
+     direction: `todo` while uploads are still paused, and `unknown` — which never gates — when the
+     config row could not be read. So an unreadable setting cannot hold the closing step. */
+  resumeUploads:
+    "Uploads are still switched off, so nobody can file a document. Turn them back on above before " +
+    "finishing — a forgotten pause leaves the whole site quietly refusing uploads behind a banner " +
+    "that makes it look deliberate.",
 };
 
 /**
