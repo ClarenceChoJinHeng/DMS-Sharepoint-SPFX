@@ -11837,3 +11837,40 @@ also put another tab for archived"*.
   nothing has been archived since the stamp shipped — the tab looks inert rather than absent, which is
   most likely why it read as missing. ⚠ **The 57 + 17 files archived on 2026-09-02 predate
   `ArchivedAt` and carry no stamp, so they will never appear there.**
+
+## THE MOBILE PASS, FINISHED FOR THE SCREENS THAT NEEDED IT (2026-09-09, 1.0.507.0)
+Client, going to sleep: *"are you able to do the mobile design for the rest"*. Surveyed all 35
+components rather than touching them all — **only three grids genuinely needed anything**, and the
+survey is the useful half of this entry.
+- **⚠ THE 2026-09-07 PASS DID MORE THAN ITS OWN NOTE SUGGESTS.** Every other fixed grid in the project
+  is already `minmax(0, …)`, so it COMPRESSES rather than overflowing, and `Requests` and
+  `DocumentSearch` are wrap-based with `minWidth: 0` where it matters. They need nothing.
+- **THE ONE THAT WAS ACTUALLY BROKEN: `ApprovalDocument`'s grid** — the named outstanding item since
+  2026-09-07. Its CONDITIONAL inline override is `"196px minmax(0, 1fr) 280px"`, and those outer two
+  tracks carry **no `minmax`**, so they cannot shrink: 476px of floor plus gaps on a 360px screen.
+  Now one column below 640px.
+- **`MySubmissions`' detail view** (`1fr / 300px`) could shrink, so it was not overflowing — but 300px
+  of a 360px screen leaves nothing for the document preview. Stacks.
+- **`AuditLog`'s filter panel** — exactly two columns by the client's own 2026-09-07 design, which is
+  ~170px each on a phone, too narrow for a date field. Drops to one; the Date|Action / Person|Keyword
+  pairing has no meaning in a single column anyway.
+- **⚠⚠ MEDIA QUERIES, NOT `@container`, IN ALL THREE — and the reason is not consistency.**
+  `container-type` applies **layout containment**, which makes the element a containing block for every
+  `position: fixed` descendant. Two of these three pages render fixed dialogs (the approval popup; the
+  delete and share request forms), and containment would shrink those from covering the window to
+  covering a grid. The upload forms could use `@container` only because their container is a
+  `.dms-form-body` wrapper that CLOSES before the overlays. **Cost, stated: a media query measures the
+  WINDOW, so none of this fires in SharePoint's own Mobile PREVIEW — only on a real phone.**
+- **⚠ `!important` IS REQUIRED AND IS SAFE.** All three templates are set INLINE (and the approval one
+  conditionally, since its third track drops when the panel is hidden), and a class cannot beat an
+  inline style. Each sits inside a query that exists only below 640px, so **no desktop can reach it** —
+  which is the whole argument, given the 2026-09-07 pass shipped three desktop slips.
+- **⚠ DELIBERATELY NOT DONE: `AuditLog`'s five-column log table.** All its tracks are `minmax(0, …)` so
+  it compresses to ~60px a column at phone width — unreadable, not broken. The honest fix is a shared
+  `overflow-x` wrapper with a `min-width`, and it must be **ONE** wrapper: the head and the row are
+  SEPARATE grids whose templates must stay identical (its own comment says so), so two independent
+  scroll containers would let them slide out of alignment. That is a DOM restructure on a paged data
+  table, which is not work to do unsupervised — and nobody reads the audit log on a phone.
+- **⚠ STILL NOT VERIFIED ON A DEVICE.** The no-desktop-change argument is structural (a `max-width`
+  query cannot apply above its breakpoint, and the only other edit is a `className` that matches
+  nothing outside these blocks), but the phone LAYOUT itself is reasoned, not seen.

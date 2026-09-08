@@ -2316,7 +2316,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
 
         {sent !== undefined && <div style={s.okBox}>{sent}</div>}
 
-        <div style={s.detailGrid}>
+        <div className="crs-ms-detail" style={s.detailGrid}>
           <div>
             <div style={s.sectionTitle}>Preview</div>
             {preview.kind === "image" ? (
@@ -2380,6 +2380,23 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
 
   return (
     <section style={s.wrap}>
+      {/* ⚠⚠ NO BACKTICKS INSIDE THIS TEMPLATE LITERAL, not even in a CSS comment — one ends it, and
+          the error `tsc` then reports names neither the cause nor the line.
+
+          ⚠ A MEDIA QUERY, NOT `@container`: `container-type` applies layout containment, which makes
+          the element a containing block for every `position: fixed` descendant — and this page
+          renders fixed dialogs (the delete and share request forms). It measures the WINDOW, so it
+          does not fire in SharePoint's Mobile PREVIEW, only on a real phone.
+
+          ⚠ `!important` because `gridTemplateColumns` is set INLINE via `s.detailGrid` and a class
+          cannot beat an inline style. Confined to a query that exists only below 640px, so no
+          desktop can reach it. The detail view is preview-beside-metadata at 1fr/300px; at phone
+          width 300px of that is most of the screen, so it stacks. */}
+      <style>{`
+        @media (max-width: 640px) {
+          .crs-ms-detail { grid-template-columns: minmax(0, 1fr) !important; }
+        }
+      `}</style>
       <div style={s.headRow}>
         <h2 style={s.h2}>My Submissions</h2>
         <button

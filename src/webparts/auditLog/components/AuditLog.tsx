@@ -175,7 +175,7 @@ const s: Record<string, React.CSSProperties> = {
     display: "flex",
     flexDirection: "column",
     gap: 8,
-    minWidth: 130,
+    marginTop: 23,
   },
   /* Flush with the RIGHT edge of the button stack (client, 2026-09-07: *"Ensure the export what is
      shown is align with the buttons"*). It was centred, which left it sitting proud of the buttons
@@ -187,6 +187,7 @@ const s: Record<string, React.CSSProperties> = {
     color: "#8a8886",
     textAlign: "right",
     alignSelf: "stretch",
+    margin: "10px 0px 0px",
   },
   /* ⚠ NO `gridColumn: "1 / -1"` — the Date pair occupies ONE column, so Action lands beside it
      (client, 2026-09-07: *"Can you move the Action to be on the same row as From date"*). Spanning
@@ -211,7 +212,7 @@ const s: Record<string, React.CSSProperties> = {
     display: "flex",
     flexWrap: "wrap",
     gap: 14,
-    alignItems: "flex-start",
+    alignItems: "center",
     marginBottom: 18,
   },
   introIcon: {
@@ -305,7 +306,8 @@ const s: Record<string, React.CSSProperties> = {
        read together. An empty 40px track separates only the pair that needed it.
        The head and the row MUST carry the same template — they are separate grids, and a column added
        to one and not the other misaligns every heading from its column. */
-    gridTemplateColumns: "minmax(0,150px) minmax(0,150px) minmax(0,1fr) minmax(0,40px) minmax(0,160px)",
+    gridTemplateColumns:
+      "minmax(0,150px) minmax(0,150px) minmax(0,1fr) minmax(0,40px) minmax(0,160px)",
     columnGap: 12,
     padding: "0 10px 8px",
     fontSize: 12,
@@ -315,7 +317,8 @@ const s: Record<string, React.CSSProperties> = {
   },
   row: {
     display: "grid",
-    gridTemplateColumns: "minmax(0,150px) minmax(0,150px) minmax(0,1fr) minmax(0,40px) minmax(0,160px)",
+    gridTemplateColumns:
+      "minmax(0,150px) minmax(0,150px) minmax(0,1fr) minmax(0,40px) minmax(0,160px)",
     columnGap: 12,
     padding: "10px",
     borderBottom: "1px solid #f3f2f1",
@@ -358,7 +361,12 @@ const s: Record<string, React.CSSProperties> = {
     justifyContent: "center",
     gap: 6,
   },
-  when: { fontSize: 12, color: "#323130", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
+  when: {
+    fontSize: 12,
+    color: "#323130",
+    fontFamily: "Consolas, monospace",
+    overflowWrap: "break-word",
+  },
   type: { fontSize: 12, fontWeight: 600, color: "#0f6c3f" },
   title: { fontSize: 13, color: "#1b1b1b", wordBreak: "break-word" },
   path: {
@@ -415,7 +423,13 @@ const s: Record<string, React.CSSProperties> = {
 /** The people mark for the intro card. Carries its OWN pale circle, so its wrapper draws none. */
 function AuditLogoIcon(): React.ReactElement {
   return (
-    <svg width="54" height="54" viewBox="0 0 61 61" fill="none" aria-hidden="true">
+    <svg
+      width="54"
+      height="54"
+      viewBox="0 0 61 61"
+      fill="none"
+      aria-hidden="true"
+    >
       <circle cx="30.5" cy="30.5" r="30.5" fill="#F1F7EF" />
       <path
         d="M27.2861 30.5C29.8869 30.5001 32.3773 31.5702 34.2109 33.4688C36.0441 35.3669 37.0713 37.938 37.0713 40.6152V42.5381C37.0713 43.3286 36.4479 44 35.6426 44H18.9287C18.1234 44 17.5 43.3286 17.5 42.5381V40.6152C17.5 37.938 18.5272 35.3669 20.3604 33.4688C22.1941 31.5701 24.6852 30.5 27.2861 30.5ZM36.3486 31.8125C36.6234 31.0648 37.447 30.6666 38.1992 30.9629C40.0539 31.6935 41.6475 32.9892 42.7715 34.6748C43.8953 36.3602 44.4975 38.3577 44.5 40.4023V42.5381C44.5 43.3286 43.8765 44 43.0713 44H40.2861C39.4809 44 38.8574 43.3286 38.8574 42.5381C38.8576 41.7477 39.4811 41.0771 40.2861 41.0771H41.6426V40.4053L41.6377 40.1318C41.5859 38.7678 41.1605 37.4462 40.4111 36.3223C39.6117 35.1234 38.4812 34.2062 37.1719 33.6904C36.4291 33.3975 36.0768 32.5524 36.3486 31.8125ZM27.2861 33.4229C25.4543 33.4229 23.6934 34.1765 22.3926 35.5234C21.0912 36.871 20.3575 38.7022 20.3574 40.6152V41.0771H34.2139V40.6152C34.2138 38.7022 33.48 36.871 32.1787 35.5234C30.878 34.1766 29.1178 33.423 27.2861 33.4229ZM27.2861 18C30.3988 18.0002 32.8924 20.6081 32.8926 23.7881C32.8926 26.9682 30.399 29.5769 27.2861 29.5771C24.1731 29.5771 21.6787 26.9684 21.6787 23.7881C21.6789 20.608 24.1732 18 27.2861 18ZM34.7139 18C36.2067 18 37.6355 18.6138 38.6855 19.7012C39.7352 20.7879 40.3212 22.2585 40.3213 23.7881C40.3213 25.3176 39.735 26.7882 38.6855 27.875C37.6355 28.9624 36.2067 29.5771 34.7139 29.5771C33.9088 29.5769 33.2861 28.9057 33.2861 28.1152C33.2862 27.3248 33.9088 26.6545 34.7139 26.6543C35.4373 26.6543 36.1353 26.3566 36.6523 25.8213C37.1701 25.2851 37.4639 24.5535 37.4639 23.7881C37.4638 23.0228 37.17 22.2919 36.6523 21.7559C36.1353 21.2205 35.4374 20.9229 34.7139 20.9229C33.9089 20.9226 33.2863 20.2522 33.2861 19.4619C33.2861 18.6715 33.9088 18.0002 34.7139 18ZM27.2861 20.9229C25.7838 20.9229 24.5363 22.1892 24.5361 23.7881C24.5361 25.3872 25.7836 26.6543 27.2861 26.6543C28.7884 26.6541 30.0361 25.387 30.0361 23.7881C30.0359 22.1893 28.7883 20.9231 27.2861 20.9229Z"
@@ -789,9 +803,6 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
         {/* The client's mark replaces the hand-drawn one (2026-09-06). It carries its own pale
             circle, so `s.introIcon` no longer draws a background or a corner radius - leaving them
             would put a rounded square behind a circle. */}
-        <span style={s.introIcon} aria-hidden="true">
-          <AuditLogoIcon />
-        </span>
         <div>
           {/* ⚠ THE HEADING IS REMOVED, THE BODY IS NOT (client, 2026-09-07, marking just that line
               REMOVE). The paragraph below still says what the log is and — the load-bearing half —
@@ -958,6 +969,26 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
 
   return (
     <div style={s.wrap}>
+      {/* ⚠⚠ NO BACKTICKS INSIDE THIS TEMPLATE LITERAL, not even in a CSS comment — one ends it and
+          `tsc` then reports a JSX error naming neither the cause nor the line.
+
+          The filter panel is EXACTLY TWO columns by the client's design (Date | Action, then Person |
+          Keyword). At phone width each is ~170px, which is too narrow for a date field, so it drops
+          to one — the pairing that design depends on has no meaning in a single column anyway.
+
+          ⚠ A MEDIA QUERY rather than `@container`, for consistency with the other screens: this page
+          renders nothing `position: fixed`, so containment would in fact be safe here — but a second
+          mechanism doing the same job is one more thing to reason about, and the query only has to be
+          right about a phone. It measures the WINDOW, so it does not fire in SharePoint's Mobile
+          PREVIEW, only on a real device.
+
+          ⚠ `!important` because the template is set INLINE in `s.filterFields`; confined to a query
+          that exists only below 640px, so no desktop can reach it. */}
+      <style>{`
+        @media (max-width: 640px) {
+          .crs-al-filters { grid-template-columns: minmax(0, 1fr) !important; }
+        }
+      `}</style>
       {header}
 
       {report && (
@@ -993,7 +1024,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
       <div style={s.card}>
         <p style={s.cardTitle}>Filter</p>
         <div style={s.filterGrid}>
-          <div style={s.filterFields}>
+          <div className="crs-al-filters" style={s.filterFields}>
             {/* ⚠ EXPLICIT DATES REPLACED THE "Last 7 days / 30 / 90 / All time" PERIOD SELECT
                 (client design, 2026-08-30). `AuditQuery` already carried a `to` bound, so this is a
                 wiring change rather than a new capability.
@@ -1131,12 +1162,20 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               <DownloadIcon />
               Export
             </button>
-            <span style={s.actionsNote}>export what is shown</span>
           </div>
         </div>
-        <p style={{ fontSize: 11, color: "#605e5c", margin: "10px 0 0" }}>
-          Press Apply to use the filters.
-        </p>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <p style={{ fontSize: 11, color: "#605e5c", margin: "10px 0 0" }}>
+            Press Apply to use the filters.
+          </p>
+          <span style={s.actionsNote}>export what is shown</span>
+        </div>
       </div>
 
       {readFailed && (

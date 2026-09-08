@@ -1236,6 +1236,26 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
   return (
     <div style={s.root}>
+      {/* ⚠⚠ NO BACKTICKS ANYWHERE INSIDE THIS TEMPLATE LITERAL, not even in a CSS comment — one ends
+          the literal, and `tsc` then reports a JSX error naming neither the cause nor the line. That
+          has broken a file six times in this project.
+
+          ⚠ A MEDIA QUERY, NOT `@container`, AND THAT IS DELIBERATE. `container-type` applies layout
+          containment, which makes the element a containing block for every `position: fixed`
+          descendant — and this page renders a fixed popup overlay. Containment would shrink it from
+          covering the window to covering the grid. The cost is that a media query measures the
+          WINDOW, so it does not fire in SharePoint's own Mobile PREVIEW (which narrows the column and
+          leaves the viewport alone); it fires on a real phone, which is what matters.
+
+          ⚠ `!important` IS REQUIRED AND IS SAFE HERE. `gridTemplateColumns` is set INLINE on this
+          grid — conditionally, since the third track is dropped when the approval panel is hidden —
+          and a class cannot beat an inline style. It sits inside a query that only exists below
+          640px, so it cannot reach any desktop. */}
+      <style>{`
+        @media (max-width: 640px) {
+          .crs-ad-grid { grid-template-columns: minmax(0, 1fr) !important; }
+        }
+      `}</style>
 
       <div style={s.backBand}>
         <a href={backUrl()} style={s.backLink}>
@@ -1262,6 +1282,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           empty on the right"). Overridden here rather than in `s.grid` because the style object is
           shared and static; this is the one thing about the layout that depends on state. */}
       <div
+        className="crs-ad-grid"
         style={{
           ...s.grid,
           gridTemplateColumns:
