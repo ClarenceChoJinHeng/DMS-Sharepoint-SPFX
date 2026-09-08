@@ -112,6 +112,20 @@ export interface FlowFacts {
    * reported twice (2026-08-17).
    */
   subjectGiven?: boolean;
+  /**
+   * Has a segment been picked, on a flow that works on one?
+   *
+   * THREE STATES IN ONE OPTIONAL BOOLEAN, the same trick `subjectGiven` above uses, and for the same
+   * reason: `true` a segment is chosen; `false` none is chosen AND the segment list read fine, so
+   * the admin simply has not answered; `undefined` the list could not be read, or the flow does not
+   * work on a single segment at all.
+   *
+   * ⚠ THE `undefined` CASE IS WHY THIS IS NOT TWO FIELDS. An unreadable segment list leaves nothing
+   * to pick FROM, so gating on it would strand an admin with no way forward — and "unknown never
+   * gates" is already the universal rule here, so one optional boolean expresses the whole thing
+   * with no special branch.
+   */
+  segmentChosen?: boolean;
 }
 
 const RECONCILE: FlowStep = {
@@ -499,9 +513,35 @@ const NEXT_GATED_STEPS: Record<string, string> = {
  */
 export function blocksNext(step: FlowStep, facts: FlowFacts): string {
   if (!step) return "";
+  const f = facts ?? {};
+
+  /* ⚠ CHECKED BEFORE `NEXT_GATED_STEPS`, AND DELIBERATELY NOT KEYED ON A STEP ID. "No segment
+     picked" is not a property of one step — it is true of every step that spends a segment, so an
+     entry in that allow-list could only ever cover one of them.
+
+     Reported by the client on 2026-09-08, on the migrate step: Next was clickable with the picker
+     still reading "Select a segment...". The picker REPLACES that step's whole content, so there is
+     no scan, no Rebuild and no Apply behind it — and walking on reaches step 5, which turns uploads
+     back on over a chain that was never applied. Nothing is written by pressing it; the cost is that
+     the flow lets an admin finish without doing the one thing it exists for, on a run that reports
+     success. That is the same property that made `pauseUploads` a gate rather than advice.
+
+     `undefined` never gates, so an unreadable segment list cannot strand anyone — see
+     `segmentChosen`. And because `firstBlockedStepIndex` reads this function, the rail is capped by
+     the same rule in the same breath: gating Next alone would leave the side panel as a second
+     route straight past it, which is how three separate holes were shipped on 2026-09-07. */
+  if (f.segmentChosen === false && stepUsesSegment(step)) {
+    /* ⚠ NAMES THE PICKER, NEVER "jump straight on from the list of steps". That escape hatch was
+       true while the rail navigated freely and became false when it was locked forward; a gate that
+       points at a control which no longer works is worse than one with no advice at all. */
+    return (
+      "Choose a segment above to carry on. This step works on one segment at a time, so until one " +
+      "is picked there is nothing here to scan or move."
+    );
+  }
+
   const reason = NEXT_GATED_STEPS[step.id];
   if (!reason) return "";
-  const f = facts ?? {};
   if (step.id === "abbreviations" && f.abbreviationsLoading === true) {
     return "Still reading the term store — the codes are being checked. This clears on its own.";
   }

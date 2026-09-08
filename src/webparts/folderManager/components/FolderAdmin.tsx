@@ -99,11 +99,13 @@ const s: Record<string, React.CSSProperties> = {
      reconciliation run panel, the migration scan and the group tables all render inside it - and
      capping the column would put a horizontal scrollbar on the screens that most need width. The
      padding alone answers what was asked: it no longer sticks to the wall. */
+  /* ⚠ THE PADDING LEFT THIS OBJECT AND LIVES IN `SHELL_CSS` BELOW, because an inline style cannot be
+     overridden by a class and the client asked for the side padding to go on a phone and stay on a
+     desktop. Everything else stays inline. */
   wrap: {
     fontFamily: '"Segoe UI", system-ui, sans-serif',
     color: "#242424",
     margin: "32px auto",
-    padding: "0 24px 48px",
   },
   h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 6px" },
   sub: { fontSize: 13, color: "#5f5f5f", margin: "0 0 20px", lineHeight: 1.5 },
@@ -469,6 +471,42 @@ const s: Record<string, React.CSSProperties> = {
    the four real locks (segment exists, PendingLevels set, abbreviations complete) still work and
    still explain themselves beside the Next button. What went is the GRADING of every step, not the
    checking of the ones that can actually be checked. Re-render it by restoring this map. */
+
+/* Client, 2026-09-08: *"ensure that section padding for mobile is gone but for desktop it is there"*.
+   24px each side of a 360px screen is 13 percent of it spent on nothing, and the cards inside carry
+   their own.
+
+   ⚠⚠ @media HERE, NOT @container — AND THAT IS A DELIBERATE DEPARTURE FROM THE UPLOAD FORMS.
+   A container query would need `container-type` on an ancestor of this section, and container-type
+   applies LAYOUT CONTAINMENT, which makes that element the containing block for every
+   `position: fixed` descendant. Three render inside this section: StructureManager's discard dialog,
+   SubtreeMigrator's rename dialog and FolderManager's own modal. Containment would shrink all three
+   from covering the window to covering the section.
+
+   The cost, stated rather than discovered: a media query measures the WINDOW, so this does NOT fire
+   in SharePoint's own Mobile preview, which narrows the content column and leaves the viewport at
+   desktop width. It DOES fire on a real phone and in browser device emulation. If this page ever
+   needs to respond to a narrow SECTION as well, the dialogs have to move out of the container first.
+
+   NO BACKTICKS ANYWHERE IN THIS BLOCK - it is a JS template literal and one ends it. */
+const SHELL_CSS = `
+  .crs-shell { padding: 0 24px 48px; }
+  @media (max-width: 480px) {
+    .crs-shell { padding-left: 0; padding-right: 0; }
+  }
+`;
+
+/* One definition of the page shell, used by all three of this component's roots — the flow picker,
+   the flow runner and All tools. Rendering the style tag inside it means the CSS travels with
+   whichever root is mounted, and there is never more than one. */
+function Shell({ children }: { children: React.ReactNode }): React.ReactElement {
+  return (
+    <section style={s.wrap} className="crs-shell">
+      <style>{SHELL_CSS}</style>
+      {children}
+    </section>
+  );
+}
 
 export default function FolderAdmin({
   context,
@@ -852,6 +890,12 @@ export default function FolderAdmin({
       ...(abbrevMissing === undefined
         ? {}
         : { abbreviationsMissing: abbrevMissing }),
+      /* Has a segment been picked? Set ONLY on a flow that works on one, and ONLY when the list read
+         fine — so `undefined` covers both "this flow is not about one segment" and "there is nothing
+         to pick from", neither of which may gate anything. See `segmentChosen` in folderFlows. */
+      ...(flow?.needsSegment !== true || segments === undefined
+        ? {}
+        : { segmentChosen: segment !== undefined }),
     };
     if (!flow || flow.asksSubject !== "newSegment") return facts;
     // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
@@ -914,7 +958,7 @@ export default function FolderAdmin({
 
   if (!flow && !allTools) {
     return (
-      <section style={s.wrap}>
+      <Shell>
         {/* The picker is the top of this page, so nothing else here points back to the directory that
             sent the admin — reported by the client 2026-08-15 as "I can't go back to CRS Settings".
             The deeper views have their own band back to the picker; this is the one that leaves. */}
@@ -1040,20 +1084,20 @@ export default function FolderAdmin({
             What made this safe was giving reconciliation its own card (`runRecon`). It was the only
             screen with no flow of its own, so without it an admin needing to re-run reconciliation
             would have had to start the flow for ADDING A UNIT and jump the rail. */}
-      </section>
+      </Shell>
     );
   }
 
   // ── All tools: exactly what this page was before ────────────────────────────
   if (allTools) {
     return (
-      <section style={s.wrap}>
+      <Shell>
         <BackBand
           label="Back to Folder Management"
           onClick={() => setAllTools(false)}
         />
         <FolderManager context={context} />
-      </section>
+      </Shell>
     );
   }
 
@@ -1511,7 +1555,13 @@ export default function FolderAdmin({
             </div>
             <div style={s.hint}>
               {segments === undefined
-                ? "The segment list could not be read, so a segment cannot be picked here — carry on, and use the list of steps to move between them."
+                /* ⚠ IT USED TO END "use the list of steps to move between them", AND THAT WAS
+                   FALSE. The rail stopped navigating forward on 2026-08-30, so this pointed at a
+                   control that does nothing — the same dead escape hatch already corrected in the
+                   `createSegment` gate message, missed on this sibling string. What is true is that
+                   nothing is gated when the list cannot be read (see `segmentChosen`), so the way
+                   on is Next, and the way to try again is the Refresh list button beside this. */
+                ? "The segment list could not be read, so a segment cannot be picked here. Press Refresh list to try again — Next is not held, so you can carry on either way."
                 : "Only needed if you created it earlier, or reopened this page. A segment you create above is selected for you. Picking one takes the remaining steps straight to it — it does not create anything."}
             </div>
           </div>
@@ -1521,7 +1571,7 @@ export default function FolderAdmin({
   };
 
   return (
-    <section style={s.wrap}>
+    <Shell>
       {/* Held during a run for the same reason as the rail: this is the widest exit on the screen.
           ⚠ ALSO held on an unsaved Structure or Abbreviations edit (found live 2026-08-26): `openFlow`
           and `leaveFlow` never reset `structureDirty`/`abbreviationsDirty`, so this was previously the
@@ -1861,6 +1911,6 @@ export default function FolderAdmin({
           })()}
         </div>
       </div>
-    </section>
+    </Shell>
   );
 }

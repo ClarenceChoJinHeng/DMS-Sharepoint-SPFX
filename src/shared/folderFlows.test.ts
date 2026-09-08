@@ -460,11 +460,66 @@ describe("blocksNext", () => {
           segmentExists: false, groupsExist: false,
           foldersExist: false, abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
           uploadsPaused: false,
+          /* ⚠ LISTED, AND DELIBERATELY `undefined`. The no-segment gate is the one rule here that is
+             keyed on a STEP PROPERTY rather than a step id, so folding it into this "exactly N ids"
+             pin would muddy both: the id list would fill with steps whose gate has nothing to do
+             with the allow-list. It gets its own exhaustive sweep, immediately below. */
+          segmentChosen: undefined,
         };
         if (blocksNext(st, all).length > 0 && gated.indexOf(st.id) === -1) gated.push(st.id);
       }
     }
     expect(gated.sort()).toEqual(["abbreviations", "createSegment", "pauseUploads"]);
+  });
+
+  /* Reported by the client 2026-09-08, on the migrate step: Next was clickable with the picker still
+     reading "Select a segment...". The picker replaces that step's whole content, so walking on
+     reaches step 5 — which turns uploads back on over a chain that was never applied. */
+  describe("no segment picked", () => {
+    it("holds every step that spends a segment, and no other, across every flow", () => {
+      for (const f of FLOWS) {
+        for (const st of f.steps) {
+          const blocked = blocksNext(st, { segmentChosen: false }).length > 0;
+          // The rule IS `stepUsesSegment`, so the two must agree step for step. Asserting a list of
+          // ids instead would let a step added later slip through with nobody noticing.
+          expect(blocked).toBe(stepUsesSegment(st));
+        }
+      }
+    });
+
+    it("names the picker and never the rail, which no longer navigates forward", () => {
+      const st = step("structure", "migrate");
+      const msg = blocksNext(st, { segmentChosen: false });
+      expect(msg).toContain("Choose a segment above");
+      // The old escape hatch. True while the rail navigated freely, false since 2026-08-30 — and a
+      // gate pointing at a control that does nothing reads as a broken page.
+      expect(msg).not.toContain("list of steps");
+    });
+
+    it("lets go the moment one is picked", () => {
+      expect(blocksNext(step("structure", "migrate"), { segmentChosen: true })).toBe("");
+    });
+
+    /* ⚠ THE FAIL-OPEN CASE, and the reason this is one optional boolean rather than two fields: an
+       unreadable segment list leaves nothing to pick FROM, so gating on it would strand an admin
+       with no way forward at all. */
+    it("gates nothing when the segment list could not be read", () => {
+      for (const f of FLOWS) {
+        for (const st of f.steps) {
+          expect(blocksNext(st, { segmentChosen: undefined })).toBe("");
+        }
+      }
+    });
+
+    /* It must not reach the site-wide pause or the Folder levels screen — neither spends a segment,
+       and the picker deliberately does not stand in front of either. Both are `stepUsesSegment`
+       exclusions, so this pins the two that were reported as bugs in their own right. */
+    it("does not hold the site-wide upload steps or the Folder levels screen", () => {
+      for (const id of ["pauseUploads", "resumeUploads"]) {
+        expect(blocksNext(step("structure", id), { segmentChosen: false })).toBe("");
+      }
+      expect(blocksNext(step("structure", "levels"), { segmentChosen: false })).toBe("");
+    });
   });
 
   /* GHO, 2026-09-04: the structure change was staged, the migration started at 16:36, and a file
