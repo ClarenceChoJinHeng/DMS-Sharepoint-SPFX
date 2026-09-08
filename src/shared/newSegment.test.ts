@@ -7,10 +7,12 @@ import {
   fieldConflicts,
   ExistingSegment,
   isGuid,
+  MAX_PERMISSIONED_TIERS,
   modeKeyFor,
   NewSegmentDraft,
   nextSortOrder,
   normalizeGuid,
+  requiredFieldErrors,
   validateNewSegment,
 } from "./newSegment";
 
@@ -161,6 +163,28 @@ describe("columnsForDraft", () => {
 describe("validateNewSegment", () => {
   it("accepts a well-formed draft", () => {
     expect(validateNewSegment(draft(), existing)).toEqual([]);
+  });
+
+  /* ⚠ Client, 2026-09-09: *"It is suppose to be 2 only ... so limit it to only two levels"*. Pinned
+     because TOO MANY IS THE SILENT DIRECTION — reconciliation caps its term-tree walk at the declared
+     count, so a third tier moves every unit's ACL a level down onto a folder no Group Map row points
+     at, and the run reports clean. The depth check cannot be relied on to catch it: a capped or failed
+     read leaves depth UNKNOWN, which warns-and-allows. */
+  it("refuses MORE than two levels that carry permissions", () => {
+    const d = draft({
+      permissioned: [{ label: "Department" }, { label: "Unit" }, { label: "Team" }],
+    });
+    const errs = validateNewSegment(d, existing);
+    expect(errs.length).toBeGreaterThan(0);
+    expect(errs.join(" ")).toContain("Only 2 levels can carry permissions");
+    // It names the misreading that produces the attempt, or the admin removes the wrong one.
+    expect(errs.join(" ")).toContain("Top folder name");
+  });
+
+  it("accepts exactly two, so the ceiling and the floor are the same number", () => {
+    expect(MAX_PERMISSIONED_TIERS).toBe(2);
+    expect(validateNewSegment(draft({ permissioned: [{ label: "Region" }, { label: "Estate/Mill" }] }), existing))
+      .toEqual([]);
   });
 
   it("accepts I&T's TWO tiers — the slashed name is one tier, not two", () => {
@@ -394,5 +418,58 @@ describe("depthVerdict", () => {
 
   it("uses singular wording for one level", () => {
     expect(depthVerdict(2, 1).error).toContain("1 level");
+  });
+});
+
+describe("requiredFieldErrors", () => {
+  it("reports nothing when the three required fields are filled in", () => {
+    const r = requiredFieldErrors(draft());
+    expect(r).toEqual({ label: "", folder: "", termSet: "" });
+  });
+
+  it("names a blank segment name", () => {
+    expect(requiredFieldErrors(draft({ label: "   " })).label).toBeTruthy();
+  });
+
+  it("names a blank top folder", () => {
+    expect(requiredFieldErrors(draft({ stagingFolder: "" })).folder).toBeTruthy();
+  });
+
+  /* A folder of nothing but punctuation sanitizes away to empty, so it is blank in the only sense
+     that matters — the folder that would be created. */
+  it("treats a folder that sanitizes to nothing as blank", () => {
+    expect(requiredFieldErrors(draft({ stagingFolder: "///" })).folder).toBeTruthy();
+  });
+
+  it("names a term set that is not a GUID", () => {
+    expect(requiredFieldErrors(draft({ termSetGuid: "not-a-guid" })).termSet).toBeTruthy();
+  });
+
+  it("accepts a braced GUID, as normalizeGuid does", () => {
+    expect(requiredFieldErrors(draft({ termSetGuid: `{${SET}}` })).termSet).toBe("");
+  });
+
+  /* ⚠ THE POINT OF THE SPLIT: these must stay silent on a field that merely CLASHES, because they
+     are shown only after a refused save while a clash is shown live. A clash needs a valid value,
+     so the two can never both fire on one field. */
+  it("says nothing about a valid field that clashes with an existing segment", () => {
+    const r = requiredFieldErrors(draft({ stagingFolder: "GHO", termSetGuid: SET }));
+    expect(r.folder).toBe("");
+    expect(r.termSet).toBe("");
+  });
+
+  /* The condition has ONE definition: whatever this reports, the summary must refuse too, or a
+     field would go red while the save went through. */
+  it("agrees with validateNewSegment — anything it flags also refuses the save", () => {
+    const bad = draft({ label: "", stagingFolder: "", termSetGuid: "x" });
+    const r = requiredFieldErrors(bad);
+    expect(r.label && r.folder && r.termSet).toBeTruthy();
+    expect(validateNewSegment(bad, []).length).toBeGreaterThan(0);
+  });
+
+  it("agrees with validateNewSegment the other way — a clean draft raises none of these", () => {
+    const r = requiredFieldErrors(draft());
+    expect(`${r.label}${r.folder}${r.termSet}`).toBe("");
+    expect(validateNewSegment(draft(), [])).toEqual([]);
   });
 });

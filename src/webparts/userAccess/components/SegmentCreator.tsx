@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, sanitizeFolderSegment } from "../../../shared/formModel";
@@ -35,11 +35,13 @@ import {
   ExistingSegment,
   fieldConflicts,
   isGuid,
+  MAX_PERMISSIONED_TIERS,
   modeKeyFor,
   NewSegmentDraft,
   nextSortOrder,
   normalizeGuid,
   validateNewSegment,
+  requiredFieldErrors,
 } from "../../../shared/newSegment";
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
@@ -193,6 +195,10 @@ export default function SegmentCreator({
   // The admin NAMES the tiers here (spec 2026-08-12, "The admin NAMES the permissioned tiers"), so a
   // default is a name nobody chose. The examples stay in the hint, where they teach without filling in.
   const [tiers, setTiers] = useState<string[]>([]);
+  /* ⚠ DERIVED FROM THE SHARED CONSTANT, never a literal 2 typed here. `validateNewSegment` refuses
+     on the same number, so the control and the rule cannot drift into disagreeing — a greyed Add
+     button beside a form that would have accepted the level, or the reverse, is worse than either. */
+  const tiersFull = tiers.length >= MAX_PERMISSIONED_TIERS;
   const [below, setBelow] = useState<Level[]>([]);
   const [newTier, setNewTier] = useState("");
 
@@ -215,6 +221,14 @@ export default function SegmentCreator({
 
   const [check, setCheck] = useState<SetCheck>({ state: "blank" });
   const [busy, setBusy] = useState(false);
+  /* Red on the required fields, and ONLY after a save has actually been refused.
+     Client, 2026-09-08: *"I notice a bug when I click on the Create Segment it doesnt show the
+     error message. Highlight the Term set ID and Top Folder Name red."*
+     Never set on load: a blank form lit up red reads as broken, and people then stop reading
+     red anywhere. Each field's marker is DERIVED from its own current value, so it clears
+     itself as soon as that field is fixed without waiting for another attempt. */
+  const [showErrors, setShowErrors] = useState(false);
+  const resultRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState("");
   const [result, setResult] = useState<
     { ok: boolean; text: string; checklist?: boolean; warn?: string } | undefined
@@ -373,6 +387,26 @@ export default function SegmentCreator({
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
+  /* ⚠ THE MESSAGE WAS ALWAYS SET; IT WAS SIMPLY OFF SCREEN, AND THAT IS THE WHOLE BUG.
+     `result` renders near the TOP of this page and the Create button sits about two hundred
+     lines of JSX below it, so a refusal appeared somewhere the person who pressed the button
+     could not see - reported as *"it doesnt show the error message"*. Identical to the
+     Requests page's outcome banner (1.0.325.0), and fixed the same way.
+
+     ⚠ DECLARED HERE, WITH THE OTHER HOOKS, ABOVE `if (!loaded) return`. Below that return it
+     would run a different number of times on the render after loading finishes - *Rendered more
+     hooks than during the previous render* - which blanks the whole web part with no error UI.
+     That has cost this project three separate outages; the comment is the guard. */
+  useEffect(() => {
+    if (!result) return;
+    try {
+      resultRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    } catch {
+      /* Older browsers reject the options object. A message that did not scroll is the
+         behaviour before this existed, so there is nothing to report. */
+    }
+  }, [result]);
+
   /* ── Depth ─────────────────────────────────────────────────────────────────── */
 
   /**
@@ -462,9 +496,15 @@ export default function SegmentCreator({
       // 1. VALIDATE FIRST. A rejected draft must leave nothing behind — no column, no row.
       const errors = validateNewSegment(d, existing);
       if (errors.length > 0) {
+        // Mark the required fields red as well as printing the summary. The summary explains; the
+        // red says WHICH box, which is what a long form actually needs.
+        setShowErrors(true);
         setResult({ ok: false, text: errors.join(" ") });
         return;
       }
+      // Past validation, so nothing is outstanding — clear the markers rather than leaving a form
+      // that succeeded still wearing them.
+      setShowErrors(false);
 
       // 2. Depth. THE check: reconciliation walks the term tree and caps at the permissioned
       //    tier count, so a mismatch puts the folder ACLs on the wrong level — silently.
@@ -948,6 +988,17 @@ export default function SegmentCreator({
      rather than in state: it is three array scans over a list of segments, and state would be one more
      thing that can disagree with the fields. */
   const conflicts = fieldConflicts(draft(), existing);
+  /* What each field shows, from TWO sources that cannot both fire on one field.
+     `fieldConflicts` is a clash with an existing segment - it needs the field to hold something
+     valid, so it is safe to show live, as you type. `requiredFieldErrors` is blank-or-malformed,
+     which is true of an untouched form, so it is gated on a refused save. Merged here so the
+     three inputs read ONE value each and cannot disagree about whether they are in error. */
+  const required = requiredFieldErrors(draft());
+  const fieldError = {
+    label: conflicts.label || (showErrors ? required.label : ""),
+    folder: conflicts.folder || (showErrors ? required.folder : ""),
+    termSet: conflicts.termSet || (showErrors ? required.termSet : ""),
+  };
   const folderPreview = sanitizeFolderSegment(stagingFolder).trim();
   const pathPreview =
     `/${folderPreview || "TOPFOLDER"}/` +
@@ -1153,7 +1204,7 @@ export default function SegmentCreator({
       )}
 
       {result && (
-        <div style={{ ...s.msg, ...(result.ok ? s.ok : s.err) }}>
+        <div ref={resultRef} style={{ ...s.msg, ...(result.ok ? s.ok : s.err) }}>
           <div>{result.text}</div>
           {result.warn && <div style={{ marginTop: 8, fontWeight: 600 }}>{result.warn}</div>}
           {result.checklist && (
@@ -1201,12 +1252,12 @@ export default function SegmentCreator({
             this is display only. */}
         <label style={s.label}>{family === "Project" ? "Project name" : "Segment name"}</label>
         <input
-          style={conflicts.label ? { ...s.input, ...s.inputBad } : s.input}
+          style={fieldError.label ? { ...s.input, ...s.inputBad } : s.input}
           value={label}
           onChange={(e) => setLabel(e.target.value)}
           placeholder={family === "Project" ? "Group-Led Project" : "Upstream Operations"}
         />
-        {conflicts.label ? <div style={s.fieldErr}>{conflicts.label}</div> : undefined}
+        {fieldError.label ? <div style={s.fieldErr}>{fieldError.label}</div> : undefined}
         <div style={s.hint}>
           What uploaders pick from the {family === "Project" ? "Project" : "Segment"} dropdown.
           {key ? ` Its configuration key will be ${key}.` : ""}
@@ -1235,14 +1286,14 @@ export default function SegmentCreator({
 
         <label style={s.label}>Term set ID</label>
         <input
-          style={conflicts.termSet ? { ...s.input, ...s.inputBad } : s.input}
+          style={fieldError.termSet ? { ...s.input, ...s.inputBad } : s.input}
           value={termSetGuid}
           onChange={(e) => setTermSetGuid(e.target.value)}
           placeholder="023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf"
         />
         {/* Shown BEFORE the term-store verdict, and it is the more urgent of the two: a set that
             resolves perfectly well is still wrong if another segment owns it. */}
-        {conflicts.termSet ? <div style={s.fieldErr}>{conflicts.termSet}</div> : undefined}
+        {fieldError.termSet ? <div style={s.fieldErr}>{fieldError.termSet}</div> : undefined}
         {check.state !== "blank" && (
           <div style={{ ...s.hint, ...setCheckStyle(check), fontWeight: 600 }}>
             {setCheckMessage(check)}
@@ -1251,12 +1302,12 @@ export default function SegmentCreator({
 
         <label style={s.label}>Top folder name</label>
         <input
-          style={conflicts.folder ? { ...s.input, ...s.inputBad } : s.input}
+          style={fieldError.folder ? { ...s.input, ...s.inputBad } : s.input}
           value={stagingFolder}
           onChange={(e) => setStagingFolder(e.target.value)}
           placeholder="UPOPS"
         />
-        {conflicts.folder ? <div style={s.fieldErr}>{conflicts.folder}</div> : undefined}
+        {fieldError.folder ? <div style={s.fieldErr}>{fieldError.folder}</div> : undefined}
         <div style={s.hint}>
           The one folder every document in this segment sits under, in both libraries. Short and
           upper-case by convention. It cannot be shared with another segment.
@@ -1272,7 +1323,7 @@ export default function SegmentCreator({
           <br />
           Head offices use <strong>Department</strong> then <strong>Unit</strong>; Upstream Ops uses{" "}
           <strong>Region</strong> then <strong>Estate/Mill</strong>; SDGI uses <strong>Refinery</strong>{" "}
-          then <strong>Department</strong>. <strong>At least two are required</strong> — the business
+          then <strong>Department</strong>. <strong>Exactly two are required</strong> — the business
           segment itself is the Top folder name above, not one of these.
         </div>
         {/* Empty is the starting state since 2026-08-15, so it has to read as "your turn" rather than
@@ -1283,6 +1334,8 @@ export default function SegmentCreator({
           </div>
         )}
         <div style={{ marginTop: 10 }}>
+          {/* The Add control is closed once two are named — see `MAX_PERMISSIONED_TIERS`. Removing
+              one re-opens it, so this is a cap rather than a lock. */}
           {tiers.map((t, i) => (
             <div key={`${t}-${i}`} style={s.tierRow}>
               <span style={s.tierName}>{t}</span>
@@ -1316,13 +1369,24 @@ export default function SegmentCreator({
             placeholder="Add a level, e.g. Region"
           />
           <button
-            style={newTier.trim() ? s.ghost : s.off}
-            disabled={!newTier.trim()}
+            style={newTier.trim() && !tiersFull ? s.ghost : s.off}
+            disabled={!newTier.trim() || tiersFull}
             onClick={addTier}
           >
             Add level
           </button>
         </div>
+        {/* ⚠ THE REASON SITS BESIDE THE GREYED BUTTON. An unexplained disabled control reads as a
+            broken page, and here the admin has just typed a name into the box next to it — without
+            this they would retype it, or reload. It also names the misreading that produces the
+            attempt: the business segment is the Top folder name, not one of these levels. */}
+        {tiersFull && (
+          <div style={{ ...s.hint, marginTop: 6, color: "#7a4f00" }}>
+            Two levels is the maximum — every segment in this system has exactly two, and the
+            business segment itself is the <strong>Top folder name</strong> above rather than a level
+            here. Remove one to change it.
+          </div>
+        )}
       </div>
 
       <div style={s.card}>

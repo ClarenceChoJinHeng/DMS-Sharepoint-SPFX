@@ -11643,3 +11643,30 @@ and folder list.
   card. Pagination fixes the length of the PAGE, not that. **Flagged to the client rather than
   silently widened** — the cheap alternative is a short scroller per library with its heading and
   dropdown outside it, so all six controls stay visible.
+
+## THE NEW-SEGMENT FORM IS CAPPED AT TWO PERMISSIONED LEVELS (2026-09-09, 1.0.501.0)
+Client, having added five: *"You notice how I can add so many Levels that carry permissions? It is
+suppose to be 2 only since there is already Segment then the other two is just to make it three level,
+so limit it to only two levels"*. Correct, and this file already said so — *"ALL THIRTEEN FAMILIES ARE
+EXACTLY TWO PERMISSIONED LEVELS"* — while only the FLOOR was enforced.
+- **⚠⚠ THE CEILING MATTERS MORE THAN THE FLOOR, BECAUSE TOO MANY IS THE SILENT DIRECTION.**
+  Reconciliation walks the term tree capped at the declared tier count, so a third tier moves every
+  unit's ACL a level DOWN onto a folder no Group Map row points at — **it grants successfully and the
+  run reports clean.** One too FEW is loud: the form refuses and writes nothing. So the half that was
+  missing was the dangerous half.
+- **⚠ AND THE DEPTH CHECK CANNOT BE RELIED ON TO CATCH IT.** It compares the declared count to the
+  term set's depth and refuses on mismatch — but a walk that hits its cap, or a failed read, leaves
+  depth **UNKNOWN**, which warns-and-allows by design. So five tiers against a two-deep set sail
+  through whenever the term store is slow. The count is always knowable; the depth is not.
+- **`MAX_PERMISSIONED_TIERS` IS EXPORTED AND THE UI DERIVES `tiersFull` FROM IT** — never a literal
+  `2` typed into the component. A greyed Add button beside a form that would have accepted the level,
+  or the reverse, is worse than either alone.
+- **The refusal and the hint both name the misreading that produces the attempt:** the business
+  segment is the **Top folder name**, above the chain, not one of these levels. That is the error this
+  file records as having corrupted three rows of the segment map and flipped I&T twice in one day, so
+  a message that only says "too many" would have the admin remove the wrong one.
+- **A CAP, NOT A LOCK:** removing a level re-opens Add. And the reason renders beside the greyed
+  button, because the admin has just typed a name into the box next to it — without it they retype it
+  or reload.
+- The hint's *"At least two are required"* is now *"Exactly two"*. Two tests pin the ceiling, including
+  that it names the Top folder name.

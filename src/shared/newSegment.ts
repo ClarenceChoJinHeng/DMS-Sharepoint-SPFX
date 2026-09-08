@@ -212,6 +212,45 @@ export function fieldConflicts(
  * Nothing here touches the term store — depth is measured separately because it costs requests,
  * and there is no point spending them on a draft that fails these.
  */
+/**
+ * The three fields that are REQUIRED and can be wrong on their own, reported per field.
+ *
+ * Separate from `fieldConflicts` on purpose, and the difference is WHEN each may be shown.
+ * `fieldConflicts` reports a clash with an existing segment and is safe to render live, as you type:
+ * it can only fire once a field holds something. These are "you have not filled this in" and
+ * "this is not a GUID", which are true of an EMPTY FORM — so rendering them live would light a
+ * blank page red, and this codebase has already established that colouring untouched fields
+ * "makes a blank form look broken and people stop reading red" (Form.tsx, 2026-08-23). The caller
+ * gates them on a FAILED SAVE.
+ *
+ * ⚠ `validateNewSegment` CONSUMES THIS RATHER THAN REPEATING THE TESTS. The wording differs — a
+ * summary sentence explains, a field message points — but the CONDITION has one definition, so a
+ * field cannot go red while the summary stays silent, or the reverse.
+ */
+export function requiredFieldErrors(draft: NewSegmentDraft): {
+  label: string;
+  folder: string;
+  termSet: string;
+} {
+  return {
+    label: draft.label.trim() ? "" : "Give the segment a name.",
+    folder: sanitizeFolderSegment(draft.stagingFolder).trim()
+      ? ""
+      : "Give the segment a top folder name, e.g. UPOPS.",
+    termSet: isGuid(draft.termSetGuid)
+      ? ""
+      : "Paste the segment's term set ID, e.g. 023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf.",
+  };
+}
+
+/**
+ * How many levels may carry permissions. Exactly two, and the floor below is the same number.
+ *
+ * ⚠ THE RECURRING MISREADING IS COUNTING THE BUSINESS SEGMENT AS A LEVEL — it is the Top folder name,
+ * above the chain, which is why "head office is three levels" feels right and is wrong by one.
+ */
+export const MAX_PERMISSIONED_TIERS = 2;
+
 export function validateNewSegment(
   draft: NewSegmentDraft,
   existing: ExistingSegment[],
@@ -222,7 +261,10 @@ export function validateNewSegment(
   const folder = sanitizeFolderSegment(draft.stagingFolder).trim();
   const norm = (v: string): string => v.trim().toLowerCase();
 
-  if (!label) errors.push("Give the segment a name — it is what uploaders pick from.");
+  // ONE definition of "is this field filled in", shared with the red-field markers on the form.
+  const required = requiredFieldErrors(draft);
+
+  if (required.label) errors.push("Give the segment a name — it is what uploaders pick from.");
   else if (!key) {
     errors.push(
       `"${label}" has no letters or numbers in it, so no configuration key can be derived from it.`,
@@ -243,7 +285,7 @@ export function validateNewSegment(
     );
   }
 
-  if (!folder) {
+  if (required.folder) {
     errors.push(
       "Give the segment a top folder name, e.g. UPOPS — it is the folder every document in this segment sits under.",
     );
@@ -259,7 +301,7 @@ export function validateNewSegment(
     }
   }
 
-  if (!isGuid(draft.termSetGuid)) {
+  if (required.termSet) {
     errors.push(
       "Paste the segment's term set ID. It looks like 023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf.",
     );
@@ -298,6 +340,25 @@ export function validateNewSegment(
   // Deliberately a refusal rather than a warning: the depth check's own get-out is warn-and-allow
   // when depth is UNKNOWN, and stacking a second soft signal on the one shape that reads as complete
   // would leave the dangerous case advisory in both places.
+  /* ⚠ AND TWO IS ALSO THE CEILING (client, 2026-09-09: *"It is suppose to be 2 only since there is
+     already Segment then the other two is just to make it three level, so limit it to only two
+     levels"*). Every one of the thirteen families is exactly two, so this is not a preference — it is
+     the shape the model has.
+     ⚠ IT MATTERS MORE THAN THE FLOOR, because TOO MANY IS THE SILENT DIRECTION. Reconciliation walks
+     the term tree capped at the declared tier count, so a third tier moves every unit's ACL a level
+     DOWN onto a folder no Group Map row points at: it grants successfully and the run reports clean.
+     One too FEW is loud — the form refuses and writes nothing.
+     ⚠ AND THE DEPTH CHECK CANNOT BE RELIED ON TO CATCH IT. It compares the declared count to the
+     set's depth and refuses on mismatch, but a cap or a failed read leaves depth UNKNOWN, which
+     warns-and-allows by design — so five tiers against a two-deep set sail through whenever the term
+     store is slow. This refuses on the count alone, which is always knowable. */
+  if (draft.permissioned.length > MAX_PERMISSIONED_TIERS) {
+    errors.push(
+      `Only ${MAX_PERMISSIONED_TIERS} levels can carry permissions, and ${draft.permissioned.length} ` +
+        `are named. The business segment is the Top folder name above and is NOT one of these — ` +
+        `remove the extra ones, leaving the two that match the term set's own depth.`,
+    );
+  }
   if (draft.permissioned.length < 2) {
     errors.push(
       draft.permissioned.length === 0
