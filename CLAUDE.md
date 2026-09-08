@@ -11369,3 +11369,50 @@ beside the Term Set ID input so user can refresh the error to recheck the term s
   Term Store* link out from under the cursor of an admin reaching for it.
 - Mirrors My Submissions' `↻ Refresh` at label-row scale, and sits AFTER the link so the row reads in
   the order the work happens: **open the store, fix the set, re-check.**
+
+## ⚠⚠ SAVING AN UNCHANGED CHAIN STAMPED `CHANGE PENDING`, AND SAVE DISCARDED A FILLED ADD FORM (2026-09-09, 1.0.493.0)
+Client, having opened MHO's editor and pressed Save with the Add form still filled in: *"I can click
+Save structure before I add and this causes the entire MHO to be change pending even there is nothing
+change in the structure"*. One click, two separate defects.
+- **⚠ `staged` WAS `seg.hasDocuments === true` AND NOTHING ELSE**, so ANY save of an in-use segment
+  wrote `PendingLevels` — whether or not the chain had moved. This was already written down as a
+  consequence of removing a tier (*"the pending chain becomes identical to the live one rather than
+  being cleared"*) and had never been read as the defect it is.
+  - **THE BADGE IS NOT COSMETIC, which is what makes this worth more than a tidy-up.** `CHANGE
+    PENDING` holds the migrate step, invites a scan that finds nothing to move, and **the only way
+    back out is pressing Apply on a change nobody made.** A segment can be stuck there indefinitely.
+  - **⚠⚠ THE COMPARISON MUST BE AGAINST THE LIVE CHAIN *NORMALISED THE WAY `startEdit` NORMALISES
+    IT*, NEVER `seg.chain` RAW — and the file already said so, in `baseline`'s own comment.** A
+    segment with nothing below Unit runs on the IMPLICIT Year → Document Type pair and the editor
+    seeds them explicitly, so a raw compare reports it changed the instant it is opened. That is the
+    obvious one-line fix, and it reproduces the bug for precisely the segments that have never
+    touched their own structure.
+  - **`baseline` CANNOT BE REUSED FOR THIS.** It is seeded from `pending ?? chain`, so on a segment
+    that already has a staged change it holds the PENDING shape — comparing against it would answer
+    *"has this edit moved since I opened it"*, where the question here is *"does this differ from what
+    is live"*. Two different questions; only the second decides whether anything needs migrating.
+  - **IT NOW WRITES `Levels` AND CLEARS `PendingLevels` when the shape is identical**, which is safe
+    on an in-use segment *because* it is identical — staging exists to stop uploads landing in a new
+    shape beside folders in the old one, and there is no new shape. **That also fixes the documented
+    trap in the same change:** reverting a staged chain back to the live shape and saving now takes
+    the badge off, which nothing else could do.
+  - The success message and the audit row each gained a third branch. ⚠ The audit's not-staged line
+    asserted *"the segment held no documents"* — an in-use segment reaches that branch now, and
+    claiming it was empty would misrepresent the one record that is supposed to be the truth.
+- **⚠ THE SECOND DEFECT: SAVE THREW AWAY A COMPLETE, AUTHORED LEVEL.** The Add form is state SEPARATE
+  from `draft` and only joins it when **Add** is pressed, so filling the form in, missing that step
+  and pressing Save loses the level **with nothing on screen saying so** — the screen looks saved,
+  because it was, just not with the level they wrote. That is what the client had actually done.
+  - **REFUSED, NOT CONFIRMED** — the house rule from the tab-switch guard: both ways out (Add,
+    Cancel) are a few pixels above the button, and a *"discard?"* prompt puts losing the work one
+    click behind an ordinary-looking Save.
+  - **⚠ AN UNTOUCHED FORM BLOCKS NOTHING.** Opening the form and thinking better of it leaves nothing
+    to lose, and refusing there would make Cancel a compulsory step before every save — the same
+    reason `showErrors` never lights a blank form red.
+  - The reason renders BESIDE the greyed button and names **both** ways out. An unexplained disabled
+    primary button reads as a broken page, and the next move is a reload — which loses the level as
+    surely as Save would have.
+- **⚠ NEITHER HALF HAS A TEST, AND NEITHER CAN HAVE ONE HERE.** `saveStructure` and `addPending` are
+  local to the component and this project has no UI tests, which is why nine defects came out of the
+  client walking this one screen. **The extractable half is the comparison** — a pure
+  `chainMatchesLive(live, draft, legacySets)` in `folderChain.ts` would be testable and is not built.

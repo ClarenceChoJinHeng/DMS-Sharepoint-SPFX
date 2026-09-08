@@ -937,6 +937,22 @@ export default function StructureManager({
    */
   const dirty = editing !== undefined && JSON.stringify(draft) !== baseline;
 
+  /**
+   * A half-filled Add form that Save would throw away.
+   *
+   * ⚠ THE OTHER HALF OF THE 2026-09-09 REPORT. Save writes `draft`, and the Add form is a SEPARATE
+   * piece of state that only joins `draft` when Add is pressed — so an admin who fills the form in,
+   * misses that step and presses Save loses a complete level with nothing on screen saying so. The
+   * screen looks saved, because it was: just not with the level they authored.
+   *
+   * ⚠ AN UNTOUCHED FORM BLOCKS NOTHING. Opening the form and thinking better of it leaves nothing
+   * to lose, and refusing there would make Cancel a compulsory step on the way to every save — the
+   * same reason `showErrors` never lights a blank form red.
+   */
+  const addPending =
+    adding !== undefined &&
+    (adding.label.trim() !== "" || normalizeGuid(adding.termSetGuid) !== "");
+
   const cancelEdit = (): void => {
     setEditing(undefined);
     setDraft([]);
@@ -1230,7 +1246,29 @@ export default function StructureManager({
       //
       //    An empty segment skips all of that: there is nothing to move, and making someone
       //    run a migration over zero folders teaches them to click through it.
-      const staged = seg.hasDocuments === true;
+      /* ⚠ STAGE ONLY A CHANGE THAT ACTUALLY CHANGES THE FOLDER SHAPE (client, 2026-09-09: *"I
+         can click Save structure before I add and this causes the entire MHO to be change pending
+         even there is nothing change in the structure"*). It used to write `PendingLevels` on any
+         save of an in-use segment, so a save with the Add form still open — nothing added —
+         stamped CHANGE PENDING on a segment nothing had moved in.
+         That badge is not cosmetic: it holds the migrate step, invites a scan that finds nothing to
+         move, and the only way back out is pressing Apply on a change that was never made.
+         ⚠ COMPARED AGAINST THE LIVE CHAIN **NORMALISED THE WAY `startEdit` NORMALISES IT**, never
+         against `seg.chain` raw. A segment with nothing below Unit runs on the IMPLICIT Year →
+         Document Type pair and the editor seeds them explicitly, so a raw compare would call every
+         such segment changed and reproduce the bug for exactly the segments that never touched their
+         own structure. */
+      const liveSeeded = [
+        ...splitChain(seg.chain).permissioned,
+        ...effectiveOnDemandTiers(seg.chain, legacySets.year, legacySets.docType),
+      ];
+      const sameAsLive = JSON.stringify(draft) === JSON.stringify(liveSeeded);
+      /* Writing the identical shape to `Levels` is safe on an in-use segment precisely BECAUSE it is
+         identical: staging exists to stop uploads landing in a new shape beside folders in the old
+         one, and there is no new shape here. It also makes an implicit pair explicit, which is what
+         the editor showed, and it CLEARS a pending chain — so reverting a staged change back to the
+         live shape and saving now takes the badge off, which nothing else could do. */
+      const staged = seg.hasDocuments === true && !sameAsLive;
       if (staged) await ensurePendingColumn();
       const body: Record<string, string> = staged
         ? { [PENDING_LEVELS_FIELD]: JSON.stringify(draft) }
@@ -1276,6 +1314,9 @@ export default function StructureManager({
               ` exactly as before. Open "Move existing folders" to move the existing folders into` +
               ` the new shape; the new structure goes live at the end of that, so nobody ever sees` +
               ` a half-changed library.`
+            : sameAsLive
+            ? ` The folder shape is unchanged, so there is nothing to migrate and the segment is not` +
+              ` marked as having a pending change.`
             : ` Uploads use the new shape as soon as people reload the form — no reconciliation run` +
               ` is needed, because folders below Unit are created on demand and inherit the unit's` +
               ` permissions.`) +
@@ -1301,6 +1342,8 @@ export default function StructureManager({
         segment: seg.label,
         summary: staged
           ? `Folder structure STAGED for ${seg.label} — not live yet`
+          : sameAsLive
+          ? `Folder structure re-saved for ${seg.label} — no change to the folder shape`
           : `Folder structure changed for ${seg.label} — live now`,
         details: [
           staged
@@ -1313,6 +1356,10 @@ export default function StructureManager({
             : "No columns created — every one it needs already existed.",
           staged
             ? "Goes live at the end of the folder migration, not before."
+            : sameAsLive
+            // ⚠ NOT "the segment held no documents" — an in-use segment reaches this branch too
+            // when the shape did not move, and claiming it was empty would misrepresent the record.
+            ? "The chain matches what was already live, so nothing moved and no pending change was staged."
             : "The segment held no documents, so there was nothing to migrate.",
         ],
       }).catch(() => undefined);
@@ -1342,6 +1389,10 @@ export default function StructureManager({
    */
   const onSaveClicked = (): void => {
     if (!editingSegment()) return;
+    // REFUSED, not confirmed — the same rule as a tab switch with unsaved abbreviations. Both ways
+    // out (Add, Cancel) are a few pixels above this button, and a "discard?" prompt would put losing
+    // an authored level one click behind an ordinary-looking Save.
+    if (addPending) return;
     saveStructure().catch(() => undefined);
   };
 
@@ -1792,11 +1843,24 @@ export default function StructureManager({
         )}
 
         <div style={{ marginTop: 24, borderTop: "1px solid #edebe9", paddingTop: 16 }}>
-          <button style={busy ? s.off : s.btn} disabled={busy} onClick={onSaveClicked}>
+          <button
+            style={busy || addPending ? s.off : s.btn}
+            disabled={busy || addPending}
+            onClick={onSaveClicked}
+          >
             {busy ? "Saving…" : "Save structure"}
           </button>{" "}
           <button style={s.ghost} disabled={busy} onClick={onCancelClicked}>Cancel</button>
-          {dirty && (
+          {addPending && (
+            // Beside the button it disables, and it names BOTH ways out. An unexplained greyed
+            // primary button reads as a broken page, and the next move is a reload — which would
+            // lose the level as surely as Save would have.
+            <span style={{ ...s.hint, marginLeft: 10, color: "#7a4f00" }}>
+              Press <strong>Add</strong> to put that level into the list, or <strong>Cancel</strong>{" "}
+              beside it to drop it — saving now would leave it out.
+            </span>
+          )}
+          {dirty && !addPending && (
             // Sits beside the button that fixes it. A banner at the top of a long editor is
             // scrolled off exactly when someone is about to leave.
             <span style={{ ...s.hint, marginLeft: 12, color: "#7a4f00", fontWeight: 600 }}>
