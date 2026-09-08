@@ -257,7 +257,13 @@ const s: Record<string, React.CSSProperties> = {
      doubt); a REPLACED file is neither — somebody deliberately filed a newer version. Sharing a
      colour with either would put the client's whole reason for asking for this state back into the
      one it was meant to be told apart from. */
-  cancelBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#eff6fc", color: "#005a9e", border: "1px solid #c7e0f4" },
+  /* ⚠⚠ THIS IS THE FILE-SUPERSEDED BADGE, NOT THE WITHDRAWN-REQUEST ONE. There are TWO unrelated
+     "Cancelled"s in this file and only one of them changed on 2026-09-09:
+       `RecordState.cancelled`  — a NEWER upload replaced this file      → reads "Replaced"
+       `RequestStatus.Cancelled` — the requester WITHDREW their request  → still reads "Cancelled"
+     Renamed from `cancelBadge` along with its text, so it cannot be reached for the request badge by
+     someone searching for "cancel". */
+  replacedBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#eff6fc", color: "#005a9e", border: "1px solid #c7e0f4" },
   unsureBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#fdf5e6", color: "#8a5a00", border: "1px solid #f0dcb4" },
   /* ⚠ SLATE, AND DELIBERATELY THE SAME PALETTE AS `arcTag` — the "Archived" chip this page already
      uses for a row LIVING in the archive. The two say the same word about the same fact and would be
@@ -2629,7 +2635,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                       {f.recordState === "deleted" ? (
                         <span style={s.goneBadge}>Deleted</span>
                       ) : f.recordState === "cancelled" ? (
-                        <span style={s.cancelBadge}>Cancelled</span>
+                        <span style={s.replacedBadge}>Replaced</span>
                       ) : f.recordState === "archived" ? (
                         <span style={s.archivedBadge}>Archived</span>
                       ) : f.recordState === "unknown" ? (
@@ -3019,7 +3025,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                     {r.recordState === "deleted" ? (
                       <span style={s.goneBadge}>Deleted</span>
                     ) : r.recordState === "cancelled" ? (
-                      <span style={s.cancelBadge}>Cancelled</span>
+                      <span style={s.replacedBadge}>Replaced</span>
                     ) : r.recordState === "archived" ? (
                       <span style={s.archivedBadge}>Archived</span>
                     ) : r.recordState === "unknown" ? (

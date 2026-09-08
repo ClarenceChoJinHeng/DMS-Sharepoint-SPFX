@@ -11813,3 +11813,27 @@ the **standalone Migrate tab**, which has no step 1 and therefore never had a ga
   actions.
 - **⚠ `readPause` HAD TO BE HOISTED ABOVE THE MOUNT EFFECT** — `no-use-before-define` is on, and
   **lint catches this where `tsc` does not**. Second instance after `onAddTyped`.
+
+## THE SUPERSEDED-FILE BADGE READS `Replaced`, AND THE ARCHIVE TAB ALREADY EXISTED (2026-09-09, 1.0.506.0)
+Client: *"for the my submission, change the cancelled status to replaced instead for consistency and
+also put another tab for archived"*.
+- **THE INCONSISTENCY WAS REAL AND WAS WITHIN ONE SCREEN.** `RECORD_STATE_LABEL.cancelled` has read
+  **`replaced`** since 2026-08-28 — with a comment saying *"the file was superseded by a newer upload,
+  and 'cancelled' reads as withdrawn"* — while the row BADGE still rendered the literal `Cancelled`.
+  The summary line and the badge beside it disagreed about the same fact.
+- **⚠⚠ THERE ARE TWO UNRELATED `Cancelled`s IN THAT FILE AND ONLY ONE OF THEM MAY CHANGE:**
+  - **`RecordState.cancelled`** — a NEWER upload replaced this file → now reads **`Replaced`** (two
+    badge sites: the batch file row and the main list row).
+  - **`RequestStatus.Cancelled`** — the requester WITHDREW their request → **still reads
+    `Cancelled`**, and renaming it would be plainly wrong. Six occurrences, every one of them this
+    kind, verified individually in the shipped bundle rather than by count.
+  - **The style went from `cancelBadge` to `replacedBadge` along with the text**, so it cannot be
+    reached for the request badge by someone searching for "cancel". That rename is the guard against
+    the two being conflated again.
+- **⚠ THE ARCHIVE TAB WAS ALREADY BUILT — 1.0.393.0, 2026-09-03**, on this client's own earlier
+  request (*"Add another tab call Archive so they can tell filter to archive files"*). `TABS` carries
+  it between `Rejected` and `Requests`, `archivedRowsOnly` filters it, and it has its own count and
+  its own empty state. **Nothing was added.** On ClarenceDMSTesting it reads `Archive (0)` because
+  nothing has been archived since the stamp shipped — the tab looks inert rather than absent, which is
+  most likely why it read as missing. ⚠ **The 57 + 17 files archived on 2026-09-02 predate
+  `ArchivedAt` and carry no stamp, so they will never appear there.**
