@@ -116,7 +116,17 @@ type SetCheck =
   | { state: "blank" }
   | { state: "malformed" }
   | { state: "checking" }
-  | { state: "found"; name: string; count: number }
+  /**
+   * `nested` — how many of the top-level terms have terms of their OWN.
+   *
+   * ⚠ OPTIONAL, AND `undefined` MEANS "NOT ESTABLISHED" rather than none. A shared level only ever
+   * offers the TOP level of its set (`sets/{guid}/children`), so anything authored beneath those
+   * terms can never appear — the client hit this with a set whose second term had a child: the screen
+   * said *"Found — 2 values"*, enabled Add, and would have ignored the nested term for ever
+   * (2026-09-08: *"it doesn't really show an error or refuse if the Shared folder term Term structure
+   * is not the same as Year"*). Reported, never blocked — see the message.
+   */
+  | { state: "found"; name: string; count: number; nested?: number }
   | { state: "notfound" }
   | { state: "unknown"; status: number };
 
@@ -213,11 +223,28 @@ function setCheckMessage(c: SetCheck): string {
       return `Could not check that ID right now${c.status ? ` (HTTP ${c.status})` : ""}. ` +
         "You can still add the level, but confirm the ID is right — a wrong one leaves the " +
         "dropdown empty and blocks uploads.";
-    case "found":
-      return c.count === 0
-        ? `Found "${c.name}", but it has no terms yet. Add the terms before anyone uploads, ` +
-          "or the dropdown will be empty and block them."
-        : `Found "${c.name}" — ${c.count} ${c.count === 1 ? "value" : "values"}.`;
+    case "found": {
+      if (c.count === 0) {
+        return `Found "${c.name}", but it has no terms yet. Add the terms before anyone uploads, ` +
+          "or the dropdown will be empty and block them.";
+      }
+      const found = `Found "${c.name}" — ${c.count} ${c.count === 1 ? "value" : "values"}.`;
+      /* ⚠ SAID, NOT REFUSED. A shared level offers the TOP level of its set and nothing below, so a
+         nested term contributes one option and hides its own children — the client's set had a term
+         with a child and the screen called it two clean values. But a set with depth is still
+         perfectly USABLE as a flat list, and refusing it would block a working configuration over a
+         term that may belong to some other consumer of the same set. Warn-and-allow, the same as an
+         empty set and an unreachable store.
+         `undefined` says nothing at all: the tenant may not report `childrenCount`, and "we could
+         not establish it" must not read as "there is none". */
+      if (c.nested === undefined || c.nested === 0) return found;
+      return (
+        `${found} ⚠ ${c.nested} of them ${c.nested === 1 ? "has" : "have"} terms nested underneath. ` +
+        "A shared level only ever offers the top level — like Year and Document Type — so those " +
+        "nested terms will never appear as folders. Flatten the set, or use it knowing only the top " +
+        "level is used."
+      );
+    }
     default:
       return "";
   }
@@ -225,7 +252,12 @@ function setCheckMessage(c: SetCheck): string {
 
 function setCheckStyle(c: SetCheck): React.CSSProperties {
   if (c.state === "notfound" || c.state === "malformed") return { color: "#a4262c" };
-  if (c.state === "unknown" || (c.state === "found" && c.count === 0)) return { color: "#7a4f00" };
+  if (
+    c.state === "unknown" ||
+    (c.state === "found" && (c.count === 0 || (c.nested ?? 0) > 0))
+  ) {
+    return { color: "#7a4f00" };
+  }
   if (c.state === "found") return { color: "#0f6c3f" };
   return {};
 }
@@ -548,7 +580,33 @@ export default function StructureManager({
     } catch {
       count = 0; // reported as "0 terms" below, which is a warning and not a block
     }
-    return { state: "found", name, count };
+
+    /* Is the set FLAT? A shared level shows `sets/{guid}/children` and nothing below it, so a term
+       with children of its own contributes exactly one option and hides the rest.
+
+       ⚠ ITS OWN REQUEST, AND ITS FAILURE CHANGES NOTHING. Folding `childrenCount` into the read
+       above would risk the whole `$select` being rejected on a tenant that does not expose it —
+       which would report a perfectly good set as having 0 terms, i.e. turn a missing warning into a
+       false one. Here a failure, or a tenant that omits the field, simply leaves `nested`
+       undefined and says nothing. */
+    let nested: number | undefined;
+    try {
+      const deep: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/v2.1/termStore/sets/${guid}/children?$select=id,childrenCount`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (deep.ok) {
+        const rows = (((await deep.json()).value ?? []) as Array<{ childrenCount?: number }>);
+        // Absent on every row means the tenant does not report it — unknown, not zero.
+        if (rows.filter((r) => typeof r.childrenCount === "number").length > 0) {
+          nested = rows.filter((r) => (r.childrenCount ?? 0) > 0).length;
+        }
+      }
+    } catch {
+      // Leave it undefined: nothing is said rather than something wrong being said.
+    }
+    return { state: "found", name, count, nested };
   };
 
   /**
