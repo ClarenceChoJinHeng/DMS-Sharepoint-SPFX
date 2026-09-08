@@ -1,4 +1,4 @@
-import { SCROLL_X, TABLE_MIN, WRAP_ROW, BREAK_LONG, FIT } from "../../../shared/responsive";
+import { SCROLL_X, TABLE_MIN, WRAP_ROW, BREAK_LONG } from "../../../shared/responsive";
 // My Submissions — what happened to the files I uploaded.
 //
 // Spec: docs/superpowers/specs/2026-08-14-my-submissions-design.md
@@ -142,9 +142,12 @@ const TABS = ["Submissions", "All", "Pending", "Approved", "Rejected", "Archive"
 const s: Record<string, React.CSSProperties> = {
   // Capped and centred like the other full-page screens, so a wide monitor does not stretch the
   // rows into unreadable ribbons.
-  /* FIT is the `maxWidth: 100%` + `border-box` ceiling. Without it the 1100 below is a floor
-     as well as a cap on any container narrower than 1100, and the whole page scrolls. */
-  wrap:     { fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px", ...FIT },
+  /* ⚠ NO `FIT` HERE, AND THE REASONING THAT PUT IT HERE WAS WRONG (2026-09-07).
+     A pixel `maxWidth` does NOT overflow a narrow container — `max-width` means "no wider
+     than", so this shell already fits a phone. What FIT would have added is
+     `boxSizing: border-box`, which moves the 24px padding INSIDE the 1100 cap and narrows
+     the content column by 48px ON A DESKTOP. A responsive pass must not do that. */
+  wrap:     { fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px" },
   headRow:  { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, ...WRAP_ROW },
   h2:       { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   headRefresh: {

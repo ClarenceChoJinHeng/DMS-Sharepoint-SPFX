@@ -1396,7 +1396,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             approval controls away from a real approver; the 403 at submit is still the backstop. */}
         {approveRight !== "denied" && (
         <div style={s.panel}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
             <span style={s.panelTitle}>Approval</span>
           </div>
           {/* ⚠ A DECIDED DOCUMENT GETS A READ-ONLY SUMMARY, NOT THE SAME FORM DISABLED (client's

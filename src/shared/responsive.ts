@@ -94,12 +94,16 @@ export const BREAK_LONG: CSSProperties = {
   wordBreak: "break-word",
 };
 
-/**
- * A page shell that never exceeds its container.
- *
- * ⚠ `maxWidth: "100%"` IS THE LOAD-BEARING HALF, not the padding. Several screens set a pixel
- * `maxWidth` for readability on a desktop, which is right — but with no `100%` ceiling beside it, a
- * container narrower than that number is overflowed rather than fitted, and the whole SharePoint
- * page scrolls sideways.
- */
-export const FIT: CSSProperties = { maxWidth: "100%", boxSizing: "border-box" };
+/* ⚠ THERE IS DELIBERATELY NO `FIT` / PAGE-SHELL HELPER HERE, AND IT WAS TRIED AND REMOVED THE
+   SAME DAY (2026-09-07). It was `{ maxWidth: "100%", boxSizing: "border-box" }`, on the theory
+   that a pixel `maxWidth` on a page shell overflows a narrow container.
+
+   THAT THEORY IS WRONG. `max-width` means "no wider than", so a shell capped at 1100px already
+   fits a phone — there was nothing to fix. What the helper DID do was add
+   `box-sizing: border-box`, which moves a shell's horizontal padding INSIDE the cap and so
+   narrows its content column ON A DESKTOP: 1100 + 2x24 becomes 1100 total, 1052 of content.
+
+   A responsive pass must not move a desktop layout. Deleted rather than parked, because an
+   exported const nobody uses is one lint cannot flag and something eventually imports again —
+   the same reasoning that fully removed `inviteToGroup` from `spGroups.ts` rather than
+   leaving it dormant. */
