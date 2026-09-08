@@ -6,6 +6,7 @@ import {
   decideTier,
   effectiveOnDemandTiers,
   allowedTierPositions,
+  canMoveBelowUnitTier,
   clampTierPosition,
   perUnitTierExists,
   isFixedBelowUnitTier,
@@ -616,6 +617,63 @@ describe("clampTierPosition", () => {
     for (const bad of [-5, 99, NaN, 1.7]) {
       const p = clampTierPosition(gho, true, bad);
       expect(allowedTierPositions(gho, true).indexOf(p)).not.toBe(-1);
+    }
+  });
+});
+
+describe("canMoveBelowUnitTier", () => {
+  const perUnit = (label: string): Level => ({ label, column: label, permissioned: false });
+  const shared = (label: string): Level => ({
+    label, column: label, permissioned: false, termSet: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
+  });
+  const dept: Level = { label: "Department", column: "Department" };
+  const unitLvl: Level = { label: "Unit", column: "Unit" };
+  // MHO after the 2026-09-08 migration: Sub Unit, then the two fixed tiers.
+  const chain = [dept, unitLvl, perUnit("Sub Unit"), shared("Year"), shared("Document Type")];
+  const SUB = 2, YEAR = 3, DOCTYPE = 4;
+
+  /* ⚠ THE REPORTED BUG: "I can move subunit below year, that is not suppose to happen." The move was
+     bounded to the below-Unit region and nothing more, so it succeeded and the SAVE refused it — two
+     screens after the chain preview had already shown the broken shape. */
+  it("refuses to move a per-unit tier below a shared-list one", () => {
+    expect(canMoveBelowUnitTier(chain, SUB, 1)).toBe(false);
+  });
+
+  it("refuses to move a shared-list tier above a per-unit one", () => {
+    expect(canMoveBelowUnitTier(chain, YEAR, -1)).toBe(false);
+  });
+
+  it("allows a swap between two shared-list tiers", () => {
+    expect(canMoveBelowUnitTier(chain, YEAR, 1)).toBe(true);
+    expect(canMoveBelowUnitTier(chain, DOCTYPE, -1)).toBe(true);
+  });
+
+  /* The permissioned prefix carries folder ACLs and is rendered locked; reordering one would ask
+     reconciliation to walk a tree that does not exist. */
+  it("refuses to move anything in the permissioned prefix", () => {
+    expect(canMoveBelowUnitTier(chain, 0, 1)).toBe(false);
+    expect(canMoveBelowUnitTier(chain, 1, 1)).toBe(false);
+  });
+
+  it("refuses a move that would leave the below-Unit region", () => {
+    expect(canMoveBelowUnitTier(chain, SUB, -1)).toBe(false);
+    expect(canMoveBelowUnitTier(chain, DOCTYPE, 1)).toBe(false);
+  });
+
+  /* ⚠ THE AGREEMENT THAT MATTERS: every move it ALLOWS must produce a chain the save accepts, and
+     every move it refuses inside the region must be one the save would have refused. Two answers to
+     "which swaps are legal" is how the buttons and the save come to disagree. */
+  it("agrees with validateChain on every move within the region", () => {
+    for (let i = 2; i < chain.length; i++) {
+      for (const d of [-1, 1]) {
+        const to = i + d;
+        if (to < 2 || to >= chain.length) continue;
+        const next = chain.slice();
+        const item = next[i];
+        next.splice(i, 1);
+        next.splice(to, 0, item);
+        expect(canMoveBelowUnitTier(chain, i, d)).toBe(validateChain(next) === undefined);
+      }
     }
   });
 });

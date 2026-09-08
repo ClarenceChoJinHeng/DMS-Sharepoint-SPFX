@@ -4,8 +4,8 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD, sanitizeFolderSegment } from "../../../shared/formModel";
 import {
-  allowedTierPositions, builtInTierFor, clampTierPosition, effectiveOnDemandTiers,
-  isFixedBelowUnitTier, perUnitTierExists, splitChain, validateChain,
+  allowedTierPositions, builtInTierFor, canMoveBelowUnitTier, clampTierPosition,
+  effectiveOnDemandTiers, isFixedBelowUnitTier, perUnitTierExists, splitChain, validateChain,
 } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
 import { allLibraryTitles, cachedHcLibraries, cachedListTitle, documentsLibraryTitle, libraryTitle, libraryUrlSegment, LIST_SUFFIX } from "../../../shared/naming";
@@ -290,6 +290,9 @@ const s: Record<string, React.CSSProperties> = {
      dropdown), so re-check this if a scroller is ever added here. */
   labelRow:  { display: "flex", alignItems: "center", gap: 5, marginTop: 14 },
   infoWrap:  { position: "relative", display: "inline-flex", alignItems: "center" },
+  /* Sits on the label row, so it reads as help for THAT field rather than as a page-level action —
+     the term set ID is the one value on this form that has to be fetched from somewhere else. */
+  labelLink: { fontSize: 12, fontWeight: 400, marginLeft: "auto" },
   infoBtn:   { display: "inline-flex", background: "none", border: "none", padding: 0, cursor: "pointer", lineHeight: 1, color: "#605e5c" },
   infoPanel: { position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 30, width: 300, maxWidth: "80vw", padding: 14, background: "#fff", border: "1px solid #e1e1e1", borderRadius: 10, boxShadow: "0 4px 16px rgba(0,0,0,.12)", fontSize: 12.5, lineHeight: 1.55, color: "#323130", fontWeight: 400, textAlign: "left" },
   btn:       { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
@@ -919,6 +922,10 @@ export default function StructureManager({
 
   /** Move a below-Unit level. Bounded to the below-Unit region — the prefix cannot move. */
   const moveTier = (index: number, delta: number): void => {
+    /* ⚠ THE SAME CHECK THE BUTTON MAKES, and not merely belt-and-braces: a disabled attribute is a
+       rendering, and this handler is the thing that actually mutates the chain. Guarding only the
+       button would leave the one path that can produce the broken chain unguarded. */
+    if (!canMoveBelowUnitTier(draft, index, delta)) return;
     const first = permissionedCount(draft);
     const to = index + delta;
     if (to < first || to >= draft.length) return;
@@ -1312,7 +1319,11 @@ export default function StructureManager({
               <span style={{ flex: "0 0 auto" }}>
                 <button
                   style={s.iconBtn}
-                  disabled={fixed || k === 0}
+                  /* ⚠ ALSO REFUSED WHEN THE MOVE WOULD BREAK THE CHAIN, not only at the ends. A
+                     shared-list tier moved UP above a per-unit one is the `per-unit-not-contiguous`
+                     shape that made every unit in Buah unreadable — the save refuses it, but only
+                     after the move has visibly happened. */
+                  disabled={fixed || k === 0 || !canMoveBelowUnitTier(draft, i, -1)}
                   onClick={() => moveTier(i, -1)}
                   title={fixed ? "Year and Document Type stay where they are." : "Move up"}
                 >
@@ -1320,7 +1331,8 @@ export default function StructureManager({
                 </button>
                 <button
                   style={s.iconBtn}
-                  disabled={fixed || k === onDemand.length - 1}
+                  // The mirror: a PER-UNIT tier moved DOWN past a shared-list one breaks the same rule.
+                  disabled={fixed || k === onDemand.length - 1 || !canMoveBelowUnitTier(draft, i, 1)}
                   onClick={() => moveTier(i, 1)}
                   title={fixed ? "Year and Document Type stay where they are." : "Move down"}
                 >
@@ -1487,7 +1499,26 @@ export default function StructureManager({
                 `columnNameFor` is still what CREATES the column — only the preview is gone. */}
             {!adding.fromUnit && (
               <>
-                <label style={s.label} htmlFor="sm-set">Term set ID</label>
+                <span style={s.labelRow}>
+                  <label style={{ ...s.label, marginTop: 0 }} htmlFor="sm-set">Term set ID</label>
+                  {/* ⚠ THE CLASSIC, SITE-LEVEL PAGE — fourth mount point, same URL, same reason. The
+                      MODERN term store (`/_layouts/15/SiteAdmin.aspx#/termStoreAdminCenter`) is the
+                      TENANT admin centre and answers "Access denied" to a site collection
+                      administrator; the client hit that wall themselves on 2026-08-30. Built from
+                      `siteUrl`, never hardcoded.
+
+                      New tab, which matters here: this screen holds an unsaved-changes guard, so a
+                      same-tab jump would either prompt or lose the half-filled Add form — and the
+                      admin is going there precisely to fetch a value to paste back into it. */}
+                  <a
+                    style={s.labelLink}
+                    href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open the Term Store
+                  </a>
+                </span>
                 <input
                   id="sm-set"
                   style={s.input}

@@ -498,3 +498,36 @@ export function clampTierPosition(onDemand: Level[], fromUnit: boolean, position
   if (!Number.isFinite(position)) return first;
   return Math.min(Math.max(Math.floor(position), first), last);
 }
+
+/**
+ * May this below-Unit tier move by `delta` without producing a chain nothing will accept?
+ *
+ * ⚠ IT ASKS `validateChain` ABOUT THE PROSPECTIVE CHAIN rather than re-deriving a rule. A second
+ * expression of "which swaps are legal" would be free to drift from the one the save and the upload
+ * both consult, and the drifting copy would be the one the buttons obey.
+ *
+ * ⚠ WHY THE BUTTONS NEED IT AT ALL: bounding the move to the below-Unit region is not enough. A
+ * per-unit tier moved DOWN past a shared-list one — or a shared-list tier moved UP above a per-unit
+ * one — is exactly the `per-unit-not-contiguous` shape that made every unit in Buah unreadable. The
+ * save refuses it, but only at Save: the move succeeded, the chain preview showed the broken shape,
+ * and the admin was told two screens later to undo something the screen had just let them do
+ * (reported 2026-09-08: *"Wait the minute, I can move subunit below year, that is not suppose to
+ * happen"*). Same reasoning as the Add positions — refuse the move rather than the result.
+ *
+ * Refuses on ANY validation error, not just the per-unit one. A below-Unit move cannot create a
+ * duplicate column or break the permissioned prefix today, so that is insurance rather than
+ * behaviour — but a move that makes the chain unsavable should never be offered, whatever the reason.
+ */
+export function canMoveBelowUnitTier(chain: Level[], index: number, delta: number): boolean {
+  const levels = chain ?? [];
+  const first = splitChain(levels).permissioned.length;
+  const to = index + delta;
+  // The permissioned prefix cannot move, and neither can anything past the end.
+  if (index < first || index >= levels.length) return false;
+  if (to < first || to >= levels.length) return false;
+  const next = levels.slice();
+  const item = next[index];
+  next.splice(index, 1);
+  next.splice(to, 0, item);
+  return validateChain(next) === undefined;
+}
