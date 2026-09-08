@@ -11575,3 +11575,41 @@ lock box is gone. 1.0.497.0 working.
     Raised with the client rather than discovered.
 - **⚠ `FolderAdmin.tsx` IS NOW 2051 LINES, over the 2000 ceiling — a NEW warning, 39 → 40.** Sixth file
   in the project to exceed it. Disclosed rather than suppressed.
+
+## THE MIGRATION'S TIER VALUE IS CHOSEN PER LIBRARY NOW, NOT PER UNIT (2026-09-09, 1.0.499.0)
+Client: *"This time I want to have a dropdown for each library, this should make it easier for them
+and give them more flexibility?"*, then — shown a per-unit default with per-library overrides —
+*"Since you going to put for all units you might as well remove this [default]."*
+- **⚠ IT REVERSES `crs-migration-per-folder-tier-choice-deferred`, WHICH SAID "per-unit default +
+  per-folder override, NEVER per-folder only".** That warning was about the ANSWER COUNT: on this
+  scan 12 units became up to 72 (unit, library) pairs, and a full MHO run is 49 units. **Raised with
+  the client, who chose one control per library anyway** — their reasoning being that two controls
+  governing the same folders means two places to look and an inheritance rule to explain. Their call,
+  recorded so nobody "restores" the default as a fix.
+- **REMOVING THE DEFAULT MADE THE CHANGE SMALLER AND SAFER, which is the one clear win.** With no
+  inheritance there is no third state: each dropdown is `Destination | undefined` exactly as before,
+  so no sentinel, no resolver, no new pure rule. `dest` is simply keyed differently.
+- **⚠⚠ ONE `destKey(row)`, BECAUSE DESTINATIONS ARE DERIVED IN TWO INDEPENDENT PLACES.** `plansFor`
+  drives the display AND the move; `finishPending` re-scans afresh to decide whether the chain goes
+  LIVE. Had only the first learned the new key, a migration would have moved every folder correctly
+  and then **refused to switch the new shape on**, because the re-scan would judge them misplaced.
+  Both call it. That was the whole risk of this change.
+- **⚠ THE KEY IS `${lib.key}|${tail}` — LIBRARY FIRST.** A tail is a folder path and can contain
+  almost anything a folder name can, so leading with it makes the split ambiguous; with the key
+  first, everything before the first `|` IS the key, and `|` is illegal in a SharePoint folder name.
+  - **⚠ THE FIRST VERSION USED A NUL CHARACTER AS THE SEPARATOR.** It compiled, `tsc` was clean, and
+    it would have worked — and a **NUL byte in a source file makes `grep` report "binary file
+    matches" for everyone afterwards**, which is how it was found. Never worth the cleverness.
+- **The count and the option list are read from THIS row, not `group.rows[0]`.** Options could in
+  principle differ per library, and reading the first row's would quietly offer one library's values
+  for another's folders.
+- **⚠ THE DROPDOWNS NOW SIT INSIDE `s.scroller`, WHICH THAT STYLE'S OWN COMMENT WARNS AGAINST.** That
+  rule — controls stay outside the box so they cannot scroll away from the folders they govern — was
+  written for ONE control governing every library. A per-library control sits directly above its own
+  folders and scrolls WITH them, so *"needs a value chosen above"* stays true and adjacent. A native
+  `<select>` is unaffected by a scroll cap either way; the browser draws its list outside the DOM flow.
+- **⚠ AND A HINT IN `FolderAdmin` TOLD THE ADMIN TO USE AN OPTION THAT NO LONGER EXISTED** — *"set it
+  to **Leave this unit alone**"*. Third instance of the dead-advice defect (after the two
+  "use the list of steps" hatches). **Found by grepping the SHIPPED BUNDLE for the old string, not by
+  the compiler** — the option label is a string, so nothing type-checks the sentence that names it.
+  **After renaming any user-facing option, grep every bundle for the old label.**

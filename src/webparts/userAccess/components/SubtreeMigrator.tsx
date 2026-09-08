@@ -913,9 +913,27 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
 
   /* ---------- Plan ------------------------------------------------------- */
 
+  /**
+   * The `dest` key for one library's copy of one unit.
+   *
+   * ⚠⚠ ONE DEFINITION, AND THAT IS THE WHOLE SAFETY OF THIS CHANGE. Destinations are derived in TWO
+   * independent places — `plansFor`, which drives the display AND the move, and `finishPending`, the
+   * fresh re-scan that decides whether the chain goes LIVE. If those two ever disagree about the key,
+   * a migration moves every folder correctly and then REFUSES to switch the new shape on, because the
+   * re-scan judges them misplaced. Both must call this.
+   *
+   * ⚠ THE LIBRARY KEY GOES FIRST, and the separator is `|`. A tail is a folder path and can
+   * contain almost anything a folder name can, so putting it first would make the split ambiguous;
+   * with the library key leading, everything before the first `|` IS the key, and `|` is illegal in
+   * a SharePoint folder name so it cannot appear in either half.
+   * (The first version used a NUL character as the separator. It compiled and even worked, but a NUL
+   * byte in a source file breaks grep and diffs for everyone afterwards - not worth the cleverness.)
+   */
+  const destKey = (row: UnitScan): string => `${row.lib.key}|${row.tail}`;
+
   const plansFor = (row: UnitScan): LeafPlan[] => {
     if (row.unresolved) return [];
-    const chosenDest = dest[row.tail] ?? {};
+    const chosenDest = dest[destKey(row)] ?? {};
     return row.leaves.map((leaf) =>
       planLeaf(row.unitPath, leaf, row.tiers, chosenDest, row.removedOptions),
     );
@@ -1018,12 +1036,17 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     return "";
   };
 
-  const setDestination = (tail: string, chainIndex: number, value: Destination | undefined): void => {
+  /* Keyed per LIBRARY since 2026-09-09 (client: *"Since you going to put for all units you might as
+     well remove this ... default for all six"*). A unit-level default was designed first and removed
+     on their instruction: with a dropdown per library, a second control governing the same folders
+     means two places to look and an inheritance rule to explain. One control, one meaning — at the
+     cost of one answer per library where they agree. */
+  const setDestination = (key: string, chainIndex: number, value: Destination | undefined): void => {
     setDest((prev) => {
-      const next: Record<number, Destination | undefined> = { ...(prev[tail] ?? {}) };
+      const next: Record<number, Destination | undefined> = { ...(prev[key] ?? {}) };
       if (value) next[chainIndex] = value;
       else delete next[chainIndex];
-      return { ...prev, [tail]: next };
+      return { ...prev, [key]: next };
     });
   };
 
@@ -1221,7 +1244,9 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
           outstanding++;
           continue;
         }
-        const chosenDest = dest[row.tail] ?? {};
+        // ⚠ THE SECOND DERIVATION — see `destKey`. Reading a different key here would refuse to
+        // activate a chain whose folders had all been moved correctly.
+        const chosenDest = dest[destKey(row)] ?? {};
         for (const leaf of row.leaves) {
           const p = planLeaf(row.unitPath, leaf, row.tiers, chosenDest, row.removedOptions);
           if (p.strays.length > 0) strays++;
@@ -1736,74 +1761,41 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
           </p>
 
           {groups.map((group) => {
-            const first = group.rows[0];
-            const chosenDest = dest[group.tail] ?? {};
-            // Counted, not just collected: a picker labelled only "Credit_Card for this unit" looks
-            // like it is about to overwrite the folders that already have one. Saying how many
-            // folders are actually missing it makes clear it only fills the gaps.
-            const missingCount: Record<number, number> = {};
-            for (const row of group.rows) {
-              for (const p of plansFor(row)) {
-                for (const t of p.missingTiers) missingCount[t] = (missingCount[t] ?? 0) + 1;
-              }
-            }
-            // ⚠ TIERS ALREADY CHOSEN STAY IN THIS LIST, and leaving them out was a live bug (client,
-            // 2026-08-19: *"the moment I select Archive 1 I cannot select Archive 2 no more. I have to
-            // go back and come back"*). `missingCount` counts folders with NO value — so choosing one
-            // resolves every plan, empties the map, and the `<select>` unmounts with it. The control
-            // that sets a value disappeared the instant it was used, and the only way to change your
-            // mind was to re-scan. A chosen tier is exactly the one an admin is most likely to want to
-            // revisit, so it must keep its dropdown.
-            const chosenTiers = Object.keys(chosenDest)
-              .map((k) => Number(k))
-              .filter((k) => chosenDest[k] !== undefined);
-            const needed = Object.keys(missingCount)
-              .map((k) => Number(k))
-              .concat(chosenTiers)
-              .filter((k, i, all) => all.indexOf(k) === i)
-              .sort((a, b) => a - b);
             return (
               <div key={group.tail} style={s.card}>
                 <div style={s.unitName}>{group.tail}</div>
 
-                {needed.map((chainIndex) => {
-                  const level = belowForSeg[chainIndex];
-                  const opts = first.optionsByTier[chainIndex] ?? [];
-                  return (
-                    <div key={chainIndex}>
-                      <label style={s.label} htmlFor={`mig-d-${group.tail}-${chainIndex}`}>
-                        {level ? level.label : `Level ${chainIndex + 1}`}
-                        {missingCount[chainIndex]
-                          ? ` — for the ${missingCount[chainIndex]} folder(s) below that have no value for it`
-                          /* Every folder now has a value, so the count would read "0 folder(s)". Say
-                             what the control now does — it is still live, and changing it re-plans. */
-                          : " — chosen; change it to re-plan the folders below"}
-                      </label>
-                      <select
-                        id={`mig-d-${group.tail}-${chainIndex}`}
-                        style={s.input}
-                        disabled={running}
-                        value={chosenDest[chainIndex] ? (chosenDest[chainIndex] as Destination).id : ""}
-                        onChange={(e) => {
-                          const picked = opts.filter((o) => o.id === e.target.value)[0];
-                          setDestination(
-                            group.tail,
-                            chainIndex,
-                            picked ? { label: picked.label, id: picked.id } : undefined,
-                          );
-                        }}
-                      >
-                        <option value="">Leave this unit alone</option>
-                        {opts.map((o) => (
-                          <option key={o.id} value={o.id}>{o.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                  );
-                })}
-
                 <div style={s.scroller}>
-                {group.rows.map((row) => (
+                {group.rows.map((row) => {
+                  /* PER LIBRARY SINCE 2026-09-09, and the unit-level default that used to sit above
+                     this whole block is GONE on the client's instruction. Both the count and the
+                     option list are read from THIS row rather than from `group.rows[0]`: options
+                     could in principle differ per library, and reading the first row's would quietly
+                     offer one library's values for another's folders. */
+                  const key = destKey(row);
+                  const chosenDest = dest[key] ?? {};
+                  // Counted, not just collected: a picker labelled only "Credit_Card" looks like it is
+                  // about to overwrite folders that already have a value. Saying how many folders are
+                  // actually missing it makes clear it only fills the gaps.
+                  const missingCount: Record<number, number> = {};
+                  for (const p of plansFor(row)) {
+                    for (const t of p.missingTiers) missingCount[t] = (missingCount[t] ?? 0) + 1;
+                  }
+                  /* TIERS ALREADY CHOSEN STAY IN THIS LIST, and leaving them out was a live bug
+                     (client, 2026-08-19: *"the moment I select Archive 1 I cannot select Archive 2 no
+                     more. I have to go back and come back"*). `missingCount` counts folders with NO
+                     value, so choosing one resolves every plan, empties the map, and the select
+                     unmounts with it. The control that sets a value disappeared the instant it was
+                     used, and the only way to change your mind was to re-scan. */
+                  const chosenTiers = Object.keys(chosenDest)
+                    .map((k) => Number(k))
+                    .filter((k) => chosenDest[k] !== undefined);
+                  const needed = Object.keys(missingCount)
+                    .map((k) => Number(k))
+                    .concat(chosenTiers)
+                    .filter((k, i, all) => all.indexOf(k) === i)
+                    .sort((a, b) => a - b);
+                  return (
                   <div key={row.lib.key + row.unitPath} style={{ marginTop: 10 }}>
                     <div style={s.libName}>
                       {row.lib.title}
@@ -1813,6 +1805,50 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                         </span>
                       )}
                     </div>
+                    {/* INSIDE `s.scroller`, WHICH THAT STYLE'S OWN COMMENT WARNS AGAINST - it says the
+                        tier dropdowns stay OUTSIDE the box so the control cannot scroll away from the
+                        folders it governs. That reasoning applied to ONE control governing every
+                        library; a per-library control sits directly above its own folders and scrolls
+                        WITH them, so "needs a value chosen above" stays true and adjacent. A native
+                        select is unaffected by the cap either way - the browser draws its list
+                        outside the DOM flow. */}
+                    {needed.map((chainIndex) => {
+                      const level = belowForSeg[chainIndex];
+                      const opts = row.optionsByTier[chainIndex] ?? [];
+                      return (
+                        <div key={chainIndex} style={{ marginTop: 6 }}>
+                          <label style={s.label} htmlFor={`mig-d-${key}-${chainIndex}`}>
+                            {level ? level.label : `Level ${chainIndex + 1}`}
+                            {missingCount[chainIndex]
+                              ? ` — for the ${missingCount[chainIndex]} folder(s) below that have no value for it`
+                              /* Every folder in THIS library now has a value, so the count would read
+                                 "0 folder(s)". Say what the control now does - it is still live, and
+                                 changing it re-plans this library's folders. */
+                              : " — chosen; change it to re-plan the folders below"}
+                          </label>
+                          <select
+                            id={`mig-d-${key}-${chainIndex}`}
+                            style={s.input}
+                            disabled={running}
+                            value={chosenDest[chainIndex] ? (chosenDest[chainIndex] as Destination).id : ""}
+                            onChange={(e) => {
+                              const picked = opts.filter((o) => o.id === e.target.value)[0];
+                              setDestination(
+                                key,
+                                chainIndex,
+                                picked ? { label: picked.label, id: picked.id } : undefined,
+                              );
+                            }}
+                          >
+                            {/* "this library", not "this unit": the choice no longer reaches the others. */}
+                            <option value="">Leave this library alone</option>
+                            {opts.map((o) => (
+                              <option key={o.id} value={o.id}>{o.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
                     {/* ⚠ EVERY LINE HERE IS A FOLDER, NOT A FILE, and the client read them as files
                         (2026-08-19: *"IT shows two files from GHO Approval Document but I only see
                         one"*). Two things caused that: the count was appended only when non-zero, so
@@ -1870,7 +1906,8 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                       );
                     })}
                   </div>
-                ))}
+                  );
+                })}
                 </div>
               </div>
             );
