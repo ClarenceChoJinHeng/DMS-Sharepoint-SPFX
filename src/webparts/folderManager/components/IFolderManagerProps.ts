@@ -105,6 +105,14 @@ export interface IFolderManagerProps {
    */
   onMigratePendingChange?: (pending: boolean) => void;
   /**
+   * The staged chain has been switched on.
+   *
+   * ⚠ The guided flow's `migrate` gate reads `pendingLevels` off a segment list read earlier, so
+   * without this it would hold Next for ever after a successful migration. Mirrors
+   * `onStructureSaved`: the host re-reads the list that owns the fact.
+   */
+  onMigrateApplied?: () => void;
+  /**
    * Pre-selects the migration screen's segment picker, so a flow that already asked does not ask
    * again. Client, 2026-08-20: *"After selecting I got to select again which is weird."*
    * Matches on the mode row's `Title`, the key BOTH screens build their options from.

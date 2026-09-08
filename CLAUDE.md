@@ -11486,3 +11486,39 @@ disabled, and **Next green**.
 - **⚠ THE COUNT COULD NOT MOVE TO WHERE `needingChoice` IS ALREADY COMPUTED**, because that sits below
   two early returns (`loading`, `loadError`) and a hook may not follow them. Computed beside
   `pendingNow` instead.
+
+## NEXT NOW WAITS FOR THE MIGRATION ITSELF, NOT JUST FOR IT TO FINISH RUNNING (2026-09-09, 1.0.497.0)
+Client, on step 3 with the scan **not** running: *"Umm still the same"*. The screenshot showed the
+button back at its idle label, so it did not exercise the 1.0.496.0 padlock at all — it showed a
+THIRD, separate hole: **Next was open on the migrate step before the migration had been run at all**,
+on a segment plainly reading `CHANGE PENDING`.
+- **⚠ THREE HOLES IN ONE BUTTON, AND EACH NEEDED ITS OWN GATE.** *Running* (1.0.496.0's padlock),
+  *scanned but not planned* (1.0.496.0's `choiceNow`), and now *never started*. Fixing the first two
+  left the widest one open, because they both key on the SCAN and this one is about the STEP.
+  **When a step can be skipped, enumerate the states it can be skipped FROM.**
+- **THE GATE IS `pendingLevels === true`**, which is exactly *"a staged change exists and only this
+  step applies it"*. Walking past leaves the segment half-changed and **step 5 turns uploads back on
+  over it** — the three-day GHO loop.
+- **⚠ ANSWERED IN `blocksNext`, NOT THROUGH `stepState`, AND THE REASON IS THAT THEY ARE INVERSES.**
+  `stepState` reports this step **`done`** when a change is pending — right for the rail, where the
+  fact means *"this step has something to do"* — and gating on `todo` would therefore have held Next
+  precisely when there was nothing to apply.
+- **⚠ `=== true` ONLY.** `PendingLevels` is created ON DEMAND, so on a site where nothing has ever
+  staged a change the column does not exist and the fact is `undefined`. Gating on unknown would
+  strand every admin in this flow — the same rule that has applied since the fact was introduced.
+- **⚠ IT NEEDED A REFRESH SIGNAL OR IT WOULD NEVER RELEASE.** The fact comes from a segment list the
+  host read earlier, and applying the chain does not change that copy — so Next would have stayed
+  held after a *successful* migration until the admin navigated away and back. `onApplied` ->
+  `onMigrateApplied` -> `setReload` re-reads the list that OWNS the fact. **Sixth instance of "a
+  screen that reads once lies about anything changed beside it"**, and the second in this one flow
+  after `onStructureSaved`.
+  - **Hooked inside `activatePending`, which is the ONLY writer that clears `PendingLevels`** — both
+    routes (the end of a Rebuild, and the standalone Apply button) come through it. Reporting from the
+    two callers would have been two chances to forget one.
+- **⚠ THE EXHAUSTIVE SWEEP CANNOT COVER A GATE THAT FIRES ON `true`.** It walks every step with every
+  fact **false**, and `pendingLevels: false` means *applied*, which correctly gates nothing — so the
+  sweep passed unchanged and guarded nothing. Three explicit tests now pin it: it fires on `true`,
+  never on `false` or `undefined`, and **leaks into no other step** (the fact is read once per flow,
+  so every step sees it — the same pin `subjectGiven` needed).
+- **Two existing test comments went stale in the same change** and were corrected rather than left:
+  both described `migrate` as *"a step with no gate of its own"*.

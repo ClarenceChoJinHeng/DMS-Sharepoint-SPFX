@@ -513,6 +513,14 @@ const NEXT_GATED_STEPS: Record<string, string> = {
   abbreviations:
     "Some terms still have no folder code. Reconciliation skips those silently and creates no folder " +
     "for them, so finish here first.",
+  /* ⚠ THE STEP THE WHOLE FLOW EXISTS FOR, and Next walked straight past it (client, 2026-09-09).
+     A staged change is applied by THIS step and nothing else, so leaving it with `PendingLevels`
+     still set leaves the segment half-changed — and step 5 then turns uploads back on over it,
+     which is exactly the loop that cost three days on GHO. */
+  migrate:
+    "The structure change has not been applied yet. Run the check, move what it finds, and this " +
+    "step switches the new shape on when it finishes — walking past now leaves uploads filing " +
+    "into the old shape.",
   /* ⚠ ADDED 2026-09-07, AFTER THIS EXACT STEP WAS SKIPPED ON A LIVE SITE AND COST THREE DAYS.
      GHO's structure change was staged on 2026-09-04; the migration was started at 16:36 and a file
      arrived at 16:37 — one minute in, into a folder the scan had already walked past. Four people went
@@ -589,6 +597,13 @@ export function blocksNext(step: FlowStep, facts: FlowFacts): string {
      `firstIncompleteStep`, which decides where a flow OPENS — teaching it that reconcile is "todo"
      until a run happens would open four of the five flows on their last step. */
   if (step.id === "reconcile") return f.reconcileRan === false ? reason : "";
+  /* ⚠ `=== true` ONLY. `undefined` means the `PendingLevels` column is absent or the read failed,
+     and unknown never gates — on a site where nothing has ever staged a change that column does not
+     exist, and gating on it would strand every admin in this flow. `false` means the change has
+     been applied (or there was none), which is precisely when Next should open.
+     Answered here rather than through `stepState`, which reports this step `done` when a change is
+     PENDING — right for the rail, and the exact inverse of what the gate needs. */
+  if (step.id === "migrate") return f.pendingLevels === true ? reason : "";
   if (step.id === "abbreviations" && f.abbreviationsLoading === true) {
     return "Still reading the term store — the codes are being checked. This clears on its own.";
   }

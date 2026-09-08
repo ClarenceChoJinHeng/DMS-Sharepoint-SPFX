@@ -1541,6 +1541,11 @@ export default function FolderAdmin({
             }}
             // Gates NEXT only, like unsaved level edits — not the rail, because Back must stay open.
             onMigratePendingChange={setMigratePending}
+            /* ⚠ RE-READS THE SEGMENT LIST, the ONE definition of `pendingLevels` — the fact the new
+               `migrate` gate reads. The cheap-facts effect only COPIES it, so bumping `reload` is
+               what makes Next open the moment the migration switches the new shape on. Same reason
+               and same shape as `onStructureSaved` above. */
+            onMigrateApplied={() => setReload((n) => n + 1)}
             // The flow already asked which segment, and prints it in the header — so the migration
             // screen must not ask a second time. Same principle as `stepUsesSegment`: if the flow
             // knows, it does not ask.

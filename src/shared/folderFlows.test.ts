@@ -31,6 +31,36 @@ function step(flowId: string, stepId: string): FlowStep {
   return s;
 }
 
+/* ⚠ Reported by the client 2026-09-09: Next was live on the migrate step BEFORE the migration had
+   been run at all, on a segment plainly reading CHANGE PENDING. This step is the only thing that
+   applies a staged chain, and step 5 turns uploads back on — which is the loop that cost three days
+   on GHO.
+   ⚠ THE EXHAUSTIVE SWEEP CANNOT COVER THIS ONE. It walks every step with every fact FALSE, and
+   `pendingLevels: false` means "applied", which correctly gates nothing. A gate that fires on TRUE
+   needs its own test or nothing guards it. */
+describe("the migrate step holds Next while a change is still staged", () => {
+  const migrate = step("structure", "migrate");
+
+  it("gates while a change is staged, and releases once it is applied", () => {
+    expect(blocksNext(migrate, { pendingLevels: true })).toContain("has not been applied yet");
+    expect(blocksNext(migrate, { pendingLevels: false })).toBe("");
+  });
+
+  it("never gates on an unknown answer", () => {
+    // The PendingLevels column does not exist on a site where nothing has ever staged a change,
+    // and gating on a read that failed would strand every admin in this flow.
+    expect(blocksNext(migrate, {})).toBe("");
+    expect(blocksNext(migrate, { pendingLevels: undefined })).toBe("");
+  });
+
+  it("gates no other step, since the fact is read once for the whole flow", () => {
+    for (const s of flow("structure").steps) {
+      if (s.id === "migrate") continue;
+      expect(blocksNext(s, { pendingLevels: true })).not.toContain("has not been applied yet");
+    }
+  });
+});
+
 describe("the flows", () => {
   /**
    * `runRecon` was added 2026-08-20 when "All tools" left the picker: reconciliation was the only
@@ -502,7 +532,8 @@ describe("blocksNext", () => {
        sits immediately before `resumeUploads`; if this gate reached that step too, a segment whose
        reconciliation would not complete could never have its uploads switched back on. */
     it("does not hold any other step in the structure flow", () => {
-      // The two steps with no gate of their own: anything here can only come from the reconcile gate.
+      /* `levels` has no gate of its own, and `migrate`'s reads `pendingLevels`, which is unknown
+         here — so anything either returns could only have come from the reconcile gate. */
       for (const id of ["levels", "migrate"]) {
         expect(blocksNext(step("structure", id), { reconcileRan: false })).toBe("");
       }
@@ -846,7 +877,8 @@ describe("the rail cannot walk past a blocked step", () => {
      At the END of the flow the admin turns uploads back ON — the correct final state — which makes
      step 1 block again. Stepping BACK from there narrows the rail to where they now stand, so
      already-walked steps ahead grey out. They are NOT trapped: Next still advances, because levels,
-     migrate and reconcile are not themselves gated. Widening this restores the bypass above. */
+     neither `levels` nor `migrate` is gated by `uploadsPaused`. Widening this restores the bypass
+     above. (`migrate` has had a gate of its own since 2026-09-09, but it reads `pendingLevels`.) */
   it("greys already-walked steps ahead once uploads are back on and the admin steps back", () => {
     const firstBlocked = firstBlockedStepIndex(steps, { uploadsPaused: false });
     const at = { maxIdx: RESUME, idx: LEVELS, firstBlocked };

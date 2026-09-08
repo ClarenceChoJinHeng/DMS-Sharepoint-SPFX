@@ -1270,6 +1270,7 @@ export default function FolderManager({
   onReconRunningChange,
   onMigrateRunningChange,
   onMigratePendingChange,
+  onMigrateApplied,
   migrateInitialSegmentKey,
   migrateUploadsPaused,
   abbreviationsInitialSegmentKey,
@@ -7993,6 +7994,7 @@ export default function FolderManager({
           siteUrl={siteUrl}
           onRunningChange={onMigrateRunningChange}
           onPendingChange={onMigratePendingChange}
+          onApplied={onMigrateApplied}
           initialSegmentKey={migrateInitialSegmentKey}
           uploadsPaused={migrateUploadsPaused}
         />

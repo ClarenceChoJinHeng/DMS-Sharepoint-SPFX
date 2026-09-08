@@ -251,6 +251,15 @@ export interface SubtreeMigratorProps {
    */
   onRunningChange?: (running: boolean) => void;
   /**
+   * Called once the staged chain has actually been switched on.
+   *
+   * ⚠ WITHOUT THIS THE NEW `migrate` GATE WOULD NEVER RELEASE. It reads `pendingLevels`, which comes
+   * from a segment list the host read earlier — applying the chain here does not change that copy,
+   * so Next would stay held until the admin navigated away and back. Same shape and same reason as
+   * `onSaved` on the levels screen: the host re-reads the list that OWNS the fact.
+   */
+  onApplied?: () => void;
+  /**
    * True when a scan has found folders to rebuild and the run has NOT happened yet.
    *
    * Walking past this step with moves outstanding leaves the segment half-changed: `PendingLevels`
@@ -276,7 +285,7 @@ export interface SubtreeMigratorProps {
   initialSegmentKey?: string;
 }
 
-export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, initialSegmentKey, uploadsPaused }: SubtreeMigratorProps): React.ReactElement {
+export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, onApplied, initialSegmentKey, uploadsPaused }: SubtreeMigratorProps): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [segments, setSegments] = useState<SegmentRow[]>([]);
@@ -1185,6 +1194,10 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
           `"Move existing folders" again and it will finish the job.`,
       );
     }
+    /* ONE hook point for BOTH routes — the end of a Rebuild (`finishPending`) and the standalone
+       Apply button both come through here, because this is the only writer that clears
+       `PendingLevels`. Reporting from the two callers instead would be two chances to forget. */
+    if (onApplied) onApplied();
   };
 
   /**
