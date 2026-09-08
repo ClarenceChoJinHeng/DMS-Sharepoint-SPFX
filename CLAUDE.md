@@ -11543,3 +11543,35 @@ lock box is gone. 1.0.497.0 working.
   half. Grep both.
 - **Still unverified:** Next staying greyed WHILE the scan runs (1.0.496.0's derived padlock), the
   `choiceNow` gate, and whether `onMigrateApplied` releases Next after a Rebuild without a reload.
+
+## ✅ THE RUN-HOLD IS VERIFIED, AND A BUILT SEGMENT NO LONGER OFFERS ITSELF FOR "CONTINUING" (2026-09-09, 1.0.498.0)
+- **✅ 1.0.496.0's DERIVED PADLOCK WORKS.** With the scan mid-flight: **Back and Next both greyed**, the
+  segment switcher disabled with its own reason, and the run-hold message beneath. That is the first
+  time this padlock has ever been observed holding — it had been defeated on every render since it was
+  written.
+- **A SEGMENT WITH FOLDERS IS LEFT OUT OF "Continuing an earlier segment?"** (client: *"ensure that
+  the Segment that is already built do not need to be appearing... It won't make sense, its already
+  built"*). That picker exists to RESUME an unfinished creation, and it was listing all five — which
+  is the same confusion that produced *"I actually thought at first that I can recreate Group Head
+  Office when I already create."*
+  - **⚠ IT COSTS NO EXTRA REQUEST.** The per-segment facts effect ALREADY reads the Folder Map
+    unfiltered (`$select=Id,Section&$top=5000`) and filters in memory — a row's `Section` holds the
+    segment's top folder, so every segment's answer is in one response. The load-time read is the same
+    one. `$top=5000` matters: a truncated read reports a built segment as UNBUILT, which is the
+    direction that puts a live segment back into a creation flow.
+  - **⚠ FAIL-OPEN — `built` IS THREE-STATE and `undefined` LISTS THE SEGMENT.** Hiding one because the
+    Folder Map could not be read would remove the only route back into a genuinely unfinished segment.
+    The filter is `built !== true`, never `built === false`.
+  - **⚠⚠ THE PICKED SEGMENT IS ALWAYS LISTED, whatever its state.** A `<select>` whose `value` matches
+    no option **renders the FIRST option while state keeps the old value** — the trap that shipped once
+    on the Position dropdown — so the control would name one segment while the flow carried another.
+  - **The empty case is stated, not left blank.** On a settled site EVERY segment has folders, so the
+    dropdown is empty — and an empty dropdown beside a Refresh button reads as a list that failed to
+    load, which invites pressing Refresh for ever. A third hint branch says so.
+  - **⚠ THE ONE THING GIVEN UP, and it is judged acceptable rather than overlooked:** an admin who
+    created a segment, ran reconciliation, and then wants to revisit its abbreviations or groups can no
+    longer reach them through THIS flow. Those steps are reachable from **Add a department or unit**,
+    from the standalone tabs, and from the `runRecon` flow — and flow 1 is specifically for creating.
+    Raised with the client rather than discovered.
+- **⚠ `FolderAdmin.tsx` IS NOW 2051 LINES, over the 2000 ceiling — a NEW warning, 39 → 40.** Sixth file
+  in the project to exceed it. Disclosed rather than suppressed.

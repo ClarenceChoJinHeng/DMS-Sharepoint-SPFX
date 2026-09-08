@@ -90,6 +90,14 @@ type Segment = {
    * this codebase's rule for a fact that could not be read.
    */
   pendingLevels?: boolean;
+  /**
+   * Whether this segment already has FOLDERS, i.e. reconciliation has run for it.
+   *
+   * ⚠ THREE-STATE. `undefined` means the Folder Map could not be read, and the picker then shows the
+   * segment — hiding one on the strength of a failed read would take away the only way to resume an
+   * unfinished segment.
+   */
+  built?: boolean;
 };
 
 const s: Record<string, React.CSSProperties> = {
@@ -751,15 +759,43 @@ export default function FolderAdmin({
       } catch {
         // Leave it unknown. A transient failure must not lock the migrate step.
       }
+      /* Which segments already have folders, for the "Continuing an earlier segment?" picker.
+         ⚠ ONE READ, AND THE SAME ONE THE PER-SEGMENT FACTS EFFECT ALREADY MAKES UNFILTERED
+         (`$select=Id,Section&$top=5000`) — a Folder Map row's `Section` holds the segment's top
+         folder, so every segment's answer is in one response. `$top=5000`, not 500: a truncated read
+         reports a built segment as unbuilt, which is the direction that puts a live segment back in
+         a creation flow.
+         Left UNDEFINED on any failure, so the picker falls back to listing everything. */
+      let builtCodes: string[] | undefined;
+      try {
+        const fm: SPHttpClientResponse = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.folderMap))}')/items` +
+            `?$select=Id,Section&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: GET },
+        );
+        if (fm.ok) {
+          const fmRows = ((await fm.json()).value ?? []) as Array<{ Section?: string }>;
+          const codes: string[] = [];
+          for (const r of fmRows) {
+            const c = (r.Section ?? "").trim().toLowerCase();
+            if (c && codes.indexOf(c) < 0) codes.push(c);
+          }
+          builtCodes = codes;
+        }
+      } catch {
+        // Leave it undefined: the picker lists everything rather than hiding on a failed read.
+      }
       // Merged only when the second read succeeded. Absent column or failed read leaves every
       // segment `undefined`, which reads as "not checked" and locks nothing.
       setSegments(
-        stagedKnown
-          ? rows.map((r) => ({
-              ...r,
-              pendingLevels: staged[r.itemId] === true,
-            }))
-          : rows,
+        rows.map((r) => ({
+          ...r,
+          ...(stagedKnown ? { pendingLevels: staged[r.itemId] === true } : {}),
+          ...(builtCodes === undefined
+            ? {}
+            : { built: builtCodes.indexOf(r.code.toLowerCase()) >= 0 }),
+        })),
       );
       setLoadError(undefined);
       setRefreshing(false);
@@ -774,6 +810,14 @@ export default function FolderAdmin({
   }, [siteUrl, reload]);
 
   const segment = (segments ?? []).filter((x) => x.key === segKey)[0];
+  /**
+   * The segments the "Continuing an earlier segment?" picker offers: the ones NOT already built.
+   *
+   * `built !== true` rather than `built === false`, so an unreadable Folder Map lists everything —
+   * and the picked segment is kept whatever its state, or the control would display a different
+   * segment from the one the flow is carrying.
+   */
+  const resumable = (segments ?? []).filter((x) => x.built !== true || x.key === segKey);
 
   /**
    * The cheap facts for the chosen segment: groups, mappings, folders.
@@ -1576,6 +1620,19 @@ export default function FolderAdmin({
                 flexWrap: "wrap",
               }}
             >
+              {/* ⚠ ALREADY-BUILT SEGMENTS ARE LEFT OUT (client, 2026-09-09: *"ensure that the Segment
+                  that is already built do not need to be appearing under the Continuing an earlier
+                  segment? It won't make sense, its already built"*). This control exists to RESUME an
+                  unfinished creation, and a segment with folders is finished — offering it invited
+                  walking a creation flow over a live segment, which is also what produced the earlier
+                  *"I actually thought at first that I can recreate Group Head Office"*.
+                  ⚠ FAIL-OPEN: `built === undefined` means the Folder Map could not be read, and such a
+                  segment is LISTED. Hiding on a failed read would remove the only route back into an
+                  unfinished segment.
+                  ⚠ AND THE CURRENTLY-PICKED SEGMENT IS ALWAYS LISTED, whatever its state. A `<select>`
+                  whose `value` matches no option renders the FIRST option while state keeps the old
+                  one — the trap that shipped once on the Position dropdown — so the control would say
+                  one segment while the flow carried another. */}
               <select
                 id="fa-newseg"
                 style={s.select}
@@ -1588,7 +1645,7 @@ export default function FolderAdmin({
                 }}
               >
                 <option value="">Select a segment&hellip;</option>
-                {(segments ?? []).map((x) => (
+                {resumable.map((x) => (
                   <option key={x.key} value={x.key}>
                     {x.label}
                   </option>
@@ -1619,7 +1676,13 @@ export default function FolderAdmin({
                    nothing is gated when the list cannot be read (see `segmentChosen`), so the way
                    on is Next, and the way to try again is the Refresh list button beside this. */
                 ? "The segment list could not be read, so a segment cannot be picked here. Press Refresh list to try again — Next is not held, so you can carry on either way."
-                : "Only needed if you created it earlier, or reopened this page. A segment you create above is selected for you. Picking one takes the remaining steps straight to it — it does not create anything."}
+                : resumable.length === 0
+                /* ⚠ SAID PLAINLY, because an empty dropdown beside a Refresh button reads as a list
+                   that failed to load — and the admin's next move would be pressing Refresh for ever.
+                   This is the NORMAL state on a settled site: every segment has folders, so none of
+                   them is an unfinished creation. */
+                ? "Every segment on this site is already set up, so there is nothing here to continue. Create one above, or press Refresh list if you have just made one."
+                : "Only needed if you created it earlier, or reopened this page. A segment you create above is selected for you. Picking one takes the remaining steps straight to it — it does not create anything. Segments that are already set up are not listed."}
             </div>
           </div>
         )}
