@@ -10648,3 +10648,448 @@ design"*. **Six commits, `1aec09f`..`fb69a13`. Reasoned CSS only — NOT verifie
   flex rebuild of three children plus the conditional two-column override to fix properly.
 - **Verified**: `tsc --noEmit` clean, suite **1720/0**, 33 warnings — the baseline, none new. Every
   commit's diff read line by line to confirm nothing but responsive properties changed.
+
+## THE UPLOAD FORMS ASK THEIR CONTAINER, NOT THE WINDOW — AND THE WIDTH CAP HAD TO MOVE WITH THE PADDING (2026-09-08)
+Client, with a screenshot of SharePoint's own **Mobile preview**: *"the upload form becomes like this"*
+— fields crushed to slivers, "Group Led Project" spilling past the card. Then: *"can you make sure the
+padding on mobile is not there? The side padding I meant."* Both built, in `Form.tsx` and
+`BulkUpload.tsx`.
+- **⚠ THE PREVIEW SHOWS WORSE THAN A REAL PHONE, AND KNOWING THAT IS HALF THE DIAGNOSIS.** It narrows
+  the CONTENT COLUMN and leaves the viewport at desktop width — visible in the client's own screenshot,
+  where the browser is ~1570px and the left nav rail is still full size. So `@media (max-width: 480px)`
+  never fires and you are looking at the desktop layout squeezed into a phone-width box. **On a real
+  phone the media query does fire and the form stacks correctly**, which the 360px iframe test of
+  2026-09-07 had already proven. Do not read a preview screenshot as the phone behaviour.
+- **BUT THE SAME SQUEEZE IS REAL ON A DESKTOP**, in any narrow section — measured `innerWidth=1384`,
+  `matches(max-width:480px)=false`, `.dms-grid-2` still `119px 119px`. **A media query asks how wide
+  the WINDOW is; a web part is sized by its page SECTION.** That mismatch is the whole defect, and it
+  was already written up as a known limitation on 2026-09-07 before the client hit it.
+- **FIXED WITH `@container`, WHICH ASKS THE ELEMENT.** The `@media` blocks are KEPT beside it —
+  fallback for a browser without container queries, and the only way to reach the fixed overlays, which
+  sit outside the container. Duplicated rather than replaced so nothing that works today can regress.
+- **⚠⚠ `container-type` MUST NOT GO ON `.dms-form`, AND THIS IS THE TRAP THAT DECIDES THE WHOLE
+  STRUCTURE.** It applies **layout containment**, which makes the element a containing block for
+  `position: fixed` descendants — and the toast plus BOTH confirmation overlays are fixed and render
+  inside that section. Put it there and the toast stops anchoring to the window and the overlay covers
+  only the form, **on every screen**. So the container is a `.dms-form-body` wrapper that closes before
+  them; they stay direct children of the section.
+- **⚠⚠ AND THE 960px CAP HAD TO MOVE DOWN WITH THE PADDING — LEAVING IT BEHIND NARROWS EVERY DESKTOP
+  BY 48px.** A container query can never style its own container (circular), so the padding the client
+  asked to drop had to live on a `.dms-form-inner` child. But `max-width` applies to the **content**
+  box, so the old shell was 960 of content with 24px of padding OUTSIDE it — 1008 overall. Cap the
+  shell and put the padding on a child and the child is 960 overall, **912 of content**.
+  - **MEASURED, NOT REASONED: the field grid went `910` → `862` and `443px 443px` → `419px 419px`.**
+    Caught by running the old and new shapes side by side at 1400px before reporting anything.
+  - **THIRD INSTANCE OF ONE MISTAKE.** `box-sizing: border-box` in the deleted `FIT` helper
+    (2026-09-07) did exactly this, and its removal note says so. **Any change that moves padding across
+    a `max-width` boundary is a desktop change until proven otherwise** — the proof is a before/after
+    measurement at desktop width, nothing less.
+  - Capping `.dms-form-inner` instead reproduces the old geometry exactly: 960 + 48 = 1008, centred by
+    `margin: 0 auto`. Re-measured **byte-identical** to the baseline (`910` / `443px 443px` /
+    `387.891 193.953 280.156` / `960`).
+- **THE TOOLTIP CAP WAS THE SAME BUG ONE LINE DOWN.** `.dms-info-panel` was
+  `max-width: calc(100vw - 48px)` — a VIEWPORT unit inside a container-sized web part, so in a narrow
+  section the cap does nothing. Now `100cqw`. On a desktop it resolves far above the panel's 280px
+  width, so nothing moves.
+- **VERIFIED IN THE HARNESS, three configurations:** a 360px column on a 1400px desktop (the client's
+  screenshot) now reads `cols=310px` on both grids, `dir=column` on the radio group, `OVERFLOW=false`,
+  and the width went 262 → 310 which IS the padding removal; a 1400px desktop is unchanged; and a real
+  phone is covered because the container is 360px either way and both queries then set the same
+  properties.
+- **⚠ STILL NOT SITE-TESTED.** The harness renders the real extracted CSS with the real class names and
+  nesting; it does not render the live component, real data lengths or SharePoint's own chrome. Open
+  the Mobile preview on `Upload-Form.aspx` and `Bulk-Upload.aspx` to confirm.
+- **⚠ AND NOTHING ELSE GOT THIS.** Only these two components render a `<style>` block; the other 33
+  style with inline objects and **cannot take a container query any more than a media query**. The
+  approval page still compresses rather than stacking at phone width.
+- **Verified**: `tsc --noEmit` clean, suite **1720/0** across 50 suites, 38 warnings on a full clean
+  lint and **not one of them new** — the four on these two files (`file` unused, both `max-lines`, one
+  missing return type) are the documented pre-existing set.
+
+## THE CREATE-SEGMENT ERROR WAS ALWAYS SET — IT RENDERED 200 LINES ABOVE THE BUTTON (2026-09-08, 1.0.470.0)
+Client: *"I notice a bug when I click on the Create Segment it doesnt show the error message. Highlight
+the Term set ID and Top Folder Name red."* Both built, plus two mobile items in the same pass.
+- **⚠ NOTHING WAS BROKEN IN THE VALIDATION.** `create()` sets `setResult({ ok: false, … })` correctly
+  on a refused draft. The banner renders at `SegmentCreator.tsx` **line ~1155** and the Create button
+  sits at **~1352** — so a refusal appeared near the top of a long form while the person who pressed
+  the button was at the bottom of it. **Identical to the Requests page's outcome banner (1.0.325.0),
+  and fixed the same way**: a ref plus `scrollIntoView` on `result`.
+  - **⚠ THE EFFECT IS DECLARED WITH THE OTHER HOOKS, ABOVE `if (!loaded) return`.** Below that early
+    return it would run a different number of times on the render after loading finishes — *Rendered
+    more hooks than during the previous render* — which blanks the whole web part with no error UI.
+    **Fourth place in this project that trap has been paid for**; the comment at the hook is the guard.
+- **`requiredFieldErrors` IN `shared/newSegment.ts` (pure, 9 new tests) MARKS THE THREE REQUIRED FIELDS
+  RED**, and the split from `fieldConflicts` is the whole design:
+  - `fieldConflicts` reports a CLASH with an existing segment. It needs the field to hold something
+    valid, so it is safe to render LIVE, as you type — and always has been.
+  - `requiredFieldErrors` is *blank* or *not a GUID*, which is true of an **untouched form**. Rendering
+    it live would light a blank page red, and this codebase already settled that colouring untouched
+    fields *"makes a blank form look broken and people stop reading red"*. Gated on `showErrors`, set
+    ONLY by a refused save and cleared the moment a run gets past validation.
+  - **The two can never both fire on one field** — a clash needs a valid value, a required error needs
+    an absent one — so merging them into one `fieldError` per input cannot produce a contradiction.
+  - **⚠ `validateNewSegment` CONSUMES IT rather than repeating the three tests.** The wording differs (a
+    summary sentence explains, a field message points) but the CONDITION has one definition, so a field
+    cannot go red while the summary stays silent, or the reverse. Pinned by two agreement tests in both
+    directions.
+  - **The NAME field got the same treatment though only two were asked for.** It is equally required
+    and equally silent, so leaving it out would have reproduced the same complaint on the next field
+    along.
+- **⚠ A FOLDER OF NOTHING BUT PUNCTUATION COUNTS AS BLANK**, because `sanitizeFolderSegment` is what
+  decides the folder that would actually be created. Pinned.
+
+### The two mobile items in the same pass
+- **THE FILE-SUMMARY BAR STACKS AND CENTRES** (client: *"Ensure this is column and centered, same goes
+  for bulk upload"*). `.dms-dropzone.has-file` reads READY / count / size / action across one row; at
+  phone width those four become four slivers.
+  - **⚠ `.dms-filecard-action`'s `margin-left: auto` HAD TO BE RESET.** It is what pushes the action to
+    the right of a ROW, and in a column that same auto margin shoves it off the centre it is being
+    asked to sit on. Verified both ways: stacked and centred at 360px, unchanged row on a desktop.
+  - **Bulk Upload has no `has-file` dropzone** — its equivalents are `.dms-selbar` (count left, Add
+    more right) and `.dms-fp-row` (tag / name / size / bar). Both are the same shape and both stack.
+- **CRS SETTINGS' CARDS NOW MATCH FOLDER MANAGEMENT'S ON A PHONE** (client: *"Ensure that CRS Settings
+  mobile design follow the one inside the Folder management"*). Those cards are already a COLUMN —
+  icon, title, blurb, then the arrow on its own footer row — and these were a ROW squeezing the text
+  between an icon and an arrow.
+  - **⚠ IT NEEDED THE FILE'S FIRST-EVER `<style>` BLOCK.** `CrsSettings.tsx` styles with inline
+    objects, which have no way to say *only when narrow*. This is the THIRD component in the project
+    with a style block; the other 32 still cannot take a query of any kind.
+  - **The container sits on the SECTION itself here, unlike the upload forms** — this page renders
+    nothing `position: fixed`, so the layout containment `container-type` brings has nothing to
+    re-anchor. **Check that again before adding a dialog or a toast to this page.**
+  - **The class can override the inline style ONLY because `flexDirection` is absent from
+    `s.cardHead`** — its `row` comes from the flex default, not from a declaration. Had it been set
+    inline, a CSS class could never have beaten it.
+- **Verified**: `tsc --noEmit` clean; `eslint` **zero warnings** on all four changed files; suite
+  **1729/0** across 50 suites (`newSegment` 43 → 52); 38 warnings on a full clean lint, the documented
+  baseline, none new. Packaged **1.0.470.0** via `npm run build`, 466 KB (the production shape), and
+  every change grepped in the shipped bundles — the dropzone rule, the selbar rule, `crs-card-head`,
+  `crs-page{container-type`, both new field messages and `scrollIntoView`.
+- **⚠ NOT SITE-TESTED.** The dropzone was rendered from the real extracted CSS at 360px and at desktop
+  width; **CRS Settings was reasoned, not rendered** (inline styles make it awkward to harness), and
+  the SegmentCreator behaviour has no UI test — there are none in this project.
+- **⚠ STILL CRAMPED, NOT ASKED ABOUT: the staged-file row** (`.dms-staged-head`). At 360px a filename
+  wraps to four lines, the type badge truncates to *Document…* and the action wraps to three. It does
+  not overflow. Same one-line fix as the dropzone if the client wants it.
+
+## THE MIGRATION SCAN SCROLLS PER UNIT, AND THE UNIT HEADING IS READABLE (2026-09-08, 1.0.471.0)
+Client, mid-migration on GHO with **131 folder(s) to rebuild across 5 unit(s)** on screen: *"increase
+the title of that size and also put overscroll for each section, it is too long"*.
+- **EACH ENTRY IS A PATH, AN ACTION AND ITS FILENAMES**, so one unit is easily a thousand pixels and
+  five of them put Rebuild somewhere past the end of the page. `s.scroller` caps the per-unit folder
+  list at **360px**.
+- **⚠ THE HEADING AND THE TIER DROPDOWNS STAY OUTSIDE THE BOX, AND THAT IS THE LOAD-BEARING PART.**
+  Those `<select>`s decide the plan for every folder listed beneath them; scrolled away with the list,
+  an admin reads *"needs a value chosen above"* with the control that sets it off screen. Same rule
+  the abbreviation editor follows — the warning, the banner and Save stay put, **only the rows move**.
+- **⚠ SAFE ONLY BECAUSE NOTHING INSIDE IS ABSOLUTELY POSITIONED — CHECKED, NOT ASSUMED.** A scroll
+  container clips such a child, which has cost this project three screens already (Group Management's
+  people picker, the upload form's Confidentiality/Legally-Privileged panels, the member-add
+  dropdown). The only fixed element in `SubtreeMigrator.tsx` is `modalBg`, the rename dialog, which
+  renders far outside these groups. **Re-check before adding a popover to a folder row.** A native
+  `<select>` is unaffected: the browser draws its list outside the DOM flow.
+- **`overscroll-behavior: contain`** stops the PAGE scrolling on when an inner box hits its end —
+  which matters with five stacked. `maxHeight` is a CAP, so a short unit renders at its own height
+  and never scrolls.
+- **The unit heading goes 14px → 17px**, the value the client tried in devtools first. It is the only
+  line saying WHICH UNIT a wall of paths belongs to, and at 14px in the same monospace as the paths it
+  read as one of them — the more so now that it is the fixed thing above a scrolling list.
+- **Verified**: `tsc --noEmit` clean, `eslint` **zero warnings** on the file, packaged **1.0.471.0**
+  (466 KB, production shape) and the shipped `user-access-web-parts` bundle grepped for both changes.
+  **NOT site-tested.**
+
+## ⚠ TWO SEGMENTS WERE STUCK ON `CHANGE PENDING`, AND THE PARKED NOTE WAS WRONG ABOUT ONE (2026-09-08)
+Client, on the Change-the-folder-structure flow: GHO and MHO both showing **IN USE + CHANGE PENDING**.
+- **⚠ THE 2026-09-07 NOTE SAYING GHO's CHAIN WAS LIVE IS FALSE.** It was written from the RUN's own
+  report (*14 moved, 27 tidied*) rather than from the badge, and the client's own scan the next day
+  found **131 folders still to rebuild across 5 units**. **A run reporting success is not the same as
+  the state being right** — the badge is the truth, and this file has now made that mistake about its
+  own work.
+- **NOTHING IS BROKEN IN THE CODE. `PendingLevels` IS CLEARED BY EXACTLY TWO THINGS**, and neither
+  happens by opening the screen:
+  1. `finishPending`, at the end of a Rebuild — and only if a FRESH scan finds nothing outstanding.
+  2. The standalone **Apply the new structure** button, whose condition is
+     `scans && groups.length === 0 && !scanError && seg?.pending !== undefined`.
+  **THE SECOND CONDITION IS THE ONE PEOPLE MISS: the Apply card does not render until the scan has
+  actually been run.** A segment with nothing to move looks permanently stuck to anyone who only
+  looks at step 2.
+- **⚠ MHO's PENDING CHAIN ENDS `[Tes1111]` BELOW `[Document Type]`, AND ITS LIVE CHAIN IS CLEAN.**
+  That is the shape the per-unit contiguity rule refuses (1.0.463.0). It matters that the two are
+  different: `validateChain` runs at UPLOAD time against **`Levels`**, so uploads are fine today —
+  and would stop the moment that chain were applied.
+  - **THE GUARD IS ALREADY IN PLACE AND IS LOAD-BEARING.** `collectScans` throws on `chainError`
+    (`SubtreeMigrator.tsx` ~676), and the row's error comes from `validateChain(row.pending ?? chain)`
+    — the chain being migrated TOWARDS. So the migrate step refuses MHO by name rather than letting
+    it through. **`activatePending` validates nothing of its own** — it MERGEs `Levels` and blanks
+    `PendingLevels` — so that upstream check is the only thing standing between a malformed staged
+    chain and a segment that cannot accept uploads.
+  - Repair is Buah's: give `Tes1111` a shared term set ID, remove it from the pending chain, or move
+    it directly below Unit.
+- **⚠ UPLOADS ARE STILL PAUSED SITE-WIDE** (`uploadsPaused = yes`) — step 5 has never been reached in
+  any of these runs. A forgotten pause is a DMS that quietly accepts nothing behind a banner that
+  makes it look deliberate.
+
+## ⚠⚠ `flex-wrap: wrap` ON A ROW WITH A `nowrap` CHILD BROKE THE RECONCILIATION PANEL (2026-09-08, 1.0.472.0)
+Client, having just run reconciliation on GHO: *"look at the design for the folder recon"*, with a
+screenshot of every progress row rendering as a bullet ALONE on one line, its message on the next, over
+a horizontal scrollbar, each message clipped mid-word.
+- **MINE, FROM THE RESPONSIVE PASS — commit `0751900`, "wrapping rows across the admin screens".**
+- **⚠ THE CLAIM THAT PASS RESTED ON WAS *"`flex-wrap: wrap` is inert while a row fits"*, AND THAT IS
+  TRUE AND INSUFFICIENT.** The child beside the icon was `white-space: nowrap`, so its **min-content
+  width is the entire sentence** — a path like `Approval for Highly Confidential Document/GHO/GHR/
+  OCWSAS — already there` inside a ~380px panel. The row therefore **never** fits, so it wrapped
+  **always, on every screen**, desktop included. It was not a mobile-only regression at all.
+  - **THE SHAPE TO REMEMBER: `flex-wrap: wrap` + a child that cannot shrink = a row that always
+    breaks.** `white-space: nowrap` is the usual way a child cannot shrink; a fixed `width` or
+    `flex: 0 0 <px>` wider than the container does it too.
+- **⚠ EVERY OTHER ROW THAT PASS TOUCHED WAS RE-CHECKED, AND THIS IS THE ONLY ONE.** Sixteen additions
+  across five files; `whiteSpace: "nowrap"` exists in just two of them, and in both other cases it is
+  on a BUTTON or a CHIP that is not a child of any wrapped row (`FolderManager`'s `wasLabel`/`permBtn`/
+  `chipName`, `AuditLog`'s refresh button). **Checked by locating each nowrap's owning style object
+  rather than by eye.**
+- **THE ROW NO LONGER WRAPS; THE TEXT DOES.** `flexWrap` removed, `alignItems` `center` -> `flex-start`
+  (an 11px icon centred against a three-line message sits in the middle of it), and the message is
+  `minWidth: 0` + `overflow-wrap: break-word`.
+  - **`minWidth: 0` IS LOAD-BEARING, NOT DECORATION.** A flex item's default `min-width: auto` floors
+    it at its min-content width, so without it the span would refuse to shrink and the row would
+    overflow again — differently, but just as visibly.
+- **⚠ THIS REVERSES A DOCUMENTED DESIGN DECISION, DELIBERATELY.** The comment there read *"rows keep
+  nowrap (no ellipsis clip) so the whole message is reachable"* — but a run prints hundreds of rows,
+  and sliding left and right on each one is not reachable in any useful sense. Wrapping reaches the
+  same end (nothing is clipped) with only vertical scrolling. `overflowX: auto` is KEPT as a backstop
+  for a token with no break opportunity at all, where it should now never engage.
+- **Verified by RENDERING BOTH SHAPES SIDE BY SIDE**, not by reading the CSS: the old one reproduces
+  the client's screenshot exactly — bullet alone, message below, horizontal scrollbar, clipped text —
+  and the new one puts the bullet inline with a wrapped message and no horizontal scrollbar.
+  `tsc --noEmit` clean, `eslint` on the file at its documented baseline (3 `no-new-null`, 1
+  `max-lines`), packaged **1.0.472.0** and the shipped `folder-manager-web-part` bundle grepped: the
+  old row shape **0 occurrences**, the new one 1.
+
+## A SCRIPT THAT CHECKS A MIGRATED SEGMENT'S FOLDERS — `scripts/dump-segment-folders.js` (2026-09-08)
+Client, after GHO's chain went live: *"Is there a script where you can retreive all GHO folder
+structure instead of me going into each folder one by one to check if there is any errors?"* Browser
+console, READ ONLY, every request a GET.
+- **IT EXISTS BECAUSE THE RUN LOG IS NOT THE EVIDENCE.** GHO was recorded as migrated on 2026-09-07
+  from its own report (*14 moved, 27 tidied*) and the next morning's scan found **131 folders still in
+  the old shape**. Confirming that by hand is every Year and every Document Type in six libraries —
+  8 departments and 62 units for GHO — which nobody does twice.
+- **FOUR CHECKS, and each is a real failure this project has seen:** `MISPLACED FILE` (a document not
+  at the end of the chain — the migration did not move it), `NOT A YEAR` (a folder in the Year
+  position that is not four digits: that branch is still `DocumentType/Year`), `TOO DEEP` (a leftover
+  below the end of the chain, which reconciliation will call a stray for ever) and `EMPTY LEAF`,
+  reported separately because it is normally FINE and is only interesting as a count to check "27
+  tidied" against.
+- **DRIVEN BY A `CHAIN` CONST, so it is not GHO-specific.** The depth checks and the Year check are
+  derived from it; Buah or Upstream Ops need one edited line.
+- **⚠ BUILT AROUND TWO TRAPS.** `GetFolderByServerRelativeUrl` uses the **parameter alias** form, never
+  an inline quoted path — an inline literal answers **400, not 404**, once deep enough, which is the
+  bug that made `Form.tsx` report real folders as missing. And libraries are addressed by **URL
+  SEGMENT, never title**: a rename never touches the URL, and this client renames libraries routinely,
+  so `Restricted & Confidential Document` is still at `/Shared Documents`.
+- **⚠ IT CANNOT CHECK THE METADATA, AND SAYS SO ON EVERY RUN.** A reorder re-stamps zero documents by
+  design, so a file uploaded during a broken-chain window keeps a blank `Year` or `Document Type` that
+  no folder view shows and no backfill repairs. **Filtering those two columns for blanks is still a
+  manual step**, and this is the only moment anyone would.
+- **⚠ VERIFIED BY RUNNING IT, NOT BY READING IT — and that caught a real defect.** A synthetic tree
+  with one fault of each kind, `fetch` stubbed in Node: the first version reported a `TOO DEEP` folder
+  TWICE (also as a misplaced file) and printed `depth 5 (undefined)`, because `CHAIN[depth - 1]` is off
+  the end of the chain down there. Testing TOO DEEP first and returning fixed both. Final run: one of
+  each kind, no false positive on the correct branch.
+
+## ⚠⚠ THE MIGRATOR CANNOT SEE A DOCUMENT THAT IS NOT IN A LEAF FOLDER (2026-09-08)
+Found by the first live run of `scripts/dump-segment-folders.js` on GHO, immediately after its chain
+went live. **578 folders, 129 files, 11 seconds, and TWO real problems** that four separate clean
+migration runs had never mentioned.
+- **`MISPLACED FILE` — `Approval (HC)` / `GHO/GCA/GCBC`: one document sitting directly on the UNIT
+  folder.** Not at the end of the chain, in the HC approval library.
+  - **⚠ THE MIGRATOR IS STRUCTURALLY BLIND TO IT, AND WILL NEVER REPORT IT.** `walkLeaves` pushes a
+    folder only when `kids.length === 0` — a LEAF — so a file on a folder that HAS subfolders is never
+    collected. Its own comment states the assumption it rests on: *"Leaves are where documents live,
+    because the upload form always creates the whole chain before writing the file."* True of anything
+    the FORM wrote, and false of anything placed by hand, dragged in, or left behind by a shape that
+    predates the chain. **Re-running the migration will neither move it nor mention it.**
+  - Same family as the `Forms` exclusion fixed on 2026-09-07: a walk that quietly skips a folder, with
+    nothing reporting the folder and nothing reporting the file.
+  - **A pending document there is worse than misfiled — an approver's queue is per unit folder, so it
+    can sit unreviewed indefinitely.** Check its moderation status before deciding what to do with it.
+- **`TOO DEEP` — `Archive (normal)` / `GHO/GF/TAX/2024/Term Sheet/Archive 2`: one file below the end
+  of the chain.** **This is the KNOWN stray**, recorded when the work was parked on 2026-09-07, at
+  exactly that path. Not new, and not a migration failure: a stray is reported and deliberately left,
+  because the tool cannot resolve one and letting it block activation would strand the client for ever.
+- **EVERYTHING ELSE IS CLEAN, AND THAT IS THE REAL RESULT.** Zero `NOT A YEAR` across all six
+  libraries — so the reorder landed on every branch, which is the thing that could not be confirmed by
+  opening folders one at a time. Zero `UNREADABLE`.
+- **The 74 `EMPTY LEAF` folders are the migration working, not residue.** The scan's own output was
+  full of `empty -> 2025/Agreement` lines: the migrator RE-PLACES an empty leaf into the new shape and
+  then tidies the old one. They are also inert — reconciliation walks the term tree capped at
+  `permissionedDepth` and never descends below Unit, so a below-Unit folder is never reported as a
+  stray no matter how many runs happen.
+- **⚠ AND THE FIRST READING OF THIS OUTPUT WAS WRONG.** The empties table was pasted first, all 74 rows
+  of one kind, and read as the whole result — "no misplaced files, nothing too deep". The script prints
+  real problems in a SEPARATE table ABOVE it, in red. **Two tables, and the important one is the short
+  one.** Worth remembering when reading this script's output: the count line says
+  `N problem(s) — every one of these is worth opening`.
+
+## ⚠⚠ THE UPLOAD FORM'S HC BRANCH FILED A DOCUMENT ONTO THE UNIT FOLDER, SILENTLY (2026-09-08, 1.0.473.0)
+Client, on the misplaced HC file the folder dump found: *"the file is pending... but question is how did
+that happen in the first place?"* Answered from the code, and it is a real defect with a single cause.
+- **`resolveHcFolder` SEEDS `folderId` WITH THE UNIT FOLDER AND ONLY DESCENDS PER `dest.segments`
+  ENTRY.** With NO segments the loop never runs, so it returns the UNIT folder as the destination, the
+  write succeeds, and the upload is reported as successful. Exactly the artefact: one pending document
+  on `HCApprovalDocument/GHO/GCA/GCBC`.
+- **⚠ THE NORMAL PATH HAS ALWAYS REFUSED THAT, AND SO HAS BULK UPLOAD.** Both leave `destFolder`
+  **undefined** when the loop does not run and answer *"No destination folder could be resolved"*.
+  **This branch was the only one of the three seeded with a usable id before its loop** — which is
+  precisely why the artefact is in the HC library and there is no equivalent beside it in the normal
+  one. The asymmetry IS the bug; the guard existed twice and was missing once.
+- **⚠ AND `buildOnDemandSegments` REPORTS NOTHING WRONG IN THAT STATE.** No tiers means no `missing`
+  entries, so the form's own required-field check passes cleanly. **Empty is not incomplete**, and only
+  this guard can tell the two apart — the same distinction this codebase draws everywhere else and did
+  not draw here.
+- **HOW A CHAIN REACHES THE FORM WITH NO BELOW-UNIT TIERS is the 2026-08-26 shape**: a tier whose
+  `termSet` is blank IS a per-unit tier, its options are the children of the unit term, a unit with no
+  children SKIPS it, and a tier cascading below a skipped one is skipped too. So Year and Document Type
+  can both vanish and the document files two levels shallower — which is exactly what that SDG incident
+  described, and it was repaired there by editing the `mode` row rather than by closing this hole.
+- **NOT A SECURITY PROBLEM, AND WORTH SAYING SO PRECISELY.** The unit folder carries the unit's own ACL
+  and everything below it inherits, so a document one level up is readable by exactly the same people.
+  The cost is that it is **misfiled and effectively unreviewable** — an approver works from the folder
+  they expect, so a pending document parked on the unit folder can sit indefinitely.
+- **⚠ THE MIGRATOR CANNOT CLEAN IT UP EITHER** — `walkLeaves` collects only folders with no children,
+  so a file on a unit folder is invisible to it. Re-running the migration neither moves nor reports it.
+  Move it by hand into the right `<Year>/<Document Type>`.
+- **DIAGNOSTIC FOR THE NEXT ONE, in order of decisiveness:** blank `Year` **and** `Document Type` on the
+  item says the form never offered the tiers (this mechanism) rather than that folder creation failed —
+  a failed `ensureFolder` returns an error and refuses the upload, so it cannot produce this quietly.
+  A populated `SubmissionId`/`SubmissionFileId` then says it came through the FORM rather than being
+  dragged into the library by hand.
+- **Verified**: `tsc --noEmit` clean, `eslint` on `Form.tsx` at its documented baseline (3 warnings),
+  full suite green through `npm run build`, packaged **1.0.473.0** and the shipped `form-web-part`
+  bundle grepped for the refusal. **NOT site-tested** — and the state that triggers it is now hard to
+  stage deliberately, which is part of why it survived.
+
+## THREE SMALL FIXES AND TWO ANSWERS ON THE STRUCTURE FLOW (2026-09-08, 1.0.474.0)
+- **THE DISCARD DIALOG'S THREE BUTTONS WERE TWO SIZES** (client: *"The discard button is not the same
+  size"*). `danger` is `4px 9px` at 12px — sized for the **inline Remove button on a tier row**, its
+  only other use — while `ghost` and `btn` beside it are `7px 14px` at 13px. New `dangerLg`, derived
+  from `danger` so the red has one definition and only the metrics differ; the row-scale Remove is
+  untouched.
+- **FOLDER MANAGEMENT DROPS ITS SIDE PADDING ON A PHONE** (client: *"ensure that section padding for
+  mobile is gone but for desktop it is there"*). The padding moved OUT of the inline `s.wrap` into
+  `SHELL_CSS`, because **an inline style cannot be overridden by a class**; a module-scope `Shell`
+  component now owns the section and the style tag, and all three of this component's roots (picker,
+  flow runner, All tools) use it.
+  - **⚠⚠ `@media` HERE, NOT `@container`, AND THAT IS A DELIBERATE DEPARTURE FROM THE UPLOAD FORMS.**
+    A container query needs `container-type` on an ancestor, and container-type applies **layout
+    containment**, which makes that element the containing block for every `position: fixed`
+    descendant. **THREE render inside this section** — StructureManager's discard dialog,
+    SubtreeMigrator's rename dialog and FolderManager's own modal — so containment would shrink all
+    three from covering the window to covering the section. Checked before choosing, not after.
+  - **The cost is stated at the code: a media query measures the WINDOW**, so this does NOT fire in
+    SharePoint's own Mobile preview (which narrows the column and leaves the viewport alone). It fires
+    on a real phone and in device emulation. Making this container-aware means moving those dialogs
+    out of the shell first.
+- **⚠ `Tes1111` HAS NO TERM SET, AND THE SCREEN ALREADY SAID SO** (client: *"I cannot seem to see an
+  unique ID for test111, am I suppose to click something to edit?"*). Its meta line reads **"values
+  come from the level above"**, which is this screen's wording for a **per-unit** tier; a shared-list
+  tier reads **"own list of values"**, as Year and Document Type do two rows above it. So there is no
+  ID to see and nothing to click — **editing a level in place is still unbuilt; you Remove and
+  re-add.** That confirms MHO is Buah's fault exactly: a per-unit tier below two shared-list tiers,
+  which the migrate step refuses by name.
+  - **⚠ REMOVING IT DOES NOT CLEAR `CHANGE PENDING` ON ITS OWN.** `saveStructure` writes to
+    `PendingLevels` whenever `hasDocuments === true`, and MHO is IN USE — so the pending chain becomes
+    identical to the live one rather than being cleared. The badge goes only after step 3 scans, finds
+    nothing to move, and the **Apply the new structure** card is pressed. Same route GHO took.
+- **`Archive 2` WAS A LEFTOVER — CONFIRMED.** `Archive 1`/`Archive 2` were values of a below-Unit tier
+  in an earlier chain (they appear in paths this file records from 2026-08-20 and 2026-08-25). When
+  that tier left the chain its folders stayed, and the migrator **cannot** resolve a stray — it reports
+  and leaves it deliberately, so one stray can never block activation for ever. The client deleted it;
+  the next dump shows `Archive/GHO/GF/TAX/2024/Term Sheet` as an ordinary empty leaf.
+- **GHO IS DOWN TO ONE REAL PROBLEM** — the HC document on `GHO/GCA/GCBC`, which no tool can move
+  because `walkLeaves` sees only childless folders. Everything else is empty leaves.
+- **Verified**: `tsc --noEmit` clean, `eslint` on both changed files at baseline (one pre-existing
+  `mapRows`), full suite green through `npm run build`, packaged **1.0.474.0** and both changes grepped
+  in the shipped bundles. **NOT site-tested.**
+
+## THE SUB UNIT LEVEL CAN ONLY GO UNDER UNIT, AND IS REFUSED WHERE NO UNIT HAS TERMS (2026-09-08, 1.0.475.0)
+Client, looking at GHO's Folder Structure Management with "Sub unit" selected and the Position
+dropdown open on three options: *"can you ensure that it is always under unit?... I also notice this
+subunit actually doesn't have a validation. anyone can simply add anything, is there a way to detect
+that the subunit exist in the term store under the unit then only let the subunit to be added? Also
+ensure if subunit exist no other new shared folder term can go above subunit"*
+- **⚠ THE FIRST AND THIRD ASKS ARE ONE RULE, AND IT ALREADY EXISTED — IT WAS JUST NEVER SURFACED.**
+  `per-unit-not-contiguous` (1.0.463.0) is exactly *"a per-unit tier only works directly under Unit,
+  or under other per-unit levels"*, and it is what caught Buah's `Clarence Kiwi`. But it refuses at
+  **SAVE and UPLOAD** time, so the Position dropdown went on building its options from
+  `onDemand.length + 1` with no reference to the toggle: on GHO's live chain a Sub unit tier was
+  offered three slots, **two of which produce a chain the same code then rejects two screens later.**
+  `allowedTierPositions` derives the slots instead, closing both directions at once.
+  - **The rule removes the choice rather than warning about it**, the same reasoning that took the
+    per-unit/shared toggle away from Year and Document Type. A chain saved in the broken shape reads
+    as working right up until a migration reports every unit as unreadable, naming nothing.
+- **⚠⚠ HIDING THE INVALID OPTIONS ALONE WOULD HAVE SHIPPED A WORSE BUG THAN IT FIXED.** A `<select>`
+  whose `value` matches no option **renders the FIRST option while the state behind it keeps the old
+  number** — so the screen would read *"Before Year"* while Add still inserted after Document Type.
+  Three routes could leave a stale slot: the two Folder-setup radios, and **the form's own default,
+  `position: onDemand.length`** — which is why "After Document Type" was pre-selected on a Sub unit
+  tier in the first place, i.e. the worst slot was the default. `clampTierPosition` snaps at all
+  three; the allowed slots are a CONTIGUOUS range, so clamping is exact rather than a guess and keeps
+  the admin's intent instead of resetting to the top.
+- **THE SINGLE-OPTION HINT RENDERS ONLY WHEN THE CHOICE IS GENUINELY GONE.** An unexplained
+  one-option dropdown reads as a broken control — the admin hunts for the positions they had
+  yesterday — and a permanent explanation is the *"Unable to verify current permissions"* mistake
+  again: a state drawn as a static sibling stops being read at all.
+
+### The term-store check, and what is NOT checkable
+- **⚠ THE TIER'S NAME CANNOT BE VALIDATED AND THE CODE DOES NOT TRY.** A per-unit tier's options are
+  the **children of the term above it**, whatever they are called; the label only names the tier and
+  derives its column. So *"does `Sub unit` exist in the term store"* is not a question with an
+  answer, which is why that field is free text and **stays** free text.
+- **WHAT IS CHECKABLE is whether any unit term has children at all.** If none does, the tier can
+  never appear for anybody and every unit files straight into the next level down — the same
+  silent-skip shape that filed an HC document onto a unit folder (1.0.473.0). That is a definite
+  negative, so it **refuses Add**, per the client's own *"then only let the subunit to be added"*.
+- **⚠ PARTIAL IS THE DESIGNED SHAPE AND IS NEVER REFUSED.** Some units have sub units and some do
+  not, and they are unit-SPECIFIC — precisely why they are authored under each unit rather than in a
+  flat set, and why optionality needs no configuration. **Only a definite zero is refusable.** The
+  count is reported instead (*"3 of 62..."*), in the ordinary hint tone and **not amber**: it is
+  information the admin has no other way to get, it says at a glance whether the terms were authored
+  where they meant, and colouring a normal state as a warning trains people to ignore the one that
+  matters.
+- **⚠ AN UNREACHABLE TERM STORE WARNS, NEVER BLOCKS.** Already this screen's rule for a shared-list
+  ID: malformed and 404 block Add, a resolvable-but-empty set and an unreachable store warn only. An
+  outage must not stop an admin authoring a legitimate tier. So a failed read, a capped walk, and a
+  segment with **no `TermSetGuid` recorded** are all `unknown`, and `unknown` allows.
+- **Bounded at 400 requests, 8 at a time** — GHO is 8 departments and 62 units, so ~71 reads, the
+  same range as the abbreviation screen's own tree walk. **Hitting the cap is `unknown`, never
+  "none":** an incomplete walk answering zero would refuse a tier on a segment too large to check.
+  **One unreadable branch abandons the whole answer** rather than counting as "no children", because
+  too-shallow is the silent direction — the same reasoning as the segment depth check.
+- **⚠ `TermSetGuid` IS READ IN ITS OWN REQUEST**, mirroring `loadPendingChains` directly above it. A
+  `$select` naming a column this site lacks 400s the WHOLE query, and the main segment read failing
+  is what puts *"Could not read the configuration"* on this screen. A hand-authored `mode` row can
+  legitimately lack it, since the column is written by `SegmentCreator`.
+- **⚠ THE MESSAGES NAME THE DEEPEST PERMISSIONED TIER, NEVER THE LITERAL "unit"** — `Estate/Mill` on
+  Upstream Ops, `Buah Number` on Buah, `Department` on SDGI. Hardcoding "unit" is the mistake that
+  leaves the approver's detail panel blank on every segment naming its tiers differently.
+- **THE WALK RUNS FROM AN EFFECT, not from the radio's `onChange`.** Two routes reach the per-unit
+  state — opening the form (which defaults to it) and toggling back — and a handler on one starts
+  from zero on the other. Third instance of *"a new route into an existing path silently starts from
+  zero"*. Declared **above every early return**: a hook below one renders a different number of hooks
+  on the pass after loading finishes and blanks the web part with no error UI (fourth screen to pay
+  for that). Keyed on the segment and the toggle only — re-walking 71 reads per keystroke would make
+  the name field unusable, and `draft` is deliberately absent because the permissioned prefix renders
+  locked and so cannot change while the form is open.
+- **Verified**: `tsc --noEmit` clean, `eslint` **clean on both changed files**, full suite
+  **0 failures** (`folderChain` 68 -> 72), 38 warnings on a full clean lint — the documented
+  baseline, none new. Packaged **1.0.475.0** via `npm run build` (470 KB, the production shape) and
+  the shipped `user-access-web-parts` bundle grepped for all five new strings plus `TermSetGuid`.
+  **NOT site-tested.**
+- **⚠ STILL OPEN, REPORTED THE SAME DAY AND NOT BUILT: Next is clickable on the migrate step with no
+  segment picked.** `blocksNext` gates three steps and `migrate` is not one of them, while the
+  picker REPLACES that step's whole content — so an admin can walk past it and reach step 5, which
+  turns uploads back on over a chain that was never applied. Nothing is written by pressing it; the
+  cost is that the flow lets you finish without doing the one thing it exists for. The fix needs a
+  three-state fact (not chosen / chosen / list unreadable) gated ahead of the step-id allow-list,
+  because gating an unreadable segment list would strand an admin who cannot pick one — and it must
+  cap the rail too, or the side panel is a second route past it.
