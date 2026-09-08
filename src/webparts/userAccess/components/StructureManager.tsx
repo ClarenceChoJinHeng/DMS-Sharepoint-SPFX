@@ -1843,6 +1843,12 @@ export default function StructureManager({
         )}
 
         <div style={{ marginTop: 24, borderTop: "1px solid #edebe9", paddingTop: 16 }}>
+          {/* ⚠ NO REASON IS RENDERED BESIDE THIS WHEN `addPending` GREYS IT (client, 2026-09-09:
+              *"its plain obvious they need to click add to save, so remove it"*), which is a
+              deliberate departure from the house rule that an unexplained disabled button reads as a
+              broken page. The judgement is theirs: the Add form is directly above with its own Add
+              and Cancel, so the way out is on screen even though nothing points at it. Restore a
+              message here if anyone ever reports Save as broken. */}
           <button
             style={busy || addPending ? s.off : s.btn}
             disabled={busy || addPending}
@@ -1851,16 +1857,7 @@ export default function StructureManager({
             {busy ? "Saving…" : "Save structure"}
           </button>{" "}
           <button style={s.ghost} disabled={busy} onClick={onCancelClicked}>Cancel</button>
-          {addPending && (
-            // Beside the button it disables, and it names BOTH ways out. An unexplained greyed
-            // primary button reads as a broken page, and the next move is a reload — which would
-            // lose the level as surely as Save would have.
-            <span style={{ ...s.hint, marginLeft: 10, color: "#7a4f00" }}>
-              Press <strong>Add</strong> to put that level into the list, or <strong>Cancel</strong>{" "}
-              beside it to drop it — saving now would leave it out.
-            </span>
-          )}
-          {dirty && !addPending && (
+          {dirty && (
             // Sits beside the button that fixes it. A banner at the top of a long editor is
             // scrolled off exactly when someone is about to leave.
             <span style={{ ...s.hint, marginLeft: 12, color: "#7a4f00", fontWeight: 600 }}>
