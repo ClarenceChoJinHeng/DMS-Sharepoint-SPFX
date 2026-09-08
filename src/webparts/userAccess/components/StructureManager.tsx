@@ -322,12 +322,30 @@ export interface StructureManagerProps {
    * itself, and a caller that does not care still gets those.
    */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Fired after a structure change is SAVED, so a page hosting this can re-read what it thought it
+   * knew.
+   *
+   * ⚠ THIS EXISTS BECAUSE A SAVE HERE INVALIDATES A FACT THE GUIDED FLOW READ AT MOUNT, and nothing
+   * told it. `FolderAdmin` locks its migrate step on `pendingLevels`, which it copies out of a
+   * segment list read once on `[siteUrl, reload]` — so saving a change on the levels step left the
+   * NEXT step insisting *"There is no pending structure change to move to"* about the change just
+   * made. Found live 2026-09-08.
+   *
+   * ⚠ AND RE-READING THE DERIVED FACTS DID NOT HELP, which is the subtle part: that flow already
+   * re-reads its facts on every step change (`stepIdx` is in the effect's deps, added 2026-08-19 for
+   * exactly this class of problem). But the effect COPIES the flag out of the segment list rather
+   * than re-reading it, so re-running the consumer re-copied the same stale value. **Re-reading a
+   * derived fact cannot fix staleness that lives in the upstream read.**
+   */
+  onSaved?: () => void;
 }
 
 export default function StructureManager({
   context,
   siteUrl,
   onDirtyChange,
+  onSaved,
 }: StructureManagerProps): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
@@ -1178,6 +1196,11 @@ export default function StructureManager({
       }).catch(() => undefined);
 
       cancelEdit();
+      /* ⚠ AFTER `cancelEdit`, and only on the success path. The audit write above is deliberately
+         `.catch`ed to undefined, so reaching here means the chain really was written — and a caller
+         re-reading on a FAILED save would refresh itself into the same state while implying
+         something changed. */
+      if (onSaved) onSaved();
     } catch (e) {
       setResult({ ok: false, text: (e as Error).message });
     } finally {

@@ -1483,6 +1483,12 @@ export default function FolderAdmin({
             // NOT the padlock: unsaved edits are not a run, and holding Back would trap someone who
             // opened the screen by mistake. It gates NEXT only, with its own reason.
             onStructureDirtyChange={setStructureDirty}
+            /* ⚠ RE-READS THE SEGMENT LIST, which is the ONE definition of `pendingLevels` — the
+               fact the migrate step locks on. Bumping `reload` re-runs the read that owns it; the
+               cheap-facts effect merely COPIES it, so re-running that alone re-copies the stale
+               value. Before this, saving on the levels step left the very next step reporting
+               "There is no pending structure change to move to" about the change just made. */
+            onStructureSaved={() => setReload((n) => n + 1)}
             onAbbreviationsDirtyChange={setAbbreviationsDirty}
             onAbbreviationsRegisterSave={(fn) => {
               abbrevSaveRef.current = fn;

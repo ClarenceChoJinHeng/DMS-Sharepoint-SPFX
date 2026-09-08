@@ -1277,6 +1277,7 @@ export default function FolderManager({
   onAbbreviationsRegisterSave,
   hideSegmentCreate,
   onStructureDirtyChange,
+  onStructureSaved,
 }: IFolderManagerProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
 
@@ -7982,6 +7983,9 @@ export default function FolderManager({
             // switch. Reported up, never acted on here — this component keeps its own behaviour.
             if (onStructureDirtyChange) onStructureDirtyChange(d);
           }}
+          // Reported up so a guided flow can re-read the segment list it read at mount. This
+          // component needs nothing from it — its own tab reads the chain fresh each time.
+          onSaved={onStructureSaved}
         />
       ) : tab === "Migrate" ? (
         <SubtreeMigrator
@@ -8525,8 +8529,13 @@ export default function FolderManager({
                         >
                           {panel.title}
                         </div>
-                        {/* overflowX:auto lets the client slide left/right to read full paths;
-                            rows keep nowrap (no ellipsis clip) so the whole message is reachable. */}
+                        {/* ⚠ THE ROWS WRAP NOW; THEY USED TO SCROLL SIDEWAYS. The old note here read
+                            "rows keep nowrap (no ellipsis clip) so the whole message is reachable",
+                            and sliding left and right on EVERY row to read a line is not reachable in
+                            any useful sense — a run prints hundreds of them. Wrapping reaches the
+                            same end (nothing is clipped) with only vertical scrolling.
+                            overflowX stays as a backstop for a token with no break opportunity at
+                            all; with the text wrapping it should never actually engage. */}
                         <div
                           style={{
                             maxHeight: 220,
@@ -8551,8 +8560,19 @@ export default function FolderManager({
                                 key={i}
                                 style={{
                                   display: "flex",
-                                  flexWrap: "wrap",
-                                  alignItems: "center",
+                                  /* ⚠⚠ NO `flexWrap: "wrap"` HERE, AND ADDING IT BROKE THIS PANEL
+                                     OUTRIGHT (mine, commit 0751900, reported 2026-09-08 with a
+                                     screenshot). The text beside this icon was `white-space: nowrap`,
+                                     so its min-content width is the WHOLE sentence — the flex line
+                                     could never fit, so it broke on every single row and the panel
+                                     rendered as a bullet alone on one line with its message on the
+                                     next, over a horizontal scrollbar.
+                                     THE CLAIM THAT PASS RESTED ON WAS "wrap is inert while a row
+                                     fits". True, and a row holding a nowrap child WIDER THAN ITS
+                                     CONTAINER never fits — so it wrapped always, on every screen.
+                                     That is the one shape the reasoning missed, and it is the only
+                                     one of the sixteen rows that pass touched with a nowrap child. */
+                                  alignItems: "flex-start",
                                   gap: 8,
                                   padding: "3px 10px",
                                   fontSize: 12,
@@ -8561,7 +8581,10 @@ export default function FolderManager({
                                 }}
                               >
                                 {progIcon(it.status)}
-                                <span style={{ whiteSpace: "nowrap" }}>
+                                {/* `minWidth: 0` is what lets this shrink inside the flex row at all
+                                    — a flex item's default `min-width: auto` floors it at its
+                                    min-content width, which for a long path is most of the sentence. */}
+                                <span style={{ minWidth: 0, overflowWrap: "break-word" }}>
                                   {it.text}
                                 </span>
                               </div>

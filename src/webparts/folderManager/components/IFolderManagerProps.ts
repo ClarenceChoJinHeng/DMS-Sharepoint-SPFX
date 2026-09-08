@@ -85,6 +85,17 @@ export interface IFolderManagerProps {
    */
   onStructureDirtyChange?: (dirty: boolean) => void;
   /**
+   * Fired after the Folder levels screen SAVES a structure change.
+   *
+   * ⚠ THE GUIDED FLOW MUST RE-READ ITS SEGMENT LIST ON THIS, or the very next step insists there is
+   * no pending change to move to — about the change just made. That flow locks its migrate step on
+   * `pendingLevels`, which it copies out of a segment list read once at mount; re-reading the
+   * DERIVED facts on step change (which it already does) cannot help, because the stale value lives
+   * in the upstream read. Found live 2026-09-08.
+   * Ignored by `FolderMap`, which shares this interface.
+   */
+  onStructureSaved?: () => void;
+  /**
    * True when the migration screen has SCANNED work that has not been run yet.
    *
    * Walking past that step with moves outstanding leaves the segment half-changed — `PendingLevels`
