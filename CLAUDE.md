@@ -11783,3 +11783,33 @@ and MHO's `Sub Unit` is per-unit — present for some units, absent for others.
   itself: run it against a fake tree, never reason about it.**
   - The harness seeds five faults plus TWO correct branches — a unit with a sub unit and one without —
     and asserts the exact problem set, so a false positive on either fails the test.
+
+## ⚠⚠ THE MIGRATION NOW REFUSES TO RUN WITH UPLOADS ON (2026-09-09, 1.0.505.0)
+The red banner on the migrate screen has said *"Uploads must be turned off before continuing"* since
+2026-08-19 and **refused nothing** — its own comment admitted it: *"IT IS STILL NOT A GATE... a
+migration CAN be run with uploads on"*, on the reasoning that the block lived one level up in the
+guided flow's step 1. Two routes defeated that: the flow's own **Back** button (closed 1.0.504.0) and
+the **standalone Migrate tab**, which has no step 1 and therefore never had a gate at all.
+- **⚠⚠ IT IS NOT THE ONE-LINE CHANGE IT LOOKS LIKE, and the naive version breaks the very tab it is
+  for.** `uploadsPaused` is a PROP passed only by the guided flow's mount, so on the standalone tab it
+  is permanently `undefined` — gating `canRun` on it would have blocked that tab for ever. The
+  migrator now READS the setting itself when the host supplies nothing, and the host's value still
+  wins when it has one (the flow's step 1 already re-reads it and reports down, so there is no second
+  request there).
+- **⚠⚠ AND IT FAILS CLOSED, THE OPPOSITE DIRECTION FROM `uploadsArePaused`'s OWN DEFAULT.** That
+  helper answers *"should this uploader be blocked?"*, where a wrong `true` takes every uploader on the
+  site down over a transient read — so it fails OPEN by design. `readPause` answers *"is it safe to
+  move folders?"*, where a wrong `true` migrates on top of live traffic, which is the loop that cost
+  three days on GHO. **The helper still parses the VALUE**, so `yes`/`true`/`on`/`1`/`paused` mean the
+  same thing here as to an uploader; only the treatment of a failed READ differs. A MISSING row is a
+  real answer (nothing ever paused uploads), not an unknown.
+- **⚠ THE CHECK THAT MATTERS IS THE RE-READ INSIDE `run()`, NOT THE BUTTON.** The button's condition
+  was decided when the page loaded, and an admin can pause or resume in another tab or leave this
+  screen open across a working day. Same rule as the upload form's write-time re-check of this very
+  setting and as the stale-chain guard: **the state that counts is the one at WRITE time.** It refuses
+  before anything moves and says which of the two states it found.
+- **Two reasons, not one**, and ahead of the choose-a-value reason — because choosing values is
+  pointless until uploads are off, and *"they are on"* versus *"could not be read"* need different
+  actions.
+- **⚠ `readPause` HAD TO BE HOISTED ABOVE THE MOUNT EFFECT** — `no-use-before-define` is on, and
+  **lint catches this where `tsc` does not**. Second instance after `onAddTyped`.

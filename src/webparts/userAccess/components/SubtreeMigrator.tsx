@@ -24,6 +24,7 @@ import {
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, libraryTargets, LibTarget, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
+import { UPLOAD_PAUSE_SETTING, uploadsArePaused } from "../../../shared/uploadPause";
 import { writeAudit } from "../../../shared/spAuditLog";
 import {
   deleteFolderIfEmpty,
@@ -322,6 +323,16 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
      sections now, each with its own heading, dropdown and folder list, so twelve of them is a very
      long page. */
   const [unitPage, setUnitPage] = useState(0);
+  /**
+   * Whether uploads are paused, as far as THIS screen knows. `undefined` means not established.
+   *
+   * ⚠⚠ THE PROP ALONE IS NOT ENOUGH, and that is the whole reason this exists. `uploadsPaused` is
+   * passed only by the GUIDED FLOW's mount; the standalone Migrate tab has no step 1 and passes
+   * nothing, so it is permanently `undefined` there. Gating `canRun` on the prop would have blocked
+   * that tab for ever — and that tab is precisely the route with no forward gate, i.e. the one the
+   * gate is for.
+   */
+  const [pausedNow, setPausedNow] = useState<boolean | undefined>(uploadsPaused);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<Array<{ text: string; ok: boolean }>>([]);
   const [done, setDone] = useState<string | undefined>(undefined);
@@ -332,6 +343,13 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
   useEffect(() => {
     if (onRunningChange) onRunningChange(scanning || running);
   }, [scanning, running]);
+
+  /* The host's value wins whenever it has one: the flow's own step 1 re-reads the setting when its
+     toggle is pressed and reports it down, so this keeps the button in step with that without a
+     second request. */
+  useEffect(() => {
+    if (uploadsPaused !== undefined) setPausedNow(uploadsPaused);
+  }, [uploadsPaused]);
 
   const [confirm, setConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState("");
@@ -429,10 +447,51 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     return { year: get("termSet_yearPeriod"), docType: get("termSet_documentType") };
   };
 
+  /**
+   * Read the site-wide pause straight from `CRS Config`.
+   *
+   * ⚠⚠ IT INTERPRETS AN UNREADABLE ANSWER AS **NOT PAUSED**, WHICH IS THE OPPOSITE DIRECTION FROM
+   * `uploadsArePaused`'s own documented default — and deliberately so, because the two decisions have
+   * opposite costs. That helper answers *"should this uploader be blocked?"*, where a wrong `true`
+   * takes every uploader on the site down over a transient read. This answers *"is it safe to move
+   * folders?"*, where a wrong `true` migrates on top of live traffic — the loop that cost three days
+   * on GHO. So `undefined` here must never satisfy the gate.
+   *
+   * The helper is still what parses the VALUE, so `yes`/`true`/`on`/`1`/`paused` mean the same thing
+   * on this screen as they do to an uploader. Only the treatment of a failed READ differs.
+   */
+  const readPause = async (): Promise<boolean | undefined> => {
+    try {
+      // Names first: `cachedListTitle` answers the legacy `DMS Config` until priming settles, which
+      // 404s on a CRS-renamed site — the 1.0.207.0 race, paid for three times in this project.
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+          `/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'&$top=200`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return undefined;
+      const rows = ((await res.json()).value ?? []) as Array<{ Title?: string; SettingValue?: string }>;
+      const row = rows.filter((r) => (r.Title ?? "").trim() === UPLOAD_PAUSE_SETTING)[0];
+      // A MISSING row is a real answer: nothing has ever paused uploads, so they are on.
+      return uploadsArePaused(row?.SettingValue);
+    } catch {
+      return undefined;
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     // Names first: an unprimed cache resolves to the legacy DMS titles, which 404 on a renamed site
     // and present as "the configuration could not be read".
+    /* Only where the host did not supply it — the guided flow has already read this fact, and a
+       second read would be a second answer to one question. */
+    if (uploadsPaused === undefined) {
+      readPause()
+        .then((v) => setPausedNow(v))
+        .catch(() => undefined);
+    }
     primeNames(context.spHttpClient, siteUrl)
       .catch(() => undefined)
       .then(() => loadLegacyTermSets())
@@ -1303,6 +1362,28 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
   const run = async (): Promise<void> => {
     const seg = segments.filter((x) => x.key === chosen)[0];
     if (!seg || !scans) return;
+    /* ⚠⚠ RE-READ IMMEDIATELY BEFORE ANYTHING MOVES — the check that actually matters, and the same
+       rule the upload form follows for this very setting and for the stale chain (gotcha 10b): the
+       state that counts is the one at WRITE time, not at render time. The button's own condition was
+       decided when the page loaded, and an admin can pause or resume in another tab, or leave this
+       screen open across a working day.
+       Refuses on an unestablished answer too, for the reason on `readPause`. */
+    const fresh = await readPause();
+    setPausedNow(fresh);
+    if (fresh !== true) {
+      setConfirm(false);
+      setConfirmText("");
+      setDone(
+        fresh === false
+          ? "Nothing was moved. Uploads are ON, so a document filed mid-run could land in the old" +
+            " shape and never be moved — which leaves the structure change unable to go live. Turn" +
+            " uploads off, then run this again."
+          : "Nothing was moved. Whether uploads are paused could not be read just now, and moving" +
+            " folders while the site is accepting documents is what this check exists to prevent." +
+            " Try again in a moment.",
+      );
+      return;
+    }
     setRunning(true);
     setConfirm(false);
     setConfirmText("");
@@ -1536,8 +1617,19 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
      separately from outstanding folders.
      ⚠ AND IT CANNOT DEADLOCK: a tier whose options could not be READ makes its unit `unresolved`,
      which `unresolvedCount` already blocks on and which renders no dropdown to be stuck at. */
+  /* ⚠⚠ AND UPLOADS MUST BE PAUSED (2026-09-09). The red banner on this screen has said so since
+     2026-08-19 and refused nothing — its own comment admitted it: *"IT IS STILL NOT A GATE... a
+     migration CAN be run with uploads on"*, on the reasoning that the BLOCK lived one level up in the
+     guided flow's step 1. Two routes defeated that: the flow's own Back button (closed in 1.0.504.0)
+     and the STANDALONE Migrate tab, which has no step 1 at all and therefore never had a gate.
+     `=== true` only, so an unestablished answer refuses — see `readPause` for why this one fact fails
+     closed where `uploadsArePaused` fails open. */
   const canRun =
-    totalMoves > 0 && needingChoice === 0 && unresolvedCount === 0 && badNames === 0;
+    totalMoves > 0 &&
+    needingChoice === 0 &&
+    unresolvedCount === 0 &&
+    badNames === 0 &&
+    pausedNow === true;
 
   /** Units grouped by tail, so one set of pickers serves both libraries. */
   const groups: Array<{ tail: string; rows: UnitScan[] }> = [];
@@ -2106,7 +2198,17 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                 still waiting are usually on another page, and a reason that only described the
                 visible cards would send the admin looking on the wrong one. It names the page count
                 too, because with three units a page "8 folders" alone does not say where to look. */}
-            {conflicts.length === 0 && needingChoice > 0 && totalMoves > 0 && (
+            {/* ⚠ AHEAD OF THE VALUE-CHOOSING REASON, because it is the one an admin must act on
+                FIRST: choosing values is pointless until uploads are off. Named separately for the
+                two states, since "could not be read" and "they are on" need different actions. */}
+            {conflicts.length === 0 && totalMoves > 0 && pausedNow !== true && (
+              <span style={{ ...s.hint, marginLeft: 10, color: "#a4262c" }}>
+                {pausedNow === false
+                  ? "Turn uploads off first — see the warning above. A document filed mid-run can land in the old shape and never be moved."
+                  : "Whether uploads are paused could not be read, so this will not run. Try again in a moment."}
+              </span>
+            )}
+            {conflicts.length === 0 && needingChoice > 0 && totalMoves > 0 && pausedNow === true && (
               <span style={{ ...s.hint, marginLeft: 10, color: "#7a4f00" }}>
                 {needingChoice} folder(s) across {unitPages.total} unit(s) still have no value chosen.
                 Every one needs a value before anything moves — a library left unchosen stays in the
