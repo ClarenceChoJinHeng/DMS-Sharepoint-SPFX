@@ -12233,3 +12233,33 @@ screens.
     list" (2026-08-17) and "Shared folder term". Flagged to the client; their call.
 - **Verified**: `tsc --noEmit` clean, suite **1805/0** (2 new), no new lint warnings. Packaged as
   `1.0.516.0`. **NOT site-tested.**
+
+## THE RETIRE FLOW ASKS FOR NO SEGMENT — ITS SCREEN LISTS THEM ALL (2026-09-09, 1.0.517.0)
+Client, on a `Segment` dropdown standing above a list of all six segments: *"no need dropdown, just
+display the entire thing"*, following *"for the retire a segment... it should only show, Segments on
+this site (6)"*.
+- **`needsSegment: false`.** The one remaining screen enumerates every segment on the site with a
+  Delete beside each, so the picker asked for a value the step never spends — and the switcher above
+  it offered to change an answer that changed nothing on screen. **THIS IS THE `stepUsesSegment`
+  SHAPE APPLIED TO A WHOLE FLOW**: with one step, and a screen that lists its own subjects, the flow
+  itself is in that position.
+- **⚠ IT ONLY BECAME TRUE WHEN "Move the documents out" LEFT (same change, earlier today).** THAT
+  step did consume a segment, because the migrator works on one. A one-step flow is what made the
+  picker pointless — so this is not a rule that was always available and overlooked.
+- **⚠ THE `segmentExists` LOCK WENT WITH THE PICKER, and removing it was required rather than
+  tidy.** It asked *"is the segment you chose real"*, which is unanswerable once nothing is chosen
+  and meaningless when the screen below is a list of the segments that ARE real. It would also have
+  been **inert** — no segment picked leaves the fact `undefined`, and unknown never locks. **A lock
+  that can never fire is worse than no lock, because the next reader trusts it.**
+- **No component change was needed, and that is worth knowing before editing `FolderAdmin`:** both
+  the picker (`needsPick`) and the switcher are gated on `active.needsSegment`, so one flag removed
+  both.
+- **⚠ AND THE RAIL TEST'S INDEX COMMENT HAD GONE STALE THE DAY THE ABBREVIATIONS STEP WAS ADDED** —
+  it listed five steps against six constants, which makes every index below it suspect. The step
+  order is now **pinned by its own test**, so a step added or reordered fails loudly instead of
+  silently changing what `MIGRATE` means. That stale comment is also why `ABBREV` was sitting unused;
+  it is asserted now rather than deleted.
+- **Verified**: `tsc --noEmit` clean, `eslint` **clean on both changed files** (the pre-existing
+  `ABBREV` warning is gone), suite **1806/0**. Packaged **1.0.517.0** via `npm run build` — 482 KB,
+  the production shape — and verified INSIDE the `.sppkg`: `needsSegment:!1` on the retire flow, and
+  the removed lock reason at **0 occurrences in every bundle**. **NOT site-tested.**

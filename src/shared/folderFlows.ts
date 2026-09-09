@@ -503,7 +503,15 @@ export const FLOWS: Flow[] = [
     label: "Retire a segment",
     blurb: "Remove the segment from the available options so users can no longer use it for new work. Any documents already stored in the segment will remain available and will not be deleted — nothing here moves them anywhere else.",
     tone: "destructive",
-    needsSegment: true,
+    /* ⚠⚠ IT ASKS FOR NO SEGMENT (client, 2026-09-09: *"no need dropdown, just display the entire
+       thing"*), AND THIS IS THE RULE THE PAUSE STEP WALKED INTO TWICE.
+       The screen lists every segment on the site with a Delete beside each, so a picker in front of
+       it asked for a value the step never spends — and then a switcher above it offered to change an
+       answer that changed nothing on screen. `stepUsesSegment` exists for exactly this shape; with
+       one step and a screen that enumerates its own subjects, the whole flow is in that position.
+       ⚠ It only became true when "Move the documents out" left (same change): THAT step did consume
+       a segment, because the migrator works on one. A one-step flow made the picker pointless. */
+    needsSegment: false,
     /* ⚠⚠ "MOVE THE DOCUMENTS OUT" IS GONE (client, 2026-09-09), AND IT WAS NEVER THE TOOL ITS LABEL
        PROMISED. It mounted the MIGRATOR, which re-shapes folders WITHIN one segment — there is no
        cross-segment move tool anywhere in this system, so the only way to get documents out of a
@@ -527,10 +535,11 @@ export const FLOWS: Flow[] = [
           "confirmation. ⚠ Nothing here moves documents to another segment — if any are worth " +
           "keeping, move them by hand in SharePoint first.",
         screen: { kind: "tab", tab: "newsegment" },
-        lock: {
-          fact: "segmentExists",
-          reason: "There is no such segment to retire.",
-        },
+        /* ⚠ THE `segmentExists` LOCK WENT WITH THE PICKER. It asked "is the segment you chose real",
+           which is unanswerable when nothing has been chosen — and meaningless when the screen below
+           is a list of the segments that ARE real, each with its own Delete. It would also have been
+           inert: no segment picked leaves the fact `undefined`, and unknown never locks. Removed
+           rather than left as a lock that can never fire. */
       },
     ],
   },

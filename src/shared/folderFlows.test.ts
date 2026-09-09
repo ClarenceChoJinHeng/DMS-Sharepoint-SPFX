@@ -76,10 +76,16 @@ describe("the flows", () => {
     expect(FLOWS.filter((f) => f.tone === "destructive").map((f) => f.id)).toEqual(["retire"]);
   });
 
-  it("asks for a segment on every flow except Add a new segment", () => {
+  it("asks for a segment only where a step actually spends one", () => {
     // Flow 1 creates the segment, so it cannot require one first.
     expect(flow("newSegment").needsSegment).toBe(false);
-    for (const id of ["addUnit", "structure", "rename", "retire"]) {
+    /* ⚠ RETIRE JOINED IT ON 2026-09-09. Its one remaining screen LISTS every segment with a Delete
+       beside each, so a picker in front asked for a value the step never spends and a switcher above
+       offered to change an answer that changed nothing — the `stepUsesSegment` shape, applied to a
+       whole flow. It only became true when "Move the documents out" left: that step DID consume a
+       segment, because the migrator works on one. */
+    expect(flow("retire").needsSegment).toBe(false);
+    for (const id of ["addUnit", "structure", "rename"]) {
       expect(flow(id).needsSegment).toBe(true);
     }
   });
@@ -277,10 +283,16 @@ describe("isLocked — THE client's rule: never stop them doing the work", () =>
        is on it: the SAME step object, lock included, rather than a lock-free copy. It cannot fire
        there either — the structure flow has no abbreviations screen, so the count stays `undefined`
        and unknown never gates. */
+    /* ⚠ `retire.delete` LEFT THIS LIST ON 2026-09-09, WITH ITS SEGMENT PICKER. Its lock asked
+       "is the segment you chose real", which is unanswerable once nothing is chosen — and
+       meaningless when the screen below is a list of the segments that ARE real, each with its own
+       Delete. It would also have been inert: no segment picked leaves `segmentExists` undefined,
+       and unknown never locks. A lock that can never fire is worse than no lock, because the next
+       reader trusts it. */
     expect(locked).toEqual([
       "newSegment.abbreviations", "newSegment.reconcile",
       "addUnit.reconcile", "structure.reconcile",
-      "rename.reconcile", "runRecon.reconcile", "retire.delete",
+      "rename.reconcile", "runRecon.reconcile",
     ]);
   });
 
@@ -932,8 +944,17 @@ describe("scopeFactsToFlow — segment facts must not tick a subject-scoped flow
  */
 describe("the rail cannot walk past a blocked step", () => {
   const steps = flow("structure").steps;
-  // pauseUploads, levels, migrate, reconcile, resumeUploads
+  /* ⚠ THIS COMMENT WENT STALE THE DAY THE ABBREVIATIONS STEP WAS ADDED (2026-09-09) and listed
+     five steps against six constants — the kind of drift that makes every index below it suspect.
+     Derived from the flow now, so it cannot lie: a step added or reordered fails the length pin
+     rather than silently shifting what `MIGRATE` means. */
   const PAUSE = 0, LEVELS = 1, ABBREV = 2, MIGRATE = 3, RECONCILE = 4, RESUME = 5;
+
+  it("pins the step order the indices below depend on", () => {
+    expect(steps.map((st) => st.id)).toEqual([
+      "pauseUploads", "levels", "abbreviations", "migrate", "reconcile", "resumeUploads",
+    ]);
+  });
 
   it("blocks at step 1 while uploads are on, and at the closing step while they are paused", () => {
     expect(firstBlockedStepIndex(steps, { uploadsPaused: false })).toBe(PAUSE);
@@ -964,6 +985,7 @@ describe("the rail cannot walk past a blocked step", () => {
     const firstBlocked = firstBlockedStepIndex(steps, { uploadsPaused: true });
     const at = { maxIdx: MIGRATE, idx: PAUSE, firstBlocked };
     expect(isStepReachable(LEVELS, at)).toBe(true);
+    expect(isStepReachable(ABBREV, at)).toBe(true);
     expect(isStepReachable(MIGRATE, at)).toBe(true);
   });
 
