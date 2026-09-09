@@ -12263,3 +12263,49 @@ this site (6)"*.
   `ABBREV` warning is gone), suite **1806/0**. Packaged **1.0.517.0** via `npm run build` — 482 KB,
   the production shape — and verified INSIDE the `.sppkg`: `needsSegment:!1` on the retire flow, and
   the removed lock reason at **0 occurrences in every bundle**. **NOT site-tested.**
+
+## `target="_blank"` IS NOT ENOUGH IN A SHAREPOINT MODERN PAGE (2026-09-09, 1.0.518.0)
+Client, testing the Sub unit screens: *"I notice the Open the term stoer management link is not
+opening a new tab"*. `shared/newTab.ts` (`openInNewTab`, pure handler, 5 tests).
+- **⚠⚠ THE MARKUP WAS RIGHT, IN THE SOURCE AND IN THE SHIPPED BUNDLE — checked before touching
+  anything.** All five source anchors carried `target="_blank" rel="noopener noreferrer"`, and a grep
+  INSIDE the `.sppkg` found all eight compiled copies carrying it too. **So no amount of re-reading
+  the JSX could have found this**, and the cause is at runtime in the page.
+- **THE MECHANISM IS SHAREPOINT'S OWN ANCHOR INTERCEPTOR, already written up in this file for a
+  different symptom.** The modern page shell routes between pages without a full reload
+  (`_interceptAnchorClick` -> `_onIntercept` -> `push`) — the soft navigation recorded as the reason a
+  stale bundle fails on some navigations and not others. **A SAME-ORIGIN href is exactly what that
+  router claims**, and it can swallow the `target` on the way. `_layouts/15/termstoremanager.aspx` is
+  same-origin by construction.
+- **⚠ ON THESE SCREENS IT IS NOT COSMETIC, which is why it was worth a shared helper rather than a
+  shrug.** `StructureManager` holds an unsaved-changes guard, so same-tab navigation either prompts
+  the admin or loses the half-filled Add form — the level they were describing when they went to look
+  a term up. The code comment beside the link has said so since 1.0.477.0; it simply was not true.
+- **`window.open` IS NOT AN ANCHOR CLICK, so nothing at the anchor level can intercept it — and that
+  is what makes the fix robust to being WRONG about which runtime mechanism is doing the swallowing.**
+  The diagnosis is a theory; the fix does not depend on it.
+- **⚠ IT READS THE URL OFF `currentTarget.href` AND TAKES NO ARGUMENT, and the first version did.**
+  `openInNewTab(url)` put the address in the markup TWICE per link — ten copies across five anchors —
+  so editing the `href` and not the handler would **show one page and open another**. Caught and
+  rewritten before it shipped. `currentTarget.href` cannot disagree with the link it sits on.
+- **⚠ THE ANCHOR KEEPS `href`, `target` AND `rel`, verified in the package.** They are what make
+  middle-click, Ctrl/Cmd-click and the context menu's own *Open link in new tab* behave normally, and
+  what happens if the handler never runs. **A future edit must not "tidy" them away.**
+- **⚠ ONLY A SUCCESSFUL `window.open` CALLS `preventDefault`.** A pop-up blocker answers `null`, and
+  suppressing the anchor regardless would turn a link that goes to the wrong PLACE into a link that
+  does NOTHING — strictly worse, and the dead-control defect this project has now shipped three
+  times. Pinned by the test that matters most here.
+- **Every MODIFIED click passes straight through** (Ctrl/Cmd/Shift/Alt, middle). Those already mean
+  "open this somewhere else"; handling them opens two tabs or steals the window the admin asked for.
+- **⚠ FIVE SOURCE ANCHORS, EIGHT COMPILED ONES — `StructureManager` COMPILES INTO TWO BUNDLES**
+  (`user-access-web-parts` and `folder-manager-web-part` via `FolderManager`). Grepping one bundle
+  checks half the app; this is the fourth time that has mattered.
+- **⚠ ANY OTHER SAME-ORIGIN `target="_blank"` IN THIS PROJECT IS SUSPECT FOR THE SAME REASON.** Only
+  the Term Store links were changed, because only they were reported and only they sit behind an
+  unsaved-changes guard. If another in-app link is reported the same way, the helper is already there.
+- **Verified**: `tsc --noEmit` clean, `eslint` **clean on the new module and its test** (the three
+  warnings on the two components are pre-existing — `mapRows` and both `max-lines`, each file already
+  over the ceiling), suite **1811/0** (5 new). Packaged **1.0.518.0** via `npm run build` — 482 KB,
+  the production shape — and verified INSIDE the `.sppkg`: `onClick` on **8 of 8** anchors,
+  `target="_blank" rel="noopener noreferrer"` still on 8 of 8, `window.open` once per bundle.
+  **NOT site-tested** — the test is one click on *Open the Term Store* beside the Term set ID field.

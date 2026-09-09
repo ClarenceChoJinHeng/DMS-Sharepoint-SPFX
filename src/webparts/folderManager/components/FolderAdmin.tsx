@@ -49,6 +49,7 @@ import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { tabFromHash } from "../../../shared/adminPages";
 import { BackBand, BackToSettings } from "../../../shared/backToSettings";
+import { openInNewTab } from "../../../shared/newTab";
 import { FlowIcon } from "./flowIcons";
 
 /**
@@ -1386,6 +1387,7 @@ export default function FolderAdmin({
             <p style={{ margin: "0 0 12px" }}>
               <a
                 href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+                onClick={openInNewTab}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={s.termStoreLink}
@@ -1597,6 +1599,7 @@ export default function FolderAdmin({
           <div style={{ ...s.outside, marginBottom: 14 }}>
             <a
               href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+              onClick={openInNewTab}
               target="_blank"
               rel="noopener noreferrer"
               style={s.termStoreLink}

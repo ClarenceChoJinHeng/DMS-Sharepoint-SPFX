@@ -13,6 +13,7 @@ import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+import { openInNewTab } from "../../../shared/newTab";
 import {
   existingColumnReason,
   reservedColumnReason,
@@ -188,6 +189,7 @@ function unitCheckNote(
           {segLabel} does not have any sub units under its {unitLabel} terms yet. Add one in the{" "}
           <a
             href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+            onClick={openInNewTab}
             target="_blank"
             rel="noopener noreferrer"
           >
@@ -1763,6 +1765,7 @@ export default function StructureManager({
                   <a
                     style={s.labelLink}
                     href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+                    onClick={openInNewTab}
                     target="_blank"
                     rel="noopener noreferrer"
                   >
@@ -1819,6 +1822,7 @@ export default function StructureManager({
                     because this screen holds an unsaved-changes guard. */}
                 <a
                   href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+                  onClick={openInNewTab}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
