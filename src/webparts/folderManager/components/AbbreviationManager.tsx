@@ -296,26 +296,70 @@ export default function AbbreviationManager({
       // one" apart from "this effect already auto-picked the first one a moment ago" — it always loses
       // that race, because by the time it runs, `chosen` is no longer "". Found live 2026-08-26: a flow
       // that already named the segment in its header still opened this screen on a blank picker.
-      const preselect =
-        initialSegmentKey && opts.filter((o) => o.key === initialSegmentKey).length > 0
-          ? initialSegmentKey
-          : opts.length > 0
-          ? opts[0].key
-          : undefined;
-      if (preselect) setChosen(preselect);
+      /* WARN: WHEN THE HOST NAMED A SEGMENT AND IT IS NOT ON OFFER, SELECT NOTHING. Falling back
+         to `opts[0]` here is what put BUAH on screen under a flow header reading "Segment: Test"
+         (client, 2026-09-09: *"when I select Test it shows Buah"*) — `opts` is sorted by label,
+         so the stranger it substitutes is simply whichever segment sorts first.
+
+         It is not a display slip. The tree then loads the WRONG segment's terms, the admin types
+         codes believing they belong to the segment the flow named, and Next calls `save()` —
+         writing them to the substitute. On the one list whose whole job is saying what a folder
+         is called.
+
+         A row is absent from `opts` when its Term set ID is blank, because there are then no
+         terms to name; `FolderAdmin`'s own segment list does NOT filter on that, which is how a
+         segment can be pickable in the flow and unofferable here. Explained on screen instead —
+         see `namedMissing` below — and `missing` stays UNDEFINED with nothing chosen, so unknown
+         gates nothing and the admin is not trapped on a step they cannot satisfy.
+
+         Assigned rather than guarded (`if (preselect)`) because this effect can now re-run: a
+         no-match after a match has to CLEAR the earlier choice, not leave it standing.
+
+         `opts[0]` still applies with no host key — that is the standalone tab, where this effect
+         runs exactly once and so can never overwrite a manual pick. */
+      const named = (initialSegmentKey ?? "").trim();
+      const preselect = named
+        ? opts.filter((o) => o.key === named).length > 0
+          ? named
+          : ""
+        : opts.length > 0
+        ? opts[0].key
+        : "";
+      setChosen(preselect);
       setLoading(false);
     };
     load().catch((e) => {
       setResult({ ok: false, text: `Could not read the segments — ${(e as Error).message}` });
       setLoading(false);
     });
-  }, []);
+    /* WARN: `initialSegmentKey` IS A DEPENDENCY, and an empty array here was the other half of
+       the Buah bug. `FolderAdmin` derives that key from its OWN segment read, so on a fast mount
+       this screen runs the pass above while that read is still in flight, sees `undefined`, and
+       takes the fallback. The key then arrives, the flow header re-renders and names the right
+       segment, and this screen never re-decides — two answers on one page, one of them settled at
+       mount. Same shape as the `useMemo` dep missed on 2026-09-09, and nothing type-checks a dep
+       array.
+
+       Re-running costs the two reads again, once, when the key lands or the flow's own segment
+       switcher changes it — which is exactly when the answer must change. It cannot discard typed
+       work: with a host key the picker is a plain line, so there is no manual pick to lose, and
+       the switcher already refuses to move while the draft is dirty. */
+  }, [initialSegmentKey]);
 
   /* ── Tree + existing codes for the chosen segment ───────────────────────────── */
 
   useEffect(() => {
     const seg = segment();
-    if (!seg) return undefined;
+    if (!seg) {
+      /* WARN: CLEAR THE ROWS, NEVER JUST RETURN. `registerSave` hands this screen's `save()` to
+         the guided flow's Next UNCONDITIONALLY (the Save button itself came off on 2026-09-06),
+         so rows left in state after the selection goes away are codes Next would write to the
+         segment they were loaded FROM, while the flow names a different one. The rows section
+         already renders nothing without a segment, so this was invisible on screen and reachable
+         anyway. Safe against a loop: the deps are `[chosen, segments.length]`, both settled. */
+      setRows([]);
+      return undefined;
+    }
     let cancelled = false;
     const load = async (): Promise<void> => {
       setTreeLoading(true);
@@ -667,6 +711,11 @@ export default function AbbreviationManager({
 
   const seg = segment();
   const missing = rows.filter((r) => r.abbreviation.trim() === "").length;
+  /* The host named a segment this screen cannot offer. Derived, never stored, so it cannot go
+     stale against `segments`; read only below the `if (loading)` return, and guarded anyway. */
+  const namedKey = (initialSegmentKey ?? "").trim();
+  const namedMissing =
+    !loading && namedKey !== "" && segments.filter((o) => o.key === namedKey).length === 0;
 
   /* Report the count up to whatever hosts this screen — the guided flow gates Next on it.
      THE THREE UNKNOWN CASES ARE THE POINT: still loading, no segment chosen, or a term set with no terms
@@ -734,6 +783,20 @@ export default function AbbreviationManager({
           <div style={{ fontSize: 13, fontWeight: 600, color: "#242424" }}>
             {segment()?.label ?? initialSegmentKey}
           </div>
+          {/* Names BOTH causes and asserts neither: a blank Term set ID and a row that could not
+              be read are indistinguishable from here, and they have different fixes. Stated
+              rather than commanded, because nothing is gated — a segment with no term set has no
+              codes to fill in, so walking on is correct. */}
+          {namedMissing && (
+            <div style={{ ...s.msg, ...s.warn, marginTop: 8 }}>
+              This segment is not listed on this screen, so nothing below belongs to it and no
+              codes have been loaded or changed. Either its <strong>Term set ID</strong> is blank
+              on its CRS Config row — there are no terms to give codes to until one is set — or
+              that row could not be read. Set the term set on Folder Structure Management, then
+              come back. You can carry on past this step meanwhile: a segment with no terms has
+              no codes to fill in.
+            </div>
+          )}
         </div>
       ) : (
       <div style={{ marginBottom: 16 }}>

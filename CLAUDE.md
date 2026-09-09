@@ -12309,3 +12309,79 @@ opening a new tab"*. `shared/newTab.ts` (`openInNewTab`, pure handler, 5 tests).
   the production shape — and verified INSIDE the `.sppkg`: `onClick` on **8 of 8** anchors,
   `target="_blank" rel="noopener noreferrer"` still on 8 of 8, `window.open` once per bundle.
   **NOT site-tested** — the test is one click on *Open the Term Store* beside the Term set ID field.
+
+## ⚠⚠ THE FLOW SAID "Segment: Test" WHILE THE SCREEN LOADED BUAH'S TERMS (2026-09-09, 1.0.519.0)
+Client, on step 3 of Add a new segment: *"Also when I select Test it shows Buah."* — the flow header
+naming one segment and the CRS Term Abbreviations screen beneath it naming another, with Buah's own
+terms listed. **Two independent causes, either of which produces the identical symptom.**
+- **⚠⚠ IT IS NOT A DISPLAY SLIP, AND THAT IS WHY IT MATTERED.** The Save button came off this screen
+  on 2026-09-06 and the flow's **Next** now calls `save()` through `registerSave`, registered
+  unconditionally. So `rows` held the substituted segment's codes, the admin typed against a header
+  naming a different one, and pressing Next **wrote Buah's abbreviations while the flow said Test** —
+  silent data damage on the one list whose job is saying what a folder is called.
+- **CAUSE A — THE RACE, and almost certainly what the client hit.** The segments effect had an EMPTY
+  dep array, so `initialSegmentKey` was captured at mount. `FolderAdmin` derives that key from its
+  OWN segment read, so on a fast mount this screen ran its pass while that read was still in flight,
+  saw `undefined`, and fell through to `opts[0].key` — and `opts` is sorted by label, so `opts[0]` is
+  **Buah**. The key then arrived, the header re-rendered and said Test, **and the effect never ran
+  again**: one value derived at render, the other settled once at mount.
+  - **Same family as the `useMemo` dep missed on 2026-09-09 and the 1.0.251.0 preselect race.**
+    `initialSegmentKey` is a dependency now. **Nothing type-checks a dep array** and
+    `react-hooks/exhaustive-deps` did not flag either one, so the only guard is adding the dep in the
+    SAME edit as the read.
+  - Re-running is safe and cannot discard typed work: with a host key the picker renders as a plain
+    line, so there is no manual pick to lose, and the switcher already refuses to move while the
+    draft is dirty.
+- **CAUSE B — A SILENT FALLBACK OVER A FILTER ASYMMETRY.** This screen drops any mode row with a
+  blank `TermSetGuid` (no term set, so no terms to name); **`FolderAdmin`'s own segment read selects
+  that column and does NOT filter on it.** So a segment can be pickable in the flow and absent from
+  `opts` here — the same fallback, the same stranger.
+- **THE FIX IS THAT A HOST-NAMED SEGMENT NEVER FALLS BACK TO ANOTHER.** No match ⇒ select nothing.
+  `opts[0]` still applies when no key was supplied, which is the standalone tab, where the effect
+  runs exactly once and so can never overwrite a manual pick.
+  - **⚠ ASSIGNED, NOT GUARDED.** `if (preselect) setChosen(...)` was correct while the effect ran
+    once; now that it can re-run, a no-match after a match has to CLEAR the earlier choice rather
+    than leave it standing.
+  - **⚠ SELECTING NOTHING CANNOT TRAP ANYONE, and that was checked before choosing it.** `knowable`
+    requires `seg !== undefined`, so `missing` reports **undefined** — unknown, which gates nothing.
+    The step stays walkable, which is right: a segment with no term set has no codes to fill in.
+- **⚠ AND THE NO-SEGMENT BRANCH NOW CLEARS `rows`.** It was a bare `return undefined`, so the
+  previous segment's codes survived in state — invisible on screen (the rows section renders nothing
+  without a segment) and reachable by `save()` anyway. Safe against a loop: the deps are
+  `[chosen, segments.length]`, both settled values.
+- **THE SCREEN SAYS SO WHEN THE NAMED SEGMENT IS NOT ON OFFER**, naming BOTH causes and asserting
+  neither — a blank Term set ID and a row that could not be read are indistinguishable from here and
+  have different fixes. Derived, never stored, so it cannot go stale against `segments`.
+- **⚠ NEITHER CAUSE HAS A TEST AND NEITHER CAN HAVE ONE HERE** — both live in a component effect and
+  this project has no UI tests, which is why the client walking one screen has produced nine defects
+  in a fortnight. **The extractable half is the preselect decision**; a pure
+  `preselectFor(named, opts)` would be testable and is not built.
+- **Verified**: `tsc --noEmit` clean, `eslint` **clean on the file**, suite **0 failures across 51
+  suites**, 41 warnings — the established baseline, none new. Packaged **1.0.519.0** via
+  `npm run build` (483 KB, the production shape) and verified INSIDE the `.sppkg`: the new
+  explanation present in `folder-manager-web-part`. **NOT site-tested** — the test is opening step 3
+  of the flow twice, once on a warm cache and once after a hard refresh, and confirming the screen
+  names the segment the header does.
+
+## THE "Segments on this site" LIST IS GONE FROM THE CREATE FLOW (2026-09-09, 1.0.519.0)
+Client: *"Remove the the Segments on this site (7), client dont think its needed."*
+- **DERIVED FROM `allowDelete`, NOT A NEW PROP THREADED THROUGH FOUR FILES.** The list is shown
+  exactly where it can be ACTED on, so one flag decides both and they cannot drift:
+  `hideSegmentDelete` is set only for `newSegment`, so **Retire keeps the list** — the client asked
+  on 2026-09-09 that Retire show only that list — and the standalone Segments tab keeps it too.
+  Split them into a separate `hideSegmentList` prop only if a caller ever needs the list without the
+  buttons.
+- **⚠ `existing` IS STILL READ AND STILL POPULATED.** `fieldConflicts` refuses a duplicate name or
+  top folder from it, so this hides the RENDER and nothing else.
+- **THE TWO-BRANCH HINT COLLAPSED TO ONE SENTENCE**, and the branch that went was the rationale the
+  client rejected: *"Listed so you can see what is already set up — creating one that exists is
+  refused…"* `grep -c "allowDelete === false"` returns **0** in the source, and that sentence returns
+  0 in both shipped bundles.
+- **⚠ `tsc` CAUGHT THE LEFTOVER INNER GUARD AS PROVABLY ALWAYS TRUE** (`TS2367`: `'true | undefined'`
+  and `'false'` have no overlap) — gating the block narrowed the type inside it. The Delete button is
+  unconditional now, **and only because the whole list above is gated on the same flag**. If the list
+  is ever shown where Delete must not be, bring the guard back rather than disabling the button: a
+  greyed Delete tells an admin the option belongs there and invites hunting for the way to enable it.
+- **Both prop docs were wrong and are corrected** — they claimed the list always stays.
+- **⚠ `SegmentCreator` COMPILES INTO TWO BUNDLES** (`user-access-web-parts` and
+  `folder-manager-web-part`), so grepping one checks half the app. Fifth time that has mattered.

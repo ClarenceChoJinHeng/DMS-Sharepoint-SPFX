@@ -152,8 +152,10 @@ export interface SegmentCreatorProps {
    * hidden would silently remove the button from the flow whose entire purpose is to use it — and the
    * standalone Segments tab needs it too. Only the create flow opts out.
    *
-   * The list itself STAYS either way: seeing that a segment already exists is what stops someone
-   * creating it twice.
+   * WARN: IT ALSO DECIDES WHETHER THE SEGMENTS LIST RENDERS AT ALL (client, 2026-09-09). This
+   * used to read "the list itself STAYS either way" and that is no longer true: the list is shown
+   * only where it can be acted on, which is everywhere except the create flow. The rows are still
+   * READ regardless - the duplicate-name refusal depends on them.
    */
   allowDelete?: boolean;
   /**
@@ -161,8 +163,8 @@ export interface SegmentCreatorProps {
    * step 2 ("Segments -> Delete"), and that flow has no use for the create form below the segments
    * list — client, 2026-08-26: *"Retiring a segment is just to delete, not to create."* DEFAULTS TO
    * SHOWN, so the standalone Segments tab and the "Add a new segment" flow are both untouched; only
-   * Retire opts out. The segments list itself always stays — seeing what already exists, and being
-   * able to delete it, is the whole point of this screen for that flow.
+   * Retire opts out. The segments list is what that flow exists to show, and it survives because
+   * Retire leaves `allowDelete` alone - see the warning on that prop.
    */
   allowCreate?: boolean;
 }
@@ -1023,7 +1025,22 @@ export default function SegmentCreator({
       {/* ── The segments that exist, each removable ─────────────────────────────
           Spec: 2026-08-14-delete-segment-design.md. Delete RETIRES the segment; it deletes no
           document and no column unless the folder option is ticked in the dialog. */}
-      {existing.length > 0 && (
+      {/* GATED ON `allowDelete`, WHICH IS FALSE IN THE CREATE FLOW AND NOWHERE ELSE (client,
+          2026-09-09: *"Remove the the Segments on this site (7), client dont think its needed."*
+          Their screenshot was step 2 of Add a new segment, where this list is purely informational
+          and its own hint said so.
+
+          The list is shown exactly where it can be ACTED on, so one flag decides both and they
+          cannot drift: `hideSegmentDelete` is set only for `newSegment`, so Retire keeps the list
+          (client, 2026-09-09: *"it should only show, Segments on this site"* - it IS that flow's
+          whole screen) and the standalone Segments tab keeps it too, where deleting is why anyone
+          opens it. Split them into a separate `hideSegmentList` prop only if a caller ever needs
+          the list without the buttons or the reverse.
+
+          WARN: `existing` IS STILL READ AND STILL POPULATED - `fieldConflicts` refuses a duplicate
+          name or top folder from it, so this hides the RENDER and nothing else. Do not "tidy" the
+          read away with it. */}
+      {allowDelete !== false && existing.length > 0 && (
         <div style={s.card}>
           <p style={s.h}>Segments on this site ({existing.length})</p>
           {existing.map((seg) => (
@@ -1032,30 +1049,28 @@ export default function SegmentCreator({
               <span style={s.tierMeta}>
                 top folder <strong>{seg.stagingFolder || "—"}</strong>
               </span>
-              {/* HIDDEN, not disabled, when the host says so. A greyed Delete still tells an admin the
-                  option belongs here and invites hunting for the way to enable it; in the create flow it
-                  does not belong here at all. Absent prop = shown, so the Retire flow (which mounts this
-                  same screen) and the standalone Segments tab are untouched. */}
-              {allowDelete !== false && (
-                <button
-                  style={s.danger}
-                  disabled={busy || seg.itemId === undefined}
-                  title={
-                    seg.itemId === undefined
-                      ? "This row has no id, so it cannot be deleted from here."
-                      : "Remove this segment"
-                  }
-                  onClick={() => openDelete(seg)}
-                >
-                  Delete
-                </button>
-              )}
+              {/* Unconditional, and only because the whole list above is now gated on the same
+                  flag - `tsc` caught the leftover `allowDelete !== false` here as provably always
+                  true, which is what a redundant guard looks like from the outside. If the list is
+                  ever shown where Delete must not be, bring the guard back rather than disabling
+                  the button: a greyed Delete tells an admin the option belongs here and invites
+                  hunting for the way to enable it. */}
+              <button
+                style={s.danger}
+                disabled={busy || seg.itemId === undefined}
+                title={
+                  seg.itemId === undefined
+                    ? "This row has no id, so it cannot be deleted from here."
+                    : "Remove this segment"
+                }
+                onClick={() => openDelete(seg)}
+              >
+                Delete
+              </button>
             </div>
           ))}
           <p style={s.hint}>
-            {allowDelete === false
-              ? "Listed so you can see what is already set up — creating one that exists is refused. To retire a segment, use Retire a segment from Folder Management."
-              : "Deleting a segment stops it being offered and removes its folder-access mappings. It does not delete any document, and never deletes a column."}
+            Deleting a segment stops it being offered and removes its folder-access mappings. It does not delete any document, and never deletes a column.
           </p>
         </div>
       )}
