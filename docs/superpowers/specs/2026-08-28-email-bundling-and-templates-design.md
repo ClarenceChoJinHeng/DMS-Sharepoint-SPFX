@@ -129,6 +129,24 @@ through an `APR` filter would email every ordinary Head of Unit about a Highly C
 
 ## 5. The client's templates, verbatim
 
+> ⚠⚠ **RE-ISSUED BY THE CLIENT 2026-09-10 WITH ONE CHANGE THROUGHOUT: EVERY TEMPLATE NOW SIGNS OFF
+> `SD Guthrie`.** The bodies transcribed below still carry the ORIGINAL `[PIC Name]` /
+> `[Approver Name]` sign-offs — **read that line as superseded in all eleven.** Everything else in the
+> re-issued sheet is unchanged, checked template by template.
+>
+> - **This resolves §6's two "slips" rather than confirming them.** Template 8 signed off `[PIC Name]`
+>   while being addressed to the PIC, and 6/9 signed off `[PIC Name]` while addressed to the approver.
+>   A fixed organisational sign-off removes the question entirely; **do not "fix" those back.**
+> - **⚠ It also makes template 6's first person incoherent, and that is a real editorial conflict.**
+>   *"**I** would like to share…"* signed `SD Guthrie` reads as SD Guthrie wanting to share the file.
+>   The built email uses the third person (*"clarence would like to share…"*), which is unambiguous —
+>   **a deliberate deviation from their prose, and one to confirm with them rather than assume.**
+> - **⚠ Template 10 still says `[90]` days in the re-issued sheet.** It is **93**, agreed with the
+>   client on 2026-09-03 (*"stay 93, they might not know that is why they say 90"*). The re-issue is
+>   not a reversal of that — it is the same original text carried forward.
+> - **⚠ Template 5's subject is still malformed as supplied** (`Rejected: [​ Name] has been
+>   rejected`, carrying a zero-width character). §6.4 stands.
+
 Reproduced as supplied. Bracketed tokens are theirs.
 
 ### 1 — Invitation Notification (to Recipient)

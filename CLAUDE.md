@@ -4795,7 +4795,8 @@ permission level do not exist yet, so **nothing works until reconciliation is re
   backwards). A HoU therefore **approves their own uploads**; the client accepted this.
 - **Deletions RECYCLE, never purge** — restorable for 93 days, which is what makes approving one
   reasonable, and the dialog says so. Resolved by **UniqueId**, so a rename or move since the request
-  was raised does not matter.
+  was raised does not matter — ⚠ **but ROUTING is neither, and that id dies with the approval-library
+  source**; since 1.0.520.0 a stamped `SubmissionFileId` is the second route. See the 2026-09-10 entry.
 - **Shares go through `SP.Web.ShareObject`** — the endpoint SharePoint's own Share dialog calls, so it
   honours tenant and site sharing settings rather than working around them. **HTTP 200 does NOT mean it
   worked**: the per-recipient result is in the BODY, exactly as with `validateUpdateListItem`
@@ -12393,3 +12394,295 @@ Client: *"Remove the the Segments on this site (7), client dont think its needed
 - **Both prop docs were wrong and are corrected** — they claimed the list always stays.
 - **⚠ `SegmentCreator` COMPILES INTO TWO BUNDLES** (`user-access-web-parts` and
   `folder-manager-web-part`), so grepping one checks half the app. Fifth time that has mattered.
+
+## ⚠⚠ A REQUEST IS KEYED ON `UniqueId`, WHICH DOES NOT SURVIVE ROUTING — THE SAME MISTAKE THE SUBMISSION RECORD WAS REBUILT TO AVOID (2026-09-10, FIXED 1.0.520.0, NOT SITE-TESTED)
+Found live while testing `CRS — Notify request activity`. A **pending-stage** deletion request was
+approved and answered *"That document no longer exists — it may already have been deleted."* The
+document was sitting in the library, untouched, in plain sight.
+
+- **VERIFIED FROM THE DATA, NOT INFERRED.** The request's own email recorded the location as
+  `/HCApprovalDocument/GHO/GCA/GCBC/2024/sf1/Tax Return`; the file was then found at
+  `/HCDocuments/GHO/GCA/GCBC/2024/sf1/Tax Return`, modified minutes earlier. So the document was
+  approved and routed **between the request being raised and the request being decided.**
+- **THE MECHANISM: `performDeletion` IS `GetFileById(guid'<row.itemUniqueId>')/recycle()`**
+  (`Requests.tsx` ~1417), and **`HC Auto Route` / `Auto-route` are copy-stamp-delete, not a move** —
+  the routed copy carries a **NEW `UniqueId`** and the source holding the recorded one is deleted. So
+  the stored id resolves to nothing, the call 404s, and that 404 is what produces the message.
+- **⚠⚠ THIS EXACT LESSON IS ALREADY WRITTEN DOWN IN THIS FILE, FOR A DIFFERENT FEATURE.** The
+  submission-record design was agreed keyed on `UniqueId` and corrected before shipping —
+  *"IT WOULD HAVE REPORTED EVERY APPROVED FILE AS DELETED"* — and rebuilt around a stamped
+  `SubmissionFileId` precisely because a stamped column survives the copy. **The requests feature was
+  never revisited.** Same defect, same cause, one feature over. A lesson recorded against one feature
+  does not propagate to the others by itself; **when a fact about the platform is learned, grep for
+  every consumer of it.**
+- **⚠ SCOPE — AND THE SAFE HALF IS THE COMMON HALF, which is why this survived.** An **approved-stage**
+  request (raised on a document already in `Documents`/`HC Documents`) is **fine**: nothing routes it
+  again, so its id is stable. A **pending-stage** request is at risk, and only for as long as the
+  document remains undecided. Requests were extended to pending files on 2026-08-20 when the PIC lost
+  `DELS`, so it is a real path and not a corner.
+- **⚠ IT IS PERMANENT AND IT COMPOUNDS WITH THE `Failed` GAP.** Nothing repoints the id, so approving
+  that request fails **for ever** — the requester must raise a fresh one against the routed copy. And
+  `Failed` maps to `Skip` in the notification flow, so **the requester is told nothing at all**: they
+  asked, the page says failed, and no email explains it. Both halves were observed in the same test.
+### THE FIX (1.0.520.0) — a second identifier on the row, and the rule for acting on it
+**Option 1 of the two below was built** — the stamped `SubmissionFileId` is written onto the request
+row and resolves the live file when the recorded id no longer does. Option 2 (retry the mirrored
+path) was rejected as recorded: it is a guess about where a file went rather than a fact about which
+file it is.
+- **`SubmissionFileId` JOINS `COLUMNS` ON `CRS Requests`**, written by `submitRequest` and read back
+  by `fromListItem`. `ItemUniqueId` is still tried FIRST and still threads the audit log: it is right
+  in the common case, and the stamp is the second route rather than a replacement.
+- **⚠ FOUR RUNGS ON THE READ LADDER NOW** (`Stage,RevokedBy,SubmissionFileId` → drop the stamp → drop
+  `RevokedBy` → drop `Stage`), and the WRITE gained a rung to match. **One optional column, one
+  rung** — the `RevokedBy` lesson of 2026-08-30: collapsing the newest two into a single retry loses
+  `Stage` on a site that holds it, and the stage decides which library an approver is told the file
+  leaves.
+- **⚠⚠ MORE THAN ONE MATCH IS REFUSED, NOT GUESSED — `resolveStamped` in `shared/requests.ts`**
+  (pure, 9 tests). Replace (`nameConflictBehavior: 1`) can put one file's columns onto another's, so
+  a stamp is normally unique and is **not guaranteed** to be; recycling the wrong document is not
+  undoable. The message names the count and says nothing was done.
+- **⚠⚠ AND "NOTHING FOUND" IS ONLY HONEST WHEN EVERY LIBRARY ANSWERED.** A library that could not be
+  searched — a 400 where `SubmissionFileId` was never provisioned, a throttle — makes the verdict
+  **`unknown`, never `none`**, because `none` renders as *"that document no longer exists"*, which is
+  the exact false statement this whole entry is about. A single hit still WINS over an unreadable
+  sibling: refusing on the strength of a library nobody could reach would leave the requester with no
+  route while the document sits there.
+- **THE SEARCH IS THE APPROVED SIDE ONLY, and that is the whole scope.** `GetFileById` is WEB-scoped
+  and already reaches every library, so the only case that gets here is a ROUTED document —
+  `Documents`/`HC Documents`, derived from `libraryTargets()` by KEY rather than a literal pair
+  (register #15). The archive is out because `validateDraft` refuses a request against an archived
+  document outright.
+- **⚠ THE SHARE SIDE IS FIXED IN THE SAME CHANGE AND WAS NEVER REPRODUCED — that is deliberate, not
+  an assumption that it was broken.** `performShare` posted `origin + row.itemUrl`, a PATH recorded
+  when the request was raised, so it is stale after any move and empty after routing. `liveFilePath`
+  now reads `ServerRelativeUrl` off the file itself, falls back to the stamp on a **404 only**, and
+  degrades to the recorded path on anything else — which is what it did before the probe existed, so
+  a throttle cannot take sharing down. Strictly better than the old behaviour even where the old
+  behaviour worked, since the recorded path did not survive a rename either.
+- **⚠ A REQUEST ALREADY WAITING IS NOT REPAIRED.** Nothing backfills the stamp onto a row written
+  before this, so a pending-stage request raised earlier whose document has since routed still fails
+  — and the banner says so. The requester raises a fresh one.
+- **⚠ THE BANNER NOW COVERS THREE OPTIONAL COLUMNS AND IS COUNTED, not chained `&&` pairs.** Three
+  columns give seven combinations and the old two-column form read wrong for five of them.
+  `SubmissionFileId` is listed FIRST because it is the only one whose absence makes an approval FAIL
+  rather than record something imprecisely.
+- **⚠ DO NOT "IMPROVE" THIS INTO A NAME OR PATH MATCH.** Two documents of one name can exist across
+  libraries and archive tiers. Identity comes from a stamped id or the answer is a refusal.
+- **⚠ THE `Failed` HALF IS STILL OPEN.** `Failed` maps to `Skip` in `CRS — Notify request activity`,
+  so a request that genuinely cannot be carried out still tells the requester nothing. Unchanged by
+  this, and worth building next: the page now names the cause, and nobody reads the page.
+- **Verified**: `tsc --noEmit` clean, `eslint` clean of new warnings on all four changed files (the
+  two `max-lines` are pre-existing), suite **1819/0**, and BOTH shipped bundles grepped inside the
+  `.sppkg` for the column, the ambiguity refusal and the live-path read. **NOT site-tested** — the
+  test is a pending-stage deletion request approved AFTER its document has been routed, expecting the
+  file to be recycled from `Documents`/`HC Documents` rather than a "no longer exists" refusal.
+
+**The two options as they were recorded before the build, kept because the rejection still governs:**
+  1. **Store the stamped `SubmissionFileId` on the request row and resolve the live file by it.** The
+     architecturally correct answer — it is the identifier that already survives routing, which is the
+     entire reason it exists, and `Auto-route` already transfers it. Costs a column on `CRS Requests`
+     plus a ladder read (⚠ one unknown field name fails the WHOLE `$select`).
+  2. **On a 404, retry against the mirrored path on the approved side.** Cheaper and weaker: `itemUrl`
+     records the OLD approval-library path, so it needs the library-segment swap, and it is a guess
+     about where the file went rather than a fact about which file it is.
+
+## ⏭ AGREED AND NOT BUILT: RE-CODE A SEGMENT'S FOLDER, FOR AN EMPTY SEGMENT ONLY (2026-09-10)
+Client, on the Rename-or-re-code flow: *"I can rename department and unit but not segment… sometimes
+client made a mistake on naming the segment and then they have to delete the entire segment or deal
+with it."* Agreed to build **after** the SDG migration. **It must not be forgotten — the client asked
+for it explicitly.**
+
+- **⚠ THE REAL CASE IS A TYPO ON A FRESH SEGMENT, not renaming one in use.** That distinction is what
+  makes it tractable at all, and the gate below is the whole design.
+- **⚠ WHY THERE IS NO BOX FOR IT TODAY, AND IT IS NOT AN OVERSIGHT.** The segment container folder
+  **has no term** (`FolderManager.tsx` ~3283 says so outright) — so unlike a department or unit it has
+  no abbreviation row and no term-keyed Folder Map row, and reconciliation resolves and RENAMES those
+  by UniqueId. The segment folder is created **by name** from the mode row's `StagingFolder`. Change
+  that and reconciliation does not rename anything: **it creates a new empty tree under the new name
+  and leaves the old one, documents and all, as a stray.** Plus Folder Map `Section` values still
+  carry the old name (⇒ `segmentProvisionState` mismatch ⇒ **uploads refused**) and the approval
+  destination guard resolves the unit folder from that name (⇒ **approvals refused**).
+  `StagingFolder` is referenced in **23 files**; it is a key, not a label.
+- **⚠ THE INTERIM ANSWER IS ALREADY SAFE AND SHOULD BE TOLD TO THE CLIENT: for an EMPTY segment,
+  delete and re-create it.** **Abbreviation rows are never deleted** — authored data with no other
+  copy — so every department and unit code they have already typed **survives** the round trip. The
+  existing route loses almost nothing; it merely sounds drastic.
+- **THE SHAPE TO BUILD, which is essentially the above as one button:**
+  - Count documents across **all six** libraries — reuse `countSegment` / `retireLibraries()` from the
+    Retire flow. ⚠ **That count read only ONE library until 2026-08-26**, so do not trust a
+    hand-rolled version of it.
+  - **Empty AND countable** ⇒ update `StagingFolder`, recycle the old empty tree, drop that segment's
+    Folder Map rows (**derivable** — a full reconciliation run rebuilds them), then reconcile.
+  - **Holds documents** ⇒ REFUSE, and name the migration route. Do not offer a partial path.
+  - **⚠ UNCOUNTABLE ⇒ REFUSE.** Same fail-closed rule as `canOfferFolderDelete`: guessing "empty"
+    strands a document tree, and the person who discovers it is an uploader.
+- **It belongs on the Segments tab, NOT the abbreviations screen** — a segment is not a term, and a
+  field that can strand a whole document tree must not sit in a column of five that simply work.
+- **⚠ Deliberately NOT built before the SDG migration**: it touches the 23-file key, it deletes folder
+  trees and map rows, and a fresh destructive feature alongside a live migration is the wrong pairing.
+
+## ⚠ `Get_Reject_Comment` IS UNUSED IN BOTH ROUTING FLOWS, AND THE HC COPY READS THE WRONG LIBRARY (2026-09-10, LEFT ALONE ON PURPOSE)
+Found by reading the exported flow definitions while updating the email bodies. Both `Auto-route` and
+`HC Auto Route` contain an action `Get_Reject_Comment`, sitting immediately before the rejected-file
+email:
+
+```
+GET _api/web/lists/getbytitle('Approval%20Document')/items(@{outputs('Get_item')?['body/ID']})
+    ?$select=OData__ModerationComments
+```
+
+- **IT IS DEAD — nothing reads its output.** Both rejected emails take the comment from
+  `body('Get_item')?['{ModerationComment}']` instead. Verified across both exported definitions.
+- **⚠⚠ THE HC COPY QUERIES `Approval Document` — THE NORMAL LIBRARY.** **Item ids are per-LIST**, so
+  for an HC document that id either does not exist there or belongs to **a different document
+  entirely**. **Seventh instance of the HC-clone-with-an-unswapped-library-reference pattern** — six
+  were found in `HC Auto Route` itself, and the same shape made `HC folder approval` fail silently for
+  six days. Nobody swapped this one either.
+- **⚠ Its URI also carries a trailing `\n`** (`…OData__ModerationComments\n`) — the invisible-newline
+  trap, fourth occurrence in this project's flows.
+- **BOTH FAULTS ARE INERT *ONLY BECAUSE THE OUTPUT IS UNUSED*, and that is the whole reason to leave
+  it alone.** ⚠ **Wiring the rejected email to read it — the obvious "tidy-up" — is what arms them:**
+  the HC rejection would then quote a comment from whatever document happens to hold that id in the
+  NORMAL library. **If it is ever wired up, repoint the HC copy to `HC Approval Document` FIRST.**
+- **WHY IT EXISTS IS NOT KNOWN.** The plausible reading is that `Get_item`'s `{ModerationComment}` was
+  once coming back empty — `Get_item` runs early in the flow — so somebody added a fresh read and then
+  either found it unnecessary or abandoned the approach. **That is a guess; do not write it up as the
+  cause.**
+- **ONE TEST DECIDES WHAT TO DO, AND IT HAS NOT BEEN RUN:** reject a document with a comment typed in
+  and read the email.
+  - Reason shows ⇒ `Get_item`'s comment works ⇒ **delete the action from both flows.**
+  - *"No reason provided."* ⇒ that is why it was added ⇒ wire the email to it, **HC library repointed
+    first.**
+- **Left untouched 2026-09-10** rather than deleted, because "unused" was established by reading the
+  definitions and not by watching a run, and deleting an action on the strength of a static read is
+  how a working flow gets broken the evening before a migration.
+
+## ✅ THE ARCHIVE'S FOUR MISSING COLUMNS ARE CREATED ON THE TEST SITE (2026-09-10)
+Client, on being told `LegallyPrivileged` is silently dropped when a document archives:
+*"WAIT WHAT, legally prvillege is silelntly drop in archive? WE GOT TO FIX THAT NOW"*, then
+*"so go back to the test site right now"*. Done on ClarenceDMSTesting; **SDG is NOT done.**
+- **THE FIX IS `scripts/add-archive-columns.js`** — a read-modify browser-console script that reuses
+  `ensureColumn`'s proven technique rather than reinventing it: a `$filter`ed existence check (never
+  a `$top` page), `CreateFieldAsXml` with `DisplayName`/`Name`/`StaticName` all set to the INTERNAL
+  name, `Options: 8`, then a MERGE to correct the `Title`.
+  - **⚠ `CreateFieldAsXml` IS THE POINT, NOT A DETAIL.** It is the only form that sets the internal
+    name independently of the display name — so `Vendor_x002f_CustomerName` comes out spelled
+    exactly, where creating it by display name would derive something else. **A matching display
+    name over a DIFFERENT internal name fails exactly like an absent column, and looks right.**
+  - **`Options: 8` (AddToAllContentTypes), never 12** — twelve adds every column to every VIEW and
+    reshapes the views the client arranged, once per column.
+- **✅ VERIFIED, AND NOT FROM THE RUN LOG.** 8 created / 0 failed, then a separate `$filter`ed read
+  of both libraries returned all four rows with the right internal name, title and type —
+  `DocumentDate|Document Date|DateTime`, `Remark|Remark|Text`,
+  `LegallyPrivileged|LegallyPrivileged|Boolean`,
+  `Vendor_x002f_CustomerName|Vendor/CustomerName|Text`. The internal-name spelling is the half a
+  green run cannot prove.
+- **⚠ THIS WAS NEVER A LIVE DATA LOSS, and saying so plainly is what kept it in proportion.** The
+  test site's movers were switched off after 2026-09-02, SDG's are not ported yet, and **nothing on
+  either site is genuinely seven years old** — the first eligible file is 2033. So it is a
+  fix-before-enabling item that happened to be hit at the right moment.
+- **⚠ NOTHING IS BACKFILLED.** The 57 + 17 documents already archived on 2026-09-02 lost those
+  values permanently; there is no sweep and no recovery.
+- **⚠ THE DURABLE FIX IS STILL NOT BUILT.** Reconciliation should MIRROR `Documents`' columns onto
+  the archives every run, exactly as it asserts `SubmissionId`/`BatchId`/`ApprovedBy` — deferred
+  since 2026-08-23, and this hand-run is the second time it has been paid for by hand. **A
+  hardcoded list would be right today and silently wrong after the next segment onboarding**, which
+  is the two-element-literal defect that cost the HC pair four days.
+
+### `scripts/check-archive-column-gap.js` — run this FIRST on any other site
+READ ONLY. Lists every library with its title AND URL segment, diffs each archive library against
+`Documents`, and prints a paste-ready `COLUMNS` block plus a separate taxonomy list.
+- **⚠ IT EXISTS BECAUSE THE CREATION SCRIPT'S TWO LISTS ARE SITE-SPECIFIC AND BOTH ARE WRONG ON
+  SDG.** SDG has never been renamed, so its archive pair is titled differently; and the TYPES have
+  to be read off SDG's own `Documents` rather than assumed. **A wrong type gives a column that looks
+  right and silently accepts nothing from a `MoveTo`** — the failure this whole exercise is about.
+- **Libraries are found by URL SEGMENT, never by title** — a rename never touches the URL and this
+  client renames libraries routinely.
+- **⚠⚠ ITS FIRST VERSION SILENTLY OMITTED THE TWO COLUMNS THE TASK IS ABOUT, and the harness caught
+  it rather than a reading.** The skip list was a regex with a `Doc` alternative, which swallowed
+  `DocumentDate` AND `Document_x0020_Type`. **A gap-report that silently omits gaps is worse than no
+  report.** Now an EXACT-MATCH name set, with only `_`/`ows`/`xd_`/`Tax*` left as prefixes.
+  - **Same lesson as the `Forms` folder filter (2026-09-07): a name-based filter cannot tell a
+    system object from user data.** A client column may legitimately begin with any of those words.
+- **⚠ AN UNREADABLE FIELD LIST DRAWS NO CONCLUSION** rather than reporting every column as missing —
+  which would send somebody to create columns that already exist, and SharePoint refuses those on
+  the duplicate internal name.
+- **Both scripts were run against a SYNTHETIC site with `fetch` stubbed before being used live**,
+  which is what found the greedy-skip defect and, in the creation script, confirmed that a failed
+  probe creates nothing and a wrong-type existing column is reported rather than accepted.
+
+### ⚠⚠ BOTH SCRIPTS PARSED THE WEB URL OUT OF THE PAGE PATH, AND IT BROKE ON THE FIRST SDG RUN (2026-09-10)
+Client ran the gap check from SDG's SiteAssets library page and got
+**`Uncaught SyntaxError: Unexpected token '<', "<!DOCTYPE "... is not valid JSON`.**
+- **THE CAUSE: the path regex stripped only `/SitePages` and `/Lists`.** From
+  `/sites/CRS/SiteAssets/Forms/AllItems.aspx` it kept the whole page path, so `web` became the page's
+  own address and **every REST call fetched the page's HTML at HTTP 200.** `r.json()` then threw, and
+  the error names neither the cause nor the URL — it reads as a code fault.
+- **⚠ THE SAME FLAW WAS IN `add-archive-columns.js`, AND IT HAD ALREADY BEEN RUN.** It worked on
+  ClarenceDMSTesting **purely because of which page it was run from** — its regex happened to strip
+  that path. **A parse that succeeds by luck on one page is not a working parse**, and the creation
+  script is the one that writes.
+  - There it would have been quieter and worse to diagnose: no digest, so every create answers **403**
+    — reading as a permissions problem on a site the admin plainly administers. It now checks the
+    `contextinfo` response's content type and refuses the whole run, creating nothing.
+- **THE TELL WAS ALREADY ON SCREEN AND IS WORTH READING FIRST.** Both scripts log
+  `Site: <resolved web>` as their first line, and it read
+  `…/sites/CRS/SiteAssets/Forms/AllItems.aspx`. **When a console script answers `Unexpected token
+  '<'`, read the URL it says it is using before anything else** — a 200 with HTML is a wrong ADDRESS,
+  never a wrong query.
+- **FIXED: `resolveWeb()` in both — `_spPageContextInfo.webAbsoluteUrl`, then the
+  `/sites/<name>`-or-`/teams/<name>` prefix, then the origin, with a `SITE_OVERRIDE` const.**
+  - **⚠ `_spPageContextInfo` CANNOT BE THE ONLY ROUTE** — it threw a live `ReferenceError` in
+    `dump-site-inventory.js` on a modern page, which is why that script already carries this exact
+    fallback. **Third script to need it; it is the house pattern for a console script now.**
+- **AND A 200 WITH THE WRONG CONTENT TYPE IS NOW ITS OWN ERROR**, naming the address asked and the
+  resolved web. `r.ok` proves nothing when the address is wrong — the page answers 200 quite happily.
+- **⚠ RUN THE GAP CHECK BEFORE THE CREATION SCRIPT ON ANY SITE, and this is a hard ordering rather
+  than a suggestion** — but for the COLUMNS, not the titles.
+  - **⚠ THE REASON FIRST GIVEN HERE WAS WRONG, and the gap check disproved it in one run.** It said
+    `add-archive-columns.js` carried ClarenceDMSTesting's LIBRARY TITLES and that **"SDG has never
+    been renamed"**, so `getbytitle` would 404 and the run would report 8 failures. **SDG's archive
+    pair carries the SAME two titles** (`Archive Restricted & Confidential Document`,
+    `Archive Highly Confidential Document`), so that list needed no change at all. The claim was
+    inferred from SDG being un-renamed generally; **the archive pair was created after that and was
+    never in the short-name shape.** Do not re-derive a title from a site's rename history — read it.
+  - **THE ORDERING STILL STANDS, because the COLUMN LIST is what is genuinely per-site.**
+    ClarenceDMSTesting needed FOUR; SDG needs TEN (`Business_x0020_Segment`/`BusinessSegmentTid`,
+    `SubUnit`/`SubUnitTid`, `ProjectName` and `Full_x0020_Name` on top of the four), because its
+    `Documents` carries columns the test site's does not. A carried-over list creates too few and
+    reports success.
+- **Verified against a synthetic site at the exact failing path**, with `_spPageContextInfo` absent —
+  the worst case — plus an unparseable path to confirm the new message fires instead of the JSON
+  error. **Neither fix was checked by reading the code**; the first version of this parse read as
+  obviously fine.
+
+### SDG's GAP, MEASURED 2026-09-10 — TEN COLUMNS, AND THE TAXONOMY THREE ARE ALREADY RIGHT
+Gap check run on `/sites/CRS` after the path fix. **Nine libraries listed, both archive titles
+resolved, and the two archive libraries report the IDENTICAL ten missing columns.**
+- **`Business_x0020_Segment`, `BusinessSegmentTid`, `SubUnit`, `SubUnitTid`, `DocumentDate`,
+  `Vendor_x002f_CustomerName`, `ProjectName`, `Remark`, `LegallyPrivileged`, `Full_x0020_Name`** —
+  23 candidate columns on `Restricted & Confidential Document`, 13 already present, 10 absent.
+- **✅ NO TAXONOMY COLUMN IS MISSING AND NO TYPE MISMATCHES — which is the difference from
+  ClarenceDMSTesting and is worth stating.** `Document_x0020_Type`, `Year` and
+  `Confidentiality_x0020_Level` are already on SDG's archives bound correctly, so **there is no
+  by-hand step here.** On the test site all three were absent or plain TEXT and had to be deleted
+  and rebound to their term sets manually on 2026-09-02. **Two sites, two different archive states —
+  never carry one's conclusion to the other.**
+- **⚠ SDG NEEDS SIX MORE COLUMNS THAN THE TEST SITE DID**, because its `Documents` carries
+  `SubUnit`/`SubUnitTid` (the migrated below-Unit tier), `ProjectName` and `Full_x0020_Name` while
+  ClarenceDMSTesting's did not offer them as gaps. **A carried-over four-column list would have
+  created four, reported `4 created / 0 failed`, and left six columns still dropping on every
+  archive** — the silent half-fix this ordering exists to prevent.
+- **⚠ AND SDG'S MOVERS ARE NOT PORTED YET (wave 7), so nothing is archiving there today.** Same as
+  the test site: a fix-before-enabling item, not a loss in progress. Nothing backfills either.
+- **✅ CREATED AND VERIFIED THE SAME DAY: `20 created · 0 already there · 0 failed`**, and all four
+  encoded renames landed (`Business Segment`, `Document Date`, `Vendor/CustomerName`, `Full Name`).
+  **Both sites are now done; nothing here is outstanding.**
+  - **⚠ VERIFIED BY RE-RUNNING THE GAP CHECK, NOT BY THE CREATE LOG — and that is the only read that
+    could prove it.** Both libraries came back `✓ every source column is present with a matching
+    type`. A green create says the POST succeeded; it says nothing about whether
+    `Vendor_x002f_CustomerName` and `Full_x0020_Name` came out spelled exactly, and **a matching
+    display name over a DIFFERENT internal name fails exactly like an absent column and looks right
+    on screen.** The gap check compares INTERNAL names, so it is what closes the loop.
+  - **The two scripts compose into a cycle worth reusing on any third site:** gap check → paste its
+    `COLUMNS` block → create → gap check again. The second run is the test, and it costs nothing.

@@ -46,3 +46,10 @@ dev/**/*.bundle.js
 # Client data exports — migration scratch, not source
 /DMS Group Map.csv
 /DMS Term Abbreviation.csv
+
+# Exported Power Automate flow definitions — tenant identifiers and connection
+# GUIDs, so not source-controlled (client's call, 2026-09-10). The flows are NOT
+# recoverable from this repo: their only record is the runbooks under
+# docs/superpowers/specs/ and CLAUDE.md's own flow sections, which is exactly why
+# those must be updated whenever a flow changes.
+/PowerAutomateFlows/

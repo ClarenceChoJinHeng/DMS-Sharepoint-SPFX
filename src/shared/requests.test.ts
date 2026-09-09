@@ -46,6 +46,8 @@ import {
   ShareState,
   SharePermission,
   longDate,
+  resolveStamped,
+  StampedCandidate,
   REASON_REQUIRED,
   RECIPIENT_REQUIRED,
 } from "./requests";
@@ -1154,5 +1156,80 @@ describe("longDate", () => {
     expect(longDate("2026-13-02")).toBe("2026-13-02");
     expect(longDate("2026-00-02")).toBe("2026-00-02");
     expect(longDate("2026-09-00")).toBe("2026-09-00");
+  });
+});
+
+/**
+ * ⚠⚠ THE DEFECT THIS EXISTS FOR: a request is keyed on `UniqueId`, which does not survive routing.
+ *
+ * Found live 2026-09-10 — a pending-stage deletion request, approved after `HC Auto Route` had
+ * copied the document to `HC Documents` and deleted the source, answered *"that document no longer
+ * exists"* about a file sitting in plain sight. `SubmissionFileId` is the identifier that survives
+ * the copy, and these are the rules for acting on what it finds.
+ *
+ * Weighted entirely toward the two answers that must never be confused: "genuinely gone" and "we
+ * could not tell", because the first invites the requester to stop looking.
+ */
+describe("resolveStamped — the live document behind a routed request", () => {
+  const at = (p: Partial<StampedCandidate> = {}): StampedCandidate => ({
+    library: "Restricted & Confidential Document",
+    itemId: 6828,
+    fileRef: "/sites/CRS/Shared Documents/GHO/GCA/GCBC/2024/Tax Return/a.pdf",
+    ...p,
+  });
+
+  it("uses the one document carrying the stamp", () => {
+    const r = resolveStamped([at()], false);
+    expect(r.kind).toBe("found");
+    if (r.kind === "found") {
+      expect(r.itemId).toBe(6828);
+      expect(r.fileRef).toContain("/Shared Documents/");
+      expect(r.library).toBe("Restricted & Confidential Document");
+    }
+  });
+
+  /* ⚠ THE ONE THAT MUST NEVER BE GUESSED. Two documents of one name legitimately exist across
+     libraries and archive tiers, and Replace can put one file's columns onto another's — so a stamp
+     is normally unique and is not guaranteed to be. Recycling the wrong document is not undoable. */
+  it("REFUSES when more than one document carries it, and says how many", () => {
+    const r = resolveStamped([at({ itemId: 1 }), at({ itemId: 2, library: "Archive" })], false);
+    expect(r).toEqual({ kind: "ambiguous", count: 2 });
+  });
+
+  it("refuses on several matches even inside one library", () => {
+    const r = resolveStamped([at({ itemId: 1 }), at({ itemId: 2 })], false);
+    expect(r.kind).toBe("ambiguous");
+  });
+
+  /* Every library answered and none held it: the document really has gone. The only case where
+     "no longer exists" is an honest thing to tell an approver. */
+  it("is `none` only when every library answered", () => {
+    expect(resolveStamped([], false)).toEqual({ kind: "none" });
+  });
+
+  /* ⚠⚠ EMPTY ≠ UNKNOWN, in the place where the cost is somebody believing a document was
+     destroyed. A library that could not be searched — a 400 where the column was never
+     provisioned, a throttle — makes the answer unknown. */
+  it("is `unknown`, NEVER `none`, when a library could not be searched", () => {
+    expect(resolveStamped([], true)).toEqual({ kind: "unknown" });
+  });
+
+  it("is `unknown` when nothing was searched at all", () => {
+    expect(resolveStamped(undefined, false)).toEqual({ kind: "unknown" });
+    expect(resolveStamped(undefined, true)).toEqual({ kind: "unknown" });
+  });
+
+  /* A single hit WINS over an unreadable sibling. The stamp identifies one document, and refusing
+     on the strength of a library we could not reach leaves the requester with no route at all
+     while the document sits there. */
+  it("acts on one match even when another library was unreadable", () => {
+    expect(resolveStamped([at()], true).kind).toBe("found");
+  });
+
+  /* A row with no usable id cannot be addressed, so it is not a match — and must not be counted
+     toward ambiguity either, or one malformed response would refuse a clean answer. */
+  it("ignores a candidate with no usable item id", () => {
+    expect(resolveStamped([at({ itemId: 0 })], false)).toEqual({ kind: "none" });
+    expect(resolveStamped([at({ itemId: 0 }), at({ itemId: 6828 })], false).kind).toBe("found");
   });
 });

@@ -1270,6 +1270,12 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         return isArchivedRow(row.library, a ? { normal: a.normal.urlSegment, hc: a.hc?.urlSegment } : undefined);
       })(),
       itemUniqueId: row.uniqueId ?? "",
+      /* ⚠⚠ THE IDENTIFIER THAT SURVIVES ROUTING, and the reason this request can still be carried
+         out after the document is approved. `uniqueId` above dies with the approval-library source
+         when Auto-route copies the file away — see `resolveStamped` in `shared/requests.ts`. Blank
+         for a document uploaded before the stamp existed, or one whose library could not confirm
+         the column (`stampMissingRef`); blank simply means no second route, never a refusal. */
+      submissionFileId: row.submissionFileId,
       itemName: row.name,
       segment: where.segment,
       unit: routed ? routed.value : where.unit,
@@ -1311,6 +1317,12 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         RequestedAt: new Date().toISOString(),
         Reason: reason.trim(),
       };
+      /* OMITTED when the document carries no stamp, rather than sent as "". A blank value and an
+         absent column mean the same thing to the approver's screen — no second route to the file —
+         and writing a blank costs a column that may not exist for nothing. */
+      if ((draft.submissionFileId ?? "").trim().length > 0) {
+        body.SubmissionFileId = (draft.submissionFileId ?? "").trim();
+      }
       if (type === "Share") {
         body.ShareWith = parseRecipients(shareWith).join("; ");
         body.SharePermission = permission;
@@ -1340,9 +1352,18 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
        * Never the reverse — the field is always ATTEMPTED first, so a correctly provisioned site
        * always records the stage.
        */
+      /* ⚠ ONE OPTIONAL COLUMN, ONE RUNG — newest first, the `RevokedBy` lesson of 2026-08-30.
+         Dropping both at once would lose the STAGE on a site that holds it, and the stage decides
+         which library the approver is told the file leaves. */
+      if (res.status === 400 && body.SubmissionFileId !== undefined) {
+        const without: Record<string, string> = { ...body };
+        delete without.SubmissionFileId;
+        res = await send(without);
+      }
       if (res.status === 400 && body.Stage !== undefined) {
         const without: Record<string, string> = { ...body };
         delete without.Stage;
+        delete without.SubmissionFileId;
         res = await send(without);
       }
       if (!res.ok) {

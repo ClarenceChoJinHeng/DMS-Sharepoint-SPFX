@@ -24,6 +24,9 @@ import {
   cachedListTitle,
   LIST_SUFFIX,
   libraryTitle,
+  /* Derived, never a two-element literal — register #15. The approved-side pair is filtered out of
+     it by KEY, so a site with no HC libraries yields one and nothing here has to know that. */
+  libraryTargets,
   noteCreatedList,
   titleForNewList,
 } from "../../../shared/naming";
@@ -58,6 +61,8 @@ import {
   revocationNote,
   localDateStamp,
   longDate,
+  resolveStamped,
+  StampedCandidate,
   SharedFile,
   ShareState,
   FileAcl,
@@ -559,6 +564,11 @@ const COLUMNS: Array<{ name: string; type: number }> = [
   { name: "Stage", type: 2 },
   { name: "Status", type: 2 },
   { name: "ItemUniqueId", type: 2 },
+  /* ⚠⚠ THE SECOND IDENTIFIER, AND THE ONE THAT SURVIVES ROUTING (2026-09-10). `ItemUniqueId` goes
+     dead the moment a pending-stage document is approved, because Auto-route is copy-stamp-delete —
+     so without this a deletion request approved after its file routed answers "that document no
+     longer exists" about a file in plain sight. See `resolveStamped`. */
+  { name: "SubmissionFileId", type: 2 },
   { name: "ItemName", type: 2 },
   { name: "ItemUrl", type: 2 },
   { name: "Segment", type: 2 },
@@ -623,6 +633,11 @@ export default function Requests({
      (gotcha #11), which would lose the revoke's DecisionNote line as well — and that line is where
      the revoker's name currently lives. Degrade to prose; never lose the record. */
   const [revokedByMissing, setRevokedByMissing] = useState(false);
+  /* ⚠ WITHOUT THIS COLUMN A ROUTED DOCUMENT CANNOT BE FOUND AGAIN, and that is a REFUSAL rather
+     than a cosmetic loss: a pending-stage request approved after its file was routed has only the
+     dead `ItemUniqueId` to go on. Banner AND message, because the fix is one button away and the
+     failure otherwise names the wrong cause ("the document no longer exists"). */
+  const [fileIdMissing, setFileIdMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   /* ⚠ IS THE NOTICE A FAILURE? Found live 2026-08-30: EVERY message rendered in the GREEN success
@@ -885,13 +900,25 @@ export default function Requests({
          it. Same ladder as `readLibrary` in My Submissions. */
       let noStage = false;
       let noRevokedBy = false;
+      let noFileId = false;
       let res = await context.spHttpClient.get(
-        `${base},Stage,RevokedBy${tail}`,
+        `${base},Stage,RevokedBy,SubmissionFileId${tail}`,
         SPHttpClient.configurations.v1,
         { headers: GET },
       );
       // 400 only. A 404 is the LIST missing and is answered below; retrying that would report an
       // unprovisioned list as an unreadable one.
+      if (res.status === 400) {
+        // ⚠ ONE OPTIONAL COLUMN, ONE RUNG — the `RevokedBy` lesson of 2026-08-30. Collapsing the
+        // newest two into a single retry would take `Stage` down with them on a site that holds it,
+        // and every pending-file request would then read as an approved-document one.
+        noFileId = true;
+        res = await context.spHttpClient.get(
+          `${base},Stage,RevokedBy${tail}`,
+          SPHttpClient.configurations.v1,
+          { headers: GET },
+        );
+      }
       if (res.status === 400) {
         noRevokedBy = true;
         res = await context.spHttpClient.get(
@@ -925,6 +952,7 @@ export default function Requests({
       // is which library the file leaves. An approver must not be told the wrong one.
       setStageMissing(noStage);
       setRevokedByMissing(noRevokedBy);
+      setFileIdMissing(noFileId);
       setRows({
         state: "ready",
         value: ((data.value ?? []) as Record<string, string>[]).map(
@@ -1406,9 +1434,95 @@ export default function Requests({
   /* ── Carrying out a decision ──────────────────────────────────────────── */
 
   /**
+   * Find the document again by its stamped `SubmissionFileId`, for a request whose recorded
+   * `ItemUniqueId` no longer resolves.
+   *
+   * ⚠⚠ THE APPROVED SIDE ONLY, AND THAT IS THE WHOLE SCOPE. `GetFileById` is WEB-scoped and already
+   * reaches every library, so the only case that gets here is a document that was ROUTED — copied
+   * to `Documents`/`HC Documents` and deleted from the approval library. Searching the approval
+   * libraries again would ask a question already answered. The ARCHIVE is deliberately out too:
+   * `validateDraft` refuses a request against an archived document outright, because every role
+   * holds only Read there.
+   *
+   * ⚠ A 400 IS THE COLUMN BEING ABSENT, NOT AN EMPTY ANSWER. One unknown name fails the whole
+   * `$filter`, so a library that has never been reconciled answers 400 — and that must make the
+   * verdict `unknown`, never `none`. Every other non-OK status is unreadable for the same reason.
+   */
+  const findByStamp = async (
+    stamp: string,
+  ): Promise<ReturnType<typeof resolveStamped>> => {
+    const wanted = (stamp ?? "").trim();
+    if (wanted.length === 0) return { kind: "unknown" };
+    const approvedSide = libraryTargets().filter(
+      (t) => t.key === "Documents" || t.key === "DocumentsHC",
+    );
+    if (approvedSide.length === 0) return { kind: "unknown" };
+
+    const found: StampedCandidate[] = [];
+    let unreadable = false;
+    for (const lib of approvedSide) {
+      try {
+        const res = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib.title)}')/items` +
+            `?$select=Id,FileRef&$filter=SubmissionFileId eq '${encodeURIComponent(wanted)}'` +
+            `&$top=5${bust()}`,
+          SPHttpClient.configurations.v1,
+          { headers: GET },
+        );
+        if (!res.ok) {
+          unreadable = true;
+          continue;
+        }
+        const rows = ((await res.json()).value ?? []) as Array<{
+          Id?: number;
+          FileRef?: string;
+        }>;
+        for (const r of rows) {
+          found.push({
+            library: lib.title,
+            itemId: Number(r.Id ?? 0),
+            fileRef: r.FileRef ?? "",
+          });
+        }
+      } catch {
+        unreadable = true;
+      }
+    }
+    return resolveStamped(found, unreadable);
+  };
+
+  /** What to tell an approver when the stamp could not settle which document to act on. */
+  const stampProblem = (
+    lookup: ReturnType<typeof resolveStamped>,
+    verb: string,
+  ): string => {
+    if (lookup.kind === "ambiguous") {
+      return (
+        `More than one document (${lookup.count}) carries this request's reference, so nothing was ` +
+        `${verb} — acting on the wrong one could not be undone. Check the unit's folder and do it by hand.`
+      );
+    }
+    if (lookup.kind === "unknown") {
+      return fileIdMissing
+        ? `This request records no document reference, because the list is missing the SubmissionFileId ` +
+            `column — add it with the button at the top of this page. Nothing was ${verb}. If the ` +
+            `document has since been approved and filed, raise the request again against the filed copy.`
+        : `The document could not be located, so nothing was ${verb}. Refresh and try again.`;
+    }
+    /* `none` — every library answered and none holds it. The one case where "gone" is honest. */
+    return "That document no longer exists — it may already have been deleted.";
+  };
+
+  /**
    * Recycle, never delete outright — restorable for 93 days, which is what makes approving a deletion
-   * reasonable at all. Resolved by UniqueId, so a rename or move since the request was raised does not
-   * matter.
+   * reasonable at all.
+   *
+   * ⚠⚠ TWO IDENTIFIERS, AND THE RECORDED ONE CAN BE DEAD. `ItemUniqueId` is tried first: it is
+   * right in the common case (an approved-stage request), and a rename or a move does not disturb
+   * it. But `Auto-route` is copy-stamp-delete, so a PENDING-stage document that has since been
+   * approved leaves that id resolving to nothing — and until 2026-09-10 the 404 was reported as
+   * *"that document no longer exists"* about a file sitting in plain sight, permanently, because
+   * nothing repoints the id. The stamp is the second route.
    */
   const performDeletion = async (
     row: RequestRow,
@@ -1417,11 +1531,23 @@ export default function Requests({
       `${siteUrl}/_api/web/GetFileById(guid'${row.itemUniqueId}')/recycle()`,
     );
     if (res.ok) return undefined;
-    if (res.status === 404)
-      return "That document no longer exists — it may already have been deleted.";
     if (res.status === 403)
       return "You do not have permission to delete that document.";
-    return `The document could not be deleted (HTTP ${res.status}).`;
+    if (res.status !== 404)
+      return `The document could not be deleted (HTTP ${res.status}).`;
+
+    // 404 — the recorded id resolves to nothing. Either the document really has gone, or it was
+    // routed and this id died with the source. Only the stamp can tell those apart.
+    const lookup = await findByStamp(row.submissionFileId ?? "");
+    if (lookup.kind !== "found") return stampProblem(lookup, "deleted");
+    const again = await post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lookup.library)}')` +
+        `/items(${lookup.itemId})/recycle()`,
+    );
+    if (again.ok) return undefined;
+    if (again.status === 403)
+      return `That document has since been filed in ${lookup.library}, and you do not have permission to delete it there.`;
+    return `That document has since been filed in ${lookup.library} and could not be deleted there (HTTP ${again.status}).`;
   };
 
   /**
@@ -1431,17 +1557,62 @@ export default function Requests({
    * site sharing settings rather than working around them. If external sharing is off there, this
    * fails and says so — the correct outcome, and far better than a grant that half-works.
    */
+  /**
+   * Where does this request's document live NOW?
+   *
+   * ⚠ `row.itemUrl` IS THE PATH AS RECORDED, AND IT GOES STALE. A rename or a move leaves it
+   * pointing at nothing, and routing empties the address entirely — the approval-library copy is
+   * deleted. So the live path is read off the file itself, and only where that cannot be answered
+   * does the recorded path stand in.
+   *
+   * Costs one GET per share approval, which is a decision somebody is about to act on rather than
+   * a page load.
+   */
+  const liveFilePath = async (
+    row: RequestRow,
+  ): Promise<{ path: string } | { problem: string }> => {
+    try {
+      const res = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFileById(guid'${row.itemUniqueId}')?$select=ServerRelativeUrl${bust()}`,
+        SPHttpClient.configurations.v1,
+        { headers: GET },
+      );
+      if (res.ok) {
+        const live = ((await res.json()) as { ServerRelativeUrl?: string })
+          .ServerRelativeUrl;
+        if (live && live.trim().length > 0) return { path: live };
+      } else if (res.status === 404) {
+        // Routed, or genuinely gone. The stamp is the only thing that can say which.
+        const lookup = await findByStamp(row.submissionFileId ?? "");
+        if (lookup.kind === "found" && lookup.fileRef.trim().length > 0)
+          return { path: lookup.fileRef };
+        if (lookup.kind === "found")
+          return {
+            problem: `That document has since been filed in ${lookup.library}, but its address could not be read. Nothing was shared.`,
+          };
+        return { problem: stampProblem(lookup, "shared") };
+      }
+    } catch {
+      /* fall through to the recorded path — an unanswerable probe says nothing about the file */
+    }
+    /* Anything other than a definite 404 degrades to the recorded path, which is what this did
+       before the probe existed. A refusal here would take sharing down over a throttle. */
+    if (row.itemUrl && row.itemUrl.trim().length > 0) return { path: row.itemUrl };
+    return { problem: "This request has no document address recorded." };
+  };
+
   const performShare = async (row: RequestRow): Promise<string | undefined> => {
     const people = (row.shareWith ?? []).map((e) => ({ Key: e }));
     if (people.length === 0)
       return "No recipients were recorded on this request.";
-    if (!row.itemUrl) return "This request has no document address recorded.";
+    const where = await liveFilePath(row);
+    if ("problem" in where) return where.problem;
 
     // SharePoint's own role values: 1073741826 = View, 1073741827 = Edit.
     const roleValue =
       row.sharePermission === "Edit" ? "role:1073741827" : "role:1073741826";
     const res = await post(`${siteUrl}/_api/SP.Web.ShareObject`, {
-      url: `${window.location.origin}${row.itemUrl}`,
+      url: `${window.location.origin}${where.path}`,
       peoplePickerInput: JSON.stringify(people),
       roleValue,
       groupId: 0,
@@ -2120,6 +2291,13 @@ export default function Requests({
     );
   })();
 
+  /* Counted, never a chain of `&&` pairs. Three optional columns give seven combinations, and the
+     old two-column form (`stageMissing && revokedByMissing ? "them" : "it"`) reads WRONG for five
+     of them — a fourth column would make it wrong for more. */
+  const missingCount = [stageMissing, revokedByMissing, fileIdMissing].filter(
+    (m) => m,
+  ).length;
+
   return (
     <section style={s.wrap}>
       {/* ⚠ RENAMED (client's mockup, 2026-09-03): "Requests" → "Document Deletion & Sharing
@@ -2148,18 +2326,28 @@ export default function Requests({
         </div>
       )}
 
-      {/* ONE banner for BOTH optional columns, and it must stay that way: this is the only route
-          to `addMissingColumns`, so gating it on `stageMissing` alone would leave `RevokedBy`
-          unreachable on every site that already has `Stage` — which is all of them. A fix nobody can
-          press is not a fix. */}
-      {(stageMissing || revokedByMissing) && (
+      {/* ONE banner for ALL THREE optional columns, and it must stay that way: this is the only
+          route to `addMissingColumns`, so gating it on `stageMissing` alone would leave `RevokedBy`
+          and `SubmissionFileId` unreachable on every site that already has `Stage` — which is all
+          of them. A fix nobody can press is not a fix. */}
+      {(stageMissing || revokedByMissing || fileIdMissing) && (
         <div style={s.warn}>
           <strong>
-            This list is missing{" "}
-            {stageMissing && revokedByMissing ? "two columns" : "a column"}.
+            This list is missing {missingCount > 1 ? "columns" : "a column"}.
           </strong>{" "}
-          Requests still work, and nothing already recorded is lost.
+          Requests can still be raised, and nothing already recorded is lost.
           <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
+            {/* ⚠ LISTED FIRST, because it is the only one of the three whose absence makes an
+                approval FAIL rather than merely record something imprecisely. */}
+            {fileIdMissing && (
+              <li>
+                <strong>SubmissionFileId</strong> — a request for a file that is{" "}
+                <em>awaiting approval</em> cannot be carried out if the document
+                is approved and filed in the meantime. Approving it then reports
+                that the document no longer exists, about a file that is still
+                there, and the requester has to ask again.
+              </li>
+            )}
             {stageMissing && (
               <li>
                 <strong>Stage</strong> — a request for a file that is{" "}
@@ -2186,15 +2374,18 @@ export default function Requests({
             >
               {busy
                 ? "Working…"
-                : stageMissing && revokedByMissing
+                : missingCount > 1
                   ? "Add the missing columns"
                   : "Add the missing column"}
             </button>
           </div>
           <div style={{ marginTop: 6, fontSize: 12 }}>
-            Adding {stageMissing && revokedByMissing ? "them" : "it"} fixes
-            every request raised from now on. Requests already recorded are not
-            changed.
+            Adding {missingCount > 1 ? "them" : "it"} fixes every request raised
+            from now on. Requests already recorded are not changed
+            {fileIdMissing
+              ? " — a request already waiting still cannot be carried out if its document is filed before it is decided"
+              : ""}
+            .
           </div>
         </div>
       )}
@@ -2765,6 +2956,9 @@ function fromListItem(r: Record<string, string>): RequestRow {
        open. Never inline this list again. */
     status: parseRequestStatus(r.Status),
     itemUniqueId: r.ItemUniqueId ?? "",
+    // Blank on every row written before 2026-09-10, and on any document whose library could not
+    // confirm the column. Absent means "no second route to the file", never "the file is gone".
+    submissionFileId: r.SubmissionFileId ?? "",
     itemName: r.ItemName ?? "",
     itemUrl: r.ItemUrl ?? "",
     segment: r.Segment ?? "",

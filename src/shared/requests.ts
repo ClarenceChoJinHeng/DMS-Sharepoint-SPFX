@@ -90,9 +90,32 @@ export interface RequestRow {
    * never directly, or a pre-2026-08-20 row reads as neither.
    */
   stage?: RequestStage;
-  /** The file's UniqueId — survives rename and move, which a URL does not. */
+  /**
+   * The file's UniqueId at the moment the request was raised.
+   *
+   * ⚠⚠ IT SURVIVES A RENAME AND A MOVE AND DOES **NOT** SURVIVE ROUTING. This comment used to say
+   * it was "the one identifier that survives a rename or a move, which a URL does not" — true of
+   * both of those, and FALSE of `Auto-route`, which is copy-stamp-delete: the routed copy carries a
+   * NEW UniqueId and the source holding this one is deleted. So on a pending-stage request this
+   * value goes dead the moment the document is approved. Read `submissionFileId` for identity that
+   * outlives that; this stays because it is what resolves in the common case and it threads the
+   * audit log.
+   */
   itemUniqueId: string;
+  /**
+   * The stamped `SubmissionFileId` of the document — the identifier that SURVIVES routing.
+   *
+   * Optional: absent on every row written before 2026-09-10, and absent for a document uploaded
+   * before the stamp existed or into a library where the column could not be confirmed. Absent
+   * means "no second route to the file", never "the file is gone" — see `resolveStamped`.
+   */
+  submissionFileId?: string;
   itemName: string;
+  /**
+   * The document's path as RECORDED. Correct when the request was raised and stale after any move
+   * — including the routing above, which empties the address entirely. A share resolves the live
+   * path rather than trusting this.
+   */
   itemUrl?: string;
   segment: string;
   /** The unit's LABEL — for display only. Never the matching key: terms get renamed. */
@@ -131,6 +154,8 @@ export interface RequestDraft {
   /** Absent means `"approved"`, matching `RequestRow`. */
   stage?: RequestStage;
   itemUniqueId: string;
+  /** The document's stamped `SubmissionFileId`, when it carries one — see `RequestRow`. */
+  submissionFileId?: string;
   itemName: string;
   /**
    * Has the document passed seven years and moved to the archive? (2026-08-22)
@@ -526,6 +551,70 @@ export function applyDecision(row: RequestRow, decision: Decision): RequestRow {
     // rejection note and a failure reason can never both apply.
     decisionNote: decision.failure ?? decision.note ?? "",
   };
+}
+
+/* ── Finding the live document ───────────────────────────────────────────────── */
+
+/**
+ * A document carrying a request's `SubmissionFileId`, as one library answered.
+ *
+ * `itemId` addresses it for a recycle (`items(N)/recycle`) and `fileRef` for a share, so a caller
+ * needs no second read once one of these is in hand.
+ */
+export interface StampedCandidate {
+  /** The library's live TITLE — for the message, never for addressing anything. */
+  library: string;
+  itemId: number;
+  /** Server-relative path, as the library holds it NOW — never the path recorded on the request. */
+  fileRef: string;
+}
+
+export type StampLookup =
+  | { kind: "found"; library: string; itemId: number; fileRef: string }
+  | { kind: "none" }
+  /** More than one document carries the stamp. REFUSED — see `resolveStamped`. */
+  | { kind: "ambiguous"; count: number }
+  /** A library could not be searched, so "none" cannot be asserted. */
+  | { kind: "unknown" };
+
+/**
+ * Which document does a request's stamp point at, and may we act on it?
+ *
+ * ⚠⚠ THIS EXISTS BECAUSE A REQUEST IS KEYED ON `UniqueId`, WHICH DOES NOT SURVIVE ROUTING.
+ * `Auto-route`/`HC Auto Route` are copy-stamp-delete, so the routed copy carries a NEW `UniqueId`
+ * and the source holding the recorded one is DELETED. A pending-stage request approved after its
+ * document was routed therefore 404s on `GetFileById` and answers *"that document no longer
+ * exists"* about a file sitting in plain sight (found live 2026-09-10). `SubmissionFileId` is the
+ * identifier that survives the copy — which is the whole reason it exists, and why the submission
+ * record had to be rebuilt around it — so it is what resolves the live file here.
+ *
+ * ⚠ MORE THAN ONE MATCH IS REFUSED, NOT GUESSED. Two documents of one name legitimately exist
+ * across libraries and archive tiers, and Replace (`nameConflictBehavior: 1`) can put one file's
+ * columns onto another's — so a stamp is normally unique and is not guaranteed to be. Recycling the
+ * wrong document is not undoable by anything this system does, so an ambiguous answer stops.
+ *
+ * ⚠ AND "NOTHING FOUND" IS ONLY HONEST WHEN EVERY LIBRARY ANSWERED. A library that could not be
+ * searched (a 400 from a `$filter` on a site where the column was never provisioned, a throttle)
+ * makes the answer `unknown`, never `none` — because `none` reads as *the document is genuinely
+ * gone*, which invites the requester to stop looking. Empty ≠ unknown, as everywhere here.
+ *
+ * A single hit still WINS over an unreadable sibling: the stamp is designed to identify one
+ * document, and refusing on the strength of a library we could not reach would leave the requester
+ * with no route at all while the document sits there.
+ */
+export function resolveStamped(
+  candidates: readonly StampedCandidate[] | undefined,
+  anyLibraryUnreadable: boolean,
+): StampLookup {
+  // Never searched. Distinct from "searched and found nothing", and the caller must not conflate them.
+  if (candidates === undefined) return { kind: "unknown" };
+  const usable = (candidates ?? []).filter((c) => c && c.itemId > 0);
+  if (usable.length === 1) {
+    const c = usable[0];
+    return { kind: "found", library: c.library, itemId: c.itemId, fileRef: c.fileRef };
+  }
+  if (usable.length > 1) return { kind: "ambiguous", count: usable.length };
+  return anyLibraryUnreadable ? { kind: "unknown" } : { kind: "none" };
 }
 
 /** Pending requests for the units this person approves, oldest first — a queue, not a list. */
