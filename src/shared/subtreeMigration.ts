@@ -26,9 +26,62 @@ function sameName(a: string, b: string): boolean {
  * to one unit and not another — the client confirmed on 2026-08-10 that not every Unit has
  * SubUnits.
  */
+export interface TierOption {
+  /**
+   * Term label. The folder name on an uncoded level, and the name EVERY below-Unit folder carried
+   * before codes existed — which is why matching must still accept it for ever.
+   */
+  label: string;
+  /** Folder code, when the level is `abbreviated` and this term has one. Sanitized by the caller. */
+  code?: string;
+}
+
+/**
+ * A bare string is a label with no code — every caller and test written before 2026-09-09 passes
+ * these, and accepting them keeps this module's 70-odd existing tests describing real behaviour
+ * rather than being rewritten around a shape change.
+ */
+export type TierOptionInput = string | TierOption;
+
+const toTierOption = (o: TierOptionInput): TierOption =>
+  typeof o === "string" ? { label: o } : { label: o?.label ?? "", code: o?.code };
+
+/**
+ * The folder name a term SHOULD have: its code where the level is coded, else its label.
+ *
+ * ⚠ This is the half that makes a rename happen. `assignSegments` records THIS rather than the name
+ * the folder currently has, so a folder called `Expatriate Formalities Subunit` gets a destination of
+ * `EFS`, and the existing move machinery carries it there. Record the current name instead and the
+ * destination equals the source, which is a no-op reported as success.
+ */
+export function optionFolderName(o: TierOption): string {
+  const code = sanitizeFolderSegment(o?.code ?? "");
+  return code || sanitizeFolderSegment(o?.label ?? "");
+}
+
+/**
+ * Which option, if any, an existing folder name belongs to — under EITHER naming.
+ *
+ * ⚠ ACCEPTING BOTH IS NOT A CONVENIENCE, IT IS THE WHOLE MIGRATION. On the day a level is switched
+ * to codes, every folder under it is still named by label. Match on the code alone and all of them
+ * become STRAYS: the scan reports "needs a value chosen" for everything, Rebuild is held, and
+ * nothing moves — Buah's failure mode reached by a new route.
+ *
+ * It also has to keep accepting labels afterwards, for ever: a level can be switched back off, and a
+ * folder created during any window where a code was missing is label-named and still real.
+ */
+function matchOption(tier: EffectiveTier | undefined, folderName: string): TierOption | undefined {
+  for (const o of (tier ?? { options: [] }).options ?? []) {
+    if (sameName(sanitizeFolderSegment(o.label), folderName)) return o;
+    const code = sanitizeFolderSegment(o.code ?? "");
+    if (code.length > 0 && sameName(code, folderName)) return o;
+  }
+  return undefined;
+}
+
 export interface EffectiveTier {
   chainIndex: number;
-  options: string[];
+  options: TierOption[];
 }
 
 /**
@@ -45,9 +98,10 @@ export interface EffectiveTier {
  * not touch this unit", and conflating them is the difference between skipping a tier and
  * relocating a unit's documents because of a network error.
  */
-export function effectiveTiers(optionsByTier: string[][]): EffectiveTier[] {
+export function effectiveTiers(optionsByTier: TierOptionInput[][]): EffectiveTier[] {
   const out: EffectiveTier[] = [];
-  (optionsByTier ?? []).forEach((options, chainIndex) => {
+  (optionsByTier ?? []).forEach((raw, chainIndex) => {
+    const options = (raw ?? []).map(toTierOption);
     if ((options ?? []).length > 0) out.push({ chainIndex, options });
   });
   return out;
@@ -72,8 +126,7 @@ export type Placement =
 export function classifyChild(name: string, tiers: EffectiveTier[]): Placement {
   const list = tiers ?? [];
   if (list.length === 0) return { kind: "stray" };
-  const validAt = (i: number): boolean =>
-    ((list[i] ?? { options: [] }).options ?? []).filter((o) => sameName(sanitizeFolderSegment(o), name)).length > 0;
+  const validAt = (i: number): boolean => matchOption(list[i], name) !== undefined;
   if (validAt(0)) return { kind: "ok" };
   for (let k = 1; k < list.length; k++) {
     if (validAt(k)) return { kind: "misplaced", levels: k };
@@ -83,10 +136,18 @@ export function classifyChild(name: string, tiers: EffectiveTier[]): Placement {
 
 /** A destination value chosen by the administrator for one tier. */
 export interface Destination {
-  /** Term label as chosen. The folder name is the sanitized form of this. */
+  /** Term label as chosen. The folder name is the sanitized form of this on an uncoded level. */
   label: string;
   /** Term GUID, written to the tier's `tidCol`. */
   id: string;
+  /**
+   * Folder code, when the level is `abbreviated`. The folder name is this when present.
+   *
+   * ⚠ The `label` is still what reaches `labelCol`, and the `id` what reaches `tidCol` — a code
+   * names the FOLDER and never the metadata. Stamping a code into the column would make a document
+   * describe itself by an abbreviation nobody chose as its value.
+   */
+  code?: string;
 }
 
 /* ===================================================================================
@@ -139,28 +200,41 @@ export interface SegmentAssignment {
 export function assignSegments(
   segments: string[],
   tiers: EffectiveTier[],
-  removedOptions?: string[][],
+  removedOptions?: TierOptionInput[][],
 ): SegmentAssignment {
   const out: SegmentAssignment = { assigned: [], strays: [], dropped: [] };
   const list = tiers ?? [];
   (segments ?? []).forEach((name, at) => {
     const matches: number[] = [];
     for (let i = 0; i < list.length; i++) {
-      if (list[i].options.filter((o) => sameName(sanitizeFolderSegment(o), name)).length > 0) {
-        matches.push(i);
-      }
+      if (matchOption(list[i], name) !== undefined) matches.push(i);
     }
     if (matches.length > 0) {
       // Identity first: a segment already sitting at a tier that accepts it belongs there. Only
       // then fall back to the shallowest tier that does.
       const identity = matches.filter((i) => i === at)[0];
       const chosen = identity === undefined ? matches[0] : identity;
-      out.assigned.push({ at, chainIndex: list[chosen].chainIndex, name });
+      const opt = matchOption(list[chosen], name);
+      const canonical = opt ? optionFolderName(opt) : name;
+      /* ⚠ THE CANONICAL NAME, NOT THE ONE THE FOLDER CURRENTLY HAS — this is what turns switching a
+         level to codes into an ordinary move that the existing Rebuild carries out.
+
+         ⚠ EXCEPT WHEN THEY DIFFER ONLY IN CASE, which must keep the existing name. SharePoint
+         sibling names are case-insensitive, so `Tax Return` -> `TAX RETURN` is a move onto itself:
+         it would collide with its own source and achieve nothing. The abbreviation rename already
+         refuses a case-only change for exactly this reason (FolderManager ~3233). */
+      out.assigned.push({
+        at,
+        chainIndex: list[chosen].chainIndex,
+        name: sameName(canonical, name) ? name : canonical,
+      });
       return;
     }
     const removed =
       (removedOptions ?? []).filter(
-        (opts) => (opts ?? []).filter((o) => sameName(sanitizeFolderSegment(o), name)).length > 0,
+        (opts) =>
+          matchOption({ chainIndex: -1, options: (opts ?? []).map(toTierOption) }, name) !==
+          undefined,
       ).length > 0;
     if (removed) out.dropped.push(name);
     else out.strays.push(name);
@@ -211,7 +285,7 @@ export function planLeaf(
   leaf: LeafFolder,
   tiers: EffectiveTier[],
   chosen: Record<number, Destination | undefined>,
-  removedOptions?: string[][],
+  removedOptions?: TierOptionInput[][],
 ): LeafPlan {
   const { assigned, strays, dropped } = assignSegments(leaf.segments, tiers, removedOptions);
   const plan: LeafPlan = { leaf, ancestors: [], missingTiers: [], strays, dropped };
@@ -245,7 +319,8 @@ export function planLeaf(
       continue;
     }
     const pick = chosen[tier.chainIndex];
-    const segment = pick ? sanitizeFolderSegment(pick.label) : "";
+    // Code where the level is coded, label otherwise — one rule, shared with `optionFolderName`.
+    const segment = pick ? optionFolderName({ label: pick.label, code: pick.code }) : "";
     // An unusable name would build `unit//2024`, which SharePoint collapses to `unit/2024` — a
     // move that does nothing and reports success. Treated as "not chosen".
     if (!segment) {
@@ -523,12 +598,20 @@ export function backfillNeeds(
     const fields: StampNeed["fields"] = [];
     for (let i = 0; i < folders.length && i < tiers.length; i++) {
       const tier = tiers[i];
-      const match = tier.options.filter((o) => sameName(sanitizeFolderSegment(o), folders[i]))[0];
+      const match = matchOption(tier, folders[i]);
       if (!match) continue;
       const col = labelColFor(tier.chainIndex);
       if (!col) continue;
-      if (!sameName(file.values[col] ?? "", match)) {
-        fields.push({ chainIndex: tier.chainIndex, label: match });
+      /* ⚠ THE LABEL IS STAMPED, NEVER THE CODE, even when the folder is named by the code. `labelCol`
+         holds the term as a person reads it — writing `EFS` there would make the document describe
+         itself by an abbreviation nobody chose as its VALUE, and every filter and report over that
+         column would then read in codes. A code names the FOLDER and nothing else.
+
+         Matching still accepts either, so a folder already renamed to `EFS` is recognised and stamps
+         `Expatriate Formalities Subunit` — which is the whole point: the path gets shorter and the
+         metadata stays readable. */
+      if (!sameName(file.values[col] ?? "", match.label)) {
+        fields.push({ chainIndex: tier.chainIndex, label: match.label });
       }
     }
     if (fields.length > 0) out.push({ path: file.path, fields });

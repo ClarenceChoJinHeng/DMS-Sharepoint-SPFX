@@ -1,6 +1,8 @@
 import { Level, parseLevels } from "./formModel";
 import {
   buildOnDemandSegments,
+  folderCodeFor,
+  isAbbreviatedLevel,
   builtInOnDemandTiers,
   builtInTierFor,
   decideTier,
@@ -257,6 +259,11 @@ describe("gridPlan", () => {
 
 describe("buildOnDemandSegments", () => {
   const pick = { Year: { id: "y1", label: "2026" }, DocumentType: { id: "d1", label: "Invoice" } };
+  /* ⚠ `Function` IS AN ORDINARY BELOW-UNIT LEVEL, so since 2026-09-09 it is named by its term's
+     ABBREVIATION — Year and Document Type are the only two that are not. These tests are about chain
+     ORDER, so they supply a code and go on asserting order; the naming rule itself is pinned in
+     "below-Unit folder codes" below. */
+  const fnCodes = { f1: "HR" };
 
   it("produces folder names in chain order", () => {
     const r = buildOnDemandSegments([year, docType], pick);
@@ -267,15 +274,16 @@ describe("buildOnDemandSegments", () => {
   it("follows the chain when a tier is inserted at the top", () => {
     const r = buildOnDemandSegments([fn, year, docType], {
       ...pick, Function: { id: "f1", label: "Human Resource" },
-    });
-    expect(r.segments).toEqual(["Human Resource", "2026", "Invoice"]);
+    }, fnCodes);
+    // The coded level and the two fixed ones, in chain order and named by their own rules.
+    expect(r.segments).toEqual(["HR", "2026", "Invoice"]);
   });
 
   it("follows the chain when a tier is inserted at the bottom", () => {
     const r = buildOnDemandSegments([year, docType, fn], {
       ...pick, Function: { id: "f1", label: "Human Resource" },
-    });
-    expect(r.segments).toEqual(["2026", "Invoice", "Human Resource"]);
+    }, fnCodes);
+    expect(r.segments).toEqual(["2026", "Invoice", "HR"]);
   });
 
   // Reporting the gap rather than skipping it. A skipped tier routes the file to
@@ -675,5 +683,104 @@ describe("canMoveBelowUnitTier", () => {
         expect(canMoveBelowUnitTier(chain, i, d)).toBe(validateChain(next) === undefined);
       }
     }
+  });
+});
+
+/* =====================================================================================
+ * Per-level folder codes (2026-09-09).
+ *
+ * Spec: docs/superpowers/specs/2026-09-09-below-unit-abbreviations-design.md
+ * ===================================================================================== */
+/* Every below-Unit level is named by its terms' abbreviations EXCEPT Year and Document Type
+   (client, 2026-09-09). Derived, never stored — see `isAbbreviatedLevel`. */
+describe("below-Unit folder codes", () => {
+  const sub: Level = { label: "Sub Unit", column: "SubUnit", permissioned: false };
+  // `Year` is one of the two fixed tiers, so it is NOT abbreviated — there is no code for `2024`.
+  const plain: Level = { label: "Year", column: "Year", permissioned: false, termSet: "y" };
+  const pickSub = { id: "T-1", label: "Expatriate Formalities Subunit" };
+  const pickYear = { id: "T-9", label: "2024" };
+  const codes = { "t-1": "EFS", "t-9": "YR24" };
+
+  it("names Year from the label — the fixed pair is never abbreviated", () => {
+    const r = buildOnDemandSegments([plain], { Year: pickYear }, codes);
+    expect(r.segments).toEqual(["2024"]);
+    expect(r.uncoded).toEqual([]);
+  });
+
+  it("ignores a code that exists for Year, so a stray row cannot rename its folders", () => {
+    expect(folderCodeFor(plain, "T-9", codes)).toBe("");
+  });
+
+  it("also exempts Document Type, matched the same way Year is", () => {
+    const dt: Level = { label: "Document Type", column: "DocumentType", permissioned: false };
+    expect(isAbbreviatedLevel(dt)).toBe(false);
+    expect(isAbbreviatedLevel(plain)).toBe(false);
+    expect(isAbbreviatedLevel(sub)).toBe(true);
+  });
+
+  it("names an ordinary below-Unit level from its code", () => {
+    const r = buildOnDemandSegments([sub], { SubUnit: pickSub }, codes);
+    expect(r.segments).toEqual(["EFS"]);
+    expect(r.missing).toEqual([]);
+    expect(r.uncoded).toEqual([]);
+  });
+
+  it("REPORTS a term with no code — it never falls back to the label", () => {
+    // The fallback is what would put `EFS` and `Expatriate Formalities Subunit` in one tree,
+    // and give the same term two folders the moment the code was filled in.
+    const r = buildOnDemandSegments([sub], { SubUnit: pickSub }, {});
+    expect(r.segments).toEqual([]);
+    expect(r.uncoded).toEqual(["Expatriate Formalities Subunit"]);
+  });
+
+  it("reports the TERM label, not the tier label — they answer different questions", () => {
+    const r = buildOnDemandSegments([sub], { SubUnit: pickSub }, {});
+    expect(r.uncoded).toEqual(["Expatriate Formalities Subunit"]);
+    expect(r.uncoded).not.toEqual(["Sub Unit"]);
+  });
+
+  it("treats a blank or whitespace code as no code", () => {
+    expect(buildOnDemandSegments([sub], { SubUnit: pickSub }, { "t-1": "   " }).uncoded.length).toBe(1);
+    expect(buildOnDemandSegments([sub], { SubUnit: pickSub }, { "t-1": "" }).uncoded.length).toBe(1);
+  });
+
+  it("treats a code that sanitizes to nothing as no code", () => {
+    // `///` yields an empty folder name, which would build `unit//2024` — SharePoint collapses that
+    // to `unit/2024`, a silent level-too-shallow. Reported instead.
+    expect(buildOnDemandSegments([sub], { SubUnit: pickSub }, { "t-1": "///" }).uncoded.length).toBe(1);
+  });
+
+  it("matches the code key case-insensitively in BOTH directions", () => {
+    // A GUID is written upper- and lower-case all over this codebase, and the abbreviation list
+    // stores whatever was pasted in. Normalising only the lookup made every hit miss — and a miss
+    // REFUSES the upload, so a coded level would have read as "no codes filled in".
+    expect(
+      buildOnDemandSegments([sub], { SubUnit: { id: "t-1", label: "x" } }, { "T-1": "EFS" }).segments,
+    ).toEqual(["EFS"]);
+    expect(
+      buildOnDemandSegments([sub], { SubUnit: { id: "T-1", label: "x" } }, { "t-1": "EFS" }).segments,
+    ).toEqual(["EFS"]);
+  });
+
+  it("still reports a tier with NO selection as missing, not uncoded", () => {
+    const r = buildOnDemandSegments([sub], {}, codes);
+    expect(r.missing).toEqual(["Sub Unit"]);
+    expect(r.uncoded).toEqual([]);
+  });
+
+  it("carries on past an uncoded tier so every problem is reported at once", () => {
+    // An uploader told about one gap at a time fixes one, retries, and meets the next.
+    const r = buildOnDemandSegments([sub, plain], { SubUnit: pickSub }, {});
+    expect(r.uncoded.length).toBe(1);
+    expect(r.missing).toEqual(["Year"]);
+  });
+
+  it("a chain written before codes existed is still abbreviated — the rule is derived", () => {
+    // No flag is stored anywhere, so an old chain and a new one behave identically. That is what
+    // makes the client's "enforce it everywhere" possible without a data migration.
+    const legacy: Level = { label: "Sub Unit", column: "SubUnit", permissioned: false };
+    expect(buildOnDemandSegments([legacy], { SubUnit: pickSub }, {}).uncoded).toEqual([
+      "Expatriate Formalities Subunit",
+    ]);
   });
 });

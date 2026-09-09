@@ -113,6 +113,15 @@ export function parseLevels(json: string): Level[] {
       // STRING "false" that a hand-authored row can easily contain — leaves it
       // permissioned, which is the loud direction (see the interface comment).
       if (e.permissioned === false) lvl.permissioned = false;
+      /* ⚠⚠ THIS PARSER IS A WHITELIST — ADDING A FIELD TO `Level` IS NOT ENOUGH ON ITS OWN.
+         It rebuilds each level field by field, so a new property type-checks everywhere and is still
+         silently dropped on every read. An `abbreviated` flag shipped without a line here on
+         2026-09-09 and the whole feature failed invisibly: it saved to the config row, the
+         abbreviation screen showed no coded level, the upload form kept naming folders by label.
+         Nothing errored. **Grep this function whenever `Level` grows.**
+
+         (That flag is gone again — folder naming below Unit is DERIVED now, see `folderCodeFor` —
+         but the trap it fell into is the reason this warning stays.) */
       return lvl;
     });
 }
@@ -231,6 +240,21 @@ export function isLeafChainValid(
 }
 
 const ILLEGAL_FOLDER_CHARS = /[\\/:*?"<>|#%]/g;
+
+/**
+ * Remove only the characters SharePoint refuses in a folder name — nothing else.
+ *
+ * ⚠ DELIBERATELY NOT `sanitizeFolderSegment`, WHICH ALSO COLLAPSES WHITESPACE AND TRIMS. Those two
+ * are right for deriving a folder name and WRONG on every keystroke: trimming as you type means a
+ * space can never be entered, so `GC EP` is unreachable — you would type `GC`, the space would
+ * vanish, and `E` would land against the `C`.
+ *
+ * Same character class, so an input guarded with this and a name built with that can never disagree
+ * about what is legal.
+ */
+export function stripFolderChars(name: string): string {
+  return (name ?? "").replace(ILLEGAL_FOLDER_CHARS, "");
+}
 
 /** Make a term label safe to use as a single folder name. Returns "" if nothing remains. */
 export function sanitizeFolderSegment(name: string): string {

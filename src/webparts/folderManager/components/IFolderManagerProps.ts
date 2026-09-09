@@ -113,6 +113,15 @@ export interface IFolderManagerProps {
    */
   onMigrateApplied?: () => void;
   /**
+   * A migration CHECK has finished — whatever it found, and whether or not it succeeded.
+   *
+   * ⚠ FINISHED, NOT SUCCEEDED, and the distinction matters here more than usual: in the structure
+   * flow this step sits before the one that turns uploads back ON, so a success requirement would
+   * keep the site refusing documents for as long as the scan kept failing. Same rule as
+   * `onReconRunningChange`.
+   */
+  onMigrateScanned?: () => void;
+  /**
    * Pre-selects the migration screen's segment picker, so a flow that already asked does not ask
    * again. Client, 2026-08-20: *"After selecting I got to select again which is weird."*
    * Matches on the mode row's `Title`, the key BOTH screens build their options from.

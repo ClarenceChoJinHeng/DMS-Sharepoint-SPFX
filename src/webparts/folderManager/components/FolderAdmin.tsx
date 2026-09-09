@@ -651,11 +651,14 @@ export default function FolderAdmin({
    * the admin believes they made, and the flow looks broken rather than incomplete.
    */
   const [structureDirty, setStructureDirty] = useState(false);
-  /* ⚠ REPORTED BUT NO LONGER GATING (2026-09-06). Nothing reads the flag now that Next saves — the
-     state it protected against cannot arise — but the screen still reports it, and dropping the
-     receiver would make re-instating a dirty gate a two-file change instead of a one-line one.
-     Named `_` so lint sees it consumed without pretending it is used. */
-  const [, setAbbreviationsDirty] = useState(false);
+  /* ⚠⚠ GATING AGAIN SINCE 2026-09-09, AND THE REASON IS A REGRESSION I INTRODUCED THE SAME DAY.
+     This was parked on 2026-09-06 — "nothing reads it now that Next saves" — which was true while
+     the abbreviation screen showed its OWN segment picker, because that picker refuses to switch on
+     a dirty draft ("Save your changes first"). Hiding that picker inside a flow (so the step stopped
+     showing two Segment dropdowns) left the FLOW's switcher as the only way to change segment on
+     that step — and it checked nothing. Type four codes, switch segment, they are gone.
+     Removing a control removes its guards with it. */
+  const [abbreviationsDirty, setAbbreviationsDirty] = useState(false);
   /**
    * The migration screen has scanned work it has not run.
    *
@@ -685,7 +688,17 @@ export default function FolderAdmin({
    * finished here", which is true of one segment for one visit. The switcher can change segment
    * mid-flow, and the previous segment's result must not unlock the new one's lock.
    */
-  const [appliedFor, setAppliedFor] = useState<string | undefined>(undefined);
+  /**
+   * A migration CHECK has been run on this step, in this visit.
+   *
+   * ⚠ REPLACES `appliedFor`, WHICH EXISTED ONLY TO SURVIVE THE MIGRATE LOCK (removed 2026-09-09).
+   * That lock hid the screen whenever nothing was staged, and this component had to suppress it
+   * after a successful run or the result log vanished the instant the run cleared `PendingLevels`.
+   * With the lock gone there is nothing to suppress — and the opposite problem appears instead:
+   * nothing would hold the step at all in the two cases the lock got wrong. Hence a gate on the scan
+   * having been RUN rather than a lock on what was staged.
+   */
+  const [migrateScanned, setMigrateScanned] = useState(false);
 
   /**
    * Hold navigation while a run is in flight, and RE-READ THE FACTS when it ends.
@@ -712,6 +725,20 @@ export default function FolderAdmin({
   // answer: the abbreviation count (a term-tree walk, paid for by the screen that needs it anyway) and
   // flow 1's segmentExists (no picker, because the segment does not exist yet).
   const [baseFacts, setBaseFacts] = useState<FlowFacts>({});
+
+  /**
+   * Is the site-wide pause setting still being read?
+   *
+   * ⚠ STARTS `true`, and that is the point. `useEffect` runs AFTER the first paint, so an initial
+   * `false` leaves one rendered frame where the setting is neither known nor being read - and a
+   * frame is all a fast click needs. Before any flow is open it simply stays `true`, which costs
+   * nothing: the picker has no Next to hold.
+   *
+   * Cleared by whichever read answers first, the facts effect below or the toggle's own - see the
+   * `onChanged` handler. Understating (held a beat longer than strictly needed) is the safe
+   * direction; overstating opens the one gate this flow cannot do without.
+   */
+  const [pauseLoading, setPauseLoading] = useState(true);
 
   const GET = { Accept: "application/json;odata=nometadata" };
 
@@ -852,6 +879,9 @@ export default function FolderAdmin({
   useEffect(() => {
     if (!flow) return;
     let cancelled = false;
+    // In flight from here until the pause read below resolves, either way. Not in this effect's
+    // deps, so it cannot loop.
+    setPauseLoading(true);
     const load = async (): Promise<void> => {
       const next: FlowFacts = {};
       const target = segment;
@@ -940,9 +970,14 @@ export default function FolderAdmin({
       } catch {
         /* leaves uploadsPaused undefined — unknown, never "on" */
       }
+      /* CLEARED WHETHER OR NOT THE READ SUCCEEDED. A failed read leaves `uploadsPaused` undefined,
+         which is `unknown` and gates nothing - the long-standing fail-open rule. This flag is only
+         ever about the request still being in the air. */
+      if (!cancelled) setPauseLoading(false);
       if (!cancelled) setBaseFacts(next);
     };
     load().catch(() => {
+      if (!cancelled) setPauseLoading(false);
       if (!cancelled) setBaseFacts({});
     });
     return () => {
@@ -990,6 +1025,8 @@ export default function FolderAdmin({
       // `abbreviationsLoading` is carried ALWAYS, count or no count — it is the fact that tells the
       // gate apart "not read yet" from "read and failed", and only the first holds Next.
       abbreviationsLoading: abbrevLoading,
+      // Same rule, same reason, for the pause step: in flight is not unknown.
+      uploadsPausedLoading: pauseLoading,
       ...(abbrevMissing === undefined
         ? {}
         : { abbreviationsMissing: abbrevMissing }),
@@ -1004,6 +1041,10 @@ export default function FolderAdmin({
       ...(flow && flow.steps.filter((st) => st.id === "reconcile").length > 0
         ? { reconcileRan: reconRan }
         : {}),
+      // Same shape, same reasoning: about the SESSION, not the segment, so it sits after the scoping.
+      ...(flow && flow.steps.filter((st) => st.id === "migrate").length > 0
+        ? { migrateScanRan: migrateScanned }
+        : {}),
     };
     if (!flow || flow.asksSubject !== "newSegment") return facts;
     // Unreadable list ⇒ change nothing, so nothing is gated. This is the ONLY fail-open case here.
@@ -1011,7 +1052,23 @@ export default function FolderAdmin({
     // The list read fine, so "nothing picked" is the admin not having answered — not a failure.
     if (!segment) return { ...facts, subjectGiven: false };
     return { ...facts, subjectGiven: true, segmentExists: true };
-  }, [flow, baseFacts, segments, segment, abbrevMissing, abbrevLoading, reconRan]);
+  /* WARN: EVERY FACT ABOVE MUST APPEAR HERE, AND `migrateScanned` WAS MISSED - found by the client
+     on the first live run, 2026-09-09. This is a `useMemo`, so a fact whose source is not in the deps
+     is read ONCE and then frozen: pressing Check flipped the state, the memo did not recompute, and
+     Next stayed greyed under "Run the check first" permanently. The gate could never release.
+     Nothing type-checks this and `react-hooks/exhaustive-deps` did not flag it, so the only guard is
+     adding the dep in the SAME edit as the fact. `reconRan` sits here for exactly that reason. */
+  }, [
+    flow,
+    baseFacts,
+    segments,
+    segment,
+    abbrevMissing,
+    abbrevLoading,
+    reconRan,
+    migrateScanned,
+    pauseLoading,
+  ]);
 
   /** Open a flow on the first thing left to do. */
   /* ⚠ `segKey` IS CLEARED ON BOTH TRANSITIONS (client, 2026-09-06: leaving the structure flow and
@@ -1025,7 +1082,7 @@ export default function FolderAdmin({
      goes through `leaveFlow` first. */
   const openFlow = (f: Flow): void => {
     setFlow(f);
-    setAppliedFor(undefined);
+    setMigrateScanned(false);
     setReconRan(false);
     reconStarted.current = false;
     setAllTools(false);
@@ -1036,7 +1093,7 @@ export default function FolderAdmin({
 
   const leaveFlow = (): void => {
     setFlow(undefined);
-    setAppliedFor(undefined);
+    setMigrateScanned(false);
     setReconRan(false);
     reconStarted.current = false;
     setBaseFacts({});
@@ -1220,8 +1277,6 @@ export default function FolderAdmin({
   const steps = active.steps;
   const step = steps[idx];
   const needsPick = active.needsSegment && !segment;
-  /* ⚠ THE MIGRATE STEP STAYS UNLOCKED AFTER ITS OWN RUN — see `appliedFor`. Everything else about
-     the lock is unchanged: on a first visit with no pending change it renders exactly as before. */
   /**
    * The flow has done its job: the last step is reached and uploads are back ON.
    *
@@ -1234,9 +1289,10 @@ export default function FolderAdmin({
   const flowComplete =
     idx >= steps.length - 1 && effectiveFacts.uploadsPaused === false;
 
-  const locked =
-    isLocked(step, effectiveFacts) &&
-    !(step.id === "migrate" && appliedFor !== undefined && appliedFor === segKey);
+  const locked = isLocked(step, effectiveFacts);
+
+  /** Unsaved work on the screen this step is showing — the segment switcher must not discard it. */
+  const segSwitchDirty = structureDirty || abbreviationsDirty;
 
   /**
    * The lowest step whose Next is currently blocked. Nothing PAST it may be reached from the rail.
@@ -1421,7 +1477,13 @@ export default function FolderAdmin({
                `false` and Next stayed blocked saying uploads were on, clearable only by reloading the
                page (reported on site 2026-09-07). The toggle only ever calls this after a read or
                write that actually succeeded, so a failure still leaves the fact as it was. */
-            onChanged={(paused) => setBaseFacts((f) => ({ ...f, uploadsPaused: paused }))}
+            onChanged={(paused) => {
+              // The toggle only calls this after a read or write that SUCCEEDED, so the answer is
+              // known here even if the facts effect above is still in the air. Clearing the flag as
+              // well stops Next being held a beat after the panel has plainly said "on"/"off".
+              setPauseLoading(false);
+              setBaseFacts((f) => ({ ...f, uploadsPaused: paused }));
+            }}
           />
         );
       }
@@ -1629,12 +1691,9 @@ export default function FolderAdmin({
                `migrate` gate reads. The cheap-facts effect only COPIES it, so bumping `reload` is
                what makes Next open the moment the migration switches the new shape on. Same reason
                and same shape as `onStructureSaved` above. */
-            onMigrateApplied={() => {
-              // Remember it BEFORE the re-read: `reload` is what flips `pendingLevels` to false and
-              // therefore what would fire this step's own lock.
-              setAppliedFor(segKey);
-              setReload((n) => n + 1);
-            }}
+            onMigrateApplied={() => setReload((n) => n + 1)}
+            // A check has finished — the only thing that can say whether any folders need moving.
+            onMigrateScanned={() => setMigrateScanned(true)}
             // The flow already asked which segment, and prints it in the header — so the migration
             // screen must not ask a second time. Same principle as `stepUsesSegment`: if the flow
             // knows, it does not ask.
@@ -1895,10 +1954,18 @@ export default function FolderAdmin({
                   on against the OLD segment while the flow header names the NEW one. Nothing breaks;
                   the screen simply states two different segments at once, and the admin has no way to
                   tell which the result belongs to. */}
+              {/* ⚠ ALSO HELD WHILE A SCREEN HAS UNSAVED WORK (client, 2026-09-09, after typing four
+                  abbreviations: switching segment threw them away). The abbreviation screen's OWN
+                  picker refuses this — *"Save your changes first — switching segment would lose
+                  them"* — and this one, six inches above it, did it silently. The Back band has
+                  consulted `structureDirty || abbreviationsDirty` since 1.0.253.0; this switcher was
+                  added afterwards (1.0.455.0) and never inherited the rule.
+                  REFUSED, not confirmed: Save is on the same screen, and a "discard?" prompt puts
+                  losing the work one click behind ordinary-looking navigation. */}
               <select
-                style={{ ...s.select, ...(runBusy ? s.off : {}) }}
+                style={{ ...s.select, ...(runBusy || segSwitchDirty ? s.off : {}) }}
                 value={segKey}
-                disabled={runBusy}
+                disabled={runBusy || segSwitchDirty}
                 onChange={(e) => {
                   setSegKey(e.target.value);
                   setMaxIdx(idx);
@@ -1913,7 +1980,9 @@ export default function FolderAdmin({
               <p style={s.hint}>
                 {runBusy
                   ? "You cannot change segment while this step is running — the run would carry on against the segment it started with."
-                  : "Change this to work on a different segment. The steps you have already passed are re-checked for whichever one you pick."}
+                  : segSwitchDirty
+                    ? "Save or discard what you are editing first — switching segment now would lose it."
+                    : "Change this to work on a different segment. The steps you have already passed are re-checked for whichever one you pick."}
               </p>
             </div>
           )}

@@ -82,6 +82,7 @@ interface DraftTier {
    * the saved chain by a later toggle back.
    */
   fromUnit: boolean;
+
   termSetGuid: string; // only meaningful when fromUnit is false
   position: number;    // index within the below-Unit list
 }
@@ -384,6 +385,7 @@ const s: Record<string, React.CSSProperties> = {
   tierLock:  { background: "#f3f2f1", color: "#605e5c" },
   tierName:  { fontWeight: 600, flex: "0 0 170px", color: "#242424" },
   tierMeta:  { fontSize: 11.5, color: "#8a8886", flex: "1 1 160px" },
+  codeTog:   { display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "#605e5c", marginRight: 10, cursor: "pointer", whiteSpace: "nowrap" },
   label:     { display: "block", fontSize: 12, fontWeight: 600, color: "#323130", margin: "14px 0 4px" },
   input:     { width: "100%", boxSizing: "border-box", padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4 },
   hint:      { fontSize: 11, color: "#8a8886", marginTop: 3, lineHeight: 1.5 },
@@ -1500,6 +1502,13 @@ export default function StructureManager({
              tier past Year shifts Year's index, and that is fine — the two can never change order
              relative to EACH OTHER, because neither can be moved directly. */
           const fixed = isFixedBelowUnitTier(l);
+          /* ⚠ ALSO REFUSED WHEN THE MOVE WOULD BREAK THE CHAIN, not only at the ends. A shared-list
+             tier moved UP above a per-unit one is the `per-unit-not-contiguous` shape that made every
+             unit in Buah unreadable — the save refuses it, but only after the move has visibly
+             happened. The mirror is a per-unit tier moved DOWN past a shared-list one. */
+          const canUp = !fixed && k > 0 && canMoveBelowUnitTier(draft, i, -1);
+          const canDown =
+            !fixed && k < onDemand.length - 1 && canMoveBelowUnitTier(draft, i, 1);
           return (
             <div style={s.tierRow} key={`d${i}`}>
               <span style={s.tierName}>{l.label}</span>
@@ -1507,30 +1516,42 @@ export default function StructureManager({
                 {l.termSet !== undefined ? "own list of values" : "values come from the level above"}
                 {" · column: "}
                 {l.labelCol ?? l.column}
+                {/* ⚠ DERIVED, NOT A SETTING (client, 2026-09-09). Every below-Unit level but the
+                    fixed pair is named by its terms' abbreviations, so this states a fact rather than
+                    reflecting a choice — there is no longer a control to reflect. */}
+                {!fixed && " · folders named by abbreviation"}
                 {fixed && " · fixed — cannot be moved or removed"}
               </span>
               <span style={{ flex: "0 0 auto" }}>
-                <button
-                  style={s.iconBtn}
-                  /* ⚠ ALSO REFUSED WHEN THE MOVE WOULD BREAK THE CHAIN, not only at the ends. A
-                     shared-list tier moved UP above a per-unit one is the `per-unit-not-contiguous`
-                     shape that made every unit in Buah unreadable — the save refuses it, but only
-                     after the move has visibly happened. */
-                  disabled={fixed || k === 0 || !canMoveBelowUnitTier(draft, i, -1)}
-                  onClick={() => moveTier(i, -1)}
-                  title={fixed ? "Year and Document Type stay where they are." : "Move up"}
-                >
-                  &#8593;
-                </button>
-                <button
-                  style={s.iconBtn}
-                  // The mirror: a PER-UNIT tier moved DOWN past a shared-list one breaks the same rule.
-                  disabled={fixed || k === onDemand.length - 1 || !canMoveBelowUnitTier(draft, i, 1)}
-                  onClick={() => moveTier(i, 1)}
-                  title={fixed ? "Year and Document Type stay where they are." : "Move down"}
-                >
-                  &#8595;
-                </button>
+                {/* ⚠ ABSENT, NOT GREYED, WHEN A LEVEL CAN MOVE NEITHER WAY (client, 2026-09-09) —
+                    the rule Remove below already follows. Three levels reach it for two different
+                    reasons: Year and Document Type are `fixed`, a SUB UNIT is refused both ways by
+                    `canMoveBelowUnitTier` because it may only sit directly under Unit. Derived from
+                    the predicates the buttons already obeyed, so it names none of them and covers a
+                    future immovable level too.
+
+                    ⚠ ONE DIRECTION STILL SHOWS BOTH: a greyed ↑ beside a usable ↓ says "you are at
+                    the end" and becomes usable when another level is added. Only "neither" hides. */}
+                {(canUp || canDown) && (
+                  <>
+                    <button
+                      style={s.iconBtn}
+                      disabled={!canUp}
+                      onClick={() => moveTier(i, -1)}
+                      title="Move up"
+                    >
+                      &#8593;
+                    </button>
+                    <button
+                      style={s.iconBtn}
+                      disabled={!canDown}
+                      onClick={() => moveTier(i, 1)}
+                      title="Move down"
+                    >
+                      &#8595;
+                    </button>
+                  </>
+                )}
                 {/* Absent rather than greyed: a disabled Remove on a level that can NEVER be removed
                     is a control that will never do anything, and the meta line above already says
                     why it is not there. Greying it invites repeated clicking. */}
@@ -1609,15 +1630,49 @@ export default function StructureManager({
                   })}
                 />
                 <span>
-                  <strong>Shared folder term</strong>
+                  {/* ⚠ RENAMED ON THE CLIENT'S INSTRUCTION (2026-09-09). Note that BOTH radios add a
+                      folder layer, so the name does not by itself say which is which — the hint under
+                      it is doing that work. The distinction they answer is where the VALUES come from:
+                      each unit's own child terms, or one list shared by every unit. Earlier labels
+                      were "One shared list" (2026-08-17) and then "Shared folder term". */}
+                  <strong>New Folder Layer</strong>
                   <br />
                   <span style={s.radioHint}>
-                    Apply the same list of options to all unit folders.
+                    One list of options, shared by every unit folder.
                   </span>
                 </span>
               </label>
             </div>
 
+            {/* ⚠ NO LONGER A CHOICE (client, 2026-09-09: *"honestly just enforce the term abbreviation
+                to be created"*, then *"can we enforce them to use term abbreviations when adding new
+                subunit or share folders"*). A new below-Unit level is ALWAYS named by abbreviation,
+                so there is nothing to tick and nothing to forget.
+
+                ⚠ THE CHECKBOX THAT WAS HERE ALSO READ AS A DUPLICATE OF THE ONE ON THE TIER ROW
+                ABOVE — client: *"I can tick both btw"*. They govern different levels (that row's
+                level, and the one being added), which nothing on screen said.
+
+                ⚠ NOT APPLIED TO YEAR OR DOCUMENT TYPE — see `addTier`. There is no useful
+                abbreviation for `2024`, and coding either would move every document in the system.
+
+                ⚠ THE TIER-ROW CHECKBOX STAYS, and only until the four levels that predate this are
+                switched on and migrated (`Minasmas Archive 2`, GHO's and Buah's `Shared Folder`,
+                TO's `SDG`). It is the migration path, not an option — delete it once they are done
+                and the rule becomes absolute with nothing left to get wrong. */}
+            <label style={{ ...s.label, marginTop: 14 }}>Folder naming</label>
+            <p style={{ ...s.hint, marginTop: 0 }}>
+              Folders on this level are named by each term&rsquo;s <strong>abbreviation</strong>
+              {" "}rather than its full label, which keeps paths short. Every term on it needs an
+              abbreviation before anyone can file into it.
+            </p>
+
+            {/* ⚠ HIDDEN WHEN A SUB UNIT LEVEL ALREADY EXISTS (client, 2026-09-09). Naming a level
+                that cannot be added is work thrown away — typed, then a greyed Add, then the reason.
+                ⚠ GATED ON THE COMBINATION, NEVER `perUnitTaken` ALONE: switching to Shared folder
+                term is the way out, so the field must come straight back when they do. */}
+            {!(adding.fromUnit && perUnitTaken) && (
+              <>
             <span style={s.labelRow}>
               <label style={{ ...s.label, marginTop: 0 }} htmlFor="sm-label">Folder level name</label>
               {/* ⚠ THE NEUTRAL INFO AFFORDANCE, NOT A RED WARNING — matching the upload form's own
@@ -1682,6 +1737,8 @@ export default function StructureManager({
               onChange={(e) => setAdding({ ...adding, label: e.target.value })}
               placeholder="Folder Name"
             />
+              </>
+            )}
             {/* ⚠ THE COLUMN NAME IS NO LONGER SHOWN (client, 2026-09-06), AND IT WAS NOT DECORATION.
                 `ensureTextColumn` SKIPS a column that already exists whatever its TYPE, so a level
                 named into an existing column binds to it silently — that is how a re-added `Year`
@@ -1754,9 +1811,20 @@ export default function StructureManager({
             {adding.fromUnit && perUnitTaken && (
               <p style={{ ...s.msg, ...s.warn }}>
                 This segment already has a sub unit level (
-                {onDemand.filter((l) => !(l.termSet ?? "").trim())[0]?.label}). There is one sub unit
-                per unit, so a second one would have nothing to draw its values from. Choose{" "}
-                <strong>Shared folder term</strong> instead, or remove the existing level first.
+                {onDemand.filter((l) => !(l.termSet ?? "").trim())[0]?.label}), continue to add more
+                in the{" "}
+                {/* ⚠ THE CLASSIC, SITE-LEVEL PAGE — fifth mount point, same URL, same reason. The
+                    MODERN term store is the TENANT admin centre and answers "Access denied" to a
+                    site collection administrator; the client hit that wall on 2026-08-30. New tab,
+                    because this screen holds an unsaved-changes guard. */}
+                <a
+                  href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Term Store
+                </a>
+                .
               </p>
             )}
             {adding.fromUnit && !perUnitTaken && unitCheck.state !== "idle" && (

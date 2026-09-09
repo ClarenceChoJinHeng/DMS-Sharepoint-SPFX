@@ -521,8 +521,11 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       worked. The warning, the collision banner and Save all stay OUTSIDE the box — only the rows
       move. Capped unconditionally, unlike Folder Access's group list, because these rows hold text
       boxes and buttons and nothing absolutely positioned for a scroll container to clip.
-    - Below-Unit tiers are **listed but read-only** (they name folders from the term label), so nobody
-      goes hunting for Year.
+    - **⚠ THIS ONCE SAID below-Unit tiers are "listed but read-only". THEY WERE NOT LISTED AT ALL** —
+      the walk is capped at the permissioned depth on purpose, and the below-Unit note came off the
+      screen on 2026-09-06 at the client's request. Since 1.0.509.0 a below-Unit level IS listed and
+      editable, but **only when it opted in to codes** (`Level.abbreviated`); an uncoded one still
+      names its folders from the term label and is still absent, so nobody goes hunting for Year.
     - **Blanking a code after its folder exists, then setting a new one, shows NO rename warning** —
       the warning compares against the STORED code (now empty), so it reads as a first-time fill, while
       the Folder Map row still points at the old folder and the next run renames it. Seen live
@@ -11874,3 +11877,359 @@ survey is the useful half of this entry.
 - **⚠ STILL NOT VERIFIED ON A DEVICE.** The no-desktop-change argument is structural (a `max-width`
   query cannot apply above its breakpoint, and the only other edit is a `className` that matches
   nothing outside these blocks), but the phone LAYOUT itself is reasoned, not seen.
+
+## THE PAUSE GATE HELD ONLY AFTER THE READ, AND A STRAY-ONLY SCAN WAS A DEAD END (2026-09-09, 1.0.508.0)
+Two defects from one client message, plus a third item that turned out to be already built.
+
+### 1. Next was clickable while the pause setting was still being read
+Client: *"When I load in there is a split second I can click the next button without disablling the
+upload, when the internet is bad I can definitely click it fast enough."*
+- **`uploadsPaused` IS `undefined` FOR THE WHOLE READ, AND `undefined` NEVER GATES.** `blocksNext`
+  for `pauseUploads` falls through to `stepState`, which answers **`unknown`** in exactly that state —
+  so Next was green beside a panel reading *"Reading the current setting…"*. `baseFacts` starts `{}`
+  and the value only arrives when the config request lands.
+- **THE SAME SHAPE AS `abbreviationsLoading`, IN A SECOND PLACE**, and the rule it established was
+  never applied here: *one value cannot distinguish "not read yet" from "read and failed", and only
+  the first should hold a button.* New `FlowFacts.uploadsPausedLoading`, set true while the read is
+  in flight and cleared however it ends.
+- **⚠ IT STARTS `true`, AND THAT IS THE POINT.** `useEffect` runs AFTER the first paint, so an
+  initial `false` leaves one rendered frame where the setting is neither known nor being read — and a
+  frame is all a fast click needs. Before any flow is open it simply stays `true`, which costs
+  nothing: the picker has no Next.
+- **⚠ IT HOLDS BOTH PAUSE STEPS, though only the opening one was reported.** They read the same
+  setting over the same window, and Finish is gated on `resumeUploads` — so an open gate there is an
+  open Finish, and a forgotten pause leaves the site quietly refusing uploads behind a banner that
+  makes it look deliberate.
+- **⚠ IT CANNOT TRAP ANYONE.** Only `true` holds. A read that finished and FAILED leaves the flag
+  `false` and `uploadsPaused` undefined — unknown, which gates nothing, the fail-open rule this
+  module is built on. The toggle's own `onChanged` clears it too, since that callback only fires
+  after a read or write that succeeded.
+- **⚠ THE EXHAUSTIVE SWEEP CANNOT PROVE THIS GATE, and the field is listed there anyway.** That test
+  walks every step with every fact FALSE, and for a LOADING flag the gating value is `true` — so
+  `false` is the right entry (it pins that the step list is unchanged) and the gate gets its own
+  describe block, exactly as `abbreviationsLoading` does. **Any field added to `FlowFacts` still
+  belongs in that object**, or a future polarity change shows up nowhere.
+
+### 2. A stray-only scan could not be applied, moved, or walked past
+Client, on Buah: *"the Segment for Buah, for some reason it is not allowing me to Select or rebuild
+folders, why does this work only for MHO"*.
+- **THREE THINGS LOCKED TOGETHER, and each was individually correct.** `rowsWithWork` deliberately
+  KEEPS a stray-only row, so `groups.length > 0` — and the Apply card is gated on
+  `groups.length === 0`. Rebuild is disabled (`canRun` needs `totalMoves > 0`, and a stray is never a
+  move), Apply never renders, and the guided flow's Next is held because the segment still carries
+  `PendingLevels`. **Nothing to move, nothing to apply, nothing to click.**
+- **⚠ THE RULE IT BREAKS WAS ALREADY WRITTEN DOWN ONE FUNCTION AWAY.** `finishPending` says in as
+  many words that *a stray does not block activation — this tool cannot resolve one at all, and
+  letting it hold a structure change hostage forever would leave the client with no way forward.*
+  That governed the END of a Rebuild and had never been applied to the standalone Apply button, which
+  is the only route left when there is no Rebuild to run. `strayOnlyRemains` is the second way in.
+- **⚠ EVERY OTHER KIND OF OUTSTANDING WORK STILL BLOCKS** — moves, folders awaiting a value, units
+  whose options could not be READ, and unsettled collisions. `unreadableUnits` in particular must
+  stay: a unit that could not be checked is unknown, not clean, and switching the chain on over it is
+  the silent-misfile direction. Only a stray is genuinely unresolvable.
+- The other two `groups.length === 0` blocks are deliberately NOT widened: *"every folder already sits
+  where the structure says"* would be flatly false with strays listed underneath it. The card's own
+  copy changes instead, to say the listed folders match no level, will not be guessed at, and are not
+  touched by applying the change.
+
+### ⚠⚠ WHY BUAH HAD STRAYS AT ALL: A TERM WAS DELETED FROM THE TERM STORE (client, 2026-09-09)
+Client: *"reene deleted the term store term set directly for buah share folder that exist and it
+causes the issue"* — and `assignSegments`' own comment names this cause exactly: a stray is *"a
+hand-made folder or **a deleted term**, where a confident guess does damage."*
+- **THE MATCH IS ON THE SANITIZED TERM LABEL, NOT A GUID** —
+  `sameName(sanitizeFolderSegment(option), folderName)`. Delete the term and it leaves `options`, so
+  the folder `JB` matches nothing at any depth and becomes a stray. Nothing is wrong with the code;
+  the vocabulary the folders were named from was removed underneath them.
+- **⚠ SO THE REPAIR IS TO RE-CREATE THE TERMS WITH THE SAME LABELS, and the new GUIDs do not
+  matter.** A below-Unit tier has **no abbreviation row, no Folder Map row and no group** — its
+  folder name comes from the label — so nothing keys on the old GUID and matching is restored the
+  moment the labels are back. **The migration can then actually PLACE those folders**, which is the
+  outcome worth having; applying the chain over them is the give-up path.
+- **⚠⚠ THAT IS TRUE OF A BELOW-UNIT TIER ONLY. NEVER DELETE AND RE-ADD A PERMISSIONED TERM.**
+  Department and Unit terms are keyed by GUID in `CRS Term Abbreviation`, `CRS Folder Map` AND
+  `CRS Group Map`, so a re-created term orphans all three at once — the standing *rename terms, never
+  delete and re-add* rule. The distinction is which TIER, not which term store.
+- **THE SYMPTOM SAYS WHICH VARIANT HAPPENED, and they need different repairs:**
+  - *"JB matches no folder level"* (a **STRAY**) means the SET still resolves and the TERM is gone.
+    Re-create the term with the same label.
+  - *"some of its folder values could not be read from the term store"* (**unresolved**) means the SET
+    itself is gone, so the level's stored `termSet` GUID points at nothing. Re-creating the set gives
+    a NEW set GUID, so the level must be repointed — and since editing a level in place is still
+    unbuilt, that means removing and re-adding it.
+- **⚠ THE FIX IN §2 DOES NOT REPAIR THE DATA and must not be reached for first.** Applying the chain
+  over strays leaves those documents sitting outside the structure for good, findable only by
+  browsing. It exists for the strays nobody can restore — a hand-made folder, or a term whose
+  original label is unknown.
+
+### 3. Several new shared levels at once — already built, no change
+Client: *"what happens if we add three new share folders at the same time and each new Share folder
+have multi options"*. The migrate screen already renders **one select per missing tier, per library,
+per unit** (`needed.map((chainIndex) => ...)`), each labelled with its own level name and *"for the N
+folder(s) below that have no value for it"*, reading its options from `row.optionsByTier[chainIndex]`.
+Since 1.0.502.0 every one of them must be answered before Rebuild lights up (`needingChoice === 0`),
+so no level can be silently skipped. The only cost is volume, and pagination already caps the page at
+three unit cards while `dest` keeps the answers across pages.
+
+**Verified**: `tsc --noEmit` clean, suite **1772/0** across 50 suites, 40 lint warnings — **none on
+the changed pure module or its tests**, and the three naming the two components (`mapRows`, two
+`max-lines`) are pre-existing, both files having been over the ceiling at HEAD (2304 and 2117).
+**NOT site-tested.**
+
+
+## BELOW-UNIT LEVELS CAN BE NAMED BY TERM CODES (2026-09-09, 1.0.509.0)
+Client: *"I just want to ensure that they can use term abbreviations with no errors for both unit and
+shared folders."* Two reasons: **paths are getting long**, and **consistency**. Spec:
+`docs/superpowers/specs/2026-09-09-below-unit-abbreviations-design.md`. **BUILT, NOT site-tested.**
+- **A cheaper alternative was offered and DECLINED** - renaming the subunit terms shorter
+  (`Expatriate Formalities Subunit` -> `EF Subunit`) buys ~75% of the path saving and all of the
+  visual consistency for no code, no rows and no migration. Recorded so nobody re-proposes it as
+  though it had not been considered.
+- **CODES ARE OPTED IN PER LEVEL (`Level.abbreviated`), never "all below-Unit terms".** Requiring one
+  everywhere below Unit would require one for `Year`, and there is no useful code for `2024`; and
+  switching Year or Document Type on would move EVERY document in the system. Not offered on a
+  `fixed` level for that reason.
+  - **ABSENT MEANS FALSE, the opposite of `permissioned` beside it.** That one defaults TRUE because
+    its wrong answer is loud (an extra ACL'd folder). Defaulting this true would make every existing
+    segment demand codes it does not have and refuse every upload on the spot.
+  - **The flag lives in the CHAIN, so switching it on IS a structure change** - it stages to
+    `PendingLevels`, shows `CHANGE PENDING`, and the migration renames the folders. No new
+    machinery; it drops into the flow the client already knows.
+  - **The toggle is on the TIER ROW as well as the add form**, and it is the FIRST in-place edit that
+    screen has. It has to be: turning codes on for a level that already exists is the whole cutover,
+    and remove-and-re-add would read to the migrator as a REMOVE (collapsing every folder under it
+    together) followed by an ADD - a destructive way to express a rename. Unchecking writes
+    `undefined`, not `false`, so `dirty` (a JSON diff) sees a toggle on-and-off as no change.
+- **AN UNCODED TERM REFUSES; IT DOES NOT FALL BACK TO THE LABEL** (client: *"force them to not be
+  able to create untill they provide a term abbreviation... this should be more safe"*). A fallback
+  puts `EFS` and `General Admin Subunit` in one tree and gives the same term TWO folders the moment
+  somebody fills the code in.
+  - **The force CANNOT live at term creation** - the Term Store is Microsoft's own UI and there is no
+    hook. It lives in the flow: `blocksNext` has always held the `abbreviations` step while a term
+    lacks a code, and **the structure flow gained that step (2026-09-09)** so the rule finally
+    applies where subunit terms are actually added. Six steps now, and a test pins it sits between
+    `levels` and `migrate`.
+  - **THE OPTION IS STILL OFFERED, and hiding it is the dangerous version of the same idea.** A unit
+    whose terms are ALL uncoded would then have an empty option list, `decideTier` answers `skip`,
+    the tier stops applying, and the document files one level SHALLOWER with nothing erroring - the
+    SDG defect of 2026-08-26 exactly. Shown, and refused at submit naming the TERM (not the tier).
+  - **`undefined` codes (read failed) and `{}` (read, none) both refuse but say different things.**
+    "Ask for a code" is useless when the list could not be read; "try again" is useless when the code
+    genuinely is not there.
+- **THE RENAME IS THE EXISTING "Move existing folders" RUN - no new pass.** Two rules had to change
+  TOGETHER: `assignSegments`/`classifyChild` match **code OR label**, and `assignSegments` records
+  the **canonical** name rather than the one the folder currently has, so `planLeaf` builds a
+  destination that differs from where the folder sits and the run treats it as an ordinary move.
+  - **HALF OF THAT IS THE FAILURE THAT MATTERS.** Destinations from codes while matching keys on
+    labels turns **every existing below-Unit folder into a stray**: the scan reports "needs a value
+    chosen" for everything and nothing moves. Buah's failure mode by a new route. Pinned by tests.
+  - **A CASE-ONLY DIFFERENCE KEEPS THE EXISTING NAME.** `efs` -> `EFS` is a move onto its own source.
+    Same rule the abbreviation rename has followed since 2026-07-30.
+  - **`backfillNeeds` STAMPS THE LABEL, NEVER THE CODE.** A folder named `EFS` still writes
+    `Expatriate Formalities Subunit` into `SubUnit` - the path gets shorter and the metadata stays
+    readable. Stamping the code would make every filter and report over that column read in
+    abbreviations.
+- **A REAL BUG THE TESTS CAUGHT, and it was the dangerous kind.** `folderCodeFor` normalised the
+  lookup key and not the map's own keys, so a map written `T-1` and a selection carrying `t-1` missed
+  - and a miss REFUSES, so a whole coded level would have read as "nobody filled the codes in" while
+  the rows sat there correctly. Normalised both ways, pinned in both directions.
+- **A DEADLOCK CAUGHT BEFORE SHIPPING: the abbreviation screen renders one section per PERMISSIONED
+  level.** Coded below-Unit rows are built and counted as missing - which HOLDS the flow's Next - and
+  would have rendered nowhere. The section list is now derived from the same `abbreviated` flag the
+  walk uses, so a level can never be walked into rows without also being rendered.
+- **⚠ THE SCREEN READS `PendingLevels ?? Levels`, IN ITS OWN REQUEST.** Step 2 stages the level and
+  step 3 must show its terms before step 4 applies it - read the live chain and a newly coded level's
+  terms never appear on the step whose job is forcing their codes. The read is separate because
+  `PendingLevels` is created ON DEMAND and one unknown name fails the WHOLE `$select` (gotcha #11);
+  `FolderAdmin` paid exactly that price on 2026-08-18.
+- **⚠ A SHARED LEVEL'S TERMS GET A SYNTHETIC PARENT KEY (`set:<guid>`), and without it the sibling
+  check is WRONG.** Uniqueness groups on `parentGuid`, and a top-level term carries `""` - so two
+  coded shared sets would be judged siblings of each other AND of the segment's own departments.
+  `findCollisions` treats the key as opaque, which is what makes this legitimate.
+- **⚠ AN UNREADABLE SHARED SET THROWS rather than contributing no rows.** Omitting them silently
+  would make the screen report every code filled in while terms sat unlisted - and that count is what
+  releases Next.
+- **Only levels that OPTED IN are walked.** An uncoded level names from the label and needs no code;
+  listing its terms would inflate `missing` and hold the flow for codes nobody needs - which is the
+  reason the walk was capped in the first place.
+- **⚠ NOTHING CHANGES BEHAVIOUR UNTIL A LEVEL IS SWITCHED ON.** `abbreviated` is absent everywhere, so
+  `uncoded` is always empty and the canonical name is always the sanitized label - byte-identical to
+  before, including the edge where a folder differs from its label only by case or whitespace.
+- **⚠ DO THE CUTOVER WHILE IT IS SMALL.** MHO has TWO subunit terms today with almost nothing filed
+  under them: 2 codes and a handful of renames. Every document filed first makes step 4 longer.
+- **⚠ STALE LINE CORRECTED: CLAUDE.md said below-Unit tiers are "listed but read-only" on the
+  abbreviation screen.** They were not listed at all - the walk was capped and the below-Unit note came
+  off on 2026-09-06 at the client's request. They are listed now, and editable, but only when coded.
+- **⚠⚠ THE MIGRATOR MUST NOT CARRY ON UNCODED WHEN THE CODES LIST CANNOT BE READ, and the first
+  version swallowed that failure (fixed 1.0.510.0, before deploy).** An empty map makes every term
+  look uncoded, so `optionFolderName` falls back to the LABEL — and that function feeds the RENAME.
+  A transient 403 or 500 on one list would have had the migration re-file a coded level's folders
+  under their full labels, in bulk, reporting success: the exact state the codes were switched on to
+  remove. It throws now, like the term-set read beside it. **An unreadable list is "do not touch
+  this", never "there are none"** — the rule this project keeps re-learning.
+- **⚠⚠ IT SHIPPED BROKEN AND FAILED SILENTLY — `parseLevels` IS A WHITELIST (found by the client on
+  the first live test, fixed 1.0.511.0).** That function rebuilds each `Level` field by field, so
+  adding `abbreviated` to the interface was only HALF the change: the flag saved to the config row
+  and was **dropped by every reader**. The abbreviation screen showed no coded level, the upload form
+  went on naming folders by label, and the migrator would have renamed a coded level's folders BACK
+  to labels. Nothing errored anywhere, and the badge read CHANGE PENDING throughout — so it looked
+  like the save had worked.
+  - **THE GENERAL RULE: a whitelist parser is a SECOND CHANGE SITE WITH NO COMPILER LINK.** Adding a
+    field to `Level` type-checks everywhere and still does nothing. Grep `parseLevels` whenever that
+    interface grows. Now pinned by a round-trip test.
+  - `=== true` only, mirroring `permissioned === false`: a hand-authored row carrying the STRING
+    	rue\ must not switch a level to codes, because every term on it would then demand one and
+    every upload into it would be refused.
+- **The abbreviations step showed TWO segment dropdowns** — the flow's own switcher and the screen's.
+  Neither had been on one screen before, because this flow only gained the step today. The screen now
+  renders a plain line when the host supplied a segment, exactly as the migrate screen has since
+  1.0.456.0; the standalone tab keeps its real picker.
+- **Verified**: `tsc --noEmit` clean, suite **1802/0** (30 new), zero new lint warnings on eleven
+  changed files. Packaged as `1.0.511.0`.
+
+
+## THE MIGRATE LOCK IS GONE, RENAME GAINED A MIGRATE STEP, AND NEW LEVELS ARE ALWAYS CODED (2026-09-09, 1.0.512.0)
+Four changes from one live test session, three of them closing hazards the first build left open.
+
+- **⚠⚠ THE MIGRATE LOCK RESTED ON A FALSE PREMISE AND IS REMOVED.** It refused the step whenever
+  `pendingLevels` was false, on the reasoning that a migration is only needed when a chain change is
+  staged. **Two cases disprove that and BOTH stage nothing:**
+  - adding SUBUNIT TERMS to a unit that had none leaves its documents a level too shallow (client,
+    2026-09-09: step 3 read *"There is no pending structure change to move to"* — WITHOUT LOOKING —
+    with Next open beside it, so the flow walked past the one step that mattered and resumed uploads);
+  - changing a below-Unit ABBREVIATION renames nothing, because reconciliation never walks below Unit.
+  **The SCAN is the only thing that can answer**, and it reads the term store live per unit. So the
+  step renders and the scan answers. `LockFact` lost `pendingLevels`; `appliedFor` in `FolderAdmin`
+  went with it (it existed only to stop the lock eating the run's own result log).
+- **⚠ REMOVING THE LOCK ALONE WOULD HAVE LEFT THE STEP SKIPPABLE, so `migrateScanRan` gates Next.**
+  `pendingLevels === true` holds Next only while a chain change is staged — and the two cases above
+  stage nothing, so nothing would have held the step at all. **FINISHED, never SUCCEEDED** (the
+  `reconcileRan` rule): in the structure flow this step sits before the one that turns uploads back
+  ON, so a success requirement would keep the site refusing documents while a scan kept failing.
+  `undefined` never gates — the standalone Migrate tab reports nothing.
+- **⚠⚠ THE RENAME FLOW WAS ACTIVELY DANGEROUS ON A CODED LEVEL, and now has a migrate step.** Its own
+  blurb promises *"or by changing its short code"* — which reconciliation delivers for Department and
+  Unit and **CANNOT below Unit**. Changing `EFS` to `EF` there used to: write the row, run a
+  reconciliation that touched nothing, leave the folder called `EFS`, and send the next upload to
+  `EF` — **TWO FOLDERS FOR ONE TERM, documents split, reported as success.** That is the duplicate-folder
+  failure the whole design exists to prevent, reached through the flow named after the operation.
+  Harmless on an ordinary Department/Unit rename: the scan finds nothing and says so.
+- **⚠⚠ SUPERSEDED WITHIN THE HOUR: THERE IS NO FLAG AT ALL (1.0.513.0).** The bullet below shipped a
+  per-level opt-in that grandfathered the four levels predating it; the client looked at
+  `Minasmas Archive 2` still unticked and said *"Uhh I thought its enforcing abbreviations?"*, then
+  chose the harder option outright: *"Nonono, we follow B"*. `Level.abbreviated` is REMOVED and the
+  rule is DERIVED — `isAbbreviatedLevel` is `!isFixedBelowUnitTier`, so **every below-Unit level
+  except Year and Document Type is named by its terms' abbreviations, always.**
+  - **⚠ NOTHING IS STORED, so there is no data migration and an old chain behaves like a new one.**
+    MHO's Sub Unit, already switched on and migrated under the flag, gets the same answer derived.
+  - **⚠ AND FOUR LIVE LEVELS BECOME CODED THE DAY THIS DEPLOYS, WITH NO ABBREVIATIONS ON THEIR
+    TERMS** — `Minasmas Archive 2`, GHO's and Buah's `Shared Folder`, TO's `SDG`. **Uploads into those
+    four segments are REFUSED until each has its abbreviations filled in and is migrated.** That is
+    the cost the client accepted knowingly, having been shown it twice. Roughly 30 abbreviations and
+    four runs of the structure flow. SDG's tenant is unaffected — nothing is deployed there yet.
+  - The tier-row checkbox is gone with it; the meta line now STATES the fact rather than reflecting a
+    choice. Two existing `buildOnDemandSegments` tests failed on the change and were right to: they
+    used an ordinary below-Unit level with no codes, which is now a refusal.
+- ~~**NEW BELOW-UNIT LEVELS ARE ALWAYS CODED — the choice is gone**~~ (superseded, above) (client: *"honestly just enforce the
+  term abbreviation to be created"*, then *"can we enforce them to use term abbreviations when adding
+  new subunit or share folders"*). The Add form's checkbox is removed; `addTier` sets the flag on
+  anything that is not a restored built-in.
+  - **⚠ EXCEPT YEAR AND DOCUMENT TYPE**, enforced by `!builtIn`. There is no useful abbreviation for
+    `2024`, and coding either would move every document in the system.
+  - **⚠ THE TIER-ROW CHECKBOX STAYS, AND ONLY UNTIL FOUR LEVELS ARE MIGRATED** — `Minasmas Archive 2`,
+    GHO's and Buah's `Shared Folder`, TO's `SDG`. It is the migration path for what predates this,
+    not an option. **Delete it once they are done** and the rule becomes absolute. Stripping the flag
+    outright instead would refuse uploads into all four on the day it deployed.
+  - It also read as a duplicate of the tier-row checkbox (client: *"I can tick both btw"*) — they
+    govern different levels, which nothing on screen said.
+- **THE CHECKBOX IS "Use abbreviations" NOW** (client: *"Is there a better name for folder codes? Idk
+  what it means honestly"*), and the refusals say **abbreviation** rather than **code**, so the control
+  names the page an admin has to visit to satisfy it.
+  - **⚠ I TOLD THE CLIENT "code" WAS MY OWN INVENTION AND THAT WAS WRONG.** It is long-standing
+    vocabulary here — `bulkGroups` and the ABBREVIATIONS step hint both use it, and that hint is copy
+    the client APPROVED on 2026-09-06, newline included. So the two words coexist deliberately: the
+    new CONTROL says abbreviation, the approved copy is untouched. **Do not "unify" it by rewriting
+    client-approved strings.**
+  - The structure flow's abbreviations step now reuses the shared `ABBREVIATIONS` object rather than a
+    hint of its own — two wordings for one screen is how the two come to disagree about its purpose.
+- **Verified**: `tsc --noEmit` clean, suite **1805/0**, no new lint warnings on nine changed files.
+  Packaged as `1.0.512.0`. **NOT site-tested.**
+
+
+## THREE FIXES FROM THE FIRST LIVE RUN OF THE ABBREVIATION LEVELS (2026-09-09, 1.0.514.0)
+MHO's cutover succeeded first time - **47 documents moved, 138 empty folders tidied**, with `MAD`/`MAU`
+(Minasmas Archive 2) and `EFS`/`GAS`/`test`/`test 2` (Sub Unit) applied across all six libraries. Two
+levels coded at once, each named by its own terms' abbreviations. Three defects surfaced from the same
+screens.
+
+- **ILLEGAL CHARACTERS WERE NOT BLOCKED IN THE ABBREVIATION BOX** (client: *"did you prevent any
+  illegal chracter to not enter in the term abbrevition input?"* - it did not). `folderNameFor`
+  sanitizes when the FOLDER is named, so typing `MA/D` stored `MA/D` in the list and created a folder
+  called `MAD`: no error, no warning. Not dangerous - the migrator sanitizes the code too, so matching
+  still works, and the clash check already compares sanitized names - but it breaks the one thing this
+  list exists to do, **say what a folder is called**.
+  - **`stripFolderChars` in `formModel.ts`, NEVER `sanitizeFolderSegment`.** That one also collapses
+    whitespace and TRIMS, which is right for deriving a folder name and wrong on every keystroke: a
+    space could never be entered, so `GC EP` would be unreachable. Same character class, so an input
+    guarded with one and a name built with the other can never disagree about what is legal.
+- **⚠ A SHARED LEVEL'S TERMS RENDERED UNDER "Parent term not found"**, with a count reading
+  *"2 minasmas archive 2s"*. Those terms sit at the top of their OWN set and carry the synthetic
+  grouping key `set:<guid>` - which is what stops two coded shared sets being judged siblings of each
+  other AND of the segment's own departments - so the parent header had no term to name and fell
+  through to the unresolved-parent message, reading as an error. A flat set has exactly ONE group and
+  the level heading above already names it, so it renders flat now.
+- **⚠⚠ THE FLOW'S SEGMENT SWITCHER DISCARDED UNSAVED ABBREVIATIONS, AND THAT WAS A REGRESSION FROM
+  EARLIER THE SAME DAY.** `abbreviationsDirty` was parked on 2026-09-06 - *"nothing reads it now that
+  Next saves"* - which held only because the abbreviation screen showed its OWN segment picker, and
+  that one refuses to switch on a dirty draft. **Hiding that picker inside a flow** (so the new step
+  stopped showing two Segment dropdowns) **left the flow's switcher as the only way to change segment
+  there, and it checked nothing.** Type four codes, switch segment, they are gone.
+  - **REMOVING A CONTROL REMOVES ITS GUARDS WITH IT.** The guard was not in the code I changed; it was
+    in the control I hid. Worth checking for whenever a duplicate-looking control is taken away.
+  - Refused, not confirmed - Save is on the same screen, and a "discard?" prompt puts losing the work
+    one click behind ordinary-looking navigation. Same rule as the Back band and the tab switch.
+- **WARN: THE NEW MIGRATE GATE COULD NEVER RELEASE - A MISSING `useMemo` DEPENDENCY (found by the
+  client on the first live run, fixed 1.0.515.0).** `migrateScanRan` was added to the facts object
+  beside `reconcileRan` and **not** to that memo's dependency array, so the value was read once and
+  frozen: pressing Check flipped `migrateScanned`, the memo did not recompute, and Next stayed greyed
+  under *"Run the check first"* even after a completed rebuild. The gate held for ever.
+  - **I MIS-READ THE SCREENSHOT AS THE GATE WORKING AS DESIGNED.** It showed Next greyed AFTER both
+    the check and the rebuild, which is precisely the state that proves it broken - the client had to
+    ask *"did you notice the next button is disabled for some reason?"* before it was looked at.
+    **A gate that never opens looks identical to a gate doing its job, until you check what came
+    before it.**
+  - **Nothing type-checks a dep array and `react-hooks/exhaustive-deps` did not flag this one**, so
+    the only guard is adding the dep in the SAME edit as the fact.
+- **Verified**: `tsc --noEmit` clean, suite **1803/0**, no new lint warnings. Packaged as `1.0.515.0`.
+  **The four fixes are NOT site-tested**; the cutover they came from is.
+
+
+## THE RETIRE FLOW LOST ITS FIRST STEP, AND THE SHARED RADIO IS "New Folder Layer" (2026-09-09, 1.0.516.0)
+- **WARN: "MOVE THE DOCUMENTS OUT" IS REMOVED, AND IT WAS NEVER THE TOOL ITS LABEL PROMISED** (client:
+  *"for the retire a segment... it should only show, Segments on this site"*). It mounted the
+  MIGRATOR, which re-shapes folders WITHIN one segment - **there is no cross-segment move tool
+  anywhere in this system**, so the only way to get documents out of a segment being retired is by
+  hand in SharePoint. The step was named after something the screen under it could not do, and its
+  HINT was the entire mechanism.
+  - **WARN: THE 2026-08-26 ENTRY RECORDED THIS STEP AS DELIBERATE**, with the caveat that *"its
+    purpose is narrower than the step's label suggests"*. The client resolved that the other way. They
+    asked *"I thought we agreed that Move the Documents out is not meant to be there anymore?"* - there
+    was no such agreement, and saying so plainly was worth more than agreeing to a memory. **Check the
+    record before conceding a decision.**
+  - **THE WARNING IT CARRIED MOVED INTO THE BLURB AND THE DELETE STEP'S HINT, and that is what made
+    removing it safe rather than merely tidier.** Anyone retiring a segment holding documents has to
+    be told nothing here relocates them. `canOfferFolderDelete` and the typed confirmation are what
+    actually protect those documents; this step never did.
+  - **WARN: THE RETIRE FLOW'S STEPS WERE NEVER PINNED BY A TEST**, so removing one left the suite
+    green - found only because the removal was expected to break something and did not. Every other
+    flow had a list pinned. It has one now, plus a test that the by-hand warning survives wherever it
+    is worded.
+  - `stepState`'s `case "moveOut"` went with it rather than being left as a branch for an id nothing
+    produces.
+- **The Folder-setup radio "Shared folder term" is now "New Folder Layer"** (client's wording), hint
+  reworded to *"One list of options, shared by every unit folder."*
+  - **WARN: BOTH RADIOS ADD A FOLDER LAYER, so the name does not by itself say which is which** - the
+    hint under it is doing that work. What the pair actually answers is where the VALUES come from:
+    each unit's own child terms, or one list shared by every unit. Earlier labels were "One shared
+    list" (2026-08-17) and "Shared folder term". Flagged to the client; their call.
+- **Verified**: `tsc --noEmit` clean, suite **1805/0** (2 new), no new lint warnings. Packaged as
+  `1.0.516.0`. **NOT site-tested.**

@@ -35,7 +35,7 @@ export type StepScreen =
  * Only three, and each is answerable by ONE read. Anything needing judgement, or a walk we cannot
  * afford, is not on this list and therefore cannot lock a step.
  */
-export type LockFact = "segmentExists" | "abbreviationsComplete" | "pendingLevels";
+export type LockFact = "segmentExists" | "abbreviationsComplete";
 
 export interface FlowStep {
   id: string;
@@ -100,6 +100,24 @@ export interface FlowFacts {
    * they did not will migrate on top of live traffic.
    */
   uploadsPaused?: boolean;
+  /**
+   * The site-wide pause setting is BEING READ right now.
+   *
+   * ⚠ A SEPARATE FACT FROM `uploadsPaused`, and it has to be - the same split that
+   * `abbreviationsLoading` exists for, in a second place. `uploadsPaused` is `undefined` for the
+   * whole read, `undefined` never gates, and so Next was green on step 1 while the panel beside it
+   * still said "Reading the current setting..." (reported on site 2026-09-09, with the client noting
+   * that on a bad connection the window is easily long enough to click through).
+   *
+   * That is the one step whose omission makes every later step futile: a document uploaded during
+   * the migration lands in the old shape, and one arriving after its folder was scanned is never
+   * moved - so the chain can never apply, however many times the migration is run.
+   *
+   * **In flight is not unknown.** Fail-open exists for reads that can FAIL, not for reads still
+   * running: this clears itself in seconds so it strands nobody, where gating on a failed read
+   * would strand everybody.
+   */
+  uploadsPausedLoading?: boolean;
   /** The subject term was found in the tree (flows 2 and 4). */
   subjectFound?: boolean;
   /**
@@ -142,6 +160,22 @@ export interface FlowFacts {
    * flow over a read rather than over the work.
    */
   reconcileRan?: boolean;
+  /**
+   * Has the migration CHECK been run on this step, in this visit?
+   *
+   * ⚠ WITHOUT THIS, REMOVING THE MIGRATE LOCK WOULD HAVE LEFT THE STEP SKIPPABLE. `pendingLevels`
+   * gates Next only while a chain change is STAGED — and the two cases that made the lock wrong
+   * (subunit terms added, an abbreviation changed) stage nothing, so nothing would hold the step at
+   * all. The scan is the only thing that knows whether there is work; requiring it to have run is
+   * how the flow stops asserting an answer nobody checked.
+   *
+   * ⚠ FINISHED, NEVER SUCCEEDED — the `reconcileRan` rule. A scan that keeps failing must not trap an
+   * admin on a step with uploads still switched off.
+   *
+   * Session-scoped, like `reconcileRan`: a refresh asks for the check again. Running it is read-only
+   * and idempotent, so the cost of asking twice is one scan.
+   */
+  migrateScanRan?: boolean;
 }
 
 const RECONCILE: FlowStep = {
@@ -319,6 +353,25 @@ export const FLOWS: Flow[] = [
           "folders until applied.",
         screen: { kind: "tab", tab: "structure" },
       },
+      /* ⚠ ADDED 2026-09-09, AND IT IS WHAT MAKES CODED LEVELS ENFORCEABLE AT ALL.
+         Client, on why a term should not be usable before it has a code: *"WHy not we force them to
+         not be able to create untill they provide a term abbreviation... this should be more safe."*
+
+         The force CANNOT live at term creation — the Term Store is Microsoft's own UI and there is no
+         hook. It lives here instead, on the existing rule: `blocksNext` holds this step while any term
+         lacks a code. Without the step in THIS flow that gate never runs, because adding a subunit
+         term or switching a level to codes never passes through any other flow that has one.
+
+         ⚠ BETWEEN `levels` AND `migrate`, in that order, and the order is the whole design. Step 2 is
+         where the level is coded and the Term Store is reached; step 4 renames the existing folders to
+         match. Codes missing at step 4 would leave the migration building destinations it cannot name.
+
+         ⚠ Uses the SAME factory, so the id stays `abbreviations` — `NEXT_GATED_STEPS` keys on it, and
+         a new id would silently exempt this step from the very gate it was added for. */
+      /* ⚠ THE SHARED `ABBREVIATIONS` OBJECT, not a hint of its own. Its copy is the client's, agreed
+         2026-09-06 (newline included), and this step renders the SAME screen the other flows do — two
+         wordings for one screen is how the two come to disagree about what it is for. */
+      ABBREVIATIONS,
       {
         id: "migrate",
         label: "Move existing folders",
@@ -331,10 +384,21 @@ export const FLOWS: Flow[] = [
           "Apply the new folder structure to existing documents. This is what makes the pending " +
           "change live — until it runs, uploads keep using the old structure.",
         screen: { kind: "tab", tab: "migrate" },
-        lock: {
-          fact: "pendingLevels",
-          reason: "There is no pending structure change to move to — edit the levels first, or this has nothing to do.",
-        },
+        /* ⚠⚠ THE LOCK THAT USED TO BE HERE WAS BUILT ON A PREMISE THAT IS FALSE (removed 2026-09-09).
+           It refused the step whenever `pendingLevels` was false, on the reasoning that a migration is
+           only ever needed when a chain change is staged. Two things disprove that:
+
+           - adding SUBUNIT TERMS to a unit that had none leaves its documents a level too shallow with
+             NO chain change at all (client, 2026-09-09; step 3 said "this has nothing to do" and Next
+             sat open beside it, so the flow walked past the one step that mattered and resumed
+             uploads);
+           - changing a below-Unit ABBREVIATION renames nothing, because reconciliation never walks
+             below Unit — so the rename flow needs this screen too, and stages nothing either.
+
+           The SCAN is the only thing that can answer whether there is work, and it reads the term
+           store live per unit. So the step renders and the scan answers, instead of the flow asserting
+           an answer it never checked. `blocksNext` still holds Next while a change is staged, and now
+           also until a scan has actually been run. */
       },
       /* ⚠ RECONCILIATION IS IN THIS FLOW SINCE 2026-09-06, REVERSING A DELIBERATE EXCLUSION.
          It was kept OUT because reconciliation walks the TERM TREE, not `Levels` — so a change to
@@ -386,6 +450,25 @@ export const FLOWS: Flow[] = [
         "Rename the folder in the Term Store and on this page, where applicable. Always RENAME a " +
           "term — never delete and re-add it, which orphans its abbreviation, folder and group rows.",
       ),
+      /* ⚠⚠ ADDED 2026-09-09 BECAUSE THIS FLOW WAS ACTIVELY DANGEROUS WITHOUT IT, on a level named by
+         abbreviations. Its own blurb promises *"or by changing its short code"* — which reconciliation
+         delivers for Department and Unit and CANNOT below Unit, because that walk stops at
+         `permissionedDepth`. So changing `EFS` to `EF` here used to: write the row, run a
+         reconciliation that touched nothing, leave the folder called `EFS`, and send the next upload
+         to `EF` — TWO FOLDERS FOR ONE TERM, documents split between them, reported as success.
+
+         The migration is the only thing that renames a below-Unit folder. It is harmless on the
+         ordinary Department/Unit rename this flow was written for: the scan finds nothing to move and
+         says so. */
+      {
+        id: "migrate",
+        label: "Move existing folders",
+        hint:
+          "Renaming a folder code below Unit does not move the folders on its own — reconciliation " +
+          "never goes below Unit. Run the check here; it reports nothing to move when the code you " +
+          "changed was a Department or Unit.",
+        screen: { kind: "tab", tab: "migrate" },
+      },
       RECONCILE,
     ],
   },
@@ -418,20 +501,31 @@ export const FLOWS: Flow[] = [
   {
     id: "retire",
     label: "Retire a segment",
-    blurb: "Remove the segment from the available options so users can no longer use it for new work. Any documents already stored in the segment will remain available and will not be deleted.",
+    blurb: "Remove the segment from the available options so users can no longer use it for new work. Any documents already stored in the segment will remain available and will not be deleted — nothing here moves them anywhere else.",
     tone: "destructive",
     needsSegment: true,
+    /* ⚠⚠ "MOVE THE DOCUMENTS OUT" IS GONE (client, 2026-09-09), AND IT WAS NEVER THE TOOL ITS LABEL
+       PROMISED. It mounted the MIGRATOR, which re-shapes folders WITHIN one segment — there is no
+       cross-segment move tool anywhere in this system, so the only way to get documents out of a
+       segment being retired is by hand in SharePoint. The step's hint WAS the mechanism; the screen
+       under it could not do the thing the step was named after.
+
+       ⚠ THE WARNING IT CARRIED IS NOT LOST — it moved into the blurb above and the hint below, which
+       is the whole reason this could be removed rather than just hidden. Anyone retiring a segment
+       that still holds documents has to be told that nothing here relocates them, and that deleting
+       the folders sends them to the recycle bin for 93 days. The `canOfferFolderDelete` guard and the
+       typed confirmation are what actually protect them; this step never did.
+
+       Recorded as deliberate on 2026-08-26 with the caveat that its purpose was narrower than its
+       label — the client resolved that the other way. */
     steps: [
-      {
-        id: "moveOut",
-        label: "Move the documents out",
-        hint: "Move anything worth keeping somewhere else first.",
-        screen: { kind: "tab", tab: "migrate" },
-      },
       {
         id: "delete",
         label: "Segments → Delete",
-        hint: "Removes the segment and its access rows. Deleting the folders is a separate, typed confirmation.",
+        hint:
+          "Removes the segment and its access rows. Deleting the folders is a separate, typed " +
+          "confirmation. ⚠ Nothing here moves documents to another segment — if any are worth " +
+          "keeping, move them by hand in SharePoint first.",
         screen: { kind: "tab", tab: "newsegment" },
         lock: {
           fact: "segmentExists",
@@ -459,8 +553,7 @@ export function isLocked(step: FlowStep, facts: FlowFacts): boolean {
   switch (step.lock.fact) {
     case "segmentExists":
       return f.segmentExists === false;
-    case "pendingLevels":
-      return f.pendingLevels === false;
+
     case "abbreviationsComplete":
       // A count of undefined means the tree has not been walked — the picker's state. Never a lock, and
       // never read as zero either.
@@ -603,9 +696,34 @@ export function blocksNext(step: FlowStep, facts: FlowFacts): string {
      been applied (or there was none), which is precisely when Next should open.
      Answered here rather than through `stepState`, which reports this step `done` when a change is
      PENDING — right for the rail, and the exact inverse of what the gate needs. */
-  if (step.id === "migrate") return f.pendingLevels === true ? reason : "";
+  if (step.id === "migrate") {
+    if (f.pendingLevels === true) return reason;
+    /* ⚠ `=== false` ONLY. `undefined` is "no migrator has reported yet" — the standalone Migrate tab
+       passes nothing, and unknown never gates. Only a mounted migrator that has NOT been run holds. */
+    if (f.migrateScanRan === false) {
+      return "Run the check first — it is the only thing that can tell whether any folders need moving.";
+    }
+    return "";
+  }
   if (step.id === "abbreviations" && f.abbreviationsLoading === true) {
     return "Still reading the term store — the codes are being checked. This clears on its own.";
+  }
+  /* ⚠ HELD WHILE THE SETTING IS STILL BEING READ, not only when it reads "on". `uploadsPaused` is
+     `undefined` for the length of that request and `undefined` never gates, so Next was clickable
+     for the whole window - which on a slow connection is long enough to walk past the one step this
+     flow cannot do without. Checked BEFORE the `stepState` fallthrough below, which would answer
+     `unknown` for exactly this state and let it through. */
+  /* ⚠ BOTH PAUSE STEPS, though only the opening one was reported. They read the SAME setting over
+     the SAME window, and skipping the closing one is the failure this project has already met: a
+     forgotten pause leaves the whole site quietly refusing uploads behind a banner that makes it
+     look deliberate. Finish is gated on `resumeUploads`, so an open gate there is an open Finish.
+     ⚠ IT CANNOT TRAP ANYONE ON EITHER STEP. Only `true` holds; a read that finished and FAILED
+     leaves this `false` and `uploadsPaused` undefined, which is unknown and gates nothing. */
+  if (
+    (step.id === "pauseUploads" || step.id === "resumeUploads") &&
+    f.uploadsPausedLoading === true
+  ) {
+    return "Still reading the current setting — this clears on its own in a moment.";
   }
   if (step.id === "createSegment") {
     // Already created — nothing to say, whatever else is unknown.
@@ -721,9 +839,10 @@ export function stepState(step: FlowStep, facts: FlowFacts): StepState {
       // and a rail that ticks it while the site is still paused would confirm the wrong thing.
       return f.uploadsPaused === undefined ? "unknown" : f.uploadsPaused ? "todo" : "done";
     case "migrate":
-    case "moveOut":
     case "pauseFlows":
-      // Nothing to read. A migration run leaves no marker, and Power Automate is unreachable.
+      /* Nothing to read. A migration run leaves no marker, and Power Automate is unreachable.
+         `moveOut` was here too until 2026-09-09; the Retire flow's step is gone, and this case is
+         removed with it rather than left as a branch for an id nothing produces. */
       return "unknown";
     default:
       return "unknown";

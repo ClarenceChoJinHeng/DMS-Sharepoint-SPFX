@@ -21,6 +21,7 @@ import {
   ensureFolder,
   encodeServerRelativePath,
   FolderMapRow,
+  readFolderCodes,
 } from "../../../shared/dmsFolderMap";
 /* ⚠ THE WRITE PROBE IS ON SINCE 2026-08-22, AND ITS ABSENCE WAS NEVER A BUG.
    This web part was existence-gated only *because* it wrote into DOCUMENTS, where a PIC holds Read
@@ -678,6 +679,29 @@ export default function BulkUpload({
   // Site-wide upload pause. Starts FALSE so a slow or failed read never hides the form; the
   // write-time re-check in handleUpload is the guard that actually refuses.
   const [paused, setPaused] = useState<boolean>(false);
+  /**
+   * Folder codes for below-Unit terms — see `readFolderCodes`. `undefined` means NOT READ, which is
+   * a different message from "read, and this term has none".
+   */
+  const [folderCodes, setFolderCodes] = useState<Record<string, string> | undefined>(undefined);
+  const [codesRead, setCodesRead] = useState<boolean>(false);
+
+  /* Its own effect — a failed code read costs the codes and nothing else on this screen. */
+  useEffect(() => {
+    let cancelled = false;
+    readFolderCodes(context.spHttpClient, siteUrl)
+      .then((map) => {
+        if (cancelled) return;
+        setFolderCodes(map);
+        setCodesRead(true);
+      })
+      .catch(() => {
+        if (!cancelled) setCodesRead(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [context.spHttpClient, siteUrl]);
   const [runError, setRunError] = useState<string | null>(null);
   const [results, setResults] = useState<FileResult[] | null>(null);
   const [live, setLive] = useState<LiveFile[] | null>(null);
@@ -1979,7 +2003,7 @@ export default function BulkUpload({
     // Derived from the chain, not hardcoded. Every tier is required — an optional
     // one left blank files documents at inconsistent depths inside a single unit.
     missing.push(
-      ...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing,
+      ...buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes).missing,
     );
     if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidential Level");
@@ -2775,6 +2799,28 @@ export default function BulkUpload({
       return;
     }
 
+    /* ⚠ REFUSED, NEVER NAMED BY THE LABEL INSTEAD — the same rule as the upload form, and it has to
+       be the same or the two screens would file the same term into two differently named folders.
+       A level named by codes with a term that has none has no folder name to build.
+
+       ⚠ SEPARATE FROM `validate()`, which lists FIELDS the admin has not filled in. This is a term
+       that IS chosen and has no code — nothing on this screen can fix it, so it needs its own
+       sentence naming the term and the person who can. */
+    const coded = buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes);
+    if (coded.uncoded.length > 0) {
+      const which = coded.uncoded.map((t) => `"${t}"`).join(" and ");
+      showToast(
+        codesRead && folderCodes === undefined
+          ? `The folder abbreviations could not be read, so ${which} cannot be filed yet. Try again ` +
+              `in a moment; if it keeps happening, tell your CRS administrator.`
+          : `${which} ${coded.uncoded.length === 1 ? "has" : "have"} no abbreviation, and that ` +
+              `folder level is named by abbreviations. Add one on the CRS Term Abbreviations page ` +
+              `first.`,
+        "error",
+      );
+      return;
+    }
+
     // Files upload under their original names, so two identically named files in
     // one selection would silently collide (first wins). Reject up front rather
     // than half-way through the run.
@@ -2847,7 +2893,7 @@ export default function BulkUpload({
       // The below-Unit path and its metadata, resolved once here and carried to the
       // runner. Passing the ordered segments rather than two named labels is what
       // lets the runner stay agnostic about how deep the chain is.
-      tierSegments: buildOnDemandSegments(tierPlan().tiers, tierSelections())
+      tierSegments: buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes)
         .segments,
       // Only APPLICABLE tiers write metadata: a unit with no subunits leaves SubUnit and
       // SubUnitTid empty rather than storing a value from another unit's list.
@@ -3130,7 +3176,26 @@ export default function BulkUpload({
   return (
     <section className="dms-form">
       <style>{`
-        .dms-form { max-width: 960px; margin: 32px auto; padding: 0 24px 48px; font-family: 'Segoe UI', sans-serif; }
+        .dms-form { margin: 32px auto; font-family: 'Segoe UI', sans-serif; }
+        /* WARN: THE 960px CAP MOVED DOWN WITH THE PADDING, AND LEAVING IT ON .dms-form
+           NARROWS EVERY DESKTOP BY 48px. max-width applies to the CONTENT box, so the old
+           shell was 960 of content with 24px of padding OUTSIDE it - 1008 overall. Cap the
+           shell and put the padding on a child and the child is 960 overall, 912 of
+           content. Measured: the field grid went 910 -> 862 before this was corrected,
+           which is the same trap that deleted the FIT helper on 2026-09-07. Capping the
+           INNER element instead reproduces the old geometry exactly: 960 + 48 = 1008,
+           centred. */
+        /* THE CONTAINER. Same reasoning, same two warnings, as the upload form - read the long
+           comment there. In short: a media query asks how wide the WINDOW is and a web part is
+           sized by its page SECTION, so SharePoint mobile preview and any narrow section squeeze
+           this form while the 640px query never fires.
+           WARN: NOT ON .dms-form. container-type applies layout containment, which would make it
+           the containing block for the position: fixed toast and both overlays that render
+           inside that section - they are deliberately left OUTSIDE this wrapper.
+           WARN: THE PADDING MUST SIT ON A DESCENDANT, because a container query can never style
+           its own container - see the WARN above for why the 960px cap moved down with it. */
+        .dms-form-body { container-type: inline-size; }
+        .dms-form-inner { max-width: 960px; margin: 0 auto; padding: 0 24px 48px; }
         /* Same rule as Form.tsx, so the two upload pages carry the SAME heading — the client asked
            for this one "same like a normal upload form". If one is restyled, restyle both. */
         .dms-page-title { margin: 0 0 24px; font-size: 28px; font-weight: 700; color: #1b1b1b; }
@@ -3199,9 +3264,9 @@ export default function BulkUpload({
         .dms-overall-track { height: 10px; border-radius: 6px; background: #ececec; overflow: hidden; }
         .dms-overall-fill { height: 100%; background: #0f6c3f; border-radius: 6px; transition: width .3s ease; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
-        .dms-field > span { font-weight: 600; color: black font-size: 14px;}
+        .dms-field > span { font-weight: 600; color:black; font-size: 14px;}
         .dms-field .req { color: #d13438; font-style: normal; }
-        .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid #c8c8c8; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
+        .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid black; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
         /* Client, 2026-09-04: *"the icon arrow for each dropdown is too close to the border, move it
            away more"* — on BOTH upload forms. Chromium draws a native select's arrow inside the
            padding box, so padding-right is what moves it away from the border; there is no
@@ -3235,7 +3300,7 @@ export default function BulkUpload({
            drift against. */
         .dms-labelrow { display: flex; align-items: center; gap: 6px; }
         .dms-info { position: relative; flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid #0f6c3f; background: transparent; color: #0f6c3f; font-size: 12px; font-weight: 700; font-style: normal; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; }
-        .dms-info-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; font-weight: 400; }
+        .dms-info-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 280px; max-width: calc(100cqw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; font-weight: 400; }
         /* The rightmost icon on the row would push its panel past the card edge. */
         .dms-info.align-right .dms-info-panel { left: auto; right: 0; }
         .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; }
@@ -3248,7 +3313,7 @@ export default function BulkUpload({
            destination folder, so they read better as a set than stacked. */
         .dms-grid-3 { grid-template-columns: 1.8fr 0.9fr 1.3fr; }
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; align-items: center; }
-        .dms-radio-group p { margin: 0; font-size: 13px; color: black; font-weight: 600; }
+        .dms-radio-group p { margin: 0; font-size: 14px; color: black; font-weight: 600; }
         .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; cursor: pointer; color: black; }
         .dms-radio-group input[type="radio"] { accent-color: #0f6c3f; width: 16px; height: 16px; cursor: pointer; }
         .dms-dept-badge { display: inline-flex; align-items: center; gap: 8px; background: #e8f5ee; border: 1px solid #b3d9c4; border-radius: 20px; padding: 5px 14px; font-size: 13px; margin-bottom: 20px; }
@@ -3300,6 +3365,14 @@ export default function BulkUpload({
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         @media (max-width: 640px) {
           .dms-grid, .dms-grid-3 { grid-template-columns: 1fr; }
+          .dms-form-inner { padding-left: 0; padding-right: 0; }
+          /* Client, 2026-09-08: *"same goes for bulk upload"*. This screen has no has-file
+             dropzone; its equivalents are the selection bar (count left, Add more right) and the
+             per-file progress row (tag / name / size / bar). Both are the same shape and both
+             collapse into slivers at phone width, so both stack and centre. */
+          .dms-selbar { flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; }
+          .dms-fp-row { flex-direction: column; align-items: center; text-align: center; }
           /* The Business Segment / Group-Led Project switch. Two long labels side by side wrap
              mid-word on a phone; stacked they stay readable. Matches the upload form, which does
              the same at its own breakpoint.
@@ -3308,7 +3381,32 @@ export default function BulkUpload({
           .dms-radio-group { flex-direction: column; align-items: flex-start; gap: 10px; }
           .dms-toast { left: 12px; right: 12px; min-width: unset; top: 12px; }
         }
+        /* THE SAME COLLAPSE, ASKED OF THE CONTAINER RATHER THAN THE WINDOW. This is what fires
+           in SharePoint mobile preview and in a narrow section; the @media block above stays as
+           the fallback and for the fixed overlays, which sit outside this container and cannot
+           be reached from here.
+           NO BACKTICKS IN THIS BLOCK - one ends the template literal, and the error is reported
+           as JSX hundreds of lines away. */
+        @container (max-width: 640px) {
+          .dms-grid, .dms-grid-3 { grid-template-columns: 1fr; }
+          .dms-radio-group { flex-direction: column; align-items: flex-start; gap: 10px; }
+          /* Client, 2026-09-08: on a phone the side padding goes. */
+          .dms-form-inner { padding-left: 0; padding-right: 0; }
+          /* Client, 2026-09-08: *"same goes for bulk upload"*. This screen has no has-file
+             dropzone; its equivalents are the selection bar (count left, Add more right) and the
+             per-file progress row (tag / name / size / bar). Both are the same shape and both
+             collapse into slivers at phone width, so both stack and centre. */
+          .dms-selbar { flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; }
+          .dms-fp-row { flex-direction: column; align-items: center; text-align: center; }
+        }
       `}</style>
+
+      {/* Two wrappers: .dms-form-body is the query container (it may not carry the padding,
+          because a container query cannot style its own container) and .dms-form-inner carries
+          the padding so the query can drop it on a narrow screen. */}
+      <div className="dms-form-body">
+      <div className="dms-form-inner">
 
       {/* ⚠ THE PAGE MUST HAVE ITS OWN TITLE WEB PART DELETED, or "Bulk Upload" appears TWICE — the
           same required deployment step the upload form needed (2026-09-03). Nothing in code can
@@ -3935,51 +4033,6 @@ export default function BulkUpload({
             </select>
           </div>
 
-          {/* ⚠ MOVED HERE FROM THE FOLDER-INFORMATION SECTION (client, 2026-09-04: *"ensure the
-            keyword input is under Documents Details for bulk upload"*). It describes the DOCUMENTS,
-            not their destination, so it belongs with them.
-            Only the position changed: the state, the strip-and-say guard and the conditional write
-            (guarded by `libraryHasColumns`, gotcha #4) are all untouched.
-            Optional for the same
-          reason it is optional on the upload form: it is a findability aid, not a property of the
-          document, so requiring it would block an import of files nobody has words for. */}
-
-          <label
-            className="dms-field"
-            style={{ display: "block", marginTop: 16, maxWidth: 620 }}
-          >
-            <span>Keyword</span>
-            <input
-              type="text"
-              value={keyword}
-              // 50, matching the hint below and the upload form's own cap.
-              maxLength={50}
-              disabled={busy}
-              placeholder="Words to help find these documents later"
-              onChange={(e) => {
-                /* The same strip-and-say guard as Remark above — a character vanishing with no
-             explanation is how a field comes to feel broken. */
-                const clean = stripBlockedChars(e.target.value);
-                setKeywordBlocked(
-                  clean !== e.target.value
-                    ? blockedCharsMessage(e.target.value)
-                    : undefined,
-                );
-                setKeyword(clean);
-              }}
-            />
-            {keywordBlocked ? (
-              <small className="dms-err">{keywordBlocked}</small>
-            ) : (
-              /* Matched to the upload form (client, 2026-09-04) - one field, one hint.
-             NOTE the comment style: this is an EXPRESSION position (a ternary branch), so it
-             takes a plain block comment. A JSX-children comment belongs in children, and a
-             line comment in an attribute list - the three are not interchangeable, and this
-             file has now been broken by each of them. */
-              <small>Max. 50 characters</small>
-            )}
-          </label>
-
           {/* Offered only for the levels LISTED by `legallyPrivilegedFor` in DMS
               Config (a list since 2026-08-19; one value behaves as before). Unset
               means never offered. The value is re-derived at upload time rather
@@ -4027,7 +4080,69 @@ export default function BulkUpload({
               </em>
             </div>
           )}
+
         </div>
+
+        {/* KEYWORD SITS OUTSIDE `.dms-detail-row`, AND THAT IS THE WHOLE POINT (client,
+            2026-09-08: *"Can you help push the keyword down below? like the normal upload
+            form?"*). It was the FOURTH child of that row, which is `display: flex` with
+            `flex: 1 1 200px` on every `.dms-field` — so it sat beside Document Date,
+            Confidential Level and Legally Privileged, and because those three carry taller
+            label rows its own label rode visibly lower than theirs.
+            ⚠ ITS `display: "block"` DID NOT AND COULD NOT FIX THAT. A flex item is blockified
+            already, so that property is inert on a flex child — the only thing that takes it
+            off the row is not being in the row.
+            ⚠ `flexBasis: "100%"` WAS THE OTHER CANDIDATE AND WAS REJECTED. Flex line-breaking
+            uses the hypothetical main size CLAMPED BY `max-width`, so with the 620 cap below it
+            would still tuck back alongside on a wide enough card — right on the screen it was
+            tested at, wrong later, which is the worst kind of layout fix.
+            This matches `Form.tsx`, where Keyword is likewise a bare `.dms-field` on its own
+            row: *"keywords run to several words, and pairing it with another control would make
+            it look like half of one thought."* */}
+        {/* ⚠ MOVED HERE FROM THE FOLDER-INFORMATION SECTION (client, 2026-09-04: *"ensure the
+          keyword input is under Documents Details for bulk upload"*). It describes the DOCUMENTS,
+          not their destination, so it belongs with them.
+          Only the position changed: the state, the strip-and-say guard and the conditional write
+          (guarded by `libraryHasColumns`, gotcha #4) are all untouched.
+          Optional for the same
+        reason it is optional on the upload form: it is a findability aid, not a property of the
+        document, so requiring it would block an import of files nobody has words for. */}
+
+        <label
+          className="dms-field"
+          style={{ display: "block", marginTop: 16, maxWidth: 620 }}
+        >
+          <span>Keyword</span>
+          <input
+            type="text"
+            value={keyword}
+            // 50, matching the hint below and the upload form's own cap.
+            maxLength={50}
+            disabled={busy}
+            placeholder="Words to help find these documents later"
+            onChange={(e) => {
+              /* The same strip-and-say guard as Remark above — a character vanishing with no
+           explanation is how a field comes to feel broken. */
+              const clean = stripBlockedChars(e.target.value);
+              setKeywordBlocked(
+                clean !== e.target.value
+                  ? blockedCharsMessage(e.target.value)
+                  : undefined,
+              );
+              setKeyword(clean);
+            }}
+          />
+          {keywordBlocked ? (
+            <small className="dms-err">{keywordBlocked}</small>
+          ) : (
+            /* Matched to the upload form (client, 2026-09-04) - one field, one hint.
+           NOTE the comment style: this is an EXPRESSION position (a ternary branch), so it
+           takes a plain block comment. A JSX-children comment belongs in children, and a
+           line comment in an attribute list - the three are not interchangeable, and this
+           file has now been broken by each of them. */
+            <small>Max. 50 characters</small>
+          )}
+        </label>
       </div>
 
       {/* ── Actions ─────────────────────────────────────────────────────── */}
@@ -4091,6 +4206,13 @@ export default function BulkUpload({
           )}
         </div>
       )}
+
+      {/* The form body ends here. Both overlays and the toast are DELIBERATELY outside it:
+          they are position: fixed, and the container above applies layout containment, which
+          would make this wrapper their containing block and pin them to the form rather than
+          the window. */}
+      </div>
+      </div>
 
       {/* ── Name clashes, decided ONCE after the run ─────────────────────────────
           Replaces the per-file "Replace Existing File" prompt and its `overwrite=true`. Same shape as

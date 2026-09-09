@@ -2,8 +2,18 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
-import { Level, parseLevels } from "../../../shared/formModel";
-import { splitChain } from "../../../shared/folderChain";
+import { Level, parseLevels, stripFolderChars } from "../../../shared/formModel";
+import { isAbbreviatedLevel, splitChain } from "../../../shared/folderChain";
+
+/**
+ * Grouping-key prefix for the top terms of a SHARED level's own term set.
+ *
+ * ⚠ Sibling uniqueness groups on `parentGuid`, and a top-level term carries "". Without a synthetic
+ * key two coded shared sets would be judged siblings OF EACH OTHER, and of the segment's own
+ * departments — so `ARC` in one set would clash with `ARC` in another, which are not siblings at
+ * all. `findCollisions` treats the key as opaque, which is what makes this legitimate.
+ */
+const SHARED_SET_KEY = "set:";
 import { abbrevListTitle } from "../../../shared/folderAbbreviation";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
@@ -47,6 +57,18 @@ interface SegmentOption {
   levelNames: string[];
   /** Below-Unit tiers, which name their folders from the term label and need no code. */
   belowNames: string[];
+  /**
+   * The below-Unit chain itself, taken from `PendingLevels ?? Levels`.
+   *
+   * ⚠ THE PENDING CHAIN, NOT THE LIVE ONE, and that is load-bearing. Turning codes on for a level
+   * STAGES the change; this screen is the very next step and has to show that level's terms before
+   * the migration applies it. Read the live chain and a newly coded level's terms never appear on
+   * the one step whose job is forcing their codes in.
+   *
+   * Only levels with `abbreviated` need rows at all — an uncoded level names its folders from the
+   * label and needs no code, which is why the walk was capped in the first place.
+   */
+  below: Level[];
 }
 
 /** A term resolved from the store, with its position in the tree. */
@@ -216,10 +238,42 @@ export default function AbbreviationManager({
         StagingFolder?: string;
         Levels?: string;
       }>;
+
+      /* ⚠ ITS OWN REQUEST, AND ITS FAILURE CHANGES NOTHING.
+         `PendingLevels` is created ON DEMAND by the Folder levels screen the first time a structure
+         change is staged, so on a site where that has never happened the column DOES NOT EXIST — and
+         one unknown name fails the WHOLE `$select` with HTTP 400 (gotcha #11). Folded into the read
+         above, this screen would report "could not read the segments" on a site that is otherwise
+         perfectly provisioned. `FolderAdmin` paid exactly that price on 2026-08-18 and both
+         `StructureManager` and `SubtreeMigrator` split the read for the same reason.
+
+         A failure here leaves every segment on its LIVE chain, which is what this screen did before
+         today — degraded, never broken. */
+      const pendingBy: Record<string, string> = {};
+      try {
+        const pres: SPHttpClientResponse = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${configList()}')/items` +
+            `?$select=Title,PendingLevels&$filter=ConfigType eq 'mode'&$top=200`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (pres.ok) {
+          (
+            ((await pres.json()).value ?? []) as Array<{ Title?: string; PendingLevels?: string }>
+          ).forEach((r) => {
+            const staged = (r.PendingLevels ?? "").trim();
+            if (staged) pendingBy[(r.Title ?? "").trim()] = staged;
+          });
+        }
+      } catch {
+        /* left on the live chain — see above */
+      }
+
       const opts = raw
         .filter((r) => (r.TermSetGuid ?? "").trim() !== "")
         .map((r) => {
-          const chain: Level[] = parseLevels(r.Levels ?? "");
+          const staged = pendingBy[(r.Title ?? "").trim()] ?? "";
+          const chain: Level[] = parseLevels(staged || (r.Levels ?? ""));
           const { permissioned, onDemand } = splitChain(chain);
           return {
             key: (r.Title ?? "").trim(),
@@ -231,6 +285,7 @@ export default function AbbreviationManager({
             levelNames:
               permissioned.length > 0 ? permissioned.map((l) => l.label) : ["Department", "Unit"],
             belowNames: onDemand.map((l) => l.label),
+            below: onDemand,
           };
         })
         .sort((a, b) => a.label.localeCompare(b.label));
@@ -266,10 +321,21 @@ export default function AbbreviationManager({
       setTreeLoading(true);
       setResult(undefined);
 
-      // Walk only as deep as there are permissioned levels. Anything deeper belongs to a below-Unit
-      // tier, which names its folder from the term label and needs no code — walking it would list
-      // terms the page must not offer to name.
-      const maxDepth = seg.levelNames.length;
+      /* Walk as deep as there are permissioned levels, PLUS one more when a below-Unit level is
+         named by codes.
+
+         ⚠ EVERY BELOW-UNIT LEVEL EXCEPT YEAR AND DOCUMENT TYPE. Those two are named from the term
+         label — there is no useful abbreviation for `2024` — and listing their terms would inflate
+         `missing`, which HOLDS the guided flow's Next button: the screen would demand codes nobody
+         needs before an admin could carry on. `isAbbreviatedLevel` is the one definition, shared with
+         the upload form and the migrator, so a level cannot be named one way and listed the other.
+
+         ⚠ ONE EXTRA LEVEL, never more. `allowedTierPositions` permits exactly one per-unit level and
+         the contiguity rule puts it directly under the deepest permissioned tier, so its terms are
+         always one step below the leaf. */
+      const codedBelow = (seg.below ?? []).filter(isAbbreviatedLevel);
+      const codedPerUnit = codedBelow.filter((l) => !(l.termSet ?? "").trim())[0];
+      const maxDepth = seg.levelNames.length + (codedPerUnit ? 1 : 0);
       const nodes: TermNode[] = [];
       const walk = async (parentId: string, depth: number): Promise<void> => {
         if (depth > maxDepth) return;
@@ -301,6 +367,56 @@ export default function AbbreviationManager({
       };
       await walk("", 1);
 
+      /* Coded SHARED levels draw from their own term set, not the segment's, so each needs its own
+         read — this screen has only ever walked `seg.termSetGuid`.
+
+         ⚠ THE PARENT KEY IS SYNTHETIC, AND WITHOUT IT THE COLLISION CHECK IS WRONG. Sibling
+         uniqueness groups on `parentGuid`, and a top-level term carries "" — so two coded shared
+         sets would be judged siblings OF EACH OTHER, and of the segment's own departments. `ARC` on
+         one set and `ARC` on another are not siblings and must not clash; `ARC` twice inside ONE set
+         must. `findCollisions` treats the key as opaque, which is what makes this legitimate.
+
+         ⚠ ONE LEVEL DEEP, because a shared set is REQUIRED to be flat (1.0.491.0 refuses a nested
+         one outright), so its top terms are the whole set.
+
+         ⚠ AN UNREADABLE SET THROWS rather than contributing no rows. Omitting them silently would
+         make this screen report every code filled in while terms sat unlisted — and that count is
+         what releases the flow's Next button. "Could not read" is the honest answer. */
+      const sharedRows: Array<{
+        id: string;
+        label: string;
+        level: string;
+        parentKey: string;
+      }> = [];
+      for (const lvl of codedBelow) {
+        const set = (lvl.termSet ?? "").trim();
+        if (!set) continue;
+        const sres: SPHttpClientResponse = await context.spHttpClient.get(
+          `${siteUrl}/_api/v2.1/termStore/sets/${set}/children?$select=id,labels`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json" } },
+        );
+        if (!sres.ok) {
+          throw new Error(
+            `the term store returned HTTP ${sres.status} for the "${lvl.label}" level's own term set`,
+          );
+        }
+        (
+          ((await sres.json()).value ?? []) as Array<{
+            id?: string;
+            labels?: Array<{ name?: string }>;
+          }>
+        ).forEach((t) => {
+          if (!t.id) return;
+          sharedRows.push({
+            id: t.id,
+            label: (t.labels ?? [])[0]?.name ?? "",
+            level: lvl.label,
+            parentKey: `${SHARED_SET_KEY}${set.toLowerCase()}`,
+          });
+        });
+      }
+
       // Existing rows, with their item ids so a save updates in place.
       const existing: Record<string, { id: number; abbreviation: string }> = {};
       const cur: SPHttpClientResponse = await context.spHttpClient.get(
@@ -328,12 +444,28 @@ export default function AbbreviationManager({
         return {
           termGuid: n.id,
           label: n.label,
-          level: seg.levelNames[n.depth - 1] ?? `Level ${n.depth}`,
+          // Past the permissioned depth the only thing down there is the coded per-unit level.
+          level:
+            seg.levelNames[n.depth - 1] ??
+            (codedPerUnit ? codedPerUnit.label : `Level ${n.depth}`),
           parentGuid: n.parentId,
           abbreviation: found ? found.abbreviation : "",
           original: found ? found.abbreviation : "",
         };
-      });
+      }).concat(
+        sharedRows.map((r) => {
+          const found = existing[r.id.toLowerCase()];
+          if (found) ids[r.id] = found.id;
+          return {
+            termGuid: r.id,
+            label: r.label,
+            level: r.level,
+            parentGuid: r.parentKey,
+            abbreviation: found ? found.abbreviation : "",
+            original: found ? found.abbreviation : "",
+          };
+        }),
+      );
       setItemIds(ids);
       setRows(drafts);
       setTreeLoading(false);
@@ -586,6 +718,24 @@ export default function AbbreviationManager({
         />
       )}
 
+      {/* ⚠ A PLAIN LINE WHEN A FLOW ALREADY CHOSE THE SEGMENT, not a pre-selected dropdown. Reported
+          on the first live test of the new step (2026-09-09): the structure flow renders its own
+          segment switcher, so this step showed TWO "Segment" dropdowns stacked, both naming the same
+          thing. Neither had been on one screen before, because this flow only gained an abbreviations
+          step today.
+
+          Exactly the treatment the migrate screen already carries (1.0.456.0) for the same complaint
+          — client, 2026-09-06: *"You haven't remove the select... just put a message indicator is
+          enough."* Gated on the HOST having supplied a segment rather than on which flow this is, so
+          the standalone tab keeps its real picker. */}
+      {initialSegmentKey ? (
+        <div style={{ marginBottom: 16 }}>
+          <label style={s.label}>Segment</label>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#242424" }}>
+            {segment()?.label ?? initialSegmentKey}
+          </div>
+        </div>
+      ) : (
       <div style={{ marginBottom: 16 }}>
         <label style={s.label}>Segment</label>
         <select
@@ -615,6 +765,7 @@ export default function AbbreviationManager({
             instruction (2026-09-06), along with the below-Unit note and the missing-code banner.
             The screen now says one thing: every field is required. */}
       </div>
+      )}
 
 
       {treeLoading ? (
@@ -643,7 +794,17 @@ export default function AbbreviationManager({
               `overflowX: hidden` because the row is a flex layout that already fits; without it a
               long term label can raise a horizontal scrollbar under every row. */}
           <div style={s.scrollBox}>
-          {seg.levelNames.map((levelName) => {
+          {/* ⚠ CODED BELOW-UNIT LEVELS ARE APPENDED, and leaving them out is a DEADLOCK rather than
+              a missing section. Their rows are built and counted as missing, so `abbreviationsMissing`
+              is non-zero and the flow's Next button is HELD — while the rows themselves render
+              nowhere, because this list only ever held the permissioned levels. The admin would be
+              told codes are outstanding with nothing on screen to fill in.
+
+              Derived from the same `isAbbreviatedLevel` rule the walk uses, so a level can never be walked
+              into rows without also being rendered. */}
+          {seg.levelNames
+            .concat((seg.below ?? []).filter(isAbbreviatedLevel).map((l) => l.label))
+            .map((levelName) => {
             const levelRows = rows.filter((r) => r.level === levelName);
             if (levelRows.length === 0) return null;
             return (
@@ -660,9 +821,20 @@ export default function AbbreviationManager({
                     visible: codes must be unique among SIBLINGS, so two departments may each hold a
                     `TAX` unit — which looks like a duplicate in a flat list and is perfectly legal
                     here. */}
-                {groupRowsByParent(levelRows, rows).map((g) => (
-                  <div key={g.parentGuid || "__top"} style={g.parentGuid ? s.parentGroup : undefined}>
-                    {g.parentGuid ? (
+                {groupRowsByParent(levelRows, rows).map((g) => {
+                  /* ⚠ A SHARED LEVEL'S TERMS SIT AT THE TOP OF THEIR OWN SET, so they carry the
+                     synthetic grouping key `set:<guid>` — which is what stops two different sets
+                     being judged siblings of each other AND of the segment's own departments. There
+                     is no term behind that key, so the parent header fell through to "Parent term
+                     not found" and read as an error (seen live 2026-09-09), with a count that
+                     pluralised the level name into "2 minasmas archive 2s".
+                     A flat set has exactly ONE group, so the header adds nothing anyway — the level
+                     heading above already names it. Rendered flat, like the top-level case. */
+                  const flatSet = g.parentGuid.indexOf(SHARED_SET_KEY) === 0;
+                  const grouped = g.parentGuid !== "" && !flatSet;
+                  return (
+                  <div key={g.parentGuid || "__top"} style={grouped ? s.parentGroup : undefined}>
+                    {grouped ? (
                       <div style={s.parentHead}>
                         {/* An UNRESOLVED parent is labelled, never hidden: a row with no code still
                             needs one, and dropping it is the one failure this page exists to stop. */}
@@ -695,7 +867,15 @@ export default function AbbreviationManager({
                            reporting the problem afterwards, which is the right shape for a limit
                            somebody meets while typing. */
                         maxLength={20}
-                        onChange={(e) => setCode(r.termGuid, e.target.value)}
+                        /* ⚠ STRIPPED AS IT IS TYPED (client, 2026-09-09: *"did you prevent any
+                           illegal chracter to not enter in the term abbrevition input?"* — it did
+                           not). `folderNameFor` sanitizes when the folder is NAMED, so typing `MA/D`
+                           stored `MA/D` in this list and created a folder called `MAD`: no error, no
+                           warning, and the list silently stopped saying what the folder is called —
+                           which is the one thing it exists to say.
+                           ⚠ `stripFolderChars`, never `sanitizeFolderSegment`: that one also trims,
+                           so a space could never be typed and a two-word code would be unreachable. */
+                        onChange={(e) => setCode(r.termGuid, stripFolderChars(e.target.value))}
                       />
                       {/* ⚠ "Same as term name" AND THE `/code` PREVIEW BOTH REMOVED (client,
                           2026-09-06: *"remove those buttons. force client to type"*). The rename
@@ -718,7 +898,8 @@ export default function AbbreviationManager({
                   );
                 })}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             );
           })}

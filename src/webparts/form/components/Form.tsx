@@ -27,6 +27,7 @@ import {
   ensureFolder,
   encodeServerRelativePath,
   probeFolderUploadAccess,
+  readFolderCodes,
   probeFolderApproveAccess,
   resolveFolderByPath,
   FolderMapRow,
@@ -230,15 +231,47 @@ const getExtension = (name: string): string => {
   return dot >= 0 ? name.slice(dot) : "";
 };
 
+/**
+ * Put the original file's extension on a composed base name.
+ *
+ * ⚠⚠ A PERIOD ANYWHERE IN THE COMPOSED NAME USED TO EAT EVERYTHING AFTER IT, INCLUDING THE DATE.
+ * This called `getExtension` on the BASE and stripped whatever came back — but the base is not a
+ * filename, it is `[Project] - [Vendor] - [Document Name] - [Date]`, so `lastIndexOf(".")` found the
+ * period in a Document Name and called the entire remainder an extension:
+ *
+ *   "No. 2 - 09-09-26"  + No.pdf  ->  "No.pdf"      (the number AND the date, gone)
+ *   "No. 4 - 09-09-26"  + No.pdf  ->  "No.pdf"      (so two different documents collide)
+ *   "Acme - Invoice No. 5 - 09-09-26" ->  "Acme - Invoice No.pdf"
+ *   "Report v1.2 - 09-09-26"          ->  "Report v1.pdf"
+ *
+ * Reported as a false clash warning (client, 2026-09-09: *"Upload form doesnt allow No. 4, its
+ * detects the same name even when two files have different number"*) — and the warning was RIGHT.
+ * Both files genuinely would have been saved as `No.pdf`. The defect was never in the collision
+ * check; it was here, one step earlier, and it silently renamed every document whose name carried a
+ * period. It survived because a hyphenated date carries none and most names do not either, so the
+ * result was merely SHORTER rather than obviously wrong.
+ *
+ * ⚠ THE GUARD IT REPLACES WAS THERE FOR A REASON — do not simply delete the extension handling.
+ * Typing "report.pdf" as the Document Name of a .pdf must not yield "report.pdf.pdf". The rule that
+ * does that WITHOUT eating real content is to skip the append only when the base already ends with
+ * THIS file's own extension, which is exactly what `resolveUploadName` in `uploadBatches.ts` has
+ * always done. That function's comment says it "mirrors buildUploadName in Form.tsx"; the two had
+ * drifted, and the drifting copy was the one that names every uploaded file.
+ *
+ * Cost, accepted: a Document Name ending in a DIFFERENT extension now keeps it — "Invoice.docx" on a
+ * PDF saves as "Invoice.docx.pdf". Ugly, rare, and honest, where the old behaviour claimed the file
+ * was something it is not.
+ *
+ * ⚠ Module-local, so nothing tests it. That is half of why this shipped. Worth lifting into
+ * `uploadBatches.ts` beside `resolveUploadName` — one definition, with tests — as its own change.
+ */
 const buildUploadName = (originalName: string, typed: string): string => {
   const cleaned = typed.trim();
   if (!cleaned) return originalName;
   const ext = getExtension(originalName);
-  let base = cleaned;
-  const typedExt = getExtension(base);
-  if (typedExt) base = base.slice(0, base.length - typedExt.length);
-  base = base.replace(ILLEGAL_NAME_CHARS, "").replace(/\s+/g, " ").trim();
-  return base ? `${base}${ext}` : originalName;
+  const base = cleaned.replace(ILLEGAL_NAME_CHARS, "").replace(/\s+/g, " ").trim();
+  if (!base) return originalName;
+  return ext && base.toLowerCase().endsWith(ext.toLowerCase()) ? base : `${base}${ext}`;
 };
 
 // validateUpdateListItem validates dates against the SITE's regional settings.
@@ -695,6 +728,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   // Site-wide upload pause, set while an administrator reorganises the folders. Starts FALSE, so a
   // slow or failed config read never hides the form — the write-time re-check is the real guard.
   const [paused, setPaused] = useState<boolean>(false);
+  /**
+   * Folder codes for below-Unit terms, keyed by lower-cased term GUID — see `readFolderCodes`.
+   *
+   * ⚠ `undefined` MEANS NOT READ, and it is not the same as `{}`. A level named by codes cannot
+   * build a folder name without one either way, so both refuse — but the MESSAGE has to differ, or
+   * an uploader is told to ask for a code that is already there.
+   *
+   * Consulted only by a level that opted in, so on every segment as it stands today this is fetched
+   * and never looked at. That is the price of one small read at mount.
+   */
+  const [folderCodes, setFolderCodes] = useState<Record<string, string> | undefined>(undefined);
+  const [codesRead, setCodesRead] = useState<boolean>(false);
   const [toast, setToast] = useState<{
     message: string;
     type: ToastType;
@@ -809,6 +854,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     hcAvailable: hcAvailable(),
     canWriteHc: hcWrite[leafTerm ?? permissionedLeafTerm()],
   });
+
+  /* ⚠ ITS OWN EFFECT, never folded into another load. A failed code read must not be able to reach
+     the "could not read your settings" path or empty a dropdown — it costs the codes and nothing
+     else, and every level that has not opted in carries on exactly as before. */
+  useEffect(() => {
+    let cancelled = false;
+    readFolderCodes(context.spHttpClient, siteUrl)
+      .then((map) => {
+        if (cancelled) return;
+        setFolderCodes(map);
+        setCodesRead(true);
+      })
+      .catch(() => {
+        if (!cancelled) setCodesRead(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [context.spHttpClient, siteUrl]);
 
   /** The label behind a confidentiality term id — the routing rules compare labels, not GUIDs. */
   const confidentialityLabel = (termId: string): string =>
@@ -2203,7 +2267,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       if (!levelValues[i]) destMissing.push(lvl.label);
     });
     destMissing.push(
-      ...buildOnDemandSegments(tierPlan().tiers, tierSelections()).missing,
+      ...buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes).missing,
     );
 
     const short = files.filter((sf) => missingForFile(sf).length > 0);
@@ -2278,7 +2342,29 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       );
       return false;
     }
-    const { segments } = buildOnDemandSegments(plan.tiers, tierSelections());
+    const built = buildOnDemandSegments(plan.tiers, tierSelections(), folderCodes);
+    /* ⚠ REFUSED, NEVER NAMED BY THE LABEL INSTEAD. A level named by codes with a term that has none
+       has no folder name to build — falling back would put `EFS` and `General Admin Subunit` in one
+       tree and give the same term two folders the moment somebody filled the code in.
+
+       ⚠ NAMES THE TERM, and says which of the two things went wrong. "Ask for a code" is useless
+       advice when the truth is that the list could not be read, and "try again" is useless when the
+       code genuinely is not there — `folderCodes === undefined` is what tells them apart. Neither
+       is something an uploader can fix, so both point at the person who can. */
+    if (built.uncoded.length > 0) {
+      const which = built.uncoded.map((t) => `"${t}"`).join(" and ");
+      showToast(
+        codesRead && folderCodes === undefined
+          ? `The folder abbreviations could not be read, so ${which} cannot be filed yet. ` +
+              `Try again in a moment; if it keeps happening, tell your CRS administrator.`
+          : `${which} ${built.uncoded.length === 1 ? "has" : "have"} no abbreviation, and this ` +
+              `folder level is named by abbreviations. Ask your CRS administrator to add one on ` +
+              `the CRS Term Abbreviations page.`,
+        "error",
+      );
+      return false;
+    }
+    const { segments } = built;
 
     const leafIdx = m.levels.length - 1;
     const leafTerm = (levelChoices[leafIdx] ?? []).find(
@@ -3642,6 +3728,36 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               "Ask an administrator to run folder reconciliation.",
           };
         }
+        /* ⚠⚠ AN EMPTY CHAIN IS REFUSED, AND ITS ABSENCE HERE SILENTLY MISFILED A DOCUMENT.
+           Found live on 2026-09-08: one PENDING document sitting directly on
+           `HCApprovalDocument/GHO/GCA/GCBC`, the UNIT folder, with nothing having reported it.
+
+           The mechanism is this function's own shape. `folderId` is seeded with the UNIT folder and
+           only descends once per `dest.segments` entry — so with NO segments the loop never runs and
+           this returns the unit folder as the destination. The upload then succeeds and is reported
+           as successful.
+
+           ⚠ THE NORMAL PATH HAS ALWAYS REFUSED THAT, and so has Bulk Upload: both leave `destFolder`
+           undefined when the loop does not run and answer "No destination folder could be resolved".
+           This branch was the only one of the three seeded with a usable id before the loop, which is
+           why the artefact is in the HC library and there is no equivalent beside it.
+
+           ⚠ AND `buildOnDemandSegments` REPORTS NOTHING WRONG in that state: no tiers means no
+           `missing` entries, so the form's own required-field check passes. Empty is not the same as
+           incomplete, and only this guard can tell the difference.
+
+           How a chain reaches the form with no below-Unit tiers is the 2026-08-26 shape: a tier whose
+           `termSet` is blank IS a per-unit tier, its options are the children of the unit term, a unit
+           with no children skips it, and a tier cascading below a skipped one is skipped too — so
+           Year and Document Type can both vanish and file the document two levels shallower. */
+        if (dest.segments.length === 0) {
+          return {
+            error:
+              "No destination folder could be resolved for this set, so nothing was uploaded. " +
+              "Reload the page; if it happens again, an administrator should check this segment's " +
+              "folder levels below Unit.",
+          };
+        }
         // Below the unit, ensure-creation is correct and matches the normal path: everything below
         // Unit inherits the unit's ACL by design.
         let parent = unitHere.serverRelativeUrl;
@@ -4226,7 +4342,35 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         /* Plain sans-serif (client, 2026-09-04: "change the all font family to sans-serif"). It was
            'Segoe UI', sans-serif - so on Windows this changes nothing visible, and elsewhere it now
            takes the reader's own default rather than falling back through a font they may not have. */
-        .dms-form { max-width: 960px; margin: 32px auto; padding: 0 24px 48px; font-family: sans-serif; }
+        .dms-form { margin: 32px auto; font-family: sans-serif; }
+        /* WARN: THE 960px CAP MOVED DOWN WITH THE PADDING, AND LEAVING IT ON .dms-form
+           NARROWS EVERY DESKTOP BY 48px. max-width applies to the CONTENT box, so the old
+           shell was 960 of content with 24px of padding OUTSIDE it - 1008 overall. Cap the
+           shell and put the padding on a child and the child is 960 overall, 912 of
+           content. Measured: the field grid went 910 -> 862 before this was corrected,
+           which is the same trap that deleted the FIT helper on 2026-09-07. Capping the
+           INNER element instead reproduces the old geometry exactly: 960 + 48 = 1008,
+           centred. */
+        /* THE CONTAINER, AND WHY IT IS A WRAPPER RATHER THAN .dms-form ITSELF.
+           A media query asks how wide the WINDOW is; a web part is sized by the page SECTION it
+           sits in, so SharePoint mobile preview - and any narrow two-column section on a desktop
+           - squeezed this form while the 480px query never fired (client, 2026-09-08, with a
+           screenshot of the preview). container-type asks how wide THIS ELEMENT is, which is the
+           question that was always meant.
+
+           WARN: IT MUST NOT GO ON .dms-form. container-type applies layout containment, which
+           makes the element a containing block for position: fixed descendants - and the toast
+           and BOTH confirmation overlays are fixed and render inside that section. Put it there
+           and the toast stops anchoring to the window and the overlay covers only the form, on
+           every screen. They are deliberately left OUTSIDE this wrapper.
+
+           WARN: AND THE PADDING HAS TO SIT ON A DESCENDANT. A container query can never style
+           its own container - that would be circular - so the side padding the client asked to
+           drop on a phone lives on .dms-form-inner, one level down, where the query can reach
+           it. That move is NOT free on its own - see the WARN above for the 48px it costs a
+           desktop if the width cap is left behind on the shell. */
+        .dms-form-body { container-type: inline-size; }
+        .dms-form-inner { max-width: 960px; margin: 0 auto; padding: 0 24px 48px; }
         .dms-form h2 { margin: 0 0 4px; font-size: 24px; font-weight: 700; color: #1b1b1b; }
         .dms-subtitle { margin: 0 0 28px; font-size: 14px; color: #666; }
         /* ⚠ THE PAGE TITLE IS RENDERED BY THE WEB PART AGAIN (client, 2026-09-03: "client wants the
@@ -4338,7 +4482,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            background and the font rules are gone or they would ring the artwork a second time.
            Size stays 18px so the label rows beside it do not move. */
         .dms-info { position: relative; flex: 0 0 auto; width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; cursor: help; box-sizing: border-box; font-style: normal; }
-        .dms-info-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 280px; max-width: calc(100vw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; font-weight: 400; }
+        .dms-info-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 280px; max-width: calc(100cqw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; font-weight: 400; }
         /* The rightmost icon on the row would push its panel past the card edge. */
         .dms-info.align-right .dms-info-panel { left: auto; right: 0; }
         .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; }
@@ -4515,6 +4659,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
              This sits INSIDE the existing 480px query, so the desktop is untouched by construction:
              the rules cannot apply above 480px at all. */
           .dms-grid, .dms-grid-2, .dms-grid-3 { grid-template-columns: 1fr; }
+          .dms-form-inner { padding-left: 0; padding-right: 0; }
+          /* Client, 2026-09-08: *"Ensure this is column and centered"*. At full width this bar
+             reads READY / count / size / action across one line; at phone width those four are
+             four slivers. Stacking centres them instead.
+             The margin-left reset matters: .dms-filecard-action carries margin-left:auto to push
+             the action to the right of a ROW, and in a column that same auto margin would shove
+             it off the centre it is being asked to sit on. */
+          .dms-dropzone.has-file { flex-direction: column; align-items: center;
+            justify-content: center; text-align: center; gap: 8px; }
+          .dms-dropzone.has-file .dms-filecard-action { margin-left: 0; }
           /* The radio group is the Business Segment / Group-Led Project switch. Two long labels
              side by side wrap mid-word on a phone; stacked they stay readable. */
           .dms-radio-group { flex-direction: column; gap: 10px; }
@@ -4524,9 +4678,38 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           .dms-popup-msg { margin-bottom: 20px; font-size: 13px; }
           .dms-toast { left: 12px; right: 12px; min-width: unset; top: 12px; }
         }
+        /* THE SAME COLLAPSE, ASKED OF THE CONTAINER RATHER THAN THE WINDOW.
+           This is what actually fires in SharePoint mobile preview and in a narrow section; the
+           @media block above stays as the fallback for a browser without container queries and
+           for the fixed overlays, which sit outside this container and cannot be reached from
+           here. Duplicated rather than replaced so nothing that works today can regress.
+           NO BACKTICKS ANYWHERE IN THIS BLOCK - it is a JS template literal and one ends it,
+           with the error reported as JSX hundreds of lines away. */
+        @container (max-width: 480px) {
+          .dms-grid, .dms-grid-2, .dms-grid-3 { grid-template-columns: 1fr; }
+          .dms-radio-group { flex-direction: column; gap: 10px; }
+          /* Client, 2026-09-08: on a phone the side padding goes. 24px each side of a 360px
+             screen is 13 percent of it spent on nothing, and the card already has its own. */
+          .dms-form-inner { padding-left: 0; padding-right: 0; }
+          /* Client, 2026-09-08: *"Ensure this is column and centered"*. At full width this bar
+             reads READY / count / size / action across one line; at phone width those four are
+             four slivers. Stacking centres them instead.
+             The margin-left reset matters: .dms-filecard-action carries margin-left:auto to push
+             the action to the right of a ROW, and in a column that same auto margin would shove
+             it off the centre it is being asked to sit on. */
+          .dms-dropzone.has-file { flex-direction: column; align-items: center;
+            justify-content: center; text-align: center; gap: 8px; }
+          .dms-dropzone.has-file .dms-filecard-action { margin-left: 0; }
+        }
         @keyframes dms-fadein { from { opacity: 0; } to { opacity: 1; } }
         @keyframes dms-popin { from { transform: scale(.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       `}</style>
+
+      {/* Two wrappers, and each earns its place: .dms-form-body is the query container (it may
+          not carry the padding, because a container query cannot style its own container) and
+          .dms-form-inner carries the padding so the query can drop it on a narrow screen. */}
+      <div className="dms-form-body">
+      <div className="dms-form-inner">
 
       {/* ⚠ THE HEADING IS BACK, REVERSING ITS OWN REMOVAL (client, 2026-09-03). It was taken out
           because the page already titled itself and this repeated it — so THE PAGE'S OWN TITLE WEB
@@ -4949,7 +5132,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           CSS: tab order follows the DOM, so a visual-only swap would have keyboard
           users moving through the form in a different sequence from what they see. */}
           <div className="dms-section">
-            <p className="dms-section-title">1. Document Folder Information</p>
+            <p className="dms-section-title">1. Documents Folder Information</p>
 
             {deptLoading ? (
               <p className="dms-dept-loading">Loading your access&hellip;</p>
@@ -5600,6 +5783,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       </div>
 
       {status && <p className="dms-status">{status}</p>}
+
+      {/* The form body ends here. The toast and both overlays are DELIBERATELY outside it:
+          they are position: fixed, and the container above applies layout containment, which
+          would make this wrapper their containing block and pin them to the form instead of the
+          window. */}
+      </div>
+      </div>
 
       {toast && (toast.type === "error" || toast.type === "notice") && (
         <div className={`dms-toast ${toast.type}`} role="alert">

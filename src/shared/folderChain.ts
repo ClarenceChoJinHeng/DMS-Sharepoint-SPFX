@@ -338,15 +338,83 @@ export interface SegmentResult {
   segments: string[];
   /** Labels of tiers with no selection. Non-empty means do not upload. */
   missing: string[];
+  /**
+   * TERM labels picked on an `abbreviated` level that have no folder code. Non-empty means do not
+   * upload — see `buildOnDemandSegments`.
+   *
+   * ⚠ TERM labels, not TIER labels, unlike `missing`. The two answer different questions: `missing`
+   * says "you have not chosen a Sub Unit", this says "the Sub Unit you chose has no code". A message
+   * naming the tier would send the admin looking at the level when the gap is on one term.
+   */
+  uncoded: string[];
+}
+
+/**
+ * Is this below-Unit level named by its terms' abbreviations?
+ *
+ * ⚠ DERIVED, NOT STORED, AND THAT IS THE CLIENT'S DECISION (2026-09-09: *"just enforce the term
+ * abbreviation to be created"*, then *"Nonono, we follow B"* when offered the choice between
+ * grandfathering the levels that predate it and enforcing it everywhere at once). A per-level flag
+ * shipped for a few hours; it was removed because a stored choice is a choice, and every screen that
+ * showed it had to explain a setting nobody wanted to make.
+ *
+ * ⚠ EVERY below-Unit level EXCEPT THE FIXED PAIR. There is no useful abbreviation for `2024`, and
+ * requiring one for Year or Document Type would demand ~20 rows nobody asked for AND move every
+ * document in the system. `isFixedBelowUnitTier` is the same rule that refuses to move or remove
+ * them, so the two can never disagree about which levels are special.
+ *
+ * ⚠ IT IS ONLY EVER ASKED ABOUT A BELOW-UNIT LEVEL. The permissioned prefix is named from the
+ * abbreviation list already, by reconciliation, and never passes through here.
+ */
+export function isAbbreviatedLevel(level: Level): boolean {
+  return !isFixedBelowUnitTier(level);
+}
+
+/**
+ * The folder code for one below-Unit term, or "" when the level is not coded or the code is absent.
+ *
+ * Keys are compared lower-cased because a term GUID is written in both cases across this codebase
+ * and the abbreviation list stores whatever was pasted in.
+ */
+export function folderCodeFor(
+  level: Level,
+  termId: string,
+  codes?: Record<string, string>,
+): string {
+  if (!isAbbreviatedLevel(level)) return "";
+  const key = (termId ?? "").trim().toLowerCase();
+  if (!key) return "";
+  const map = codes ?? {};
+  // The normal path: a caller that normalised its keys hits this and nothing else runs.
+  const direct = map[key];
+  if (direct !== undefined) return sanitizeFolderSegment(direct);
+  /* ⚠ BOTH SIDES ARE NORMALISED, NOT JUST THE LOOKUP. A term GUID is written upper- and lower-case
+     all over this codebase and the abbreviation list stores whatever was pasted into it, so a map
+     keyed `T-1` and a selection carrying `t-1` are the same term. Normalising only one side made
+     every lookup miss — and a miss here does not degrade, it REFUSES the upload, so the whole level
+     would have read as "nobody filled the codes in" while the rows sat there correctly. Caught by
+     its own test rather than on a site.
+
+     `Object.keys` then a plain array walk: `for…of` over a Map is a compile error on this tsconfig
+     (CLAUDE.md gotcha #3's family), and the map is a few hundred entries at most. */
+  const keys = Object.keys(map);
+  for (const k of keys) {
+    if (k.trim().toLowerCase() === key) return sanitizeFolderSegment(map[k]);
+  }
+  return "";
 }
 
 /**
  * Turn the on-demand suffix plus the user's selections into ordered folder names.
  *
- * Names come from the sanitized TERM LABEL, not the abbreviation list — deliberately.
- * Abbreviations keep permissioned paths short and stable across renames because those
- * paths carry ACLs and appear in the Folder Map; below-Unit folders carry neither, and
- * `2026` / `Invoice` / `Human Resource` is more use to someone browsing than a code.
+ * Names come from the sanitized TERM LABEL by default — `2026` / `Invoice` / `Human Resource` is
+ * more use to someone browsing than a code, and below-Unit folders carry no ACL and no Folder Map
+ * row, so they need none of the stability an abbreviation buys a permissioned path.
+ *
+ * ⚠ EXCEPT that every below-Unit level BUT Year and Document Type is named by its terms'
+ * ABBREVIATIONS (client, 2026-09-09), so the label above describes those two and nothing else. A term
+ * with no abbreviation is reported in `uncoded` and the caller REFUSES — never named by its label
+ * instead, because one tree holding both forms is the inconsistency the abbreviations remove.
  *
  * Every tier is required. An optional tier left blank would file documents at
  * inconsistent depths inside one unit, defeating the point of having the tier — so a
@@ -357,19 +425,41 @@ export interface SegmentResult {
 export function buildOnDemandSegments(
   onDemand: Level[],
   selections: Record<string, TierSelection | undefined>,
+  codes?: Record<string, string>,
 ): SegmentResult {
   const segments: string[] = [];
   const missing: string[] = [];
+  const uncoded: string[] = [];
   for (const lvl of onDemand ?? []) {
     const picked = selections[lvl.column];
-    const name = sanitizeFolderSegment(picked?.label ?? "");
-    if (!name) {
+    const label = sanitizeFolderSegment(picked?.label ?? "");
+    if (!label) {
       missing.push(lvl.label);
       continue;
     }
-    segments.push(name);
+    if (isAbbreviatedLevel(lvl)) {
+      const code = folderCodeFor(lvl, picked?.id ?? "", codes);
+      if (!code) {
+        /* ⚠ REPORTED, NEVER FALLEN BACK TO THE LABEL. A fallback puts `EFS` and
+           `General Admin Subunit` in one tree, which is exactly the inconsistency the codes exist to
+           remove — and worse, the SAME term would then own two folders as soon as somebody filled the
+           code in. Client, 2026-09-09: *"force them to not be able to create untill they provide a
+           term abbreviation... this should be more safe."*
+
+           ⚠ AND NEVER BY HIDING THE OPTION EITHER — that is the dangerous version of the same idea.
+           A unit whose terms are ALL uncoded would end up with an empty option list, `decideTier`
+           would answer `skip`, the tier would stop applying, and the document would file one level
+           SHALLOWER with nothing erroring. That is the SDG defect of 2026-08-26 exactly. The option
+           stays on screen; the upload is refused naming the term. */
+        uncoded.push(picked?.label ?? lvl.label);
+        continue;
+      }
+      segments.push(code);
+      continue;
+    }
+    segments.push(label);
   }
-  return { segments, missing };
+  return { segments, missing, uncoded };
 }
 
 /**

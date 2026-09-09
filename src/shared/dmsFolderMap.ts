@@ -27,6 +27,55 @@ const mapList = async (spHttpClient: SPHttpClient, siteUrl: string): Promise<str
   return encodeURIComponent(cachedListTitle(LIST_SUFFIX.folderMap));
 };
 
+/**
+ * Folder codes for below-Unit terms, keyed by LOWER-CASED term GUID.
+ *
+ * A level that opted in (`Level.abbreviated`) names its folders by these instead of the term label —
+ * the client asked for it on 2026-09-09 for long sub unit labels. `folderCodeFor` in `folderChain.ts`
+ * is what consults the map; this only fetches it.
+ *
+ * ⚠ RETURNS `undefined` ON FAILURE, NEVER `{}`. Both refuse the upload — a coded level with no code
+ * has no folder name to build, so there is nothing safe to fall back to — but they need different
+ * MESSAGES: "ask an administrator to add a code" is useless advice when the truth is that the list
+ * could not be read, and "try again" is useless when the code genuinely is not there. Empty is
+ * read-and-empty; undefined is not-read.
+ *
+ * ⚠ Keys are lower-cased HERE so every caller gets one shape. `folderCodeFor` also falls back to a
+ * case-insensitive scan, because a map assembled anywhere else may not have been normalised — and a
+ * miss there does not degrade, it REFUSES, which reads as "nobody filled the codes in".
+ *
+ * `$top=5000` for the reason recorded in memory `sp-capped-read-reads-as-absent`: a truncated read
+ * is indistinguishable from the codes being absent, and here that would refuse every upload on a
+ * coded level. A site with more than 5,000 abbreviation rows needs paging before it needs anything
+ * else here.
+ */
+export async function readFolderCodes(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+): Promise<Record<string, string> | undefined> {
+  try {
+    await primeNames(spHttpClient, siteUrl);
+    const title = encodeURIComponent(cachedListTitle(LIST_SUFFIX.abbreviation));
+    const res: SPHttpClientResponse = await spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${title}')/items?$select=TermGuid,Abbreviation&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) return undefined;
+    const out: Record<string, string> = {};
+    (
+      ((await res.json()).value ?? []) as Array<{ TermGuid?: string; Abbreviation?: string }>
+    ).forEach((r) => {
+      const key = (r.TermGuid ?? "").trim().toLowerCase();
+      const code = (r.Abbreviation ?? "").trim();
+      if (key && code) out[key] = code;
+    });
+    return out;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface FolderMapping {
   termGuid: string;
   folderUniqueId: string;

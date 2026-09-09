@@ -3,7 +3,12 @@ import { useState, useEffect } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, parseLevels, PENDING_LEVELS_FIELD } from "../../../shared/formModel";
-import { effectiveOnDemandTiers, splitChain, validateChain } from "../../../shared/folderChain";
+import {
+  effectiveOnDemandTiers,
+  isAbbreviatedLevel,
+  splitChain,
+  validateChain,
+} from "../../../shared/folderChain";
 import { paginate, Pager } from "../../../shared/pagination";
 
 /** Unit cards per page (the client's number, 2026-09-09). Three keeps the page to a screen or two. */
@@ -14,6 +19,7 @@ import {
   Destination,
   EffectiveTier,
   effectiveTiers,
+  TierOptionInput,
   findCollisions,
   LeafFolder,
   LeafPlan,
@@ -162,6 +168,14 @@ interface LibCtx {
 interface TermLite {
   id: string;
   label: string;
+  /**
+   * Folder code, when this term's LEVEL is `abbreviated` and the term has an abbreviation row.
+   *
+   * ⚠ Carried on the option rather than looked up again at the dropdown, so the code that names the
+   * folder and the code the plan was built from are the same value. Two lookups is how a destination
+   * comes to disagree with what the scan decided.
+   */
+  code?: string;
 }
 
 /** Every file in one library, indexed the two ways this screen needs. */
@@ -185,7 +199,8 @@ interface UnitScan {
    * removed tier be told apart from one belonging to nothing — a deliberate collapse versus a
    * folder nobody recognises.
    */
-  removedOptions: string[][];
+  /** Options of levels that USED to be in the chain, with codes where those levels were coded. */
+  removedOptions: TierOptionInput[][];
   leaves: LeafFolder[];
   /** Files in a folder that also has subfolders — reported, never moved. */
   looseFiles: string[];
@@ -265,6 +280,14 @@ export interface SubtreeMigratorProps {
    */
   onApplied?: () => void;
   /**
+   * A CHECK has finished — reported however it ended, including an error.
+   *
+   * ⚠ It is the ONLY thing that can say whether any folders need moving. Since 2026-09-09 the flow
+   * gates Next on it, because the two cases that made the old `pendingLevels` lock wrong — subunit
+   * terms added, an abbreviation changed — stage nothing, so nothing else would hold the step.
+   */
+  onScanned?: () => void;
+  /**
    * True when a scan has found folders to rebuild and the run has NOT happened yet.
    *
    * Walking past this step with moves outstanding leaves the segment half-changed: `PendingLevels`
@@ -290,7 +313,7 @@ export interface SubtreeMigratorProps {
   initialSegmentKey?: string;
 }
 
-export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, onApplied, initialSegmentKey, uploadsPaused }: SubtreeMigratorProps): React.ReactElement {
+export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, onApplied, onScanned, initialSegmentKey, uploadsPaused }: SubtreeMigratorProps): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [segments, setSegments] = useState<SegmentRow[]>([]);
@@ -838,6 +861,54 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
       }
     }
 
+    /* Folder codes, read ONCE per scan — and only when some level actually opted in, so a segment
+       with none makes no extra request at all.
+
+       ⚠⚠ IT THROWS RATHER THAN CARRYING ON UNCODED, and swallowing it was a real hole in the first
+       version of this. An empty map makes every term look uncoded, so `optionFolderName` falls back
+       to the LABEL — and this function feeds the RENAME. A transient 403 or 500 on that one list
+       would have had the migrator cheerfully re-file a coded level's folders under their full
+       labels, which is the exact state the codes were switched on to remove, done in bulk and
+       reported as success.
+
+       Nothing else in this scan is allowed to guess either: the term-set read above throws, and the
+       upload form refuses rather than naming a folder it cannot name. Same rule, same reason — an
+       unreadable list is "do not touch this", never "there are none". */
+    const codeByTerm: Record<string, string> = {};
+    if (tiers.concat(gone).filter(isAbbreviatedLevel).length > 0) {
+      const cres: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.abbreviation))}')` +
+          `/items?$select=TermGuid,Abbreviation&$top=5000`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!cres.ok) {
+        throw new Error(
+          `the folder abbreviations could not be read (HTTP ${cres.status}). One of this segment's ` +
+            `levels is named by abbreviations, so nothing can be planned without them — try the ` +
+            `check again.`,
+        );
+      }
+      (
+        ((await cres.json()).value ?? []) as Array<{
+          TermGuid?: string;
+          Abbreviation?: string;
+        }>
+      ).forEach((r) => {
+        const k = (r.TermGuid ?? "").trim().toLowerCase();
+        const v = (r.Abbreviation ?? "").trim();
+        if (k && v) codeByTerm[k] = v;
+      });
+    }
+    /** Attach the code to each option of a level that opted in. Others are returned untouched. */
+    const withCodes = (chain: Level[], chainIndex: number, opts: TermLite[]): TermLite[] => {
+      if (!chain[chainIndex] || !isAbbreviatedLevel(chain[chainIndex])) return opts;
+      return opts.map((o) => {
+        const c = codeByTerm[(o.id ?? "").trim().toLowerCase()];
+        return c ? { ...o, code: c } : o;
+      });
+    };
+
     // Unit folder -> its term, so a cascading tier can read that unit's own values. Keyed on the
     // last (permissioned + 1) path segments, identical in every library.
     const depth = Math.max(1, permissioned.length);
@@ -921,9 +992,17 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
         const target = await tierOptionsFor(tiers, termByTail[tail], setGuid, mapUnreadable);
         const removed = await tierOptionsFor(gone, termByTail[tail], setGuid, mapUnreadable);
         const unreadable = target.options.filter((o) => o === undefined).length > 0;
-        const eff = effectiveTiers(target.options.map((o) => (o ?? []).map((t) => t.label)));
+        /* ⚠ CODES GO IN HERE, and this is the half that decides whether switching a level to codes
+           renames the existing folders or turns every one of them into a stray. `effectiveTiers` now
+           carries {label, code}; `assignSegments` matches EITHER and records the CANONICAL name, so a
+           folder still called `Expatriate Formalities Subunit` is recognised and given a destination
+           of `EFS`. Pass labels only and every existing folder reads as unrecognised. */
+        const coded = target.options.map((o, i) => withCodes(tiers, i, (o ?? []) as TermLite[]));
+        const eff = effectiveTiers(
+          coded.map((o) => (o ?? []).map((t) => ({ label: t.label, code: t.code }))),
+        );
         const optionsByTier: Record<number, TermLite[]> = {};
-        for (const t of eff) optionsByTier[t.chainIndex] = (target.options[t.chainIndex] ?? []) as TermLite[];
+        for (const t of eff) optionsByTier[t.chainIndex] = coded[t.chainIndex] ?? [];
 
         const leaves = await walkLeaves(unit.url);
         for (const leaf of leaves) leaf.files = (files[lib.key].byFolder[leaf.path] ?? []).slice();
@@ -943,7 +1022,14 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
           tail,
           tiers: eff,
           optionsByTier,
-          removedOptions: removed.options.map((o) => (o ?? []).map((t) => t.label)),
+          // A REMOVED level's folders may also have been code-named, so its options need codes too —
+          // otherwise a collapse leaves them looking like strays instead of being dropped.
+          removedOptions: removed.options.map((o, i) =>
+            (withCodes(gone, i, (o ?? []) as TermLite[])).map((t) => ({
+              label: t.label,
+              code: t.code,
+            })),
+          ),
           leaves,
           looseFiles,
         };
@@ -1043,7 +1129,11 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
         scans !== undefined && done === undefined && (pendingNow > 0 || choiceNow > 0),
       );
     }
-  }, [scans, pendingNow, choiceNow, done]);
+    /* ⚠ REPORTED ON AN ERROR TOO. Gating the flow on a scan that must SUCCEED would strand an admin
+       on this step, with uploads still off, for as long as the scan kept failing — the reason
+       `reconcileRan` counts a finished run rather than a good one. */
+    if (onScanned && (scans !== undefined || scanError !== undefined)) onScanned();
+  }, [scans, scanError, pendingNow, choiceNow, done]);
 
   /**
    * Collisions as they stand BEFORE any rename — the stable list the form renders.
@@ -1639,6 +1729,35 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     else groups.push({ tail: row.tail, rows: [row] });
   }
 
+  /**
+   * Everything still listed is a STRAY, and there is nothing left this tool can do.
+   *
+   * ⚠⚠ THE DEAD END THIS EXISTS FOR (client, 2026-09-09, on Buah). `rowsWithWork` deliberately KEEPS
+   * a stray-only row, so `groups.length > 0` - and the Apply card is gated on `groups.length === 0`.
+   * Three things then locked together: Rebuild is disabled (`canRun` needs `totalMoves > 0`, and a
+   * stray is never a move), Apply never renders, and the guided flow's Next is held because the
+   * segment still carries `PendingLevels`. Nothing to move, nothing to apply, nothing to click.
+   *
+   * ⚠ AND THE RULE IT BREAKS WAS ALREADY WRITTEN DOWN, one function away: `finishPending` says in as
+   * many words that *a stray does not block activation - this tool cannot resolve one at all, and
+   * letting it hold a structure change hostage forever would leave the client with no way forward*.
+   * That rule governed the END of a Rebuild and had never been applied to the standalone Apply
+   * button, which is the only route left when there is no Rebuild to run.
+   *
+   * ⚠ EVERY OTHER KIND OF OUTSTANDING WORK STILL BLOCKS. Moves, folders awaiting a value, units whose
+   * options could not be READ, and unsettled collisions each mean the old shape is not finished with;
+   * only a stray is genuinely unresolvable. `unreadableUnits` in particular must stay here - a unit
+   * that could not be checked is unknown, not clean, and switching the chain on over it is the
+   * silent-misfile direction.
+   */
+  const strayOnlyRemains =
+    groups.length > 0 &&
+    totalMoves === 0 &&
+    needingChoice === 0 &&
+    unreadableUnits === 0 &&
+    unresolvedCount === 0 &&
+    badNames === 0;
+
   /* ⚠ THREE CARDS A PAGE, AND EVERY AGGREGATE ABOVE THEM IS STILL WHOLE-SCAN — which is what makes
      paging this safe. `shared/pagination` carries the rule in its own header: *paging must never hide
      outstanding work without saying so*, and the pager's total is the safety rather than decoration.
@@ -1796,11 +1915,18 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
         </div>
       )}
 
-      {scans && groups.length === 0 && !scanError && seg?.pending !== undefined && (
+      {/* ⚠ `strayOnlyRemains` IS THE SECOND WAY IN, and without it a stray-only scan is a dead end -
+          see that const for the whole diagnosis. The other two `groups.length === 0` blocks above are
+          deliberately NOT widened: "every folder already sits where the structure says" would be flatly
+          false with strays listed underneath it. */}
+      {scans && (groups.length === 0 || strayOnlyRemains) && !scanError && seg?.pending !== undefined && (
         <div style={{ ...s.card, marginTop: 4 }}>
           <p style={{ fontSize: 13, lineHeight: 1.6, margin: "0 0 12px" }}>
-            <strong>{seg.label}</strong> has a structure change waiting, and nothing needs moving.
-            Applying it makes uploaders start using{" "}
+            <strong>{seg.label}</strong> has a structure change waiting, and{" "}
+            {strayOnlyRemains
+              ? "nothing left that can be moved automatically — the folders listed below match no level in the chain, so this tool will not guess where they belong. They stay exactly where they are; applying the change does not touch them"
+              : "nothing needs moving"}
+            . Applying it makes uploaders start using{" "}
             <span style={{ fontFamily: "Consolas, monospace" }}>
               {[seg.stagingFolder || seg.label, ...(seg.pending ?? []).map((l) => `[${l.label}]`)].join(" / ")}
             </span>
@@ -1965,7 +2091,11 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
                               setDestination(
                                 key,
                                 chainIndex,
-                                picked ? { label: picked.label, id: picked.id } : undefined,
+                                // The code rides along, so a chosen destination is named the same
+                                // way an existing folder at that tier is.
+                                picked
+                                  ? { label: picked.label, id: picked.id, code: picked.code }
+                                  : undefined,
                               );
                             }}
                           >

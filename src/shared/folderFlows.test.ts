@@ -99,11 +99,41 @@ describe("the flows", () => {
     expect(small).toEqual(big.slice(2));
   });
 
-  it("keeps Add a department or unit and Rename at two steps", () => {
+  it("keeps Add a department or unit at two steps", () => {
     // Pinned because the client asked for exactly two (2026-09-06), and because a third would
     // silently re-introduce the instruction screen the redesign removed.
     expect(flow("addUnit").steps.map((s) => s.id)).toEqual(["abbreviations", "reconcile"]);
-    expect(flow("rename").steps.map((s) => s.id)).toEqual(["abbreviations", "reconcile"]);
+  });
+
+  /* ⚠ RENAME GAINED A THIRD STEP ON 2026-09-09, AND IT CLOSED A LIVE HAZARD. Its blurb promises
+     *"or by changing its short code"* — which reconciliation delivers for Department and Unit and
+     CANNOT below Unit, because that walk stops at `permissionedDepth`. So changing a below-Unit
+     abbreviation used to write the row, run a reconciliation that touched nothing, leave the folder
+     under its old name, and send the next upload to the new one: TWO FOLDERS FOR ONE TERM, reported
+     as success. The migration is the only thing that renames a below-Unit folder. */
+  /* ⚠ THE RETIRE FLOW'S STEPS WERE NEVER PINNED, so removing one broke no test — found on
+     2026-09-09 when "Move the documents out" came out and the suite stayed green. Every other flow
+     has a list pinned; this one now does too. */
+  it("leaves Retire with the delete step alone", () => {
+    expect(flow("retire").steps.map((s) => s.id)).toEqual(["delete"]);
+  });
+
+  /* ⚠ "Move the documents out" MOUNTED THE MIGRATOR, which re-shapes folders WITHIN one segment —
+     there is no cross-segment move tool anywhere in this system. So the step was named after a thing
+     the screen under it could not do, and its hint WAS the mechanism. Removed on the client's
+     instruction; the warning it carried moved into the flow's blurb and the delete step's hint, which
+     is what made removing it safe rather than merely tidier. */
+  it("keeps the do-it-by-hand warning somewhere an admin retiring a segment will read", () => {
+    const f = flow("retire");
+    const text = `${f.blurb} ${f.steps.map((s) => s.hint).join(" ")}`;
+    expect(text).toContain("by hand");
+    expect(f.steps.map((s) => s.id)).not.toContain("moveOut");
+  });
+
+  it("gives Rename a migrate step, between the abbreviation and the reconciliation", () => {
+    expect(flow("rename").steps.map((s) => s.id)).toEqual([
+      "abbreviations", "migrate", "reconcile",
+    ]);
   });
 
   it("keeps the abbreviations step id stable however the flow labels it", () => {
@@ -121,8 +151,9 @@ describe("the flows", () => {
     // Removed 2026-09-06 (five steps to four). Pinned so it is not quietly restored: what it said is
     // recorded at the removal site in folderFlows.ts and is a real operational caveat.
     expect(flow("structure").steps.map((s) => s.id)).not.toContain("pauseFlows");
-    // Five: the four the client's rail shows, plus the reconciliation step they asked for on top.
-    expect(flow("structure").steps).toHaveLength(5);
+    // Six: the four the client's rail shows, plus reconciliation (2026-09-06) and term
+    // abbreviations (2026-09-09, so a coded level's terms cannot reach the migration uncoded).
+    expect(flow("structure").steps).toHaveLength(6);
   });
 
   /* ⚠ THIS TEST ONCE ASSERTED THE OPPOSITE, AND THE REASON IT DID IS WORTH KEEPING.
@@ -136,6 +167,7 @@ describe("the flows", () => {
     expect(ids).toEqual([
       "pauseUploads",
       "levels",
+      "abbreviations",
       "migrate",
       "reconcile",
       "resumeUploads",
@@ -190,11 +222,23 @@ describe("isLocked — THE client's rule: never stop them doing the work", () =>
   });
 
   it("locks only on a KNOWN-false fact, never on a missing one", () => {
-    const migrate = step("structure", "migrate");
-    expect(isLocked(migrate, { pendingLevels: false })).toBe(true);
-    expect(isLocked(migrate, { pendingLevels: true })).toBe(false);
+    const abbrev = step("newSegment", "abbreviations");
+    expect(isLocked(abbrev, { segmentExists: false })).toBe(true);
+    expect(isLocked(abbrev, { segmentExists: true })).toBe(false);
     // A read that failed leaves it undefined — must pass.
-    expect(isLocked(migrate, {})).toBe(false);
+    expect(isLocked(abbrev, {})).toBe(false);
+  });
+
+  /* ⚠ THE MIGRATE STEP HAS NO LOCK AT ALL SINCE 2026-09-09, and this pins that it stays that way.
+     It used to lock on `pendingLevels === false`, on the premise that a migration is only needed
+     when a chain change is staged. Two cases disprove it and both stage NOTHING: subunit terms added
+     to a unit that had none, and a below-Unit abbreviation changed. The scan is the only thing that
+     can answer, so the step renders and `blocksNext` requires the scan to have been RUN. */
+  it("never locks the migrate step — the scan is what answers", () => {
+    for (const id of ["structure", "rename"]) {
+      expect(step(id, "migrate").lock).toBeUndefined();
+      expect(isLocked(step(id, "migrate"), { pendingLevels: false })).toBe(false);
+    }
   });
 
   it("locks the later steps of Add a new segment until the segment exists", () => {
@@ -235,7 +279,7 @@ describe("isLocked — THE client's rule: never stop them doing the work", () =>
        and unknown never gates. */
     expect(locked).toEqual([
       "newSegment.abbreviations", "newSegment.reconcile",
-      "addUnit.reconcile", "structure.migrate", "structure.reconcile",
+      "addUnit.reconcile", "structure.reconcile",
       "rename.reconcile", "runRecon.reconcile", "retire.delete",
     ]);
   });
@@ -490,6 +534,13 @@ describe("blocksNext", () => {
           segmentExists: false, groupsExist: false,
           foldersExist: false, abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
           uploadsPaused: false,
+          /* ⚠ LISTED, AND `false` IS THE RIGHT POLARITY. For a LOADING flag the gating value is
+             `true`, so this sweep is deliberately not the test that proves the loading gate — it
+             asserts the step list is unchanged by it. `uploadsPaused: false` above already puts
+             `pauseUploads` in the list, and the loading gate has its own describe block below,
+             exactly as `abbreviationsLoading` does. What this line buys is that a future change to
+             the gate's polarity shows up here rather than nowhere. */
+          uploadsPausedLoading: false,
           /* Enforced at the client's request on 2026-09-08 even though the step is not technically
              required — see NEXT_GATED_STEPS.reconcile. */
           reconcileRan: false,
@@ -505,6 +556,67 @@ describe("blocksNext", () => {
     expect(gated.sort()).toEqual([
       "abbreviations", "createSegment", "pauseUploads", "reconcile",
     ]);
+  });
+
+  describe("the pause setting is still being read", () => {
+    /* ⚠ THE DEFECT (client, 2026-09-09): *"When I load in there is a split second I can click the
+       next button without disablling the upload, when the internet is bad I can definitely click it
+       fast enough."* `uploadsPaused` is `undefined` for the whole read and `undefined` never gates,
+       so Next was green beside a panel reading "Reading the current setting…".
+       The same shape as `abbreviationsLoading`, in a second place: in flight is not unknown. */
+    it("holds Next while the read is in flight", () => {
+      expect(
+        blocksNext(step("structure", "pauseUploads"), { uploadsPausedLoading: true }),
+      ).toContain("Still reading");
+      // And it outranks a stale value: an answer being replaced is not an answer.
+      expect(
+        blocksNext(step("structure", "pauseUploads"), {
+          uploadsPausedLoading: true,
+          uploadsPaused: true,
+        }),
+      ).toContain("Still reading");
+    });
+
+    /* ⚠ THE CLOSING STEP TOO. Finish is gated on `resumeUploads`, so an open gate there is an open
+       Finish — and a forgotten pause leaves the site refusing uploads behind a banner that makes it
+       look deliberate. Same setting, same window, same hold. */
+    it("holds the closing step as well", () => {
+      expect(
+        blocksNext(step("structure", "resumeUploads"), { uploadsPausedLoading: true }),
+      ).toContain("Still reading");
+    });
+
+    it("lets go the moment the read FINISHES, however it finished", () => {
+      // Read, and uploads are off: the step is done and Next opens.
+      expect(
+        blocksNext(step("structure", "pauseUploads"), {
+          uploadsPausedLoading: false,
+          uploadsPaused: true,
+        }),
+      ).toBe("");
+      /* ⚠ FINISHED AND FAILED MUST NOT GATE. That is what a throttled config list produces, and
+         holding there would strand an admin with no way forward — the fail-open rule this whole
+         module is built on. The flag is only ever about the request being in the air. */
+      expect(blocksNext(step("structure", "pauseUploads"), { uploadsPausedLoading: false })).toBe("");
+      expect(blocksNext(step("structure", "resumeUploads"), { uploadsPausedLoading: false })).toBe("");
+    });
+
+    /* It is set for the WHOLE flow, so every step sees it — the same pin `subjectGiven` needed. */
+    it("does not leak onto any other step, in any flow", () => {
+      for (const f of FLOWS) {
+        for (const st of f.steps) {
+          if (st.id === "pauseUploads" || st.id === "resumeUploads") continue;
+          expect(blocksNext(st, { uploadsPausedLoading: true })).toBe("");
+        }
+      }
+    });
+
+    /* `undefined` is a flow that never reported — the standalone tabs, and any caller predating the
+       fact. It must behave exactly as it did before this existed. */
+    it("gates nothing when nobody reported", () => {
+      expect(blocksNext(step("structure", "pauseUploads"), {})).toBe("");
+      expect(blocksNext(step("structure", "resumeUploads"), {})).toBe("");
+    });
   });
 
   describe("reconciliation not run", () => {
@@ -821,7 +933,7 @@ describe("scopeFactsToFlow — segment facts must not tick a subject-scoped flow
 describe("the rail cannot walk past a blocked step", () => {
   const steps = flow("structure").steps;
   // pauseUploads, levels, migrate, reconcile, resumeUploads
-  const PAUSE = 0, LEVELS = 1, MIGRATE = 2, RECONCILE = 3, RESUME = 4;
+  const PAUSE = 0, LEVELS = 1, ABBREV = 2, MIGRATE = 3, RECONCILE = 4, RESUME = 5;
 
   it("blocks at step 1 while uploads are on, and at the closing step while they are paused", () => {
     expect(firstBlockedStepIndex(steps, { uploadsPaused: false })).toBe(PAUSE);
@@ -914,35 +1026,65 @@ describe("the rail cannot walk past a blocked step", () => {
 describe("the structure flow, step by step", () => {
   const steps = flow("structure").steps;
 
-  it("runs pause -> levels -> migrate -> reconcile -> resume", () => {
+  it("runs pause -> levels -> abbreviations -> migrate -> reconcile -> resume", () => {
     expect(steps.map((x) => x.id)).toEqual([
-      "pauseUploads", "levels", "migrate", "reconcile", "resumeUploads",
+      "pauseUploads", "levels", "abbreviations", "migrate", "reconcile", "resumeUploads",
     ]);
   });
 
-  it("holds the migrate step until a chain is actually staged", () => {
-    // The one lock that matters here: migrating with nothing pending moves folders to no purpose.
-    expect(isLocked(step("structure", "migrate"), { pendingLevels: false })).toBe(true);
-    expect(isLocked(step("structure", "migrate"), { pendingLevels: true })).toBe(false);
-    expect(isLocked(step("structure", "migrate"), {})).toBe(false);
+  /* ⚠ THE ORDER IS THE DESIGN, not a preference. Step 2 codes the level and reaches the Term Store;
+     step 4 renames the existing folders to match. Codes missing at step 4 leave the migration
+     building destinations it has no name for. */
+  it("puts the abbreviations step between editing the levels and moving the folders", () => {
+    const ids = steps.map((x) => x.id);
+    expect(ids.indexOf("levels")).toBeLessThan(ids.indexOf("abbreviations"));
+    expect(ids.indexOf("abbreviations")).toBeLessThan(ids.indexOf("migrate"));
   });
 
-  /* ⚠ RECONCILE CARRIES AN ABBREVIATIONS LOCK AND THIS FLOW HAS NO ABBREVIATIONS STEP. That is
-     deliberate — the same RECONCILE object serves several flows — and it is inert here because
-     nothing sets the count, so it stays undefined and undefined never locks. Pinned so that reusing
-     the object stays safe. */
+  /* ⚠ THE SCAN IS THE GATE NOW, NOT A LOCK ON WHAT WAS STAGED (2026-09-09). Reported by the client:
+     step 3 said "there is nothing to move to" — WITHOUT LOOKING — after they had added subunit terms,
+     and Next sat open beside it. Removing the lock alone would have left the step skippable, because
+     `pendingLevels` holds Next only while a chain change is staged and those cases stage nothing. */
+  it("holds Next until the check has actually been run", () => {
+    const migrate = step("structure", "migrate");
+    expect(blocksNext(migrate, { migrateScanRan: false })).toContain("Run the check first");
+    expect(blocksNext(migrate, { migrateScanRan: true })).toBe("");
+    // Unknown never gates — the standalone Migrate tab reports nothing at all.
+    expect(blocksNext(migrate, {})).toBe("");
+  });
+
+  it("still holds Next while a staged change has not been applied", () => {
+    expect(blocksNext(step("structure", "migrate"), { pendingLevels: true, migrateScanRan: true }))
+      .toContain("has not been applied yet");
+  });
+
+  /* ⚠ THIS FLOW GAINED AN ABBREVIATIONS STEP ON 2026-09-09, so reconcile's abbreviation lock is no
+     longer inert here — the count IS set now, and a term with no code holds reconciliation as well
+     as Next. That is wanted (reconciliation skips an uncoded term and creates no folder) and it
+     cannot deadlock: the abbreviations gate stops you reaching reconcile in that state anyway, and
+     Back is always open. Undefined still never locks, which is what this pins. */
   it("never locks reconciliation in a flow that cannot know the abbreviation count", () => {
     expect(isLocked(step("structure", "reconcile"), {})).toBe(false);
   });
 
-  it("gates ONLY the pause step for Next, across the whole flow", () => {
+  /* ⚠ TWO SINCE 2026-09-09, AND THE SECOND IS THE WHOLE POINT OF ADDING THAT STEP. A level named by
+     term codes cannot reach the migration with terms that have none, or the run builds destinations
+     it has no name for. The gate itself is the one that has held the abbreviations step since it was
+     written — the step was added so that rule finally applies in THIS flow. */
+  it("gates the pause step and the abbreviations step, and nothing else", () => {
     const all: FlowFacts = {
       segmentExists: false, groupsExist: false, foldersExist: false,
       abbreviationsMissing: 9, pendingLevels: false, subjectFound: false,
       uploadsPaused: false,
     };
     const gated = steps.filter((x) => blocksNext(x, all).length > 0).map((x) => x.id);
-    expect(gated).toEqual(["pauseUploads"]);
+    expect(gated).toEqual(["pauseUploads", "abbreviations"]);
+  });
+
+  it("releases the abbreviations step once every term has a code", () => {
+    expect(blocksNext(step("structure", "abbreviations"), { abbreviationsMissing: 0 })).toBe("");
+    // Unknown never gates: an unread count must not strand an admin mid-flow.
+    expect(blocksNext(step("structure", "abbreviations"), {})).toBe("");
   });
 
   /* Both pause steps read one fact in OPPOSITE directions, and a rail that ticked the closing step

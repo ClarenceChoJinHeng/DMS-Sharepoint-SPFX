@@ -11,15 +11,24 @@ import {
   suggestRename,
   validateRename,
   EffectiveTier,
+  TierOption,
+  optionFolderName,
 } from "./subtreeMigration";
 
 const UNIT = "/sites/S/ApprovalDocument/GHO/GF/CORU";
 
+/**
+ * An option list from bare labels — the shape every test written before codes existed used, and
+ * still the shape of an UNCODED level. Kept as a helper rather than rewriting each literal so these
+ * tests go on describing the behaviour they were written for.
+ */
+const L = (...names: string[]): TierOption[] => names.map((label) => ({ label }));
+
 /** Chain: 0 = SubUnit (cascading), 1 = Year, 2 = Document Type. */
 const TIERS: EffectiveTier[] = [
-  { chainIndex: 0, options: ["testig", "Finance"] },
-  { chainIndex: 1, options: ["2024", "2025"] },
-  { chainIndex: 2, options: ["Tax Return", "Invoice"] },
+  { chainIndex: 0, options: L("testig", "Finance") },
+  { chainIndex: 1, options: L("2024", "2025") },
+  { chainIndex: 2, options: L("Tax Return", "Invoice") },
 ];
 
 describe("effectiveTiers", () => {
@@ -53,8 +62,8 @@ describe("classifyChild", () => {
     // The safe direction: moving a correctly filed folder needs evidence, and a name valid
     // at tier 0 is evidence that it is where it belongs.
     const ambiguous: EffectiveTier[] = [
-      { chainIndex: 0, options: ["2026"] },
-      { chainIndex: 1, options: ["2026"] },
+      { chainIndex: 0, options: L("2026") },
+      { chainIndex: 1, options: L("2026") },
     ];
     expect(classifyChild("2026", ambiguous)).toEqual({ kind: "ok" });
   });
@@ -67,7 +76,7 @@ describe("classifyChild", () => {
     // Folder names are written sanitized, so an option carrying an illegal character must
     // still match the folder created from it — otherwise a correctly filed folder reads as
     // a stray and an admin is shown a problem that does not exist.
-    const tiers: EffectiveTier[] = [{ chainIndex: 0, options: ["Legal: Tax"] }];
+    const tiers: EffectiveTier[] = [{ chainIndex: 0, options: L("Legal: Tax") }];
     expect(classifyChild("Legal Tax", tiers)).toEqual({ kind: "ok" });
   });
 
@@ -292,10 +301,10 @@ describe("backfillNeeds", () => {
 
 /** Target chain: 0 = Credit_Card, 1 = Testing, 2 = Year, 3 = Document Type. */
 const CHAIN: EffectiveTier[] = [
-  { chainIndex: 0, options: ["Credit1", "Credit2"] },
-  { chainIndex: 1, options: ["testig", "live"] },
-  { chainIndex: 2, options: ["2024", "2025"] },
-  { chainIndex: 3, options: ["Tax Return", "Invoice"] },
+  { chainIndex: 0, options: L("Credit1", "Credit2") },
+  { chainIndex: 1, options: L("testig", "live") },
+  { chainIndex: 2, options: L("2024", "2025") },
+  { chainIndex: 3, options: L("Tax Return", "Invoice") },
 ];
 
 const leaf = (segments: string[], files: string[]): { path: string; segments: string[]; files: string[] } => ({
@@ -308,8 +317,8 @@ describe("assignSegments", () => {
   it("keeps a segment at the tier it already occupies when several would accept it", () => {
     // `2026` could be a SubUnit or a Year. The reading that requires no movement is the safe one.
     const tiers: EffectiveTier[] = [
-      { chainIndex: 0, options: ["2026"] },
-      { chainIndex: 1, options: ["2026"] },
+      { chainIndex: 0, options: L("2026") },
+      { chainIndex: 1, options: L("2026") },
     ];
     expect(assignSegments(["x", "2026"], tiers).assigned).toEqual([{ at: 1, chainIndex: 1, name: "2026" }]);
   });
@@ -404,7 +413,7 @@ describe("planLeaf — add", () => {
 
 describe("planLeaf — a level appended at the BOTTOM", () => {
   /** CHAIN plus a fifth tier below Document Type. */
-  const withStage: EffectiveTier[] = CHAIN.concat([{ chainIndex: 4, options: ["S1", "S2"] }]);
+  const withStage: EffectiveTier[] = CHAIN.concat([{ chainIndex: 4, options: L("S1", "S2") }]);
   const full = ["Credit2", "testig", "2024", "Tax Return"];
 
   it("asks for the new deepest value instead of reporting nothing to do", () => {
@@ -588,5 +597,136 @@ describe("planTotals", () => {
 
   it("returns zeroes for an empty plan", () => {
     expect(planTotals([])).toEqual({ unitsWithMoves: 0, moves: 0, strays: 0, skippedUnits: 0 });
+  });
+});
+
+/* =====================================================================================
+ * Folder codes on a below-Unit level (2026-09-09).
+ *
+ * These pin the half of the change that decides whether switching a level to codes RENAMES
+ * the existing folders or turns every one of them into a stray.
+ *
+ * Spec: docs/superpowers/specs/2026-09-09-below-unit-abbreviations-design.md
+ * ===================================================================================== */
+describe("coded below-Unit levels", () => {
+  /** Sub Unit coded EFS/GAS; Year uncoded. */
+  const CODED: EffectiveTier[] = [
+    {
+      chainIndex: 0,
+      options: [
+        { label: "Expatriate Formalities Subunit", code: "EFS" },
+        { label: "General Admin Subunit", code: "GAS" },
+      ],
+    },
+    { chainIndex: 1, options: L("2024", "2025") },
+  ];
+
+  it("optionFolderName prefers the code and falls back to the label", () => {
+    expect(optionFolderName({ label: "Expatriate Formalities Subunit", code: "EFS" })).toBe("EFS");
+    expect(optionFolderName({ label: "2024" })).toBe("2024");
+    expect(optionFolderName({ label: "2024", code: "" })).toBe("2024");
+  });
+
+  it("sanitizes the code, so an illegal character cannot build an unusable folder name", () => {
+    expect(optionFolderName({ label: "x", code: "E:F/S" })).toBe("EFS");
+  });
+
+  it("⚠ still recognises a LABEL-named folder after the level is switched to codes", () => {
+    // THE test. Match on the code alone and every folder that already exists becomes a stray:
+    // the scan reports "needs a value chosen" for all of them and nothing moves.
+    const r = assignSegments(["Expatriate Formalities Subunit", "2024"], CODED);
+    expect(r.strays).toEqual([]);
+    expect(r.assigned.map((a) => a.chainIndex)).toEqual([0, 1]);
+  });
+
+  it("⚠ assigns the CODE as the name, which is what makes the rename an ordinary move", () => {
+    // Record the folder's CURRENT name instead and the destination equals the source — a no-op
+    // reported as success, and the rename never happens.
+    const r = assignSegments(["Expatriate Formalities Subunit"], CODED);
+    expect(r.assigned[0].name).toBe("EFS");
+  });
+
+  it("recognises a folder ALREADY named by its code, and leaves the name alone", () => {
+    const r = assignSegments(["EFS", "2024"], CODED);
+    expect(r.strays).toEqual([]);
+    expect(r.assigned[0].name).toBe("EFS");
+  });
+
+  it("⚠ keeps the existing name when it differs from the code only in CASE", () => {
+    // SharePoint sibling names are case-insensitive, so `efs` -> `EFS` is a move onto itself:
+    // it collides with its own source and achieves nothing.
+    const r = assignSegments(["efs"], CODED);
+    expect(r.assigned[0].name).toBe("efs");
+  });
+
+  it("leaves an uncoded tier in the same chain naming from its label", () => {
+    const r = assignSegments(["EFS", "2024"], CODED);
+    expect(r.assigned[1].name).toBe("2024");
+  });
+
+  it("a folder matching neither the code nor the label is still a stray", () => {
+    expect(assignSegments(["Old Stuff"], CODED).strays).toEqual(["Old Stuff"]);
+  });
+
+  it("classifyChild matches a code as well as a label", () => {
+    expect(classifyChild("EFS", CODED)).toEqual({ kind: "ok" });
+    expect(classifyChild("Expatriate Formalities Subunit", CODED)).toEqual({ kind: "ok" });
+    expect(classifyChild("2024", CODED)).toEqual({ kind: "misplaced", levels: 1 });
+  });
+
+  it("builds a destination that RENAMES a label-named folder to the code", () => {
+    const plan = planLeaf(
+      UNIT,
+      {
+        path: `${UNIT}/Expatriate Formalities Subunit/2024`,
+        segments: ["Expatriate Formalities Subunit", "2024"],
+        files: ["a.pdf"],
+      },
+      CODED,
+      {},
+    );
+    expect(plan.strays).toEqual([]);
+    expect(plan.missingTiers).toEqual([]);
+    expect(plan.to).toBe(`${UNIT}/EFS/2024`);
+  });
+
+  it("takes the code from a CHOSEN destination too, not only from an existing folder", () => {
+    // The add case: the folder has no Sub Unit segment, so the admin picks one on the migrate
+    // screen. That pick has to name the folder by its code like any other.
+    const plan = planLeaf(
+      UNIT,
+      { path: `${UNIT}/2024`, segments: ["2024"], files: [] },
+      CODED,
+      { 0: { label: "General Admin Subunit", id: "T-2", code: "GAS" } },
+    );
+    expect(plan.to).toBe(`${UNIT}/GAS/2024`);
+  });
+
+  it("a chosen destination with no code still names from its label", () => {
+    const plan = planLeaf(
+      UNIT,
+      { path: `${UNIT}/2024`, segments: ["2024"], files: [] },
+      CODED,
+      { 0: { label: "General Admin Subunit", id: "T-2" } },
+    );
+    expect(plan.to).toBe(`${UNIT}/General Admin Subunit/2024`);
+  });
+
+  it("bare-string options still work — every test written before codes existed", () => {
+    const tiers = effectiveTiers([["testig"], ["2024"]]);
+    expect(tiers[0].options).toEqual([{ label: "testig" }]);
+    expect(assignSegments(["testig"], tiers).assigned[0].name).toBe("testig");
+  });
+
+  it("⚠ backfillNeeds stamps the LABEL for a code-named folder, never the code", () => {
+    // `labelCol` holds the term as a person reads it. Stamping `EFS` there would make every
+    // filter and report over that column read in abbreviations.
+    const needs = backfillNeeds(
+      UNIT,
+      [{ path: `${UNIT}/EFS/2024/a.pdf`, values: {} }],
+      CODED,
+      (i) => (i === 0 ? "SubUnit" : "Year"),
+    );
+    expect(needs[0].fields[0].label).toBe("Expatriate Formalities Subunit");
   });
 });
