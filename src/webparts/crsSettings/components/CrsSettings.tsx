@@ -138,7 +138,7 @@ function Card({
       style={wholeCardHref === undefined ? s.card : { ...s.card, ...s.linkCard }}
       {...(wholeCardHref === undefined ? {} : { href: wholeCardHref, title: card.title })}
     >
-      <div style={s.cardHead}>
+      <div style={s.cardHead} className="crs-card-head">
         <CardIcon name={card.icon} />
         <div style={s.cardText}>
           <h2 style={s.cardTitle}>{card.title}</h2>
@@ -162,7 +162,7 @@ function Card({
             the affordance that says the card goes somewhere; it simply is not the hit target any
             more. `aria-hidden` because the card's own link already carries the name. */}
         {wholeCardHref !== undefined && (
-          <span style={s.arrowBox} aria-hidden="true">
+          <span style={s.arrowBox} className="crs-card-arrow" aria-hidden="true">
             &#8594;
           </span>
         )}
@@ -221,7 +221,37 @@ export default function CrsSettings(props: CrsSettingsProps): React.ReactElement
   const targets = resolveAll(pages ?? [], props.overrides);
 
   return (
-    <section style={s.wrap}>
+    <section style={s.wrap} className="crs-page">
+      {/* THE ONLY CSS IN THIS FILE, AND IT EXISTS BECAUSE INLINE STYLES CANNOT CARRY A QUERY.
+          Everything else here is a `Record<string, CSSProperties>`, which has no way to say
+          'only when narrow'. Client, 2026-09-08: *"Ensure that CRS Settings mobile design follow
+          the one inside the Folder management"* — those cards are already a COLUMN (icon, then
+          title, then blurb, then the arrow on its own footer row), and these are a ROW that
+          squeezes the text between an icon and an arrow.
+
+          @container, not @media, for the reason the upload forms learned on 2026-09-08: a media
+          query asks how wide the WINDOW is, and a web part is sized by its page SECTION - so
+          SharePoint mobile preview and any narrow section never fire one. @media is kept beside
+          it as the fallback for a browser without container queries.
+
+          The container may sit on the section itself here, unlike the upload forms: this page
+          renders nothing position: fixed, so the layout containment container-type brings has
+          nothing to re-anchor. Check that again before adding a dialog or a toast to this page.
+
+          NO BACKTICKS ANYWHERE IN THIS BLOCK - it is a JS template literal and one ends it. */}
+      <style>{`
+        .crs-page { container-type: inline-size; }
+        @container (max-width: 480px) {
+          .crs-card-head { flex-direction: column; }
+          /* Bottom-RIGHT, matching Folder Management's card foot rather than sitting under the
+             blurb at the left, where it reads as another list item. */
+          .crs-card-arrow { align-self: flex-end; }
+        }
+        @media (max-width: 480px) {
+          .crs-card-head { flex-direction: column; }
+          .crs-card-arrow { align-self: flex-end; }
+        }
+      `}</style>
       <div style={s.head}>
         <h1 style={s.h1}>{props.heading || "CRS Settings"}</h1>
         <p style={s.sub}>
