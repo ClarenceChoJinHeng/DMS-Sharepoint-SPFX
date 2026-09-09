@@ -1,5 +1,13 @@
 # SDG DMS — Claude Code Project Context
 
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-09:
+> `docs/2026-09-09-session-handoff.md`.** What shipped as `1.0.516.0`–`1.0.519.0` and **none of it
+> site-tested**; the deploy-and-test order for `1.0.519.0`; the two client decisions outstanding on
+> the request-email runbook; the three flows with a runbook and no build; and — §5 — the handful of
+> things that **must be verified rather than assumed**, starting with whether `uploadsPaused` is
+> still `yes` site-wide. §6 records that THIS file is now 12,387 lines and auto-loads in full every
+> session, and why a trim is its own reviewable change.
+
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-04:
 > `docs/2026-09-04-open-questions-handoff.md`.** The six client questions are all **answered** now
 > (the table records what was decided and what must therefore NOT be "tidied" back); five things

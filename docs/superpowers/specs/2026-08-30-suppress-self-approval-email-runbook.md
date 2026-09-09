@@ -1,7 +1,14 @@
 # Suppressing the approval email when the approver uploaded the document
 
 **Date:** 2026-08-30
-**Status:** DESIGN — not built.
+**Status:** ✅ **BUILT AND VERIFIED IN BOTH FLOWS, 2026-09-02.** Tested both directions on real
+accounts: a cross-person approval sent the email, a self-approval sent none (confirmed from the audit
+log AND an empty inbox). ⚠ This line read *"DESIGN — not built"* until 2026-09-09, a week after the
+work shipped — the exact stale-status trap this project has now paid for three times. **The design
+below is the record of HOW it was built, not a to-do.** One correction to it: the condition compares
+`Author.Email` to the `ApprovedBy` column, never `Editor.Claims` — SharePoint does not restamp
+`Editor` on a moderation change, so it is never the approver. See the `ApprovedBy` section in
+CLAUDE.md.
 **Flows to change:** `Auto-route approved Pending folders to Documents Library`, **and its clone**
 `HC Auto Route`.
 **Client QA #5:** *"MY ROLE IS APPROVER. IF I UPLOAD DOCUMENT, I SHOULD NOT BE RECEIVING AN EMAIL
