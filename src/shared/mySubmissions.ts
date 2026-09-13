@@ -67,6 +67,14 @@ export interface Submission {
   /** The approver's rejection comment; "" when there is none or it could not be read. */
   comment: string;
   /**
+   * Who approved it — the `ApprovedBy` email stamped at approval (2026-09-10). Undefined when blank
+   * or unread: a document approved before the stamp existed, through the native Approve command, or
+   * auto-approved as a bulk import. Never guessed from `Editor`, which is always the uploader.
+   */
+  approvedBy?: string;
+  /** The comment typed when APPROVING, from `ApprovalComment`. The rejection reason is `comment`. */
+  approvalComment?: string;
+  /**
    * File size in BYTES, as text — `File/Length` is a string, and a raw one reaches the screen as
    * `1483776`. Formatted by `formatBytes` at render. Undefined when it could not be read.
    */
@@ -323,6 +331,45 @@ export function isArchivedRow(
     .map((n) => (n ?? "").trim().toLowerCase())
     .filter((n) => n.length > 0);
   return names.indexOf(key) !== -1;
+}
+
+/**
+ * Which library does this server-relative path sit in? (2026-09-10)
+ *
+ * ⚠ IT EXISTS BECAUSE A REQUEST ROW STORES A PATH AND NOT A LIBRARY. Every row on the two document
+ * lists carries `library` as a URL segment, so `isHcRow` and `isArchivedRow` can be asked directly.
+ * A `CRS Requests` row carries only `ItemUrl` — the full server-relative path recorded when the
+ * request was raised — so the segment has to be recovered from it before either can be asked.
+ *
+ * ⚠ WHY IT IS WORTH RECOVERING AT ALL: THE SAME FILENAME CAN EXIST IN BOTH THE NORMAL AND THE HC
+ * LIBRARY. That is not hypothetical — on 2026-08-21 `TES - TES - TES - 20-08-26.pdf` existed in
+ * both, and an approved deletion took the HC copy while an identically named file remained. The HC
+ * tag was added to the list rows and to the request dialog for exactly that reason; the Requests
+ * tab listed the bare filename and was the one place a requester still could not tell them apart.
+ *
+ * Matched the same way `folderTrail` strips the library — first recognised part wins, compared
+ * trimmed and lower-cased — so the two cannot disagree about where a path's library ends. The part
+ * is returned AS IT APPEARS in the path rather than in its canonical form: both consumers normalise,
+ * and echoing the path keeps this function honest about what it actually found.
+ *
+ * ⚠ `undefined` MEANS NOT RECOGNISED, AND MUST TAG NOTHING. Falling back to the first path segment
+ * would name `sites` as a library and then answer `false` to everything anyway — but silently, and
+ * from a value that was invented rather than read. Same rule as an unresolved `hcSegs`: a missing
+ * tag is safer than a wrong one, because a wrong `true` brands an ordinary document confidential and
+ * a wrong `false` hides the distinction the reader is looking for.
+ */
+export function librarySegmentOf(
+  itemPath: string,
+  librarySegments: readonly string[],
+): string | undefined {
+  const parts = (itemPath ?? "").split("/").filter((p) => p.trim().length > 0);
+  const wanted = (librarySegments ?? [])
+    .map((l) => l.trim().toLowerCase())
+    .filter((l) => l.length > 0);
+  for (const p of parts) {
+    if (wanted.indexOf(p.trim().toLowerCase()) !== -1) return p;
+  }
+  return undefined;
 }
 
 /**

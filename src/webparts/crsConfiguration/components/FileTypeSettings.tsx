@@ -46,7 +46,7 @@ const s: Record<string, React.CSSProperties> = {
   // Description column readable on a wide monitor; without `margin auto` it pinned hard left inside a
   // full-width section, which reads as a rendering fault rather than a deliberate measure.
   /* The Upload Form's page shell - see the note in AuditLog.tsx. Centred but unpadded before. */
-  wrap: { fontFamily: "'Segoe UI', sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px" },
+  wrap: { fontFamily: "Arial, sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px" },
   h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   subtitle: { fontSize: 13, color: "#605e5c", margin: "0 0 20px", lineHeight: 1.5 },
   card: { border: "1px solid #e1dfdd", borderRadius: 8, padding: "16px 18px", marginBottom: 16 },

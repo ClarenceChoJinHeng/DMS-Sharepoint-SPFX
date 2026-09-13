@@ -596,12 +596,21 @@ export const PERSONAS: Persona[] = [
        Draft Item Security is back to "only users who can approve items (and the author)" as of
        2026-08-20, so a PIC sees only their own drafts. That bounds what they would have deleted; it
        is not a substitute for the permission. */
-    roles: ["UPL"],
-    // SUMMARY CORRECTED 2026-08-17, same drift as `hou`: it read "Cannot approve or delete"
-    // while DELS had been added directly above on 2026-08-15. "Cannot delete" is the sentence a
-    // PIC would be shown to explain why they must raise a request — and it is wrong in the
-    // library where they hold delete outright.
-    summary: "Uploads to their unit at any confidentiality level. Reads the unit's approved documents but cannot approve; deleting anything — a pending file or an approved document — is a request the Head of Unit decides.",
+    /* DELS RESTORED 2026-09-11, client: "now pic can delete without approval on staging" — a second
+       reversal of the same rule, this time deliberate rather than a correction. Confirmed the scope
+       explicitly before building: "its fine since they can only see their own file" — draft
+       security (still "only users who can approve items and the author" since 2026-08-20) is what
+       makes that true, not a narrower grant; DELS itself still covers any pending/rejected file in
+       the unit, exactly as it did in 2026-08-15/2026-08-19.
+
+       ⚠ THE STATUS ON MY SUBMISSIONS DIFFERS BY WHICH ROUTE WAS USED, and that distinction is NOT
+       carried by this grant — it lives entirely in `MySubmissions.tsx`'s new direct-delete action,
+       which stamps `WithdrawnAt`/`WithdrawnBy` on the `CRS Submissions` record before recycling the
+       file. A PENDING/REJECTED file deleted this way reads `Cancelled`; an APPROVED document is
+       still only ever removed via the request Requests/HoU decide, unaffected by this and still
+       reading `Deleted`. See `RecordState.withdrawn` in `shared/submissionRecords.ts`. */
+    roles: ["UPL", "DELS"],
+    summary: "Uploads to their unit at any confidentiality level. Reads the unit's approved documents but cannot approve; can delete their own pending or rejected file directly. Deleting an approved document is still a request the Head of Unit decides.",
   },
 
   // ── PIC, Highly Confidential ───────────────────────────────────────────────
@@ -628,9 +637,13 @@ export const PERSONAS: Persona[] = [
        here would mean a cleared PIC could delete pending HC files while an uncleared one could
        delete nothing — clearance deciding a DELETE right it has never decided anywhere else.
 
-       DELSHC now belongs to `hou` alone, exactly as DELS does. */
-    roles: ["UPLHC"],
-    summary: "Everything a PIC does, plus filing and reading Highly Confidential documents for this unit. A PIC without this clearance is never even shown the Highly Confidential level.",
+       DELSHC then belonged to `hou_hc` alone, exactly as DELS belonged to `hou`. */
+    /* DELSHC RESTORED 2026-09-11, alongside DELS on the plain `pic` persona above — the client's
+       instruction was "pic" generically, and an HC-cleared PIC left without the parallel grant
+       would be the one persona still unable to delete their own pending file directly. Same scope,
+       same `withdrawn` status on My Submissions; see the note on `pic` above. */
+    roles: ["UPLHC", "DELSHC"],
+    summary: "Everything a PIC does, plus filing and reading Highly Confidential documents for this unit, and can delete their own pending or rejected Highly Confidential file directly.",
   },
 
   // ── SDG Employee, Highly Confidential ──────────────────────────────────────

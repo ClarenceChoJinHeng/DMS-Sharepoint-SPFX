@@ -221,20 +221,35 @@ describe("buildDetailRows", () => {
     expect(labels.indexOf("Estate Mill")).toBeLessThan(labels.indexOf("Document Type"));
   });
 
-  it("includes every fixed field that has a value, in the library's own order", () => {
+  it("includes every fixed field, in the library's own order, whether or not it has a value", () => {
     const labels = buildDetailRows({ fieldText: UPOPSMY }).map((r) => r.label);
     expect(labels).toEqual([
       "Business Segment", "Region", "Estate Mill",
       "Document Type", "Year", "Document Date", "Confidentiality",
-      "Legally Privileged", "Remark",
+      "Legally Privileged", "Project Name", "Vendor / Customer", "Remark", "Keyword",
     ]);
   });
 
-  it("drops blank fixed fields rather than padding with em dashes", () => {
-    // Most columns are empty for any given document on a library serving twelve segments.
-    const labels = buildDetailRows({ fieldText: UPOPSMY }).map((r) => r.label);
-    expect(labels).not.toContain("Project Name");
-    expect(labels).not.toContain("Vendor / Customer");
+  it("shows a dash for a blank fixed field rather than dropping it (2026-09-11)", () => {
+    // UPOPSMY has no Project Name, Vendor/Customer or Keyword — the row still appears, with
+    // a dash, so a blank field and a MISSING one never look identical (client, 2026-09-11: "can we
+    // show Keyword -, like how ApprovalDocument.aspx shows empty dashes? Keeping it consistent").
+    const rows = buildDetailRows({ fieldText: UPOPSMY });
+    const byLabel = (label: string): string | undefined => rows.find((r) => r.label === label)?.value;
+    expect(byLabel("Project Name")).toBe("—");
+    expect(byLabel("Vendor / Customer")).toBe("—");
+    expect(byLabel("Details")).toBeUndefined();
+    expect(byLabel("Keyword")).toBe("—");
+  });
+
+  it("still DROPS a blank tier row — a different question, answered differently", () => {
+    // A Group Head Office document has no Region/Estate Mill at all: that tier does not apply, and
+    // padding every document on every segment with every OTHER segment's tier names is the clutter
+    // this rule exists to avoid. Fixed fields carry no such multiplication — there are always the
+    // same ten, on every document — which is why they get the opposite rule above.
+    const labels = buildDetailRows({ fieldText: GHO }).map((r) => r.label);
+    expect(labels).not.toContain("Region");
+    expect(labels).not.toContain("Estate Mill");
   });
 
   it("keeps a caller row EXACTLY as given, blank or not — 'unknown' is meant", () => {
@@ -260,21 +275,22 @@ describe("buildDetailRows", () => {
   });
 
   it("returns nothing but the caller's rows when the metadata could not be read", () => {
-    // The screen distinguishes "could not read" from "nothing recorded"; this returns [] for both
-    // and lets it.
+    // The screen distinguishes "could not read" from "nothing recorded". `fetchFieldText` answers
+    // `{}` ONLY on a failed read — a real item always carries at least an Id — so an entirely empty
+    // `fieldText` must NOT be dashed out as though every field were read and found blank.
     expect(buildDetailRows({ fieldText: {} })).toEqual([]);
   });
 
   it("names LegallyPrivileged so a 'No' is shown, not blanked", () => {
     // Yes/No comes back as the words, which is the whole point on a privilege flag.
     const rows = buildDetailRows({ fieldText: { LegallyPrivileged: "No" } });
-    expect(rows).toEqual([{ label: "Legally Privileged", value: "No" }]);
+    expect(rows.find((r) => r.label === "Legally Privileged")?.value).toBe("No");
   });
 
   it("never re-parses the document date — it arrives formatted by SharePoint", () => {
     // Re-parsing is how the M/D/YYYY trap of gotcha #1 gets reintroduced.
     const rows = buildDetailRows({ fieldText: { DocumentDate: "8/13/2026 12:00 AM" } });
-    expect(rows[0].value).toBe("8/13/2026 12:00 AM");
+    expect(rows.find((r) => r.label === "Document Date")?.value).toBe("8/13/2026 12:00 AM");
   });
 });
 
@@ -419,16 +435,32 @@ describe("batch and file field split", () => {
     expect(labels).not.toContain("Remark");
   });
 
-  it("buildFileRows carries the per-file fields and no destination field", () => {
+  it("buildFileRows carries every per-file field, dashed if blank, and no destination field", () => {
     const rows = buildFileRows({
       fieldText: { Year: "2024", Remark: "please review", ProjectName: "Alpha" },
       trailing: [{ label: "File size", value: "1.4 MB" }],
     });
-    expect(rows.map((r) => r.label)).toEqual(["Project Name", "Remark", "File size"]);
+    const labels = rows.map((r) => r.label);
+    expect(labels).toEqual([
+      "Document Date", "Confidentiality", "Legally Privileged",
+      "Project Name", "Vendor / Customer", "Remark", "Keyword",
+      "File size",
+    ]);
+    expect(labels).not.toContain("Year"); // a BATCH field — always excluded here, blank or not
+    expect(rows.find((r) => r.label === "Project Name")?.value).toBe("Alpha");
+    expect(rows.find((r) => r.label === "Remark")?.value).toBe("please review");
+    expect(rows.find((r) => r.label === "Document Date")?.value).toBe("—");
   });
 
-  it("drops blanks in both halves but never a caller's trailing row", () => {
-    expect(buildBatchRows({ Year: "  " })).toEqual([]);
+  it("dashes a blank fixed field in both halves, but a read failure still yields nothing", () => {
+    // One key present (Year, even blank) means "we read something", so both batch fields show a
+    // dash rather than vanishing.
+    expect(buildBatchRows({ Year: "  " })).toEqual([
+      { label: "Document Type", value: "—" },
+      { label: "Year", value: "—" },
+    ]);
+    // An entirely empty fieldText is the READ-FAILED case: nothing is dashed out, and a caller's own
+    // trailing row still comes through exactly as given.
     expect(buildFileRows({ fieldText: {}, trailing: [{ label: "File size", value: "" }] }))
       .toEqual([{ label: "File size", value: "" }]);
   });

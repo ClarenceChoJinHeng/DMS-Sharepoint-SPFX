@@ -86,16 +86,33 @@ export const ARCHIVED_COLUMN = "Archived";
  * because `Author` and `Editor` are always the uploader. No approver was ever notified. See CLAUDE.md
  * "`Editor` IS NOT THE APPROVER" (2026-09-01) for the full trigger-payload proof.
  *
- * ⚠ ONLY THE TWO APPROVAL-SIDE LIBRARIES NEED IT — `Staging`/`StagingHC`, never `Documents` or the
- * archive. It answers "who approved THIS pending item", which is meaningless once the item has been
- * routed and deleted; Auto-route reads it from the SOURCE item, before the copy, so it never has to
- * survive the move the way `SubmissionFileId` does.
+ * ⚠ ON EVERY CRS LIBRARY SINCE 2026-09-10 — it was approval-side only until then. Client: *"to be
+ * able to know who approve and can still be track in the system and not just email"*. My Submissions
+ * reads an approved document from the APPROVED side, and Auto-route's copy carries a column over ONLY
+ * when it exists at the destination — so an approval-side-only column vanished at routing, and the
+ * uploader could never see who approved. Reconciliation now creates it everywhere; the copy does the
+ * rest. ⚠ The Update-file (replace) branch copies NO columns, so the flow's `StampDestSubmissionIds`
+ * must carry it — see `2026-09-02-replaced-record-stamp-runbook.md` §3c.
  *
  * ⚠ BLANK MEANS "SEND", NEVER "SUPPRESS". The native Approve/Reject command bypasses the app
  * entirely and leaves this column empty, and so does every document approved before it existed.
  * Reading a blank value as "self-approved" would silently revert to the exact bug this column fixes.
  */
 export const APPROVED_BY_COLUMN = "ApprovedBy";
+
+/**
+ * The comment an approver types when APPROVING (2026-09-10), for the same reason and on the same
+ * libraries as `ApprovedBy`.
+ *
+ * ⚠ NOT THE MODERATION COMMENT. `_ModerationComments` exists only on a library with content approval
+ * ON, and the approved side has it OFF — so Auto-route's copy can never carry it, and an approved
+ * document's comment was lost at routing. The REJECTION reason stays in the moderation comment: a
+ * rejected file is never routed, so it is read where it was written.
+ *
+ * A NOTE (multi-line) column: a comment is prose, and a Text column's 255-character cap would refuse
+ * the whole MERGE — taking `ApprovedBy` down with it.
+ */
+export const APPROVAL_COMMENT_COLUMN = "ApprovalComment";
 
 /**
  * Free text the uploader types so a document can be found by a word that is nowhere else on it

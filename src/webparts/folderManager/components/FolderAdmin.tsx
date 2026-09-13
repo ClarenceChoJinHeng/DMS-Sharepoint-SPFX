@@ -112,7 +112,7 @@ const s: Record<string, React.CSSProperties> = {
      overridden by a class and the client asked for the side padding to go on a phone and stay on a
      desktop. Everything else stays inline. */
   wrap: {
-    fontFamily: '"Segoe UI", system-ui, sans-serif',
+    fontFamily: 'Arial, sans-serif',
     color: "#242424",
     margin: "32px auto",
   },
@@ -1662,6 +1662,11 @@ export default function FolderAdmin({
                same tab embedded and needs the button. */
             hideSegmentDelete={active.id === "newSegment"}
             hideSegmentCreate={active.id === "retire"}
+            /* Client, 2026-09-13: found "Re-code folder" on the retire screen and asked why - it
+               was never deliberate, just a gap between Re-code shipping and this flow's own
+               "hide everything but delete" wiring already existing. Retiring and recoding are
+               opposite actions on the same row and must not sit side by side. */
+            hideSegmentRecode={active.id === "retire"}
             /* The abbreviations screen hands over its own count — the flow cannot afford the term-tree
                walk that produces it, and without it `undefined` gated nothing, so Next was clickable on a
                screen full of "no folder will be created" warnings. */

@@ -168,4 +168,13 @@ export interface IFolderManagerProps {
    * inverted; defaults to shown so the standalone Segments tab and "Add a new segment" are unaffected.
    */
   hideSegmentCreate?: boolean;
+  /**
+   * Passed through to `SegmentCreator`'s `allowRecode`, inverted — hides **Re-code folder** from the
+   * segments list. Set true only by the Retire flow (client, 2026-09-13: found it sitting on the
+   * retire screen and asked why it was there — it was never a deliberate choice, just a gap between
+   * Re-code being built and Retire's own "hide everything but delete" wiring already existing).
+   * Defaults to shown, mirroring `hideSegmentDelete`/`hideSegmentCreate`, so the standalone Segments
+   * tab and "Add a new segment" are unaffected.
+   */
+  hideSegmentRecode?: boolean;
 }

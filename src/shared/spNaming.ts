@@ -284,6 +284,63 @@ async function primeArchiveLibraries(sp: SPHttpClient, siteUrl: string): Promise
   return archiveLookup;
 }
 
+/**
+ * The Documents-side libraries THIS READER can open, each asked on its own (2026-09-10).
+ *
+ * ⚠ FOR READ-ONLY SEARCH SCOPE ONLY — never for routing, filing, or deciding whether to offer the
+ * HC level. `hcAvailable()` and the archive cache are BOTH-OR-NEITHER on purpose: an HC approval
+ * library with no HC documents library accepts uploads that then have nowhere to go. But that rule
+ * is decided by a probe of the APPROVAL library, which SharePoint security-trims to a 404 for anyone
+ * with no role in it — a C-Level, a Head of Department, an SDG Employee. For them HC Documents and
+ * the HC archive were never probed, so CRS Search left out the very libraries `LIBRARY_ROLES` grants
+ * them Read on (client, 2026-09-10: "allow C level able to search archive").
+ *
+ * Here each library is probed independently. A reader who cannot open one fails that probe and the
+ * library is omitted — which loses nothing, because Search trims every result by ACL anyway. A failed
+ * probe is `undefined`, never a guessed title: a guess would put a name on screen that matches no
+ * library on the site.
+ */
+export interface ReadableLibrary {
+  title: string;
+  urlSegment: string;
+}
+export interface ReadableApprovedSide {
+  hcDocuments?: ReadableLibrary;
+  archive?: ReadableLibrary;
+  archiveHc?: ReadableLibrary;
+}
+
+let readableSide: ReadableApprovedSide | undefined;
+let readableLookup: Promise<void> | undefined;
+
+/** Undefined until `primeReadableApprovedSide` has settled — await that before reading this. */
+export function cachedReadableApprovedSide(): ReadableApprovedSide | undefined {
+  return readableSide;
+}
+
+export async function primeReadableApprovedSide(sp: SPHttpClient, siteUrl: string): Promise<void> {
+  if (!readableLookup) {
+    readableLookup = (async () => {
+      const toLib = (
+        found: { title: string; url: string } | undefined,
+      ): ReadableLibrary | undefined => {
+        if (!found) return undefined;
+        const title = (found.title ?? "").trim();
+        // Same rule as the pair setters in naming.ts: a blank segment would reduce a path match to
+        // matching every separator in the document tree.
+        const urlSegment = (found.url ?? "").split("/").filter(Boolean).pop() ?? "";
+        return title.length === 0 || urlSegment.length === 0 ? undefined : { title, urlSegment };
+      };
+      // Sequential, like primeNames: three small reads, and a burst buys nothing worth having.
+      const hcDocuments = toLib(await probeLibrary(sp, siteUrl, HC_DOCUMENTS_CANDIDATES));
+      const archive = toLib(await probeLibrary(sp, siteUrl, ARCHIVE_CANDIDATES));
+      const archiveHc = toLib(await probeLibrary(sp, siteUrl, ARCHIVE_HC_CANDIDATES));
+      readableSide = { hcDocuments, archive, archiveHc };
+    })();
+  }
+  return readableLookup;
+}
+
 export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<void> {
   await primeSiteEntry(sp, siteUrl);
   await primeLibrary(sp, siteUrl);

@@ -29,7 +29,7 @@ const base: React.CSSProperties = {
   boxSizing: "border-box",
   padding: "12px 14px",
   borderRadius: 8,
-  fontFamily: '"Segoe UI", system-ui, sans-serif',
+  fontFamily: 'Arial, sans-serif',
   fontSize: 13,
   lineHeight: 1.5,
   boxShadow: "0 6px 18px rgba(0,0,0,.18)",

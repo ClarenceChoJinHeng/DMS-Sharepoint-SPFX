@@ -94,6 +94,7 @@ import { writeSubmissionRecord } from "../../../shared/spSubmissionRecords";
 import { offersLegalPrivilege } from "../../../shared/legalPrivilege";
 import { newReference } from "../../../shared/submissionGroups";
 import { primeNames } from "../../../shared/spNaming";
+import { readSitePages } from "../../../shared/backToSettings";
 import {
   stripBlockedChars,
   blockedCharsMessage,
@@ -156,13 +157,10 @@ const FIELDS = {
   // frozen "Department_x0020_Type"; see 2026-07-24-document-type-internal-name-migration-design).
   documentType: "Document_x0020_Type",
   yearPeriod: "Year", // site column internal name (client kept plain "Year")
-  documentDate: "DocumentDate",
   confidentiality: "Confidentiality_x0020_Level",
   // "Vendor/CustomerName" — the "/" encodes to _x002f_ in the internal name.
   // Verified against /fields 2026-07-28. The old "Vendor" column was deleted.
   vendor: "Vendor_x002f_CustomerName",
-  // A dedicated "Remark" column, NOT the built-in _ExtendedDescription — matches Form.tsx.
-  remark: "Remark",
   legallyPrivileged: "LegallyPrivileged",
 };
 
@@ -212,6 +210,27 @@ type UploadMode = {
   /** The full authored chain. Absent on the code fallbacks — see Form.tsx. */
   chain?: Level[];
   sortOrder: number;
+};
+
+/**
+ * Alphabetical by label, except one segment PINNED first (client, 2026-09-10: *"arrange dropdown
+ * in alphabetical order... President Office to be the first of the dropdown list"*) — mirrors
+ * `Form.tsx`'s function of the same name verbatim, ported here 2026-09-11 for the identical ask
+ * on this screen. `UploadMode` is not shared between the two upload web parts (see the type
+ * above), so neither is this; keep the two in step by hand if either changes.
+ *
+ * Sorts only at the DISPLAY point — the `modes` array itself is left alone, since `sortOrder` and
+ * index-based logic elsewhere may still depend on the load order. Matched loosely on the label
+ * ("president" anywhere in it) rather than an exact string, so a small rename in the mode row's
+ * label does not silently drop the pin.
+ */
+const sortModesForDisplay = (list: UploadMode[]): UploadMode[] => {
+  const isPinned = (m: UploadMode): boolean => /president/i.test(m.label);
+  return [...list].sort((a, b) => {
+    const pa = isPinned(a) ? 0 : 1;
+    const pb = isPinned(b) ? 0 : 1;
+    return pa !== pb ? pa - pb : a.label.localeCompare(b.label);
+  });
 };
 
 // A fully authorised upload path for a restricted (non-privileged) user.
@@ -421,10 +440,8 @@ type DmsSettings = {
   columns: {
     documentType: string;
     yearPeriod: string;
-    documentDate: string;
     confidentiality: string;
     vendor: string;
-    remark: string;
     legallyPrivileged: string;
     businessSegmentLabel: string;
     businessSegmentTid: string;
@@ -448,10 +465,8 @@ const DEFAULT_SETTINGS: DmsSettings = {
   columns: {
     documentType: FIELDS.documentType,
     yearPeriod: FIELDS.yearPeriod,
-    documentDate: FIELDS.documentDate,
     confidentiality: FIELDS.confidentiality,
     vendor: FIELDS.vendor,
-    remark: FIELDS.remark,
     legallyPrivileged: FIELDS.legallyPrivileged,
     businessSegmentLabel: LEVEL_COLUMNS.BusinessSegment.label,
     businessSegmentTid: LEVEL_COLUMNS.BusinessSegment.tid,
@@ -599,6 +614,35 @@ export default function BulkUpload({
   const siteUrl = context.pageContext.web.absoluteUrl;
   const webSru = context.pageContext.web.serverRelativeUrl.replace(/\/+$/, "");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /**
+   * The My Submissions page's URL, resolved from Site Pages rather than hardcoded — same reasoning
+   * and same shape as Form.tsx's own copy. Falls back to the site root, never a dead button.
+   */
+  const [mySubmissionsUrl, setMySubmissionsUrl] = useState<string>(siteUrl);
+  useEffect(() => {
+    let alive = true;
+    readSitePages(context, siteUrl)
+      .then((pages) => {
+        if (!alive) return;
+        const hits = pages.filter(
+          (p) =>
+            /my.?submission/i.test(p.fileName) ||
+            /my.?submission/i.test(p.title),
+        );
+        if (hits.length === 0) return;
+        const sorted = hits
+          .slice()
+          .sort((a, b) => a.fileName.length - b.fileName.length);
+        setMySubmissionsUrl(sorted[0].serverRelativeUrl);
+      })
+      .catch(() => {
+        /* keep the site-root fallback */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
   const fileSeqRef = useRef<number>(1);
   // Cached form digest for the XHR upload path (spHttpClient handles its own).
   // Digests expire — SharePoint tells us when, and we refresh a minute early.
@@ -654,18 +698,13 @@ export default function BulkUpload({
   const [childCache, setChildCache] = useState<
     Record<string, { terms: TermOption[]; ok: boolean }>
   >({});
-  const [documentDate, setDocumentDate] = useState<string>("");
   const [confidentiality, setConfidentiality] = useState<string>("");
   const [legallyPrivileged, setLegallyPrivileged] = useState<boolean>(false);
-  const [remark, setRemark] = useState<string>("");
   /* Free text for finding a document later (client, 2026-09-04). ONE value for the whole selection,
      like every other field on this screen — unlike the upload form, where it is per file. That is
      this screen's own model (one metadata set, one destination), not an inconsistency. */
   const [keyword, setKeyword] = useState<string>("");
   const [keywordBlocked, setKeywordBlocked] = useState<string | undefined>(
-    undefined,
-  );
-  const [remarkBlocked, setRemarkBlocked] = useState<string | undefined>(
     undefined,
   );
   // Vendor stays wired but unset — the select is hidden (client request 2026-07-28).
@@ -683,7 +722,9 @@ export default function BulkUpload({
    * Folder codes for below-Unit terms — see `readFolderCodes`. `undefined` means NOT READ, which is
    * a different message from "read, and this term has none".
    */
-  const [folderCodes, setFolderCodes] = useState<Record<string, string> | undefined>(undefined);
+  const [folderCodes, setFolderCodes] = useState<
+    Record<string, string> | undefined
+  >(undefined);
   const [codesRead, setCodesRead] = useState<boolean>(false);
 
   /* Its own effect — a failed code read costs the codes and nothing else on this screen. */
@@ -1184,13 +1225,10 @@ export default function BulkUpload({
           get("col_documentType") ?? DEFAULT_SETTINGS.columns.documentType,
         yearPeriod:
           get("col_yearPeriod") ?? DEFAULT_SETTINGS.columns.yearPeriod,
-        documentDate:
-          get("col_documentDate") ?? DEFAULT_SETTINGS.columns.documentDate,
         confidentiality:
           get("col_confidentiality") ??
           DEFAULT_SETTINGS.columns.confidentiality,
         vendor: get("col_vendor") ?? DEFAULT_SETTINGS.columns.vendor,
-        remark: get("col_remark") ?? DEFAULT_SETTINGS.columns.remark,
         legallyPrivileged:
           get("col_legallyPrivileged") ??
           DEFAULT_SETTINGS.columns.legallyPrivileged,
@@ -1544,10 +1582,8 @@ export default function BulkUpload({
   const resetForm = (): void => {
     setPicked([]);
     setTierValues({});
-    setDocumentDate("");
     setConfidentiality("");
     setLegallyPrivileged(false);
-    setRemark("");
     setResults(null);
     setRunError(null);
     setLive(null);
@@ -1672,8 +1708,7 @@ export default function BulkUpload({
            now asks the uploader to check rather than explaining the mechanism - so if anyone reads
            this as a refusal, it is not one. */
         showToast(
-          `${dupes.join(", ")} appears more than once. Please check that the files are different ` +
-            `documents before uploading.`,
+          `${dupes.join(", ")} appears more than once.`,
           "notice",
           "Duplicate file names detected.",
         );
@@ -2003,9 +2038,9 @@ export default function BulkUpload({
     // Derived from the chain, not hardcoded. Every tier is required — an optional
     // one left blank files documents at inconsistent depths inside a single unit.
     missing.push(
-      ...buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes).missing,
+      ...buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes)
+        .missing,
     );
-    if (!documentDate) missing.push("Document Date");
     if (!confidentiality) missing.push("Confidential Level");
     return missing;
   };
@@ -2276,12 +2311,6 @@ export default function BulkUpload({
         FieldName: settings.columns.legallyPrivileged,
         FieldValue: privilegedApplies && legallyPrivileged ? "true" : "false",
       },
-      {
-        FieldName: settings.columns.documentDate,
-        FieldValue: toSpDate(documentDate),
-      },
-      { FieldName: settings.columns.remark, FieldValue: remark.trim() },
-      ...buildLevelFormValues(levelCols, allSelections),
     ];
     /* ── The bulk-import marker, and the submission reference ────────────────
        `BulkImport` is what the auto-approve flow keys its trigger condition on, so it is the one
@@ -2734,10 +2763,8 @@ export default function BulkUpload({
         if (fileStamp.length > 0) {
           const snapshot: Record<string, string> = {};
           for (const l of allSelections ?? []) snapshot[l.column] = l.label;
-          snapshot["Document date"] = documentDate;
           // The LABEL, not the term id — the record is read by a person, and a bare GUID says nothing.
           snapshot.Confidentiality = labels.confLabel;
-          snapshot.Remark = remark.trim();
           snapshot["Bulk import"] = "Yes";
           await writeSubmissionRecord(context.spHttpClient, siteUrl, {
             submissionRef: canRef ? submissionRef : "",
@@ -2806,7 +2833,11 @@ export default function BulkUpload({
        ⚠ SEPARATE FROM `validate()`, which lists FIELDS the admin has not filled in. This is a term
        that IS chosen and has no code — nothing on this screen can fix it, so it needs its own
        sentence naming the term and the person who can. */
-    const coded = buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes);
+    const coded = buildOnDemandSegments(
+      tierPlan().tiers,
+      tierSelections(),
+      folderCodes,
+    );
     if (coded.uncoded.length > 0) {
       const which = coded.uncoded.map((t) => `"${t}"`).join(" and ");
       showToast(
@@ -2893,8 +2924,11 @@ export default function BulkUpload({
       // The below-Unit path and its metadata, resolved once here and carried to the
       // runner. Passing the ordered segments rather than two named labels is what
       // lets the runner stay agnostic about how deep the chain is.
-      tierSegments: buildOnDemandSegments(tierPlan().tiers, tierSelections(), folderCodes)
-        .segments,
+      tierSegments: buildOnDemandSegments(
+        tierPlan().tiers,
+        tierSelections(),
+        folderCodes,
+      ).segments,
       // Only APPLICABLE tiers write metadata: a unit with no subunits leaves SubUnit and
       // SubUnitTid empty rather than storing a value from another unit's list.
       tierFormValues: tierPlan().tiers.reduce(
@@ -3176,7 +3210,7 @@ export default function BulkUpload({
   return (
     <section className="dms-form">
       <style>{`
-        .dms-form { margin: 32px auto; font-family: 'Segoe UI', sans-serif; }
+        .dms-form { margin: 32px auto; font-family: Arial, sans-serif; }
         /* WARN: THE 960px CAP MOVED DOWN WITH THE PADDING, AND LEAVING IT ON .dms-form
            NARROWS EVERY DESKTOP BY 48px. max-width applies to the CONTENT box, so the old
            shell was 960 of content with 24px of padding OUTSIDE it - 1008 overall. Cap the
@@ -3225,7 +3259,7 @@ export default function BulkUpload({
           font-size: 13px; font-weight: 600; color: #0f6c3f; }
         /* Scrolls instead of paginating — the whole selection is always reachable. */
         .dms-filelist { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow-y: auto; overscroll-behavior: contain; padding-right: 6px; }
-        .dms-filerow { display: flex; align-items: center; gap: 12px; border: 1px solid #ececec; border-radius: 8px; padding: 10px 12px; background: #fafafa; font-size: 13px; }
+        .dms-filerow { display: flex; align-items: center; gap: 12px; border: 1px solid black; border-radius: 8px; padding: 10px 12px; background: #fafafa; font-size: 13px; }
         .dms-filerow .fname { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; color: #1b1b1b; }
         .dms-filerow .size { flex: 0 0 auto; font-size: 12px; color: #666; }
         .dms-remove { flex: 0 0 auto; background: none; border: none; cursor: pointer; color: #d13438; font-size: 15px; line-height: 1; padding: 4px; }
@@ -3233,7 +3267,10 @@ export default function BulkUpload({
         /* Live per-file progress */
         .dms-progress-list { margin-top: 12px; max-height: 360px; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 6px; padding-right: 6px; }
         /* One row per file: status tag · name · size · live bar · % · remove */
-        .dms-fp-row { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 10px 12px; border-radius: 6px; background: #fafafa; }
+        /* Border added (client, 2026-09-11: "Add a borderline on the uploaded documents") — the row
+           had a background tint and rounded corners but no outline, so a run's file list read as one
+           unbroken block rather than a list of distinct files. */
+        .dms-fp-row { display: flex; align-items: center; gap: 12px; font-size: 13px; padding: 10px 12px; border-radius: 6px; border: 1px solid #e1e1e1; background: #fafafa; }
         /* No green wash on a finished row — the READY tag carries the state in
            text, and 50 green rows drown out the ones that need attention. */
         .dms-fp-row.skipped, .dms-fp-row.tagFailed { background: #fff4e5; }
@@ -3303,15 +3340,15 @@ export default function BulkUpload({
         .dms-info-panel { display: none; position: absolute; top: calc(100% + 8px); left: 0; z-index: 30; width: 280px; max-width: calc(100cqw - 48px); padding: 16px; background: #fff; border: 1px solid #e1e1e1; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.12); cursor: default; text-align: left; font-weight: 400; }
         /* The rightmost icon on the row would push its panel past the card edge. */
         .dms-info.align-right .dms-info-panel { left: auto; right: 0; }
-        .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; }
+        .dms-info:hover .dms-info-panel, .dms-info:focus .dms-info-panel, .dms-info:focus-within .dms-info-panel { display: block; color: #444;}
         .dms-info-panel dl { margin: 0; }
         .dms-info-panel dt { margin-top: 12px; color: #0f6c3f; font-size: 13px; font-weight: 700; }
         .dms-info-panel dt:first-of-type { margin-top: 0; }
         .dms-info-panel dd { margin: 4px 0 0; color: #444; font-size: 12px; font-weight: 400; line-height: 1.45; }
         .dms-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 24px; }
-        /* Unit | Year | Document Type on one row. Together they name exactly one
-           destination folder, so they read better as a set than stacked. */
-        .dms-grid-3 { grid-template-columns: 1.8fr 0.9fr 1.3fr; }
+        /* ⚠ .dms-grid-3 REMOVED 2026-09-11 — the destination-info layout no longer uses a
+           3-column row (see the "LAYOUT REORDERED" comment above the render), so nothing
+           references this class any more. */
         .dms-radio-group { display: flex; gap: 24px; margin-bottom: 20px; align-items: center; }
         .dms-radio-group p { margin: 0; font-size: 14px; color: black; font-weight: 600; }
         .dms-radio-group label { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; cursor: pointer; color: black; }
@@ -3356,7 +3393,7 @@ export default function BulkUpload({
         .dms-popup-btn.danger:hover { background: #fdf3f4; }
         .dms-popup-btn.cancel { background: #fff; color: #0f6c3f; border: 1px solid #0f6c3f; }
         .dms-popup-btn.cancel:hover { background: #f0f6f2; }
-        .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
+        .dms-toast { position: fixed; top: 24px; right: 24px; z-index: 9999; min-width: 300px; max-width: 460px; padding: 14px 40px 14px 16px; border-radius: 6px; font-size: 13px; font-family: Arial, sans-serif; box-shadow: 0 4px 16px rgba(0,0,0,.18); animation: dms-slidein .2s ease; }
         .dms-toast.error { background: #d13438; color: #fff; }
         .dms-toast.success { background: #0f6c3f; color: #fff; }
         .dms-toast.notice { background: #8a4b00; color: #fff; }
@@ -3364,7 +3401,7 @@ export default function BulkUpload({
         .dms-toast-close:hover { opacity: 1; }
         @keyframes dms-slidein { from { transform: translateX(60px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         @media (max-width: 640px) {
-          .dms-grid, .dms-grid-3 { grid-template-columns: 1fr; }
+          .dms-grid { grid-template-columns: 1fr; }
           .dms-form-inner { padding-left: 0; padding-right: 0; }
           /* Client, 2026-09-08: *"same goes for bulk upload"*. This screen has no has-file
              dropzone; its equivalents are the selection bar (count left, Add more right) and the
@@ -3388,7 +3425,7 @@ export default function BulkUpload({
            NO BACKTICKS IN THIS BLOCK - one ends the template literal, and the error is reported
            as JSX hundreds of lines away. */
         @container (max-width: 640px) {
-          .dms-grid, .dms-grid-3 { grid-template-columns: 1fr; }
+          .dms-grid { grid-template-columns: 1fr; }
           .dms-radio-group { flex-direction: column; align-items: flex-start; gap: 10px; }
           /* Client, 2026-09-08: on a phone the side padding goes. */
           .dms-form-inner { padding-left: 0; padding-right: 0; }
@@ -3406,684 +3443,367 @@ export default function BulkUpload({
           because a container query cannot style its own container) and .dms-form-inner carries
           the padding so the query can drop it on a narrow screen. */}
       <div className="dms-form-body">
-      <div className="dms-form-inner">
-
-      {/* ⚠ THE PAGE MUST HAVE ITS OWN TITLE WEB PART DELETED, or "Bulk Upload" appears TWICE — the
+        <div className="dms-form-inner">
+          {/* ⚠ THE PAGE MUST HAVE ITS OWN TITLE WEB PART DELETED, or "Bulk Upload" appears TWICE — the
           same required deployment step the upload form needed (2026-09-03). Nothing in code can
           detect the duplicate: a text web part is not readable from inside a web part, so this will
           not fail, warn, or look wrong to any check. It renders twice until somebody opens the page.
           Client: *"Same like a normal upload form, add the title back into the form for bulk
           upload."* */}
-      <h1 className="dms-page-title">Bulk Upload</h1>
+          <h1 className="dms-page-title">Bulk Upload</h1>
 
-      {/* Above the form, so it is read before any work is done. Amber, not red: nothing has failed
+          {/* Above the form, so it is read before any work is done. Amber, not red: nothing has failed
           and nothing the uploader did is wrong. The write-time re-check is what refuses. */}
-      {paused ? (
-        <div
-          role="status"
-          style={{
-            margin: "0 0 16px",
-            padding: "10px 14px",
-            borderRadius: 4,
-            ...NOTICE_ATTENTION,
-            fontSize: 13,
-            lineHeight: 1.5,
-          }}
-        >
-          {/* The SAME sentence as the upload form (client, 2026-09-05). Two screens describing one
+          {paused ? (
+            <div
+              role="status"
+              style={{
+                margin: "0 0 16px",
+                padding: "10px 14px",
+                borderRadius: 4,
+                ...NOTICE_ATTENTION,
+                fontSize: 13,
+                lineHeight: 1.5,
+              }}
+            >
+              {/* The SAME sentence as the upload form (client, 2026-09-05). Two screens describing one
               site-wide state in different words invites the reader to wonder whether they are two
               different states. */}
-          <strong>Upload is temporarily disabled.</strong> Please try again
-          shortly or check with the system administrator.
-        </div>
-      ) : undefined}
-      <div className="dms-warn">
-        {/* ⚠ INLINED, NOT PROVISIONED — the client's own `Icon.svg`, verbatim apart from the two
-            attributes JSX needs to own (`aria-hidden`, and the sizing left to the markup). It is NOT
-            referenced as a file: shipping an image asset in this package has failed to provision on
-            this tenant TWICE, both times silently (the `+ New Folder` customizer, then the
-            bulk-approve command set), so a src-referenced icon would render as a broken box with
-            nothing explaining it. Same reason the bulk-approve command set uses a base64 data URI
-            rather than a packaged file.
-            `flexShrink: 0` because `.dms-warn` is a flex row: without it the icon is squeezed as the
-            sentence grows. `fill` is the client's `#DA3B3B`, kept verbatim rather than switched to
-            `currentColor` — it is deliberately a shade off the banner's `#a4262c` text in their
-            design, and guessing otherwise would quietly redesign it. */}
-        <svg
-          width="35"
-          height="35"
-          viewBox="0 0 21 19"
-          fill="none"
-          aria-hidden="true"
-          style={{ flexShrink: 0, marginTop: 1 }}
-        >
-          <path
-            d="M11.2354 6.85311C11.2328 6.38367 10.8501 6.00526 10.3806 6.00789C9.9112 6.01053 9.53279 6.39322 9.53543 6.86265L10.3854 6.85788L11.2354 6.85311ZM9.55786 10.8563C9.5605 11.3258 9.94319 11.7042 10.4126 11.7015C10.8821 11.6989 11.2605 11.3162 11.2578 10.8468L10.4078 10.8516L9.55786 10.8563ZM11.2354 13.8479C11.2354 13.3784 10.8549 12.9979 10.3854 12.9979C9.91597 12.9979 9.53541 13.3784 9.53541 13.8479H10.3854H11.2354ZM9.53541 13.8579C9.53541 14.3273 9.91597 14.7079 10.3854 14.7079C10.8549 14.7079 11.2354 14.3273 11.2354 13.8579H10.3854H9.53541ZM8.65456 1.84753L7.91895 1.42165V1.42165L8.65456 1.84753ZM1.12346 14.8558L0.387845 14.4299H0.387845L1.12346 14.8558ZM19.6474 14.8558L18.9118 15.2817V15.2817L19.6474 14.8558ZM12.1163 1.84754L11.3807 2.27342V2.27342L12.1163 1.84754ZM10.3854 6.85788L9.53543 6.86265L9.55786 10.8563L10.4078 10.8516L11.2578 10.8468L11.2354 6.85311L10.3854 6.85788ZM10.3854 13.8479H9.53541V13.8579H10.3854H11.2354V13.8479H10.3854ZM8.65456 1.84753L7.91895 1.42165L0.387845 14.4299L1.12346 14.8558L1.85907 15.2817L9.39017 2.27342L8.65456 1.84753ZM2.85431 17.8579V18.7079H17.9165V17.8579V17.0079H2.85431V17.8579ZM19.6474 14.8558L20.383 14.4299L12.8519 1.42166L12.1163 1.84754L11.3807 2.27342L18.9118 15.2817L19.6474 14.8558ZM17.9165 17.8579V18.7079C20.112 18.7079 21.483 16.3299 20.383 14.4299L19.6474 14.8558L18.9118 15.2817C19.3556 16.0484 18.8024 17.0079 17.9165 17.0079V17.8579ZM1.12346 14.8558L0.387845 14.4299C-0.712152 16.3299 0.658856 18.7079 2.85431 18.7079V17.8579V17.0079C1.96843 17.0079 1.41521 16.0484 1.85907 15.2817L1.12346 14.8558ZM8.65456 1.84753L9.39017 2.27342C9.83311 1.50834 10.9377 1.50834 11.3807 2.27342L12.1163 1.84754L12.8519 1.42166C11.7542 -0.474401 9.01667 -0.474411 7.91895 1.42165L8.65456 1.84753Z"
-            fill="#DA3B3B"
-          />
-        </svg>
-        {/* Client's own copy, verbatim, 2026-09-03. Shorter than what it replaced, which spelled out
-            that the files are visible to everyone with access to the destination folder as soon as
-            they upload — that consequence is now unstated on screen. Their call; it is the ONE thing
-            an admin might not infer from "without going through approval". */}
-        <span>
-          <strong>Temporary Tool.</strong> Upload files directly to the{" "}
-          <strong>Documents</strong> library without going through approval.
-          Please make sure the file names are correct before uploading.
-        </span>
-      </div>
+              <strong>Upload is temporarily disabled.</strong> Please try again
+              shortly or check with the system administrator.
+            </div>
+          ) : undefined}
+          {/* ⚠ THE "Temporary Tool" WARNING NOTICE IS REMOVED (client, 2026-09-11: "Remove the
+              warning notice"). It carried a real disclosure — that Bulk Upload writes straight to
+              Documents with no approval step — which is now unstated on screen anywhere on this
+              page. Their call, and the same pattern as the 2026-09-03 shortening of this same
+              banner's text. */}
 
-      {/* ⚠ THE 50-FILE CEILING AND "same folder, same details" CAME OFF 2026-08-30 at the client's
+          {/* ⚠ THE 50-FILE CEILING AND "same folder, same details" CAME OFF 2026-08-30 at the client's
           request. Both are still TRUE and still enforced — `MAX_FILES` refuses the 51st file with a
           toast, and this screen has one destination and one metadata set by construction. Only the
           statement of them is gone, so an uploader now meets the cap at the moment they exceed it
           rather than before they start. */}
-      <p className="dms-subtitle">
-        All fields marked <strong>*</strong> are required.
-      </p>
+          <p className="dms-subtitle">
+            All fields marked <strong>*</strong> are required.
+          </p>
 
-      {/* ── Documents Folder Information ─────────────────────────────────── */}
-      {/* Deliberately BEFORE Documents Details in SOURCE order, not reordered
+          {/* ── Documents Folder Information ─────────────────────────────────── */}
+          {/* Deliberately BEFORE Documents Details in SOURCE order, not reordered
           with CSS: tab order follows the DOM. Mirrors Form.tsx. */}
-      <div className="dms-section">
-        <p className="dms-section-title">1. Documents Folder Information</p>
+          <div className="dms-section">
+            <p className="dms-section-title">1. Documents Folder Information</p>
 
-        {deptLoading ? (
-          <p className="dms-dept-loading">Loading your access&hellip;</p>
-        ) : !privileged && validPaths.length === 0 ? (
-          <div className="dms-dept-error">
-            {awaitingFolders ? (
-              /* Access is correct; the folders were never created. The membership
+            {deptLoading ? (
+              <p className="dms-dept-loading">Loading your access&hellip;</p>
+            ) : !privileged && validPaths.length === 0 ? (
+              <div className="dms-dept-error">
+                {awaitingFolders ? (
+                  /* Access is correct; the folders were never created. The membership
                  wording below would send the administrator to check groups that are
                  already right. Both fixes are named in order — a unit with no
                  abbreviation row is skipped by every reconciliation run, so
                  "re-run reconciliation" alone is wrong half the time. */
-              <>
-                Your unit&apos;s folders haven&apos;t been created yet. Your CRS
-                administrator needs to give every unit an abbreviation in the
-                DMS Term Abbreviation list, then run folder reconciliation.
-              </>
-            ) : (
-              <>
-                Your account isn&apos;t fully provisioned to upload — you need
-                membership at every level plus the unit uploader role. Contact
-                your administrator.
-              </>
-            )}
-          </div>
-        ) : null}
+                  <>
+                    Your unit&apos;s folders haven&apos;t been created yet. Your
+                    CRS administrator needs to give every unit an abbreviation
+                    in the DMS Term Abbreviation list, then run folder
+                    reconciliation.
+                  </>
+                ) : (
+                  <>
+                    Your account isn&apos;t fully provisioned to upload — you
+                    need membership at every level plus the unit uploader role.
+                    Contact your administrator.
+                  </>
+                )}
+              </div>
+            ) : null}
 
-        {/* Business Segment | Project toggle — a side shows only if the user can
+            {/* Business Segment | Project toggle — a side shows only if the user can
             actually upload there (privileged users see every configured side). */}
-        <div className="dms-radio-group">
-          <p>Upload to</p>
-          {(["BusinessSegment", "Project"] as const).map((side) => {
-            const sideModes = modes.filter((m) => m.side === side);
-            const offerable = privileged
-              ? sideModes
-              : sideModes.filter((m) =>
-                  validPaths.some((p) => p.modeKey === m.key),
+            <div className="dms-radio-group">
+              <p>Upload to</p>
+              {(["BusinessSegment", "Project"] as const).map((side) => {
+                const sideModes = modes.filter((m) => m.side === side);
+                const offerable = sortModesForDisplay(
+                  privileged
+                    ? sideModes
+                    : sideModes.filter((m) =>
+                        validPaths.some((p) => p.modeKey === m.key),
+                      ),
                 );
-            if (offerable.length === 0) return null;
-            const active = activeMode()?.side === side;
-            return (
-              <label key={side}>
-                <input
-                  type="radio"
-                  name="bulkSideToggle"
-                  checked={active}
-                  disabled={busy}
-                  onChange={() => switchMode(offerable[0].key)}
-                />
-                {/* ⚠ HARDCODED to "Group-Led Project" (capitalised 2026-09-04), client's instruction
+                if (offerable.length === 0) return null;
+                const active = activeMode()?.side === side;
+                return (
+                  <label key={side}>
+                    <input
+                      type="radio"
+                      name="bulkSideToggle"
+                      checked={active}
+                      disabled={busy}
+                      onChange={() => switchMode(offerable[0].key)}
+                    />
+                    {/* ⚠ HARDCODED to "Group-Led Project" (capitalised 2026-09-04), client's instruction
                     (2026-09-02) — mirrors Form.tsx's identical change; see that file's comment
                     for why this will need revisiting once a second Project-category segment
                     exists. Keep the two upload screens' wording in sync deliberately — this
                     project's own history is full of the two drifting apart. */}
-                {side === "BusinessSegment"
-                  ? "Business Segment"
-                  : "Group-Led Project"}
-              </label>
-            );
-          })}
-        </div>
+                    {side === "BusinessSegment"
+                      ? "Business Segment"
+                      : "Group-Led Project"}
+                  </label>
+                );
+              })}
+            </div>
 
-        {/* Segment picker. Shown whenever a segment is offered, even if there is
-            only one — a single-option select still answers "where am I". */}
-        {(() => {
-          const side = activeMode()?.side;
-          const sideModes = modes.filter((m) => m.side === side);
-          const offerable = privileged
-            ? sideModes
-            : sideModes.filter((m) =>
-                validPaths.some((p) => p.modeKey === m.key),
-              );
-          if (offerable.length === 0) return null;
-          return (
-            <label className="dms-field">
-              <span>
-                {side === "Project" ? "Project" : "Segment"}{" "}
-                <em className="req">*</em>
-              </span>
-              <select
-                value={uploadMode}
-                disabled={busy}
-                onChange={(e) => switchMode(e.target.value)}
-              >
-                {offerable.map((m) => (
-                  <option key={m.key} value={m.key}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          );
-        })()}
+            {/* Restricted users: read-only breadcrumb of the resolved location. */}
+            {!privileged && activeMode() && (
+              <div className="dms-dept-badge">
+                <span className="dept-label">Uploading to:</span>
+                <span className="dept-name">
+                  {[
+                    activeMode()?.label,
+                    ...(activeMode()?.levels ?? []).map(
+                      (_lvl, i) =>
+                        (levelChoices[i] ?? []).find(
+                          (o) => o.id === levelValues[i],
+                        )?.label,
+                    ),
+                  ]
+                    .filter(Boolean)
+                    .join(" › ")}
+                </span>
+              </div>
+            )}
 
-        {/* Restricted users: read-only breadcrumb of the resolved location. */}
-        {!privileged && activeMode() && (
-          <div className="dms-dept-badge">
-            <span className="dept-label">Uploading to:</span>
-            <span className="dept-name">
-              {[
-                activeMode()?.label,
-                ...(activeMode()?.levels ?? []).map(
-                  (_lvl, i) =>
-                    (levelChoices[i] ?? []).find((o) => o.id === levelValues[i])
-                      ?.label,
+            {/* ⚠ LAYOUT REORDERED 2026-09-11 (client: *"1st level // Segment & Department, 2nd
+            level // Unit, 3rd level // Doc Type, Year (frontend, doc type field comes first)"*).
+            ONE 2-column grid now (was a 3-column grid built for a different grouping): Segment
+            picker shares its row with the first permissioned level; the second permissioned level
+            (always exactly two — see CLAUDE.md's "ALL THIRTEEN FAMILIES ARE EXACTLY TWO
+            PERMISSIONED LEVELS") sits alone; any OTHER below-Unit tier (e.g. Sub Unit) gets its
+            own row, in its existing order; Document Type and Year share the final row, reordered
+            so Document Type renders first. None of the underlying selection/disabled/cascade logic
+            changed — only which row each field is drawn in. */}
+            <div className="dms-grid">
+              {/* Segment picker. Shown whenever a segment is offered, even if there is
+              only one — a single-option select still answers "where am I". */}
+              {(() => {
+                const side = activeMode()?.side;
+                const sideModes = modes.filter((m) => m.side === side);
+                const offerable = sortModesForDisplay(
+                  privileged
+                    ? sideModes
+                    : sideModes.filter((m) =>
+                        validPaths.some((p) => p.modeKey === m.key),
+                      ),
+                );
+                if (offerable.length === 0) return null;
+                return (
+                  <label className="dms-field">
+                    <span>
+                      {side === "Project" ? "Project" : "Segment"}{" "}
+                      <em className="req">*</em>
+                    </span>
+                    <select
+                      value={uploadMode}
+                      disabled={busy}
+                      onChange={(e) => switchMode(e.target.value)}
+                    >
+                      {offerable.map((m) => (
+                        <option key={m.key} value={m.key}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              })()}
+
+              {/* First permissioned level (Department, or whatever this segment calls it) — shares
+              the row above with the Segment picker. */}
+              {(activeMode()?.levels ?? []).slice(0, 1).map((lvl) =>
+                renderSelect(
+                  lvl.label,
+                  true,
+                  levelValues[0] ?? "",
+                  (v) => {
+                    const md = activeMode();
+                    if (md) handleLevelChange(md, 0, v);
+                  },
+                  levelChoices[0] ?? [],
+                  busy || deptLoading || isLevelLocked(0),
+                  `Select ${lvl.label}`,
+                  false,
                 ),
-              ]
-                .filter(Boolean)
-                .join(" › ")}
-            </span>
-          </div>
-        )}
+              )}
 
-        <div className="dms-grid dms-grid-3">
-          {/* File-path fields, in folder order: Segment (above) -> level(s) ->
-              Year -> Document Type. Intermediate levels span the full row; the
-              deepest one shares a row of three with Year and Document Type,
-              which is the set that identifies a single destination folder. */}
-          {(activeMode()?.levels ?? []).map((lvl, i, arr) =>
-            renderSelect(
-              lvl.label,
-              true,
-              levelValues[i] ?? "",
-              (v) => {
-                const md = activeMode();
-                if (md) handleLevelChange(md, i, v);
-              },
-              levelChoices[i] ?? [],
-              busy ||
-                deptLoading ||
-                isLevelLocked(i) ||
-                (i > 0 && !levelValues[i - 1]),
-              `Select ${lvl.label}`,
-              i < arr.length - 1,
-            ),
-          )}
+              {/* Second permissioned level (Unit) — alone on its own row. */}
+              {(activeMode()?.levels ?? []).slice(1, 2).map((lvl) =>
+                renderSelect(
+                  lvl.label,
+                  true,
+                  levelValues[1] ?? "",
+                  (v) => {
+                    const md = activeMode();
+                    if (md) handleLevelChange(md, 1, v);
+                  },
+                  levelChoices[1] ?? [],
+                  busy || deptLoading || isLevelLocked(1) || !levelValues[0],
+                  `Select ${lvl.label}`,
+                  true,
+                ),
+              )}
 
-          {/* The below-Unit chain, in path order — third-width, so tiers flow onto
-              the row the deepest permissioned level starts. Unchanged on a site
-              that has configured none. */}
-          {/* Only the tiers that apply here — a unit with no subunits shows no SubUnit
-              dropdown at all rather than an empty required one. */}
-          {tierPlan().tiers.map((t, i) => {
-            const parent = tierPlan().parents[i];
-            return renderSelect(
-              t.label,
-              true,
-              tierValues[t.column] ?? "",
-              (v) => setTierValues((prev) => ({ ...prev, [t.column]: v })),
-              tierOptions(t, parent),
-              // A cascading tier stays disabled until the tier above it is chosen.
-              busy || (!(t.termSet ?? "").trim() && !parent),
-            );
-          })}
+              {/* The below-Unit chain. Only the tiers that apply here — a unit with no subunits
+              shows no SubUnit dropdown at all rather than an empty required one. Year and
+              Document Type — the built-in pair — are pulled out and rendered LAST, together,
+              Document Type first; every other tier (Sub Unit, a New Folder Layer) keeps its
+              existing order and renders on its own row ahead of that pair. */}
+              {(() => {
+                const rawTiers = tierPlan().tiers;
+                const rawParents = tierPlan().parents;
+                const isYear = (t: Level): boolean =>
+                  (t.column ?? "").trim().toLowerCase() === "year" ||
+                  t.label.trim().toLowerCase() === "year";
+                const isDocType = (t: Level): boolean => {
+                  const col = (t.column ?? "").trim().toLowerCase();
+                  const lbl = t.label.trim().toLowerCase().replace(/\s+/g, " ");
+                  return (
+                    col === "document_x0020_type" || lbl === "document type"
+                  );
+                };
+                const renderTier = (
+                  idx: number,
+                  wide: boolean,
+                ): React.ReactElement => {
+                  const t = rawTiers[idx];
+                  const parent = rawParents[idx];
+                  return renderSelect(
+                    t.label,
+                    true,
+                    tierValues[t.column] ?? "",
+                    (v) =>
+                      setTierValues((prev) => ({ ...prev, [t.column]: v })),
+                    tierOptions(t, parent),
+                    // A cascading tier stays disabled until the tier above it is chosen.
+                    busy || (!(t.termSet ?? "").trim() && !parent),
+                    "--",
+                    wide,
+                  );
+                };
+                const otherIdx = rawTiers
+                  .map((_t, i) => i)
+                  .filter(
+                    (i) => !isYear(rawTiers[i]) && !isDocType(rawTiers[i]),
+                  );
+                const yearIdx = rawTiers.findIndex(isYear);
+                const docTypeIdx = rawTiers.findIndex(isDocType);
+                return (
+                  <>
+                    {otherIdx.map((i) => (
+                      <React.Fragment key={i}>
+                        {renderTier(i, true)}
+                      </React.Fragment>
+                    ))}
+                    {yearIdx !== -1 && renderTier(yearIdx, false)}
+                    {docTypeIdx !== -1 && renderTier(docTypeIdx, false)}
+                  </>
+                );
+              })()}
 
-          {/* Graceful empty-state: a segment whose term set has no child terms yet
+              {/* Graceful empty-state: a segment whose term set has no child terms yet
               (the non-GHO Head Offices before their Department/Unit trees are
               added) would otherwise show a dead "Select …" dropdown. */}
-          {(() => {
-            const md = activeMode();
-            if (
-              !md ||
-              md.levels.length === 0 ||
-              deptLoading ||
-              levelChoices.length === 0
-            )
-              return null;
-            for (let i = 0; i < md.levels.length; i++) {
-              const parentChosen = i === 0 || !!levelValues[i - 1];
-              if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
-                return (
-                  <div
-                    key="dms-empty-level"
-                    style={{
-                      gridColumn: "1 / -1",
-                      padding: "8px 12px",
-                      ...NOTICE_ATTENTION,
-                      borderRadius: 4,
-                      fontSize: 13,
-                    }}
-                  >
-                    No {md.levels[i].label.toLowerCase()} options are configured
-                    for this segment yet — ask your administrator to add them in
-                    the term store before uploading here.
-                  </div>
-                );
-              }
-            }
-            return null;
-          })()}
-
-          {/* Spans the row, matching the Form. One shared remark for the whole
-              selection, like every other field on this screen. */}
-          <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-            <span>Remark</span>
-            <input
-              type="text"
-              value={remark}
-              maxLength={250}
-              disabled={busy}
-              onChange={(e) => {
-                /* Same guard as the upload form (client QA, 2026-08-30). Stripped rather than
-                   refused, and the removal is SAID - a character vanishing with no explanation is
-                   how a field comes to feel broken. */
-                const clean = stripBlockedChars(e.target.value);
-                setRemarkBlocked(
-                  clean !== e.target.value
-                    ? blockedCharsMessage(e.target.value)
-                    : undefined,
-                );
-                setRemark(clean);
-              }}
-            />
-            {remarkBlocked ? (
-              <small className="dms-err">{remarkBlocked}</small>
-            ) : (
-              <small>Max. 250 characters</small>
-            )}
-          </label>
-        </div>
-      </div>
-
-      {/* ── Documents Details ───────────────────────────────────────────── */}
-      <div className="dms-section">
-        <p className="dms-section-title">2. Documents Details</p>
-
-        {/* The file area has three states: empty drop zone, selected list, and
-            live upload progress. Spec 2026-08-03 §3. */}
-        {settings.allowedFileTypes.kind === "none" ? (
-          /* An empty AllowedFileTypes selection is a hard block, not a silent
-             fallback — spec 2026-07-30 §3. The message names the column and the
-             list because the client is the one who fixes it, in one click. */
-          <div className="dms-dropzone" style={{ opacity: 0.6 }}>
-            <span>{NO_TYPES_MESSAGE}</span>
-          </div>
-        ) : live ? (
-          <>
-            <div className="dms-overall-head">
-              <span>
-                {liveTotals.done} of {liveTotals.total} document
-                {liveTotals.total === 1 ? "" : "s"} processed
-              </span>
-              <span>{livePct}%</span>
-            </div>
-            <div className="dms-overall-track">
-              <div
-                className="dms-overall-fill"
-                style={{ width: `${livePct}%` }}
-              />
-            </div>
-            {/* Completed rows stay visible and keep their order, so the header
-                count can be checked against the list. */}
-            <div className="dms-progress-list">
-              {live.map((f, fi) => {
-                return (
-                  <div className={`dms-fp-row ${f.state}`} key={fi}>
-                    <span className={`dms-fp-tag ${f.state}`}>
-                      {fpLabel[f.state]}
-                    </span>
-                    <span className="dms-fp-name" title={f.name}>
-                      {f.name}
-                    </span>
-                    <span className="dms-fp-size">{fmtSize(f.size)}</span>
-                    {f.state === "uploading" ? (
-                      <UploadingBar
-                        target={f.pct}
-                        label={`Uploading ${f.name}`}
-                      />
-                    ) : (
-                      <span className="dms-fp-gap" aria-hidden="true" />
-                    )}
-                    {/* WARN: DE-SELECT, NOT DELETE. See `dropFromRun`, and `sru` on LiveFile for why
-                        a server-side delete must not come back here.
-
-                        Offered ONLY on a row that was NOT uploaded. `done` is excluded because the row
-                        is the only record that the file went, and `tagFailed` IS offered because that
-                        file stays in the selection and would otherwise be re-sent on the next press.
-                        Held entirely while a run is in flight. */}
-                    {!busy &&
-                    (f.state === "skipped" ||
-                      f.state === "failed" ||
-                      f.state === "tagFailed") ? (
-                      <button
-                        type="button"
-                        className="dms-fp-x"
-                        aria-label={`Remove ${f.name} from the list`}
-                        title="Remove from the list (nothing is deleted)"
-                        onClick={() => dropFromRun(fi)}
-                      >
-                        ✕
-                      </button>
-                    ) : (
-                      <span className="dms-fp-xspacer" aria-hidden="true" />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        ) : picked.length === 0 ? (
-          /* Click anywhere to open the picker, or drop files on it. */
-          <div
-            className={`dms-dropzone${dragOver ? " over" : ""}`}
-            role="button"
-            tabIndex={0}
-            onClick={() => fileRef.current?.click()}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                fileRef.current?.click();
-              }
-            }}
-            // preventDefault on dragOver is what makes the element a valid drop
-            // target; without it the browser navigates to the file instead.
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              addFiles(e.dataTransfer?.files ?? null);
-            }}
-          >
-            {/* Inlined rather than imported: an <img> would need an asset loader
-                and a second network request for a 20-line glyph. */}
-            <svg
-              className="dms-dropzone-icon"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              <path
-                d="M12 3v10m0 0 4-4m-4 4-4-4"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <path
-                d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-            <span>
-              <span className="dms-link">Choose multiple documents</span> or
-              drop them here
-            </span>
-            <span className="hint">Max. {MAX_FILES} files.</span>
-          </div>
-        ) : (
-          // The list itself is now ALSO a drop target, not only the empty dropzone above —
-          // dragging more files onto an already-picked list previously did nothing (the
-          // browser just navigated to the file), which read as "the system didn't allow it".
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setDragOver(true);
-            }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setDragOver(false);
-              addFiles(e.dataTransfer?.files ?? null);
-            }}
-            style={
-              dragOver
-                ? {
-                    outline: "2px dashed #0f6c3f",
-                    outlineOffset: 4,
-                    borderRadius: 6,
-                  }
-                : undefined
-            }
-          >
-            <div className="dms-selbar">
-              <span>
-                {picked.length} document{picked.length === 1 ? "" : "s"}{" "}
-                selected
-              </span>
-              <button
-                type="button"
-                className="dms-link"
-                disabled={busy}
-                onClick={() => fileRef.current?.click()}
-              >
-                Add more
-              </button>
-            </div>
-            <div className="dms-filelist">
-              {picked.map((p) => {
-                /* Marked on the ROW as well as in the toast: a toast is gone in seconds and a
-                   fifty-row list is not, so an admin scrolling back has no way to find which two
-                   files the message was about. Both rows are marked — which of them is the mistake
-                   is not knowable here, the same reasoning as the abbreviation sibling check. */
-                const duplicate =
-                  picked.filter(
-                    (q) =>
-                      q.file.name.toLowerCase() === p.file.name.toLowerCase(),
-                  ).length > 1;
-                return (
-                  <div className="dms-filerow" key={p.key}>
-                    <span className="fname" title={p.file.name}>
-                      {p.file.name}
-                    </span>
-                    {duplicate && (
-                      <span
+              {(() => {
+                const md = activeMode();
+                if (
+                  !md ||
+                  md.levels.length === 0 ||
+                  deptLoading ||
+                  levelChoices.length === 0
+                )
+                  return null;
+                for (let i = 0; i < md.levels.length; i++) {
+                  const parentChosen = i === 0 || !!levelValues[i - 1];
+                  if (parentChosen && (levelChoices[i]?.length ?? 0) === 0) {
+                    return (
+                      <div
+                        key="dms-empty-level"
                         style={{
-                          fontSize: 11,
-                          color: "#8a4b00",
-                          whiteSpace: "nowrap",
+                          gridColumn: "1 / -1",
+                          padding: "8px 12px",
+                          ...NOTICE_ATTENTION,
+                          borderRadius: 4,
+                          fontSize: 13,
                         }}
-                        title="Another selected file has this name. All of them can be uploaded — the later ones are offered a free name — but check this is not the same document picked twice."
                       >
-                        same name
-                      </span>
-                    )}
-                    <span className="size">{fmtSize(p.file.size)}</span>
-                    <button
-                      type="button"
-                      className="dms-remove"
-                      aria-label={`Remove ${p.file.name}`}
-                      disabled={busy}
-                      onClick={() => removeFile(p.key)}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                );
-              })}
+                        No {md.levels[i].label.toLowerCase()} options are
+                        configured for this segment yet — ask your administrator
+                        to add them in the term store before uploading here.
+                      </div>
+                    );
+                  }
+                }
+                return null;
+              })()}
+
+              {/* Spans the row, matching the Form. One shared remark for the whole
+              selection, like every other field on this screen. */}
+
+              {/* No need remark for bulk */}
+              {/* <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
+                <span>Remark</span>
+                <input
+                  type="text"
+                  value={remark}
+                  maxLength={250}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const clean = stripBlockedChars(e.target.value);
+                    setRemarkBlocked(
+                      clean !== e.target.value
+                        ? blockedCharsMessage(e.target.value)
+                        : undefined,
+                    );
+                    setRemark(clean);
+                  }}
+                />
+                {remarkBlocked ? (
+                  <small className="dms-err">{remarkBlocked}</small>
+                ) : (
+                  <small>Max. 250 characters</small>
+                )}
+              </label> */}
             </div>
           </div>
-        )}
 
-        {/* One input serves the drop zone and Add more. `multiple` is the only
+          {/* ── Documents Information ───────────────────────────────────────────── */}
+          <div className="dms-section">
+            <p className="dms-section-title">2. Documents Information</p>
+
+            {/* One input serves the drop zone and Add more. `multiple` is the only
             functional difference from the Form's single-file picker; `accept`
             filters the DIALOG only, which is why addFiles re-checks. */}
-        <input
-          ref={fileRef}
-          type="file"
-          multiple
-          accept={
-            // undefined rather than "": an empty accept attribute means "no
-            // filter" and would offer every file in the dialog. addFiles blocks
-            // them anyway, but not offering them is clearer.
-            settings.allowedFileTypes.kind === "none"
-              ? undefined
-              : settings.allowedFileTypes.types.join(",")
-          }
-          style={{ display: "none" }}
-          onChange={(e) => addFiles(e.target.files)}
-        />
-
-        <div className="dms-detail-row" style={{ marginTop: 16 }}>
-          <label className="dms-field">
-            <span>
-              Document Date <em className="req">*</em>
-            </span>
             <input
-              type="date"
-              value={documentDate}
-              disabled={busy}
-              max={(() => {
-                const d = new Date();
-                const mm = d.getMonth() + 1;
-                const day = d.getDate();
-                return `${d.getFullYear()}-${mm < 10 ? "0" + mm : mm}-${day < 10 ? "0" + day : day}`;
-              })()}
-              onChange={(e) => setDocumentDate(e.target.value)}
-            />
-          </label>
-
-          {/* Not renderSelect: the info icon belongs on the LABEL, and the label
-              is a <span> holding a real <label htmlFor> so clicking the icon does
-              not fall through and focus the select. */}
-          <div className="dms-field">
-            <span className="dms-labelrow">
-              <label htmlFor="dms-bulk-conf">
-                Confidential Level <em className="req">*</em>
-              </label>
-              <em
-                className="dms-info"
-                tabIndex={0}
-                role="button"
-                aria-label="What the confidentiality levels mean"
-              >
-                i
-                <span className="dms-info-panel" role="tooltip">
-                  {/* Legally Privileged is NOT defined here any more — it has its
-                      own control and its own icon beside it, and defining it in two
-                      places invites the two texts to drift apart.
-                      Highly Confidential is deliberately absent too: its term is
-                      removed from the term store for Phase 1, so the dropdown
-                      cannot offer it. */}
-                  <dl>
-                    <dt>Confidential</dt>
-                    <dd>
-                      This applies to sensitive business information that is
-                      intended strictly for use within the Group, on a
-                      need-to-know basis.
-                    </dd>
-                    <dt>Restricted</dt>
-                    <dd>
-                      This applies to business information that may be disclosed
-                      to external parties only if a non-disclosure agreement has
-                      been signed.
-                    </dd>
-                  </dl>
-                </span>
-              </em>
-            </span>
-            <select
-              id="dms-bulk-conf"
-              value={confidentiality}
-              disabled={busy}
-              title={
-                options.confidentiality.find((o) => o.id === confidentiality)
-                  ?.label ?? ""
+              ref={fileRef}
+              type="file"
+              multiple
+              accept={
+                // undefined rather than "": an empty accept attribute means "no
+                // filter" and would offer every file in the dialog. addFiles blocks
+                // them anyway, but not offering them is clearer.
+                settings.allowedFileTypes.kind === "none"
+                  ? undefined
+                  : settings.allowedFileTypes.types.join(",")
               }
-              onChange={(e) => setConfidentiality(e.target.value)}
-            >
-              <option value="">--</option>
-              {/* Hidden rather than greyed out, as on the upload form. On a site with no HC
-                  libraries nothing is filtered and the level stays an ordinary label. */}
-              {(() => {
-                const ctx = hcCtx();
-                const keep = new Set(
-                  selectableLevels(
-                    options.confidentiality.map((o) => o.label),
-                    ctx,
-                  ).map((l) => l.trim().toLowerCase()),
-                );
-                return options.confidentiality
-                  .filter((o) => keep.has((o.label ?? "").trim().toLowerCase()))
-                  .map((o) => (
-                    <option key={o.id} value={o.id} title={o.label}>
-                      {o.label}
-                    </option>
-                  ));
-              })()}
-            </select>
-          </div>
+              style={{ display: "none" }}
+              onChange={(e) => addFiles(e.target.files)}
+            />
 
-          {/* Offered only for the levels LISTED by `legallyPrivilegedFor` in DMS
-              Config (a list since 2026-08-19; one value behaves as before). Unset
-              means never offered. The value is re-derived at upload time rather
-              than trusted from here, because hiding the control does not clear the
-              state behind it. */}
-          {offersLegalPrivilege(
-            options.confidentiality.find((o) => o.id === confidentiality)
-              ?.label ?? "",
-            settings.legallyPrivilegedFor,
-          ) && (
-            // Wrapped together so the icon sits tight beside the checkbox label instead of
-            // inheriting `.dms-detail-row`'s 24px row gap — the two were previously separate
-            // flex children of that row, which is what put daylight between them.
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                flex: "0 0 auto",
-                marginBottom: 16,
-              }}
-            >
-              <label className="dms-lp" style={{ margin: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={legallyPrivileged}
-                  disabled={busy}
-                  onChange={(e) => setLegallyPrivileged(e.target.checked)}
-                />
-                <span>Legally Privileged</span>
-              </label>
-              <em
-                className="dms-info align-right"
-                tabIndex={0}
-                role="button"
-                aria-label="What Legally Privileged means"
-              >
-                i
-                <span className="dms-info-panel" role="tooltip">
-                  This applies to confidential communications (email, advice,
-                  documents, conversations) between client and lawyer that are
-                  protected by law from being disclosed in a court of law or
-                  during legal proceedings.
-                </span>
-              </em>
-            </div>
-          )}
-
-        </div>
-
-        {/* KEYWORD SITS OUTSIDE `.dms-detail-row`, AND THAT IS THE WHOLE POINT (client,
+            <div className="dms-detail-row" style={{ marginTop: 16 }}>
+              {/* KEYWORD SITS OUTSIDE `.dms-detail-row`, AND THAT IS THE WHOLE POINT (client,
             2026-09-08: *"Can you help push the keyword down below? like the normal upload
             form?"*). It was the FOURTH child of that row, which is `display: flex` with
             `flex: 1 1 200px` on every `.dms-field` — so it sat beside Document Date,
@@ -4099,7 +3819,181 @@ export default function BulkUpload({
             This matches `Form.tsx`, where Keyword is likewise a bare `.dms-field` on its own
             row: *"keywords run to several words, and pairing it with another control would make
             it look like half of one thought."* */}
-        {/* ⚠ MOVED HERE FROM THE FOLDER-INFORMATION SECTION (client, 2026-09-04: *"ensure the
+
+              {/* Not renderSelect: the info icon belongs on the LABEL, and the label
+              is a <span> holding a real <label htmlFor> so clicking the icon does
+              not fall through and focus the select. */}
+              <div className="dms-field" style={{ maxWidth: 263 }}>
+                <span className="dms-labelrow">
+                  <label htmlFor="dms-bulk-conf">
+                    Confidential Level <em className="req">*</em>
+                  </label>
+                  <em
+                    className="dms-info"
+                    tabIndex={0}
+                    role="button"
+                    aria-label="What the confidentiality levels mean"
+                  >
+                    i
+                    <span className="dms-info-panel" role="tooltip">
+                      {/* Legally Privileged is NOT defined here — it has its own control
+                      and its own icon beside it, and defining it in two places
+                      invites the two texts to drift apart.
+
+                      ⚠ HIGHLY CONFIDENTIAL WAS ABSENT UNTIL 2026-09-10, AND THE
+                      COMMENT SAYING WHY OUTLIVED ITS OWN REASON. Its term was
+                      removed from the term store for Phase 1, so the dropdown could
+                      not offer it — true when written, false the day the HC
+                      libraries shipped and the level became selectable. Reported by
+                      the client as a missing tooltip.
+
+                      ⚠ THIS BLOCK IS HAND-COPIED FROM `Form.tsx` and the two have
+                      drifted before — a confidentiality definition is the worst
+                      place for two screens to disagree. Change one, change both.
+                      The texts are the client's, verbatim; do not reword them. */}
+                      <dl>
+                        {/* ⚠⚠ GATED ON THE SAME TEST THE DROPDOWN USES (client, 2026-09-10). The
+                        option is hidden rather than disabled for an uncleared uploader, so
+                        DEFINING the level here would leak exactly what hiding it protects — that
+                        the classification exists and this unit may hold documents under it.
+                        `selectableLevels` + `isHcLevel` are the same two functions the `<option>`
+                        list filters with, so this cannot describe a level the dropdown withholds.
+                        ⚠ This screen was admin-only until 2026-08-22 and is now open to EVERY
+                        uploader, which is what makes the gate necessary here at all — the stale
+                        comment that once justified skipping HC checks on this page was written
+                        before that change. */}
+                        {(() => {
+                          const ctx = hcCtx();
+                          const offered = selectableLevels(
+                            options.confidentiality.map((o) => o.label),
+                            ctx,
+                          );
+                          if (!offered.some((l) => isHcLevel(l, ctx)))
+                            return undefined;
+                          return (
+                            <>
+                              <dt>Highly Confidential</dt>
+                              <dd>
+                                This applies to the most sensitive business
+                                information that is intended strictly for use
+                                within the Group, the disclosure of which will
+                                impact share price and competitive advantage.
+                              </dd>
+                            </>
+                          );
+                        })()}
+                        <dt>Confidential</dt>
+                        <dd>
+                          This applies to sensitive business information that is
+                          intended strictly for use within the Group, on a
+                          need-to-know basis.
+                        </dd>
+                        <dt>Restricted</dt>
+                        <dd>
+                          This applies to business information that may be
+                          disclosed to external parties only if a non-disclosure
+                          agreement has been signed.
+                        </dd>
+                      </dl>
+                    </span>
+                  </em>
+                </span>
+                <select
+                  id="dms-bulk-conf"
+                  value={confidentiality}
+                  disabled={busy}
+                  title={
+                    options.confidentiality.find(
+                      (o) => o.id === confidentiality,
+                    )?.label ?? ""
+                  }
+                  onChange={(e) => setConfidentiality(e.target.value)}
+                >
+                  <option value="">--</option>
+                  {/* Hidden rather than greyed out, as on the upload form. On a site with no HC
+                  libraries nothing is filtered and the level stays an ordinary label. */}
+                  {(() => {
+                    const ctx = hcCtx();
+                    const keep = new Set(
+                      selectableLevels(
+                        options.confidentiality.map((o) => o.label),
+                        ctx,
+                      ).map((l) => l.trim().toLowerCase()),
+                    );
+                    return options.confidentiality
+                      .filter((o) =>
+                        keep.has((o.label ?? "").trim().toLowerCase()),
+                      )
+                      .map((o) => (
+                        <option key={o.id} value={o.id} title={o.label}>
+                          {o.label}
+                        </option>
+                      ));
+                  })()}
+                </select>
+              </div>
+
+              {/* Offered only for the levels LISTED by `legallyPrivilegedFor` in DMS
+              Config (a list since 2026-08-19; one value behaves as before). Unset
+              means never offered. The value is re-derived at upload time rather
+              than trusted from here, because hiding the control does not clear the
+              state behind it. */}
+              {offersLegalPrivilege(
+                options.confidentiality.find((o) => o.id === confidentiality)
+                  ?.label ?? "",
+                settings.legallyPrivilegedFor,
+              ) && (
+                // Wrapped together so the icon sits tight beside the checkbox label instead of
+                // inheriting `.dms-detail-row`'s 24px row gap — the two were previously separate
+                // flex children of that row, which is what put daylight between them.
+                /* ⚠ `marginTop: 20` AND `height: 38` ARE THE VERTICAL ALIGNMENT, NOT PADDING
+               (client, 2026-09-10: *"Not centered, fix this now, they see it"*). Every sibling
+               in `.dms-detail-row` — Document Date, Confidential Level — carries a ~20px LABEL
+               ROW above its input, and this control has no label of its own. Without the
+               compensation the checkbox lines up with their LABELS instead of their INPUTS and
+               sits visibly high; `alignItems: center` cannot fix it, because it centres this
+               block's own content rather than matching a taller sibling.
+               ⚠ THE SAME FIX ALREADY EXISTS IN `Form.tsx` as `.dms-lp-wrap`
+               (`height: 38px; margin-top: 20px; margin-bottom: 16px`) — these values are copied
+               from it deliberately. Two upload forms, one row shape: change one, change both, or
+               they drift again. */
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    flex: "0 0 auto",
+                    height: 38,
+                    marginTop: 20,
+                    marginBottom: 16,
+                  }}
+                >
+                  <label className="dms-lp" style={{ margin: 0 }}>
+                    <input
+                      type="checkbox"
+                      checked={legallyPrivileged}
+                      disabled={busy}
+                      onChange={(e) => setLegallyPrivileged(e.target.checked)}
+                    />
+                    <span>Legally Privileged</span>
+                  </label>
+                  <em
+                    className="dms-info align-right"
+                    tabIndex={0}
+                    role="button"
+                    aria-label="What Legally Privileged means"
+                  >
+                    i
+                    <span className="dms-info-panel" role="tooltip">
+                      This applies to confidential communications (email,
+                      advice, documents, conversations) between client and
+                      lawyer that are protected by law from being disclosed in a
+                      court of law or during legal proceedings.
+                    </span>
+                  </em>
+                </div>
+              )}
+              {/* ⚠ MOVED HERE FROM THE FOLDER-INFORMATION SECTION (client, 2026-09-04: *"ensure the
           keyword input is under Documents Details for bulk upload"*). It describes the DOCUMENTS,
           not their destination, so it belongs with them.
           Only the position changed: the state, the strip-and-say guard and the conditional write
@@ -4108,110 +4002,325 @@ export default function BulkUpload({
         reason it is optional on the upload form: it is a findability aid, not a property of the
         document, so requiring it would block an import of files nobody has words for. */}
 
-        <label
-          className="dms-field"
-          style={{ display: "block", marginTop: 16, maxWidth: 620 }}
-        >
-          <span>Keyword</span>
-          <input
-            type="text"
-            value={keyword}
-            // 50, matching the hint below and the upload form's own cap.
-            maxLength={50}
-            disabled={busy}
-            placeholder="Words to help find these documents later"
-            onChange={(e) => {
-              /* The same strip-and-say guard as Remark above — a character vanishing with no
+              <label
+                className="dms-field"
+                style={{ display: "block", marginTop: 5, maxWidth: 620 }}
+              >
+                <span>Keyword</span>
+                <input
+                  type="text"
+                  value={keyword}
+                  // 50, matching the hint below and the upload form's own cap.
+                  maxLength={50}
+                  disabled={busy}
+                  placeholder="Enter words, phrases, or names related to this file to make it easier to find in search."
+                  onChange={(e) => {
+                    /* The same strip-and-say guard as Remark above — a character vanishing with no
            explanation is how a field comes to feel broken. */
-              const clean = stripBlockedChars(e.target.value);
-              setKeywordBlocked(
-                clean !== e.target.value
-                  ? blockedCharsMessage(e.target.value)
-                  : undefined,
-              );
-              setKeyword(clean);
-            }}
-          />
-          {keywordBlocked ? (
-            <small className="dms-err">{keywordBlocked}</small>
-          ) : (
-            /* Matched to the upload form (client, 2026-09-04) - one field, one hint.
+                    const clean = stripBlockedChars(e.target.value);
+                    setKeywordBlocked(
+                      clean !== e.target.value
+                        ? blockedCharsMessage(e.target.value)
+                        : undefined,
+                    );
+                    setKeyword(clean);
+                  }}
+                />
+                {keywordBlocked ? (
+                  <small className="dms-err">{keywordBlocked}</small>
+                ) : (
+                  /* Matched to the upload form (client, 2026-09-04) - one field, one hint.
            NOTE the comment style: this is an EXPRESSION position (a ternary branch), so it
            takes a plain block comment. A JSX-children comment belongs in children, and a
            line comment in an attribute list - the three are not interchangeable, and this
            file has now been broken by each of them. */
-            <small>Max. 50 characters</small>
-          )}
-        </label>
-      </div>
-
-      {/* ── Actions ─────────────────────────────────────────────────────── */}
-      <div className="dms-actions">
-        <button
-          type="button"
-          className="dms-btn secondary"
-          onClick={resetForm}
-          disabled={busy}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          className="dms-btn primary"
-          onClick={() => {
-            handleUpload().catch(() => undefined);
-          }}
-          disabled={busy || preflight || deptLoading || picked.length === 0}
-        >
-          {/* `busy` first: once the run starts both are true, and "Uploading" is the truer word. */}
-          {busy
-            ? "Uploading…"
-            : preflight
-              ? "Checking…"
-              : `Upload${picked.length > 0 ? ` (${picked.length})` : ""}`}
-        </button>
-      </div>
-
-      {status && <p className="dms-status">{status}</p>}
-
-      {/* ── Results ─────────────────────────────────────────────────────── */}
-      {results && (
-        <div className="dms-results">
-          {runError ? (
-            <div className="dms-run-error">{runError}</div>
-          ) : (
-            <>
-              <p className="dms-results-summary">
-                {resultCounts.uploaded} uploaded
-                {resultCounts.skipped > 0 &&
-                  `, ${resultCounts.skipped} skipped`}
-                {resultCounts.failed > 0 && `, ${resultCounts.failed} failed`}
-                {resultCounts.tagFailed > 0 &&
-                  `, ${resultCounts.tagFailed} uploaded without tags`}
-                .
-                {resultCounts.tagFailed > 0 &&
-                  " Files listed as “uploaded, not tagged” are already in Documents — fix their metadata in the library rather than re-uploading."}
-              </p>
-              {problemRows.map((r, i) => (
-                <div
-                  className={`dms-result ${r.outcome}`}
-                  key={`${r.name}-${i}`}
-                >
-                  <span className="tag">{outcomeLabel[r.outcome]}</span>
-                  <span className="fname">{r.name}</span>
-                  {r.detail && <span className="why">{r.detail}</span>}
+                  <small>Max. 50 characters</small>
+                )}
+              </label>
+            </div>
+            {/* The file area has three states: empty drop zone, selected list, and
+            live upload progress. Spec 2026-08-03 §3. */}
+            {settings.allowedFileTypes.kind === "none" ? (
+              /* An empty AllowedFileTypes selection is a hard block, not a silent
+             fallback — spec 2026-07-30 §3. The message names the column and the
+             list because the client is the one who fixes it, in one click. */
+              <div className="dms-dropzone" style={{ opacity: 0.6 }}>
+                <span>{NO_TYPES_MESSAGE}</span>
+              </div>
+            ) : live ? (
+              <>
+                <div className="dms-overall-head">
+                  <span>
+                    {liveTotals.done} of {liveTotals.total} document
+                    {liveTotals.total === 1 ? "" : "s"} processed
+                  </span>
+                  <span>{livePct}%</span>
                 </div>
-              ))}
-            </>
-          )}
-        </div>
-      )}
+                <div className="dms-overall-track">
+                  <div
+                    className="dms-overall-fill"
+                    style={{ width: `${livePct}%` }}
+                  />
+                </div>
+                {/* Completed rows stay visible and keep their order, so the header
+                count can be checked against the list. */}
+                <div className="dms-progress-list">
+                  {live.map((f, fi) => {
+                    return (
+                      <div className={`dms-fp-row ${f.state}`} key={fi}>
+                        <span className={`dms-fp-tag ${f.state}`}>
+                          {fpLabel[f.state]}
+                        </span>
+                        <span className="dms-fp-name" title={f.name}>
+                          {f.name}
+                        </span>
+                        <span className="dms-fp-size">{fmtSize(f.size)}</span>
+                        {f.state === "uploading" ? (
+                          <UploadingBar
+                            target={f.pct}
+                            label={`Uploading ${f.name}`}
+                          />
+                        ) : (
+                          <span className="dms-fp-gap" aria-hidden="true" />
+                        )}
+                        {/* WARN: DE-SELECT, NOT DELETE. See `dropFromRun`, and `sru` on LiveFile for why
+                        a server-side delete must not come back here.
 
-      {/* The form body ends here. Both overlays and the toast are DELIBERATELY outside it:
+                        Offered ONLY on a row that was NOT uploaded. `done` is excluded because the row
+                        is the only record that the file went, and `tagFailed` IS offered because that
+                        file stays in the selection and would otherwise be re-sent on the next press.
+                        Held entirely while a run is in flight. */}
+                        {!busy &&
+                        (f.state === "skipped" ||
+                          f.state === "failed" ||
+                          f.state === "tagFailed") ? (
+                          <button
+                            type="button"
+                            className="dms-fp-x"
+                            aria-label={`Remove ${f.name} from the list`}
+                            title="Remove from the list (nothing is deleted)"
+                            onClick={() => dropFromRun(fi)}
+                          >
+                            ✕
+                          </button>
+                        ) : (
+                          <span className="dms-fp-xspacer" aria-hidden="true" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            ) : picked.length === 0 ? (
+              /* Click anywhere to open the picker, or drop files on it. */
+              <div
+                className={`dms-dropzone${dragOver ? " over" : ""}`}
+                role="button"
+                tabIndex={0}
+                onClick={() => fileRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    fileRef.current?.click();
+                  }
+                }}
+                // preventDefault on dragOver is what makes the element a valid drop
+                // target; without it the browser navigates to the file instead.
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  addFiles(e.dataTransfer?.files ?? null);
+                }}
+              >
+                {/* Inlined rather than imported: an <img> would need an asset loader
+                and a second network request for a 20-line glyph. */}
+                <svg
+                  className="dms-dropzone-icon"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M12 3v10m0 0 4-4m-4 4-4-4"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span>
+                  <span className="dms-link">
+                    Choose one or multiple documents or drag and drop them here
+                  </span>
+                </span>
+                <span className="hint">Max. {MAX_FILES} files.</span>
+              </div>
+            ) : (
+              // The list itself is now ALSO a drop target, not only the empty dropzone above —
+              // dragging more files onto an already-picked list previously did nothing (the
+              // browser just navigated to the file), which read as "the system didn't allow it".
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOver(true);
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOver(false);
+                  addFiles(e.dataTransfer?.files ?? null);
+                }}
+                style={
+                  dragOver
+                    ? {
+                        outline: "2px dashed #0f6c3f",
+                        outlineOffset: 4,
+                        borderRadius: 6,
+                      }
+                    : undefined
+                }
+              >
+                <div className="dms-selbar">
+                  <span>
+                    {picked.length} document{picked.length === 1 ? "" : "s"}{" "}
+                    selected
+                  </span>
+                  <button
+                    type="button"
+                    className="dms-link"
+                    disabled={busy}
+                    onClick={() => fileRef.current?.click()}
+                  >
+                    Add more
+                  </button>
+                </div>
+                <div className="dms-filelist">
+                  {picked.map((p) => {
+                    /* Marked on the ROW as well as in the toast: a toast is gone in seconds and a
+                   fifty-row list is not, so an admin scrolling back has no way to find which two
+                   files the message was about. Both rows are marked — which of them is the mistake
+                   is not knowable here, the same reasoning as the abbreviation sibling check. */
+                    const duplicate =
+                      picked.filter(
+                        (q) =>
+                          q.file.name.toLowerCase() ===
+                          p.file.name.toLowerCase(),
+                      ).length > 1;
+                    return (
+                      <div className="dms-filerow" key={p.key}>
+                        <span className="fname" title={p.file.name}>
+                          {p.file.name}
+                        </span>
+                        {duplicate && (
+                          <span
+                            style={{
+                              fontSize: 11,
+                              color: "#8a4b00",
+                              whiteSpace: "nowrap",
+                            }}
+                            title="Another selected file has this name. All of them can be uploaded — the later ones are offered a free name — but check this is not the same document picked twice."
+                          >
+                            Duplicate File Name
+                          </span>
+                        )}
+                        <span className="size">{fmtSize(p.file.size)}</span>
+                        <button
+                          type="button"
+                          className="dms-remove"
+                          aria-label={`Remove ${p.file.name}`}
+                          disabled={busy}
+                          onClick={() => removeFile(p.key)}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Actions ─────────────────────────────────────────────────────── */}
+          <div className="dms-actions">
+            <button
+              type="button"
+              className="dms-btn secondary"
+              onClick={resetForm}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="dms-btn primary"
+              onClick={() => {
+                handleUpload().catch(() => undefined);
+              }}
+              disabled={busy || preflight || deptLoading || picked.length === 0}
+            >
+              {/* `busy` first: once the run starts both are true, and "Uploading" is the truer word. */}
+              {busy
+                ? "Uploading…"
+                : preflight
+                  ? "Checking…"
+                  : `Upload${picked.length > 0 ? ` (${picked.length})` : ""}`}
+            </button>
+          </div>
+
+          {status && <p className="dms-status">{status}</p>}
+
+          {/* ── Results ─────────────────────────────────────────────────────── */}
+          {results && (
+            <div className="dms-results">
+              {runError ? (
+                <div className="dms-run-error">{runError}</div>
+              ) : (
+                <>
+                  <p className="dms-results-summary">
+                    {resultCounts.uploaded} uploaded
+                    {resultCounts.skipped > 0 &&
+                      `, ${resultCounts.skipped} skipped`}
+                    {resultCounts.failed > 0 &&
+                      `, ${resultCounts.failed} failed`}
+                    {resultCounts.tagFailed > 0 &&
+                      `, ${resultCounts.tagFailed} uploaded without tags`}
+                    .
+                    {resultCounts.tagFailed > 0 &&
+                      " Files listed as “uploaded, not tagged” are already in Documents — fix their metadata in the library rather than re-uploading."}
+                  </p>
+                  {problemRows.map((r, i) => (
+                    <div
+                      className={`dms-result ${r.outcome}`}
+                      key={`${r.name}-${i}`}
+                    >
+                      <span className="tag">{outcomeLabel[r.outcome]}</span>
+                      <span className="fname">{r.name}</span>
+                      {r.detail && <span className="why">{r.detail}</span>}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* The form body ends here. Both overlays and the toast are DELIBERATELY outside it:
           they are position: fixed, and the container above applies layout containment, which
           would make this wrapper their containing block and pin them to the form rather than
           the window. */}
-      </div>
+        </div>
       </div>
 
       {/* ── Name clashes, decided ONCE after the run ─────────────────────────────
@@ -4478,19 +4587,18 @@ export default function BulkUpload({
               />
             </svg>
             <p className="dms-popup-title">Upload Successful</p>
-            <p className="dms-popup-msg">
-              Your document is awaiting approval.
-              <br />
-              Please visit Home page to track progress.
-            </p>
+            {/* ⚠ THE BODY COPY IS REMOVED ENTIRELY (client, 2026-09-11: "remove body copy"), and it
+                was worth removing on its own merits: "Your document is awaiting approval" was
+                FALSE for this tool — Bulk Upload writes straight to Documents with no approval
+                step, per the (now also removed) warning banner above. */}
             <div className="dms-popup-stack">
               <button
                 className="dms-popup-btn confirm"
                 onClick={() => {
-                  window.location.href = siteUrl;
+                  window.location.href = mySubmissionsUrl;
                 }}
               >
-                Back to Document
+                My Submissions
               </button>
               <button
                 className="dms-popup-btn cancel"

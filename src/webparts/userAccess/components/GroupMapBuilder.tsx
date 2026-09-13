@@ -167,7 +167,7 @@ const s: Record<string, React.CSSProperties> = {
   gBody:      { padding: "4px 10px 10px 24px", background: "#fcfcfc" },
   // `display: block` is load-bearing: a <button> is inline by default, so the two disclosures and the
   // "Groups (308)" heading all rendered on ONE line, reading as a single run of words.
-  disc:       { display: "block", background: "none", border: "none", padding: "0 0 10px", cursor: "pointer", fontFamily: "'Segoe UI', sans-serif", fontSize: 13, fontWeight: 600, color: "#0f6c3f", textAlign: "left" },
+  disc:       { display: "block", background: "none", border: "none", padding: "0 0 10px", cursor: "pointer", fontFamily: "Arial, sans-serif", fontSize: 13, fontWeight: 600, color: "#0f6c3f", textAlign: "left" },
   th:         { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
   td:         { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "top" },
   delBtn:     { padding: "3px 10px", fontSize: 12, color: "#a4262c", border: "1px solid #a4262c", borderRadius: 4, background: "#fff", cursor: "pointer" },

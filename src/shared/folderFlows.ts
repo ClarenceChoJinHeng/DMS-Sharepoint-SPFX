@@ -445,6 +445,29 @@ export const FLOWS: Flow[] = [
        because the client's redesign has no instruction step to put it on. If that hint is ever
        shortened, this warning needs somewhere else to live. */
     steps: [
+      /* ⚠⚠ ADDED 2026-09-11, MIRRORING `structure`'S OPENING STEP EXACTLY — SAME id, SAME screen,
+         SAME gate, reused with no new wiring anywhere: `blocksNext`/`stepState` key on `step.id`
+         alone, never on which flow it sits in.
+
+         Only load-bearing for a BELOW-UNIT code rename, where the migrate step below is what
+         actually renames the folder — a document uploaded into the old-named folder mid-scan lands
+         there permanently, with no pending chain to keep the state visibly unfinished (unlike the
+         structure flow, which at least refuses to go live over drift). A plain Department/Unit
+         rename needs no pause at all: reconciliation does that rename directly, live.
+
+         ⚠ THE HARD GATE WAS A DELIBERATE CHOICE OVER A CHEAPER ONE. The alternative — warn only once
+         the scan finds a below-Unit folder to move, leave Next open for everything else — was
+         offered and explicitly declined: client, 2026-09-11, *"Hard gate it same as Change the
+         folder structure because we dont want to confuse the client, they have to go back and forth
+         which will be tiring."* The accepted cost: an ordinary Department/Unit rename now also
+         demands a pause-then-resume cycle it does not strictly need, in exchange for one consistent
+         shape across both flows rather than two different pause behaviours to explain. */
+      {
+        id: "pauseUploads",
+        label: "Temporarily disable uploads",
+        hint: "Temporarily restrict document uploads across the site while you rename or re-code a folder.",
+        screen: { kind: "component", id: "pauseUploads" },
+      },
       abbreviationsStep(
         "Rename Term Abbreviation",
         "Rename the folder in the Term Store and on this page, where applicable. Always RENAME a " +
@@ -470,6 +493,15 @@ export const FLOWS: Flow[] = [
         screen: { kind: "tab", tab: "migrate" },
       },
       RECONCILE,
+      /* Mirrors `structure`'s closing step, same reasoning: turning uploads back on is the step that
+         gets forgotten, and a forgotten pause is a DMS that quietly accepts no documents behind a
+         banner that makes it look deliberate. */
+      {
+        id: "resumeUploads",
+        label: "Enable Upload",
+        hint: "Enable upload access. Until you do, nobody can file a document.",
+        screen: { kind: "component", id: "pauseUploads" },
+      },
     ],
   },
   {

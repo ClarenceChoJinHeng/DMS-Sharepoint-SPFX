@@ -1,5 +1,6 @@
 import {
   SegmentCounts,
+  canDeleteArchive,
   canOfferFolderDelete,
   confirmationMatches,
   deletionSummary,
@@ -10,7 +11,7 @@ import {
 
 /** A successful count. Tests override only the field under examination. */
 function counted(over: Partial<SegmentCounts> = {}): SegmentCounts {
-  return { state: "counted", folders: 0, documents: 0, groupMapRows: 0, ...over };
+  return { state: "counted", folders: 0, documents: 0, groupMapRows: 0, abbreviationRows: 0, ...over };
 }
 
 describe("canOfferFolderDelete — the one rule that fails CLOSED", () => {
@@ -38,6 +39,29 @@ describe("canOfferFolderDelete — the one rule that fails CLOSED", () => {
   });
 });
 
+describe("canDeleteArchive — a SEPARATE fail-closed rule from canOfferFolderDelete", () => {
+  it("permits it only on a confirmed, explicit zero", () => {
+    expect(canDeleteArchive(counted({ archiveDocuments: 0 }))).toBe(true);
+  });
+
+  it("refuses when the archive has content", () => {
+    expect(canDeleteArchive(counted({ archiveDocuments: 7 }))).toBe(false);
+  });
+
+  it("refuses when the archive could not be counted — never guess empty on a failed read", () => {
+    expect(canDeleteArchive(counted({ archiveDocuments: undefined }))).toBe(false);
+    expect(canDeleteArchive(counted())).toBe(false); // field simply absent
+  });
+
+  it("is independent of the operational-library count — one can be empty while the other is not", () => {
+    // The whole reason this is a separate field: a segment with real archived records but an
+    // already-empty operational tree must still offer the ordinary folder delete.
+    const c = counted({ documents: 0, archiveDocuments: 42 });
+    expect(canOfferFolderDelete(c)).toBe(true);
+    expect(canDeleteArchive(c)).toBe(false);
+  });
+});
+
 describe("needsTypedConfirmation", () => {
   it("does NOT gate a brand-new empty segment", () => {
     // A gate that fires on the harmless case is one people learn to type through without reading.
@@ -51,6 +75,10 @@ describe("needsTypedConfirmation", () => {
   it("gates whenever folder-access mappings exist", () => {
     // Deleting these changes who can reach what, even though no file moves.
     expect(needsTypedConfirmation(counted({ groupMapRows: 1 }), false)).toBe(true);
+  });
+
+  it("gates whenever abbreviation rows exist — they are deleted unconditionally now", () => {
+    expect(needsTypedConfirmation(counted({ abbreviationRows: 1 }), false)).toBe(true);
   });
 
   it("always gates a folder delete, even of an empty segment", () => {
@@ -91,10 +119,14 @@ describe("confirmationMatches", () => {
 });
 
 describe("survivorLines", () => {
-  it("always states that the columns and abbreviations stay", () => {
+  it("states that the tier columns stay AND that the abbreviations are removed", () => {
+    // ⚠ REVERSED 2026-09-11: abbreviations used to be promised to survive. Retire now deletes them
+    // unconditionally, so this line has to warn about that, not reassure against it.
     const lines = survivorLines(false).join(" ");
     expect(lines).toContain("columns");
     expect(lines).toContain("abbreviations");
+    expect(lines).toContain("deleted");
+    expect(lines).not.toContain("stay, so re-creating");
   });
 
   it("says the files stay put when the folders are NOT being deleted", () => {
@@ -107,10 +139,43 @@ describe("survivorLines", () => {
 
   // The archive line: said only when the folders are actually going AND this site has an archive.
   // Client's decision 2026-08-26 — 7-year retained records outlive the segment that produced them,
-  // so the retire skips those two libraries and has to SAY so, or an admin who ticked "delete the
-  // folders" finds Archive/<SEG> still standing in the next reconciliation log.
-  it("warns that the archive survives when the folders go on an archive site", () => {
-    expect(survivorLines(true, true).join(" ")).toContain("archive folders are NOT deleted");
+  // so the retire skips those two libraries when they hold anything, and has to SAY so, or an admin
+  // who ticked "delete the folders" finds Archive/<SEG> still standing in the next reconciliation
+  // log. `archiveDocuments: 5` here — an explicit POSITIVE count — is what selects this branch.
+  //
+  // ⚠ SIMPLIFIED 2026-09-13: the "if this segment is ever recreated..." consequence that used to be
+  // tested here is GONE, deliberately — the archive code-reuse guard on segment CREATION (same day)
+  // makes that scenario structurally impossible now, so warning about it is stale advice rather
+  // than a safety net. `undefined` and a positive count now share the SAME plain sentence, since the
+  // displayed text no longer needs to distinguish "could not confirm" from "confirmed has content" —
+  // only `canDeleteArchive`'s underlying check still cares about that distinction.
+  it("says the archive is not removed when it has content on an archive site", () => {
+    const lines = survivorLines(true, true, 5).join(" ");
+    expect(lines).toContain("not removed");
+    expect(lines).toContain("only empty ones are removed automatically");
+    // The old, now-obsolete consequence wording must not reappear.
+    expect(lines).not.toContain("recreated");
+    expect(lines).not.toContain("Move existing folders");
+    expect(lines).not.toContain("recognised");
+  });
+
+  it("says the archive is removed too when it is confirmed empty — never 'not removed'", () => {
+    const lines = survivorLines(true, true, 0).join(" ");
+    expect(lines).toContain("empty too");
+    expect(lines).toContain("removed as well");
+    expect(lines).not.toContain("not removed");
+  });
+
+  it("gives the archive an unknown count the SAME wording as a confirmed positive one", () => {
+    // Not a distinction the client asked to keep — both mean "left alone", and `canDeleteArchive`
+    // is the only place that still needs to tell them apart.
+    expect(survivorLines(true, true, undefined).join(" ")).toBe(survivorLines(true, true, 5).join(" "));
+  });
+
+  // Omitting the third argument entirely must behave exactly like passing `undefined` explicitly —
+  // no caller should have to remember to pass it just to stay in the safe, fail-closed state.
+  it("treats an omitted archiveDocuments the same as an explicit undefined", () => {
+    expect(survivorLines(true, true).join(" ")).toBe(survivorLines(true, true, undefined).join(" "));
   });
 
   it("says nothing about an archive the site does not have", () => {
@@ -125,12 +190,13 @@ describe("survivorLines", () => {
     expect(survivorLines(false, true).join(" ")).not.toContain("archive");
   });
 
-  it("keeps the columns and abbreviations promise even when the folders go", () => {
+  it("keeps the columns promise even when the folders go, and still warns abbreviations are gone", () => {
     // The documents may have been MOVED elsewhere, which is exactly this workflow — so their
-    // metadata columns must survive the folders.
+    // metadata columns must survive the folders. Abbreviations do NOT survive either way.
     const lines = survivorLines(true).join(" ");
     expect(lines).toContain("columns");
     expect(lines).toContain("abbreviations");
+    expect(lines).toContain("deleted");
   });
 });
 
@@ -144,6 +210,27 @@ describe("deletionSummary", () => {
       "Deletes the segment and 1 folder-access mapping.",
     );
     expect(deletionSummary(counted({ groupMapRows: 3 }), false)).toContain("3 folder-access mappings");
+  });
+
+  it("counts abbreviation rows, unconditionally — they go whether or not the folders do", () => {
+    expect(deletionSummary(counted({ abbreviationRows: 1 }), false)).toBe(
+      "Deletes the segment and 1 abbreviation.",
+    );
+    expect(deletionSummary(counted({ abbreviationRows: 5 }), false)).toContain("5 abbreviations");
+    expect(deletionSummary(counted({ abbreviationRows: 5 }), true)).toContain("5 abbreviations");
+  });
+
+  // Added 2026-09-12 alongside canDeleteArchive — the summary (and the audit row that reuses it)
+  // must say the archive went too, whenever it genuinely did.
+  it("mentions the archive only when it was CONFIRMED empty and folders are being deleted", () => {
+    expect(deletionSummary(counted({ archiveDocuments: 0 }), true)).toContain("its empty archive");
+    // Not when the folders aren't being deleted at all — nothing archive-related is happening.
+    expect(deletionSummary(counted({ archiveDocuments: 0 }), false)).not.toContain("archive");
+    // Not when the archive has content — it was correctly left alone, so claiming it here would be
+    // an audit row describing a deletion that never happened.
+    expect(deletionSummary(counted({ archiveDocuments: 4 }), true)).not.toContain("archive");
+    // Not when it could not be counted — same reasoning, unknown must never be reported as done.
+    expect(deletionSummary(counted({ archiveDocuments: undefined }), true)).not.toContain("archive");
   });
 
   it("counts folders and documents only when the folders are being deleted", () => {

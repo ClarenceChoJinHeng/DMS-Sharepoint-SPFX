@@ -25,7 +25,6 @@ import {
   SearchHit,
   SearchLibrary,
   buildKql,
-  buildListFilter,
   buildRecentFilter,
   emptyCriteria,
   failedLibraries,
@@ -58,7 +57,12 @@ import {
   libraryTitle,
   libraryUrlSegment,
 } from "../../../shared/naming";
-import { primeNames } from "../../../shared/spNaming";
+import {
+  primeNames,
+  primeReadableApprovedSide,
+  cachedReadableApprovedSide,
+  ReadableLibrary,
+} from "../../../shared/spNaming";
 // The trail builder My Submissions uses — see the note where `trailOf` used to be.
 import { folderTrail, trailText } from "../../../shared/mySubmissions";
 // The `Keyword` column is created by reconciliation, so a library provisioned earlier may not have
@@ -176,7 +180,7 @@ function formatDate(iso: string): string {
 /* ─────────────────────────────── Styles ─────────────────────────────── */
 
 const s: Record<string, React.CSSProperties> = {
-  root: { fontFamily: '"Segoe UI", system-ui, sans-serif', color: "#242424" },
+  root: { fontFamily: 'Arial, sans-serif', color: "#242424" },
 
   /* ---- The hero (client design, 2026-08-30) --------------------------------
      ⚠ Every key used anywhere in this file MUST exist in this object: it is a
@@ -218,7 +222,7 @@ const s: Record<string, React.CSSProperties> = {
        `width: 100%` that keeps the content full width once this becomes a flex container — a flex
        item shrinks to its content by default, so removing one without the other narrows the search
        bar to the width of the words in it. */
-    minHeight: 275,
+    minHeight: 400,
     display: "flex",
     flexWrap: "wrap",
     alignItems: "center",
@@ -732,11 +736,7 @@ export default function DocumentSearch({
       if (!modes.ok) {
         // Named, not silent. Without segments the tier filters cannot be offered at all, and an
         // admin needs to know the cause is a config read rather than an empty repository.
-        setConfigWarning(
-          "Segment and tier filters are unavailable — the configuration list could not be read " +
-            `(${modes.status === 0 ? "the request did not complete" : `HTTP ${modes.status}`}). ` +
-            "Free-text and the other filters still work.",
-        );
+        setConfigWarning("Segment and tier filters are unavailable");
       } else {
         const list: Segment[] = [];
         for (const row of (modes.body.value as RawRow[]) ?? []) {
@@ -833,19 +833,45 @@ export default function DocumentSearch({
 
   /* ── Reads ─────────────────────────────────────────────────────────────── */
 
+  /* ⚠⚠ SEARCH'S OWN VIEW OF THE DOCUMENTS SIDE, NOT THE HC PAIR (2026-09-10, client: "allow C level
+     able to search archive"). `hcAvailable()` is BOTH-OR-NEITHER, and `primeHcLibraries` probes the
+     HC APPROVAL library first and stops if it does not resolve. A C-Level holds nothing in either
+     approval library, so that probe is security-trimmed to a 404 — and HC Documents, then the HC
+     archive, were never probed at all, although `LIBRARY_ROLES` grants C-Levels Read on both. So
+     search silently left them out of scope for exactly the people the archive is narrowed TO.
+     The pair rule is right for ROUTING an upload and wrong here. Each library is asked on its own;
+     a reader without access simply fails that probe and loses nothing, since search trims by ACL.
+     ⚠ EVERY ROUTE THAT NAMES OR READS A LIBRARY GOES THROUGH THESE — scope, labels, the folder
+     trail, `libraryOfPath` and `apiTitle`. Adding a segment to the scope WITHOUT the classification
+     would bring back HC hits labelled `Documents`, and `openRow` would read the NORMAL library with
+     an HC item id: a different document, because item ids are per list. */
+  const hcDocsLib = (): ReadableLibrary | undefined =>
+    cachedHcLibraries()?.documents ?? cachedReadableApprovedSide()?.hcDocuments;
+  const archiveLib = (): ReadableLibrary | undefined =>
+    cachedArchiveLibraries()?.normal ?? cachedReadableApprovedSide()?.archive;
+  const archiveHcLib = (): ReadableLibrary | undefined =>
+    cachedArchiveLibraries()?.hc ?? cachedReadableApprovedSide()?.archiveHc;
+  /** The title a REQUEST uses. `libApiTitle` answers the logical KEY for an unresolved HC or archive
+   *  library — right for routing, a guaranteed 404 here for anyone who cannot see an approval library. */
+  const apiTitle = (lib: SearchLibrary): string => {
+    if (lib === "DocumentsHC") return hcDocsLib()?.title ?? libApiTitle(lib);
+    if (lib === "Archive") return archiveLib()?.title ?? libApiTitle(lib);
+    if (lib === "ArchiveHC") return archiveHcLib()?.title ?? libApiTitle(lib);
+    return libApiTitle(lib);
+  };
+
   const libraryLabel = (lib: SearchLibrary): string => {
     const hc = cachedHcLibraries();
     if (lib === "Documents") return documentsLibraryTitle();
     if (lib === "Staging") return libraryTitle();
-    if (lib === "DocumentsHC") return hc ? hc.documents.title : "HC Documents";
+    if (lib === "DocumentsHC") return hcDocsLib()?.title ?? "HC Documents";
     if (lib === "StagingHC")
       return hc ? hc.approval.title : "HC Approval Document";
     /* The archive pair. Falls back to the KEY rather than a guessed title: an archive is resolved
        or it is not, and inventing "Archive" for a library whose real name nobody read would put a
        name on screen that matches no library on the site. */
-    const arc = cachedArchiveLibraries();
-    if (lib === "Archive") return arc ? arc.normal.title : lib;
-    if (lib === "ArchiveHC") return arc && arc.hc ? arc.hc.title : lib;
+    if (lib === "Archive") return archiveLib()?.title ?? lib;
+    if (lib === "ArchiveHC") return archiveHcLib()?.title ?? lib;
     return lib;
   };
 
@@ -858,21 +884,21 @@ export default function DocumentSearch({
    */
   const trailSegments = ((): string[] => {
     const hc = cachedHcLibraries();
-    const arc = cachedArchiveLibraries();
     return [
       docsSegment,
-      /* The approval library too: its REST hits carry `/ApprovalDocument/` in the path, and without
-         it the trail would open with the library name presented as a folder. */
+      /* The approval library too. Search no longer reads it (2026-09-10), so nothing here should
+         carry its path — kept only because stripping a segment no hit contains costs nothing, and
+         a hit that ever did would otherwise show the library name as the first folder. */
       libraryUrlSegment(),
-      ...(hc ? [hc.documents.urlSegment, hc.approval.urlSegment] : []),
-      ...(arc ? [arc.normal.urlSegment, ...(arc.hc ? [arc.hc.urlSegment] : [])] : []),
+      ...(hc ? [hc.approval.urlSegment] : []),
+      hcDocsLib()?.urlSegment ?? "",
+      archiveLib()?.urlSegment ?? "",
+      archiveHcLib()?.urlSegment ?? "",
     ].filter((x) => (x ?? "").length > 0);
   })();
 
   /** Which approved-side library a crawled result came from, by its path. */
   const libraryOfPath = (path: string): SearchLibrary => {
-    const hc = cachedHcLibraries();
-    const arc = cachedArchiveLibraries();
     const p = (path ?? "").toLowerCase();
     const has = (seg: string): boolean =>
       seg.length > 0 && p.indexOf(`/${seg.toLowerCase()}/`) !== -1;
@@ -883,9 +909,12 @@ export default function DocumentSearch({
        ⚠ AND THIS IS NOT COSMETIC. `openRow` resolves the per-item read through
        `libApiTitle(hit.library)`, so a mislabelled hit reads the WRONG library and the detail panel
        comes back with no metadata at all. Reported live 2026-09-05. */
-    if (arc && arc.hc && has(arc.hc.urlSegment)) return "ArchiveHC";
-    if (arc && has(arc.normal.urlSegment)) return "Archive";
-    if (hc && has(hc.documents.urlSegment)) return "DocumentsHC";
+    const archHc = archiveHcLib();
+    const arch = archiveLib();
+    const hcDocs = hcDocsLib();
+    if (archHc && has(archHc.urlSegment)) return "ArchiveHC";
+    if (arch && has(arch.urlSegment)) return "Archive";
+    if (hcDocs && has(hcDocs.urlSegment)) return "DocumentsHC";
     return "Documents";
   };
 
@@ -896,9 +925,11 @@ export default function DocumentSearch({
    * There is no 403 to interpret here, which is why only the live reads carry a `refused` outcome.
    */
   const runSearch = async (c: SearchCriteria): Promise<LibraryResult[]> => {
-    const hc = cachedHcLibraries();
     const segs = [docsSegment];
-    if (hc) segs.push(hc.documents.urlSegment);
+    // Search's own probe, not the HC pair — see `hcDocsLib`. A C-Level reads HC Documents without
+    // being able to see the HC approval library, which is what the pair rule demands.
+    const hcDocs = hcDocsLib();
+    if (hcDocs) segs.push(hcDocs.urlSegment);
     /* ⚠ THE ARCHIVE IS SEARCHABLE (2026-08-22), and leaving it out would be the worse default. A
        document that passed seven years would become unfindable — and search is the ONLY route to it
        once it is out of the folders people browse. Nobody would report that as a bug; they would
@@ -907,11 +938,10 @@ export default function DocumentSearch({
        Safe by the same argument as the HC library beside it: Search applies ACLs at query time, so a
        reader gets archive rows only where they already hold Read. This web part enforces no
        permissions and must never be changed to — a bug here can only ever return FEWER rows. */
-    const arc = cachedArchiveLibraries();
-    if (arc) {
-      segs.push(arc.normal.urlSegment);
-      if (arc.hc) segs.push(arc.hc.urlSegment);
-    }
+    const arch = archiveLib();
+    const archHc = archiveHcLib();
+    if (arch) segs.push(arch.urlSegment);
+    if (archHc) segs.push(archHc.urlSegment);
     const query = buildKql(c, kqlPathScope(siteUrl, segs));
     // Blank means "do not run" — never "match everything". An unscoped KQL query searches the whole
     // tenant, which would show documents from sites this system has nothing to do with.
@@ -988,12 +1018,13 @@ export default function DocumentSearch({
     return [{ library: "Documents", outcome: "ok", hits }];
   };
 
-  /** One live list read — used for the approval libraries and for the recency top-up. */
+  /** One live list read — the recency top-up on the approved side. The approval libraries are no
+   *  longer read here (2026-09-10); see the job list in `search()`. */
   const runListRead = async (
     lib: SearchLibrary,
     filter: string,
   ): Promise<LibraryResult> => {
-    const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/items`;
+    const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(apiTitle(lib))}')/items`;
     const core = `Id,FileLeafRef,FileRef,Created,Modified,Author/Title,File/Length,File/UniqueId`;
     /* ⚠ THE THREE TAXONOMY COLUMNS ARE SELECTED, NEVER FILTERED. `$filter` cannot touch them — `eq`
        answers 400 and the `TaxCatchAllLabel` workaround answers 500, both failing the WHOLE request
@@ -1031,7 +1062,7 @@ export default function DocumentSearch({
          names the library and the status. */
       if (!refused) {
         console.error(
-          `CRS Search: ${libApiTitle(lib)} read failed (HTTP ${r.status})`,
+          `CRS Search: ${apiTitle(lib)} read failed (HTTP ${r.status})`,
           r.body,
         );
       }
@@ -1111,8 +1142,11 @@ export default function DocumentSearch({
 
        Idempotent and cached, so on every settled page load this costs nothing. */
     await primeNames(sp, siteUrl).catch(() => undefined);
+    // Awaited here for the same reason as `primeNames` above: every scope and title below reads
+    // its cache, and a search pressed before it settles would drop the HC and archive libraries.
+    await primeReadableApprovedSide(sp, siteUrl).catch(() => undefined);
 
-    const hc = cachedHcLibraries();
+    const hcDocs = hcDocsLib();
 
     /* ⚠ RESOLVED PER LIBRARY, NOT ONCE (2026-09-04). One filter string is sent to up to four
        libraries, and they are provisioned independently — a site can carry `Keyword` on the normal
@@ -1123,44 +1157,47 @@ export default function DocumentSearch({
        `libraryHasColumns` caches per library, so this is at most one extra read per library per
        page, and it answers FALSE on any failure — the safe direction, because the cost of a wrong
        `true` is a dead search and the cost of a wrong `false` is one field not being matched. */
-    const hasKw = async (
-      t: "Staging" | "Documents" | "StagingHC" | "DocumentsHC",
-    ): Promise<boolean> => {
+    const hasKw = async (t: "Documents" | "DocumentsHC"): Promise<boolean> => {
       try {
         return await libraryHasColumns(
           context.spHttpClient,
           siteUrl,
-          libApiTitle(t),
+          apiTitle(t),
           [KEYWORD_COLUMN],
         );
       } catch {
         return false;
       }
     };
-    const kwStaging = await hasKw("Staging");
     const kwDocuments = await hasKw("Documents");
-    const kwStagingHc = hc ? await hasKw("StagingHC") : false;
-    const kwDocumentsHc = hc ? await hasKw("DocumentsHC") : false;
+    const kwDocumentsHc = hcDocs ? await hasKw("DocumentsHC") : false;
 
-    const listFilter = buildListFilter(criteria, kwStaging);
-    const listFilterHc = buildListFilter(criteria, kwStagingHc);
     // Generous against a crawl measured in minutes: too tight leaves exactly the invisible gap this
     // exists to close, and the cost of being generous is a few extra rows to dedupe.
     const cutoff = recencyCutoff(new Date(), 24);
     const recentFilter = buildRecentFilter(criteria, cutoff, kwDocuments);
     const recentFilterHc = buildRecentFilter(criteria, cutoff, kwDocumentsHc);
 
+    /* ⚠ THE APPROVAL LIBRARIES ARE NOT SEARCHED (client, 2026-09-10: "it is not suppose to search
+       anything from staging library only document library"). They were, by design, so an uploader
+       could find their own file while still pending — and the cost of that showed up as a banner:
+       a viewer with no role in `LIBRARY_ROLES.Staging` is security-trimmed to a 404 on that library,
+       which `runListRead` counted as a FAILURE (its `refused` rule covers only HC and only 401/403),
+       so every non-uploader saw "Approval for Document (HTTP 404)" on every search.
+       ⚠ THE COST, CHOSEN KNOWINGLY: a pending document is now findable by nobody through search,
+       its own uploader included — My Submissions is where an uploader finds their pending files.
+       Approved files are still found, including in the ~24h before they are crawled, by the
+       recency top-up below. Re-adding a `runListRead("Staging", …)` job must come with a `refused`
+       rule that treats a 404 on an approval library as a permission answer, not an error. */
     const jobs: Promise<LibraryResult[]>[] = [
       runSearch(criteria),
-      runListRead("Staging", listFilter).then((x) => [x]),
       /* The gap between the engines: a file approved two minutes ago has left the approval library
          and is not yet crawled, so it is in NEITHER. `Modified` is indexable and the window keeps
          the set tiny, so this stays threshold-safe at any library size — which is precisely why the
          main read could not be done this way. */
       runListRead("Documents", recentFilter).then((x) => [x]),
     ];
-    if (hc) {
-      jobs.push(runListRead("StagingHC", listFilterHc).then((x) => [x]));
+    if (hcDocs) {
       jobs.push(runListRead("DocumentsHC", recentFilterHc).then((x) => [x]));
     }
 
@@ -1200,7 +1237,7 @@ export default function DocumentSearch({
        per row would be hundreds. It also returns LABELS, which is what makes a taxonomy value
        readable instead of the bare lookup id that reached the screen on 2026-08-14. */
     jsonGet(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(h.library))}')` +
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(apiTitle(h.library))}')` +
         `/items(${h.itemId})/FieldValuesAsText`,
     )
       .then((r) => setFieldText(r.ok ? (r.body as Record<string, string>) : {}))
@@ -1224,7 +1261,10 @@ export default function DocumentSearch({
       fieldText: fieldText ?? {},
       leading: [
         { label: "Library", value: libraryLabel(open.library) },
-        { label: "Location", value: trailText(folderTrail(open.path, trailSegments)) },
+        {
+          label: "Location",
+          value: trailText(folderTrail(open.path, trailSegments)),
+        },
       ],
       trailing: [
         { label: "Uploaded by", value: open.author },
@@ -1556,21 +1596,15 @@ export default function DocumentSearch({
           a document was never filed. */}
       {failed.length > 0 ? (
         <div style={{ ...s.note, ...s.noteWarn }}>
+          {/* Client, 2026-09-11: the status code and the "missing from these results" sentence came
+              off the screen. The status is still in the console (`runListRead` logs every failure
+              that is not a refusal), which is where it is needed. */}
           {failed.length === 1
             ? "One library could not be searched"
             : `${failed.length} libraries could not be searched`}
           {": "}
-          {failed
-            .map(
-              (f) =>
-                `${libraryLabel(f.library)} (${
-                  f.status === 0
-                    ? "the request did not complete"
-                    : `HTTP ${f.status}`
-                })`,
-            )
-            .join(", ")}
-          . Anything filed there is missing from these results.
+          {failed.map((f) => libraryLabel(f.library)).join(", ")}
+          , please try again
         </div>
       ) : undefined}
 
@@ -1583,10 +1617,7 @@ export default function DocumentSearch({
       {unnarrowedLibraries.length > 0 ? (
         <div style={{ ...s.note, ...s.noteWarn }}>
           Document type, Year and Confidentiality could not be applied to{" "}
-          {unnarrowedLibraries.map((l) => libraryLabel(l)).join(", ")}, so
-          results from {unnarrowedLibraries.length === 1 ? "it" : "them"} may
-          include documents that do not match those three filters. Every other
-          filter was applied everywhere.
+          {unnarrowedLibraries.map((l) => libraryLabel(l)).join(", ")}.
         </div>
       ) : undefined}
 
@@ -1598,22 +1629,12 @@ export default function DocumentSearch({
         <p
           style={{ ...s.sub, marginTop: 0, marginBottom: 10, color: "#8a4b00" }}
         >
-          <strong>Banner image not loading (HTTP {bannerNote}).</strong> The
-          page fell back to the plain green. The address it tried is{" "}
-          <code>{heroImageUrl}</code> — either nothing is there, or this account
-          cannot read it. Open that address in a new tab: if it downloads or
-          displays, the file is fine and <strong>Site Assets</strong> needs Read
-          for the site members group; if it fails, upload the image to Site
-          Assets under that exact name, or set a different address in this web
-          part&rsquo;s property pane. Only administrators see this line.
+          <strong>Banner image not loading</strong>
         </p>
       )}
 
       {state === "error" ? (
-        <div style={s.empty}>
-          The search could not be completed, so this is <strong>not</strong> a
-          statement that nothing matched. See the message above, then try again.
-        </div>
+        <div style={s.empty}>The search could not be completed.</div>
       ) : state === "empty" ? (
         /* ⚠ THE ATTENTION BOX, NOT PLAIN TEXT (client, 2026-09-04: *"when something is not found can
             you use the red box design like the one is using in Retire a segment?"*). Same
@@ -1627,7 +1648,8 @@ export default function DocumentSearch({
             visual register, which is what the split was for. If the error state should be red too,
             that needs its own decision. */
         <div style={{ ...s.noteWarn, padding: "12px 14px", borderRadius: 8 }}>
-          No result found.
+          {/* Wording per the client's sheet, 2026-09-11 (marked tentative on their own item). */}
+          No Result Found. Please Try Again.
         </div>
       ) : (
         <div>
@@ -1660,13 +1682,10 @@ export default function DocumentSearch({
                   {isHcLibrary(h.library) ? (
                     <span style={{ ...s.chip, ...s.chipHc }}>HC</span>
                   ) : undefined}
-                  {h.library === "Staging" || h.library === "StagingHC" ? (
-                    <span style={{ ...s.chip, ...s.chipPending }}>
-                      Awaiting approval
-                    </span>
-                  ) : undefined}
                 </div>
-                <div style={s.meta}>{trailText(folderTrail(h.path, trailSegments))}</div>
+                <div style={s.meta}>
+                  {trailText(folderTrail(h.path, trailSegments))}
+                </div>
                 <div style={s.meta}>
                   {[h.author, formatDate(h.modified), formatBytes(h.size)]
                     .filter((x) => x.length > 0)

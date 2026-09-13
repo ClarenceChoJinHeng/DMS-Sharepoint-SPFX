@@ -37,6 +37,10 @@ import { EVENT } from "../../../shared/auditLog";
 import { normalizeRoleValue } from "../../../shared/groupMapModel";
 import { isSystemAdmin } from "../../../shared/spGroups";
 import { closeOnBackdrop } from "../../../shared/backdropClose";
+// The file view is SHARED with My Submissions (client, 2026-09-10) - one component, two mounts.
+import { FileDetailPanel } from "../../../shared/fileDetailPanel";
+import { folderTrail, trailText, formatSubmittedOn } from "../../../shared/mySubmissions";
+import { encodeServerRelativePath } from "../../../shared/pathEncoding";
 import {
   RequestRow,
   RequestStatus,
@@ -104,9 +108,27 @@ const GET_FRESH = GET;
 const bust = (): string =>
   `&_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
+/**
+ * The document behind a request, as the file view needs it.
+ *
+ * `gone` is its own state rather than an empty `ready`: an approved deletion is precisely the request
+ * whose document no longer exists, and a blank preview under it would read as a broken page.
+ */
+type FileView =
+  | { state: "loading" }
+  | {
+      state: "ready";
+      name: string;
+      fileRef: string;
+      size?: string;
+      modified?: Date;
+      fieldText: Record<string, string>;
+    }
+  | { state: "gone"; message: string };
+
 const s: Record<string, React.CSSProperties> = {
   wrap: {
-    fontFamily: '"Segoe UI", system-ui, sans-serif',
+    fontFamily: 'Arial, sans-serif',
     color: "#242424",
     fontSize: 13,
     lineHeight: 1.5,
@@ -197,6 +219,10 @@ const s: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   meta: { fontSize: 11.5, color: "#6b7a71", marginTop: 4 },
+  /* The file name as a link into the file view, and the band back out - My Submissions' own. */
+  nameBtn: { background: "none", border: "none", padding: 0, font: "inherit", fontWeight: 600, color: "#0f6cbd", cursor: "pointer", textAlign: "left", flex: "1 1 240px", wordBreak: "break-word" },
+  backBand: { background: "rgba(15, 108, 63, 0.08)", borderRadius: 4, padding: "10px 16px", marginBottom: 20 },
+  backLink: { background: "none", border: "none", padding: 0, font: "inherit", fontSize: 14, fontWeight: 600, color: "#0f6c3f", cursor: "pointer" },
   /* ⚠ `s` IS A `Record<string, CSSProperties>`: a key that does not exist yields `undefined`
      and the element renders UNSTYLED with a green build. Add every new key here. */
   reasonLabel: {
@@ -681,6 +707,25 @@ export default function Requests({
   const [aclsLoading, setAclsLoading] = useState(false);
   const [aclsRead, setAclsRead] = useState(false);
   const [revoking, setRevoking] = useState<string | undefined>(undefined);
+  /* ── The file view (client, 2026-09-10) ──
+     Clicking a request's file name opens the SAME view My Submissions shows an uploader - preview and
+     details - with the request card above it, Approve and Reject included. The request emails link
+     here (`?request=<Id>`) now that their "Open the request to approve or reject" link is gone.
+
+     Held as an ID, never a row object: a decision reloads the list, and a stored object would go on
+     showing the status it had before the click. */
+  const [viewId, setViewId] = useState<number | undefined>(undefined);
+  const [fileView, setFileView] = useState<FileView | undefined>(undefined);
+  /* A superseded read must not win - two can be in flight when the viewed row's status changes. */
+  const viewSeq = useRef(0);
+  /* Read ONCE from the address bar, and stripped, so a refresh does not re-open a closed view. */
+  const linkedRequest = useRef<number | undefined>(undefined);
+  const linkRead = useRef(false);
+  if (!linkRead.current) {
+    linkRead.current = true;
+    const n = Number(new URLSearchParams(window.location.search).get("request") ?? "");
+    if (isFinite(n) && n > 0) linkedRequest.current = n;
+  }
 
   const listUrl = (): string =>
     `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')`;
@@ -1818,6 +1863,133 @@ export default function Requests({
     }
   }, [notice]);
 
+  /**
+   * Resolve and read the document behind one request.
+   *
+   * ⚠ `ItemUniqueId` FIRST, THE STAMP SECOND - the same order the actions use. A request raised on a
+   * pending file records the approval-library copy's id, and Auto-route copies-then-deletes, so after
+   * approval that id is dead. `findByStamp` then finds the routed copy by `SubmissionFileId`. Only a
+   * definite 404 falls through: a throttle says nothing about where the file is.
+   */
+  const loadFileView = async (row: RequestRow): Promise<void> => {
+    const seq = ++viewSeq.current;
+    const settle = (v: FileView): void => {
+      if (viewSeq.current === seq) setFileView(v);
+    };
+    setFileView({ state: "loading" });
+    const read = (url: string): Promise<SPHttpClientResponse> =>
+      context.spHttpClient.get(url, SPHttpClient.configurations.v1, { headers: GET });
+    try {
+      let path: string | undefined;
+      if (row.itemUniqueId) {
+        const res = await read(
+          `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(row.itemUniqueId)}')?$select=ServerRelativeUrl${bust()}`,
+        );
+        if (res.ok) {
+          path = ((await res.json()) as { ServerRelativeUrl?: string }).ServerRelativeUrl;
+        } else if (res.status !== 404) {
+          settle({ state: "gone", message: `The document could not be read (HTTP ${res.status}). Refresh and try again.` });
+          return;
+        }
+      }
+      if (!path) {
+        const lookup = await findByStamp(row.submissionFileId ?? "");
+        if (lookup.kind === "found" && lookup.fileRef.trim().length > 0) {
+          path = lookup.fileRef;
+        } else {
+          settle({
+            state: "gone",
+            message:
+              lookup.kind === "ambiguous"
+                ? `More than one document (${lookup.count}) carries this request's reference, so none is shown.`
+                : lookup.kind === "none"
+                  ? "This document is no longer in the library - it may already have been deleted."
+                  : "This document could not be located. It may have been deleted, or moved since the request was raised.",
+          });
+          return;
+        }
+      }
+      /* Parameter alias, never an inline literal - a deep path answers 400 otherwise (gotcha #9). */
+      const alias = `@f='${encodeServerRelativePath(path)}'`;
+      const base = `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)`;
+      const fr = await read(`${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`);
+      if (!fr.ok) {
+        settle({
+          state: "gone",
+          message: fr.status === 404
+            ? "This document is no longer in the library - it may already have been deleted."
+            : `The document could not be read (HTTP ${fr.status}). Refresh and try again.`,
+        });
+        return;
+      }
+      const f = (await fr.json()) as {
+        Name?: string;
+        Length?: string;
+        TimeLastModified?: string;
+        ServerRelativeUrl?: string;
+      };
+      /* The details are a decoration on the preview, so a failed read costs them and nothing else -
+         the panel says so rather than blanking. */
+      let fieldText: Record<string, string> = {};
+      try {
+        const t = await read(`${base}/ListItemAllFields/FieldValuesAsText?${alias}${bust()}`);
+        if (t.ok) fieldText = (await t.json()) as Record<string, string>;
+      } catch {
+        /* keep {} */
+      }
+      /* Document Date re-read RAW and formatted locally, as My Submissions does: FieldValuesAsText
+         hands back a US-locale string, and parsing that back is gotcha #1's trap. */
+      try {
+        const raw = await read(`${base}/ListItemAllFields?$select=DocumentDate&${alias}${bust()}`);
+        if (raw.ok) {
+          const iso = ((await raw.json()) as { DocumentDate?: string }).DocumentDate;
+          const d = iso ? new Date(iso) : undefined;
+          if (d && !isNaN(d.getTime())) fieldText.DocumentDate = formatSubmittedOn(d);
+        }
+      } catch {
+        /* keep SharePoint's own string */
+      }
+      const modified = f.TimeLastModified ? new Date(f.TimeLastModified) : undefined;
+      settle({
+        state: "ready",
+        name: f.Name || row.itemName,
+        fileRef: f.ServerRelativeUrl || path,
+        size: f.Length,
+        modified: modified && !isNaN(modified.getTime()) ? modified : undefined,
+        fieldText,
+      });
+    } catch (e) {
+      settle({ state: "gone", message: `The document could not be read: ${(e as Error).message}` });
+    }
+  };
+
+  /* ⚠ ONE ROUTE IN, ONE LOADER. A click and an email link both only set `viewId`; this effect does
+     the reading. It also re-reads when the viewed request's STATUS changes - an approved deletion
+     recycles the file, and the preview must not go on showing it. Declared above the early return. */
+  const viewedStatus =
+    viewId === undefined || rows.state !== "ready"
+      ? undefined
+      : rows.value.filter((r) => r.id === viewId)[0]?.status;
+  useEffect(() => {
+    if (viewId === undefined || rows.state !== "ready") return;
+    const row = rows.value.filter((r) => r.id === viewId)[0];
+    if (row) loadFileView(row).catch(() => undefined);
+  }, [viewId, viewedStatus]);
+
+  useEffect(() => {
+    const id = linkedRequest.current;
+    if (id === undefined || rows.state !== "ready") return;
+    linkedRequest.current = undefined;
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("request");
+      window.history.replaceState(window.history.state, "", u.toString());
+    } catch {
+      /* an address bar we cannot tidy costs nothing */
+    }
+    setViewId(id);
+  }, [rows]);
+
   /* ── The three accordions (client, 2026-09-04) — STATE ONLY; the rest is below ──
    *
    * ⚠⚠ THIS `useState` LIVES UP HERE BECAUSE IT SHIPPED BELOW THE EARLY RETURN AND BLANKED THE WHOLE
@@ -1997,6 +2169,8 @@ export default function Requests({
   const requestCard = (
     r: RequestRow,
     actionable: boolean,
+    /* False on the file view itself, where the name would link to the page already open. */
+    linkName: boolean = true,
   ): React.ReactElement => (
     <div
       key={r.id}
@@ -2008,14 +2182,36 @@ export default function Requests({
           a column of badges could not be scanned against a column of names. */}
       <div style={s.rowTop}>
         <span style={{ ...s.pill, ...PILL[r.status] }}>{r.status}</span>
-        <span style={s.name}>{r.itemName}</span>
+        {linkName ? (
+          <button
+            type="button"
+            style={s.nameBtn}
+            title="Open the document"
+            onClick={(e) => {
+              try {
+                (e.currentTarget.closest("section") as HTMLElement | null)?.scrollIntoView({ block: "start" });
+              } catch {
+                /* scrolling is a courtesy */
+              }
+              setViewId(r.id);
+            }}
+          >
+            {r.itemName}
+          </button>
+        ) : (
+          <span style={s.name}>{r.itemName}</span>
+        )}
       </div>
       <div style={s.meta}>
         {r.requestedBy} · {r.unit} · {longDate(r.requestedAt)}
         {/* NAMED ON THE ROW. The two stages are deleted from different libraries and mean different
             things — an unapproved draft nobody else has seen, versus a document the unit has been
             filing against. An approver should not have to open the dialog to tell them apart. */}
-        {stageOf(r) === "pending" && (
+        {/* ⚠ ONLY WHILE THE REQUEST IS PENDING (client, 2026-09-10). The tag says the FILE was pending
+            when the request was raised - but beside a decided request's "Approved" badge it read as a
+            contradiction ("Approved · still awaiting approval"). It helps decide the answer, and once
+            the answer is given it has no job left. */}
+        {stageOf(r) === "pending" && r.status === "Pending" && (
           <strong style={{ color: "#8a4b00" }}>
             {" "}
             · still awaiting approval
@@ -2297,6 +2493,206 @@ export default function Requests({
   const missingCount = [stageMissing, revokedByMissing, fileIdMissing].filter(
     (m) => m,
   ).length;
+
+  /* The decision dialog, as a value - both the list and the file view render it, and two copies of
+     the one place a reason is required would drift. */
+  const decisionDialog = (
+    <>
+      {/* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. A note is REQUIRED
+          on every decision here, so the old onClick lost a typed rejection reason the moment the
+          approver selected any of it and released outside the dialog. */}
+      {deciding && (
+        <div
+          style={s.modalBg}
+          onMouseDown={closeOnBackdrop(() => {
+            if (!busy) setDeciding(undefined);
+          })}
+        >
+          <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+            <p style={{ ...s.head, fontSize: 16, margin: "0 0 4px" }}>
+              {deciding.approve ? "Approve" : "Reject"} this request?
+            </p>
+            {/* ⚠ THE FILENAME IS SHOWN ON BOTH, though the client's REJECT mockup omits it. Only the
+                Approve mockup carried it, and dropping it from Reject would leave an approver
+                refusing a request with nothing on screen saying WHICH document — the one fact they
+                cannot reconstruct once the dialog is open. Adding information the mockup left out is
+                the safe direction; say so if it is unwanted. */}
+            <p style={s.modalFile}>{deciding.row.itemName}</p>
+            {/* ⚠ THE SUMMARY IS SHOWN FOR A SHARE ONLY, AND THE ASYMMETRY IS DELIBERATE.
+                Client, 2026-09-07: *"remove the wording 'This file will be moved to the recycle bin,
+                where it can be restored for 93 days.'"* — that is exactly what `decisionSummary`
+                returns for a DELETION, so the deletion branch is gone.
+
+                ⚠ IT IS NOT GONE FOR A SHARE, because the share branch is a different sentence doing
+                a different job: *"X will be able to view Y, with no expiry date."* It is the only
+                place the RECIPIENT and the expiry are confirmed before access is granted, and an
+                approver who cannot see who they are granting to is being asked to decide blind. The
+                client quoted the deletion wording; removing the share line as well would drop
+                something they did not ask about. Say so if it is also unwanted.
+
+                ⚠ AND `decisionSummary` ITSELF IS UNTOUCHED — it still feeds the outcome banner after
+                a decision (`Approved. …`), which for a deletion is the one remaining place the
+                93-day recycle-bin fact is stated. Do not "tidy" that away to match this dialog. */}
+            {deciding.approve && deciding.row.type === "Share" && (
+              <p style={{ fontSize: 13, margin: "0 0 4px" }}>
+                {decisionSummary(deciding.row)}
+              </p>
+            )}
+            {/* Approvals no longer require a note (client, 2026-09-11), but the box stays available
+                for an approver who wants to record one. Rejections still need a reason so the
+                requester knows what to fix. */}
+            <p style={{ fontSize: 13, margin: "0 0 4px" }}>
+              {deciding.approve
+                ? "Add a note below if needed."
+                : "Please provide your reasoning below."}
+            </p>
+            {deciding.approve &&
+              deciding.row.type === "Share" &&
+              (deciding.row.shareWith ?? []).some((e) =>
+                isExternal(e, tenantDomains),
+              ) && (
+                <div style={s.warn}>
+                  This sends the document{" "}
+                  <strong>outside the organisation</strong>. It stays accessible
+                  until the share is removed
+                  {deciding.row.expiresAt
+                    ? ` or ${longDate(deciding.row.expiresAt)} passes`
+                    : ""}
+                  .
+                </div>
+              )}
+            <label
+              style={{
+                display: "block",
+                marginTop: 12,
+                marginBottom: 4,
+                fontSize: 12,
+                fontWeight: 600,
+              }}
+            >
+              {deciding.approve ? "Note (optional)" : "Reason"}
+            </label>
+            <textarea
+              style={
+                !deciding.approve && showNoteError && note.trim() === ""
+                  ? {
+                      ...s.noteArea,
+                      borderColor: "#a4262c",
+                      background: "#fdf6f6",
+                    }
+                  : s.noteArea
+              }
+              value={note}
+              onChange={(e) => {
+                setNote(e.target.value);
+                if (showNoteError) setShowNoteError(false);
+              }}
+            />
+            {/* Shown only after a decision was ATTEMPTED with nothing typed — never on open, which
+                would mark a dialog nobody has used yet as being in error. */}
+            {!deciding.approve && showNoteError && note.trim() === "" && (
+              <p
+                style={{ fontSize: 11.5, color: "#a4262c", margin: "4px 0 0" }}
+              >
+                {/* The client's wording (2026-09-06), matching the uploader-side dialogs so one
+                    rule reads the same on both screens. The sentence it replaces explained WHY a
+                    reason is needed; the requester still sees the note, so nothing is lost but the
+                    lecture. */}
+                Reasoning is required
+              </p>
+            )}
+            <div style={s.actions}>
+              <button
+                style={
+                  busy || !canDecide(deciding.row, scope)
+                    ? s.off
+                    : deciding.approve
+                      ? s.approve
+                      : s.reject
+                }
+                disabled={busy || !canDecide(deciding.row, scope)}
+                onClick={() => {
+                  /* Rejections still require a reason. Approvals may carry a note, but no longer
+                     block when the note is blank. */
+                  if (!deciding.approve && note.trim() === "") {
+                    setShowNoteError(true);
+                    return;
+                  }
+                  decide(deciding.row, deciding.approve, note).catch(
+                    () => undefined,
+                  );
+                }}
+              >
+                {busy ? "Working…" : deciding.approve ? "Approve" : "Reject"}
+              </button>
+              <button
+                style={s.ghost}
+                disabled={busy}
+                onClick={() => setDeciding(undefined)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  /* ── The file view ── */
+  if (viewId !== undefined) {
+    const viewing = all.filter((r) => r.id === viewId)[0];
+    const tenantRoot = siteUrl.replace(/^(https?:\/\/[^/]+).*$/, "$1");
+    const libSegments = libraryTargets().map((t) => t.urlSegment);
+    const closeView = (): void => {
+      setViewId(undefined);
+      setFileView(undefined);
+    };
+    return (
+      <section style={s.wrap}>
+        <div style={s.backBand}>
+          <button type="button" style={s.backLink} onClick={closeView}>
+            ‹ Back to requests
+          </button>
+        </div>
+        {notice && (
+          <div ref={noticeRef} style={noticeBad ? s.warn : s.ok}>
+            {notice}
+          </div>
+        )}
+        {viewing === undefined ? (
+          <p style={s.quiet}>This request is no longer on the list.</p>
+        ) : !isVisibleTo(viewing, me, scope) ? (
+          /* The list is not a boundary, but its scope is the rule: a request this viewer would not see
+             in the list is not shown here either, whatever link they arrived by. */
+          <p style={s.quiet}>This request is not one you can see or act on.</p>
+        ) : (
+          <>
+            {requestCard(viewing, viewing.status === "Pending" && canDecide(viewing, scope), false)}
+            <div style={{ marginTop: 20 }}>
+              {fileView === undefined || fileView.state === "loading" ? (
+                <p style={s.quiet}>Reading the document&hellip;</p>
+              ) : fileView.state === "gone" ? (
+                <div style={s.warn}>{fileView.message}</div>
+              ) : (
+                <FileDetailPanel
+                  name={fileView.name}
+                  fileRef={fileView.fileRef}
+                  tenantRoot={tenantRoot}
+                  siteUrl={siteUrl}
+                  fieldText={fileView.fieldText}
+                  location={trailText(folderTrail(fileView.fileRef, libSegments))}
+                  size={fileView.size}
+                  modified={fileView.modified}
+                />
+              )}
+            </div>
+          </>
+        )}
+        {decisionDialog}
+      </section>
+    );
+  }
 
   return (
     <section style={s.wrap}>
@@ -2786,157 +3182,7 @@ export default function Requests({
         rejected · {tally.Revoked} revoked · {tally.Failed} failed
       </p>
 
-      {/* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. A note is REQUIRED
-          on every decision here, so the old onClick lost a typed rejection reason the moment the
-          approver selected any of it and released outside the dialog. */}
-      {deciding && (
-        <div
-          style={s.modalBg}
-          onMouseDown={closeOnBackdrop(() => {
-            if (!busy) setDeciding(undefined);
-          })}
-        >
-          <div style={s.modal} onClick={(e) => e.stopPropagation()}>
-            <p style={{ ...s.head, fontSize: 16, margin: "0 0 4px" }}>
-              {deciding.approve ? "Approve" : "Reject"} this request?
-            </p>
-            {/* ⚠ THE FILENAME IS SHOWN ON BOTH, though the client's REJECT mockup omits it. Only the
-                Approve mockup carried it, and dropping it from Reject would leave an approver
-                refusing a request with nothing on screen saying WHICH document — the one fact they
-                cannot reconstruct once the dialog is open. Adding information the mockup left out is
-                the safe direction; say so if it is unwanted. */}
-            <p style={s.modalFile}>{deciding.row.itemName}</p>
-            {/* ⚠ THE SUMMARY IS SHOWN FOR A SHARE ONLY, AND THE ASYMMETRY IS DELIBERATE.
-                Client, 2026-09-07: *"remove the wording 'This file will be moved to the recycle bin,
-                where it can be restored for 93 days.'"* — that is exactly what `decisionSummary`
-                returns for a DELETION, so the deletion branch is gone.
-
-                ⚠ IT IS NOT GONE FOR A SHARE, because the share branch is a different sentence doing
-                a different job: *"X will be able to view Y, with no expiry date."* It is the only
-                place the RECIPIENT and the expiry are confirmed before access is granted, and an
-                approver who cannot see who they are granting to is being asked to decide blind. The
-                client quoted the deletion wording; removing the share line as well would drop
-                something they did not ask about. Say so if it is also unwanted.
-
-                ⚠ AND `decisionSummary` ITSELF IS UNTOUCHED — it still feeds the outcome banner after
-                a decision (`Approved. …`), which for a deletion is the one remaining place the
-                93-day recycle-bin fact is stated. Do not "tidy" that away to match this dialog. */}
-            {deciding.approve && deciding.row.type === "Share" && (
-              <p style={{ fontSize: 13, margin: "0 0 4px" }}>
-                {decisionSummary(deciding.row)}
-              </p>
-            )}
-            {/* Unconditional now: a reason is required on BOTH decisions (2026-09-07), so the prompt
-                belongs on both. The client's deck drew it on the Reject dialog only. */}
-            <p style={{ fontSize: 13, margin: "0 0 4px" }}>
-              Please provide your reasoning below.
-            </p>
-            {deciding.approve &&
-              deciding.row.type === "Share" &&
-              (deciding.row.shareWith ?? []).some((e) =>
-                isExternal(e, tenantDomains),
-              ) && (
-                <div style={s.warn}>
-                  This sends the document{" "}
-                  <strong>outside the organisation</strong>. It stays accessible
-                  until the share is removed
-                  {deciding.row.expiresAt
-                    ? ` or ${longDate(deciding.row.expiresAt)} passes`
-                    : ""}
-                  .
-                </div>
-              )}
-            {/* ⚠ REQUIRED ON REJECT, OPTIONAL ON APPROVE (client's mockup, 2026-09-04: *"Note
-                (optional)"* on Approve, *"Reason"* on Reject).
-
-                ⚠ THIS NARROWS MY OWN OVER-APPLICATION RATHER THAN REVERSING THE CLIENT. Their
-                2026-09-03 instruction was about rejecting — *"IF APPROVER WANTS TO REJECT A REQUEST …
-                APPROVER MUST INCLUDE THE REASON … ELSE SYSTEM DOESN'T ALLOW TO PROCEED"* — and I
-                extended it to approvals as well. The mockup settles it: a refusal has to be explained
-                because the requester must know what to fix; an approval speaks for itself, since the
-                thing they asked for simply happened. */}
-            <label
-              style={{
-                display: "block",
-                marginTop: 12,
-                marginBottom: 4,
-                fontSize: 12,
-                fontWeight: 600,
-              }}
-            >
-              {/* ⚠ "Reason", NOT "Note (optional)", ON BOTH DECISIONS. A reason is required to
-                  approve as well as to reject — client, 2026-09-07: *"if they want to reject or
-                  approve in delete and share, they must provide a reason"*, restating an instruction
-                  first given on 2026-09-06. Labelling the approve path "optional" was the visible
-                  half of the code only ever gating Reject. */}
-              Reason
-            </label>
-            <textarea
-              style={
-                showNoteError && note.trim() === ""
-                  ? {
-                      ...s.noteArea,
-                      borderColor: "#a4262c",
-                      background: "#fdf6f6",
-                    }
-                  : s.noteArea
-              }
-              value={note}
-              onChange={(e) => {
-                setNote(e.target.value);
-                if (showNoteError) setShowNoteError(false);
-              }}
-            />
-            {/* Shown only after a decision was ATTEMPTED with nothing typed — never on open, which
-                would mark a dialog nobody has used yet as being in error. */}
-            {showNoteError && note.trim() === "" && (
-              <p
-                style={{ fontSize: 11.5, color: "#a4262c", margin: "4px 0 0" }}
-              >
-                {/* The client's wording (2026-09-06), matching the uploader-side dialogs so one
-                    rule reads the same on both screens. The sentence it replaces explained WHY a
-                    reason is needed; the requester still sees the note, so nothing is lost but the
-                    lecture. */}
-                Reasoning is required
-              </p>
-            )}
-            <div style={s.actions}>
-              <button
-                style={
-                  busy || !canDecide(deciding.row, scope)
-                    ? s.off
-                    : deciding.approve
-                      ? s.approve
-                      : s.reject
-                }
-                disabled={busy || !canDecide(deciding.row, scope)}
-                onClick={() => {
-                  /* ⚠ BOTH DECISIONS. An approval with no reason no longer proceeds — client,
-                     2026-09-07. This gate read `!deciding.approve && …` and was the actual defect:
-                     the instruction covered approve and reject, CLAUDE.md recorded both, and only
-                     the reject half was ever built. */
-                  if (note.trim() === "") {
-                    setShowNoteError(true);
-                    return;
-                  }
-                  decide(deciding.row, deciding.approve, note).catch(
-                    () => undefined,
-                  );
-                }}
-              >
-                {busy ? "Working…" : deciding.approve ? "Approve" : "Reject"}
-              </button>
-              <button
-                style={s.ghost}
-                disabled={busy}
-                onClick={() => setDeciding(undefined)}
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {decisionDialog}
     </section>
   );
 }

@@ -26,13 +26,28 @@ export interface SegmentCounts {
    * rows while its folders are unreadable, and the other way round.
    */
   groupMapRows: number;
+  /**
+   * `CRS Term Abbreviation` rows whose live term tree still resolves under this segment. Retiring
+   * ALWAYS deletes these now (2026-09-11, client: "no need checkbox as an option, make it
+   * mandatory") — there is no opt-out, so this count exists purely so the confirmation screen can
+   * say what is about to go. See docs/superpowers/specs/2026-09-11-retire-deletes-abbreviations-design.md.
+   */
+  abbreviationRows: number;
+  /**
+   * Documents in Archive/ArchiveHC for this segment, counted SEPARATELY from `documents` — see
+   * `canDeleteArchive`'s own comment for why the two must never be merged into one number.
+   * `undefined` means the count could not be established (including "there is no archive on this
+   * site at all", which the caller distinguishes separately via `archiveAvailable()`) — never
+   * assume empty from a missing value. Only an explicit `0` means confirmed empty.
+   */
+  archiveDocuments?: number;
   /** Set when `state === "unknown"`: what to tell the admin, instead of a silent grey checkbox. */
   reason?: string;
 }
 
 /** Nothing counted yet — the dialog's opening state, which offers no destructive option at all. */
 export function unknownCounts(reason: string): SegmentCounts {
-  return { state: "unknown", folders: 0, documents: 0, groupMapRows: 0, reason };
+  return { state: "unknown", folders: 0, documents: 0, groupMapRows: 0, abbreviationRows: 0, reason };
 }
 
 /**
@@ -53,6 +68,34 @@ export function canOfferFolderDelete(counts: SegmentCounts): boolean {
 }
 
 /**
+ * May Archive/ArchiveHC be deleted TOO, alongside the operational folders?
+ *
+ * Spec: docs/superpowers/specs/2026-09-12-empty-archive-deletion-on-retire-design.md
+ *
+ * Only when `archiveDocuments` is the EXPLICIT number `0` — a confirmed-empty count, not merely a
+ * falsy or absent one. `undefined` (unread, unreadable, or genuinely has content — see the field's
+ * own comment) answers `false` here by construction, because `undefined === 0` is false in
+ * JavaScript; there is no separate branch to get wrong.
+ *
+ * ⚠ THIS IS DELIBERATELY A SEPARATE QUESTION FROM `canOfferFolderDelete`. That one gates whether
+ * the operational libraries (Staging/Documents/HC pair) may be touched at all, counted from a
+ * DIFFERENT set of libraries than this one. Merging the two counts into one number was considered
+ * and rejected: a segment can have real archived records while its operational folders are already
+ * empty (the common, correct case today — records already archived, shell ready to retire), and
+ * folding Archive's count into the same total would make that segment fail `documents === 0` and
+ * silently lose the ability to clean up its empty operational folders at all. The two libraries'
+ * emptiness are independent facts and must stay independent fields.
+ *
+ * Archive and ArchiveHC are asked about TOGETHER by whoever populates `archiveDocuments` (both
+ * summed, or `undefined` if either could not be read) — see that field's own comment. This function
+ * does not itself distinguish the two; it only ever sees one combined number, by design, so it
+ * cannot delete one half of the pair while leaving the other.
+ */
+export function canDeleteArchive(counts: SegmentCounts): boolean {
+  return counts.archiveDocuments === 0;
+}
+
+/**
  * Does this deletion need the segment's name typed out?
  *
  * Yes whenever something is genuinely at stake: documents present, mappings present, folders about
@@ -63,7 +106,7 @@ export function canOfferFolderDelete(counts: SegmentCounts): boolean {
 export function needsTypedConfirmation(counts: SegmentCounts, deleteFolders: boolean): boolean {
   if (counts.state === "unknown") return true;
   if (deleteFolders) return true;
-  return counts.documents > 0 || counts.groupMapRows > 0;
+  return counts.documents > 0 || counts.groupMapRows > 0 || counts.abbreviationRows > 0;
 }
 
 /**
@@ -90,10 +133,17 @@ export function confirmationMatches(typed: string, label: string): boolean {
  * documents are gone when they are not — and then reporting a data-loss incident, or worse, not
  * reporting one.
  */
-export function survivorLines(deleteFolders: boolean, hasArchive?: boolean): string[] {
+export function survivorLines(
+  deleteFolders: boolean,
+  hasArchive?: boolean,
+  archiveDocuments?: number,
+): string[] {
   const lines = [
     "The tier columns stay, with every document's metadata intact.",
-    "The folder abbreviations stay, so re-creating this segment keeps the same folder names.",
+    // ⚠ REVERSED 2026-09-11 — this line used to promise abbreviations stay. Retire now deletes
+    // them unconditionally (client: "no need checkbox as an option, make it mandatory"), so the
+    // dialog has to say the opposite: re-creating this segment means retyping every code.
+    "This segment's folder abbreviations are deleted too — re-creating it later means retyping every code.",
     deleteFolders
       ? "The folders go to the recycle bin and can be restored for 93 days."
       : "Every folder and every document stays exactly where it is.",
@@ -103,9 +153,30 @@ export function survivorLines(deleteFolders: boolean, hasArchive?: boolean): str
      unconditionally would name a library that does not exist on most sites — and saying nothing at
      all leaves an admin who ticked "delete the folders" believing everything went, then finding
      Archive/<SEG> still standing in the next reconciliation log. `hasArchive` is optional so every
-     existing caller and test is unchanged. */
+     existing caller and test is unchanged.
+     ⚠ SIMPLIFIED 2026-09-13, DELIBERATELY DROPPING THE "IF RECREATED..." CONSEQUENCE — client:
+     "just tell them empty folders will be removed for this segment but folders with files wont be
+     removed." That consequence (recreating the segment leaves an unresolvable stray that blocks
+     "Move existing folders") was true and worth saying UNTIL THIS SAME DAY, when the archive
+     code-reuse guard shipped on segment CREATION (see
+     docs/superpowers/specs/2026-09-13-archive-code-reuse-guard-design.md): a new segment can no
+     longer be created reusing a code Archive already holds files under, so the scenario this
+     warning described is now structurally impossible, not merely unlikely. Warning about a
+     consequence that can no longer happen is worse than silence — it makes the admin hunt for a
+     "Move existing folders" problem that will never arise from this. Down to the plain, current
+     fact only: what does or does not happen to THIS segment's archive folders right now.
+     `undefined` (could not be confirmed) is folded into the same "left alone" sentence as `> 0`
+     (confirmed has content) — the DISPLAYED text no longer distinguishes them, though the
+     underlying value still does, and `canDeleteArchive` still refuses on anything but an explicit
+     `0`. Only a confirmed `0` gets the "removed too" sentence. */
   if (deleteFolders && hasArchive) {
-    lines.push("The archive folders are NOT deleted — archived records outlive the segment.");
+    if (archiveDocuments === 0) {
+      lines.push("This segment's archive folders are empty too, so they are removed as well.");
+    } else {
+      lines.push(
+        "This segment's archive folders are not removed — only empty ones are removed automatically.",
+      );
+    }
   }
   return lines;
 }
@@ -122,10 +193,21 @@ export function deletionSummary(counts: SegmentCounts, deleteFolders: boolean): 
   if (counts.groupMapRows > 0) {
     parts.push(`${counts.groupMapRows} folder-access mapping${counts.groupMapRows === 1 ? "" : "s"}`);
   }
+  // Unconditional, unlike the folder/document lines below: abbreviation rows go whether or not
+  // "also delete the folders" was ticked, so this must not be gated on `deleteFolders` too.
+  if (counts.state === "counted" && counts.abbreviationRows > 0) {
+    parts.push(`${counts.abbreviationRows} abbreviation${counts.abbreviationRows === 1 ? "" : "s"}`);
+  }
   if (deleteFolders && counts.state === "counted") {
     parts.push(`${counts.folders} folder${counts.folders === 1 ? "" : "s"}`);
     if (counts.documents > 0) {
       parts.push(`${counts.documents} document${counts.documents === 1 ? "" : "s"}`);
+    }
+    // Only when CONFIRMED empty (see canDeleteArchive) — an unread or non-empty archive is left
+    // alone and must not be claimed here, or an audit row would record a deletion that did not
+    // happen.
+    if (counts.archiveDocuments === 0) {
+      parts.push("its empty archive");
     }
   }
   if (parts.length === 0) return "Deletes the segment only.";

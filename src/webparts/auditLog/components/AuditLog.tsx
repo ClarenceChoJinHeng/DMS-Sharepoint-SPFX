@@ -87,7 +87,7 @@ const s: Record<string, React.CSSProperties> = {
     maxWidth: 1180,
     margin: "32px auto",
     padding: "0 24px 48px",
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     color: "#1b1b1b",
   },
   h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },

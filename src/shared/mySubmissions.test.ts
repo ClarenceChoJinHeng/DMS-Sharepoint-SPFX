@@ -14,6 +14,7 @@ import {
   trailText,
   isHcRow,
   isArchivedRow,
+  librarySegmentOf,
 } from "./mySubmissions";
 
 const LIBS = ["ApprovalDocument", "Documents"];
@@ -370,6 +371,70 @@ describe("isArchivedRow", () => {
   it("handles a non-HC site, where only the normal archive exists", () => {
     expect(isArchivedRow("Archive", { normal: "Archive" })).toBe(true);
     expect(isArchivedRow("HCArchive", { normal: "Archive" })).toBe(false);
+  });
+});
+
+describe("librarySegmentOf — recovering the library from a request row's path", () => {
+  // The order `libs` is built in on My Submissions: approval, Documents' segment, its TITLE (the
+  // trail builder strips either), then the HC pair, then the archive pair.
+  const LIBS = [
+    "ApprovalDocument", "Shared Documents", "Restricted & Confidential Document",
+    "HCApprovalDocument", "HCDocuments", "Archive", "HCArchive",
+  ];
+
+  it("finds the library a real HC request path sits in", () => {
+    expect(
+      librarySegmentOf(
+        "/sites/ClarenceDMSTesting/HCApprovalDocument/GHO/GF/COR/2024/sf2/Tax Return/ad - sad - sd - 10-09-26.pdf",
+        LIBS,
+      ),
+    ).toBe("HCApprovalDocument");
+  });
+
+  it("is what lets the two same-named files be told apart", () => {
+    /* THE CASE THIS FUNCTION EXISTS FOR (2026-08-21): one filename in both libraries, where an
+       approved deletion took the HC copy and left the other standing. */
+    const name = "TES - TES - TES - 20-08-26.pdf";
+    const hc = librarySegmentOf(`/sites/X/HCApprovalDocument/GHO/GF/TAX/2024/${name}`, LIBS);
+    const normal = librarySegmentOf(`/sites/X/ApprovalDocument/GHO/GF/TAX/2024/${name}`, LIBS);
+    expect(hc).toBe("HCApprovalDocument");
+    expect(normal).toBe("ApprovalDocument");
+    expect(isHcRow(hc ?? "", { approval: "HCApprovalDocument", documents: "HCDocuments" })).toBe(true);
+    expect(isHcRow(normal ?? "", { approval: "HCApprovalDocument", documents: "HCDocuments" })).toBe(false);
+  });
+
+  it("matches a library whose segment contains spaces", () => {
+    // `Documents` sits at /Shared Documents — the segment a rename never touches (gotcha #12).
+    expect(librarySegmentOf("/sites/X/Shared Documents/GHO/GF/TAX/a.pdf", LIBS)).toBe("Shared Documents");
+  });
+
+  it("compares case-insensitively, because SharePoint URLs are", () => {
+    expect(librarySegmentOf("/sites/X/hcapprovaldocument/GHO/a.pdf", LIBS)).toBe("hcapprovaldocument");
+  });
+
+  it("returns the FIRST recognised part, so a folder sharing a library's name cannot win", () => {
+    // A unit folder called `Archive` under the approval library must not out-vote the real library.
+    expect(librarySegmentOf("/sites/X/ApprovalDocument/GHO/Archive/a.pdf", LIBS)).toBe("ApprovalDocument");
+  });
+
+  it("answers undefined rather than guessing when nothing is recognised", () => {
+    /* ⚠ AND `undefined` MUST TAG NOTHING. Returning `sites`, or the first segment, would be a value
+       nobody read out of the data — and `isHcRow` would then answer false from an invention. */
+    expect(librarySegmentOf("/sites/X/SomeOtherLibrary/GHO/a.pdf", LIBS)).toBeUndefined();
+    expect(librarySegmentOf("", LIBS)).toBeUndefined();
+    expect(librarySegmentOf(undefined as unknown as string, LIBS)).toBeUndefined();
+    expect(librarySegmentOf("/sites/X/HCApprovalDocument/a.pdf", [])).toBeUndefined();
+    expect(
+      librarySegmentOf("/sites/X/HCApprovalDocument/a.pdf", undefined as unknown as string[]),
+    ).toBeUndefined();
+  });
+
+  it("agrees with folderTrail about where the library ends", () => {
+    /* The two are asked about the same path on the same row and must not disagree — one names the
+       library, the other names everything below it. */
+    const p = "/sites/X/HCApprovalDocument/GHO/GF/COR/2024/sf2/Tax Return/a.pdf";
+    expect(librarySegmentOf(p, LIBS)).toBe("HCApprovalDocument");
+    expect(folderTrail(p, LIBS)).toEqual(["GHO", "GF", "COR", "2024", "sf2", "Tax Return"]);
   });
 });
 

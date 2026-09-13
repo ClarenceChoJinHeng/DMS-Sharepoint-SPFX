@@ -87,8 +87,14 @@ describe("hasCriteria", () => {
   });
 
   it("is true for a tier value but false for a tier column with no value", () => {
-    expect(hasCriteria(criteria({ tiers: [{ column: "Department", value: "Group Finance" }] }))).toBe(true);
-    expect(hasCriteria(criteria({ tiers: [{ column: "Department", value: "" }] }))).toBe(false);
+    expect(
+      hasCriteria(
+        criteria({ tiers: [{ column: "Department", value: "Group Finance" }] }),
+      ),
+    ).toBe(true);
+    expect(
+      hasCriteria(criteria({ tiers: [{ column: "Department", value: "" }] })),
+    ).toBe(false);
   });
 
   it("survives a missing object rather than throwing", () => {
@@ -108,7 +114,9 @@ describe("managedProperty", () => {
   it("KEEPS the encoding of an encoded internal name", () => {
     // Decoding would name a property that does not exist — and a KQL clause naming a nonexistent
     // property matches nothing rather than erroring, which is a silently empty filter.
-    expect(managedProperty("Business_x0020_Segment")).toBe("Business_x0020_SegmentOWSTEXT");
+    expect(managedProperty("Business_x0020_Segment")).toBe(
+      "Business_x0020_SegmentOWSTEXT",
+    );
   });
 
   it("is blank for a blank name, so no clause is built from nothing", () => {
@@ -137,13 +145,16 @@ describe("kql escaping and dates", () => {
 
 describe("kqlPathScope", () => {
   it("scopes one library", () => {
-    expect(kqlPathScope("https://x.sharepoint.com/sites/s", ["Shared Documents"])).toBe(
-      'Path:"https://x.sharepoint.com/sites/s/Shared Documents/*"',
-    );
+    expect(
+      kqlPathScope("https://x.sharepoint.com/sites/s", ["Shared Documents"]),
+    ).toBe('Path:"https://x.sharepoint.com/sites/s/Shared Documents/*"');
   });
 
   it("ORs several libraries", () => {
-    const q = kqlPathScope("https://x.sharepoint.com/sites/s", ["Shared Documents", "HCDocuments"]);
+    const q = kqlPathScope("https://x.sharepoint.com/sites/s", [
+      "Shared Documents",
+      "HCDocuments",
+    ]);
     expect(q).toBe(
       '(Path:"https://x.sharepoint.com/sites/s/Shared Documents/*" OR ' +
         'Path:"https://x.sharepoint.com/sites/s/HCDocuments/*")',
@@ -159,7 +170,9 @@ describe("kqlPathScope", () => {
   it("returns BLANK when there are no segments, never an unscoped query", () => {
     // An unscoped KQL query searches the whole tenant.
     expect(kqlPathScope("https://x.sharepoint.com/sites/s", [])).toBe("");
-    expect(kqlPathScope("https://x.sharepoint.com/sites/s", ["", "  "])).toBe("");
+    expect(kqlPathScope("https://x.sharepoint.com/sites/s", ["", "  "])).toBe(
+      "",
+    );
   });
 
   it("returns blank with no web url", () => {
@@ -180,13 +193,15 @@ describe("buildKql", () => {
 
   it("always excludes folders", () => {
     // A folder's link IS a library link; 443 of them reached the My Submissions list.
-    expect(buildKql(criteria({ text: "tax" }), scope)).toContain("IsDocument:true");
+    expect(buildKql(criteria({ text: "tax" }), scope)).toContain(
+      "IsDocument:true",
+    );
   });
 
   it("matches a word against contents and the free-text columns", () => {
     const q = buildKql(criteria({ text: "tax" }), scope);
     expect(q).toContain("(tax* OR ProjectNameOWSTEXT:tax*");
-    expect(q).toContain("RemarkOWSTEXT:tax*");
+    expect(q).not.toContain("RemarkOWSTEXT");
   });
 
   /* Pinned because its absence was invisible from every side: the column existed on all six
@@ -194,7 +209,9 @@ describe("buildKql", () => {
      REST half has covered Keyword since it was added). Found live 2026-09-05 — a document filed
      with the keyword `2X` was not returned by a search for `2X`. */
   it("matches a word against Keyword — the whole point of that field", () => {
-    expect(buildKql(criteria({ text: "tax" }), scope)).toContain("KeywordOWSTEXT:tax*");
+    expect(buildKql(criteria({ text: "tax" }), scope)).toContain(
+      "KeywordOWSTEXT:tax*",
+    );
   });
 
   it("ANDs multiple words as separate clauses", () => {
@@ -205,7 +222,11 @@ describe("buildKql", () => {
 
   it("adds exact clauses for the fixed metadata", () => {
     const q = buildKql(
-      criteria({ documentType: "Tax Return", year: "2024", confidentiality: "Restricted" }),
+      criteria({
+        documentType: "Tax Return",
+        year: "2024",
+        confidentiality: "Restricted",
+      }),
       scope,
     );
     expect(q).toContain('Document_x0020_TypeOWSTEXT:"Tax Return"');
@@ -245,7 +266,10 @@ describe("buildKql", () => {
 
   it("builds both halves of a date range and omits an absent half", () => {
     const both = buildKql(
-      criteria({ documentDateFrom: "2026-01-01", documentDateTo: "2026-12-31" }),
+      criteria({
+        documentDateFrom: "2026-01-01",
+        documentDateTo: "2026-12-31",
+      }),
       scope,
     );
     expect(both).toContain("DocumentDateOWSDATE>=2026-01-01");
@@ -257,7 +281,10 @@ describe("buildKql", () => {
   });
 
   it("ignores a malformed date rather than emitting an invalid clause", () => {
-    const q = buildKql(criteria({ text: "tax", documentDateFrom: "01/01/2026" }), scope);
+    const q = buildKql(
+      criteria({ text: "tax", documentDateFrom: "01/01/2026" }),
+      scope,
+    );
     expect(q).not.toContain("DocumentDateOWSDATE");
   });
 
@@ -301,13 +328,17 @@ describe("buildListFilter", () => {
 
   it("ORs a word across the fields and ANDs separate words", () => {
     const f = buildListFilter(criteria({ text: "tax return" }));
-    expect(f).toContain("(substringof('tax',FileLeafRef) or substringof('tax',ProjectName)");
-    expect(f).toContain("substringof('return',Remark)");
+    expect(f).toContain(
+      "(substringof('tax',FileLeafRef) or substringof('tax',ProjectName)",
+    );
+    expect(f).not.toContain("substringof('return',Remark)");
     expect(f.split(" and ").length).toBeGreaterThan(2);
   });
 
   it("escapes a quote inside a searched word", () => {
-    expect(buildListFilter(criteria({ text: "O'Brien" }))).toContain("substringof('O''Brien',FileLeafRef)");
+    expect(buildListFilter(criteria({ text: "O'Brien" }))).toContain(
+      "substringof('O''Brien',FileLeafRef)",
+    );
   });
 
   /* ⚠ TWO FAILURES, IN OPPOSITE DIRECTIONS, BOTH FROM ONE COMBINED TEST.
@@ -326,7 +357,9 @@ describe("buildListFilter", () => {
   });
 
   it("filters a tier on its own COLUMN — tier columns are text, each with a text Tid twin", () => {
-    const f = buildListFilter(criteria({ tiers: [{ column: "EstateMill", value: "Bukit Benut" }] }));
+    const f = buildListFilter(
+      criteria({ tiers: [{ column: "EstateMill", value: "Bukit Benut" }] }),
+    );
     expect(f).toContain("EstateMill eq 'Bukit Benut'");
     expect(f).not.toContain("TaxCatchAll");
   });
@@ -334,11 +367,13 @@ describe("buildListFilter", () => {
   it("NEVER sends the three real taxonomy filters to $filter — that is the 400 and the 500", () => {
     // They are narrowed on the rows instead (`metadataFilterMatches`). One bad clause fails the
     // WHOLE request, so leaking any of them here would take the filters that DO work down with it.
-    const f = buildListFilter(criteria({
-      documentType: "Letters with Counterparties",
-      year: "2024",
-      confidentiality: "Confidential",
-    }));
+    const f = buildListFilter(
+      criteria({
+        documentType: "Letters with Counterparties",
+        year: "2024",
+        confidentiality: "Confidential",
+      }),
+    );
     expect(f).not.toContain("Letters with Counterparties");
     expect(f).not.toContain("2024");
     expect(f).not.toContain("Confidential");
@@ -348,7 +383,9 @@ describe("buildListFilter", () => {
   });
 
   it("keeps the text filters when a taxonomy filter is set alongside them", () => {
-    const f = buildListFilter(criteria({ segment: "Group Head Office", year: "2024" }));
+    const f = buildListFilter(
+      criteria({ segment: "Group Head Office", year: "2024" }),
+    );
     expect(f).toContain("Business_x0020_Segment eq 'Group Head Office'");
     expect(f).not.toContain("2024");
   });
@@ -364,13 +401,18 @@ describe("buildListFilter", () => {
 
 describe("buildRecentFilter", () => {
   it("adds the Modified window on top of the ordinary filter", () => {
-    const f = buildRecentFilter(criteria({ text: "tax" }), "2026-08-15T09:00:00Z");
+    const f = buildRecentFilter(
+      criteria({ text: "tax" }),
+      "2026-08-15T09:00:00Z",
+    );
     expect(f).toContain("substringof('tax',FileLeafRef)");
     expect(f).toContain("Modified ge datetime'2026-08-15T09:00:00Z'");
   });
 
   it("falls back to the plain filter when there is no cutoff", () => {
-    expect(buildRecentFilter(criteria({ text: "tax" }), "")).toBe(buildListFilter(criteria({ text: "tax" })));
+    expect(buildRecentFilter(criteria({ text: "tax" }), "")).toBe(
+      buildListFilter(criteria({ text: "tax" })),
+    );
   });
 });
 
@@ -405,7 +447,9 @@ describe("mergeHits", () => {
   });
 
   it("dedupes case-insensitively, as SharePoint GUIDs vary in case", () => {
-    expect(mergeHits([hit({ uniqueId: "abc" })], [hit({ uniqueId: "ABC" })]).length).toBe(1);
+    expect(
+      mergeHits([hit({ uniqueId: "abc" })], [hit({ uniqueId: "ABC" })]).length,
+    ).toBe(1);
   });
 
   it("dedupes on UniqueId, NOT on path — a moved file is still one file", () => {
@@ -415,7 +459,9 @@ describe("mergeHits", () => {
   });
 
   it("keeps distinct documents that happen to share a name", () => {
-    expect(mergeHits([hit({ uniqueId: "A" })], [hit({ uniqueId: "B" })]).length).toBe(2);
+    expect(
+      mergeHits([hit({ uniqueId: "A" })], [hit({ uniqueId: "B" })]).length,
+    ).toBe(2);
   });
 
   it("KEEPS a hit with no UniqueId rather than hiding a document", () => {
@@ -446,7 +492,10 @@ describe("sortByModified", () => {
   });
 
   it("does not mutate its input", () => {
-    const input = [hit({ uniqueId: "a", modified: "2026-01-01T00:00:00Z" }), hit({ uniqueId: "b" })];
+    const input = [
+      hit({ uniqueId: "a", modified: "2026-01-01T00:00:00Z" }),
+      hit({ uniqueId: "b" }),
+    ];
     sortByModified(input);
     expect(input[0].uniqueId).toBe("a");
   });
@@ -470,12 +519,16 @@ describe("searchState", () => {
 
   it("is error when a read FAILED and there is nothing to show", () => {
     // "No results" for an unreachable library made someone upload a second copy in My Submissions.
-    expect(searchState(true, [res({ outcome: "failed", status: 404 })])).toBe("error");
+    expect(searchState(true, [res({ outcome: "failed", status: 404 })])).toBe(
+      "error",
+    );
   });
 
   it("treats an HC REFUSAL as empty, not as an error", () => {
     // Every uncleared user would otherwise see a permanent warning and learn to ignore it.
-    expect(searchState(true, [res({ library: "DocumentsHC", outcome: "refused" })])).toBe("empty");
+    expect(
+      searchState(true, [res({ library: "DocumentsHC", outcome: "refused" })]),
+    ).toBe("empty");
   });
 
   it("is results when one library succeeded even though another failed", () => {
@@ -506,7 +559,9 @@ describe("failedLibraries", () => {
   });
 
   it("survives a missing list", () => {
-    expect(failedLibraries(undefined as unknown as LibraryResult[]).length).toBe(0);
+    expect(
+      failedLibraries(undefined as unknown as LibraryResult[]).length,
+    ).toBe(0);
   });
 });
 
@@ -519,51 +574,81 @@ describe("failedLibraries", () => {
 describe("metadataFilterMatches / hasMetadataFilter", () => {
   type Labels = { documentType: string; year: string; confidentiality: string };
   const row = (over: Partial<Labels>): Labels => ({
-    documentType: "", year: "", confidentiality: "", ...over,
+    documentType: "",
+    year: "",
+    confidentiality: "",
+    ...over,
   });
 
   it("passes a row that matches every set filter", () => {
-    expect(metadataFilterMatches(
-      { documentType: "Tax Return", year: "2024", confidentiality: "Confidential" },
-      row({ documentType: "Tax Return", year: "2024", confidentiality: "Confidential" }),
-    )).toBe(true);
+    expect(
+      metadataFilterMatches(
+        {
+          documentType: "Tax Return",
+          year: "2024",
+          confidentiality: "Confidential",
+        },
+        row({
+          documentType: "Tax Return",
+          year: "2024",
+          confidentiality: "Confidential",
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("ignores a filter that is not set", () => {
-    expect(metadataFilterMatches(
-      { documentType: "", year: "2024", confidentiality: "" },
-      row({ documentType: "anything", year: "2024" }),
-    )).toBe(true);
+    expect(
+      metadataFilterMatches(
+        { documentType: "", year: "2024", confidentiality: "" },
+        row({ documentType: "anything", year: "2024" }),
+      ),
+    ).toBe(true);
   });
 
   it("rejects a row that misses one of several set filters", () => {
-    expect(metadataFilterMatches(
-      { documentType: "Tax Return", year: "2024", confidentiality: "" },
-      row({ documentType: "Tax Return", year: "2023" }),
-    )).toBe(false);
+    expect(
+      metadataFilterMatches(
+        { documentType: "Tax Return", year: "2024", confidentiality: "" },
+        row({ documentType: "Tax Return", year: "2023" }),
+      ),
+    ).toBe(false);
   });
 
   it("compares trimmed and case-insensitively — these are picked labels, not keys", () => {
-    expect(metadataFilterMatches(
-      { documentType: "tax return", year: "", confidentiality: "" },
-      row({ documentType: "  Tax Return  " }),
-    )).toBe(true);
+    expect(
+      metadataFilterMatches(
+        { documentType: "tax return", year: "", confidentiality: "" },
+        row({ documentType: "  Tax Return  " }),
+      ),
+    ).toBe(true);
   });
 
   it("fails a set filter on a row with no value — a blank cannot be shown to match", () => {
-    expect(metadataFilterMatches(
-      { documentType: "Tax Return", year: "", confidentiality: "" },
-      row({}),
-    )).toBe(false);
+    expect(
+      metadataFilterMatches(
+        { documentType: "Tax Return", year: "", confidentiality: "" },
+        row({}),
+      ),
+    ).toBe(false);
   });
 
   it("hasMetadataFilter is true only for the three it cannot filter server-side", () => {
     expect(hasMetadataFilter(emptyCriteria())).toBe(false);
     // Business Segment IS filtered server-side, so it must not arm the client-side narrowing.
-    expect(hasMetadataFilter({ ...emptyCriteria(), segment: "Group Head Office" })).toBe(false);
+    expect(
+      hasMetadataFilter({ ...emptyCriteria(), segment: "Group Head Office" }),
+    ).toBe(false);
     expect(hasMetadataFilter({ ...emptyCriteria(), year: "2024" })).toBe(true);
-    expect(hasMetadataFilter({ ...emptyCriteria(), documentType: "Tax Return" })).toBe(true);
-    expect(hasMetadataFilter({ ...emptyCriteria(), confidentiality: "Confidential" })).toBe(true);
+    expect(
+      hasMetadataFilter({ ...emptyCriteria(), documentType: "Tax Return" }),
+    ).toBe(true);
+    expect(
+      hasMetadataFilter({
+        ...emptyCriteria(),
+        confidentiality: "Confidential",
+      }),
+    ).toBe(true);
   });
 });
 
@@ -580,7 +665,9 @@ describe("buildListFilter - the Keyword column", () => {
   });
 
   it("is matched when the column is confirmed", () => {
-    expect(buildListFilter(words, true)).toContain("substringof('audit',Keyword)");
+    expect(buildListFilter(words, true)).toContain(
+      "substringof('audit',Keyword)",
+    );
   });
 
   /* It joins the OR-group rather than adding a clause of its own: a word may match the filename OR
@@ -594,6 +681,8 @@ describe("buildListFilter - the Keyword column", () => {
   it("carries through the recency top-up filter, and defaults off there too", () => {
     const since = "2026-09-01T00:00:00Z";
     expect(buildRecentFilter(words, since).indexOf("Keyword")).toBe(-1);
-    expect(buildRecentFilter(words, since, true)).toContain("substringof('audit',Keyword)");
+    expect(buildRecentFilter(words, since, true)).toContain(
+      "substringof('audit',Keyword)",
+    );
   });
 });

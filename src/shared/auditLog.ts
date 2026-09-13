@@ -50,6 +50,9 @@ export const EVENT = {
   migrationRun: "MigrationRun",
   segmentCreated: "SegmentCreated",
   segmentDeleted: "SegmentDeleted",
+  // Re-coding a segment's TOP FOLDER (2026-09-11, spec 2026-09-11-segment-recode-design.md) — a
+  // physical rename, distinct from creating or deleting the mode row entirely.
+  segmentRecoded: "SegmentRecoded",
   abbreviationChanged: "AbbreviationChanged",
   policyChanged: "PolicyChanged",
   groupMapChanged: "GroupMapChanged",
@@ -98,6 +101,7 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.migrationRun]: "Folder migration run",
   [EVENT.segmentCreated]: "Segment created",
   [EVENT.segmentDeleted]: "Segment deleted",
+  [EVENT.segmentRecoded]: "Segment top folder re-coded",
   [EVENT.abbreviationChanged]: "Abbreviation changed",
   [EVENT.policyChanged]: "File type policy changed",
   [EVENT.groupMapChanged]: "Group Map changed",
@@ -135,7 +139,7 @@ export const ALL_EVENT_TYPES: string[] = [
   EVENT.archived,
   EVENT.uploadRefused, EVENT.accessGranted, EVENT.accessRevoked,
   EVENT.reconciliationRun, EVENT.structureChanged, EVENT.migrationRun,
-  EVENT.segmentCreated, EVENT.segmentDeleted, EVENT.abbreviationChanged, EVENT.policyChanged,
+  EVENT.segmentCreated, EVENT.segmentDeleted, EVENT.segmentRecoded, EVENT.abbreviationChanged, EVENT.policyChanged,
   EVENT.groupMapChanged, EVENT.groupCreated, EVENT.groupDeleted, EVENT.membersChanged,
   EVENT.deletionRequested, EVENT.shareRequested, EVENT.requestApproved, EVENT.requestRejected,
   EVENT.shareRevoked,

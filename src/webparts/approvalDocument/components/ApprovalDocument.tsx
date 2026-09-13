@@ -4,7 +4,7 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { swapLibrarySegment } from "../../../shared/hcRouting";
 import { markRecordReplaced } from "../../../shared/spSubmissionRecords";
 import { documentsLibraryTitle } from "../../../shared/naming";
-import { libraryHasColumns, APPROVED_BY_COLUMN } from "../../../shared/optionalColumns";
+import { libraryHasColumns, APPROVED_BY_COLUMN, APPROVAL_COMMENT_COLUMN } from "../../../shared/optionalColumns";
 import { IApprovalDocumentProps } from "./IApprovalDocumentProps";
 import {
   buildQueue,
@@ -19,6 +19,7 @@ import { previewTarget } from "../../../shared/filePreview";
 import { cachedHcLibraries, hcAvailable, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
 import { primeNames, listTitleEncoded, LIST_SUFFIX } from "../../../shared/spNaming";
 import { permissionedTierCount } from "../../../shared/approvalDestination";
+import { buildDetailRows, DetailRow } from "../../../shared/documentDetails";
 // ⚠ THE CHECKS THEMSELVES LIVE IN shared/approvalGuards.ts, shared with the bulk approve command
 // set. Two implementations of "is it safe to approve this" is how a bulk route ends up weaker
 // than the page it copies. Do not re-inline them here.
@@ -116,7 +117,7 @@ const s = {
      right column reserves a fixed 280px for the approval panel, so a narrow cap squeezes the document
      PREVIEW — the one thing an approver is on this page to read. Its own 40px bottom padding is kept
      rather than replaced by the shell's 48. */
-  root:        { fontFamily: "'Segoe UI', Tahoma, sans-serif", color: "#323130", background: "#fff", maxWidth: 1180, margin: "32px auto", padding: "0 24px 40px" } as React.CSSProperties,
+  root:        { fontFamily: "Arial, sans-serif", color: "#323130", background: "#fff", maxWidth: 1180, margin: "32px auto", padding: "0 24px 40px" } as React.CSSProperties,
   // A full-width band, tinted from the same green as the link so the two read as
   // one control. The tint is an alpha of the brand green rather than a second
   // hex value — one colour to change if the brand shifts.
@@ -228,6 +229,11 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const [fetchError, setFetchError] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [fieldText, setFieldText]   = useState<IFieldText>({});
+  /** The Details panel's labels from the last document whose fields loaded. A queue swap clears
+   *  `fieldText` to `{}`, and the shared builder drops blank rows — so without this the panel would
+   *  collapse to one row on every Next press. Declared up here with the other hooks, never below an
+   *  early return. */
+  const lastDetailLabels = useRef<string[] | undefined>(undefined);
   /**
    * The existing-document check, run PROACTIVELY as soon as the document loads rather than only at
    * the moment Approve is clicked (client, 2026-09-02: *"there is no need for two popup as the one we
@@ -411,7 +417,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   };
 
   /**
-   * Build the queue: every Pending item this account can read, oldest first.
+   * Build the queue: every Pending FILE this account can read, oldest first.
    *
    * SCOPE COMES FROM PERMISSIONS, not from a filter. Inheritance is broken per unit folder in
    * Staging, so SharePoint security-trims the query and an approver gets exactly their unit's
@@ -428,9 +434,21 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       // THE QUEUE STAYS INSIDE ONE LIBRARY. Merging the two would walk an HC approver from a Highly
       // Confidential document straight into an ordinary one and back, and — worse — would show a
       // plain approver nothing while quietly counting HC documents they cannot open.
+      //
+      // ⚠ `FSObjType eq 0` EXCLUDES FOLDERS, and its absence was a live bug (found 2026-09-10). The
+      // upload form ensure-creates below-Unit folders as the uploader, so a freshly created folder
+      // arrives Pending exactly like a file (the same fact `MySubmissions.tsx`'s own comment on this
+      // filter already records) — and without it those folders were counted as queue POSITIONS
+      // here. A unit holding one real pending file and two pending folders read "3 of 3" on this
+      // page while the folder's own "Pending Files" view correctly listed three items of two kinds.
+      // Folders are approved by the separate folder-approval flow, never through this page, and
+      // `IFileItem`/`buildQueue` have no notion of a folder — walking Prev/Next into one would try to
+      // treat a folder as a document. REST accepts `FSObjType` directly in a `$filter` (unlike CAML,
+      // which wants it unencoded and unprefixed too); the encoded literal matches every other
+      // `$filter` on this line.
       const url =
         `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items` +
-        `?$filter=OData__ModerationStatus%20eq%202` +
+        `?$filter=OData__ModerationStatus%20eq%202%20and%20FSObjType%20eq%200` +
         `&$expand=File,Author` +
         `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl` +
         `&$orderby=Created%20asc&$top=200`;
@@ -480,6 +498,24 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
       }
       const data: IFileItem = await res.json();
+      /* ⚠ THIS ITEM MAY BE A FOLDER, NOT A DOCUMENT (found 2026-09-10) — the Name column's own
+         formatting links every Pending ROW to this page, files and folders alike, and a folder
+         arrives Pending exactly like a file whenever the upload form ensure-creates one. SharePoint
+         returns `File: null` for a folder's `$expand=File`, and TWO things downstream then read
+         `item.File.ServerRelativeUrl` with NO optional chaining — the clash-check effect right below
+         the render guards, evaluated as a function ARGUMENT and so thrown synchronously, uncaught by
+         its own `.catch()`. No error boundary sits above this component, so that throw blanked the
+         whole web part with nothing on screen — exactly the "blank page, no item" report. Caught
+         here, before `setItem` ever runs, so none of the item-driven effects can reach it. */
+      if (!data.File) {
+        setFetchError(
+          "This link points to a folder, not a document, so there is nothing here to approve. " +
+            "Folders created by an upload are approved automatically by a separate process — if this " +
+            "one is stuck Pending, it needs that process re-run rather than a decision on this page.",
+        );
+        setLoading(false);
+        return;
+      }
       setItem(data);
       /* ⚠ THE LINK ONLY SPEAKS FOR A DOCUMENT THAT IS STILL PENDING. An already-decided one must
          show what actually happened to it — pre-ticking "Reject" on a document somebody approved
@@ -870,10 +906,24 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             // write re-asserts it, we then call approve() again immediately after to restore Approved.
             // approve() is a dedicated method, not a field MERGE, so IT doesn't hit the restriction
             // either. Net effect: ApprovedBy lands, and the item ends up Approved regardless of order.
+            // The approver's comment rides in the SAME field MERGE (2026-09-10), so My Submissions can
+            // show it once the document is routed: Auto-route's copy carries a column over only when
+            // it exists at the destination, and the moderation comment does not exist there.
+            // ⚠ Checked separately: one unknown field name fails the WHOLE MERGE, so a library
+            // missing ApprovalComment must still get ApprovedBy. Raw text — JSON escapes quotes;
+            // `safeComment` is quote-doubled for the approve() URL and is wrong here.
+            const stamp: Record<string, string> = { ApprovedBy: approverEmail };
+            const typed = comments.trim();
+            if (
+              typed.length > 0 &&
+              (await libraryHasColumns(context.spHttpClient, webUrl, libTitle(), [APPROVAL_COMMENT_COLUMN]))
+            ) {
+              stamp.ApprovalComment = typed;
+            }
             await context.spHttpClient.fetch(itemBase, SPHttpClient.configurations.v1, {
               method: "POST",
               headers: { ...headers, "X-HTTP-Method": "MERGE", "IF-MATCH": "*", "Content-Type": "application/json;odata=nometadata" },
-              body: JSON.stringify({ ApprovedBy: approverEmail }),
+              body: JSON.stringify(stamp),
             });
             await context.spHttpClient.post(
               `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)/approve(comment='${safeComment}')?@f='${safeUrl}'`,
@@ -1145,16 +1195,6 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     webUrl,
   );
 
-  // Read whichever key SharePoint returns: the double-encoded name (what the OData
-  // response actually uses) first, then the plain internal name as a fallback.
-  const pick = (...keys: string[]): string => {
-    for (const k of keys) {
-      const v = fieldText[k];
-      if (v) return v;
-    }
-    return "—";
-  };
-
 
   // Location = the org folder path (Segment › … › Unit), derived from the file's live
   // Staging path so it is segment-agnostic (GHO, Upstream, Projects — any depth). Drops
@@ -1201,27 +1241,24 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     return segmentSides?.[folder] === "Project" ? "Group-Led Project" : "Business Segment";
   })();
 
-  const metadata: [string, string][] = [
-    ["Location",             orgLocation],
-    [segmentLabel,           pick("Business_x005f_x0020_x005f_Segment", "Business_x0020_Segment")],
-    ["Department",           pick("Department")],
-    ["Unit",                 pick("Unit")],
-    ["Document Type",        pick("Document_x005f_x0020_x005f_Type", "Document_x0020_Type")],
-    ["Year",                 pick("Year", "Year_x005f_x002f_x005f_Period", "Year_x002f_Period")],
-    // Already formatted to the site locale by SharePoint — displayed as returned,
-    // never re-parsed. Parsing it here would reintroduce the M/D/YYYY trap.
-    ["Document Date",        pick("DocumentDate")],
-    // ProjectName has no encoded characters, so its response key is unencoded.
-    ["Project Name",         pick("ProjectName")],
-    ["Vendor/Customer Name", pick("Vendor_x005f_x002f_x005f_CustomerName", "Vendor_x002f_CustomerName")],
-    ["Confidential Level",   pick("Confidentiality_x005f_x0020_x005f_Level", "Confidentiality_x0020_Level")],
-    // Yes/No comes back as the words, not a boolean — so a false reads "No"
-    // rather than blank, which is the whole point on a privilege flag.
-    ["Legally Privileged",   pick("LegallyPrivileged")],
-    // The built-in Description. Its leading underscore is encoded too.
-    ["Details",              pick("_x005f_ExtendedDescription", "_ExtendedDescription")],
-    ["Remark",               pick("Remark")],
-  ];
+  /* ⚠ ONE LIST, SHARED WITH MY SUBMISSIONS (2026-09-10). This panel used to name `Department` and
+     `Unit` literally, so Region / Estate·Mill / Refinery segments read blank, a below-Unit layer
+     (Sub Unit, a New Folder Layer) never appeared, and Keyword was missing — while My Submissions,
+     reading `buildDetailRows`, showed all of them. Tier rows are now DERIVED from their `<Base>Tid`
+     twins, so a level added next year appears here with no code change. Do NOT re-inline a list.
+     Location stays this page's own leading row: the abbreviated folder path, beside the full labels. */
+  const liveDetailRows: DetailRow[] = buildDetailRows({
+    fieldText,
+    leading: [{ label: "Location", value: orgLocation }],
+    segmentLabel,
+  });
+  const fieldsLoaded = Object.keys(fieldText).length > 0;
+  if (fieldsLoaded) lastDetailLabels.current = liveDetailRows.map((r) => r.label);
+  // Mid-swap: the previous document's labels with a dash, as the old fixed list did — never its
+  // VALUES, which belong to a different document.
+  const detailRows: DetailRow[] = !fieldsLoaded && lastDetailLabels.current
+    ? lastDetailLabels.current.map((label) => ({ label, value: label === "Location" ? orgLocation : "—" }))
+    : liveDetailRows;
 
   // Pending is a system state only — approvers pick Approved or Rejected.
   /* ⚠ THE LABEL IS THE ACTION; THE `val` IS THE STORED DECISION, and they are deliberately
@@ -1308,10 +1345,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
               document itself. Hiding the rows would collapse the column and shift the layout on
               every Next press. */}
           <div style={swapping ? { opacity: 0.45, transition: "opacity .15s" } : undefined}>
-            {metadata.map(([label, value]) => (
-              <div key={label} style={s.detailRow}>
-                <div style={s.metaLabel}>{label}</div>
-                <div style={s.metaValue}>{value}</div>
+            {detailRows.map((r, i) => (
+              <div key={`${i}-${r.label}`} style={s.detailRow}>
+                <div style={s.metaLabel}>{r.label}</div>
+                <div style={s.metaValue}>{r.value}</div>
               </div>
             ))}
           </div>

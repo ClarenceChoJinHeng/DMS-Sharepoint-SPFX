@@ -3,9 +3,11 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import {
   SubmissionRecord,
   RECORD_READ_SELECT,
+  RECORD_READ_SELECT_NO_WITHDRAWAL,
   RECORD_READ_SELECT_NO_ARCHIVE,
   RECORD_READ_SELECT_LEGACY,
   REPLACEMENT_COLUMNS,
+  WITHDRAWAL_COLUMNS,
   buildRecordPayload,
   parseRecordRow,
 } from "./submissionRecords";
@@ -214,6 +216,85 @@ export async function markRecordReplaced(
   }
 }
 
+/**
+ * Mark the record of a file the UPLOADER THEMSELVES just deleted, direct on staging.
+ *
+ * Client, 2026-09-11: *"now pic can delete without approval on staging, but the status will be
+ * different on staging... the status in my submission will show cancelled"*.
+ *
+ * ⚠ CALLED AFTER `recycle()` HAS ALREADY SUCCEEDED, exactly like `markRecordReplaced` — the delete
+ * has already happened by the time this runs, so a failure here costs only the LABEL: the record
+ * falls back to reading `deleted`, which is what it did before this feature existed.
+ *
+ * ⚠ FILTERED BY AUTHOR IS NOT NEEDED AND WOULD BE WRONG HERE, unlike a general write. This action
+ * only ever runs against the CALLER'S OWN row — `canActDirectly` gates the button on the viewer
+ * holding delete rights on THIS document's own chain, and the row it targets is the one they just
+ * opened on their own My Submissions page. Matching by stamp alone is exactly right.
+ *
+ * Same shape as `markRecordReplaced` throughout: `$top=5` rather than 1 (one stamp should identify
+ * one row; silently picking the first of two would leave the other reading `deleted` for ever), ISO
+ * dates (a plain items MERGE goes through the OData layer, which rejects `M/D/YYYY`), ISO fields
+ * batched into one MERGE per matching row.
+ */
+export async function markRecordWithdrawn(
+  sp: SPHttpClient,
+  siteUrl: string,
+  fileId: string,
+  actor: string,
+): Promise<boolean> {
+  const id = (fileId ?? "").trim();
+  try {
+    if (id.length === 0) return false;
+
+    const find: SPHttpClientResponse = await sp.get(
+      `${listBase(siteUrl)}/items?$select=Id&$filter=SubmissionFileId eq '${encodeURIComponent(id.replace(/'/g, "''"))}'&$top=5`,
+      SPHttpClient.configurations.v1,
+      { headers: GET_HEADERS },
+    );
+    if (!find.ok) {
+      console.info(`[submissions] withdrawn record not found (HTTP ${find.status}) for ${id}`);
+      return false;
+    }
+    const found = ((await find.json()).value ?? []) as Array<{ Id?: number }>;
+    if (found.length === 0) {
+      // Ordinary on a site where the file predates the record feature. Not a defect.
+      console.info(`[submissions] no record for the withdrawn file (${id}) — nothing to mark`);
+      return false;
+    }
+
+    const body: Record<string, string> = {};
+    body[WITHDRAWAL_COLUMNS[0]] = new Date().toISOString();
+    body[WITHDRAWAL_COLUMNS[1]] = (actor ?? "").trim();
+
+    let ok = true;
+    for (const row of found) {
+      if (typeof row.Id !== "number") continue;
+      const upd: SPHttpClientResponse = await sp.post(
+        `${listBase(siteUrl)}/items(${row.Id})`,
+        SPHttpClient.configurations.v1,
+        {
+          headers: { ...WRITE_HEADERS, "X-HTTP-Method": "MERGE", "IF-MATCH": "*" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!upd.ok) {
+        ok = false;
+        /* A 400 here is the columns not existing — a site that has not reconciled since they
+           shipped. Logged quietly, because the outcome is simply the old behaviour: the record
+           reads `deleted` instead of `withdrawn`, and no uploader is blocked. */
+        const detail = await upd.text().catch(() => "");
+        console.info(
+          `[submissions] could not mark ${id} withdrawn (HTTP ${upd.status}). ${detail.slice(0, 200)}`,
+        );
+      }
+    }
+    return ok;
+  } catch (e) {
+    console.info(`[submissions] could not mark ${id} withdrawn — ${(e as Error).message}`);
+    return false;
+  }
+}
+
 export async function readSubmissionRecords(
   sp: SPHttpClient,
   siteUrl: string,
@@ -232,11 +313,15 @@ export async function readSubmissionRecords(
       );
 
     let res: SPHttpClientResponse = await ask(RECORD_READ_SELECT);
-    /* ⚠ A THREE-RUNG LADDER SINCE 2026-09-03, AND THE MIDDLE RUNG IS THE POINT. `ArchivedAt` arrived
-       after `ReplacedAt`/`ReplacedBy`, so a site carrying only the older pair must lose ONLY the new
-       column — dropping straight to the legacy select would take the replacement state with it, and
-       every replaced file there would silently go back to reading "Deleted". `RevokedBy` taught this
-       on `CRS Requests` (2026-08-30): one retry is not enough once a second optional column exists. */
+    /* ⚠ A FOUR-RUNG LADDER SINCE 2026-09-11, ONE PER OPTIONAL COLUMN PAIR ADDED, NEWEST FIRST.
+       `WithdrawnAt`/`WithdrawnBy` are the newest, so they drop FIRST — a site carrying `ReplacedAt`
+       and `ArchivedAt` but not these must not lose all three at once. Same lesson as the archive
+       rung below it, and as `RevokedBy` on `CRS Requests` (2026-08-30): one retry is not enough once
+       a second (now third) optional column pair exists. */
+    if (res.status === 400) {
+      console.info("[submissions] no WithdrawnAt/WithdrawnBy columns on this list — reading without them");
+      res = await ask(RECORD_READ_SELECT_NO_WITHDRAWAL);
+    }
     if (res.status === 400) {
       console.info("[submissions] no ArchivedAt column on this list — reading without it");
       res = await ask(RECORD_READ_SELECT_NO_ARCHIVE);

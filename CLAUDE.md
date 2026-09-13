@@ -1,5 +1,14 @@
 # SDG DMS — Claude Code Project Context
 
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-13:
+> `docs/2026-09-13-session-handoff.md`.** The PCAR incident (an old segment's Archive folder
+> silently reused by a new one of the same name) and the three fixes it produced: retiring a
+> segment now deletes its abbreviation rows mandatorily; retire can also remove a confirmed-empty
+> Archive tree; and segment CREATION now refuses to reuse a top-folder code Archive still holds
+> documents under. Search this file for "PCAR INCIDENT" and "ARCHIVE CODE-REUSE GUARD" for the
+> full reasoning. **`git commit` was never run this session** — the working tree still holds the
+> accumulated diff; do not assume it is safe in git, only that it is saved to disk and documented.
+
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-09:
 > `docs/2026-09-09-session-handoff.md`.** What shipped as `1.0.516.0`–`1.0.519.0` and **none of it
 > site-tested**; the deploy-and-test order for `1.0.519.0`; the two client decisions outstanding on
@@ -334,8 +343,12 @@ for the full map): 4 Head Offices (Group, Upstream Malaysia, Minamas, **NBPOL** 
       - **Retire runs BEFORE the folders**, and a failed `mode`-row delete STOPS the run. The other
         order can leave a live segment with no folders, where every upload fails or silently
         re-creates a shell.
-      - **Abbreviation rows are never deleted** — authored data with no other copy, and re-creating
-        the segment without them renames every folder. **Columns are never deleted** either: the
+      - ⚠ **SUPERSEDED 2026-09-11 — abbreviation rows ARE now deleted, mandatorily, on every
+        retire.** This line stood as the original rule for a year; the client reversed it after the
+        PCAR fruit/car rows kept surfacing as `⚠ ORPHANED` on every reconciliation run long after
+        that segment was retired. See the dated entry below — this line is kept as the historical
+        record of what the original design argued, not as current behaviour.
+        **Columns are still never deleted**: the
         documents may have been MOVED elsewhere, which is exactly this workflow, and a deleted
         column takes its data with it and does NOT go to the recycle bin.
       - Group Map rows go WITH the segment: a row under a segment that no longer exists is a grant
@@ -12486,11 +12499,16 @@ file it is.
      records the OLD approval-library path, so it needs the library-segment swap, and it is a guess
      about where the file went rather than a fact about which file it is.
 
-## ⏭ AGREED AND NOT BUILT: RE-CODE A SEGMENT'S FOLDER, FOR AN EMPTY SEGMENT ONLY (2026-09-10)
+## ✅ BUILT 2026-09-11 — SEE THAT DATED ENTRY AT THE END OF THIS FILE. THE "AGREED AND NOT BUILT"
+## HEADING BELOW IS STALE; THE CLIENT ASKED FOR IT SOONER THAN "AFTER THE SDG MIGRATION."
+## ⏭ (WAS) AGREED AND NOT BUILT: RE-CODE A SEGMENT'S FOLDER, FOR AN EMPTY SEGMENT ONLY (2026-09-10)
 Client, on the Rename-or-re-code flow: *"I can rename department and unit but not segment… sometimes
 client made a mistake on naming the segment and then they have to delete the entire segment or deal
 with it."* Agreed to build **after** the SDG migration. **It must not be forgotten — the client asked
-for it explicitly.**
+for it explicitly.** ⚠ **THAT TIMING DID NOT HOLD** — asked again directly the next day, confirmed
+they wanted the physical-rename version now rather than waiting, and it was built the same session.
+The design below is what shipped; read the 2026-09-11 entry at the end of this file for what actually
+exists (`shared/segmentRecode.ts`, the Segments-tab dialog, the audit event).
 
 - **⚠ THE REAL CASE IS A TYPO ON A FRESH SEGMENT, not renaming one in use.** That distinction is what
   makes it tractable at all, and the gate below is the whole design.
@@ -12686,3 +12704,834 @@ resolved, and the two archive libraries report the IDENTICAL ten missing columns
     on screen.** The gap check compares INTERNAL names, so it is what closes the loop.
   - **The two scripts compose into a cycle worth reusing on any third site:** gap check → paste its
     `COLUMNS` block → create → gap check again. The second run is the test, and it costs nothing.
+
+## THE HC TOOLTIP LOST ITS DEFINITION, AND "PENDING SHOWS AS DELETED" WAS A STALE TAB (2026-09-10, 1.0.521.0)
+Two client reports in one message. **One was a real defect; the other was a browser tab, and it cost
+five REST reads and six rounds to establish that.**
+
+- **✅ THE REAL ONE: `Highly Confidential` WAS MISSING FROM THE CONFIDENTIALITY TOOLTIP** on BOTH
+  upload forms. Fixed — HC leads, then Confidential, then Restricted, in the client's own order and
+  their verbatim wording (*"...the disclosure of which will impact share price and competitive
+  advantage"*, which appears nowhere else in the codebase, so their screenshot was a target and not
+  the live UI).
+  - **⚠ THE CAUSE WAS A COMMENT THAT OUTLIVED ITS OWN REASON BY WEEKS, and it read as a decision.**
+    It said HC was *"deliberately absent — its term is removed from the term store for Phase 1, so
+    the dropdown cannot offer it, and describing a level nobody can pick reads as a bug in UAT. The
+    definition returns with the HC libraries in Phase 2."* Every word was true when written. **Phase
+    2 shipped, the level became selectable, and nobody came back for the definition** — so the
+    comment went on justifying an omission whose premise had gone. Exactly what the header of this
+    file warns about, in a code comment rather than in the docs.
+  - **⚠ TWO HAND-COPIED BLOCKS, and the warning is now in both.** `Form.tsx` and `BulkUpload.tsx`
+    each carry their own copy of that `<dl>`; the pair has drifted before, and a definition of a
+    confidentiality level is the worst place for two screens to disagree. **Change one, change
+    both.** Not extracted to a shared module in this change — worth doing, and not while the client
+    is mid-migration.
+
+- **⚠⚠ THE OTHER REPORT — an HC file reading `deleted` on My Submissions while sitting Pending in the
+  library — WAS A STALE BUNDLE IN AN OPEN TAB. A hard refresh fixed it outright.** After it: `Pending
+  (1)` with the HC tag, the record correctly joined to its live row, full metadata and `Open file`.
+  **There was never a defect in `MySubmissions`.**
+  - **FIFTH INSTANCE on this project**, after the dead web part showing `ERROR: [object Object]`, the
+    reconciliation run asserting an old page policy, the Bulk Upload clash dialog showing the
+    pre-`reserved` scheme, and the migrate-gate fix that tested as "still the same" twice. The client
+    had deployed `1.0.520.0` minutes earlier, which is precisely when this happens.
+  - **⚠ THE DIAGNOSTIC ORDER WAS WRONG AND THAT IS THE LESSON, not the tab.** Memory
+    `feedback-scale-process-to-change-size` says **ask the cheapest diagnostic first — "did you hard
+    refresh?" — before building a theory.** Instead: four theories were built and killed by data
+    (stamp never written · `cachedHcLibraries()` undefined via a priming race · the same via
+    security-trimmed title probes · a normalisation applied to the lookup but not the index), each
+    costing a REST read, before the free question was asked.
+  - **⚠⚠ THE SIGNAL TO SUSPECT THE BUNDLE IS "THE DATA ALL CHECKS OUT".** By read four the file was
+    proven stamped, pending, authored by the viewer and returned by the page's own filter, and the
+    join code was proven sound — i.e. **the source, as written, could not produce what was on
+    screen.** That contradiction IS the tell, and it should short-circuit straight to the tab rather
+    than motivating a fifth theory. Write it down as a rule: *when the code as read cannot produce
+    the observed behaviour, stop theorising and establish which build is running.*
+  - **The cheap ways to date a running build**, both already recorded and neither used here: grep the
+    shipped bundle for a STRING the change introduced (a string the installed package does not
+    contain cannot be rendered by it), or find a string on screen that the current source no longer
+    has. **Site Contents' version number is necessary and NOT sufficient** — it reports the package,
+    never what a tab has loaded.
+
+- **THREE FACTS WORTH KEEPING FROM THE READS, since they were never established before:**
+  - **A cleared PIC resolves BOTH HC libraries.** `getbytitle` is security-trimmed, and
+    `primeHcLibraries` needs both halves or `cachedHcLibraries()` stays `undefined` — so this was a
+    real candidate. Confirmed by listing every library that account can see: `Approval for Highly
+    Confidential Document` AND `Highly Confidential Document` are both there. The HC read on My
+    Submissions is therefore sound for a PIC.
+  - **Neither archive library is visible to a PIC**, which is the 2026-09-02 narrowing working as
+    intended — and confirms why My Submissions no longer reads them.
+  - **⚠ `$expand=File` IS STILL THE ONE PART OF `readLibrary`'S REAL REQUEST NEVER REPRODUCED BY
+    HAND.** Every diagnostic query omitted it. All four upper rungs carry it, so if it were ever
+    refused for a viewer, only the minimal fallback survives — and that one drops the stamp. Not a
+    live problem; a gap in what has been tested.
+
+- **Verified**: `tsc --noEmit` clean. Packaged as `1.0.521.0`.
+
+## THE REQUESTS TAB NAMED A FILE AND NOTHING ELSE (2026-09-10, 1.0.522.0)
+Client, looking at their own Requests tab with two pending deletions on it: *"I think you need to
+provide details such as the file path and whether if its HC or not because I can't really tell which
+file to cancel the delete request."*
+- **⚠⚠ IT IS NOT A TIDINESS COMPLAINT — THE SAME FILENAME CAN EXIST IN BOTH LIBRARIES, AND THIS
+  PROJECT HAS ALREADY PAID FOR IT.** On 2026-08-21 `TES - TES - TES - 20-08-26.pdf` existed in the
+  normal AND the HC library, and an approved deletion took the HC copy while an identically named
+  file remained. That is precisely why `isHcRow` and the HC tag were added to the list rows **and
+  repeated in the request dialog** — *"by the dialog the uploader has committed to a file, and that
+  is the last moment they can notice"*. **The Requests tab was never given either**, so it was the
+  one screen left where a requester cancelling one of two chose blind.
+- **THE TAB NOW RENDERS THE FOLDER TRAIL AND THE HC / Archived TAGS**, in the same shape as the file
+  rows below it, so the two read alike.
+- **⚠ IT COSTS NO EXTRA READ.** A `CRS Requests` row already stores `ItemUrl` — the server-relative
+  path recorded when the request was raised — and `Requests.tsx` has selected it unconditionally
+  since the list was created. **So adding it to My Submissions' `$select` carries no gotcha-#11 risk:
+  a site missing that column would already have a broken approver queue.**
+- **⚠ THE GAP THE HELPER CLOSES: A REQUEST ROW STORES A PATH, EVERY DOCUMENT ROW STORES A LIBRARY.**
+  `isHcRow`/`isArchivedRow` take a URL SEGMENT, which every row on the two document lists carries as
+  `library`; a request row has only the full path. `librarySegmentOf` (in `shared/mySubmissions.ts`,
+  pure, 7 tests) recovers it — **matched the same way `folderTrail` strips the library, first
+  recognised part wins**, so the two cannot disagree about where a path's library ends. Pinned by a
+  test that asks both about one path.
+- **⚠ `undefined` MEANS NOT RECOGNISED AND TAGS NOTHING.** Falling back to the first path segment
+  would name `sites` as a library — an invented value that then answers `false` to everything anyway,
+  but silently. Same rule as an unresolved `hcSegs`: **a wrong `true` brands an ordinary document
+  confidential, and a wrong `false` hides the distinction the reader came for.**
+- **⚠ THE FIRST RECOGNISED PART, NOT THE LAST, and a test pins why:** a unit folder legitimately
+  called `Archive` under the approval library must not out-vote the real library.
+- **`itemPath` is written by BOTH producers of a `MyRequest`** — the list read (`r.ItemUrl`) and
+  `submitRequest`'s instant reflect (`row.fileRef`, the same value it writes to `ItemUrl`). One of
+  the two missing it would make a just-raised request render differently from the same row after the
+  next load, which reads as the page losing information.
+- A blank path renders an em dash rather than an empty cell — blank reads as a failed load, and it is
+  missing only for a row written before `ItemUrl` existed, which is a fact about the row.
+- **Verified**: `tsc --noEmit` clean, **51 suites / 0 failed** (`mySubmissions` 60 → 67), 41 lint
+  warnings — every one a pre-existing category, **none on the changed pure module or its test**; the
+  only one naming a changed file is `MySubmissions.tsx`'s `max-lines`, already over the ceiling.
+  ⚠ **That file is now 3233 lines and is the largest of the six over the limit — extracting the
+  Requests tab and the request dialog deserves its own reviewable change.**
+
+## ⏭ THREE UI FIXES AGREED AND DEFERRED (2026-09-10, client: *"we do later"*)
+Raised by the client while porting flows; all three deliberately NOT built, so the flow work was not
+interrupted. Each has enough here to build without re-deriving it.
+
+1. **`Pending` IS MISSING FROM THE REQUESTS PAGE'S OUTCOME DROPDOWN, and it is now a real gap.**
+   `present` is derived from `decidedOf("Deletion")`/`decidedOf("Share")` only
+   (`Requests.tsx` ~2245), so a pending row can never put `Pending` in the picker. **That was correct
+   while `applyFilters` deliberately never hid a pending row** — and the client had that clause
+   REMOVED on 2026-09-07 (*"When I select approve or reject it doesnt filter to show approve or
+   reject"*), so the filter genuinely narrows now and there is no way to isolate one's own queue.
+   ⚠ Derive that one option from `ofType(...)` rather than `decidedOf(...)`; the rest must stay
+   derived from `REQUEST_STATUSES`, which is the compiler-checked list. Selecting it shows ALL
+   pending, so it cannot hide outstanding work — the rule the removed clause existed to protect.
+2. **THE APPROVER CANNOT TELL AN HC DOCUMENT FROM A NORMAL ONE** (client: *"an approver cannot tell
+   if the file that is going to be delete is HC files or not"*). Same defect fixed on My Submissions
+   in 1.0.522.0, one page over: the request cards show the filename and no library. ⚠ **The same
+   filename can exist in BOTH libraries** — 2026-08-21, where an approved deletion took the HC copy
+   and left the other standing. `Requests.tsx` already reads `itemUrl` in `fromListItem` (~2963), so
+   `librarySegmentOf` + `isHcRow`/`isArchivedRow` need no new read. **Widens nothing:** anyone who can
+   SEE an HC request is already cleared for it (`APRHC`, or an owner).
+3. **⚠⚠ THE MIGRATE SCREEN'S PAUSE BANNER NAMES A STEP THAT DOES NOT EXIST IN THE RENAME FLOW.**
+   `SubtreeMigrator.tsx` ~1791 reads *"Go back to Step 1 to turn off uploads"* — but the `rename`
+   flow's three steps are Rename Term Abbreviation / Move existing folders / Folder Reconciliation,
+   and **`UploadPauseToggle` is mounted in exactly ONE place: the structure flow's `pauseUploads`
+   step** (`FolderAdmin.tsx` ~1467). So step 1 there is the abbreviations screen, with no toggle —
+   and since 1.0.505.0 Rebuild REFUSES while uploads are on, a below-Unit code rename can dead-end
+   with no route in that flow to satisfy the gate. **Fourth instance of advice naming a control that
+   cannot act** (after the two "use the list of steps" hatches and "Leave this unit alone").
+   - ⚠ **DO NOT "fix" it by adding pause/resume steps to the rename flow.** `blocksNext` gates
+     `pauseUploads` whenever uploads are on, so it would FORCE a pause on every Department/Unit
+     rename — which needs none, because reconciliation does that rename and the scan reports nothing
+     to move. The agreed shape is: **show the banner only once the scan has found folders to move**
+     (before the check there is nothing to warn about) **and word it to name a real route** — the
+     structure flow's first step, or the `uploadsPaused` row in `CRS Config`.
+   - **THE RULE WORTH KEEPING FROM THE DIAGNOSIS: the pause is needed for a BELOW-UNIT coded level
+     and not for a Department or Unit.** Reconciliation renames Dept/Unit folders and never goes
+     below Unit, so below Unit the MIGRATOR is the only thing that renames them — and an upload
+     landing in the old-named folder after the scan leaves TWO folders for one term with documents
+     split, **with no pending chain to keep the state visibly unfinished.** Silent, where the
+     structure flow at least refuses to activate.
+
+## THE REQUESTS PAGE HAS A FILE VIEW, AND THE REQUEST EMAILS LAND ON IT (2026-09-10, 1.0.528.0)
+Client: *"Reuse the my submission view file component for the my request, if client click on the file
+name it will open that page for them"*, and the email's **"Open the request to approve or reject"**
+link is removed — **"Open the document"** now goes to the file view. NOT site-tested.
+- **`shared/fileDetailPanel.tsx` IS THE ONE FILE VIEW** — preview + details, lifted out of My
+  Submissions, which now mounts it. It fetches nothing; each page resolves its file its own way. Its
+  `.crs-ms-detail` phone rule moved with it. **Two mount points, never a copy.**
+- **Requests page: clicking a file name opens the view** with the request card above it — **Approve
+  and Reject included**, which is what makes dropping the email's approve link safe. `?request=<Id>`
+  opens it directly.
+  - ⚠ **HELD AS AN ID, NOT A ROW** — a decision reloads the list, and a stored row would keep its
+    pre-click status. ⚠ **One loader, driven by an effect on `viewId` and the viewed row's STATUS**:
+    both routes (click, link) only set the id, and an approved deletion re-reads so the preview stops
+    showing a recycled file. Declared above the early return.
+  - Resolves the document `ItemUniqueId` first, then `findByStamp` (`SubmissionFileId`) on a 404 only —
+    the same order the actions use, since the id is dead after routing. A file that is gone gets its own
+    `gone` state and message, never a blank preview.
+  - Visibility still follows `isVisibleTo`: a link to a request outside the viewer's scope says so.
+    ⚠ `systemAdmin` loads in a separate effect, so an admin can see that line for a moment.
+  - The decision dialog became a `decisionDialog` value rendered by both views, not a second copy.
+  - ⚠ No Group-Led Project label here: this page does not read the mode rows' `Category`, so the top
+    tier always reads `Business Segment`.
+- **My Submissions: `?file=<UniqueId>&sfi=<SubmissionFileId>` opens that file.** A record row
+  (deleted/archived/replaced) has no view, so it lands on the Requests tab with a line saying why —
+  which is the ordinary case for an approved deletion.
+- **"· still awaiting approval" shows only while the request is Pending** — beside a decided request's
+  `Approved` badge it read as a contradiction.
+- ⚠ **THE FLOW HALF IS MANUAL, ON BOTH SITES**: `MySubmissionsPageLink` Compose + the new `FileLink`
+  in `2026-09-09-request-notification-flow-runbook.md` §11.2. Approvers (Pending) get
+  `Request.aspx?request=<ID>`; requesters (decided) get the My Submissions link — **a PIC cannot open
+  the Requests page.**
+
+## THE APPROVAL PAGE: A FOLDER IN THE QUEUE, A FOLDER THAT BLANKED IT, AND AN HC LINK THAT OPENED THE WRONG DOCUMENT (2026-09-10, 1.0.526.0)
+Three reports from one SDG session, two of them the same root cause.
+- **THE QUEUE COUNTED PENDING FOLDERS.** `loadQueue`'s `$filter` was `OData__ModerationStatus eq 2`
+  and nothing else, so the folders the upload form ensure-creates — which arrive Pending exactly like
+  files — became Prev/Next POSITIONS. One real pending file and two pending folders read **"3 of 3"**.
+  Fixed with `and FSObjType eq 0`. ⚠ **`MySubmissions.tsx` had this exact bug fixed long ago, with a
+  comment saying so; the approval page was never checked.** Grep every `ModerationStatus eq 2` read.
+- **⚠ STEPPING INTO ONE BLANKED THE WEB PART, with no error UI.** `$expand=File` returns `File: null`
+  for a folder, and the clash-check effect reads `item.File.ServerRelativeUrl` as a function
+  ARGUMENT — so it throws synchronously inside a `useEffect`, outside its own `.catch()`, and with no
+  error boundary the whole page renders nothing. Console: `TypeError: Cannot read properties of
+  undefined (reading 'ServerRelativeUrl')`. `loadItem` now refuses a folder BEFORE `setItem`, with a
+  message saying folders are approved by a separate process.
+  - **The route in was the queue, not the library view** — the Name column's formatting sends a
+    folder to `defaultClick` (open the folder), never to this page. `?itemId=` is rewritten as the
+    approver steps through the queue, so a folder position put a folder's id in the URL.
+- **⚠⚠ AN HC FILE OPENED A DIFFERENT, NORMAL DOCUMENT — the HC library's Name-column formatting had
+  no `&lib=hc`.** It was byte-identical to the normal library's, so the page read the NORMAL library
+  first, found an unrelated document holding the same id (**item ids are per-LIST**), succeeded, and
+  never tried HC — its fallback fires only when the normal read FAILS. The worse of the two outcomes
+  the page's own comment names: not a 404, a different document. **Verified fixed live** —
+  `?itemId=224&lib=hc` now shows the HC document. The file branch's `href` operands are
+  `["/sites/CRS/SitePages/Approval-Document.aspx?itemId=", "[$ID]", "&lib=hc"]`.
+  - **⚠ COLUMN FORMATTING IS NOT IN THE PACKAGE** — it is set by hand per library, per site, so it
+    will be missing on any new site. **Fifth instance of an HC clone with an unswapped reference**, the
+    first outside Power Automate. The normal library's copy must NOT carry `&lib=hc`.
+- **The folders are stuck Pending because the folder-approval flow has not cleared them** on SDG —
+  check it is ported and on for `Approval for Document`. Not a code defect.
+
+## CRS SEARCH NO LONGER READS THE APPROVAL LIBRARIES (2026-09-10, 1.0.526.0)
+Client: *"it is not suppose to search anything from staging library only document library"* —
+reported as a banner, *"Approval for Document (HTTP 404)"*, seen by a viewer.
+- **⚠ THE BANNER WAS A PERMISSION ANSWER MISREPORTED AS A FAILURE.** A viewer holds nothing in
+  `LIBRARY_ROLES.Staging`, so SharePoint **security-trims the library to a 404** — and `runListRead`'s
+  `refused` rule covered only HC libraries and only 401/403. Every non-uploader saw the banner on
+  every search: the permanent-warning outcome the design doc warned against, for HC, and never
+  extended to the normal pair.
+- **THE CLIENT CHOSE TO DROP THE APPROVAL LIBRARIES RATHER THAN FIX THE RULE**, offered both. The
+  `Staging`/`StagingHC` REST jobs, their keyword probes and the "Awaiting approval" chip are gone.
+  KQL never scoped them; the 24-hour recency top-up on `Documents`/`HC Documents` stays, so a file
+  approved minutes ago and not yet crawled is still found.
+- **⚠ THE COST, STATED: A PENDING DOCUMENT IS NOW FINDABLE BY NOBODY THROUGH SEARCH, ITS OWN UPLOADER
+  INCLUDED.** That was the whole reason the approval libraries were searched (2026-08-16). My
+  Submissions is where an uploader finds a pending file.
+- **⚠ RE-ADDING THEM NEEDS THE REFUSAL FIX FIRST** — a 404 on an approval library must count as
+  `refused`, or the banner returns for every viewer. Said at the job list in `search()`.
+- `buildListFilter` stays exported and tested in `shared/documentSearch.ts`; nothing calls it now.
+
+## ⚠⚠ C-LEVELS COULD NOT SEARCH HC DOCUMENTS OR THE HC ARCHIVE — THE HC PAIR RULE HID THEM (2026-09-10, 1.0.527.0)
+Client: *"allow C level able to search archive"*, after *"some c level user can only see one to two
+files but system admin can see all"*.
+- **THE CAUSE IS RESOLUTION, NOT PERMISSIONS.** `primeHcLibraries` probes the HC **approval** library
+  first and **returns if it does not resolve**. A C-Level holds nothing in either approval library, so
+  that probe is security-trimmed to a 404 — HC Documents is **never probed**, `hcAvailable()` is
+  false, and `primeArchiveLibraries` then skips the HC archive (`needsHc = hcAvailable()`). Search's
+  scope was built from those caches, so it left out the very libraries `LIBRARY_ROLES` grants C-Levels
+  Read on — the archive being narrowed TO them (2026-09-02). The normal archive was in scope throughout.
+- **FIXED WITH SEARCH'S OWN PROBE, `primeReadableApprovedSide` in `shared/spNaming.ts`** — HC Documents,
+  the archive and the HC archive, each asked independently. A reader without access fails that probe
+  and loses nothing, since Search trims by ACL. `hcAvailable()` and the archive pair rule are
+  **deliberately untouched**: both-or-neither is right for ROUTING an upload, and this probe is
+  commented as search-scope only — **never use it to route or to offer the HC level.**
+- **⚠ SCOPE AND CLASSIFICATION HAD TO MOVE TOGETHER.** Adding the HC segments to the KQL scope alone
+  would have brought back HC hits that `libraryOfPath` labels `Documents`, and `openRow` would then
+  read the NORMAL library with an HC item id — a different document, since item ids are per list.
+  `hcDocsLib`/`archiveLib`/`archiveHcLib` and `apiTitle` now feed the scope, labels, folder trail,
+  classification, the 24-hour top-up and the detail read. `libApiTitle` answers the logical KEY for an
+  unresolved HC library, which is a guaranteed 404 for these readers.
+- **⚠ THIS DOES NOT FIX A STALE SEARCH INDEX, which is the other half of "one or two files".** Search
+  trims by the ACL stored at crawl time, so permissions granted since the last crawl do not show until
+  those items are re-crawled — Library settings → Advanced → Reindex Document Library, per library.
+  The one or two files a C-Level saw are most likely the live 24-hour REST read, which is not indexed.
+- **On SDG the archive is EMPTY** (movers not ported), so a C-Level there will find nothing in it
+  whatever the fix — test on ClarenceDMSTesting, which holds the 2026-09-02 archived files.
+
+## THE APPROVAL PAGE'S DETAILS PANEL NOW READS THE SHARED LIST (2026-09-10, 1.0.529.0)
+Client: *"ApprovalDocument.aspx do not have Keyword for the details panel, I thought it is dynamic?"*
+then *"what if someone adds lets say new folder layer, will it appear as well? Because we need to
+ensure consistency"*. It was NOT dynamic: `ApprovalDocument.tsx` kept its own hand-written `metadata`
+array while only My Submissions used `buildDetailRows`. **This supersedes the 1.0.413.0 note that
+"the bigger defect in this file is untouched" — it is fixed.**
+- **THE PANEL IS `buildDetailRows` NOW**, with this page's `Location` as a `leading` row and
+  `segmentLabel` passed through. Tier rows are DERIVED from `<Base>Tid` twins, so Region /
+  Estate·Mill / Refinery segments stop reading blank, and **any level added through Folder levels (Sub
+  Unit, a New Folder Layer) appears here with no code change** — the consistency the client asked for.
+  Keyword and every future `FILE_FIXED_FIELDS` entry arrive the same way. Do not re-inline a list.
+- **THREE VISIBLE CHANGES, disclosed:** blank fields are now DROPPED rather than shown as `—` (same
+  as My Submissions); two labels change to the shared wording — `Confidential Level` →
+  `Confidentiality`, `Vendor/Customer Name` → `Vendor / Customer`; and order follows the shared list.
+- **⚠ A QUEUE SWAP CLEARS `fieldText` TO `{}`, AND THE SHARED BUILDER DROPS BLANKS** — so the panel
+  would collapse to one row on every Next press. `lastDetailLabels` (a `useRef`, declared with the other
+  hooks, above every early return) keeps the previous labels with `—` values mid-swap, as the old
+  fixed list did. Never the previous VALUES: they belong to another document.
+- **⚠ STILL OPEN: `orgLocation` DROPS A FIXED THREE PATH SEGMENTS** (Year, Document Type, filename),
+  so a document under a below-Unit layer shows that layer inside Location too. Harmless duplication,
+  not a wrong value; the fix is counting from the top with `permissionedTierCount`.
+- NOT site-tested — check one approval on GHO and one on a segment with a Sub Unit / New Folder Layer.
+- **⚠ SUPERSEDED BY THE NEXT SECTION (2026-09-11) — blank fixed fields now show `—`, NOT dropped.**
+
+## A CLIENT QA DECK — ELEVEN STRAIGHTFORWARD ITEMS BUILT, PLUS ONE REAL BUG CAUGHT (2026-09-11, 1.0.533.0)
+Client sent a 30-row QA deck spanning Document Upload, Bulk Upload, My Submissions, Search, Email
+Notification, Approval for HC, Homepage. Confirmed several as blockers/held-off first (download
+restriction, PIC direct-delete persona change, a new bulk access-toggle tab, three items held off
+entirely) — those are NOT built yet, only planned. This entry covers the eleven items with no
+blocker, done in one pass. **NOT site-tested.**
+- **⚠⚠ A REAL BUG, CAUGHT BEFORE SHIPPING: `FIELDS.remark` HAD BEEN CHANGED TO `"Remark for
+  Approval"`.** That constant is the SharePoint INTERNAL COLUMN NAME used as `FieldName` in every
+  `validateUpdateListItem` call — every sibling entry in the same object is a real internal name
+  (`Document_x0020_Type`, `DocumentDate`, `ProjectName`, …). The actual column is `Remark`, per
+  CLAUDE.md's own field list. Left as changed, every upload's tagging call would have failed
+  ENTIRELY (gotcha #4 — one unknown field name fails the whole write, not just that field).
+  Reverted to `"Remark"`; the visible LABEL is what became "Remark for Approval" instead, on the
+  textarea below.
+- **Document Upload dropdown sorted alphabetically, "President Office" pinned first** — matched
+  loosely on the label (`/president/i`) rather than an exact string, and applied only at the DISPLAY
+  point (`sortModesForDisplay`); the underlying `modes` array and its `sortOrder` are untouched.
+- **Remark moved to the bottom of the Document File Name section**, relabelled "Remark for
+  Approval," and turned into an expandable, resizable `<textarea>` (was a single-line input) — same
+  250-char cap, same write path.
+- **Project Name and Vendor now share a row; Document Name is full-width** — the composed-filename
+  ORDER (`composeUploadBase`) is unchanged; only which field gets the full-width grid cell moved.
+- **Success popup (both upload forms):** "Please visit Home page to track progress" removed; button
+  "Back to Document" → "My Submission", now navigating to the My Submissions page instead of the
+  site root. Bulk Upload's popup had its body copy removed ENTIRELY, not partially — its old text
+  ("awaiting approval") was actively wrong for that tool, which writes straight to Documents with no
+  approval step.
+- **My Submissions page URL is resolved from Site Pages at mount**, never hardcoded — this client
+  renames every page at import. Falls back to the site root, so the button is never dead; matches
+  every other cross-page link in this project.
+- **The replace-clash popup on Form.tsx dropped its `maxWidth: 560` override**, now matching the
+  Upload Successful popup's default 420px, per the client's explicit "same size" ask.
+- **Bulk Upload: a border added to `.dms-fp-row`** (the uploaded-file list rows) — previously only a
+  background tint and rounded corners, so a run's file list read as one unbroken block.
+- **Bulk Upload: the "Temporary Tool" warning banner is removed entirely.** It carried a real
+  disclosure (writes bypass approval), now unstated anywhere on the page — the client's call, and the
+  same trade already made once before when this banner was shortened on 2026-09-03.
+- **Bulk Upload: destination-info layout reordered** — Segment picker now shares a row with the
+  first permissioned level (Department, or whatever this segment calls it); the second level (Unit)
+  sits alone; any OTHER below-Unit tier (Sub Unit, a New Folder Layer) gets its own row in its
+  existing order; Document Type and Year share the final row, reordered so Document Type renders
+  first. **Only rendering order/grouping changed** — every selection, disabled-state and cascade
+  callback is untouched, just relocated. `.dms-grid-3` (the old 3-column class) is now dead and was
+  removed.
+- **My Submissions tabs reordered and one relabelled**: `Requests` moved to leftmost and now
+  DISPLAYS as "Permission" (`TAB_LABEL` map — the internal id `"Requests"` is untouched, so every
+  `tab === "Requests"` branch in the file still works); `Archive` moved to last.
+- **Search's empty-state text** → "No Result Found. Please Try Again." (client marked this item
+  tentative on their own sheet).
+- **⚠ ITEM 5 (tooltip hover font → green) DEFERRED, not built** — the confidentiality-level names
+  (`dt` in `.dms-info-panel`) are already `#0f6c3f` green in the current source; no non-green tooltip
+  text could be found to recolour. Likely already resolved by earlier work the same day, or refers
+  to an element not yet identified — needs a screenshot or more specifics before touching anything.
+- **Pre-existing lint warnings noted, not introduced by this pass and not fixed here**:
+  `buildLevelFormValues`/`toSpDate`/`levelCols` unused in BulkUpload.tsx — plausible fallout from the
+  earlier Document Date/Remark removal from that screen; left for a deliberate look rather than
+  silently deleted.
+- Verified: `tsc --noEmit` clean, all four touched files lint with zero NEW warnings (Form.tsx and
+  MySubmissions.tsx match their documented pre-existing baselines), 51 test suites passed, full
+  build/package clean.
+
+## EVERY FIXED FIELD ALWAYS SHOWS — DASH IF BLANK, ON BOTH DETAIL PANELS (2026-09-11, 1.0.532.0)
+Client, after confirming a "missing" Keyword was genuinely blank: *"can we show Keyword -, like how
+ApprovalDocument.aspx shows empty dashes? Keeping it consistent is better."*
+- **⚠ THIS REVERSES THE "drop blank fixed fields" RULE `documentDetails.ts` shipped WITH, not just for
+  Keyword.** Singling out one field would be arbitrary; the coherent rule is all-or-nothing for the
+  ten fixed fields (Document Type, Year, Document Date, Confidentiality, Legally Privileged, Project
+  Name, Vendor/Customer, Details, Remark, Keyword). Every panel now has at minimum these ten rows.
+- **⚠ TIER ROWS (Region, Estate Mill, Department, Unit, Sub Unit…) STILL DROP WHEN BLANK, UNCHANGED.**
+  Different reasoning: a library serves thirteen segments with different tier names, so padding a
+  Group Head Office document with a blank `Region` row would bury the tiers that DO apply. Fixed
+  fields have no such multiplication — always the same ten — so the dash rule is safe there and would
+  not be safe for tiers.
+- **⚠ A GENUINE READ FAILURE STILL RETURNS NOTHING, not ten dashes.** `fetchFieldText` answers `{}`
+  only when the request itself failed (a real item always has an Id/Title), so `buildDetailRows`
+  guards on `Object.keys(fieldText).length === 0` — that state renders no fixed rows at all, same as
+  before. Otherwise "could not read this document" and "read it, everything is blank" would look
+  identical, which is the one distinction this module exists to preserve.
+- Applies to `buildDetailRows` (single-file panel, both screens now share it — see the earlier
+  entry), and `buildBatchRows`/`buildFileRows` (My Submissions' read-only batch view).
+- NOT site-tested.
+
+## MY SUBMISSIONS SHOWS WHO APPROVED, AND WHAT THEY WROTE (2026-09-10, 1.0.530.0)
+Client: *"add another column call Approved By and another column Comment? Reason for this is to be
+able to know who approve and can still be track in the system and not just email"*. NOT site-tested.
+- **⚠ NEITHER VALUE REACHED THE ROWS, AND THAT IS WHY IT NEEDED SCHEMA.** An approved row is read from
+  the APPROVED side, where `ApprovedBy` did not exist (it was approval-side only, 2026-09-01) and the
+  approval comment could not exist: it lived in `_ModerationComments`, which only a library with content
+  approval ON has. Auto-route's copy carries a column over only when it exists at the destination.
+- **`ApprovedBy` (Text) AND NEW `ApprovalComment` (Note) ARE NOW ASSERTED ON EVERY CRS LIBRARY**
+  (`allLibraryTitles()`, archive included) — reconciliation must run before any of this shows.
+- **BOTH WRITERS STAMP THE COMMENT** in the SAME field MERGE as `ApprovedBy` — never beside the
+  moderation status, which 500s (1.0.348.0). Each column is checked separately with `libraryHasColumns`,
+  because one unknown field name fails the whole MERGE and would lose `ApprovedBy` too. The rejection
+  reason stays in the moderation comment: a rejected file is never routed.
+- **My Submissions:** two table columns, `Approved By` and `Comment`, plus a green box in the detail
+  view. The rejection reason MOVED from under the file name into the Comment column. Read on its own top
+  rung of the `$select` ladder, so an unreconciled library costs only these two columns.
+- **⚠ BLANK, AND CORRECTLY SO, for:** everything approved before this deploy (nothing backfills), the
+  native Approve/Reject command, and bulk imports (the auto-approve flow writes no approver).
+- **⚠ THE REPLACE PATH NEEDS A FLOW EDIT, IN BOTH ROUTING FLOWS** — `Update file` copies no columns, so
+  a replaced document would keep the FIRST approval's approver. Runbook
+  `2026-09-02-replaced-record-stamp-runbook.md` §3c. Until then only the ordinary Copy path is right.
+
+## THE PER-FILE DETAILS PANEL COULD SHOW A STALE RESPONSE — CACHE-BUSTED (2026-09-11, 1.0.531.0)
+Client, a super admin account: *"sometimes this happens to my submission until I refresh... shows
+no keyword"*. `fetchFieldText` (the `FieldValuesAsText` read behind My Submissions' detail panel,
+including Keyword) sent `Cache-Control: no-cache` but no cache-busting query string — the exact gap
+already fixed on the Requests page and the approval guard (2026-08-30/2026-09-02): those two headers
+alone can still be served from a stale response, and the symptom is precisely "wrong until a hard
+refresh". A plain reload does not reliably force revalidation.
+- **Fixed with `bust()`**, a unique query parameter on every call, on BOTH requests inside
+  `fetchFieldText` (the `FieldValuesAsText` read and the raw `DocumentDate` re-read beside it).
+- **⚠ NOT APPLIED TO THE REST OF THE PAGE** — the library list read (`readLibrary`) already had this
+  reported and fixed at `bust()`-level severity in earlier work; this pass is scoped to the one read
+  the client's report pointed at. If the same "stale until refresh" symptom recurs on the table
+  itself, extend it there the same way.
+- NOT site-tested.
+
+## ⚠⚠ EXCHANGE ONLINE BLOCKS EVERY OUTBOUND EMAIL TO AN EXTERNAL ADDRESS — TENANT-LEVEL MAIL FLOW RULE, NOT A FLOW OR CODE DEFECT (2026-09-10)
+Traced why neither `clarence@trinergydigital.com` (approver, agency) nor `clarencechojinheng@gmail.com`
+(requester) received their `CRS — Notify request activity` emails, despite BOTH runs proving a correct
+`200` send with the right recipient/subject/body. The bounce-back sitting in `crs@sdguthrie.com`'s own
+inbox names the real cause:
+
+> *"A custom mail flow rule created by an admin at `simedarbyplantation.onmicrosoft.com` has blocked
+> your message. You are not allowed to send emails to external recipients."*
+
+- **THE TENANT IS `simedarbyplantation.onmicrosoft.com`**, not a Guthrie-owned tenant — SD Guthrie's
+  mail runs under Sime Darby Plantation's Exchange Online tenant, and an admin there has a transport
+  rule blocking EVERY outbound message to any address outside that tenant's own domains.
+  `@trinergydigital.com` (the agency) and `@gmail.com` are both "external" to it, so both are blocked
+  identically — one cause behind two apparently separate deliverability mysteries.
+- **NOTHING IN THIS PROJECT CAN WORK AROUND IT.** A `200` status and a correctly addressed
+  `Send an email (V2)` action are genuinely all Power Automate can ever report — Exchange accepts the
+  message, queues it, and this rule drops it AFTER that, invisibly to the flow. No retry, no different
+  connector, no app-side code reaches past it.
+- **THIS AFFECTS EVERY FLOW THAT EMAILS AN EXTERNAL ADDRESS**, not only
+  `CRS — Notify request activity` — the 3-day approval reminder, any approver notification where the
+  approver is an agency account, and any share/delete request notification to a requester or recipient
+  outside `sdguthrie.com`. ⚠ `SP.Web.ShareObject`'s own native SharePoint invite email
+  (`sendEmail: true` in `Requests.tsx`'s `performShare`) is a SEPARATE mechanism from Exchange
+  transport and may or may not hit the same rule — **not yet checked**, worth confirming separately.
+- **THE FIX IS AN EXCHANGE ADMIN ACTION, NOT A DEV ONE.** Whoever administers mail flow rules on
+  `simedarbyplantation.onmicrosoft.com` needs an exception — normally scoped to the sending account
+  (`crs@sdguthrie.com`, or whichever mailbox the connector uses) rather than loosening the rule
+  tenant-wide. This is a conversation with SD Guthrie's/Sime Darby's IT/Exchange team.
+- **DIAGNOSTIC WORTH REUSING, and cheaper than everything tried first: check the SENDING mailbox's own
+  Inbox for a bounce-back (NDR) before chasing recipient-side spam folders, SPF/DKIM/DMARC theories, or
+  further test sends.** The NDR names the exact tenant, the exact rule, and the exact fix in one email
+  — settled in seconds what several rounds of flow-run inspection could not.
+
+## A PIC DELETES DIRECTLY ON STAGING AGAIN — DELS/DELSHC RESTORED, AND A THIRD "CANCELLED" (2026-09-11)
+Client: *"now pic can delete without approval on staging, but the status will be different on staging,
+if PIC delete directly on staging the status in my submission will show cancelled but if they request
+to delete on documents library then it will show the same as before Deleted."* **This REVERSES
+2026-08-20's removal** ("For Staging PIC should not be able to delete, they have to request from HOU")
+— confirmed with the client first, including that a PIC can only see (and therefore only delete) their
+own draft, since Draft Item Security still reads *"Only users who can approve items (and the author)"*.
+**BUILT, NOT site-tested.**
+- **`DELS` BACK ON `pic`, `DELSHC` BACK ON `pic_hc`** (`groupMapModel.ts`), matching the 2026-08-15
+  shape exactly. `LIBRARY_ROLES.Staging`/`StagingHC` already listed both roles — nothing else needed
+  granting; a reconciliation run is what actually applies it.
+  - **⚠ SCOPE IS WHATEVER THE VIEWER CAN SEE, NOT "OWN FILE ONLY", AND THAT IS FINE ONLY BECAUSE OF
+    DRAFT SECURITY.** `DELS` grants delete on the WHOLE unit's pending/rejected queue — a PIC could in
+    principle delete a teammate's draft too. Accepted deliberately (client: *"its fine since they can
+    only see their own file"*), because with Draft Item Security as it stands a PIC's own session
+    genuinely shows nothing else. If that setting is ever changed, this scope widens silently with it.
+- **⚠⚠ A THIRD, DIFFERENT "CANCELLED" — `RecordState.withdrawn`, in `submissionRecords.ts`.** The
+  EXISTING `cancelled` state already reads **"Replaced"** on screen (2026-08-28's REPLACE feature — a
+  newer upload overwrote this one) and the codebase already carries a loud warning about confusing it
+  with `RequestStatus.Cancelled` (a withdrawn REQUEST). Reusing either for this would have shown the
+  wrong word or conflated two unrelated facts. `withdrawn` is a THIRD, OBSERVED state — set only by the
+  new direct-delete action itself, never derived from a failed library read — whose `RECORD_STATE_LABEL`
+  is deliberately the literal word **"cancelled"**, because that is the client's own wording for this
+  specific action and no other state may use it.
+  - **Checked FIRST in the merge precedence**, above `cancelled`/`archived`/`deleted`/`unknown`: it is
+    the uploader's own terminal act on a file that, by construction, can never also have been archived
+    (archiving only touches APPROVED documents) and cannot honestly co-occur with a replace.
+  - **Two new columns on `CRS Submissions`, `WithdrawnAt`/`WithdrawnBy`**, mirroring `ReplacedAt`/
+    `ReplacedBy` exactly — asserted by reconciliation via the existing `RECORD_COLUMNS` loop, no
+    separate provisioning step. The read ladder gained a FOURTH, newest rung
+    (`RECORD_READ_SELECT_NO_WITHDRAWAL`), dropped first on a 400 — same "one optional column, one
+    rung" lesson `RevokedBy` taught on `CRS Requests`.
+  - `markRecordWithdrawn` in `spSubmissionRecords.ts` mirrors `markRecordReplaced` — called AFTER the
+    recycle succeeds, never blocking it, and a failed stamp degrades to the pre-existing `deleted`
+    reading rather than costing the delete itself.
+- **My Submissions gained a real "Delete" button** on a PENDING/REJECTED file's detail view, offered
+  wherever `canActDirectly(chain, policy.directDeleteStaging)` is already true — the SAME mechanism
+  that already hides "Request deletion" and tells a Head of Unit to act themselves "in the library, no
+  request needed." A PIC now gets an in-app action instead of being pointed at the library, because
+  only an in-app action can stamp the record. `GetFileById(...)/recycle()` is web-scoped, same call
+  `Requests.tsx`'s `performDeletion` uses.
+  - **Documents-library deletes are completely unaffected**: `policy.directDelete` (the APPROVED-stage
+    check) still comes only from `DEL`/`DELHC`, which `pic` never holds — so an approved document still
+    always goes through the existing request-and-approval flow and still reads `Deleted`.
+- **⚠ PINNED TESTS FOR THE OLD (2026-08-20) SHAPE HAD TO BE INVERTED, NOT JUST PATCHED** — several in
+  `groupMapModel.test.ts`, `userAccess.test.ts` and `bulkGroups.test.ts` asserted `pic`'s role set had
+  NO `DELS`, including the rename-recovery pair that pins `roleSetKey`'s exact-fingerprint behaviour
+  (a persona gaining a role breaks recognition of pre-change groups exactly as losing one does — the
+  two rename-recovery fixtures had to swap which role set counts as "current").
+- Verified: `tsc --noEmit` clean, full suite **1842/0**, 44 lint warnings — the documented pre-existing
+  baseline, zero new categories (`MySubmissions.tsx`'s `max-lines` count grew with the new code, same
+  warning already on the baseline list).
+
+## THE RENAME FLOW GAINED A HARD UPLOAD PAUSE, MIRRORING `structure` EXACTLY (2026-09-11)
+Client, asked why the flow's own migrate screen carries a red "turn off uploads" warning with nothing
+in the flow that can actually turn them off: confirmed they want the **same hard gate** `structure`
+already has, not a lighter conditional one — *"Hard gate it same as Change the folder structure
+because we dont want to confuse the client, they have to go back and forth which will be tiring."*
+- **THE OFFERED ALTERNATIVE, DECLINED ON RECORD:** warn only once the scan finds a below-Unit folder
+  to move, leave Next open for a plain Department/Unit rename (which needs no pause at all —
+  reconciliation renames those directly, live, unlike a below-Unit code, which only the migrator can
+  rename). Rejected for consistency: two different pause behaviours to explain beats one, even though
+  it costs every ordinary rename an unneeded pause-then-resume cycle.
+- **ZERO NEW WIRING — `pauseUploads`/`resumeUploads` ARE REUSED VERBATIM.** `blocksNext`, `stepState`,
+  `firstBlockedStepIndex`, `isStepReachable`, `flowComplete` and the `pauseUploads` component-render
+  branch in `FolderAdmin.tsx` all key on `step.id` alone, never on which flow the step sits in — so
+  adding the two step objects (`{id:"pauseUploads",...}` first, `{id:"resumeUploads",...}` last) to
+  the `rename` flow's `steps` array in `folderFlows.ts` is the ENTIRE change. Nothing in
+  `FolderAdmin.tsx` needed touching.
+- **`rename`'s step order is now** `pauseUploads → abbreviations → migrate → reconcile →
+  resumeUploads` — the same shape as `structure`, with the flow's own three original steps sandwiched
+  between the pair. `flowComplete`'s generic rule (`idx >= steps.length - 1 && uploadsPaused ===
+  false`) applies unchanged, so Back is correctly held once this flow finishes too.
+- Pinned test updated: `folderFlows.test.ts`'s `"gives Rename a migrate step..."` now expects the
+  five-step list, plus three new tests confirming the pause/resume gates and `stepUsesSegment(false)`
+  hold for `rename` exactly as they already do for `structure`.
+- Verified: `tsc --noEmit` clean, full suite **1862/0**, 40 lint warnings — the documented baseline,
+  zero new. **NOT yet site-tested.**
+
+## A SEGMENT'S TOP FOLDER CAN BE RE-CODED — EMPTY SEGMENTS ONLY, BUILT 2026-09-11
+Spec: `docs/superpowers/specs/2026-09-11-segment-recode-design.md`. Client asked for the PHYSICAL
+rename (not just the display label), confirmed after being shown the risk described in the
+2026-09-10 entry above. Built the same session, on the Segments tab, next to Delete.
+- **THE SHAPE IS EXACTLY WHAT WAS DEFERRED, and nothing about it needed revising once built.**
+  `shared/segmentRecode.ts` (pure, 17 tests) reuses `SegmentCounts`/`countSegment()`/
+  `retireLibraries()` from `segmentDeletion.ts` directly rather than a second count definition —
+  same libraries, same fail-closed instinct on an unreadable count.
+- **`canOfferRecode` GATES ON `documents === 0` ONLY, NOT `folders === 0`.** An empty tree
+  reconciliation has already built for a segment nobody has uploaded into yet is the ORDINARY case
+  this exists for, not a red flag — folders may be non-zero and the recode still proceeds.
+- **CONFIRMED WHILE BUILDING: GROUPS AND GROUP MAP ROWS ARE COMPLETELY UNAFFECTED**, which is what
+  makes this smaller than it first looks. `suggestGroupName` derives a group's stem from the
+  segment's **label** (`ModeLabel`), never from `StagingFolder` — checked directly in
+  `groupMapModel.ts` before relying on it — and a Group Map row's `Segment`/`UnitTermGuid` are term
+  GUIDs, not the folder key. So the only two things this action touches are the mode row's
+  `StagingFolder` cell and the Folder Map rows naming the OLD `Section`.
+- **THE WRITE ORDER MATTERS, and follows the same reasoning `onDelete` already uses:** recycle the
+  old (empty) folder tree first, THEN merge `StagingFolder` on the mode row, THEN drop the stale
+  Folder Map rows. If the mode-row write fails, the run stops there rather than leaving a row naming
+  a folder that no longer exists.
+- **ALWAYS REQUIRES THE TYPED LABEL CONFIRMATION, unlike the delete dialog's harmless-case
+  exemption** — there is no harmless case here, since offering the form at all already means a
+  folder tree is about to be recycled.
+- **REFUSES OUTRIGHT, NO PARTIAL PATH, on a segment holding documents or an uncountable one** —
+  `recodeRefusalReason` names which and, for documents, the real route (move them out first; there
+  is still no cross-segment move tool anywhere in this system).
+- **NEW AUDIT EVENT `EVENT.segmentRecoded` ("SegmentRecoded")**, added to `EVENT`, `EVENT_LABEL` and
+  `ALL_EVENT_TYPES` together in `auditLog.ts` — the standing lesson from `Replaced`/`ShareRevoked`
+  paid attention to this time: a type left out of `ALL_EVENT_TYPES` is written and stored correctly
+  but invisible to the viewer's Action filter, and nothing fails when that happens.
+- **NOTHING HERE BUILDS THE NEW FOLDER TREE.** The result message and the audit row both say to run
+  Folder Reconciliation next — reconciliation is what actually creates folders, and this action's
+  entire job is clearing the way for it to do so under the new name.
+- **Does NOT touch abbreviation rows** (authored data, no other copy, per-term anyway) and does NOT
+  offer editing the segment's display label — that is a separate, already-safe plain-text edit with
+  no folder or reconciliation impact, and is not part of this feature.
+- Verified: `tsc --noEmit` clean, full suite **1862/0** (17 new tests), 40 lint warnings — the
+  documented baseline, zero new (`SegmentCreator.tsx` stayed under the 2000-line lint ceiling).
+  **NOT yet site-tested** — the first real test should be a genuinely empty, freshly-created test
+  segment, recoded, then reconciled, with its upload path confirmed under the new key.
+
+## ⚠ `CRS — Audit replacements` (SDG) HAD A BROKEN DEDUPE — `EventType eq ''` — FIXED 2026-09-11
+Found on SDG's ported tenant while the client tested `CRS — Approval reminder`. Recorded here because
+Power Automate config is not in source control and this file is its only record.
+- **THE BUG:** `Already_logged`'s Filter Query read
+  `ItemUniqueId eq '...' and EventType eq '' and EventTime gt datetime'...-5min'` — it should be
+  `ItemUniqueId eq '...' and EventType eq 'Replaced'`, per
+  `docs/superpowers/specs/2026-09-06-staging-replacement-audit-runbook.md` §4.3. No real audit row
+  ever has a blank `EventType`, so this check could never find a match — `Not_already_logged` always
+  evaluated true and would `Create_item` every time the trigger re-fired for a record it had already
+  logged (the trigger re-fires on ANY later edit to a `CRS Submissions` row once `ReplacedAt` is set —
+  that is by design, and the dedupe is what is supposed to make it harmless). Not yet a duplicate on
+  site only because none of the three records logged so far had been touched again.
+- **FIXED** by the client directly in the flow, matching the runbook's filter exactly. **The extra
+  `EventTime` clause was dropped too** — not in the spec, and unnecessary (a record is replaced at
+  most once, so there is nothing to time-box).
+- **CHECKED WHILE FIXING THIS, AND IT WAS ALREADY CORRECT:** the "ONE WRITER" instruction (runbook
+  §3 — delete the `Replaced` `Create item` from **both** `Auto-route` and `HC Auto Route` before this
+  flow exists, or every approval-time replacement logs twice) had been followed on SDG's tenant in
+  both flows. Confirmed by reading both exported flow definitions directly: `WasReplaced`/
+  `WasReplacedHC` hold only `GetReplacedRecordId` → `StampReplacedRecord`, no stray `Create_item`.
+- **"Succeeded" IN THE RUN HISTORY DID NOT PROVE THE DEDUPE WAS CORRECT** — a broken dedupe still runs
+  green; it only risks a *duplicate* row later, which never shows as a run failure. Don't take a green
+  run history as proof this class of bug is absent — check the filter logic itself.
+
+## ⚠ `CRS — Audit request activity` (SDG) HAS A REAL EMBEDDED CRLF THAT TURNED OUT TO BE HARMLESS — CHECKED, NOT FIXED, 2026-09-11
+Checked as a precaution while fixing the flow above (built the same migration session, same risk
+class). **This one is confirmed working — do not "fix" it as urgent.**
+- `Not_already_logged`'s condition is `equals("@if(empty(body('Already_logged')?['value']), 'write',
+  'skip')\r\n", "write")` — a genuine byte-level `\r\n` (confirmed via the exported JSON's raw bytes,
+  not a display artifact) sitting **after the closing `)`** of the `if(...)` call, inside the operand
+  string that gets evaluated as an expression.
+- **⚠ THIS IS A DIFFERENT POSITION FROM THE `CutOff` BUG THAT DID BREAK SOMETHING** (the seven-year
+  archive mover, 2026-09-03) — there the stray whitespace sat *inside* a quoted `datetime'...'`
+  literal and corrupted the value itself, producing `Creating query failed`. Here the CRLF sits
+  *outside* every literal, trailing the whole expression — and Power Automate's runtime evaluator
+  tolerates that: **verified live**, `CRS Audit Log` holds many real `Request approved` / `Share
+  requested` / `Deletion requested` / `Deletion request failed` rows, across different actors, files
+  and timestamps, matching this flow's own successful run history exactly. The condition is firing
+  correctly despite the whitespace.
+- **Two lessons, both worth keeping:** (1) not every instance of this project's "invisible whitespace
+  in a Power Automate expression" defect class actually breaks anything — position inside vs. outside
+  a quoted literal is what decides it, and a real CRLF found in the export is not on its own proof of
+  a live failure; check the actual data before concluding a flow is silently failing. (2) it is still
+  the exact `if(empty(...), 'write', 'skip')` string-comparison form the staging-replacement runbook
+  explicitly warns against (*"that form... failed in the deletion flow with the array verifiably
+  `[]`; cause never established, invisible whitespace the suspect"*) — this may be the very defect
+  that warning was written about, just not reproducing here. Worth retyping as the numeric form
+  (`length(coalesce(body('Already_logged')?['value'], createArray())) is equal to 0`, via the fx
+  editor) as low-priority hygiene, not because it is currently broken.
+
+## ⚠⚠ THE PCAR INCIDENT — WHY RETIRING NOW TOUCHES ARCHIVE, AND WHY CREATING NOW CHECKS IT (2026-09-11/13)
+Recorded once, here, because it is the origin story for BOTH features below and for the
+2026-09-11 abbreviation-deletion change above. Live incident, on the test tenant's `PCAR`
+("Project Cars") segment.
+
+- **What happened, reconstructed from the client's own account:** Crystal retired an earlier
+  "Project Cars" segment with "also delete the folders" ticked. That correctly deleted the folder
+  tree in `Staging`/`Documents`/`StagingHC`/`DocumentsHC` — and deliberately left
+  `Archive`/`ArchiveHC` untouched, per the 2026-08-26 rule that 7-year retained records outlive the
+  segment that produced them. Clarence then recreated the segment later, reusing the SAME
+  `StagingFolder` code (`PCAR`) and a fresh term set.
+- **⚠ THE SEGMENT'S TOP FOLDER HAS NO TERM BEHIND IT, so reconciliation matched it by NAME
+  alone.** Unlike a department or unit — matched by term GUID via Folder Map — the top-level
+  container is created/reused purely by string match against `StagingFolder`. So reconciliation
+  found the SURVIVING `PCAR` folder still sitting in Archive from the old, retired segment, and
+  **reused it** rather than creating a fresh one.
+- **⚠ THE ONE LEVEL DOWN COULD NOT RECONNECT, AND THAT IS WHAT BLOCKED THE MIGRATOR.** The
+  department/unit folders inside the reused `PCAR` container (`EB`/`Volvo`/`Honda` from the OLD
+  term tree) had no route back to the NEW term tree — their Folder Map rows died along with the
+  recycled Staging folders when the segment was first retired. They sat there as unresolvable
+  strays with no term to match against, and `SubtreeMigrator`'s "Move existing folders" step
+  refused to proceed past them the next day. **Tracing that refusal back to a retirement from days
+  earlier took most of a session.**
+- **⚠ THE STRAYS PREDATE ANY CODE IN THIS PROJECT AND ARE NOT AUTOMATICALLY REPAIRED BY EITHER
+  FEATURE BELOW.** Both fixes only change future behaviour. PCAR's existing `EB`/`Volvo`/`Honda`
+  strays under Archive still need a manual clean-up in SharePoint — deliberately out of scope for
+  both specs (see each one's own Non-goals section).
+- **This produced two fixes, built in order, each closing a different half of the gap:**
+  1. **2026-09-12 — retire can now delete an Archive tree too, but ONLY when a fresh count
+     confirms it holds zero documents** (below). This closes the gap for a FUTURE retire of an
+     already-emptied segment — nothing is left behind to be reused.
+  2. **2026-09-13 — segment CREATION now refuses to reuse a top-folder code that still has
+     documents sitting in Archive** (below). This closes the gap for the case #1 cannot reach: an
+     old segment's Archive folder that was correctly left in place because it genuinely still held
+     records. Together, either the leftover is empty and gets removed on retire, or it has content
+     and creation refuses to reuse its name — there is no longer a state where a NEW segment can
+     silently inherit an OLD one's Archive folder.
+
+## SEGMENT DELETE NOW ALSO REMOVES ITS ARCHIVE, IF IT IS CONFIRMED EMPTY (2026-09-12)
+Spec: `docs/superpowers/specs/2026-09-12-empty-archive-deletion-on-retire-design.md`. Origin: the
+PCAR incident above. Client, once it was traced back to the retire flow leaving Archive folders
+behind: *"How about this, if the folder is empty in archive then the delete a segment will remove
+it? Would make more sense right?"*
+- **⚠ THIS IS NOT A RELAXATION OF THE 2026-08-26 "RECORDS OUTLIVE THE SEGMENT" RULE.** That rule
+  is about DOCUMENTS, not empty containers — it says nothing about a folder that was never used,
+  or one whose contents already moved on. Deleting an empty shell protects nothing; leaving one
+  behind is exactly what produced the PCAR collision.
+- **A NEW, INDEPENDENT COUNT — `SegmentCounts.archiveDocuments?: number` — NEVER FOLDED INTO
+  `documents`.** The existing `documents` field counts only the four libraries retire actually
+  deletes from (`retireLibraries()`); merging Archive's count into that same total would make a
+  segment with real archived records but an already-empty operational tree read `documents > 0`
+  and **lose the existing, working ability to clean up its empty operational folders while
+  leaving Archive alone** — the common, correct case (a segment fully wound down, its records
+  already archived). *"Can I delete Staging/Documents at all"* and *"can I ALSO delete Archive"*
+  are genuinely separate questions and must stay separate fields.
+- **THREE STATES, and only one of them deletes anything** (`canDeleteArchive` in
+  `segmentDeletion.ts`): `0` (confirmed empty) permits deleting Archive's tree; `> 0` leaves it
+  alone; `undefined` (unread or unreadable) is treated **identically to "has content"** — fails
+  CLOSED, same reasoning as the original delete-segment spec's refusal to guess an archive is
+  empty from a failed read.
+- **ARCHIVE AND ARCHIVEHC ARE ONE COMBINED CHECK, NOT TWO INDEPENDENT ONES** — matching this
+  project's existing both-or-neither treatment of the HC pair everywhere else. If the site has
+  both, BOTH must independently confirm zero before either is deleted; if one has content or one's
+  count fails, NEITHER is deleted. Partially deleting the pair would create a new, asymmetric
+  version of the exact problem this spec exists to close.
+- **RE-COUNTED FRESH AT THE MOMENT OF DELETION, NEVER TRUSTED FROM THE DIALOG-OPEN-TIME
+  READ** (`SegmentCreator.tsx` ~1279-1303) — same reasoning already applied to the Group Map and
+  abbreviation-row counts beside it: state can move between opening the dialog and pressing the
+  button. A re-check that comes back `undefined` or positive leaves Archive untouched and says so
+  explicitly (*"either holds documents or could not be re-confirmed as empty"*) rather than
+  silently doing nothing.
+- **THE CHECKBOX STAYS ONE CONTROL — no third checkbox.** Its consequence text
+  (`survivorLines`) now branches on THREE states rather than two: confirmed empty → *"the archive
+  folders are also empty, so they are removed as well"*; confirmed non-empty → the existing "not
+  removed, only empty ones are removed automatically" line; `undefined` folds into the SAME
+  non-empty wording, per the 2026-09-13 simplification recorded at `survivorLines`' own comment —
+  see that entry for why the three-way distinction was later collapsed to two in the DISPLAYED
+  text (the underlying `canDeleteArchive` check still tells all three apart).
+- **`deletionSummary` counts `"its empty archive"` into the one-line summary and the audit row,
+  ONLY when `archiveDocuments === 0` AND folders are being deleted** — never claim a deletion that
+  did not happen, which an audit row must never do.
+- **NO STANDALONE "CLEAN UP ARCHIVE" TOOL, and none is planned.** A prior one-off admin button for
+  a related archive cleanup (the library-root prune, 2026-09-02/03) was built and explicitly
+  removed at the client's request — *"we don't want to confuse the client with a new feature like
+  this."* This capability lives entirely inside the existing retire flow's existing checkbox.
+- **NO RETROACTIVE CLEANUP.** PCAR's own existing strays are untouched by this — it only changes
+  what happens on a FUTURE retire.
+- **Verified**: `tsc --noEmit` clean, full suite green, no new lint warnings. **NOT yet
+  site-tested** — the test is retiring a segment whose Archive genuinely holds zero documents with
+  the folder-delete box ticked, and confirming the run log names Archive as removed too.
+
+## THE ARCHIVE CODE-REUSE GUARD — SEGMENT CREATION NOW REFUSES A TOP-FOLDER CODE STILL HELD IN ARCHIVE (2026-09-13)
+Spec: `docs/superpowers/specs/2026-09-13-archive-code-reuse-guard-design.md`. Origin: the PCAR
+incident above — the other half of the gap the 2026-09-12 fix could not reach (an old segment's
+Archive folder correctly left in place because it genuinely still held records, later silently
+reused by a new, unrelated segment sharing the same top-folder code). Agreed with the client
+(relayed by Reene) after evaluating and rejecting a more elaborate "Archive folder mapping"
+proposal in favour of Reene's simpler rule.
+- **REJECTED ALTERNATIVE: a separate Archive-only abbreviation + persistent mapping list.** Solves
+  uniqueness but needs a new required step at segment creation, a mapping list kept in sync
+  forever, an update to the 7-year archive-mover flow to consult it, and creates its OWN new
+  client-facing confusion — *"why doesn't the Archive folder's code match the Document Library's
+  code for the same segment?"* — the exact kind of confusion this feature exists to prevent, just
+  moved one level over.
+- **THE RULE: at segment creation, before anything is written, check whether Archive/ArchiveHC
+  already has any files under the proposed top-folder code. If it does, REFUSE — a hard block, not
+  a dismissable warning.** The message must name Archive specifically, because Staging and
+  Documents will show no conflict at all — that silence is exactly what would confuse an admin if
+  the refusal message didn't say so (`SegmentCreator.tsx` ~754-765): *"'PCT' already exists in the
+  Archive library — it holds N archived documents. Staging and Documents show it as free because
+  that previous segment was retired, but its Archive folder was kept (7-year retention) — reusing
+  this code now would mix that old segment's records in with this new one."*
+- **⚠ SCOPE: THE SEGMENT'S OWN TOP-FOLDER CODE ONLY — never department/unit abbreviations.**
+  Confirmed with the client on the reasoning that SharePoint refuses two sibling folders with the
+  same name, so once the top-level code is guaranteed unique, nothing beneath it can ever collide
+  with a DIFFERENT segment's history: it is always created fresh under a folder that has never
+  existed before.
+- **HARD REFUSAL, NO OVERRIDE — confirmed deliberately, for two reasons.** (a) The check itself
+  prevents any collision from ever happening, so there is nothing to override AROUND; (b) a
+  segment retired with a genuinely empty Archive already has that folder deleted by the
+  2026-09-12 feature above, so the code becomes available again on its own once it is safe — no
+  manual override path is needed.
+- **FAILS CLOSED ON AN UNREADABLE CHECK**, matching `canDeleteArchive`'s own reasoning: an
+  unconfirmed archive state must never be treated as "clear" — `countArchiveDocumentsForCode`
+  returning `undefined` refuses creation with *"Could not confirm whether '<code>' is already used
+  in the Archive library — try again in a moment. Nothing has been created."*
+- **CHECKED FRESH AT SUBMISSION TIME, not as a live-as-you-type indicator** — matching the
+  existing "validate first, create nothing until it passes" order the form already follows for its
+  other checks (name clash, key clash, folder clash, depth). Given time constraints, no debounced
+  live indicator was built for this one (unlike the Term Set ID field); the admin only learns on
+  Create rather than while typing.
+- **⚠ A SUSPECTED-BUT-UNCONFIRMED RACE WAS FOUND AND HARDENED DURING FIRST LIVE TESTING, THEN
+  DOWNGRADED ON RE-TEST.** The guard appeared to let "PCT" through once, with 3 real files still
+  sitting in `Archive/PCT`. `archiveAvailable()` reads a cache `primeNames()` fills, awaited ONCE
+  in this component's mount effect but not blocking render — so moving through "Create the term
+  set" → "New segment" → Create fast enough on a freshly-loaded page could in principle reach the
+  guard before that background priming settles, silently skipping the whole check (the same shape
+  as the documented 1.0.207.0 race and `GroupManager`'s `loadModes` race). **Fixed defensively**
+  with `await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);` immediately
+  before the check (`primeNames` memoises its own probes, so a repeat call is cheap). **But when
+  the user then cleared their browser cache and re-tested, the OLDER build — without this
+  fix — ALSO worked correctly.** So the specific failure observed was very likely this project's
+  own single most common false alarm (a stale package/cached tab), not this race. The newer build
+  ships anyway: it is strictly safer with no downside, and the comment in the code is worded
+  "SUSPECTED LIVE," not "FOUND LIVE," to avoid overclaiming a cause that was never actually
+  confirmed.
+- **⚠ A SEPARATE, GENUINE UX BUG WAS FOUND AND FIXED THE SAME SESSION: a standing "term set must
+  already exist" reminder banner was rendering UNCONDITIONALLY**, stacking in the same red styling
+  beside this new archive-clash error even after the term set had been successfully found
+  (confirmed by a green success message elsewhere on the same screen) — client: *"showing this
+  error doesnt make sense at this moment."* Fixed by conditioning the banner on
+  `check.state !== "found"`.
+- **WHAT THIS DOES NOT FIX, per the spec's own Non-goals:** PCAR's existing test-data collision
+  (confirmed non-production, left as-is); the "Move existing folders" tool ignoring
+  already-orphaned archive folders (a complementary safety net, explicitly out of scope given time
+  constraints — the reasoning being that this guard makes NEW collisions impossible, so that net
+  is not urgently needed); and the segment-create-time check does not attempt to clean up or
+  migrate any existing collision, only prevent new ones.
+- **Verified**: `tsc --noEmit` clean, `npx eslint` clean except the pre-existing `max-lines`
+  warning on `SegmentCreator.tsx`, full test suite green (1872/1872 at the time), `npm run build`
+  completed and the shipped `.sppkg` grepped for the guard's refusal message string in BOTH
+  `folder-manager-web-part` and `user-access-web-parts` bundles (1 occurrence each — confirming the
+  fix reached both compile targets `SegmentCreator.tsx` feeds). **Site-tested and confirmed
+  working** — see the race note above for the one test that produced an ambiguous result and how
+  it was resolved.
+
+## ⚠⚠ RETIRING A SEGMENT NOW DELETES ITS ABBREVIATION ROWS, MANDATORILY — REVERSES A YEAR-OLD RULE (2026-09-11)
+Spec: `docs/superpowers/specs/2026-09-11-retire-deletes-abbreviations-design.md`. Client, after the
+PCAR fruit/car test segment's abbreviation rows kept surfacing as `⚠ ORPHANED` on every
+reconciliation run long after PCAR was retired: *"is it possible that if someone retire a segment
+it will remove the term abbreviation as well and let them retype instead"* — offered as an optional
+checkbox first, rejected: *"no need checkbox as an option, make it mandatory."*
+- **⚠⚠ THIS DIRECTLY REVERSES THE ORIGINAL 2026-08-14 DELETE-SEGMENT DESIGN, restated verbatim in
+  at least two places in this file until today: "Abbreviation rows are never deleted — authored
+  data with no other copy, and re-creating the segment without them renames every folder."** That
+  line is now marked SUPERSEDED at its original location rather than deleted, so the historical
+  reasoning is not lost — it was a real, considered decision, just overturned. **Do not "restore"
+  it as a fix without checking this entry first.**
+- **THE ACCEPTED COST, STATED PLAINLY:** re-creating a retired segment no longer brings folder
+  names back automatically. Every department/unit — and any coded below-Unit level — needs its
+  abbreviation retyped from scratch. For a genuine one-off test segment (PCAR) this is exactly
+  right; for a real segment someone retires meaning to bring it back later, this is now the cost of
+  that workflow. The client chose this trade-off explicitly, twice (first offered as opt-in, then
+  told to make it unconditional).
+- **⚠ ABBREVIATION ROWS CARRY NO SEGMENT FIELD, so matching one to "the segment being retired" is
+  not a simple filter.** `CRS Term Abbreviation` only has `Id, TermGuid, Title, Level,
+  Abbreviation` — no `Section`, no `Segment`. The only reliable correlation is the LIVE TERM TREE,
+  walked at retire time before anything is deleted: `loadSegmentTermGuids` in `SegmentCreator.tsx`
+  BFS-walks the segment's `TermSetGuid` (same REST shape `AbbreviationManager.tsx` already uses,
+  `_api/v2.1/termStore/sets/{guid}/children` then `.../terms/{parentId}/children`) and collects
+  every term GUID under it at any depth. An abbreviation row whose `TermGuid` is in that set
+  belongs to this segment.
+  - **⚠ THIS ONLY WORKS WHILE THE TERMS STILL EXIST, and it cannot reach back and fix PCAR's own
+    17 rows** — those terms were already deleted before this feature existed, so the walk finds
+    nothing for them. They still need a one-time manual delete. Going forward, since deletion now
+    happens automatically the moment ANY segment is retired, this exact situation — a retired
+    segment whose abbreviation rows survive to later become orphaned — should not recur.
+- **FAILS CLOSED ON THE PREVIEW, NON-BLOCKING ON THE ACTUAL DELETE — deliberately different
+  directions, same as the rest of this dialog's counts.** The walk is bounded
+  (`MAX_TERM_WALK_REQUESTS = 400`, same cap class as elsewhere in this codebase). If it cannot
+  complete while COUNTING (for the confirmation dialog), the whole `SegmentCounts` goes
+  **`unknown`** — the same fail-closed rule `canOfferFolderDelete` already applies to an unreadable
+  folder/Group Map count. Guessing "zero abbreviation rows" when the walk merely failed would
+  understate what retiring is about to remove. But at ACTUAL deletion time, a failed walk does
+  **not** stop the retire — it is logged (`ok: false`) and the run continues, exactly like a failed
+  Group Map row read already does beside it. This is cleanup riding alongside the Group Map
+  cleanup, not a second critical step gating the mode-row delete.
+- **POSITIONED BEFORE THE MODE ROW, AFTER GROUP MAP ROWS** — both are "other associated data"
+  cleanup passes that run before the one truly critical step (the mode-row delete, which still
+  STOPS the whole run if it fails, per the existing D6 ordering rule). Re-walked FRESH inside
+  `onDelete` rather than trusting the dialog's preview count, because state can move between
+  opening the dialog and pressing the button.
+- **`SegmentCounts` gained `abbreviationRows: number`** (`shared/segmentDeletion.ts`).
+  `needsTypedConfirmation` now also gates on it — having abbreviation rows to remove is enough on
+  its own to demand the typed segment-name confirmation, same as Group Map rows already did.
+  `survivorLines` no longer promises abbreviations survive; it now states plainly that they are
+  removed and retyping is required. `deletionSummary` counts them into the one-line summary,
+  **unconditionally** — unlike folders/documents, this is not gated on the "also delete the
+  folders" checkbox, because abbreviation deletion has no checkbox of its own any more.
+- **THE PROGRESS BAR NOW CARRIES A `label`**, since Group Map row deletion and abbreviation-row
+  deletion share the same `delProgress` state and, without a label, the bar would go on reading
+  "Removing folder-access mappings" while it was actually deleting abbreviation rows. Every
+  `setDelProgress` call site in `onDelete` was updated to supply one.
+- **Verified**: `tsc`/`heft test` clean, full suite **1864/0** (5 new tests in
+  `segmentDeletion.test.ts`; `segmentRecode.test.ts`'s local `SegmentCounts` fixture updated to
+  satisfy the new required field, unaffected otherwise since `segmentRecode.ts` only ever READS
+  the type, never constructs a literal). 40 lint warnings — the documented pre-existing baseline,
+  zero new. **NOT yet site-tested** — the test is retiring a genuinely empty throwaway segment and
+  confirming its abbreviation rows are gone from `CRS Term Abbreviation` afterwards, plus a run on
+  a segment whose terms happen to be unreachable (to confirm the count goes `unknown` and the
+  typed-confirmation gate still fires rather than silently reporting zero).

@@ -28,8 +28,10 @@ const g = (id: number, title: string): UserGroupRef => ({ id, title });
 
 describe("personaForRoles", () => {
   it("matches a persona on its exact role set, whatever the order or case", () => {
-    expect(personaForRoles(["UPL"])?.key).toBe("pic");
-    expect(personaForRoles(["upl"])?.key).toBe("pic");
+    // pic regained DELS on 2026-09-11 (client: "now pic can delete without approval on staging"),
+    // so its exact set is ["UPL", "DELS"] again, as it was before the 2026-08-20 correction.
+    expect(personaForRoles(["UPL", "DELS"])?.key).toBe("pic");
+    expect(personaForRoles(["dels", "upl"])?.key).toBe("pic");
     // hod's set gained DELHC/SHAREHC on 2026-08-24, so it is a five-role match now.
     expect(personaForRoles(["SHARE", "DEL", "DEPTVIEW", "DELHC", "SHAREHC"])?.key).toBe("hod");
     // hou_hc's full set since the 2026-08-24 clarification ("only HC HOU can see and approve") —
@@ -43,7 +45,7 @@ describe("personaForRoles", () => {
   });
 
   it("ignores duplicates, which a row set legitimately contains", () => {
-    expect(personaForRoles(["UPL", "UPL"])?.key).toBe("pic");
+    expect(personaForRoles(["UPL", "DELS", "UPL"])?.key).toBe("pic");
   });
 
   // The whole reason this is an exact match. `employee` is ["MEMBER"] and `employee_hc` is
@@ -71,11 +73,16 @@ describe("personaForRoles", () => {
 
 describe("summarizeUserAccess", () => {
   it("reports the persona, the roles and the place for a mapped group", () => {
-    const s = summarizeUserAccess([g(42, "GHO_GF_TAX_UPLOADER")], [row({ groupId: 42 })], resolve);
+    // pic's mapping rows carry BOTH roles again since 2026-09-11 (DELS regained).
+    const s = summarizeUserAccess(
+      [g(42, "GHO_GF_TAX_UPLOADER")],
+      [row({ groupId: 42, role: "UPL" }), row({ groupId: 42, role: "DELS" })],
+      resolve,
+    );
     expect(s.none).toBe(false);
     expect(s.groups).toHaveLength(1);
     expect(s.groups[0].persona?.key).toBe("pic");
-    expect(s.groups[0].roles).toEqual(["UPL"]);
+    expect(s.groups[0].roles).toEqual(["UPL", "DELS"]);
     expect(s.groups[0].places).toEqual([
       {
         segmentLabel: "Group Head Office",

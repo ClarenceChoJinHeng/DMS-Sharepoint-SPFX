@@ -136,10 +136,32 @@ describe("the flows", () => {
     expect(f.steps.map((s) => s.id)).not.toContain("moveOut");
   });
 
-  it("gives Rename a migrate step, between the abbreviation and the reconciliation", () => {
+  /* ⚠ GAINED `pauseUploads`/`resumeUploads` ON 2026-09-11, MIRRORING `structure` EXACTLY — client:
+     "Hard gate it same as Change the folder structure because we dont want to confuse the client".
+     Both ids are reused with no new wiring: `blocksNext`/`stepState` key on `step.id` alone. */
+  it("gives Rename a migrate step, between the abbreviation and the reconciliation, bracketed by the pause", () => {
     expect(flow("rename").steps.map((s) => s.id)).toEqual([
-      "abbreviations", "migrate", "reconcile",
+      "pauseUploads", "abbreviations", "migrate", "reconcile", "resumeUploads",
     ]);
+  });
+
+  it("gates the Rename flow's pause step exactly like structure's", () => {
+    expect(
+      blocksNext(step("rename", "pauseUploads"), { uploadsPaused: false }),
+    ).toContain("Uploads are still switched on");
+    expect(blocksNext(step("rename", "pauseUploads"), { uploadsPaused: true })).toBe("");
+  });
+
+  it("gates the Rename flow's closing step exactly like structure's", () => {
+    expect(
+      blocksNext(step("rename", "resumeUploads"), { uploadsPaused: true }),
+    ).toContain("Uploads are still switched off");
+    expect(blocksNext(step("rename", "resumeUploads"), { uploadsPaused: false })).toBe("");
+  });
+
+  it("does not put a segment picker in front of either Rename pause step", () => {
+    expect(stepUsesSegment(step("rename", "pauseUploads"))).toBe(false);
+    expect(stepUsesSegment(step("rename", "resumeUploads"))).toBe(false);
   });
 
   it("keeps the abbreviations step id stable however the flow labels it", () => {

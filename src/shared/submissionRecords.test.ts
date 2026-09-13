@@ -26,10 +26,12 @@ import {
   buildRecordPayload,
   parseRecordRow,
   RECORD_READ_SELECT,
+  RECORD_READ_SELECT_NO_WITHDRAWAL,
   RECORD_READ_SELECT_NO_ARCHIVE,
   RECORD_READ_SELECT_LEGACY,
   REPLACEMENT_COLUMNS,
   ARCHIVE_COLUMNS,
+  WITHDRAWAL_COLUMNS,
   SNAPSHOT_FILE_KEYS,
   RECORD_STATE_LABEL,
   recordStateParts,
@@ -292,15 +294,18 @@ describe("mergedKey", () => {
 });
 
 describe("recordCounts and liveRowsOnly", () => {
-  it("counts the five states apart", () => {
+  it("counts the six states apart", () => {
     const rows = [
       live(),
       rowFromRecord(rec({ fileId: "SFI-1" }), "deleted"),
       rowFromRecord(rec({ fileId: "SFI-2" }), "unknown"),
       rowFromRecord(rec({ fileId: "SFI-3" }), "cancelled"),
       rowFromRecord(rec({ fileId: "SFI-4" }), "archived"),
+      rowFromRecord(rec({ fileId: "SFI-5" }), "withdrawn"),
     ];
-    expect(recordCounts(rows)).toEqual({ live: 1, deleted: 1, unknown: 1, cancelled: 1, archived: 1 });
+    expect(recordCounts(rows)).toEqual({
+      live: 1, deleted: 1, unknown: 1, cancelled: 1, archived: 1, withdrawn: 1,
+    });
   });
 
   it("excludes every gone state from the approval counts", () => {
@@ -310,6 +315,7 @@ describe("recordCounts and liveRowsOnly", () => {
       rowFromRecord(rec({ fileId: "SFI-2" }), "unknown"),
       rowFromRecord(rec({ fileId: "SFI-3" }), "cancelled"),
       rowFromRecord(rec({ fileId: "SFI-4" }), "archived"),
+      rowFromRecord(rec({ fileId: "SFI-5" }), "withdrawn"),
     ];
     expect(liveRowsOnly(rows)).toHaveLength(1);
   });
@@ -415,6 +421,66 @@ describe("mergeRecords: archived files", () => {
   });
 });
 
+/* ── Withdrawn submissions read as Cancelled (2026-09-11) ──────────────────────
+ * Client: "now pic can delete without approval on staging... the status in my submission will show
+ * cancelled." The uploader's OWN deliberate delete of their own pending/rejected draft, distinct from
+ * `cancelled` (a REPLACE — somebody else filed a newer document) even though its on-screen label
+ * happens to be the same literal word. */
+describe("mergeRecords: withdrawn files", () => {
+  const WITHDRAWN = new Date("2026-09-11T04:30:00.000Z");
+
+  it("reads a withdrawn record as withdrawn, not deleted", () => {
+    const r = mergeRecords([rec({ fileId: "SFI-1", withdrawnAt: WITHDRAWN })], [], true);
+    expect(r.rows[0].recordState).toBe("withdrawn");
+    expect(r.withdrawn).toBe(1);
+    expect(r.deleted).toBe(0);
+  });
+
+  it("⚠ says withdrawn even when the live read FAILED — it is observed, not derived", () => {
+    const r = mergeRecords([rec({ fileId: "SFI-1", withdrawnAt: WITHDRAWN })], [], false);
+    expect(r.rows[0].recordState).toBe("withdrawn");
+    expect(r.unknown).toBe(0);
+  });
+
+  it("⚠ but LIVE still wins — a stale stamp must not hide a document the viewer can see", () => {
+    const doc = live({ submissionFileId: "SFI-1" });
+    const r = mergeRecords([rec({ fileId: "SFI-1", withdrawnAt: WITHDRAWN })], [doc], true);
+    expect(r.live).toBe(1);
+    expect(r.withdrawn).toBe(0);
+    expect(r.rows[0].recordState).toBeUndefined();
+  });
+
+  it("⚠ withdrawn beats a replace stamp too — checked first, above all three observed states", () => {
+    const r = mergeRecords(
+      [rec({
+        fileId: "SFI-1",
+        withdrawnAt: WITHDRAWN,
+        replacedAt: new Date("2026-09-11T05:00:00.000Z"),
+      })],
+      [],
+      true,
+    );
+    expect(r.rows[0].recordState).toBe("withdrawn");
+    expect(r.cancelled).toBe(0);
+  });
+
+  it("carries who deleted it and when, for the screen to show", () => {
+    const r = mergeRecords(
+      [rec({ fileId: "SFI-1", withdrawnAt: WITHDRAWN, withdrawnBy: "pic@example.com" })],
+      [],
+      true,
+    );
+    expect(r.rows[0].record?.withdrawnBy).toBe("pic@example.com");
+    expect(r.rows[0].record?.withdrawnAt).toEqual(WITHDRAWN);
+  });
+
+  it("leaves an ordinary unresolved record as deleted", () => {
+    const r = mergeRecords([rec({ fileId: "SFI-1" })], [], true);
+    expect(r.rows[0].recordState).toBe("deleted");
+    expect(r.withdrawn).toBe(0);
+  });
+});
+
 describe("parseRecordRow: the archive column", () => {
   const base = {
     Id: 8, SubmissionRef: "SUB-20260903-K4P2", BatchRef: "BAT-20260903-GRWZ",
@@ -470,16 +536,50 @@ describe("parseRecordRow: replacement columns", () => {
   });
 });
 
+describe("parseRecordRow: withdrawal columns", () => {
+  const base = {
+    Id: 9, SubmissionRef: "SUB-20260911-K4P2", BatchRef: "BAT-20260911-GRWZ",
+    SubmissionFileId: "SFI-20260911-BGWU", FileName: "a.pdf",
+    ItemPath: "/sites/x/ApprovalDocument/a.pdf",
+    LibraryTitle: "Approval Document", UploadedBy: "pic@example.com", Source: "Form",
+  };
+
+  it("reads both columns when present", () => {
+    const r = parseRecordRow({
+      ...base, WithdrawnAt: "2026-09-11T04:30:00.000Z", WithdrawnBy: "pic@example.com",
+    });
+    expect(r.withdrawnAt).toEqual(new Date("2026-09-11T04:30:00.000Z"));
+    expect(r.withdrawnBy).toBe("pic@example.com");
+  });
+
+  it("leaves them undefined on a list that does not have them", () => {
+    const r = parseRecordRow(base);
+    expect(r.withdrawnAt).toBeUndefined();
+    expect(r.withdrawnBy).toBeUndefined();
+  });
+
+  it("⚠ treats an UNPARSEABLE date as not-withdrawn, never as Invalid Date", () => {
+    // `withdrawnAt !== undefined` is what decides `withdrawn`, and an Invalid Date is truthy — so
+    // this would mark a record withdrawn on the strength of a value nobody could read.
+    const r = parseRecordRow({ ...base, WithdrawnAt: "not a date" });
+    expect(r.withdrawnAt).toBeUndefined();
+  });
+
+  it("treats a blank as not-withdrawn", () => {
+    expect(parseRecordRow({ ...base, WithdrawnAt: "", WithdrawnBy: "" }).withdrawnAt).toBeUndefined();
+  });
+});
+
 describe("RECORD_READ_SELECT_LEGACY", () => {
   it("is the full read minus exactly the optional columns", () => {
     const full = RECORD_READ_SELECT.split(",");
     const legacy = RECORD_READ_SELECT_LEGACY.split(",");
-    const optional = REPLACEMENT_COLUMNS.concat(ARCHIVE_COLUMNS);
+    const optional = REPLACEMENT_COLUMNS.concat(ARCHIVE_COLUMNS).concat(WITHDRAWAL_COLUMNS);
     expect(legacy).toEqual(full.filter((c) => optional.indexOf(c) === -1));
     for (const c of optional) expect(legacy).not.toContain(c);
   });
 
-  /* ⚠ THE MIDDLE RUNG IS WHY THIS LADDER HAS THREE STEPS, and these pin the failure it prevents: a
+  /* ⚠ THE MIDDLE RUNG IS WHY THIS LADDER HAS FOUR STEPS, and these pin the failure it prevents: a
      site holding `ReplacedAt` but not `ArchivedAt` must lose ONLY the archive column. Dropping
      straight to the legacy select would take the replacement state with it, and every replaced file
      there would silently go back to reading "Deleted" — the state the client asked us to stop
@@ -488,7 +588,18 @@ describe("RECORD_READ_SELECT_LEGACY", () => {
     const mid = RECORD_READ_SELECT_NO_ARCHIVE.split(",");
     for (const c of REPLACEMENT_COLUMNS) expect(mid).toContain(c);
     for (const c of ARCHIVE_COLUMNS) expect(mid).not.toContain(c);
+    for (const c of WITHDRAWAL_COLUMNS) expect(mid).not.toContain(c);
     expect(mid).toContain(RECORD_JOIN_COLUMN);
+  });
+
+  /* ⚠ THE NEWEST RUNG (2026-09-11), one step above the archive one: a site holding `ReplacedAt` AND
+     `ArchivedAt` but not the withdrawal pair must lose ONLY that pair, not both older columns too. */
+  it("has a top rung that keeps replacement and archive but drops only the withdrawal pair", () => {
+    const top = RECORD_READ_SELECT_NO_WITHDRAWAL.split(",");
+    for (const c of REPLACEMENT_COLUMNS) expect(top).toContain(c);
+    for (const c of ARCHIVE_COLUMNS) expect(top).toContain(c);
+    for (const c of WITHDRAWAL_COLUMNS) expect(top).not.toContain(c);
+    expect(top).toContain(RECORD_JOIN_COLUMN);
   });
 
   it("declares the archive column on the list, or the write would 400 for ever", () => {
@@ -503,6 +614,11 @@ describe("RECORD_READ_SELECT_LEGACY", () => {
   it("declares both replacement columns on the list, or the write would 400 for ever", () => {
     const declared = RECORD_COLUMNS.map((c) => c.name);
     for (const c of REPLACEMENT_COLUMNS) expect(declared).toContain(c);
+  });
+
+  it("declares both withdrawal columns on the list, or the write would 400 for ever", () => {
+    const declared = RECORD_COLUMNS.map((c) => c.name);
+    for (const c of WITHDRAWAL_COLUMNS) expect(declared).toContain(c);
   });
 });
 
@@ -707,7 +823,9 @@ describe("isBulkUploadRow", () => {
  * Pinned by iterating the states rather than naming two of them, so the next one added is covered
  * without anybody remembering to come back here. */
 describe("mergedKey: record-backed rows", () => {
-  const states: RecordState[] = ["deleted", "cancelled", "unknown"];
+  // Derived from RECORD_STATE_LABEL's keys, not hand-typed — the hand-typed list here missed
+  // `archived` from the day it was added, which is exactly the omission this test exists to catch.
+  const states = Object.keys(RECORD_STATE_LABEL) as RecordState[];
 
   it("keys EVERY gone state off the stamp, never off library#itemId", () => {
     for (const st of states) {
@@ -882,8 +1000,8 @@ describe("snapshot rows: the folder half and the file half", () => {
  */
 describe("recordStateParts: no state can go unmentioned", () => {
   const counts = (over: Partial<Record<string, number>>): {
-    live: number; deleted: number; cancelled: number; archived: number; unknown: number;
-  } => ({ live: 0, deleted: 0, cancelled: 0, archived: 0, unknown: 0, ...over });
+    live: number; deleted: number; cancelled: number; archived: number; withdrawn: number; unknown: number;
+  } => ({ live: 0, deleted: 0, cancelled: 0, archived: 0, withdrawn: 0, unknown: 0, ...over });
 
   it("gives every non-live state a word", () => {
     // The guard against a fourth omission: a state added to RecordState fails to compile in
@@ -892,7 +1010,7 @@ describe("recordStateParts: no state can go unmentioned", () => {
       expect(RECORD_STATE_LABEL[k as keyof typeof RECORD_STATE_LABEL].length).toBeGreaterThan(0);
     }
     expect(Object.keys(RECORD_STATE_LABEL).sort()).toEqual(
-      ["archived", "cancelled", "deleted", "unknown"],
+      ["archived", "cancelled", "deleted", "unknown", "withdrawn"],
     );
   });
 
@@ -909,14 +1027,22 @@ describe("recordStateParts: no state can go unmentioned", () => {
     expect(recordStateParts(counts({ cancelled: 1 }))).toEqual(["1 replaced"]);
   });
 
+  // The THIRD "Cancelled" in this codebase (2026-09-11): a PIC deleted their own pending/rejected
+  // file directly, on staging. Its `RecordState` value is `withdrawn`, deliberately NOT `cancelled`
+  // — that value already means "replaced" — but its LABEL is literally "cancelled", the client's
+  // own word for this exact action, and the one place the bare word is used for a record state.
+  it("says `cancelled` for withdrawn — a PIC's own direct staging delete, not a replace", () => {
+    expect(recordStateParts(counts({ withdrawn: 1 }))).toEqual(["1 cancelled"]);
+  });
+
   it("says `not checked` for unknown, never anything implying the file is gone", () => {
     // It means a library read failed; those files may be perfectly fine.
     expect(recordStateParts(counts({ unknown: 1 }))).toEqual(["1 not checked"]);
   });
 
   it("reads worst news first and doubt last", () => {
-    expect(recordStateParts(counts({ deleted: 1, cancelled: 2, archived: 3, unknown: 4 }))).toEqual([
-      "1 deleted", "2 replaced", "3 archived", "4 not checked",
+    expect(recordStateParts(counts({ deleted: 1, withdrawn: 2, cancelled: 3, archived: 4, unknown: 5 }))).toEqual([
+      "1 deleted", "2 cancelled", "3 replaced", "4 archived", "5 not checked",
     ]);
   });
 });

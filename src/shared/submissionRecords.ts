@@ -76,6 +76,19 @@ export const RECORD_COLUMNS: Array<{ name: string; type: number }> = [
      ⚠ NO `ArchivedBy`. The movers are SCHEDULED flows: there is no person, and a column naming the
      service account would read as somebody having done it deliberately to that file. */
   { name: "ArchivedAt", type: 4 },
+  /* ── Direct staging delete (2026-09-11) ──────────────────────────────────────
+     Client: "now pic can delete without approval on staging... the status in my submission will
+     show cancelled." Set when the UPLOADER themselves recycled a pending/rejected file directly on
+     the approval library — no request, no approver. Their PRESENCE is what makes the record
+     `withdrawn` rather than `deleted`; see `RecordState`.
+
+     ⚠ NOT THE SAME AS `ReplacedAt`. A replace means somebody uploaded a NEWER document over this
+     one; a withdrawal means the uploader deleted it with nothing behind it. Different facts, and
+     `RECORD_STATE_LABEL.withdrawn` is deliberately "cancelled" — the ONE record state this codebase
+     shows that literal word for, since `cancelled` (the type value) already reads "replaced" on
+     screen and reusing it here would have shown the wrong badge for what the client asked for. */
+  { name: "WithdrawnAt", type: 4 },
+  { name: "WithdrawnBy", type: 2 },
 ];
 
 /** The one column name this module and `optionalColumns.ts` must agree on. Pinned by test. */
@@ -108,6 +121,11 @@ export interface SubmissionRecord {
   replacedBy?: string;
   /** When the archive mover moved it. Present ⇒ the record is `archived`, not `deleted`. */
   archivedAt?: Date;
+  /** When the uploader deleted it THEMSELVES, direct on staging. Present ⇒ `withdrawn`, not `deleted`. */
+  withdrawnAt?: Date;
+  /** Who deleted it. Always the uploader — this action exists only for a PIC's own pending/rejected
+   * file — but stored rather than assumed, for the same reason `replacedBy` is. */
+  withdrawnBy?: string;
 }
 
 /**
@@ -134,8 +152,16 @@ export interface SubmissionRecord {
  * this page deliberately does not read the archive (access is C-Level only since 2026-09-02), so an
  * archived file resolves nowhere and would otherwise be reported as a loss. It is NOT a kind of
  * `deleted`: the document exists, is retained, and is simply somewhere this viewer cannot go.
+ *
+ * `withdrawn` (2026-09-11, client: PICs can now delete a pending/rejected file directly on staging,
+ * with no approval) is the uploader's OWN deliberate deletion of their own unreviewed draft — the
+ * approval-library equivalent of a request-based `Documents` delete, but with nobody to decide it.
+ * OBSERVED, exactly like `cancelled`/`archived`: the in-app action that recycles the file also stamps
+ * the record, so it needs no library read and cannot be produced by a failed one. It is NOT a kind of
+ * `cancelled` (that means REPLACED by a newer upload, a different fact) even though its on-screen
+ * label happens to be the literal word "Cancelled" — see `RECORD_STATE_LABEL`.
  */
-export type RecordState = "live" | "deleted" | "cancelled" | "archived" | "unknown";
+export type RecordState = "live" | "deleted" | "cancelled" | "archived" | "withdrawn" | "unknown";
 
 /**
  * A row as the page renders it: either a live document, or a record of one that is gone.
@@ -190,6 +216,8 @@ export interface MergeResult {
   cancelled: number;
   /** Records moved to the archive. Observed, like `cancelled` — never derived from a failed read. */
   archived: number;
+  /** Records the uploader deleted themselves, direct on staging. Observed, like `cancelled`. */
+  withdrawn: number;
   /** Records that could not be checked, because a library read failed. */
   unknown: number;
 }
@@ -344,6 +372,7 @@ export function mergeRecords(
   let deleted = 0;
   let cancelled = 0;
   let archived = 0;
+  let withdrawn = 0;
   let unknown = 0;
 
   for (const r of records ?? []) {
@@ -381,20 +410,30 @@ export function mergeRecords(
 
        ⚠ AND `live` STILL BEATS ARCHIVED, which is why the resolve check runs first: a stamp left
        behind by a mover that moved something else, or a file restored from the archive, must not be
-       reported as gone while the viewer can plainly see it. */
-    const state: RecordState = r.replacedAt !== undefined
-      ? "cancelled"
-      : r.archivedAt !== undefined
-        ? "archived"
-        : judgeable ? "deleted" : "unknown";
+       reported as gone while the viewer can plainly see it.
+
+       `withdrawn` CHECKED FIRST, above all three. It is the uploader's own deliberate, terminal act
+       on their own pending/rejected draft — nothing produced by ANY of the other three columns can
+       apply to a file that no longer exists to be replaced, archived (archiving only ever touches an
+       APPROVED document, which a withdrawal can never be — the two cannot co-occur at all) or
+       re-derived as merely "deleted". Checking it first costs nothing on a record where it is
+       absent, and guarantees a deliberate self-delete is never masked by a stale value elsewhere. */
+    const state: RecordState = r.withdrawnAt !== undefined
+      ? "withdrawn"
+      : r.replacedAt !== undefined
+        ? "cancelled"
+        : r.archivedAt !== undefined
+          ? "archived"
+          : judgeable ? "deleted" : "unknown";
     if (state === "deleted") deleted += 1;
     else if (state === "cancelled") cancelled += 1;
     else if (state === "archived") archived += 1;
+    else if (state === "withdrawn") withdrawn += 1;
     else unknown += 1;
     rows.push(rowFromRecord(r, state));
   }
 
-  return { rows, live: liveCount, deleted, cancelled, archived, unknown };
+  return { rows, live: liveCount, deleted, cancelled, archived, withdrawn, unknown };
 }
 
 /**
@@ -406,29 +445,31 @@ export function mergeRecords(
  */
 export function recordCounts(
   rows: readonly MergedRow[],
-): { live: number; deleted: number; cancelled: number; archived: number; unknown: number } {
+): { live: number; deleted: number; cancelled: number; archived: number; withdrawn: number; unknown: number } {
   let deleted = 0;
   let cancelled = 0;
   let archived = 0;
+  let withdrawn = 0;
   let unknown = 0;
   let liveCount = 0;
   for (const r of rows ?? []) {
     if (r.recordState === "deleted") deleted += 1;
     else if (r.recordState === "cancelled") cancelled += 1;
     else if (r.recordState === "archived") archived += 1;
+    else if (r.recordState === "withdrawn") withdrawn += 1;
     else if (r.recordState === "unknown") unknown += 1;
     else liveCount += 1;
   }
-  return { live: liveCount, deleted, cancelled, archived, unknown };
+  return { live: liveCount, deleted, cancelled, archived, withdrawn, unknown };
 }
 
 /* ── The status line's record half ─────────────────────────────────────────────
  *
- * ⚠ THREE STATES HAVE NOW BEEN LEFT OUT OF THAT LINE, ONE PER STATE ADDED. `cancelled` on
- * 2026-08-28 and `archived` on 2026-09-03 each shipped with `recordCounts` counting them and the
- * status column never mentioning them — so a submission whose every file was replaced, and later one
- * whose every file was archived, rendered a **blank Status cell**. On the page whose whole job is
- * saying what became of a file, a blank cell reads as the page being broken.
+ * ⚠ THREE STATES HAVE BEEN LEFT OUT OF THAT LINE, ONE PER STATE ADDED. `cancelled` on 2026-08-28
+ * and `archived` on 2026-09-03 each shipped with `recordCounts` counting them and the status column
+ * never mentioning them — so a submission whose every file was replaced, and later one whose every
+ * file was archived, rendered a **blank Status cell**. On the page whose whole job is saying what
+ * became of a file, a blank cell reads as the page being broken.
  *
  * A `Record` over the union is what stops a fourth: adding a member to `RecordState` is a COMPILE
  * ERROR here until it is given a word. That is the same guard `RequestStatus` uses for its pill
@@ -439,6 +480,10 @@ export const RECORD_STATE_LABEL: Record<Exclude<RecordState, "live">, string> = 
   // Not "cancelled": the file was superseded by a newer upload, and "cancelled" reads as withdrawn.
   cancelled: "replaced",
   archived: "archived",
+  // THE ONE state that literally says "cancelled" — see the `RecordState` doc comment for why this
+  // is deliberately not the SAME word as the `cancelled` type value two lines above, which means
+  // "replaced" on screen. Client's own wording for a PIC's direct staging delete.
+  withdrawn: "cancelled",
   // Worded differently on purpose — it means the libraries could not all be read, so those files may
   // be perfectly fine. Never "missing".
   unknown: "not checked",
@@ -446,7 +491,7 @@ export const RECORD_STATE_LABEL: Record<Exclude<RecordState, "live">, string> = 
 
 /** The order they read in — worst news first, doubt last. */
 const RECORD_STATE_ORDER: Array<Exclude<RecordState, "live">> = [
-  "deleted", "cancelled", "archived", "unknown",
+  "deleted", "withdrawn", "cancelled", "archived", "unknown",
 ];
 
 /** One number per state. `MergeResult` satisfies it, so a merge's own totals can be passed straight in. */
@@ -561,6 +606,9 @@ export const REPLACEMENT_COLUMNS = ["ReplacedAt", "ReplacedBy"];
 /** The column added on 2026-09-03, named once. Its own rung on the ladder — see below. */
 export const ARCHIVE_COLUMNS = ["ArchivedAt"];
 
+/** The columns added on 2026-09-11, named once. The NEWEST, so the FIRST to drop on a 400. */
+export const WITHDRAWAL_COLUMNS = ["WithdrawnAt", "WithdrawnBy"];
+
 /** Everything the record read asks for, including the built-ins it needs. */
 export const RECORD_READ_SELECT = [
   "Id", "SubmissionRef", "BatchRef", "SubmissionFileId", "ItemUniqueId", "FileName", "ItemPath",
@@ -572,10 +620,22 @@ export const RECORD_READ_SELECT = [
      Requests page does for `Stage`. */
   ...REPLACEMENT_COLUMNS,
   ...ARCHIVE_COLUMNS,
+  ...WITHDRAWAL_COLUMNS,
 ].join(",");
 
 /**
- * The same read with only the 2026-09-03 column dropped — the MIDDLE rung.
+ * The same read with only the 2026-09-11 columns dropped — a NEW top rung.
+ *
+ * ⚠ NEWEST DROPS FIRST, same reasoning as the archive rung below it: a site that has `ReplacedAt`
+ * and `ArchivedAt` but not `WithdrawnAt`/`WithdrawnBy` must not lose all three at once. Derived by
+ * subtraction so the ladder cannot drift.
+ */
+export const RECORD_READ_SELECT_NO_WITHDRAWAL = RECORD_READ_SELECT.split(",")
+  .filter((c) => WITHDRAWAL_COLUMNS.indexOf(c) === -1)
+  .join(",");
+
+/**
+ * The same read with only the 2026-09-03 column ALSO dropped — the MIDDLE rung.
  *
  * ⚠ THIS RUNG EXISTS SO A SITE THAT HAS `ReplacedAt` BUT NOT `ArchivedAt` DOES NOT LOSE BOTH. A
  * two-rung ladder would drop straight to the 2026-08-28 fallback, and every replaced file on such a
@@ -583,26 +643,27 @@ export const RECORD_READ_SELECT = [
  * showing. Exactly the trap `RevokedBy` taught on `CRS Requests` (2026-08-30), where a single retry
  * covering `Stage` was not enough once a second optional column arrived.
  *
- * Derived by subtraction, like the one below it, so the three cannot drift apart.
+ * Derived from the rung ABOVE it, never from the full select — dropping straight from `RECORD_READ_
+ * SELECT` would reintroduce the 2026-09-11 columns this rung is supposed to have already lost.
  */
-export const RECORD_READ_SELECT_NO_ARCHIVE = RECORD_READ_SELECT.split(",")
+export const RECORD_READ_SELECT_NO_ARCHIVE = RECORD_READ_SELECT_NO_WITHDRAWAL.split(",")
   .filter((c) => ARCHIVE_COLUMNS.indexOf(c) === -1)
   .join(",");
 
 /**
- * The same read with the 2026-08-28 columns dropped.
+ * The same read with the 2026-08-28 columns dropped too — every optional column gone.
  *
  * ⚠ THE FALLBACK IS THE WHOLE POINT. A site whose `CRS Submissions` list predates that change has
- * neither column, and one unknown field name fails the ENTIRE `$select` — so without this, adding
- * two optional columns would empty My Submissions of every record on every unreconciled site. The
+ * none of these columns, and one unknown field name fails the ENTIRE `$select` — so without this,
+ * adding optional columns would empty My Submissions of every record on every unreconciled site. The
  * `Stage` column on `CRS Requests` taught this on 2026-08-20; the difference is that this list is
  * read by an UPLOADER rather than an approver, so the blast radius is everybody.
  *
  * DERIVED by subtraction, never written out again: a second literal list is how the two drift, and
  * the drifting one would be the rarely-exercised fallback.
  */
-export const RECORD_READ_SELECT_LEGACY = RECORD_READ_SELECT.split(",")
-  .filter((c) => REPLACEMENT_COLUMNS.indexOf(c) === -1 && ARCHIVE_COLUMNS.indexOf(c) === -1)
+export const RECORD_READ_SELECT_LEGACY = RECORD_READ_SELECT_NO_ARCHIVE.split(",")
+  .filter((c) => REPLACEMENT_COLUMNS.indexOf(c) === -1)
   .join(",");
 
 /** What a record row is written as. One field per column, plus `Title`. */
@@ -700,6 +761,15 @@ export function parseRecordRow(raw: Record<string, unknown>): SubmissionRecord {
       const d = new Date(raw);
       return isNaN(d.getTime()) ? undefined : d;
     })(),
+    /* Same rule again: `withdrawnAt !== undefined` is what decides `withdrawn`, so an `Invalid Date`
+       would be truthy and mark a record withdrawn on the strength of a value nobody could read. */
+    withdrawnAt: (() => {
+      const raw = str("WithdrawnAt");
+      if (raw.length === 0) return undefined;
+      const d = new Date(raw);
+      return isNaN(d.getTime()) ? undefined : d;
+    })(),
+    withdrawnBy: str("WithdrawnBy") || undefined,
   };
 }
 

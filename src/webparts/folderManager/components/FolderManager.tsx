@@ -63,6 +63,7 @@ import {
   ARCHIVED_COLUMN,
   SUBMISSION_FILE_COLUMN,
   APPROVED_BY_COLUMN,
+  APPROVAL_COMMENT_COLUMN,
   KEYWORD_COLUMN,
 } from "../../../shared/optionalColumns";
 import { writeAudit } from "../../../shared/spAuditLog";
@@ -844,13 +845,13 @@ const s: Record<string, React.CSSProperties> = {
     maxWidth: 880,
     margin: "32px auto",
     padding: "0 24px 48px",
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
   },
   // Mounted inside a guided flow step, where the panel already supplies width, centring and padding.
   // Reusing `wrap` there added a SECOND set of all three — an indent plus an 880px cap inside a panel
   // often narrower than that, which is the "margin and padding" the client asked to remove. Font stays,
   // because the flow does not set one on the step body.
-  wrapEmbedded: { fontFamily: "'Segoe UI', sans-serif" },
+  wrapEmbedded: { fontFamily: "Arial, sans-serif" },
   h2: { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
   subtitle: { fontSize: 13, color: "#666", margin: "0 0 24px" },
   toggleWrap: { display: "flex", justifyContent: "center", marginBottom: 24 },
@@ -868,7 +869,7 @@ const s: Record<string, React.CSSProperties> = {
   segBtn: {
     padding: "8px 16px",
     fontSize: 13,
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontWeight: 600,
     cursor: "pointer",
     background: "#fff",
@@ -935,7 +936,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "5px 9px",
     border: "1px solid #c8c8c8",
     borderRadius: 4,
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontSize: 13,
     width: 200,
     boxSizing: "border-box",
@@ -954,7 +955,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "3px 10px",
     fontSize: 11,
     cursor: "pointer",
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     color: "#444",
     flexShrink: 0,
     whiteSpace: "nowrap",
@@ -1018,7 +1019,7 @@ const s: Record<string, React.CSSProperties> = {
     border: "1px solid #c8c8c8",
     borderRadius: 4,
     fontSize: 12,
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     background: "#fff",
   },
   undoLink: {
@@ -1028,14 +1029,14 @@ const s: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     fontSize: 11,
     padding: 0,
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
   },
   searchWrap: { position: "relative", marginBottom: 6 },
   searchIn: {
     padding: "5px 9px",
     border: "1px solid #c8c8c8",
     borderRadius: 4,
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontSize: 12,
     width: "100%",
     boxSizing: "border-box",
@@ -1067,7 +1068,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "4px 12px",
     fontSize: 12,
     cursor: "pointer",
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     marginTop: 8,
   },
   actions: {
@@ -1081,7 +1082,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "8px 22px",
     borderRadius: 4,
     cursor: "pointer",
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontSize: 13,
   },
   logBox: {
@@ -1140,7 +1141,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "5px 14px",
     borderRadius: 4,
     cursor: "pointer",
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontSize: 12,
     border: "none",
     background: "#a4262c",
@@ -1151,7 +1152,7 @@ const s: Record<string, React.CSSProperties> = {
     padding: "5px 14px",
     borderRadius: 4,
     cursor: "pointer",
-    fontFamily: "'Segoe UI', sans-serif",
+    fontFamily: "Arial, sans-serif",
     fontSize: 12,
     border: "1px solid #d0d0d0",
     background: "#fff",
@@ -1278,6 +1279,7 @@ export default function FolderManager({
   onAbbreviationsDirtyChange,
   onAbbreviationsRegisterSave,
   hideSegmentCreate,
+  hideSegmentRecode,
   onStructureDirtyChange,
   onStructureSaved,
 }: IFolderManagerProps): React.ReactElement {
@@ -3836,39 +3838,43 @@ export default function FolderManager({
           ok: true,
         });
 
-        /* ⚠ THE APPROVER'S EMAIL, on the TWO APPROVAL-SIDE libraries only (2026-09-01).
+        /* ⚠ THE APPROVER'S EMAIL AND THE APPROVAL COMMENT, on EVERY CRS library (2026-09-10).
            SharePoint records no "approved by" field, and `Editor` is not a stand-in for one — proven
            live from a trigger payload after `File.Approve()` AND a MERGE of `OData__ModerationStatus`
-           both left `Editor` as the uploader. Both approval routes must WRITE this column at the
-           moment of approval; this pass only creates it, the same as every column above.
-           NOT on `Documents` or the archive — it answers "who approved THIS pending item", which is
-           meaningless once the item is routed and deleted, and Auto-route reads it from the SOURCE
-           item, before the copy, so it never has to survive the move. */
-        for (const key of ["Staging", "StagingHC"] as const) {
-          const title = libApiTitle(key);
-          // The HC key resolves to itself when the HC pair is unresolved (naming.ts has no HC
-          // fallback), which would try to create a column on a library named "StagingHC" that does
-          // not exist. Skip it rather than let `ensureColumn` fail loudly for every site without HC.
-          if (key === "StagingHC" && !hcAvailable()) continue;
-          try {
-            const madeAppr = await ensureColumn(
-              context.spHttpClient,
-              siteUrl,
-              title,
-              APPROVED_BY_COLUMN,
-              "Approved By",
-            );
-            if (madeAppr) {
+           both left `Editor` as the uploader. Both approval routes WRITE these at the moment of
+           approval; this pass only creates them, the same as every column above.
+           Approval-side only until 2026-09-10. Now on the approved side and the archive too, because
+           My Submissions reads an approved document from where it was ROUTED, and Auto-route's copy
+           carries a column over only when it exists at the destination (client: *"to be able to know
+           who approve and can still be track in the system and not just email"*).
+           `allLibraryTitles()` already leaves out an unresolved HC pair and a site with no archive,
+           so nothing here tries to create a column on a library that does not exist. */
+        for (const title of allLibraryTitles()) {
+          for (const col of [
+            { name: APPROVED_BY_COLUMN, display: "Approved By", kind: "Text" as const },
+            { name: APPROVAL_COMMENT_COLUMN, display: "Approval Comment", kind: "Note" as const },
+          ]) {
+            try {
+              const made = await ensureColumn(
+                context.spHttpClient,
+                siteUrl,
+                title,
+                col.name,
+                col.display,
+                col.kind,
+              );
+              if (made) {
+                entries.push({
+                  msg: `  ↳ ${title}: ${col.display} column created ✓`,
+                  ok: true,
+                });
+              }
+            } catch (e) {
               entries.push({
-                msg: `  ↳ ${title}: Approved By column created ✓`,
-                ok: true,
+                msg: `  ⚠ ${title}: ${col.display} column could not be ensured — ${(e as Error).message}. Approving still works; My Submissions will show no approver or comment for documents in this library, and on an approval library the audit log will name the uploader as the approver.`,
+                ok: false,
               });
             }
-          } catch (e) {
-            entries.push({
-              msg: `  ⚠ ${title}: Approved By column could not be ensured — ${(e as Error).message}. Approving still works; the audit log will keep naming the uploader as the approver, and approval emails will keep being suppressed.`,
-              ok: false,
-            });
           }
         }
       } catch (e) {
@@ -8015,6 +8021,7 @@ export default function FolderManager({
           // "allow", and both defaults must mean the button is shown.
           allowDelete={!hideSegmentDelete}
           allowCreate={!hideSegmentCreate}
+          allowRecode={!hideSegmentRecode}
         />
       ) : tab === "Reconciliation" ? (
         <div>

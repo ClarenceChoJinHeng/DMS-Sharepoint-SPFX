@@ -242,6 +242,23 @@ Headers: `Accept`, `Content-Type` (both `application/json;odata=nometadata`), `X
 ```
 `runAfter` `GetSourceSubmissionIds`, succeeded.
 
+> **⏭ ADD `ApprovedBy` AND `ApprovalComment` TO BOTH ACTIONS (2026-09-10, app 1.0.530.0) — NOT YET
+> DONE, in `Auto-route` AND `HC Auto Route`.** My Submissions now shows *Approved By* and *Comment*,
+> read from the approved-side document. On the ordinary `Copy file` path both arrive with no flow
+> change, once reconciliation has created the columns on the destination library. On the
+> **`Update file` (replace) path nothing is copied**, so without this a replaced document keeps the
+> FIRST approval's approver and comment — naming the wrong person on the new version.
+>
+> - `GetSourceSubmissionIds` Uri: append `,ApprovedBy,ApprovalComment` to its `$select`.
+> - `StampDestSubmissionIds` body — the full replacement:
+> ```json
+> {"SubmissionId": "@{body('GetSourceSubmissionIds')?['SubmissionId']}", "BatchId": "@{body('GetSourceSubmissionIds')?['BatchId']}", "SubmissionFileId": "@{body('GetSourceSubmissionIds')?['SubmissionFileId']}", "ApprovedBy": "@{body('GetSourceSubmissionIds')?['ApprovedBy']}", "ApprovalComment": "@{body('GetSourceSubmissionIds')?['ApprovalComment']}"}
+> ```
+> ⚠ **RUN RECONCILIATION FIRST.** One unknown field name fails the whole MERGE, so this body on a
+> destination library that lacks the two columns would stop the three submission ids transferring too.
+> ⚠ A comment containing a double quote or a line break would break the hand-built JSON above; if
+> that proves real, build the body with `json()`/`setProperty` instead of string interpolation.
+
 > ⚠ **Both actions had to be built via the Parameters tab, field by field — Code view repeatedly
 > accepted a pasted JSON block into the Uri box instead of replacing the whole action.** Whatever the
 > cause in this designer, don't rely on Code view for creating these; use it only to inspect the

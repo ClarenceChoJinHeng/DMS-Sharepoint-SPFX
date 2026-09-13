@@ -419,15 +419,49 @@ https://dcidigitalcom.sharepoint.com
 ⚠ **Swap this on SDG's tenant.** It is the one value that differs per site, so it lives in exactly
 one place rather than inside four email bodies.
 
-**`FileLink`**
+**`MySubmissionsPageLink`** — a plain literal, like `RequestsPageLink` below:
 ```
-if(startsWith(coalesce(triggerOutputs()?['body/ItemUrl'],''), 'http'),
-   triggerOutputs()?['body/ItemUrl'],
-   concat(outputs('SiteOrigin'), triggerOutputs()?['body/ItemUrl']))
+concat(outputs('SiteOrigin'), '/sites/ClarenceDMSTesting/SitePages/My-Submissions.aspx')
 ```
-⚠ **`ItemUrl` IS SERVER-RELATIVE** — `performShare` proves it, prefixing `window.location.origin`
-before use. A body that drops it in raw produces a dead link. The `startsWith` arm is insurance
-against a row that ever stores an absolute one, so the concat cannot double up.
+⚠ Same per-site caveat as `RequestsPageLink`: read the real page name off Site Pages on SDG.
+
+**`FileLink`** (rewritten 2026-09-10 — it now opens the app's FILE VIEW, never the file itself)
+
+⚠⚠ **`FileLink` MUST SIT BELOW BOTH `RequestsPageLink` AND `MySubmissionsPageLink`** — it reads them,
+and Power Automate refuses to save an action that references one not yet in its run-after path:
+*"cannot reference action 'RequestsPageLink'. Action 'RequestsPageLink' must either be in 'runAfter'
+path…"*. This section listed `FileLink` first and `RequestsPageLink` after it, which is exactly the
+order that fails. Hit on the first save, 2026-09-10. Order: `SiteOrigin` → `RequestsPageLink` →
+`MySubmissionsPageLink` → `FileLink`.
+```
+if(equals(triggerOutputs()?['body/Status'], 'Pending'),
+   concat(outputs('RequestsPageLink'), '?request=', string(triggerOutputs()?['body/ID'])),
+   concat(outputs('MySubmissionsPageLink'),
+          '?file=', encodeUriComponent(coalesce(triggerOutputs()?['body/ItemUniqueId'], '')),
+          '&sfi=', encodeUriComponent(coalesce(triggerOutputs()?['body/SubmissionFileId'], ''))))
+```
+Client, 2026-09-10: *"just direct user to the file component view once they click on File Link: Open
+the document"* — and the separate **"Open the request to approve or reject"** link is REMOVED from the
+bodies (done by the client in the flow). One link now does both jobs.
+- **A PENDING request goes to the APPROVER, so it opens the Requests page's file view** (1.0.528.0):
+  preview and details, with the request card above — reason, requester, recipients — and **Approve /
+  Reject on it**. Removing the approve link is safe only because that view carries the buttons.
+- **A DECIDED request goes to the REQUESTER, who cannot open the Requests page** (`UPL` left it on
+  2026-08-21), so it opens **My Submissions' file view** instead.
+  - ⚠ **TWO IDENTIFIERS, because `ItemUniqueId` DOES NOT SURVIVE ROUTING.** A request raised on a
+    pending file records the approval-library copy's id, and Auto-route copies-then-deletes. The page
+    tries the id, then the stamped `SubmissionFileId`. `coalesce` because a row written before that
+    column existed has none.
+  - ⚠ **An approved DELETION links to a file that is gone** — that is what it approved. The page
+    lands on its Requests tab instead, saying the document is no longer in the library, where the
+    outcome is listed.
+- ⚠ **THE FIRST VERSION LINKED THE FILE ITSELF (`SiteOrigin + ItemUrl`), AND SHAREPOINT SERVES A FILE
+  URL RAW** — a PDF in a bare browser tab, an Office file downloaded. An interim fix to the library
+  view (`Forms/AllItems.aspx?id=`) was written and **never applied**; if a `LibRoot` Compose was
+  added for it, delete it.
+- Both pages read the parameter ONCE and strip it from the address bar, so a refresh does not re-open
+  a view somebody has closed.
+- `?request=` and `&sfi=` are safe inside an HTML `href`: neither begins a legacy entity name.
 
 **`RequestsPageLink`**
 ```

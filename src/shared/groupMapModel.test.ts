@@ -196,18 +196,17 @@ describe("personas", () => {
     expect(fansFromSegmentTier("GLOBAL")).toBe(true);
   });
 
-  it("leaves DELS to both Heads of Unit and DELSHC to the HC one alone", () => {
+  it("gives DELS to both Heads of Unit AND the plain PIC; DELSHC to the HC pair", () => {
     // 2026-08-20, client: "For Staging PIC should not be able to delete, they have to request from
-    // HOU" — DELS belongs to the Head-of-Unit family, exactly. DELSHC diverged from that on
-    // 2026-08-24: the plain persona no longer holds it, so its holder set is a strict subset of
-    // DELS's, not the same set. A shared holder is what made DELS unusable as an HC role in the
-    // first place (2026-08-17): a role held by two personas cannot grant to one and withhold from
-    // the other.
+    // HOU" — DELS became Head-of-Unit-only. REVERSED 2026-09-11, client: "now pic can delete
+    // without approval on staging" — a PIC regained DELS/DELSHC for their own unit, exactly as
+    // before the 2026-08-20 correction. A PIC's status differs by ROUTE though: a direct staging
+    // delete (this grant) reads `Cancelled` on My Submissions; a request-based Documents delete
+    // (unaffected by this, still via `DEL`/`hod`/`hou`) still reads `Deleted`.
     const delsHolders = PERSONAS.filter((p) => (p.roles as string[]).indexOf("DELS") > -1);
-    expect(delsHolders.map((h) => h.key)).toEqual(["hou", "hou_hc"]);
-    for (const h of delsHolders) expect(h.family).toBe("Head of Unit");
+    expect(delsHolders.map((h) => h.key)).toEqual(["hou", "hou_hc", "pic"]);
     const delshcHolders = PERSONAS.filter((p) => (p.roles as string[]).indexOf("DELSHC") > -1);
-    expect(delshcHolders.map((h) => h.key)).toEqual(["hou_hc"]);
+    expect(delshcHolders.map((h) => h.key)).toEqual(["hou_hc", "pic_hc"]);
   });
 
   it("keeps PIC off Documents by omitting the base group", () => {
@@ -216,8 +215,10 @@ describe("personas", () => {
     // group — the SDG Employee role. Bundling MEMBER in here made every PIC a Documents
     // reader by default: the wrong default for a permission, and not what the client's
     // "can see the files in the unit" line meant.
-    // DELS removed 2026-08-20 — a PIC now requests deletion from the Head of Unit.
-    expect(personaByKey("pic")?.roles).toEqual(["UPL"]);
+    // DELS removed 2026-08-20, restored 2026-09-11 — a PIC can now delete their own pending or
+    // rejected file directly on staging; deleting an approved Documents file is still a request to
+    // the Head of Unit.
+    expect(personaByKey("pic")?.roles).toEqual(["UPL", "DELS"]);
   });
 
   it("offers two PIC personas — ordinary, and Highly Confidential cleared", () => {
@@ -230,13 +231,15 @@ describe("personas", () => {
     // collapse into pic — so those keys stay absent.
     const pics = PERSONAS.filter((p) => p.family === "PIC");
     expect(pics.map((p) => p.key)).toEqual(["pic", "pic_hc"]);
-    expect(pics[0].roles).toEqual(["UPL"]);
     // DELS -> DELSHC 2026-08-17, and this closed a live leak rather than renaming anything: the
     // PLAIN PIC also holds DELS, so while DELS was on the HC approval library every plain PIC held
     // CRS Delete there.
     // DELSHC removed 2026-08-20, following the plain PIC losing DELS: HC Approval Document is a
-    // staging-side library, and clearance must not decide a DELETE right.
-    expect(pics[1].roles).toEqual(["UPLHC"]);
+    // staging-side library, and clearance must not decide a DELETE right. BOTH restored 2026-09-11
+    // (client: "now pic can delete without approval on staging") — a PIC deletes directly again, in
+    // their own unit's library, at whichever confidentiality level they are cleared for.
+    expect(pics[0].roles).toEqual(["UPL", "DELS"]);
+    expect(pics[1].roles).toEqual(["UPLHC", "DELSHC"]);
     for (const p of pics) expect(p.unavailable).toBeUndefined();
     expect(personaByKey("pic2")).toBeUndefined();
     expect(personaByKey("pic3")).toBeUndefined();
@@ -615,14 +618,15 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
        pending delete. Assert the exact holders, because the safety of an HC row depends on it. */
     const withDocDelete = PERSONAS.filter((p) => p.roles.indexOf("DEL") !== -1).map((p) => p.key);
     expect(withDocDelete.sort()).toEqual(["hod", "hou", "hou_hc"]);
-    // ONE holder since 2026-08-24: DELSHC left the plain Head of Unit the same day APR did — "a
-    // normal HOU cannot see HC Approval Document and HC Documents". Pending-HC delete requires
-    // being able to read the HC approval library at all, which only hou_hc can any more.
+    // TWO holders since 2026-09-11: DELSHC returned to the plain PIC's HC twin alongside hou_hc
+    // (client: "now pic can delete without approval on staging"). Between 2026-08-24 and then, only
+    // hou_hc held it, because pending-HC delete requires being able to read the HC approval library
+    // at all — which a plain, uncleared PIC still cannot, but a HC-cleared PIC (`pic_hc`) can.
     const withHcPendingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELSHC") !== -1).map((p) => p.key);
-    expect(withHcPendingDelete.sort()).toEqual(["hou_hc"]);
+    expect(withHcPendingDelete.sort()).toEqual(["hou_hc", "pic_hc"]);
   });
 
-  it("gives Staging delete to the Head of Unit, and to nobody else", () => {
+  it("gives Staging delete to the Head of Unit AND the PIC, and to nobody else", () => {
     // Reversed 2026-08-09. DELS used to belong to NO persona — kept alive only so a
     // hand-authored row would still work. The client assigned it to the Head of Unit, whose
     // job it already is to act on pending work.
@@ -638,20 +642,26 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
     // acquiring it is a silent grant.
     // Later the same day: the HC variants join, for the same reasons as their plain counterparts.
     // The exact set is still what matters.
+    //
+    // 2026-08-20: the PIC lost it again (client: "For Staging PIC should not be able to delete,
+    // they have to request from HOU"). 2026-09-11: reversed a second time (client: "now pic can
+    // delete without approval on staging") — a PIC deletes their own pending/rejected file directly
+    // once more, and the status this leaves on My Submissions (`Cancelled`) is what tells that
+    // action apart from a request-based Documents delete (`Deleted`, unaffected).
     const withStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELS") !== -1);
-    // 2026-08-24: hou_hc revived — both Head-of-Unit personas carry the deletes, nobody else does.
-    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou", "hou_hc"]);
-    // DELSHC is its own role precisely so the plain PIC cannot reach the HC approval library — and,
-    // since 2026-08-24, so the plain Head of Unit cannot either. ONE holder now, not the family.
+    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou", "hou_hc", "pic"]);
+    // DELSHC is its own role precisely so an UNCLEARED PIC cannot reach the HC approval library.
+    // Both Head-of-Unit personas and the HC-cleared PIC hold it; the plain PIC does not.
     const withHcStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELSHC") !== -1);
-    expect(withHcStagingDelete.map((p) => p.key)).toEqual(["hou_hc"]);
+    expect(withHcStagingDelete.map((p) => p.key)).toEqual(["hou_hc", "pic_hc"]);
   });
 
-  it("keeps the PIC to upload alone", () => {
-    // Still UPL only, even though a PIC now reads Documents too. That read comes from
-    // LIBRARY_ROLES listing UPL under Documents — NOT from adding MEMBER here. If this ever
-    // grows a second role, the "one group per person" property has been lost.
-    expect(rolesOf("pic")).toEqual(["UPL"]);
+  it("gives the PIC upload and their own staging delete, nothing more", () => {
+    // UPL alone until 2026-08-15, when DELS joined; removed 2026-08-20; restored 2026-09-11
+    // (client: "now pic can delete without approval on staging"). Documents-side read comes from
+    // LIBRARY_ROLES listing UPL under Documents — NOT from adding MEMBER here. If this ever grows
+    // a THIRD role, the "one group per person" property has been lost.
+    expect(rolesOf("pic")).toEqual(["UPL", "DELS"]);
   });
 
   it("leaves SDG Employee as the only persona that is purely MEMBER", () => {
@@ -1067,10 +1077,15 @@ describe("validateGroupName", () => {
 describe("corrected role model (2026-08-15)", () => {
   const rolesOf = (key: string): string[] => PERSONAS.filter((p) => p.key === key)[0].roles as string[];
 
-  it("a PIC deletes in the approval library but NOT in Documents", () => {
+  it("a PIC deletes in the approval library directly, but NOT in Documents", () => {
     // DELS is Staging-only; DEL is the Documents one. A PIC holding DEL would make the whole
     // deletion-request workflow pointless — they would simply delete.
-    expect(rolesOf("pic")).not.toContain("DELS");
+    //
+    // DELS was removed from pic on 2026-08-20 and this test flipped to `.not.toContain` — but the
+    // client reversed that on 2026-09-11 ("now pic can delete without approval on staging"), which
+    // is exactly the 2026-08-15 shape this describe block is named for. DEL, the DOCUMENTS-side
+    // role, was never touched by either change and stays absent.
+    expect(rolesOf("pic")).toContain("DELS");
     expect(rolesOf("pic")).not.toContain("DEL");
   });
 

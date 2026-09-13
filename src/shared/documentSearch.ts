@@ -126,8 +126,13 @@ export function hasCriteria(c: SearchCriteria): boolean {
   if (clean(c.year).length > 0) return true;
   if (clean(c.confidentiality).length > 0) return true;
   if (clean(c.segment).length > 0) return true;
-  if (clean(c.documentDateFrom).length > 0 || clean(c.documentDateTo).length > 0) return true;
-  if (clean(c.uploadedFrom).length > 0 || clean(c.uploadedTo).length > 0) return true;
+  if (
+    clean(c.documentDateFrom).length > 0 ||
+    clean(c.documentDateTo).length > 0
+  )
+    return true;
+  if (clean(c.uploadedFrom).length > 0 || clean(c.uploadedTo).length > 0)
+    return true;
   for (const t of c.tiers ?? []) {
     if (clean(t?.value).length > 0) return true;
   }
@@ -154,7 +159,10 @@ export function hasCriteria(c: SearchCriteria): boolean {
  * would produce a property that does not exist, and a KQL clause naming a nonexistent property
  * matches NOTHING rather than erroring — a filter that silently returns an empty list.
  */
-export function managedProperty(internalName: string, kind?: "text" | "date"): string {
+export function managedProperty(
+  internalName: string,
+  kind?: "text" | "date",
+): string {
   const name = clean(internalName);
   if (name.length === 0) return "";
   return `${name}OWS${kind === "date" ? "DATE" : "TEXT"}`;
@@ -179,7 +187,11 @@ export function managedProperty(internalName: string, kind?: "text" | "date"): s
  * and a KQL clause naming a property that does not exist matches nothing rather than erroring. That
  * same forgiveness is what makes the managed-property caveat on `managedProperty` invisible.
  */
-export const TEXT_COLUMNS = ["ProjectName", "Vendor_x002f_CustomerName", "Remark", "Keyword"];
+export const TEXT_COLUMNS = [
+  "ProjectName",
+  "Vendor_x002f_CustomerName",
+  "Keyword",
+];
 
 /* ─────────────────────────────── KQL ─────────────────────────────── */
 
@@ -256,7 +268,10 @@ function kqlRange(property: string, from: string, to: string): string[] {
  * clause searches the entire tenant, which would show a user documents from sites this system has
  * nothing to do with.
  */
-export function kqlPathScope(webAbsoluteUrl: string, urlSegments: string[]): string {
+export function kqlPathScope(
+  webAbsoluteUrl: string,
+  urlSegments: string[],
+): string {
   const base = clean(webAbsoluteUrl).replace(/\/+$/, "");
   const segs = (urlSegments ?? []).map(clean).filter((s) => s.length > 0);
   if (base.length === 0 || segs.length === 0) return "";
@@ -287,7 +302,10 @@ export function buildKql(c: SearchCriteria, scope: string): string {
   const exact = [
     kqlEquals(managedProperty("Document_x0020_Type"), c.documentType),
     kqlEquals(managedProperty("Year"), c.year),
-    kqlEquals(managedProperty("Confidentiality_x0020_Level"), c.confidentiality),
+    kqlEquals(
+      managedProperty("Confidentiality_x0020_Level"),
+      c.confidentiality,
+    ),
     kqlEquals(managedProperty("Business_x0020_Segment"), c.segment),
   ];
   for (const clause of exact) {
@@ -295,12 +313,19 @@ export function buildKql(c: SearchCriteria, scope: string): string {
   }
 
   for (const tier of c.tiers ?? []) {
-    const clause = kqlEquals(managedProperty(clean(tier?.column)), clean(tier?.value));
+    const clause = kqlEquals(
+      managedProperty(clean(tier?.column)),
+      clean(tier?.value),
+    );
     if (clause.length > 0) parts.push(clause);
   }
 
   const ranges = [
-    ...kqlRange(managedProperty("DocumentDate", "date"), c.documentDateFrom, c.documentDateTo),
+    ...kqlRange(
+      managedProperty("DocumentDate", "date"),
+      c.documentDateFrom,
+      c.documentDateTo,
+    ),
     ...kqlRange("Created", c.uploadedFrom, c.uploadedTo),
   ];
   for (const clause of ranges) parts.push(clause);
@@ -374,9 +399,11 @@ export const METADATA_FILTER_FIELDS = {
 
 /** Is any filter set that REST cannot narrow, and that therefore has to be applied to the rows? */
 export function hasMetadataFilter(c: SearchCriteria): boolean {
-  return clean(c.documentType).length > 0
-    || clean(c.year).length > 0
-    || clean(c.confidentiality).length > 0;
+  return (
+    clean(c.documentType).length > 0 ||
+    clean(c.year).length > 0 ||
+    clean(c.confidentiality).length > 0
+  );
 }
 
 /**
@@ -399,9 +426,11 @@ export function metadataFilterMatches(
     if (w.length === 0) return true;
     return clean(got).toLowerCase() === w.toLowerCase();
   };
-  return same(c.documentType, row.documentType)
-    && same(c.year, row.year)
-    && same(c.confidentiality, row.confidentiality);
+  return (
+    same(c.documentType, row.documentType) &&
+    same(c.year, row.year) &&
+    same(c.confidentiality, row.confidentiality)
+  );
 }
 
 /**
@@ -426,7 +455,10 @@ export function odataDate(value: string, endOfDay?: boolean): string {
  * Free text is matched on the metadata columns and the filename only — there is no document-contents
  * search here, and that is the accepted cost of being instant on the library where instant matters.
  */
-export function buildListFilter(c: SearchCriteria, hasKeyword: boolean = false): string {
+export function buildListFilter(
+  c: SearchCriteria,
+  hasKeyword: boolean = false,
+): string {
   const parts: string[] = ["FSObjType eq 0"];
 
   for (const word of searchWords(c.text)) {
@@ -434,7 +466,6 @@ export function buildListFilter(c: SearchCriteria, hasKeyword: boolean = false):
       odataContains("FileLeafRef", word),
       odataContains("ProjectName", word),
       odataContains("Vendor_x002f_CustomerName", word),
-      odataContains("Remark", word),
       /* ⚠ THE UPLOADER'S OWN SEARCH WORDS, AND ONLY WHERE THE COLUMN IS CONFIRMED TO EXIST
          (2026-09-04). `Keyword` is a plain TEXT column reconciliation creates, so `substringof` works
          on it — unlike the three taxonomy fields the comment below excludes.
@@ -514,7 +545,9 @@ export function buildRecentFilter(
 /** The cutoff for the top-up read: `now` less `hours`, as ISO. Generous by design. */
 export function recencyCutoff(now: Date, hours?: number): string {
   const span = typeof hours === "number" && hours > 0 ? hours : 24;
-  return new Date(now.getTime() - span * 3600 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  return new Date(now.getTime() - span * 3600 * 1000)
+    .toISOString()
+    .replace(/\.\d{3}Z$/, "Z");
 }
 
 /* ─────────────────────────────── Results ─────────────────────────────── */
@@ -620,7 +653,10 @@ export type SearchState = "idle" | "results" | "empty" | "error";
  * Partial success is `results`, not `error`: there are rows to show. The caller must still surface
  * `failedLibraries` alongside them, or the list silently understates what is there.
  */
-export function searchState(searched: boolean, results: LibraryResult[]): SearchState {
+export function searchState(
+  searched: boolean,
+  results: LibraryResult[],
+): SearchState {
   if (!searched) return "idle";
   const list = results ?? [];
   const hits = list.reduce((n, r) => n + (r?.hits?.length ?? 0), 0);

@@ -195,8 +195,15 @@ export const FILE_FIXED_FIELDS: Array<{ label: string; field: string }> = [
   { label: "Legally Privileged", field: "LegallyPrivileged" },
   { label: "Project Name", field: "ProjectName" },
   { label: "Vendor / Customer", field: "Vendor_x002f_CustomerName" },
-  { label: "Details", field: "_ExtendedDescription" },
   { label: "Remark", field: "Remark" },
+  /* ⚠ ADDED 2026-09-10, AND ITS ABSENCE WAS INVISIBLE FOR THE WORST REASON: a blank value is
+     DROPPED from this panel, so a missing FIELD and an empty one render identically. `Keyword`
+     shipped as a column and a form input, was written on every upload, and was then shown on no
+     screen at all — the uploader typed *"Words to help find these documents later"* into a box
+     whose value they could never see again. Reported by the client.
+     LAST, matching the order the upload form itself uses: the folder tiers, then what the document
+     is, then how sensitive, then the free text. */
+  { label: "Keyword", field: "Keyword" },
 ];
 
 /**
@@ -208,6 +215,27 @@ export const FILE_FIXED_FIELDS: Array<{ label: string; field: string }> = [
  */
 export const FIXED_FIELDS: Array<{ label: string; field: string }> =
   BATCH_FIXED_FIELDS.concat(FILE_FIXED_FIELDS);
+
+/**
+ * One FIXED field as a row, ALWAYS shown — never dropped, blank or not (2026-09-11).
+ *
+ * Client: *"can we show Keyword -, like how ApprovalDocument.aspx shows empty dashes? Keeping it
+ * consistent is better."* Before this, a blank Keyword and a MISSING Keyword column rendered
+ * identically — no row at all — which is exactly what hid the field from every screen for a day (see
+ * the note on `Keyword`'s own definition). A dash says the field exists and nobody filled it in; the
+ * row's absence would instead have to mean the column itself could not be read, and this module never
+ * has that state to report — a failed panel read already returns `[]` for everything.
+ *
+ * ⚠ TIER ROWS STAY DROPPED, and that is a DIFFERENT question — see `tierRows`, unchanged. A library
+ * serves twelve segments with different tier names, so padding every Group Head Office document with
+ * a blank `Region` row (a tier that never applies there) would bury the rows that do mean something.
+ * Fixed fields carry no such multiplication: there are always the same seven, on every document.
+ */
+function fixedRow(fieldText: Record<string, string>, f: { label: string; field: string }): DetailRow {
+  const v = readField(fieldText, f.field);
+  return { label: f.label, value: v.length > 0 ? v : "—" };
+}
+
 /**
  * Every metadata row for one document, in reading order: where it lives, then what it is.
  *
@@ -215,10 +243,9 @@ export const FIXED_FIELDS: Array<{ label: string; field: string }> =
  * screen knows and this module does not. Parameters rather than fields, so this module never needs to
  * know which screen it is on.
  *
- * Blank values are DROPPED throughout. On a library serving twelve segments most columns are empty
- * for any given document, and a panel padded with em dashes for `Region` on a Group Head Office file
- * would bury the six rows that mean something. Caller-supplied rows pass through as given: a screen
- * that says "unknown" means it.
+ * ⚠ TWO DIFFERENT BLANK-HANDLING RULES LIVE HERE, DELIBERATELY — see `fixedRow` and `tierRows`. Fixed
+ * fields always render, value or dash; tier rows drop when blank. Caller-supplied rows pass through
+ * exactly as given: a screen that says "unknown" means it.
  */
 export function buildDetailRows(args: {
   fieldText: Record<string, string>;
@@ -228,9 +255,13 @@ export function buildDetailRows(args: {
   segmentLabel?: string;
 }): DetailRow[] {
   const ft = args.fieldText ?? {};
-  const fixed = FIXED_FIELDS
-    .map((f) => ({ label: f.label, value: readField(ft, f.field) }))
-    .filter((r) => r.value.length > 0);
+  /* ⚠ ONLY WHEN SOMETHING WAS ACTUALLY READ. `fetchFieldText` (both callers) answers `{}` on a
+     FAILED read, never on a document that genuinely has nothing filled in — every real item carries
+     at least an Id and a Title. So an entirely empty `ft` means "we could not read this", and dashing
+     out all seven fixed fields would assert values (blank) for a panel that was never actually
+     fetched — exactly the "could not read" vs "nothing recorded" conflation the caller relies on this
+     module NOT to make. */
+  const fixed = Object.keys(ft).length === 0 ? [] : FIXED_FIELDS.map((f) => fixedRow(ft, f));
   return [
     ...(args.leading ?? []),
     ...tierRows(ft, args.segmentLabel),
@@ -362,11 +393,11 @@ export function buildBatchRows(
   segmentLabel?: string,
 ): DetailRow[] {
   const ft = fieldText ?? {};
+  // Same "read failed vs nothing filled in" guard as buildDetailRows — see fixedRow.
+  const fixed = Object.keys(ft).length === 0 ? [] : BATCH_FIXED_FIELDS.map((f) => fixedRow(ft, f));
   return [
     ...tierRows(ft, segmentLabel),
-    ...BATCH_FIXED_FIELDS
-      .map((f) => ({ label: f.label, value: readField(ft, f.field) }))
-      .filter((r) => r.value.length > 0),
+    ...fixed,
   ];
 }
 
@@ -381,10 +412,10 @@ export function buildFileRows(args: {
   trailing?: DetailRow[];
 }): DetailRow[] {
   const ft = args.fieldText ?? {};
+  // Same "read failed vs nothing filled in" guard as buildDetailRows — see fixedRow.
+  const fixed = Object.keys(ft).length === 0 ? [] : FILE_FIXED_FIELDS.map((f) => fixedRow(ft, f));
   return [
-    ...FILE_FIXED_FIELDS
-      .map((f) => ({ label: f.label, value: readField(ft, f.field) }))
-      .filter((r) => r.value.length > 0),
+    ...fixed,
     ...(args.trailing ?? []),
   ];
 }

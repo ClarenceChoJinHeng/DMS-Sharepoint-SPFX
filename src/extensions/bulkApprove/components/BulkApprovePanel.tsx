@@ -17,7 +17,7 @@ import {
   checkUnitFolderReady,
   type GuardResult,
 } from "../../../shared/approvalGuards";
-import { libraryHasColumns, APPROVED_BY_COLUMN } from "../../../shared/optionalColumns";
+import { libraryHasColumns, APPROVED_BY_COLUMN, APPROVAL_COMMENT_COLUMN } from "../../../shared/optionalColumns";
 import {
   cachedHcLibraries,
   cachedListTitle,
@@ -53,7 +53,7 @@ const s: Record<string, React.CSSProperties> = {
     position: "fixed", top: 0, right: 0, bottom: 0, width: 420, maxWidth: "100vw",
     background: "#fff", boxShadow: "-2px 0 12px rgba(0,0,0,0.18)", zIndex: 1000001,
     display: "flex", flexDirection: "column",
-    font: '400 14px "Segoe UI", system-ui, sans-serif', color: "#323130",
+    font: '400 14px Arial, sans-serif', color: "#323130",
   },
   head: { padding: "16px 20px", borderBottom: "1px solid #edebe9", display: "flex", alignItems: "center", justifyContent: "space-between" },
   title: { fontSize: 18, fontWeight: 600, margin: 0 },
@@ -135,7 +135,11 @@ function BulkApprovePanel(p: PanelProps): React.ReactElement {
      Neither approval route restamps it, because setting moderation status is not an edit. So this
      panel needs the SAME `ApprovedBy` stamp as the approval page, or a document approved through
      here still names its uploader as the approver and still suppresses the notification email. */
-  const setStatus = async (doc: SelectedDoc, stampApprover: boolean): Promise<GuardResult> => {
+  const setStatus = async (
+    doc: SelectedDoc,
+    stampApprover: boolean,
+    stampComment: boolean,
+  ): Promise<GuardResult> => {
     const itemUrl = `${p.webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(p.listTitle)}')/items(${doc.id})`;
     const mergeHeaders = {
       Accept: "application/json;odata=nometadata",
@@ -157,7 +161,14 @@ function BulkApprovePanel(p: PanelProps): React.ReactElement {
       try {
         await p.sp.post(itemUrl, SPHttpClient.configurations.v1, {
           headers: mergeHeaders,
-          body: JSON.stringify({ ApprovedBy: p.approverEmail }),
+          // The comment rides in the same field MERGE so it survives routing (2026-09-10) — the
+          // moderation comment does not exist on the approved side. `stampComment` is only true when
+          // the column exists: one unknown field name fails the whole MERGE, ApprovedBy included.
+          body: JSON.stringify(
+            stampComment
+              ? { ApprovedBy: p.approverEmail, ApprovalComment: comment.trim() }
+              : { ApprovedBy: p.approverEmail },
+          ),
         });
       } catch {
         /* Best-effort — see comment above. */
@@ -185,6 +196,11 @@ function BulkApprovePanel(p: PanelProps): React.ReactElement {
     const stampApprover =
       decision === "approve" &&
       (await libraryHasColumns(p.sp, p.webUrl, p.listTitle, [APPROVED_BY_COLUMN]).catch(() => false));
+    // Asked separately so a library missing only the comment column still gets ApprovedBy.
+    const stampComment =
+      stampApprover &&
+      comment.trim().length > 0 &&
+      (await libraryHasColumns(p.sp, p.webUrl, p.listTitle, [APPROVAL_COMMENT_COLUMN]).catch(() => false));
     /* The unit-folder check is per UNIT, not per file: fifty documents in one folder ask once.
        Keyed on the folder path the guard would test, so two units in one selection still get two
        checks and a third file in either reuses the answer. */
@@ -234,7 +250,7 @@ function BulkApprovePanel(p: PanelProps): React.ReactElement {
         }
       }
 
-      const wrote = await setStatus(doc, stampApprover).catch((e) => ({ ok: false, reason: String(e) }));
+      const wrote = await setStatus(doc, stampApprover, stampComment).catch((e) => ({ ok: false, reason: String(e) }));
       out.push({ doc, ok: wrote.ok, reason: wrote.reason });
       setResults(out.slice());
     }
