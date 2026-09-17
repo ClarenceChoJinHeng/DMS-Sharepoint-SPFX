@@ -42,6 +42,10 @@ export const LIST_SUFFIX = {
   // One row per uploaded file, so My Submissions can still show a file after it is deleted.
   // Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md
   submissions: "Submissions",
+  // One row per approve/reject decision, applied by `CRS — Apply pending decisions` (Power
+  // Automate, running as crs@sdguthrie.com) rather than by the approver's own click — the
+  // tag/approve-by-proxy model. Spec: docs/superpowers/specs/2026-09-18-tag-approve-proxy-design.md
+  pendingDecisions: "Pending Decisions",
 };
 
 /**
@@ -68,6 +72,7 @@ export const PRIMED_SUFFIXES: string[] = [
   LIST_SUFFIX.auditLog,
   LIST_SUFFIX.requests,
   LIST_SUFFIX.submissions,
+  LIST_SUFFIX.pendingDecisions,
 ];
 
 /** Returns true if a list with this exact title exists. Supplied by the caller. */
