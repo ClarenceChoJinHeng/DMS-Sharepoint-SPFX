@@ -26,12 +26,14 @@ import {
   buildRecordPayload,
   parseRecordRow,
   RECORD_READ_SELECT,
+  RECORD_READ_SELECT_NO_TAGGING,
   RECORD_READ_SELECT_NO_WITHDRAWAL,
   RECORD_READ_SELECT_NO_ARCHIVE,
   RECORD_READ_SELECT_LEGACY,
   REPLACEMENT_COLUMNS,
   ARCHIVE_COLUMNS,
   WITHDRAWAL_COLUMNS,
+  TAG_COLUMNS,
   SNAPSHOT_FILE_KEYS,
   RECORD_STATE_LABEL,
   recordStateParts,
@@ -570,35 +572,174 @@ describe("parseRecordRow: withdrawal columns", () => {
   });
 });
 
+describe("tag payload columns (2026-09-18, tag-by-proxy)", () => {
+  it("RECORD_COLUMNS includes TagPayload, TagStatus, TagError", () => {
+    const names = RECORD_COLUMNS.map((c) => c.name);
+    expect(names).toContain("TagPayload");
+    expect(names).toContain("TagStatus");
+    expect(names).toContain("TagError");
+  });
+
+  it("TagPayload and TagError are type 3 (Note) — a JSON blob and a free-text reason must not be capped like a Text column", () => {
+    const tagPayload = RECORD_COLUMNS.find((c) => c.name === "TagPayload");
+    const tagError = RECORD_COLUMNS.find((c) => c.name === "TagError");
+    expect(tagPayload?.type).toBe(3);
+    expect(tagError?.type).toBe(3);
+  });
+
+  it("TagStatus is type 2 (Text), the same type as every other status-shaped field here", () => {
+    const tagStatus = RECORD_COLUMNS.find((c) => c.name === "TagStatus");
+    expect(tagStatus?.type).toBe(2);
+  });
+
+  /* `TagStatus` deliberately does NOT trip the "stores no status column" ban a few lines up — that
+     check is an EXACT match against the lowercased name (`"status"`, not a substring), so
+     `"tagstatus"` was never at risk. Worth a real assertion rather than leaving it as a claim in a
+     comment, since the earlier version of this test made exactly that claim in its own title and
+     never checked it. */
+  it("TagStatus does not collide with the banned bare 'status' name", () => {
+    const names = RECORD_COLUMNS.map((c) => c.name.toLowerCase());
+    expect(names).toContain("tagstatus");
+    expect(names).not.toContain("status");
+  });
+});
+
+describe("buildRecordPayload: tag fields", () => {
+  it("carries tagPayload when the caller supplies one", () => {
+    const p = buildRecordPayload(rec({
+      tagPayload: JSON.stringify([{ FieldName: "Year", FieldValue: "2026|guid" }]),
+    }));
+    expect(p.TagPayload).toBe(JSON.stringify([{ FieldName: "Year", FieldValue: "2026|guid" }]));
+  });
+
+  it("OMITS TagPayload/TagStatus/TagError entirely when the caller supplies none — a row must never claim an empty payload was intentional", () => {
+    const p = buildRecordPayload(rec());
+    expect("TagPayload" in p).toBe(false);
+    expect("TagStatus" in p).toBe(false);
+    expect("TagError" in p).toBe(false);
+  });
+
+  it("carries tagStatus and tagError together, when both are supplied", () => {
+    const p = buildRecordPayload(rec({
+      tagStatus: "Failed",
+      tagError: "HasException: DocumentDate is not a valid date",
+    }));
+    expect(p.TagStatus).toBe("Failed");
+    expect(p.TagError).toBe("HasException: DocumentDate is not a valid date");
+  });
+});
+
+describe("parseRecordRow: tag fields", () => {
+  it("reads tagPayload, tagStatus and tagError back", () => {
+    const r = parseRecordRow({
+      Id: 9, SubmissionRef: "SUB-20260918-K4P2", BatchRef: "BAT-20260918-GRWZ",
+      SubmissionFileId: "SFI-20260918-BGWU", FileName: "a.pdf",
+      ItemPath: "/sites/x/ApprovalDocument/a.pdf",
+      LibraryTitle: "Approval Document", UploadedBy: "pic@example.com", Source: "Form",
+      TagPayload: JSON.stringify([{ FieldName: "Year", FieldValue: "2026|guid" }]),
+      TagStatus: "Failed",
+      TagError: "HasException: DocumentDate is not a valid date",
+    });
+    expect(r.tagPayload).toBe(JSON.stringify([{ FieldName: "Year", FieldValue: "2026|guid" }]));
+    expect(r.tagStatus).toBe("Failed");
+    expect(r.tagError).toBe("HasException: DocumentDate is not a valid date");
+  });
+
+  it("leaves tagPayload/tagStatus/tagError undefined, never a guessed value, when the row carries none", () => {
+    const r = parseRecordRow({
+      Id: 9, SubmissionRef: "SUB-20260918-K4P2", BatchRef: "BAT-20260918-GRWZ",
+      SubmissionFileId: "SFI-20260918-BGWU", FileName: "a.pdf",
+      ItemPath: "/sites/x/ApprovalDocument/a.pdf",
+      LibraryTitle: "Approval Document", UploadedBy: "pic@example.com", Source: "Form",
+    });
+    expect(r.tagPayload).toBeUndefined();
+    expect(r.tagStatus).toBeUndefined();
+    expect(r.tagError).toBeUndefined();
+  });
+
+  it("treats a blank TagStatus/TagError as absent, not as an empty string", () => {
+    const r = parseRecordRow({
+      Id: 9, SubmissionRef: "SUB-20260918-K4P2", BatchRef: "BAT-20260918-GRWZ",
+      SubmissionFileId: "SFI-20260918-BGWU", FileName: "a.pdf",
+      ItemPath: "/sites/x/ApprovalDocument/a.pdf",
+      LibraryTitle: "Approval Document", UploadedBy: "pic@example.com", Source: "Form",
+      TagStatus: "", TagError: "",
+    });
+    expect(r.tagStatus).toBeUndefined();
+    expect(r.tagError).toBeUndefined();
+  });
+});
+
 describe("RECORD_READ_SELECT_LEGACY", () => {
   it("is the full read minus exactly the optional columns", () => {
     const full = RECORD_READ_SELECT.split(",");
     const legacy = RECORD_READ_SELECT_LEGACY.split(",");
-    const optional = REPLACEMENT_COLUMNS.concat(ARCHIVE_COLUMNS).concat(WITHDRAWAL_COLUMNS);
+    // TAG_COLUMNS is in this list deliberately — RECORD_READ_SELECT_LEGACY sits at the BOTTOM of
+    // the whole ladder (RECORD_READ_SELECT_NO_TAGGING → NO_WITHDRAWAL → NO_ARCHIVE → LEGACY), so
+    // every optional group ever added, including the newest, must be gone from it. A future
+    // optional column that is missed here is a future silent regression of this exact shape.
+    const optional = REPLACEMENT_COLUMNS.concat(ARCHIVE_COLUMNS).concat(WITHDRAWAL_COLUMNS).concat(TAG_COLUMNS);
     expect(legacy).toEqual(full.filter((c) => optional.indexOf(c) === -1));
     for (const c of optional) expect(legacy).not.toContain(c);
   });
 
-  /* ⚠ THE MIDDLE RUNG IS WHY THIS LADDER HAS FOUR STEPS, and these pin the failure it prevents: a
+  /* ⚠ THIS IS THE TEST THAT WOULD HAVE CAUGHT THE 2026-09-18 REGRESSION LOUDLY, ON ITS OWN.
+     `RECORD_READ_SELECT_NO_WITHDRAWAL`/`_NO_ARCHIVE`/`_LEGACY` used to be derived straight from
+     `RECORD_READ_SELECT` — which, the moment `TAG_COLUMNS` was folded into the full selector,
+     meant all three (LEGACY included, the ULTIMATE fallback every rung above it eventually reaches)
+     still carried `TagPayload`/`TagStatus`/`TagError`. On any site that had not yet had Folder
+     Reconciliation add those three columns — i.e. every currently-live site — that would have made
+     EVERY rung in the ladder 400, `readSubmissionRecords` would have returned `undefined`, and My
+     Submissions would have silently fallen back to "live files only" for everybody: the exact
+     failure this whole module exists to prevent (see the file's own header). Asserted directly and
+     by name, not folded into the generic loop above, so a future rung addition that repeats the
+     same mistake fails HERE, in a message that names the columns, rather than merely failing the
+     broader equality check above it. */
+  it("contains NONE of TagPayload/TagStatus/TagError — the ultimate fallback must never ask for a column the reconciled-since-2026-09-18 check exists to protect against", () => {
+    const legacy = RECORD_READ_SELECT_LEGACY.split(",");
+    for (const c of TAG_COLUMNS) expect(legacy).not.toContain(c);
+  });
+
+  /* The equivalent check one rung up: `RECORD_READ_SELECT_NO_TAGGING` itself must genuinely be the
+     full select minus TAG_COLUMNS and nothing else — it is the rung every lower one now derives
+     from, so a mistake here propagates through the entire chain. */
+  it("RECORD_READ_SELECT_NO_TAGGING is the full read minus exactly TAG_COLUMNS, and keeps every other optional column", () => {
+    const full = RECORD_READ_SELECT.split(",");
+    const noTagging = RECORD_READ_SELECT_NO_TAGGING.split(",");
+    expect(noTagging).toEqual(full.filter((c) => TAG_COLUMNS.indexOf(c) === -1));
+    for (const c of TAG_COLUMNS) expect(noTagging).not.toContain(c);
+    for (const c of REPLACEMENT_COLUMNS.concat(ARCHIVE_COLUMNS).concat(WITHDRAWAL_COLUMNS)) {
+      expect(noTagging).toContain(c);
+    }
+    expect(noTagging).toContain(RECORD_JOIN_COLUMN);
+  });
+
+  /* ⚠ THE MIDDLE RUNG IS WHY THIS LADDER HAS FIVE STEPS, and these pin the failure it prevents: a
      site holding `ReplacedAt` but not `ArchivedAt` must lose ONLY the archive column. Dropping
      straight to the legacy select would take the replacement state with it, and every replaced file
      there would silently go back to reading "Deleted" — the state the client asked us to stop
-     showing. `RevokedBy` taught this on `CRS Requests` (2026-08-30). */
-  it("has a middle rung that keeps the replacement columns and drops only the archive one", () => {
+     showing. `RevokedBy` taught this on `CRS Requests` (2026-08-30). Also asserts TAG_COLUMNS is
+     gone here too, inherited transitively from RECORD_READ_SELECT_NO_TAGGING via NO_WITHDRAWAL. */
+  it("has a middle rung that keeps the replacement columns and drops the archive one (and the tag columns, inherited)", () => {
     const mid = RECORD_READ_SELECT_NO_ARCHIVE.split(",");
     for (const c of REPLACEMENT_COLUMNS) expect(mid).toContain(c);
     for (const c of ARCHIVE_COLUMNS) expect(mid).not.toContain(c);
     for (const c of WITHDRAWAL_COLUMNS) expect(mid).not.toContain(c);
+    for (const c of TAG_COLUMNS) expect(mid).not.toContain(c);
     expect(mid).toContain(RECORD_JOIN_COLUMN);
   });
 
-  /* ⚠ THE NEWEST RUNG (2026-09-11), one step above the archive one: a site holding `ReplacedAt` AND
-     `ArchivedAt` but not the withdrawal pair must lose ONLY that pair, not both older columns too. */
-  it("has a top rung that keeps replacement and archive but drops only the withdrawal pair", () => {
+  /* ⚠ THE 2026-09-11 RUNG (superseded as the newest by TAG_COLUMNS on 2026-09-18, and now derived
+     from RECORD_READ_SELECT_NO_TAGGING rather than the full select — see that constant's own
+     comment): a site holding `ReplacedAt` AND `ArchivedAt` but not the withdrawal pair must lose
+     ONLY that pair, not both older columns too. Also asserts TAG_COLUMNS is already gone here,
+     which is exactly the assertion the 2026-09-18 regression would have failed. */
+  it("has a rung that keeps replacement and archive but drops the withdrawal pair (and, inherited from the rung above it, the tag columns)", () => {
     const top = RECORD_READ_SELECT_NO_WITHDRAWAL.split(",");
     for (const c of REPLACEMENT_COLUMNS) expect(top).toContain(c);
     for (const c of ARCHIVE_COLUMNS) expect(top).toContain(c);
     for (const c of WITHDRAWAL_COLUMNS) expect(top).not.toContain(c);
+    for (const c of TAG_COLUMNS) expect(top).not.toContain(c);
     expect(top).toContain(RECORD_JOIN_COLUMN);
   });
 
@@ -619,6 +760,11 @@ describe("RECORD_READ_SELECT_LEGACY", () => {
   it("declares both withdrawal columns on the list, or the write would 400 for ever", () => {
     const declared = RECORD_COLUMNS.map((c) => c.name);
     for (const c of WITHDRAWAL_COLUMNS) expect(declared).toContain(c);
+  });
+
+  it("declares all three tag columns on the list, or the write would 400 for ever", () => {
+    const declared = RECORD_COLUMNS.map((c) => c.name);
+    for (const c of TAG_COLUMNS) expect(declared).toContain(c);
   });
 });
 

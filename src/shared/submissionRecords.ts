@@ -89,6 +89,26 @@ export const RECORD_COLUMNS: Array<{ name: string; type: number }> = [
      screen and reusing it here would have shown the wrong badge for what the client asked for. */
   { name: "WithdrawnAt", type: 4 },
   { name: "WithdrawnBy", type: 2 },
+  /* ── Tag-by-proxy (2026-09-18) ─────────────────────────────────────────────
+     Client: PIC and Approver lose direct Edit rights on the document libraries, so they can no
+     longer retag a file by hand in the library view. `TagPayload` is what `CRS — Apply pending
+     tags` (Power Automate, running as crs@sdguthrie.com) reads to perform the write the uploader's
+     own browser can no longer make directly.
+
+     ⚠ NOT THE SAME FIELD AS `MetadataSnapshot`, DELIBERATELY. `MetadataSnapshot` stores LABELS
+     ONLY, is missing Document Type/Year/Keyword/Business Segment, and exists purely for DISPLAY —
+     it is read by My Submissions' detail panel for a deleted/archived/replaced record, and its
+     correctness bar is "good enough for a person to read." `TagPayload` is the EXACT write
+     payload — the same `{FieldName, FieldValue}` array `Form.tsx`/`BulkUpload.tsx` used to POST
+     to `validateUpdateListItem` directly, taxonomy fields already in `Label|GUID` form — and its
+     correctness bar is "a flow can replay this and get the same result the uploader chose."
+     Reusing `MetadataSnapshot` for this would entangle a display concern with a write concern that
+     have different tolerances for being slightly wrong. See the 2026-09-18 design doc. */
+  { name: "TagPayload", type: 3 },
+  /** blank/absent ⇒ not yet processed. "Tagged" ⇒ applied. "Failed" ⇒ see TagError. Same
+   * three-state shape as every other status field in this codebase: blank is not a failure. */
+  { name: "TagStatus", type: 2 },
+  { name: "TagError", type: 3 },
 ];
 
 /** The one column name this module and `optionalColumns.ts` must agree on. Pinned by test. */
@@ -126,6 +146,13 @@ export interface SubmissionRecord {
   /** Who deleted it. Always the uploader — this action exists only for a PIC's own pending/rejected
    * file — but stored rather than assumed, for the same reason `replacedBy` is. */
   withdrawnBy?: string;
+  /** The exact `{FieldName, FieldValue}[]` payload for `CRS — Apply pending tags` to replay,
+   * JSON-encoded. Absent on a row this flow has not been asked to act on (a display-only write, or
+   * a site predating this feature). */
+  tagPayload?: string;
+  /** blank/undefined ⇒ not yet processed by the flow. "Tagged" ⇒ applied. "Failed" ⇒ see tagError. */
+  tagStatus?: string;
+  tagError?: string;
 }
 
 /**
@@ -606,8 +633,18 @@ export const REPLACEMENT_COLUMNS = ["ReplacedAt", "ReplacedBy"];
 /** The column added on 2026-09-03, named once. Its own rung on the ladder — see below. */
 export const ARCHIVE_COLUMNS = ["ArchivedAt"];
 
-/** The columns added on 2026-09-11, named once. The NEWEST, so the FIRST to drop on a 400. */
+/** The columns added on 2026-09-11, named once. The NEWEST-until-tagging, so the FIRST of the
+ * pre-2026-09-18 group to drop on a 400. */
 export const WITHDRAWAL_COLUMNS = ["WithdrawnAt", "WithdrawnBy"];
+
+/** The columns added on 2026-09-18, named once. NOW the newest — a site that has not run Folder
+ * Reconciliation since tag-by-proxy shipped (i.e. every currently-live site, the day this ships)
+ * has no `TagPayload`/`TagStatus`/`TagError` columns at all, so asking for them unconditionally
+ * 400s the WHOLE read (gotcha #11) and takes every record off My Submissions with it — the exact
+ * failure this module exists to prevent, cited in the file's own header. `RECORD_READ_SELECT_NO_
+ * TAGGING`, immediately below, is that rung, and it is the FIRST one dropped: see its own comment
+ * for why it has to sit above `RECORD_READ_SELECT_NO_WITHDRAWAL` in the chain rather than beside it. */
+export const TAG_COLUMNS = ["TagPayload", "TagStatus", "TagError"];
 
 /** Everything the record read asks for, including the built-ins it needs. */
 export const RECORD_READ_SELECT = [
@@ -621,16 +658,42 @@ export const RECORD_READ_SELECT = [
   ...REPLACEMENT_COLUMNS,
   ...ARCHIVE_COLUMNS,
   ...WITHDRAWAL_COLUMNS,
+  ...TAG_COLUMNS,
 ].join(",");
 
 /**
- * The same read with only the 2026-09-11 columns dropped — a NEW top rung.
+ * The same read with only the 2026-09-18 columns dropped — the NEWEST rung, and now the FIRST one
+ * tried on a 400.
+ *
+ * ⚠ WHY TAGGING HAS TO BE THE TOP OF THE CHAIN, NOT FOLDED IN BESIDE ANY OTHER RUNG. Every rung
+ * below this one is reached by a site that is MISSING some OLDER optional column — one that
+ * predates 2026-09-18 and therefore predates this rung too. Such a site is, by definition, also
+ * missing `TagPayload`/`TagStatus`/`TagError`, since those did not exist yet either. So EVERY
+ * lower rung must drop the tag columns as well, or the retry ladder just re-asks for a field that
+ * is still going to 400 — which is exactly the bug this rung fixes: `RECORD_READ_SELECT_NO_
+ * WITHDRAWAL`, `_NO_ARCHIVE` and `_LEGACY` used to derive straight from `RECORD_READ_SELECT`, so
+ * all three still carried `TAG_COLUMNS` and would 400 again on any site not yet reconciled for
+ * tagging — which, the day this shipped, was every live site. Fixed by re-pointing `RECORD_READ_
+ * SELECT_NO_WITHDRAWAL`'s own source to THIS rung instead, so the drop propagates transitively
+ * down the whole chain with no other rung's derivation line needing to change.
+ */
+export const RECORD_READ_SELECT_NO_TAGGING = RECORD_READ_SELECT.split(",")
+  .filter((c) => TAG_COLUMNS.indexOf(c) === -1)
+  .join(",");
+
+/**
+ * The same read with only the 2026-09-11 columns dropped too — a NEW top rung.
  *
  * ⚠ NEWEST DROPS FIRST, same reasoning as the archive rung below it: a site that has `ReplacedAt`
  * and `ArchivedAt` but not `WithdrawnAt`/`WithdrawnBy` must not lose all three at once. Derived by
  * subtraction so the ladder cannot drift.
+ *
+ * ⚠ DERIVED FROM `RECORD_READ_SELECT_NO_TAGGING`, NOT FROM `RECORD_READ_SELECT` DIRECTLY (as of
+ * 2026-09-18) — deriving from the full select would silently reintroduce `TAG_COLUMNS` into every
+ * rung below this one. See `RECORD_READ_SELECT_NO_TAGGING`'s own comment for why the tag drop has
+ * to sit above this rung rather than be repeated in it.
  */
-export const RECORD_READ_SELECT_NO_WITHDRAWAL = RECORD_READ_SELECT.split(",")
+export const RECORD_READ_SELECT_NO_WITHDRAWAL = RECORD_READ_SELECT_NO_TAGGING.split(",")
   .filter((c) => WITHDRAWAL_COLUMNS.indexOf(c) === -1)
   .join(",");
 
@@ -644,7 +707,10 @@ export const RECORD_READ_SELECT_NO_WITHDRAWAL = RECORD_READ_SELECT.split(",")
  * covering `Stage` was not enough once a second optional column arrived.
  *
  * Derived from the rung ABOVE it, never from the full select — dropping straight from `RECORD_READ_
- * SELECT` would reintroduce the 2026-09-11 columns this rung is supposed to have already lost.
+ * SELECT` would reintroduce the 2026-09-11 columns this rung is supposed to have already lost. That
+ * chain also means this rung — and every one below it — transitively excludes the 2026-09-18 tag
+ * columns too, since `RECORD_READ_SELECT_NO_WITHDRAWAL` itself now derives from
+ * `RECORD_READ_SELECT_NO_TAGGING` rather than from the full select directly.
  */
 export const RECORD_READ_SELECT_NO_ARCHIVE = RECORD_READ_SELECT_NO_WITHDRAWAL.split(",")
   .filter((c) => ARCHIVE_COLUMNS.indexOf(c) === -1)
@@ -702,6 +768,12 @@ export function buildRecordPayload(r: Omit<SubmissionRecord, "itemId">): RecordP
   if (r.uploadedAt instanceof Date && !isNaN(r.uploadedAt.getTime())) {
     out.UploadedAt = r.uploadedAt.toISOString();
   }
+  // Present-only, same as every other optional field above: a row must never claim an empty
+  // TagPayload was a deliberate answer, and `TagStatus`/`TagError` unset simply means "not yet
+  // processed" rather than "processed with nothing to say."
+  if (r.tagPayload !== undefined) out.TagPayload = r.tagPayload;
+  if (r.tagStatus !== undefined) out.TagStatus = r.tagStatus;
+  if (r.tagError !== undefined) out.TagError = r.tagError;
   return out;
 }
 
@@ -770,6 +842,9 @@ export function parseRecordRow(raw: Record<string, unknown>): SubmissionRecord {
       return isNaN(d.getTime()) ? undefined : d;
     })(),
     withdrawnBy: str("WithdrawnBy") || undefined,
+    tagPayload: str("TagPayload") || undefined,
+    tagStatus: str("TagStatus") || undefined,
+    tagError: str("TagError") || undefined,
   };
 }
 

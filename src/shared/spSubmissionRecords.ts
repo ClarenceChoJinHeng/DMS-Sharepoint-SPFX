@@ -3,6 +3,7 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import {
   SubmissionRecord,
   RECORD_READ_SELECT,
+  RECORD_READ_SELECT_NO_TAGGING,
   RECORD_READ_SELECT_NO_WITHDRAWAL,
   RECORD_READ_SELECT_NO_ARCHIVE,
   RECORD_READ_SELECT_LEGACY,
@@ -313,11 +314,22 @@ export async function readSubmissionRecords(
       );
 
     let res: SPHttpClientResponse = await ask(RECORD_READ_SELECT);
-    /* ⚠ A FOUR-RUNG LADDER SINCE 2026-09-11, ONE PER OPTIONAL COLUMN PAIR ADDED, NEWEST FIRST.
-       `WithdrawnAt`/`WithdrawnBy` are the newest, so they drop FIRST — a site carrying `ReplacedAt`
-       and `ArchivedAt` but not these must not lose all three at once. Same lesson as the archive
-       rung below it, and as `RevokedBy` on `CRS Requests` (2026-08-30): one retry is not enough once
-       a second (now third) optional column pair exists. */
+    /* ⚠ A FIVE-RUNG LADDER SINCE 2026-09-18, ONE PER OPTIONAL COLUMN GROUP ADDED, NEWEST FIRST.
+       `TagPayload`/`TagStatus`/`TagError` are the newest, so they drop FIRST — this is the retry
+       that matters most on the day tag-by-proxy ships: every currently-live site has not run
+       Folder Reconciliation since, so NONE of them has these three columns yet, and without this
+       rung the FULL request 400s and every lower rung would 400 again too, since each of them is
+       still asking for the tag columns (see `RECORD_READ_SELECT_NO_TAGGING`'s own comment in
+       `submissionRecords.ts` for why the drop has to happen here, at the top of the chain, and
+       propagate down rather than being repeated at each rung). */
+    if (res.status === 400) {
+      console.info("[submissions] no TagPayload/TagStatus/TagError columns on this list — reading without them");
+      res = await ask(RECORD_READ_SELECT_NO_TAGGING);
+    }
+    /* `WithdrawnAt`/`WithdrawnBy` (2026-09-11) drop next — a site carrying `ReplacedAt` and
+       `ArchivedAt` but not these must not lose all three at once. Same lesson as the archive rung
+       below it, and as `RevokedBy` on `CRS Requests` (2026-08-30): one retry is not enough once a
+       second (now fourth) optional column group exists. */
     if (res.status === 400) {
       console.info("[submissions] no WithdrawnAt/WithdrawnBy columns on this list — reading without them");
       res = await ask(RECORD_READ_SELECT_NO_WITHDRAWAL);
