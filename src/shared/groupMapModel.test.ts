@@ -94,9 +94,14 @@ describe("personas", () => {
     // 2026-08-24: DELHC and SHAREHC join, keeping the department-wide HC delete/share this persona
     // already had via DEL/SHARE — those two left DocumentsHC the same day, because the plain Head of
     // Unit holds them too and must no longer reach HC at all.
-    expect(hod[0].roles).toEqual(["DEPTVIEW", "DEL", "SHARE", "DELHC", "SHAREHC"]);
-    // DEL is the DOCUMENTS delete. DELS would put a department head on Staging, which
-    // LIBRARY_ROLES routes there — and HoD has no Staging access at all.
+    // 2026-09-17: DEL and DELHC LEAVE (client: "they cannot directly delete anymore... I think HOD
+    // also have to done by proxy"). The SharePoint grant behind them also permits deleting a FOLDER,
+    // which is the actual hazard — deletion is now performed by a Power Automate flow signed in as
+    // crs@sdguthrie.com, after a `CRS Requests` row is written with Status already Approved. SHARE
+    // and SHAREHC are untouched; sharing still executes directly.
+    expect(hod[0].roles).toEqual(["DEPTVIEW", "SHARE", "SHAREHC"]);
+    expect(hod[0].roles).not.toContain("DEL");
+    expect(hod[0].roles).not.toContain("DELHC");
     expect(hod[0].roles).not.toContain("DELS");
     expect(hod[0].roles).not.toContain("UPL");
   });
@@ -127,10 +132,13 @@ describe("personas", () => {
     // approve"). So the pair no longer differs in one role — the plain persona carries NO role that
     // reaches any HC library, and hou_hc's HC roles (APRHC, UPLHC, DELSHC, DELHC, SHAREHC) are its
     // own dedicated set, held instead of the plain ones where the two would otherwise collide.
-    expect(hou[0].roles).toEqual(["APR", "DELS", "DEL", "SHARE", "UPL"]);
-    expect(hou[1].roles).toEqual(
-      ["APRHC", "DELS", "DEL", "SHARE", "UPLHC", "DELSHC", "DELHC", "SHAREHC"],
-    );
+    // 2026-09-17: DELS and DEL LEAVE both (client: "they cannot directly delete anymore but someone
+    // do it on their behalf via power automate via admin account. Reason being they can delete
+    // folders which is dangerous."). SHARE is untouched — sharing stays direct. Approving/deciding a
+    // deletion request is unchanged; a Power Automate flow (crs@sdguthrie.com) performs the actual
+    // recycle afterward. See 2026-09-17-proxy-deletion-via-power-automate-design.md.
+    expect(hou[0].roles).toEqual(["APR", "SHARE", "UPL"]);
+    expect(hou[1].roles).toEqual(["APRHC", "SHARE", "UPLHC", "SHAREHC"]);
     // The plain persona holds nothing that reaches an HC library — the persona-level guarantee
     // that feeds LIBRARY_ROLES, which is the actual source of truth for what a role opens.
     for (const hcRole of ["APRHC", "UPLHC", "DELSHC", "DELHC", "SHAREHC"]) {
@@ -196,17 +204,25 @@ describe("personas", () => {
     expect(fansFromSegmentTier("GLOBAL")).toBe(true);
   });
 
-  it("gives DELS to both Heads of Unit AND the plain PIC; DELSHC to the HC pair", () => {
-    // 2026-08-20, client: "For Staging PIC should not be able to delete, they have to request from
-    // HOU" — DELS became Head-of-Unit-only. REVERSED 2026-09-11, client: "now pic can delete
-    // without approval on staging" — a PIC regained DELS/DELSHC for their own unit, exactly as
-    // before the 2026-08-20 correction. A PIC's status differs by ROUTE though: a direct staging
-    // delete (this grant) reads `Cancelled` on My Submissions; a request-based Documents delete
-    // (unaffected by this, still via `DEL`/`hod`/`hou`) still reads `Deleted`.
-    const delsHolders = PERSONAS.filter((p) => (p.roles as string[]).indexOf("DELS") > -1);
-    expect(delsHolders.map((h) => h.key)).toEqual(["hou", "hou_hc", "pic"]);
-    const delshcHolders = PERSONAS.filter((p) => (p.roles as string[]).indexOf("DELSHC") > -1);
-    expect(delshcHolders.map((h) => h.key)).toEqual(["hou_hc", "pic_hc"]);
+  it("gives DEL/DELS/DELHC/DELSHC to NOBODY — deletion moved to a Power Automate proxy 2026-09-17", () => {
+    // Fourth reversal of this line's history: 2026-08-15 gave DELS to hou+pic, 2026-08-20 narrowed it
+    // to hou alone, 2026-09-11 restored it to both, and 2026-09-17 removes it from EVERY persona —
+    // not narrowing who may act, but changing HOW. Client: "they cannot directly delete anymore but
+    // someone do it on their behalf via power automate via admin account. Reason being they can
+    // delete folders which is dangerous." The SharePoint grant behind any of these four roles also
+    // permits deleting a FOLDER, which a UI-only restriction cannot close — only removing the grant
+    // itself does.
+    //
+    // The user-facing capability is unchanged (client: "make it look like it is the same flow
+    // process but behind the scenes its not"): a PIC still deletes their own pending file with no
+    // approval, a Head of Unit/Department still decides or performs a deletion with no code-visible
+    // difference — it is a Power Automate flow (crs@sdguthrie.com) that now calls .recycle(), after
+    // the client writes the resolved file location and Status=Approved onto a `CRS Requests` row.
+    // See 2026-09-17-proxy-deletion-via-power-automate-design.md.
+    for (const role of ["DEL", "DELS", "DELHC", "DELSHC"]) {
+      const holders = PERSONAS.filter((p) => (p.roles as string[]).indexOf(role) > -1);
+      expect(holders.map((h) => h.key)).toEqual([]);
+    }
   });
 
   it("keeps PIC off Documents by omitting the base group", () => {
@@ -215,10 +231,13 @@ describe("personas", () => {
     // group — the SDG Employee role. Bundling MEMBER in here made every PIC a Documents
     // reader by default: the wrong default for a permission, and not what the client's
     // "can see the files in the unit" line meant.
-    // DELS removed 2026-08-20, restored 2026-09-11 — a PIC can now delete their own pending or
-    // rejected file directly on staging; deleting an approved Documents file is still a request to
-    // the Head of Unit.
-    expect(personaByKey("pic")?.roles).toEqual(["UPL", "DELS"]);
+    // DELS removed 2026-08-20, restored 2026-09-11, removed again 2026-09-17 — a PIC still deletes
+    // their own pending or rejected file with no approval step, but the underlying SharePoint grant
+    // moved to a Power Automate proxy (client: "they cannot directly delete anymore... Pending files
+    // as well, PIC will still delete but without approval so crs@sdguthrie.com via power automate
+    // flow will just delete"), because DELS also permits deleting a FOLDER. Deleting an approved
+    // Documents file is still a request to the Head of Unit, unaffected by this.
+    expect(personaByKey("pic")?.roles).toEqual(["UPL"]);
   });
 
   it("offers two PIC personas — ordinary, and Highly Confidential cleared", () => {
@@ -238,8 +257,10 @@ describe("personas", () => {
     // staging-side library, and clearance must not decide a DELETE right. BOTH restored 2026-09-11
     // (client: "now pic can delete without approval on staging") — a PIC deletes directly again, in
     // their own unit's library, at whichever confidentiality level they are cleared for.
-    expect(pics[0].roles).toEqual(["UPL", "DELS"]);
-    expect(pics[1].roles).toEqual(["UPLHC", "DELSHC"]);
+    // BOTH REMOVED AGAIN 2026-09-17 — deletion moves to a Power Automate proxy for every persona;
+    // see the "gives DEL/DELS/DELHC/DELSHC to NOBODY" test above for the full reasoning.
+    expect(pics[0].roles).toEqual(["UPL"]);
+    expect(pics[1].roles).toEqual(["UPLHC"]);
     for (const p of pics) expect(p.unavailable).toBeUndefined();
     expect(personaByKey("pic2")).toBeUndefined();
     expect(personaByKey("pic3")).toBeUndefined();
@@ -590,78 +611,55 @@ describe("normalizeRoleValue — the Role COLUMN, not the group name", () => {
   });
 });
 
-describe("PERSONAS — delete belongs to the Head of Department, in Documents only", () => {
-  // Rewritten 2026-08-07. Delete used to ride with upload across four HoD and four HoU
-  // bundles; the client's third restatement gives delete to the Head of Department and
-  // says nothing about Staging delete at all. A wrong entry here is a silent permission
-  // grant rather than a visible bug, which is why each half is asserted separately.
+describe("PERSONAS — delete no longer belongs to any persona directly, since 2026-09-17", () => {
+  // Rewritten 2026-08-07 to give delete to the Head of Department; rewritten again 2026-09-17,
+  // when delete left every persona entirely (client: "they cannot directly delete anymore but
+  // someone do it on their behalf via power automate via admin account. Reason being they can
+  // delete folders which is dangerous"). Kept as its own describe block for the same reason as
+  // always: a wrong entry here is a silent permission grant rather than a visible bug.
   const rolesOf = (key: string): string[] => personaByKey(key)?.roles ?? [];
 
-  it("no longer gives the Head of Department any delete — view only since 2026-08-17", () => {
-    // The client removed it: "HOD no need deletion power, he only view". Deletion authority is now
-    // entirely the Head of Unit's, which is where the request workflow already put the performing
-    // half of it. Asserted as the EXACT set: a leftover DEL row keeps granting delete, silently.
-    // DELHC and SHAREHC joined 2026-08-24, keeping the HoD's department-wide HC delete/share intact
-    // after DEL/SHARE left DocumentsHC (the plain Head of Unit holds both and must no longer reach
-    // HC at all — a role held by two personas cannot grant to one and withhold from the other).
-    expect(rolesOf("hod")).toEqual(["DEPTVIEW", "DEL", "SHARE", "DELHC", "SHAREHC"]);
+  it("gives the Head of Department no delete of any kind — proxy-executed since 2026-09-17", () => {
+    // The client had already removed it once (2026-08-17: "HOD no need deletion power, he only
+    // view") and restored it (2026-08-20). This time it is not narrowing WHO may delete — a HoD
+    // still deletes department-wide with no approval step — it is removing the SharePoint GRANT
+    // itself, because that grant also permits deleting a FOLDER. See
+    // 2026-09-17-proxy-deletion-via-power-automate-design.md.
+    expect(rolesOf("hod")).toEqual(["DEPTVIEW", "SHARE", "SHAREHC"]);
   });
 
-  it("keeps DEL to the Head of Unit and C-Level — which is WHY it is not on an approval library", () => {
-    /* This assertion exists because getting it wrong on 2026-08-17 nearly shipped a leak. DEL was
-       briefly added to StagingHC to give a Head of Unit delete on pending HC work — on the belief
-       that HoD losing DEL had made it HoU-exclusive. It had not: C-Level carries DEL too, so a
-       C-Level would have gained read and delete on UNAPPROVED HC drafts, breaking the rule that
-       keeps every view role off both approval libraries.
-
-       DELSHC is the role that IS exclusive to the HC unit persona, so that is what carries HC
-       pending delete. Assert the exact holders, because the safety of an HC row depends on it. */
+  it("keeps DEL away from every persona — the hazard it was removed for", () => {
+    /* This assertion used to pin the EXACT holders of DEL (hod, hou, hou_hc) and the reasoning
+       behind why C-Level must never be one of them. As of 2026-09-17, DEL belongs to nobody at
+       all — the whole family of direct-delete roles (DEL/DELS/DELHC/DELSHC) moved to a Power
+       Automate proxy, because the grant behind any of them also permits deleting a FOLDER, which
+       is the actual hazard a UI-only restriction cannot close. */
     const withDocDelete = PERSONAS.filter((p) => p.roles.indexOf("DEL") !== -1).map((p) => p.key);
-    expect(withDocDelete.sort()).toEqual(["hod", "hou", "hou_hc"]);
-    // TWO holders since 2026-09-11: DELSHC returned to the plain PIC's HC twin alongside hou_hc
-    // (client: "now pic can delete without approval on staging"). Between 2026-08-24 and then, only
-    // hou_hc held it, because pending-HC delete requires being able to read the HC approval library
-    // at all — which a plain, uncleared PIC still cannot, but a HC-cleared PIC (`pic_hc`) can.
+    expect(withDocDelete).toEqual([]);
     const withHcPendingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELSHC") !== -1).map((p) => p.key);
-    expect(withHcPendingDelete.sort()).toEqual(["hou_hc", "pic_hc"]);
+    expect(withHcPendingDelete).toEqual([]);
   });
 
-  it("gives Staging delete to the Head of Unit AND the PIC, and to nobody else", () => {
-    // Reversed 2026-08-09. DELS used to belong to NO persona — kept alive only so a
-    // hand-authored row would still work. The client assigned it to the Head of Unit, whose
-    // job it already is to act on pending work.
-    //
-    // "And to nobody else" is the half that still matters: DELS is the power to delete other
-    // people's PENDING documents. Anyone else acquiring it is a silent grant, which is why
-    // this asserts the exact set rather than just that HoU has it.
-    // 2026-08-15: the PIC joins, correcting the model — they delete their OWN pending and rejected
-    // files. No "own files only" rule is needed or possible: Draft Item Security already hides a
-    // peer's pending work, so what they can delete is exactly what they can see.
-    //
-    // The exact set still matters. DELS is the power to delete pending work, so anyone ELSE
-    // acquiring it is a silent grant.
-    // Later the same day: the HC variants join, for the same reasons as their plain counterparts.
-    // The exact set is still what matters.
-    //
-    // 2026-08-20: the PIC lost it again (client: "For Staging PIC should not be able to delete,
-    // they have to request from HOU"). 2026-09-11: reversed a second time (client: "now pic can
-    // delete without approval on staging") — a PIC deletes their own pending/rejected file directly
-    // once more, and the status this leaves on My Submissions (`Cancelled`) is what tells that
-    // action apart from a request-based Documents delete (`Deleted`, unaffected).
+  it("gives Staging delete to nobody — every pending-file delete is proxy-executed", () => {
+    // DELS's history: absent until 2026-08-09, given to hou, joined by pic 2026-08-15, narrowed to
+    // hou alone 2026-08-20, restored to both 2026-09-11 — and removed from EVERY persona 2026-09-17
+    // (client: "Pending files as well, PIC will still delete but without approval so
+    // crs@sdguthrie.com via power automate flow will just delete"). The capability a PIC or Head of
+    // Unit has is unchanged; only the mechanism moved, to a Power Automate flow signed in as
+    // crs@sdguthrie.com after a `CRS Requests` row is written with Status already Approved.
     const withStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELS") !== -1);
-    expect(withStagingDelete.map((p) => p.key)).toEqual(["hou", "hou_hc", "pic"]);
-    // DELSHC is its own role precisely so an UNCLEARED PIC cannot reach the HC approval library.
-    // Both Head-of-Unit personas and the HC-cleared PIC hold it; the plain PIC does not.
+    expect(withStagingDelete.map((p) => p.key)).toEqual([]);
     const withHcStagingDelete = PERSONAS.filter((p) => p.roles.indexOf("DELSHC") !== -1);
-    expect(withHcStagingDelete.map((p) => p.key)).toEqual(["hou_hc", "pic_hc"]);
+    expect(withHcStagingDelete.map((p) => p.key)).toEqual([]);
   });
 
-  it("gives the PIC upload and their own staging delete, nothing more", () => {
-    // UPL alone until 2026-08-15, when DELS joined; removed 2026-08-20; restored 2026-09-11
-    // (client: "now pic can delete without approval on staging"). Documents-side read comes from
-    // LIBRARY_ROLES listing UPL under Documents — NOT from adding MEMBER here. If this ever grows
-    // a THIRD role, the "one group per person" property has been lost.
-    expect(rolesOf("pic")).toEqual(["UPL", "DELS"]);
+  it("gives the PIC upload only — their own staging delete is proxy-executed, nothing more", () => {
+    // UPL alone until 2026-08-15, when DELS joined; removed 2026-08-20; restored 2026-09-11; removed
+    // again 2026-09-17 (client: "now... someone do it on their behalf via power automate"). A PIC
+    // still deletes their own pending/rejected file with no approval step — the grant behind that
+    // action is now the service account's, not theirs. Documents-side read comes from LIBRARY_ROLES
+    // listing UPL under Documents — NOT from adding MEMBER here.
+    expect(rolesOf("pic")).toEqual(["UPL"]);
   });
 
   it("leaves SDG Employee as the only persona that is purely MEMBER", () => {
@@ -696,21 +694,19 @@ describe("PERSONAS — delete belongs to the Head of Department, in Documents on
     }
   });
 
-  it("gives BOTH deletes only to the Head of Unit", () => {
-    // Was "never puts DEL and DELS on the same persona" until 2026-08-15. That rule is genuinely
-    // superseded: a Head of Unit deletes pending work (DELS, approval library) AND carries out
-    // approved deletion requests (DEL, Documents). An approver can only approve what they can
-    // perform, so the combination is the requirement, not an accident.
-    //
-    // It is still asserted as an EXACT set, because the original worry stands for everyone else:
-    // the two roles map to the same permission level and are told apart only by LIBRARY_ROLES, so
-    // a persona quietly acquiring both reaches approved documents and other people's pending ones.
+  it("gives DEL/DELS to nobody at all, since 2026-09-17 — deletion moved to a Power Automate proxy", () => {
+    // Was "gives BOTH deletes only to the Head of Unit" until 2026-09-17. That rule pinned DEL and
+    // DELS living together on hou/hou_hc as the correct outcome of the 2026-08-15 correction — it is
+    // now superseded a second time: the client removed direct delete from every persona entirely
+    // (client: "they cannot directly delete anymore but someone do it on their behalf via power
+    // automate via admin account. Reason being they can delete folders which is dangerous"). The
+    // grant behind DEL/DELS also permits deleting a FOLDER, which a UI-only restriction cannot close
+    // — only removing the SharePoint role itself does. See
+    // 2026-09-17-proxy-deletion-via-power-automate-design.md.
     const both = PERSONAS.filter(
       (p) => p.roles.indexOf("DEL") !== -1 && p.roles.indexOf("DELS") !== -1,
     );
-    // Both Head-of-Unit personas since 2026-08-24, and only that family.
-    expect(both.map((p) => p.key)).toEqual(["hou", "hou_hc"]);
-    for (const p of both) expect(p.family).toBe("Head of Unit");
+    expect(both.map((p) => p.key)).toEqual([]);
   });
 
   it("keeps C-Level and Head of Department off every Staging role", () => {
@@ -1077,15 +1073,17 @@ describe("validateGroupName", () => {
 describe("corrected role model (2026-08-15)", () => {
   const rolesOf = (key: string): string[] => PERSONAS.filter((p) => p.key === key)[0].roles as string[];
 
-  it("a PIC deletes in the approval library directly, but NOT in Documents", () => {
+  it("a PIC no longer holds DELS directly — deletion moved to a Power Automate proxy 2026-09-17", () => {
     // DELS is Staging-only; DEL is the Documents one. A PIC holding DEL would make the whole
     // deletion-request workflow pointless — they would simply delete.
     //
-    // DELS was removed from pic on 2026-08-20 and this test flipped to `.not.toContain` — but the
-    // client reversed that on 2026-09-11 ("now pic can delete without approval on staging"), which
-    // is exactly the 2026-08-15 shape this describe block is named for. DEL, the DOCUMENTS-side
-    // role, was never touched by either change and stays absent.
-    expect(rolesOf("pic")).toContain("DELS");
+    // DELS was removed from pic on 2026-08-20, restored 2026-09-11 ("now pic can delete without
+    // approval on staging"), and removed a THIRD time on 2026-09-17 — not a change of WHO may act,
+    // only of HOW: a PIC still deletes their own pending/rejected file with no approval step, but the
+    // SharePoint grant behind it now belongs to crs@sdguthrie.com via Power Automate, because DELS
+    // also permits deleting a FOLDER. DEL, the Documents-side role, was never touched and stays
+    // absent. See 2026-09-17-proxy-deletion-via-power-automate-design.md.
+    expect(rolesOf("pic")).not.toContain("DELS");
     expect(rolesOf("pic")).not.toContain("DEL");
   });
 
@@ -1104,10 +1102,14 @@ describe("corrected role model (2026-08-15)", () => {
     expect(rolesOf("hou_hc")).not.toContain("UPL");
   });
 
-  it("a Head of Unit can perform BOTH things they approve", () => {
-    // An approver can only approve what they can carry out. Without DEL an approved deletion fails
-    // at the last step; without SHARE an approved share does.
-    expect(rolesOf("hou")).toContain("DEL");
+  it("a Head of Unit no longer carries out the deletion themselves — a proxy does, since 2026-09-17", () => {
+    // Until 2026-09-17 an approver could only approve what they could carry out: without DEL an
+    // approved deletion failed at the last step. That is no longer true — the LAST step moved to a
+    // Power Automate flow signed in as crs@sdguthrie.com, so a Head of Unit decides a request exactly
+    // as before but no longer needs DEL to make the outcome real. SHARE is untouched; sharing still
+    // executes directly in the approver's own session. See
+    // 2026-09-17-proxy-deletion-via-power-automate-design.md.
+    expect(rolesOf("hou")).not.toContain("DEL");
     expect(rolesOf("hou")).toContain("SHARE");
   });
 
@@ -1122,9 +1124,11 @@ describe("corrected role model (2026-08-15)", () => {
     }
   });
 
-  it("the Head of Department does BOTH now — the powers moved down from C-Level", () => {
-    // DELHC/SHAREHC joined 2026-08-24 — see the exact-set test above for why.
-    expect(rolesOf("hod")).toEqual(["DEPTVIEW", "DEL", "SHARE", "DELHC", "SHAREHC"]);
+  it("the Head of Department keeps sharing directly; deleting moved to a proxy 2026-09-17", () => {
+    // DELHC/SHAREHC joined 2026-08-24 when the powers moved down from C-Level. DEL/DELHC left again
+    // on 2026-09-17 (client: "I think HOD also have to done by proxy") — same reasoning as hou/hou_hc
+    // above: the grant also permits deleting a FOLDER. SHARE/SHAREHC are untouched.
+    expect(rolesOf("hod")).toEqual(["DEPTVIEW", "SHARE", "SHAREHC"]);
   });
 
   it("SHARE NEVER reaches the approval library", () => {

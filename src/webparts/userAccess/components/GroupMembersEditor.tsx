@@ -548,41 +548,49 @@ export default function GroupMembersEditor({
           the moment someone is added.
         </p>
       )}
-      {(members ?? []).map((m) => (
-        <div key={m.id} style={s.row}>
-          <span style={s.name}>{personDisplay(m.title, m.email)}</span>
-          {confirmRemove === m.id ? (
-            <>
-              <button
-                type="button"
-                style={s.danger}
-                disabled={busy}
-                onClick={() => {
-                  onRemove(m).catch(() => undefined);
-                }}
-              >
-                Confirm remove
-              </button>
+      {/* SCROLLS (client, 2026-09-16: *"the list is too long"*) — the System Administrators mount
+          can grow without bound, and even an ordinary group's member list can run long. Capped
+          ONLY around the rows themselves: the Add-person box, its typeahead dropdown (`s.dd`,
+          absolutely positioned) and the note below all sit OUTSIDE this wrapper as siblings, not
+          descendants — so this cannot clip that dropdown the way capping a wider region would.
+          Same rule Group Management's own group list and Folder Access already follow. */}
+      <div style={{ maxHeight: 260, overflowY: "auto" }}>
+        {(members ?? []).map((m) => (
+          <div key={m.id} style={s.row}>
+            <span style={s.name}>{personDisplay(m.title, m.email)}</span>
+            {confirmRemove === m.id ? (
+              <>
+                <button
+                  type="button"
+                  style={s.danger}
+                  disabled={busy}
+                  onClick={() => {
+                    onRemove(m).catch(() => undefined);
+                  }}
+                >
+                  Confirm remove
+                </button>
+                <button
+                  type="button"
+                  style={s.ghost}
+                  onClick={() => setConfirmRemove(undefined)}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 style={s.ghost}
-                onClick={() => setConfirmRemove(undefined)}
+                disabled={busy}
+                onClick={() => setConfirmRemove(m.id)}
               >
-                Cancel
+                Remove
               </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              style={s.ghost}
-              disabled={busy}
-              onClick={() => setConfirmRemove(m.id)}
-            >
-              Remove
-            </button>
-          )}
-        </div>
-      ))}
+            )}
+          </div>
+        ))}
+      </div>
 
       <div style={s.ddwrap}>
         <div style={s.inputRow}>

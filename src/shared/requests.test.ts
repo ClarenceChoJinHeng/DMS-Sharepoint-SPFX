@@ -234,20 +234,40 @@ describe("validateDraft", () => {
 describe("ViewerScope — a Head of Department", () => {
   const hod: ViewerScope = { aprUnits: [], hodUnits: ["Corporate"] };
 
-  it("decides an APPROVED-stage request for a unit in their department", () => {
-    expect(canDecide(row({ stage: "approved" }), hod)).toBe(true);
+  it("decides an APPROVED-stage SHARE request for a unit in their department", () => {
+    // `row()` defaults to `type: "Deletion"` — every assertion here is a SHARE row on purpose,
+    // since 2026-09-17 a HoD decides Share only (see below).
+    expect(canDecide(row({ stage: "approved", type: "Share" }), hod)).toBe(true);
     // A row written before the Stage column existed defaults to approved — it was an approved
     // document, because that is all requests could be raised against until 2026-08-20.
-    expect(canDecide(row(), hod)).toBe(true);
+    expect(canDecide(row({ type: "Share" }), hod)).toBe(true);
+  });
+
+  // ⚠⚠ NEVER a Deletion, since 2026-09-17. Client: "HOD no need deletion as well" — HoD's
+  // department-wide DEL/DELHC grant was already removed from the persona, and this is the other
+  // half: a HoD does not even DECIDE a Documents-library deletion request, only a Share one.
+  it("NEVER decides a Deletion request, whatever the stage", () => {
+    expect(canDecide(row({ stage: "approved", type: "Deletion" }), hod)).toBe(false);
+    expect(canDecide(row({ type: "Deletion" }), hod)).toBe(false);
   });
 
   it("NEVER decides a PENDING-stage request, because it would fail in their session", () => {
-    expect(canDecide(row({ stage: "pending" }), hod)).toBe(false);
+    expect(canDecide(row({ stage: "pending", type: "Share" }), hod)).toBe(false);
   });
 
   it("cannot even SEE a pending-stage request — hidden means hidden", () => {
-    expect(isVisibleTo(row({ stage: "pending" }), "hod@example.com", hod)).toBe(false);
-    expect(isVisibleTo(row({ stage: "approved" }), "hod@example.com", hod)).toBe(true);
+    expect(
+      isVisibleTo(row({ stage: "pending", type: "Share" }), "hod@example.com", hod),
+    ).toBe(false);
+    expect(
+      isVisibleTo(row({ stage: "approved", type: "Share" }), "hod@example.com", hod),
+    ).toBe(true);
+  });
+
+  it("cannot see an APPROVED-stage Deletion request either — Share only", () => {
+    expect(
+      isVisibleTo(row({ stage: "approved", type: "Deletion" }), "hod@example.com", hod),
+    ).toBe(false);
   });
 
   it("still sees a pending-stage request they raised THEMSELVES", () => {
@@ -258,11 +278,16 @@ describe("ViewerScope — a Head of Department", () => {
   });
 
   it("decides nothing outside their department", () => {
-    expect(canDecide(row({ unit: "Treasury", stage: "approved" }), hod)).toBe(false);
+    expect(
+      canDecide(row({ unit: "Treasury", stage: "approved", type: "Share" }), hod),
+    ).toBe(false);
   });
 
   it("keeps its queue free of pending-stage rows", () => {
-    const rows = [row({ stage: "approved" }), row({ stage: "pending" })];
+    const rows = [
+      row({ stage: "approved", type: "Share" }),
+      row({ stage: "pending", type: "Share" }),
+    ];
     expect(queueFor(rows, hod)).toHaveLength(1);
   });
 });
@@ -280,7 +305,15 @@ describe("ViewerScope — a Head of Unit, and someone who is both", () => {
     const both: ViewerScope = { aprUnits: ["Corporate"], hodUnits: ["Treasury"] };
     expect(canDecide(row({ unit: "Corporate", stage: "pending" }), both)).toBe(true);
     expect(canDecide(row({ unit: "Treasury", stage: "pending" }), both)).toBe(false);
-    expect(canDecide(row({ unit: "Treasury", stage: "approved" }), both)).toBe(true);
+    // `type: "Share"` — the hodUnits half of this union is Share-only since 2026-09-17.
+    expect(
+      canDecide(row({ unit: "Treasury", stage: "approved", type: "Share" }), both),
+    ).toBe(true);
+    // A Deletion request for Treasury is decided by NEITHER set here: aprUnits is Corporate only,
+    // and hodUnits never covers Deletion.
+    expect(
+      canDecide(row({ unit: "Treasury", stage: "approved", type: "Deletion" }), both),
+    ).toBe(false);
   });
 });
 
@@ -475,9 +508,8 @@ describe("counts", () => {
 });
 
 describe("decisionSummary", () => {
-  it("says a deletion is recoverable — which is what makes approving one reasonable", () => {
-    expect(decisionSummary(row())).toContain("recycle bin");
-    expect(decisionSummary(row())).toContain("93 days");
+  it("says nothing for a deletion (client, 2026-09-17: only the bare 'Approved' label)", () => {
+    expect(decisionSummary(row())).toBe("");
   });
 
   it("names who gets what, and says so when a share never expires", () => {

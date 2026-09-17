@@ -1157,7 +1157,7 @@ export default function DocumentSearch({
        `libraryHasColumns` caches per library, so this is at most one extra read per library per
        page, and it answers FALSE on any failure — the safe direction, because the cost of a wrong
        `true` is a dead search and the cost of a wrong `false` is one field not being matched. */
-    const hasKw = async (t: "Documents" | "DocumentsHC"): Promise<boolean> => {
+    const hasKw = async (t: SearchLibrary): Promise<boolean> => {
       try {
         return await libraryHasColumns(
           context.spHttpClient,
@@ -1172,11 +1172,33 @@ export default function DocumentSearch({
     const kwDocuments = await hasKw("Documents");
     const kwDocumentsHc = hcDocs ? await hasKw("DocumentsHC") : false;
 
+    /* ⚠⚠ THE RECENCY TOP-UP NEVER COVERED ARCHIVE/ARCHIVEHC (found live 2026-09-14). KQL alone
+       depends on a full-text crawl that can lag HOURS behind a file freshly placed or moved into
+       Archive — proven live: a document dropped into Archive 3 hours earlier returned zero rows from
+       `runSearch`'s own KQL query (with the correct `Archive/*` Path clause already in scope) while
+       SharePoint's own "Search this site" → Files tab found it immediately, because that experience
+       leans on personalized recent-activity signals this web part has no access to.
+
+       The same gap was already closed for `Documents`/`DocumentsHC` below; it simply was never
+       extended to the archive pair when Archive gained KQL search (2026-08-22). Nothing new is
+       invented here — `runListRead`, `apiTitle`, `isHcLibrary` and `metadataFilterMatches` already
+       handle `"Archive"`/`"ArchiveHC"` with no change, since `SearchLibrary` already includes them. */
+    const arch = archiveLib();
+    const archHc = archiveHcLib();
+    const kwArchive = arch ? await hasKw("Archive") : false;
+    const kwArchiveHc = archHc ? await hasKw("ArchiveHC") : false;
+
     // Generous against a crawl measured in minutes: too tight leaves exactly the invisible gap this
     // exists to close, and the cost of being generous is a few extra rows to dedupe.
     const cutoff = recencyCutoff(new Date(), 24);
     const recentFilter = buildRecentFilter(criteria, cutoff, kwDocuments);
     const recentFilterHc = buildRecentFilter(criteria, cutoff, kwDocumentsHc);
+    const recentFilterArchive = buildRecentFilter(criteria, cutoff, kwArchive);
+    const recentFilterArchiveHc = buildRecentFilter(
+      criteria,
+      cutoff,
+      kwArchiveHc,
+    );
 
     /* ⚠ THE APPROVAL LIBRARIES ARE NOT SEARCHED (client, 2026-09-10: "it is not suppose to search
        anything from staging library only document library"). They were, by design, so an uploader
@@ -1199,6 +1221,18 @@ export default function DocumentSearch({
     ];
     if (hcDocs) {
       jobs.push(runListRead("DocumentsHC", recentFilterHc).then((x) => [x]));
+    }
+    /* Archive's own recency top-up — see the comment above `arch`/`archHc`. Gated on resolution the
+       same way as the HC pair: an unresolved archive library (site has none, or the probe failed
+       this session) must never be sent to `runListRead`, which would read whatever `apiTitle`'s
+       fallback answers — a guaranteed 404 for a library nobody has. */
+    if (arch) {
+      jobs.push(runListRead("Archive", recentFilterArchive).then((x) => [x]));
+    }
+    if (archHc) {
+      jobs.push(
+        runListRead("ArchiveHC", recentFilterArchiveHc).then((x) => [x]),
+      );
     }
 
     // Promise.allSettled is unavailable (the tsconfig predates it), and each job already resolves to
@@ -1535,7 +1569,7 @@ export default function DocumentSearch({
 
                 <div style={s.field}>
                   <label style={s.label} htmlFor="crs-segment">
-                    Business segment
+                    Segment
                   </label>
                   <select
                     id="crs-segment"

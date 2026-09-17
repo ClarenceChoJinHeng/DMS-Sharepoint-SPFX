@@ -49,9 +49,19 @@ import { AttentionIcon } from "../../../shared/attentionBanner";
 import { useEffect, useState } from "react";
 import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
-import { isForbiddenPageTarget, siteEntryGroupTitle } from "../../../shared/groupMapModel";
-import { fetchAllSiteGroups, fetchBuiltInGroupIds, SpGroup } from "../../../shared/spGroups";
-import { policyForPage, VIEW_ONLY_ROLES } from "../../../shared/pageAccessPolicy";
+import {
+  isForbiddenPageTarget,
+  siteEntryGroupTitle,
+} from "../../../shared/groupMapModel";
+import {
+  fetchAllSiteGroups,
+  fetchBuiltInGroupIds,
+  SpGroup,
+} from "../../../shared/spGroups";
+import {
+  policyForPage,
+  VIEW_ONLY_ROLES,
+} from "../../../shared/pageAccessPolicy";
 import { roleFromGroupName } from "../../../shared/groupMapModel";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
@@ -67,8 +77,18 @@ type Props = { context: WebPartContext; siteUrl: string };
 const groupMapList = (): string => cachedListTitle(LIST_SUFFIX.groupMap);
 const PAGES_LIST = "Site Pages";
 
-type PageItem = { itemId: number; fileName: string; title: string; unique: boolean };
-type EntryRow = { itemId: number; groupId: string; groupName: string; target: string };
+type PageItem = {
+  itemId: number;
+  fileName: string;
+  title: string;
+  unique: boolean;
+};
+type EntryRow = {
+  itemId: number;
+  groupId: string;
+  groupName: string;
+  target: string;
+};
 type LiveGrant = { principalId: number; title: string; levels: string[] };
 
 /**
@@ -81,61 +101,199 @@ const NON_REAL_LEVELS = ["Limited Access", "Web-Only Limited Access"];
 
 /** A real, currently-in-force grant — at least one binding beyond an automatic traversal entry. */
 function hasRealGrant(grant: LiveGrant | undefined): boolean {
-  return grant !== undefined && grant.levels.some((n) => NON_REAL_LEVELS.indexOf(n) === -1);
+  return (
+    grant !== undefined &&
+    grant.levels.some((n) => NON_REAL_LEVELS.indexOf(n) === -1)
+  );
 }
 
 const s: Record<string, React.CSSProperties> = {
-  wrap:     { fontSize: 13, color: "#242424", lineHeight: 1.5 },
-  intro:    { fontSize: 13, color: "#444", margin: "0 0 16px" },
-  card:     { border: "1px solid #e1e1e1", borderRadius: 6, padding: 16, marginBottom: 20, background: "#fafafa" },
-  head:     { fontWeight: 600, fontSize: 13, margin: "0 0 8px" },
-  label:    { display: "block", fontWeight: 600, fontSize: 12, margin: "0 0 4px" },
-  select:   { width: "100%", maxWidth: 420, boxSizing: "border-box", padding: "7px 10px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff" },
+  wrap: { fontSize: 13, color: "#242424", lineHeight: 1.5 },
+  intro: { fontSize: 13, color: "#444", margin: "0 0 16px" },
+  card: {
+    border: "1px solid #e1e1e1",
+    borderRadius: 6,
+    padding: 16,
+    marginBottom: 20,
+    background: "#fafafa",
+  },
+  head: { fontWeight: 600, fontSize: 13, margin: "0 0 8px" },
+  label: { display: "block", fontWeight: 600, fontSize: 12, margin: "0 0 4px" },
+  select: {
+    width: "100%",
+    maxWidth: 420,
+    boxSizing: "border-box",
+    padding: "7px 10px",
+    fontSize: 13,
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+    background: "#fff",
+  },
   /* Responsive, 2026-09-07: the table keeps its own width so nothing changes on a desktop;
      TABLE_MIN is a FLOOR against crushed columns and `tableWrap` takes the scroll. The scroll
      belongs on the WRAPPER -- `display: block` on a table breaks column alignment. */
   tableWrap: { ...SCROLL_X },
-  table:    { width: "100%", borderCollapse: "collapse", fontSize: 12, marginTop: 8, ...TABLE_MIN },
-  th:       { textAlign: "left", padding: "6px 8px", borderBottom: "2px solid #e1e1e1", fontWeight: 600, color: "#555" },
-  td:       { padding: "6px 8px", borderBottom: "1px solid #f0f0f0", verticalAlign: "middle" },
-  yes:      { color: "#0f6c3f", fontWeight: 600 },
-  no:       { color: "#8a8886", fontWeight: 600 },
-  mono:     { fontFamily: "Consolas, monospace", fontSize: 11, color: "#666", overflowWrap: "break-word" },
-  drift:    { fontSize: 11, color: "#8a4b00", marginTop: 2 },
-  policyBox:{ marginBottom: 12, padding: "8px 10px", border: "1px solid #d6e8dc", background: "#f6fbf8", borderRadius: 4, fontSize: 12, color: "#265", lineHeight: 1.5 },
-  adminBox: { marginBottom: 12, padding: "8px 10px", border: "1px solid #cfd8e3", background: "#f4f7fb", borderRadius: 4, fontSize: 12, color: "#2b3f56", lineHeight: 1.5 },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: 12,
+    marginTop: 8,
+    ...TABLE_MIN,
+  },
+  th: {
+    textAlign: "left",
+    padding: "6px 8px",
+    borderBottom: "2px solid #e1e1e1",
+    fontWeight: 600,
+    color: "#555",
+  },
+  td: {
+    padding: "6px 8px",
+    borderBottom: "1px solid #f0f0f0",
+    verticalAlign: "middle",
+  },
+  yes: { color: "#0f6c3f", fontWeight: 600 },
+  no: { color: "#8a8886", fontWeight: 600 },
+  mono: {
+    fontFamily: "Consolas, monospace",
+    fontSize: 11,
+    color: "#666",
+    overflowWrap: "break-word",
+  },
+  drift: { fontSize: 11, color: "#8a4b00", marginTop: 2 },
+  policyBox: {
+    marginBottom: 12,
+    padding: "8px 10px",
+    border: "1px solid #d6e8dc",
+    background: "#f6fbf8",
+    borderRadius: 4,
+    fontSize: 12,
+    color: "#265",
+    lineHeight: 1.5,
+  },
+  adminBox: {
+    marginBottom: 12,
+    padding: "8px 10px",
+    border: "1px solid #cfd8e3",
+    background: "#f4f7fb",
+    borderRadius: 4,
+    fontSize: 12,
+    color: "#2b3f56",
+    lineHeight: 1.5,
+  },
   /* Bulk Upload's `.dms-warn`, as an inline style: same palette, same flex row, same radius and
      padding. Only `maxWidth` is dropped — that 626px was tuned by the client for a short sentence on
      a narrow form, and this page's notice sits above a full-width card. */
-  attention: { display: "flex", gap: 10, alignItems: "flex-start", ...NOTICE_ATTENTION, borderRadius: 6, padding: "12px 14px", fontSize: 13, lineHeight: 1.5, marginBottom: 16 },
-  warnBox:  { marginBottom: 16, padding: "10px 12px", border: "1px solid #f2c9a0", background: "#fff8f0", borderRadius: 4, fontSize: 12, color: "#8a4b00", lineHeight: 1.5 },
-  dangerBox:{ marginBottom: 16, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 4, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
-  openBox:  { marginBottom: 16, padding: "10px 12px", border: "1px solid #c7c7c7", background: "#fff", borderRadius: 4, fontSize: 12, color: "#444", lineHeight: 1.5 },
-  hint:     { fontSize: 11, color: "#666", marginTop: 8, lineHeight: 1.45 },
+  attention: {
+    display: "flex",
+    gap: 10,
+    alignItems: "flex-start",
+    ...NOTICE_ATTENTION,
+    borderRadius: 6,
+    padding: "12px 14px",
+    fontSize: 13,
+    lineHeight: 1.5,
+    marginBottom: 16,
+  },
+  warnBox: {
+    marginBottom: 16,
+    padding: "10px 12px",
+    border: "1px solid #f2c9a0",
+    background: "#fff8f0",
+    borderRadius: 4,
+    fontSize: 12,
+    color: "#8a4b00",
+    lineHeight: 1.5,
+  },
+  dangerBox: {
+    marginBottom: 16,
+    padding: "10px 12px",
+    border: "1px solid #f1b0b3",
+    background: "#fdf3f4",
+    borderRadius: 4,
+    fontSize: 12,
+    color: "#a4262c",
+    lineHeight: 1.5,
+  },
+  openBox: {
+    marginBottom: 16,
+    padding: "10px 12px",
+    border: "1px solid #c7c7c7",
+    background: "#fff",
+    borderRadius: 4,
+    fontSize: 12,
+    color: "#444",
+    lineHeight: 1.5,
+  },
+  hint: { fontSize: 11, color: "#666", marginTop: 8, lineHeight: 1.45 },
   // Filter box, matching Group Management's / Approval Library Access's "Filter by name…" input.
-  filterRow:{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 },
-  input:    { width: "100%", maxWidth: 320, boxSizing: "border-box", padding: "7px 10px", fontSize: 13, border: "1px solid #c7c7c7", borderRadius: 4 },
+  filterRow: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  input: {
+    width: "100%",
+    maxWidth: 320,
+    boxSizing: "border-box",
+    padding: "7px 10px",
+    fontSize: 13,
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+  },
   // Inner scroll for the group table — see the check above the table for why nothing here clips.
   scroller: { maxHeight: "60vh", overflowY: "auto" },
   // Member popup. Same fixed-overlay pattern as Group Management's delete confirmation
   // (GroupManager.tsx `s.modalBg`/`s.modal`) — reused rather than a fourth definition of a modal.
-  modalBg:  { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" },
-  modal:    { background: "#fff", borderRadius: 6, padding: 20, width: "min(420px, 92vw)", maxHeight: "76vh", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,.25)" },
-  closeBtn: { padding: "6px 14px", border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", fontSize: 12, cursor: "pointer" },
-  memberList:{ margin: "10px 0 0", padding: "0 0 0 18px", fontSize: 12.5, lineHeight: 1.8 },
+  modalBg: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,.4)",
+    zIndex: 100,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modal: {
+    background: "#fff",
+    borderRadius: 6,
+    padding: 20,
+    width: "min(420px, 92vw)",
+    maxHeight: "76vh",
+    overflowY: "auto",
+    boxShadow: "0 8px 32px rgba(0,0,0,.25)",
+  },
+  closeBtn: {
+    padding: "6px 14px",
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+    background: "#fff",
+    fontSize: 12,
+    cursor: "pointer",
+  },
+  memberList: {
+    margin: "10px 0 0",
+    padding: "0 0 0 18px",
+    fontSize: 12.5,
+    lineHeight: 1.8,
+  },
 };
 
-export default function PageAccess({ context, siteUrl }: Props): React.ReactElement {
-  const [pages, setPages]     = useState<PageItem[]>([]);
-  const [target, setTarget]   = useState<string>("");
-  const [groups, setGroups]   = useState<SpGroup[]>([]);
+export default function PageAccess({
+  context,
+  siteUrl,
+}: Props): React.ReactElement {
+  const [pages, setPages] = useState<PageItem[]>([]);
+  const [target, setTarget] = useState<string>("");
+  const [groups, setGroups] = useState<SpGroup[]>([]);
   /* ⚠ THE GROUP MAP ROWS ARE NO LONGER STORED (2026-09-03). They fed the "Current access" column's
      drift note ("granted in SharePoint, not mapped"), and that column is gone at the client's
      request — but `loadRows()` STILL RUNS, because `setScopeMissing` is set inside it: a `$select`
      naming Scope/Target failing with 400 is the only reliable signal those columns are absent
      (CLAUDE.md #11). So the read stays for its side effect; only the result is discarded. */
 
-  const [live, setLive]       = useState<LiveGrant[] | undefined>(undefined);
+  const [live, setLive] = useState<LiveGrant[] | undefined>(undefined);
   const [welcome, setWelcome] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [scopeMissing, setScopeMissing] = useState(false);
@@ -148,7 +306,9 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
   // "Go to Group Management", resolved from Site Pages rather than hardcoded — the client renames
   // every page at import, so a literal `Group-Management.aspx` would fail as a dead link. Same
   // lookup, same `resolveLink`, as Site Access and the retired Folder Access signpost.
-  const [groupManagementHref, setGroupManagementHref] = useState<string | undefined>(undefined);
+  const [groupManagementHref, setGroupManagementHref] = useState<
+    string | undefined
+  >(undefined);
 
   const GET = { Accept: "application/json;odata=nometadata" };
   const pagesBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(PAGES_LIST)}')`;
@@ -187,7 +347,10 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
    * This is a pool to filter FROM, not the answer — the answer is `granted`, below.
    */
   const allGroups = groups
-    .filter((g) => g.title.trim().toLowerCase() !== siteEntryGroupTitle().toLowerCase())
+    .filter(
+      (g) =>
+        g.title.trim().toLowerCase() !== siteEntryGroupTitle().toLowerCase(),
+    )
     .filter((g) => VIEW_ONLY_ROLES.indexOf(roleFromGroupName(g.title)) === -1)
     .sort((a, b) => a.title.localeCompare(b.title));
 
@@ -201,10 +364,14 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
    * means "unknown", so nothing is listed as granted until it genuinely is.
    */
   const liveKnown = live !== undefined;
-  const granted = liveKnown ? allGroups.filter((g) => hasRealGrant(liveByPid.get(g.id))) : [];
+  const granted = liveKnown
+    ? allGroups.filter((g) => hasRealGrant(liveByPid.get(g.id)))
+    : [];
 
   const visible = granted.filter(
-    (g) => !filter.trim() || g.title.toLowerCase().indexOf(filter.trim().toLowerCase()) !== -1,
+    (g) =>
+      !filter.trim() ||
+      g.title.toLowerCase().indexOf(filter.trim().toLowerCase()) !== -1,
   );
 
   /**
@@ -235,7 +402,9 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
     if (!res.ok) return "";
     const j = await res.json();
     // "SitePages/Home.aspx" -> "home.aspx"
-    return ((j.WelcomePage ?? "") as string).split("/").pop()?.toLowerCase() ?? "";
+    return (
+      ((j.WelcomePage ?? "") as string).split("/").pop()?.toLowerCase() ?? ""
+    );
   };
 
   const loadPages = async (): Promise<PageItem[]> => {
@@ -246,7 +415,14 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
     );
     if (!res.ok) throw new Error(`${PAGES_LIST} HTTP ${res.status}`);
     const j = await res.json();
-    return ((j.value ?? []) as Array<{ Id: number; FileLeafRef?: string; Title?: string; HasUniqueRoleAssignments?: boolean }>)
+    return (
+      (j.value ?? []) as Array<{
+        Id: number;
+        FileLeafRef?: string;
+        Title?: string;
+        HasUniqueRoleAssignments?: boolean;
+      }>
+    )
       .map((p) => ({
         itemId: p.Id,
         fileName: p.FileLeafRef ?? "",
@@ -266,10 +442,21 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
     );
     // A $select naming a column that does not exist fails the WHOLE request with 400
     // (CLAUDE.md #11), so this is the only reliable signal that Scope/Target are absent.
-    if (!res.ok) { setScopeMissing(true); return []; }
+    if (!res.ok) {
+      setScopeMissing(true);
+      return [];
+    }
     setScopeMissing(false);
     const j = await res.json();
-    return ((j.value ?? []) as Array<{ Id: number; GroupId?: string; GroupName?: string; Scope?: string; Target?: string }>)
+    return (
+      (j.value ?? []) as Array<{
+        Id: number;
+        GroupId?: string;
+        GroupName?: string;
+        Scope?: string;
+        Target?: string;
+      }>
+    )
       .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "page")
       .map((r) => ({
         itemId: r.Id,
@@ -279,7 +466,10 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
       }));
   };
 
-  const loadLiveFor = async (list: PageItem[], fileName: string): Promise<LiveGrant[] | undefined> => {
+  const loadLiveFor = async (
+    list: PageItem[],
+    fileName: string,
+  ): Promise<LiveGrant[] | undefined> => {
     const p = list.find((x) => x.fileName === fileName);
     if (!p) return undefined;
     const res: SPHttpClientResponse = await context.spHttpClient.get(
@@ -290,12 +480,19 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
     );
     if (!res.ok) return undefined;
     const j = await res.json();
-    return ((j.value ?? []) as Array<{ PrincipalId?: number; Member?: { Title?: string }; RoleDefinitionBindings?: Array<{ Name?: string }> }>)
-      .map((ra) => ({
-        principalId: ra.PrincipalId ?? 0,
-        title: ra.Member?.Title ?? "",
-        levels: (ra.RoleDefinitionBindings ?? []).map((b) => b.Name ?? "").filter(Boolean),
-      }));
+    return (
+      (j.value ?? []) as Array<{
+        PrincipalId?: number;
+        Member?: { Title?: string };
+        RoleDefinitionBindings?: Array<{ Name?: string }>;
+      }>
+    ).map((ra) => ({
+      principalId: ra.PrincipalId ?? 0,
+      title: ra.Member?.Title ?? "",
+      levels: (ra.RoleDefinitionBindings ?? [])
+        .map((b) => b.Name ?? "")
+        .filter(Boolean),
+    }));
   };
 
   const reloadAll = async (firstLoad = false): Promise<void> => {
@@ -306,7 +503,10 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
       const w = await loadWelcome();
       const p = await loadPages();
       const g = await fetchAllSiteGroups(context.spHttpClient, siteUrl);
-      const builtIns = await fetchBuiltInGroupIds(context.spHttpClient, siteUrl);
+      const builtIns = await fetchBuiltInGroupIds(
+        context.spHttpClient,
+        siteUrl,
+      );
       // Called for its side effect only — it sets `scopeMissing`. See the note by the state above.
       await loadRows();
       setWelcome(w);
@@ -320,12 +520,19 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
     }
   };
 
-  useEffect(() => { reloadAll(true).catch(() => undefined); }, []);
+  useEffect(() => {
+    reloadAll(true).catch(() => undefined);
+  }, []);
 
   // Refresh the selected page's live ACL when the selection changes.
   useEffect(() => {
-    if (!target) { setLive(undefined); return; }
-    loadLiveFor(pages, target).then(setLive).catch(() => setLive(undefined));
+    if (!target) {
+      setLive(undefined);
+      return;
+    }
+    loadLiveFor(pages, target)
+      .then(setLive)
+      .catch(() => setLive(undefined));
   }, [target, pages]);
 
   /**
@@ -336,9 +543,9 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
    * A failed read simply leaves the link out; the banner's own text still names the page.
    */
   useEffect(() => {
-    const link = CARDS
-      .filter((c) => c.key === "access")[0]
-      ?.links.filter((l) => l.key === "groups")[0];
+    const link = CARDS.filter((c) => c.key === "access")[0]?.links.filter(
+      (l) => l.key === "groups",
+    )[0];
     if (!link) return;
     readSitePages(context, siteUrl)
       .then((pages_) => {
@@ -370,17 +577,26 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
       <div style={s.attention}>
         <AttentionIcon size={22} />
         <span>
-          <strong>This page is read-only.</strong> To change who can access a page,{" "}
-          {groupManagementHref !== undefined
-            ? <a href={groupManagementHref} style={{ fontWeight: 600, color: "inherit" }}>go to Group Management</a>
-            : <strong>go to the Group Management page</strong>}.
+          <strong>This page is read-only.</strong> To change who can access a
+          page,{" "}
+          {groupManagementHref !== undefined ? (
+            <a
+              href={groupManagementHref}
+              style={{ fontWeight: 600, color: "inherit" }}
+            >
+              Go To Group Management
+            </a>
+          ) : (
+            <strong>go to the Group Management page</strong>
+          )}
+          .
         </span>
       </div>
 
       {scopeMissing && (
         <div style={s.dangerBox}>
-          The <strong>Scope</strong> and <strong>Target</strong> columns are missing from{" "}
-          <strong>{groupMapList()}</strong>.
+          The <strong>Scope</strong> and <strong>Target</strong> columns are
+          missing from <strong>{groupMapList()}</strong>.
         </div>
       )}
       {loadError && <div style={s.dangerBox}>Could not load: {loadError}</div>}
@@ -394,7 +610,10 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
             <select
               style={s.select}
               value={target}
-              onChange={(e) => { setTarget(e.target.value); setFilter(""); }}
+              onChange={(e) => {
+                setTarget(e.target.value);
+                setFilter("");
+              }}
             >
               <option value="">Select a page&hellip;</option>
               {selectablePages.map((p) => (
@@ -415,15 +634,18 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
 
       {page && (
         <div style={s.card}>
-          <div style={s.head}>{page.title} <span style={s.mono}>{page.fileName}</span></div>
+          <div style={s.head}>
+            {page.title} <span style={s.mono}>{page.fileName}</span>
+          </div>
           {!page.unique ? (
             <div style={s.openBox}>
-              <strong>Open to everyone with site access.</strong> Nothing here restricts it.
+              <strong>Open to everyone with site access.</strong> Nothing here
+              restricts it.
             </div>
           ) : (
             <div style={s.openBox}>
-              <strong>Restricted.</strong> Only the groups below, plus site owners, can open this
-              page.
+              <strong>Restricted.</strong> Only the groups below, plus site
+              owners, can open this page.
             </div>
           )}
 
@@ -447,13 +669,14 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
 
           {!page.unique ? (
             <p style={s.hint}>
-              Since this page is open to everyone with site access, no specific group holds an
-              explicit grant on it — there is nothing to list here.
+              Since this page is open to everyone with site access, no specific
+              group holds an explicit grant on it — there is nothing to list
+              here.
             </p>
           ) : !liveKnown ? (
             <div style={s.warnBox}>
-              Could not read this page&rsquo;s current permissions, so it is not possible to say
-              which groups currently have access.
+              Could not read this page&rsquo;s current permissions, so it is not
+              possible to say which groups currently have access.
             </div>
           ) : (
             <>
@@ -481,7 +704,9 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
               )}
 
               {granted.length === 0 ? (
-                <div style={s.no}>No group currently holds an explicit grant on this page.</div>
+                <div style={s.no}>
+                  No group currently holds an explicit grant on this page.
+                </div>
               ) : (
                 /* Inner scroll: nothing in this table is absolutely positioned — the member popup
                    below is `position: fixed`, which escapes a scrolling ancestor's clipping rather
@@ -500,7 +725,9 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                         {visible.length === 0 ? (
                           <tr>
                             <td style={s.td} colSpan={2}>
-                              <span style={s.no}>No group matches that filter.</span>
+                              <span style={s.no}>
+                                No group matches that filter.
+                              </span>
                             </td>
                           </tr>
                         ) : (
@@ -511,7 +738,10 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
                                   the same `members` map already read from `useGroupMembers`, so
                                   there is still only one fetch per group. */}
                               <td style={s.td}>
-                                <MemberCountWithPopup group={g} members={members} />
+                                <MemberCountWithPopup
+                                  group={g}
+                                  members={members}
+                                />
                               </td>
                             </tr>
                           ))
@@ -525,7 +755,6 @@ export default function PageAccess({ context, siteUrl }: Props): React.ReactElem
           )}
         </div>
       )}
-
     </div>
   );
 }

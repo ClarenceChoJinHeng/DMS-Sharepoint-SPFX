@@ -4,7 +4,11 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { swapLibrarySegment } from "../../../shared/hcRouting";
 import { markRecordReplaced } from "../../../shared/spSubmissionRecords";
 import { documentsLibraryTitle } from "../../../shared/naming";
-import { libraryHasColumns, APPROVED_BY_COLUMN, APPROVAL_COMMENT_COLUMN } from "../../../shared/optionalColumns";
+import {
+  libraryHasColumns,
+  APPROVED_BY_COLUMN,
+  APPROVAL_COMMENT_COLUMN,
+} from "../../../shared/optionalColumns";
 import { IApprovalDocumentProps } from "./IApprovalDocumentProps";
 import {
   buildQueue,
@@ -16,8 +20,17 @@ import {
   QueueEntry as QueueEntryOf,
 } from "../../../shared/approvalQueue";
 import { previewTarget } from "../../../shared/filePreview";
-import { cachedHcLibraries, hcAvailable, libraryTitle, libraryUrlSegment } from "../../../shared/naming";
-import { primeNames, listTitleEncoded, LIST_SUFFIX } from "../../../shared/spNaming";
+import {
+  cachedHcLibraries,
+  hcAvailable,
+  libraryTitle,
+  libraryUrlSegment,
+} from "../../../shared/naming";
+import {
+  primeNames,
+  listTitleEncoded,
+  LIST_SUFFIX,
+} from "../../../shared/spNaming";
 import { permissionedTierCount } from "../../../shared/approvalDestination";
 import { buildDetailRows, DetailRow } from "../../../shared/documentDetails";
 // ⚠ THE CHECKS THEMSELVES LIVE IN shared/approvalGuards.ts, shared with the bulk approve command
@@ -42,7 +55,8 @@ const GET_FRESH = {
   "Cache-Control": "no-cache",
   Pragma: "no-cache",
 };
-const bust = (): string => `&_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+const bust = (): string =>
+  `&_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -84,18 +98,31 @@ type QueueEntry = QueueEntryOf<IFileItem>;
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function initials(name: string): string {
-  return name.split(" ").slice(0, 2).map(n => n[0] ?? "").join("").toUpperCase();
+  return name
+    .split(" ")
+    .slice(0, 2)
+    .map((n) => n[0] ?? "")
+    .join("")
+    .toUpperCase();
 }
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
-  // 08/Jan/2035 — DD/MMM/YYYY, matching the Staging views' column formatting.
-  // en-GB gives "08 Jan 2035"; some ICU builds append a dot to the month, so strip it.
+  // 08 Jan 2035 — DD MMM YYYY, no slashes (client, 2026-09-17: "for the date format remove the /
+  // make it 15 Sept 2026"). en-GB already gives "08 Jan 2035" with a plain space; some ICU builds
+  // append a dot to the month, so strip that only.
   const date = d
-    .toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
-    .replace(/\./g, "")
-    .replace(/\s+/g, "/");
-  const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+    .toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    })
+    .replace(/\./g, "");
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
   return `${date} ${time}`;
 }
 
@@ -107,7 +134,6 @@ function formatSize(bytes: string): string {
     : `${(b / 1_024).toFixed(1)} KB`;
 }
 
-
 // ── Styles ───────────────────────────────────────────────────────────────────
 
 const s = {
@@ -117,18 +143,53 @@ const s = {
      right column reserves a fixed 280px for the approval panel, so a narrow cap squeezes the document
      PREVIEW — the one thing an approver is on this page to read. Its own 40px bottom padding is kept
      rather than replaced by the shell's 48. */
-  root:        { fontFamily: "Arial, sans-serif", color: "#323130", background: "#fff", maxWidth: 1180, margin: "32px auto", padding: "0 24px 40px" } as React.CSSProperties,
+  root: {
+    fontFamily: "Arial, sans-serif",
+    color: "#323130",
+    background: "#fff",
+    maxWidth: 1180,
+    margin: "32px auto",
+    padding: "0 24px 40px",
+  } as React.CSSProperties,
   // A full-width band, tinted from the same green as the link so the two read as
   // one control. The tint is an alpha of the brand green rather than a second
   // hex value — one colour to change if the brand shifts.
-  backBand:    { background: "rgba(0, 104, 74, 0.08)", borderRadius: 4, padding: "10px 16px", marginBottom: 20 } as React.CSSProperties,
-  backLink:    { color: "rgba(0, 104, 74, 1)", textDecoration: "none", fontSize: 14, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 } as React.CSSProperties,
+  backBand: {
+    background: "rgba(0, 104, 74, 0.08)",
+    borderRadius: 4,
+    padding: "10px 16px",
+    marginBottom: 20,
+  } as React.CSSProperties,
+  backLink: {
+    color: "rgba(0, 104, 74, 1)",
+    textDecoration: "none",
+    fontSize: 14,
+    fontWeight: 600,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+  } as React.CSSProperties,
   // 22px, not 38. Filenames here are composed — [Project] - [Vendor] - [Name] -
   // [DDMMYY] — so they are long by design and ran to three enormous lines.
   // overflowWrap breaks a single unspaced run rather than letting it overhang.
-  docTitle:    { margin: "0 0 6px", fontSize: 22, lineHeight: 1.3, fontWeight: 600, color: "#201f1e", overflowWrap: "break-word" as const } as React.CSSProperties,
-  docMeta:     { fontSize: 13, color: "#605e5c", display: "flex", gap: 8, alignItems: "center", marginBottom: 24, flexWrap: "wrap" as const } as React.CSSProperties,
-  dot:         { color: "#c8c6c4" } as React.CSSProperties,
+  docTitle: {
+    margin: "0 0 6px",
+    fontSize: 22,
+    lineHeight: 1.3,
+    fontWeight: 600,
+    color: "#201f1e",
+    overflowWrap: "break-word" as const,
+  } as React.CSSProperties,
+  docMeta: {
+    fontSize: 13,
+    color: "#605e5c",
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    marginBottom: 24,
+    flexWrap: "wrap" as const,
+  } as React.CSSProperties,
+  dot: { color: "#c8c6c4" } as React.CSSProperties,
   // minmax(0, 1fr) on the centre column: a bare 1fr floors at the iframe's
   // min-content width, so the preview could never give ground. Narrower rails +
   // a tighter gap hand ~70px back to the preview.
@@ -141,68 +202,313 @@ const s = {
      this as a wrapping flex row, which also means restyling the three children AND the
      conditional two-column override at the element (1.0.243.0). Not worth that risk on the
      approval screen for a layout that is at least usable and no longer breaks the page. */
-  grid:        { display: "grid", gridTemplateColumns: "minmax(0, 196px) minmax(0, 1fr) minmax(0, 280px)", gap: 16, alignItems: "start" } as React.CSSProperties,
-  sectionTitle:{ fontSize: 14, fontWeight: 600, color: "#201f1e", marginBottom: 12 } as React.CSSProperties,
-  avatar:      { width: 36, height: 36, borderRadius: "50%", background: "#0f6cbd", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 700, flexShrink: 0 } as React.CSSProperties,
-  authorName:  { fontWeight: 600, fontSize: 14, color: "#201f1e" } as React.CSSProperties,
-  authorDate:  { fontSize: 12, color: "#605e5c", marginTop: 2 } as React.CSSProperties,
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 196px) minmax(0, 1fr) minmax(0, 280px)",
+    gap: 16,
+    alignItems: "start",
+  } as React.CSSProperties,
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#201f1e",
+    marginBottom: 12,
+  } as React.CSSProperties,
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: "50%",
+    background: "#0f6cbd",
+    color: "#fff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 13,
+    fontWeight: 700,
+    flexShrink: 0,
+  } as React.CSSProperties,
+  authorName: {
+    fontWeight: 600,
+    fontSize: 14,
+    color: "#201f1e",
+  } as React.CSSProperties,
+  authorDate: {
+    fontSize: 12,
+    color: "#605e5c",
+    marginTop: 2,
+  } as React.CSSProperties,
   // Details stack vertically — label above value — so a long value (a deep
   // Location path, a full vendor name) wraps into the column's own width
   // instead of being squeezed into whatever the label leaves of a 196px rail.
-  detailRow:   { marginBottom: 14 } as React.CSSProperties,
-  metaLabel:   { color: "#605e5c", fontSize: 13, marginBottom: 2 } as React.CSSProperties,
+  detailRow: { marginBottom: 14 } as React.CSSProperties,
+  metaLabel: {
+    color: "#605e5c",
+    fontSize: 13,
+    marginBottom: 2,
+  } as React.CSSProperties,
   // maxHeight + scroll so a pasted essay in Remark or Details cannot push the
   // rest of the Details list below the fold — the approver would never scroll
   // past it to find Confidential Level.
-  metaValue:   { fontWeight: 500, fontSize: 13, color: "#201f1e", lineHeight: 1.35, overflowWrap: "break-word" as const, maxHeight: 132, overflowY: "auto" as const } as React.CSSProperties,
-  panel:       { border: "1px solid #edebe9", borderRadius: 4, padding: 20, position: "sticky" as const, top: 16, background: "#fff", boxShadow: "0 2px 6px rgba(0,0,0,0.08)" } as React.CSSProperties,
-  panelTitle:  { fontWeight: 700, fontSize: 16, color: "#201f1e" } as React.CSSProperties,
-  panelHint:   { fontSize: 13, color: "#605e5c", marginBottom: 16, lineHeight: 1.4 } as React.CSSProperties,
-  textarea:    { width: "100%", height: 122, maxHeight: 122, padding: "6px 8px", fontSize: 13, border: "1px solid #8a8886", borderRadius: 2, resize: "vertical" as const, fontFamily: "inherit", boxSizing: "border-box" as const, color: "#201f1e" } as React.CSSProperties,
-  charCount:   { fontSize: 12, color: "#605e5c", textAlign: "right" as const, marginTop: 2, marginBottom: 12 } as React.CSSProperties,
-  publishLabel:{ fontSize: 13, fontWeight: 600, marginBottom: 6 } as React.CSSProperties,
-  publishRow:  { display: "flex", alignItems: "center", gap: 6, marginBottom: 20, flexWrap: "wrap" as const } as React.CSSProperties,
-  publishValue:{ color: "#0f6cbd", fontSize: 13 } as React.CSSProperties,
-  btnApprove:  { width: "100%", padding: "10px 0", marginBottom: 8, background: "#107c10", color: "#fff", border: "none", borderRadius: 4, fontSize: 14, fontWeight: 600, cursor: "pointer" } as React.CSSProperties,
-  btnSendBack: { width: "100%", padding: "10px 0", marginBottom: 8, background: "#fff", color: "#201f1e", border: "1px solid #8a8886", borderRadius: 4, fontSize: 14, fontWeight: 600, cursor: "pointer" } as React.CSSProperties,
-  btnReject:   { width: "100%", padding: "10px 0", background: "#fff", color: "#a4262c", border: "1px solid #a4262c", borderRadius: 4, fontSize: 14, fontWeight: 600, cursor: "pointer" } as React.CSSProperties,
-  errText:     { color: "#a4262c", fontSize: 13, marginBottom: 10 } as React.CSSProperties,
-  popupOverlay:{ position: "fixed" as const, inset: 0, background: "rgba(0,0,0,0.25)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)", zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 } as React.CSSProperties,
-  popupCard:   { background: "#fff", borderRadius: 16, padding: "40px 40px 32px", textAlign: "center" as const, maxWidth: 420, width: "100%", boxShadow: "0 8px 40px rgba(0,0,0,0.15)" } as React.CSSProperties,
-  popupTitle:  { fontSize: 22, fontWeight: 700, color: "#0f6c3f", margin: "0 0 12px" } as React.CSSProperties,
-  popupMsg:    { fontSize: 14, color: "#555", margin: "0 0 28px", lineHeight: 1.6 } as React.CSSProperties,
-  popupBtn:    { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 6, padding: "12px 28px", fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", minWidth: 183 } as React.CSSProperties,
+  metaValue: {
+    fontWeight: 500,
+    fontSize: 13,
+    color: "#201f1e",
+    lineHeight: 1.35,
+    overflowWrap: "break-word" as const,
+    maxHeight: 132,
+    overflowY: "auto" as const,
+  } as React.CSSProperties,
+  panel: {
+    border: "1px solid #edebe9",
+    borderRadius: 4,
+    padding: 20,
+    position: "sticky" as const,
+    top: 16,
+    background: "#fff",
+    boxShadow: "0 2px 6px rgba(0,0,0,0.08)",
+  } as React.CSSProperties,
+  panelTitle: {
+    fontWeight: 700,
+    fontSize: 16,
+    color: "#201f1e",
+  } as React.CSSProperties,
+  panelHint: {
+    fontSize: 13,
+    color: "#605e5c",
+    marginBottom: 16,
+    lineHeight: 1.4,
+  } as React.CSSProperties,
+  textarea: {
+    width: "100%",
+    height: 122,
+    maxHeight: 122,
+    padding: "6px 8px",
+    fontSize: 13,
+    border: "1px solid #8a8886",
+    borderRadius: 2,
+    resize: "vertical" as const,
+    fontFamily: "inherit",
+    boxSizing: "border-box" as const,
+    color: "#201f1e",
+  } as React.CSSProperties,
+  charCount: {
+    fontSize: 12,
+    color: "#605e5c",
+    textAlign: "right" as const,
+    marginTop: 2,
+    marginBottom: 12,
+  } as React.CSSProperties,
+  publishLabel: {
+    fontSize: 13,
+    fontWeight: 600,
+    marginBottom: 6,
+  } as React.CSSProperties,
+  publishRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 20,
+    flexWrap: "wrap" as const,
+  } as React.CSSProperties,
+  publishValue: { color: "#0f6cbd", fontSize: 13 } as React.CSSProperties,
+  btnApprove: {
+    width: "100%",
+    padding: "10px 0",
+    marginBottom: 8,
+    background: "#107c10",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  btnSendBack: {
+    width: "100%",
+    padding: "10px 0",
+    marginBottom: 8,
+    background: "#fff",
+    color: "#201f1e",
+    border: "1px solid #8a8886",
+    borderRadius: 4,
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  btnReject: {
+    width: "100%",
+    padding: "10px 0",
+    background: "#fff",
+    color: "#a4262c",
+    border: "1px solid #a4262c",
+    borderRadius: 4,
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  errText: {
+    color: "#a4262c",
+    fontSize: 13,
+    marginBottom: 10,
+  } as React.CSSProperties,
+  popupOverlay: {
+    position: "fixed" as const,
+    inset: 0,
+    background: "rgba(0,0,0,0.25)",
+    backdropFilter: "blur(6px)",
+    WebkitBackdropFilter: "blur(6px)",
+    zIndex: 9998,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  } as React.CSSProperties,
+  popupCard: {
+    background: "#fff",
+    borderRadius: 16,
+    padding: "40px 40px 32px",
+    textAlign: "center" as const,
+    maxWidth: 420,
+    width: "100%",
+    boxShadow: "0 8px 40px rgba(0,0,0,0.15)",
+  } as React.CSSProperties,
+  popupTitle: {
+    fontSize: 22,
+    fontWeight: 700,
+    color: "#0f6c3f",
+    margin: "0 0 12px",
+  } as React.CSSProperties,
+  popupMsg: {
+    fontSize: 14,
+    color: "#555",
+    margin: "0 0 28px",
+    lineHeight: 1.6,
+  } as React.CSSProperties,
+  popupBtn: {
+    background: "#0f6c3f",
+    color: "#fff",
+    border: "none",
+    borderRadius: 6,
+    padding: "12px 28px",
+    fontSize: 14,
+    fontWeight: 600,
+    fontFamily: "inherit",
+    cursor: "pointer",
+    minWidth: 200,
+    maxWidth: 200,
+  } as React.CSSProperties,
   // Secondary popup button — only used when a primary is present, so the two are distinguishable.
   // No marginTop any more: the buttons live in a flex row (popupBtnRow) whose `gap` spaces them on
   // BOTH axes. A vertical margin did nothing when they sat side by side, which is how they ended up
   // touching each other (found on site 2026-08-18) — the card is text-align:center and a <button> is
   // inline, so they flowed onto one line with no separation at all.
-  popupBtnGhost:{ background: "#fff", color: "#201f1e", border: "1px solid #8a8886" } as React.CSSProperties,
-  popupBtnRow: { display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap", marginTop: 24 } as React.CSSProperties,
-  navRow:      { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" as const, marginBottom: 8 } as React.CSSProperties,
-  navControls: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" as const } as React.CSSProperties,
-  navBtn:      { padding: "5px 12px", fontSize: 13, fontFamily: "inherit", fontWeight: 600, color: "#0f6c3f", background: "#fff", border: "1px solid #0f6c3f", borderRadius: 4, cursor: "pointer" } as React.CSSProperties,
-  navBtnOff:   { color: "#a19f9d", borderColor: "#c8c6c4", cursor: "not-allowed" } as React.CSSProperties,
-  navCount:    { fontSize: 13, color: "#605e5c", minWidth: 74, textAlign: "center" as const } as React.CSSProperties,
-  navBadge:    { fontSize: 12, fontWeight: 700, padding: "2px 8px", borderRadius: 10 } as React.CSSProperties,
-  navBadgeOk:  { color: "#0f6c3f", background: "#e7f4ec", border: "1px solid #b7dcc4" } as React.CSSProperties,
-  navBadgeNo:  { color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3" } as React.CSSProperties,
+  popupBtnGhost: {
+    background: "#fff",
+    color: "#201f1e",
+    border: "1px solid #8a8886",
+  } as React.CSSProperties,
+  popupBtnRow: {
+    display: "flex",
+    gap: 12,
+    justifyContent: "center",
+    flexDirection: "column",
+    alignItems: "center",
+    marginTop: 24,
+  } as React.CSSProperties,
+  navRow: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "wrap" as const,
+    marginBottom: 8,
+  } as React.CSSProperties,
+  navControls: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap" as const,
+  } as React.CSSProperties,
+  navBtn: {
+    padding: "5px 12px",
+    fontSize: 13,
+    fontFamily: "inherit",
+    fontWeight: 600,
+    color: "#0f6c3f",
+    background: "#fff",
+    border: "1px solid #0f6c3f",
+    borderRadius: 4,
+    cursor: "pointer",
+  } as React.CSSProperties,
+  navBtnOff: {
+    color: "#a19f9d",
+    borderColor: "#c8c6c4",
+    cursor: "not-allowed",
+  } as React.CSSProperties,
+  navCount: {
+    fontSize: 13,
+    color: "#605e5c",
+    minWidth: 74,
+    textAlign: "center" as const,
+  } as React.CSSProperties,
+  navBadge: {
+    fontSize: 12,
+    fontWeight: 700,
+    padding: "2px 8px",
+    borderRadius: 10,
+  } as React.CSSProperties,
+  navBadgeOk: {
+    color: "#0f6c3f",
+    background: "#e7f4ec",
+    border: "1px solid #b7dcc4",
+  } as React.CSSProperties,
+  navBadgeNo: {
+    color: "#a4262c",
+    background: "#fde7e9",
+    border: "1px solid #f1b0b3",
+  } as React.CSSProperties,
   // Shared frame for the non-iframe previews, so an image and a "no preview" message occupy the
   // same space an iframe would and the three-column layout does not shift between documents.
-  previewBox:  { display: "flex", alignItems: "center", justifyContent: "center", width: "100%", height: "calc(100vh - 240px)", minHeight: 600, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "hidden", padding: 12, boxSizing: "border-box" as const } as React.CSSProperties,
+  previewBox: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+    height: "calc(100vh - 240px)",
+    minHeight: 600,
+    background: "#faf9f8",
+    border: "1px solid #edebe9",
+    borderRadius: 4,
+    overflow: "hidden",
+    padding: 12,
+    boxSizing: "border-box" as const,
+  } as React.CSSProperties,
   // The same frame, for IMAGES only, fitting to WIDTH and scrolling.
   //
   // `alignItems: flex-start` so a tall image starts at its TOP rather than being centred with its
   // head out of view, and `overflow: auto` so everything below the fold is reachable. Together with
   // the <img> rule below this is the whole fix for a screenshot rendering as a sliver.
-  imageBox:    { display: "flex", alignItems: "flex-start", justifyContent: "center", width: "100%", height: "calc(100vh - 240px)", minHeight: 600, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "auto", padding: 12, boxSizing: "border-box" as const } as React.CSSProperties,
+  imageBox: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "center",
+    width: "100%",
+    height: "calc(100vh - 240px)",
+    minHeight: 600,
+    background: "#faf9f8",
+    border: "1px solid #edebe9",
+    borderRadius: 4,
+    overflow: "auto",
+    padding: 12,
+    boxSizing: "border-box" as const,
+  } as React.CSSProperties,
   previewLink: { fontSize: 13, color: "#0f6cbd" } as React.CSSProperties,
 };
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
-  const [item, setItem]           = useState<IFileItem | null>(null);
+  const [item, setItem] = useState<IFileItem | null>(null);
   /**
    * Whether THIS user may approve THIS document — asked of the item itself, not inferred from a role.
    *
@@ -220,15 +526,20 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * FAILS OPEN. `unknown` shows the panel, because the 403 at submit is still the real backstop and a
    * transient read must never take the approval queue out of service for a genuine approver.
    */
-  const [approveRight, setApproveRight] = useState<"granted" | "denied" | "unknown">("unknown");
-  const [loading, setLoading]     = useState(true);
-  const [decision, setDecision]   = useState<Decision>("Approved");
-  const [comments, setComments]   = useState("");
+  const [approveRight, setApproveRight] = useState<
+    "granted" | "denied" | "unknown"
+  >("unknown");
+  const [loading, setLoading] = useState(true);
+  const [decision, setDecision] = useState<Decision>("Approved");
+  const [comments, setComments] = useState("");
+  /** Shown only after Reject was attempted with nothing typed — never on load, which would mark an
+   *  untouched box as being in error. Mirrors `Requests.tsx`'s settled reject-requires-a-reason rule. */
+  const [showCommentError, setShowCommentError] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState<Decision | null>(null);
   const [fetchError, setFetchError] = useState("");
   const [submitError, setSubmitError] = useState("");
-  const [fieldText, setFieldText]   = useState<IFieldText>({});
+  const [fieldText, setFieldText] = useState<IFieldText>({});
   /** The Details panel's labels from the last document whose fields loaded. A queue swap clears
    *  `fieldText` to `{}`, and the shared builder drops blank rows — so without this the panel would
    *  collapse to one row on every Next press. Declared up here with the other hooks, never below an
@@ -243,7 +554,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * re-checks fresh immediately before approving (its own long-standing rule, unrelated to display)
    * rather than trusting this snapshot, so a clash appearing in the gap is still caught.
    */
-  const [clashCheck, setClashCheck] = useState<GuardResult | undefined>(undefined);
+  const [clashCheck, setClashCheck] = useState<GuardResult | undefined>(
+    undefined,
+  );
 
   /**
    * Permissioned tier count per segment folder — `{ gho: 2, upopsmy: 2 }`, keyed lower-cased.
@@ -257,7 +570,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * undefined and names it, which is the same direction the rest of that guard already fails in: a
    * refused approval costs a retry, a wrong pass publishes a unit's documents to everyone.
    */
-  const [tierCounts, setTierCounts] = useState<Record<string, number> | undefined>(undefined);
+  const [tierCounts, setTierCounts] = useState<
+    Record<string, number> | undefined
+  >(undefined);
 
   /**
    * Which FAMILY each segment folder belongs to — `{ gho: "BusinessSegment", glp: "Project" }`,
@@ -277,8 +592,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * `Category` is a column `SegmentCreator` writes, so a hand-authored mode row may legitimately not
    * carry it.
    */
-  const [segmentSides, setSegmentSides] =
-    useState<Record<string, "BusinessSegment" | "Project"> | undefined>(undefined);
+  const [segmentSides, setSegmentSides] = useState<
+    Record<string, "BusinessSegment" | "Project"> | undefined
+  >(undefined);
 
   /**
    * The approver's queue: the pending documents they can see, oldest first.
@@ -288,8 +604,8 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * position and turn Next into an unpredictable jump. Instead each entry carries its own
    * `decided` flag, so positions stay fixed for the life of the page.
    */
-  const [queue, setQueue]       = useState<QueueEntry[]>([]);
-  const [pos, setPos]           = useState(0);
+  const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [pos, setPos] = useState(0);
   /**
    * True while a swap's FieldValuesAsText is in flight.
    *
@@ -318,7 +634,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
      A REF, not just state: the helpers below are called inside the same async pass that resolves
      the library, and state set mid-pass would not be visible to them. */
   const initialLib: ApprovalLib =
-    new URLSearchParams(window.location.search).get("lib") === "hc" ? "hc" : "normal";
+    new URLSearchParams(window.location.search).get("lib") === "hc"
+      ? "hc"
+      : "normal";
   const [lib, setLib] = useState<ApprovalLib>(initialLib);
 
   /* ---------- ?decision=approve|reject, from Crystal's [Approve]/[Reject] email links ----------
@@ -339,7 +657,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
      `useRef`'s initialiser runs on every render and only the first result is kept, which is exactly
      the once-per-mount semantics wanted. */
   const linkDecision = useRef<Decision | undefined>(
-    decisionFromLink(new URLSearchParams(window.location.search).get("decision") ?? undefined),
+    decisionFromLink(
+      new URLSearchParams(window.location.search).get("decision") ?? undefined,
+    ),
   );
 
   useEffect(() => {
@@ -348,7 +668,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       const u = new URL(window.location.href);
       u.searchParams.delete("decision");
       window.history.replaceState(undefined, "", u.toString());
-    } catch { /* cosmetic — the radio is already set, and the value is held in the ref regardless */ }
+    } catch {
+      /* cosmetic — the radio is already set, and the value is held in the ref regardless */
+    }
   }, []);
 
   /* Plain state, no ref. `loadItem` is the only place that needs the resolved value before a render
@@ -357,10 +679,12 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
   /** The approval library holding this document. Falls back to the normal one if HC never resolved. */
   const libTitleOf = (which: ApprovalLib): string =>
-    which === "hc" ? cachedHcLibraries()?.approval.title ?? libraryTitle() : libraryTitle();
+    which === "hc"
+      ? (cachedHcLibraries()?.approval.title ?? libraryTitle())
+      : libraryTitle();
   const libSegOf = (which: ApprovalLib): string =>
     which === "hc"
-      ? cachedHcLibraries()?.approval.urlSegment ?? libraryUrlSegment()
+      ? (cachedHcLibraries()?.approval.urlSegment ?? libraryUrlSegment())
       : libraryUrlSegment();
   const libTitle = (): string => libTitleOf(lib);
   const libSeg = (): string => libSegOf(lib);
@@ -372,7 +696,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
      than no warning. Still falls back to the literal when unresolved, which is the loud direction. */
   const approvedLibTitle = (): string =>
     lib === "hc"
-      ? cachedHcLibraries()?.documents.title ?? documentsLibraryTitle()
+      ? (cachedHcLibraries()?.documents.title ?? documentsLibraryTitle())
       : documentsLibraryTitle();
   /**
    * The destination library's URL SEGMENT, for building a path.
@@ -384,7 +708,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * refuses by name. Same reasoning as `hcRouting.ts` returning undefined rather than falling back.
    */
   const approvedLibSeg = (): string =>
-    lib === "hc" ? cachedHcLibraries()?.documents.urlSegment ?? "" : DOCUMENTS_URL_SEGMENT;
+    lib === "hc"
+      ? (cachedHcLibraries()?.documents.urlSegment ?? "")
+      : DOCUMENTS_URL_SEGMENT;
 
   const getItemId = (): number | null => {
     const p = new URLSearchParams(window.location.search);
@@ -402,18 +728,42 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     return `${base}?id=${encodeURIComponent(folder)}`;
   };
 
+  /**
+   * Only for the POST-DECISION popup's own "Back to Approval & Request" button (client,
+   * 2026-09-17): after Approve OR Reject it lands the approver on the "Pending Files" view of
+   * whichever Staging library this document belongs to — the normal Approval Document library, or
+   * the HC one if this was an HC document — so they land straight back on the rest of the queue
+   * rather than the library root or a specific folder.
+   *
+   * ⚠ HC-AWARE VIA `libSeg()`, THE SAME RESOLVER `backUrl()` USES — assumes the HC Approval library
+   * carries an identically-named "Pending Files" view. If it does not, this falls through to that
+   * library's default view instead of erroring, since a wrong view name is not a broken link, only
+   * a less convenient one.
+   *
+   * ⚠ NEVER USED for the pre-decision "Back to Approval & Request" LINK at the top of the page or
+   * the "Cancel" button — both of those already point at `backUrl()`'s own folder-scoped link and
+   * were not asked to change.
+   */
+  const pendingFilesUrl = (): string =>
+    `${webUrl}/${encodeURIComponent(libSeg())}/Forms/Pending%20Files.aspx`;
+
   /** Per-item metadata labels. Cannot be batched into the queue query — FieldValuesAsText is
    *  a per-item endpoint — so it is the one thing a swap has to wait for. */
   // `which` defaults to the settled state; loadItem passes it explicitly, because on the first pass
   // the library has only just been resolved and the state has not repainted yet.
-  const loadFieldText = async (itemId: number, which: ApprovalLib = lib): Promise<void> => {
+  const loadFieldText = async (
+    itemId: number,
+    which: ApprovalLib = lib,
+  ): Promise<void> => {
     try {
       const textRes = await context.spHttpClient.get(
         `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items(${itemId})/FieldValuesAsText`,
         SPHttpClient.configurations.v1,
       );
-      if (textRes.ok) setFieldText(await textRes.json() as IFieldText);
-    } catch { /* labels are non-critical */ }
+      if (textRes.ok) setFieldText((await textRes.json()) as IFieldText);
+    } catch {
+      /* labels are non-critical */
+    }
   };
 
   /**
@@ -429,7 +779,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * feature. The queue is a convenience on top of a page that already works; failing to build it
    * must never block the decision the approver came to make.
    */
-  const loadQueue = async (current: IFileItem, which: ApprovalLib = lib): Promise<void> => {
+  const loadQueue = async (
+    current: IFileItem,
+    which: ApprovalLib = lib,
+  ): Promise<void> => {
     try {
       // THE QUEUE STAYS INSIDE ONE LIBRARY. Merging the two would walk an HC approver from a Highly
       // Confidential document straight into an ordinary one and back, and — worse — would show a
@@ -452,14 +805,20 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         `&$expand=File,Author` +
         `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl` +
         `&$orderby=Created%20asc&$top=200`;
-      const res = await context.spHttpClient.get(url, SPHttpClient.configurations.v1);
+      const res = await context.spHttpClient.get(
+        url,
+        SPHttpClient.configurations.v1,
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json() as { value: IFileItem[] };
+      const data = (await res.json()) as { value: IFileItem[] };
       const { queue: entries, index } = buildQueue(data.value ?? [], current);
       setQueue(entries);
       setPos(index);
     } catch (err) {
-      console.error("[ApprovalDoc] queue query failed — continuing as a single document:", err);
+      console.error(
+        "[ApprovalDoc] queue query failed — continuing as a single document:",
+        err,
+      );
       setQueue([]);
     }
   };
@@ -467,7 +826,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const loadItem = async (): Promise<void> => {
     const itemId = getItemId();
     if (!itemId) {
-      setFetchError("No document ID provided. The link should include ?itemId=123.");
+      setFetchError(
+        "No document ID provided. The link should include ?itemId=123.",
+      );
       setLoading(false);
       return;
     }
@@ -523,13 +884,17 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
          The submit button is disabled for a decided document anyway, so this is about what the
          approver is TOLD, not about what they can do. */
       const current = statusToDecision(data.OData__ModerationStatus);
-      setDecision(current === "Pending" ? linkDecision.current ?? current : current);
+      setDecision(
+        current === "Pending" ? (linkDecision.current ?? current) : current,
+      );
       await loadFieldText(itemId, where);
       // After the document, never before: a queue failure must not stop the page loading, and
       // the current item has to be known so it can be placed in the queue.
       await loadQueue(data, where);
     } catch (err) {
-      setFetchError(err instanceof Error ? err.message : "Could not load this document.");
+      setFetchError(
+        err instanceof Error ? err.message : "Could not load this document.",
+      );
     } finally {
       setLoading(false);
     }
@@ -550,6 +915,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     setItem(entry.item);
     setDecision(reset.decision);
     setComments(reset.comments);
+    setShowCommentError(false);
     setSubmitError(reset.submitError);
     setSubmitted(reset.submitted);
     setFieldText(reset.fieldText);
@@ -559,7 +925,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       const u = new URL(window.location.href);
       u.searchParams.set("itemId", String(entry.item.ID));
       window.history.replaceState(undefined, "", u.toString());
-    } catch { /* a failed URL rewrite is cosmetic — the page already shows the new document */ }
+    } catch {
+      /* a failed URL rewrite is cosmetic — the page already shows the new document */
+    }
     setSwapping(true);
     try {
       await loadFieldText(entry.item.ID);
@@ -595,7 +963,11 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     (async (): Promise<void> => {
       try {
         await primeNames(context.spHttpClient, webUrl).catch(() => undefined);
-        const config = await listTitleEncoded(context.spHttpClient, webUrl, LIST_SUFFIX.config);
+        const config = await listTitleEncoded(
+          context.spHttpClient,
+          webUrl,
+          LIST_SUFFIX.config,
+        );
         const read = async (select: string): Promise<SPHttpClientResponse> =>
           context.spHttpClient.get(
             `${webUrl}/_api/web/lists/getbytitle('${config}')/items` +
@@ -609,7 +981,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
            unconditionally would refuse EVERY approval, to relabel one row.
            ⚠ RETRIED ON 400 ONLY. A 404 is the config list missing and a 403 is permissions on it;
            retrying either asks the same unanswerable question twice and hides the real status. */
-        let res: SPHttpClientResponse = await read("StagingFolder,Levels,Category");
+        let res: SPHttpClientResponse = await read(
+          "StagingFolder,Levels,Category",
+        );
         let hasCategory = res.ok;
         if (!res.ok && res.status === 400) {
           console.warn(
@@ -620,8 +994,11 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           hasCategory = false;
         }
         if (!res.ok) {
-          console.error("Approval guard: could not read the mode rows:", res.status);
-          return;   // stays undefined — the guard refuses and says why
+          console.error(
+            "Approval guard: could not read the mode rows:",
+            res.status,
+          );
+          return; // stays undefined — the guard refuses and says why
         }
         const rows = ((await res.json()).value ?? []) as Array<{
           StagingFolder?: string;
@@ -640,7 +1017,8 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
              else BusinessSegment) — one definition of what the value means, so the label an approver
              reads can never disagree with the one the uploader chose it under. */
           if (key.length > 0 && hasCategory) {
-            sides[key] = r.Category === "Project" ? "Project" : "BusinessSegment";
+            sides[key] =
+              r.Category === "Project" ? "Project" : "BusinessSegment";
           }
         }
         setTierCounts(map);
@@ -658,7 +1036,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     const res = await context.spHttpClient.post(
       `${webUrl}/_api/contextinfo`,
       SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } }
+      { headers: { Accept: "application/json;odata=nometadata" } },
     );
     const data = await res.json();
     return data.FormDigestValue as string;
@@ -764,11 +1142,13 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     try {
       // Only approving publishes to Documents. Rejecting copies nothing, so it is not gated.
       if (action === "Approved") {
-        const ready = await documentsUnitFolderReady(item.File.ServerRelativeUrl);
+        const ready = await documentsUnitFolderReady(
+          item.File.ServerRelativeUrl,
+        );
         if (!ready.ok) {
           setSubmitError(
             `This unit's folder is not ready in the ${approvedLibTitle()} library, so the document was NOT approved (${ready.reason}). ` +
-            `Ask an administrator to run Folder Reconciliation, then approve again.`,
+              `Ask an administrator to run Folder Reconciliation, then approve again.`,
           );
           // Leave `decision` as the approver chose it — the selection is still valid, it is
           // the destination that is not ready.
@@ -779,7 +1159,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         // this approval would silently replace. See `documentsFileClash` for why this cannot be
         // folded into the check above: it asks about a different folder (below-Unit, ensure-created
         // on demand) and fails closed for a different reason.
-        const clash = await documentsFileClash(item.File.ServerRelativeUrl, item.FileLeafRef);
+        const clash = await documentsFileClash(
+          item.File.ServerRelativeUrl,
+          item.FileLeafRef,
+        );
         if (!clash.ok) {
           /* ⚠ THIS NO LONGER REFUSES (client, 2026-08-28: *"just drop the guard and let them
              override … crosscheck and notify them its going to be overwritten and let them do it,
@@ -831,7 +1214,11 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             try {
               const destSeg = approvedLibSeg();
               const destFull = destSeg
-                ? swapLibrarySegment(item.File.ServerRelativeUrl, libSeg(), destSeg)
+                ? swapLibrarySegment(
+                    item.File.ServerRelativeUrl,
+                    libSeg(),
+                    destSeg,
+                  )
                 : undefined;
               if (destFull) {
                 const priorRes = await context.spHttpClient.get(
@@ -843,7 +1230,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
                 if (priorRes.ok) {
                   const prior = await priorRes.json();
                   const stamp =
-                    typeof prior?.SubmissionFileId === "string" ? prior.SubmissionFileId.trim() : "";
+                    typeof prior?.SubmissionFileId === "string"
+                      ? prior.SubmissionFileId.trim()
+                      : "";
                   if (stamp.length > 0) {
                     await markRecordReplaced(
                       context.spHttpClient,
@@ -861,15 +1250,18 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           }
         }
       }
-      const digest      = await getDigest();
+      const digest = await getDigest();
       const safeComment = comments.replace(/'/g, "''");
       // Path passed as an OData parameter alias (@f) appended to the query
       // string, not embedded inline in the URL path — inline literals hit
       // IIS's maxUrlLength once the server-relative path gets long/deep
       // (nested subcategory nesting can add up fast). See sp-rest-alias-vs-inline-literal-400-error memory.
-      const safeUrl     = item.File.ServerRelativeUrl.replace(/'/g, "''");
-      const itemBase    = `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items(${item.ID})`;
-      const headers     = { "X-RequestDigest": digest, Accept: "application/json;odata=nometadata" };
+      const safeUrl = item.File.ServerRelativeUrl.replace(/'/g, "''");
+      const itemBase = `${webUrl}/_api/web/lists/getbytitle('${libTitleEnc()}')/items(${item.ID})`;
+      const headers = {
+        "X-RequestDigest": digest,
+        Accept: "application/json;odata=nometadata",
+      };
 
       if (action === "Approved") {
         const res = await context.spHttpClient.post(
@@ -877,7 +1269,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           SPHttpClient.configurations.v1,
           { headers },
         );
-        if (!res.ok) throw new Error(`Approve returned ${res.status}: ${await res.text().catch(() => "")}`);
+        if (!res.ok)
+          throw new Error(
+            `Approve returned ${res.status}: ${await res.text().catch(() => "")}`,
+          );
         /* ⚠ `File.approve()` DOES NOT RESTAMP `Editor` — proven live 2026-09-01: after
            clarencechojinheng approved a document uploaded by chocheetuck4, `Editor` still read
            chocheetuck4. Approving is a moderation-status change, not an edit, so SharePoint has no
@@ -891,8 +1286,14 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
            reconciliation has not yet created the column degrades to today's behaviour — wrong actor,
            no email — rather than a failed approval. */
         try {
-          if (await libraryHasColumns(context.spHttpClient, webUrl, libTitle(), [APPROVED_BY_COLUMN])) {
-            const approverEmail = (context.pageContext.user.email ?? "").toLowerCase();
+          if (
+            await libraryHasColumns(context.spHttpClient, webUrl, libTitle(), [
+              APPROVED_BY_COLUMN,
+            ])
+          ) {
+            const approverEmail = (
+              context.pageContext.user.email ?? ""
+            ).toLowerCase();
             // ⚠ SHAREPOINT REJECTS A MERGE THAT SETS OData__ModerationStatus ALONGSIDE ANY OTHER
             // FIELD — proven live 2026-09-01 via a 500 reading "You cannot change moderation status
             // and set other item properties at that same time." The earlier "fix" that combined them
@@ -916,15 +1317,29 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             const typed = comments.trim();
             if (
               typed.length > 0 &&
-              (await libraryHasColumns(context.spHttpClient, webUrl, libTitle(), [APPROVAL_COMMENT_COLUMN]))
+              (await libraryHasColumns(
+                context.spHttpClient,
+                webUrl,
+                libTitle(),
+                [APPROVAL_COMMENT_COLUMN],
+              ))
             ) {
               stamp.ApprovalComment = typed;
             }
-            await context.spHttpClient.fetch(itemBase, SPHttpClient.configurations.v1, {
-              method: "POST",
-              headers: { ...headers, "X-HTTP-Method": "MERGE", "IF-MATCH": "*", "Content-Type": "application/json;odata=nometadata" },
-              body: JSON.stringify(stamp),
-            });
+            await context.spHttpClient.fetch(
+              itemBase,
+              SPHttpClient.configurations.v1,
+              {
+                method: "POST",
+                headers: {
+                  ...headers,
+                  "X-HTTP-Method": "MERGE",
+                  "IF-MATCH": "*",
+                  "Content-Type": "application/json;odata=nometadata",
+                },
+                body: JSON.stringify(stamp),
+              },
+            );
             await context.spHttpClient.post(
               `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)/approve(comment='${safeComment}')?@f='${safeUrl}'`,
               SPHttpClient.configurations.v1,
@@ -937,73 +1352,123 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         }
       } else if (action === "Rejected") {
         // /reject() fails when the item is already Approved; MERGE works regardless of current state.
-        const rejectRes = await context.spHttpClient.fetch(itemBase, SPHttpClient.configurations.v1, {
-          method: "POST",
-          headers: { ...headers, "X-HTTP-Method": "MERGE", "IF-MATCH": "*", "Content-Type": "application/json;odata=nometadata" },
-          body: JSON.stringify({ OData__ModerationStatus: 1, OData__ModerationComments: safeComment }),
-        });
-        if (!rejectRes.ok) throw new Error(`Reject returned ${rejectRes.status}: ${await rejectRes.text().catch(() => "")}`);
+        const rejectRes = await context.spHttpClient.fetch(
+          itemBase,
+          SPHttpClient.configurations.v1,
+          {
+            method: "POST",
+            headers: {
+              ...headers,
+              "X-HTTP-Method": "MERGE",
+              "IF-MATCH": "*",
+              "Content-Type": "application/json;odata=nometadata",
+            },
+            body: JSON.stringify({
+              OData__ModerationStatus: 1,
+              OData__ModerationComments: safeComment,
+            }),
+          },
+        );
+        if (!rejectRes.ok)
+          throw new Error(
+            `Reject returned ${rejectRes.status}: ${await rejectRes.text().catch(() => "")}`,
+          );
 
         // Delete the file from the Documents library if it was previously approved and routed there.
         // Search by filename so we don't need to guess the exact folder path.
         const safeLeaf = item.FileLeafRef.replace(/'/g, "''");
         const searchRes = await context.spHttpClient.get(
           `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(approvedLibTitle())}')/items?$filter=FileLeafRef eq '${safeLeaf}'&$select=FileRef&$top=1`,
-          SPHttpClient.configurations.v1
+          SPHttpClient.configurations.v1,
         );
         if (searchRes.ok) {
-          const searchData = await searchRes.json() as { value: { FileRef: string }[] };
+          const searchData = (await searchRes.json()) as {
+            value: { FileRef: string }[];
+          };
           const found = searchData.value?.[0];
           if (found?.FileRef) {
             const safeDocUrl = found.FileRef.replace(/'/g, "''");
             const delRes = await context.spHttpClient.fetch(
               `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)?@f='${safeDocUrl}'`,
               SPHttpClient.configurations.v1,
-              { method: "POST", headers: { ...headers, "X-HTTP-Method": "DELETE" } }
+              {
+                method: "POST",
+                headers: { ...headers, "X-HTTP-Method": "DELETE" },
+              },
             );
             if (!delRes.ok && delRes.status !== 404) {
-              throw new Error(`Delete from Documents returned ${delRes.status}: ${await delRes.text().catch(() => "")}`);
+              throw new Error(
+                `Delete from Documents returned ${delRes.status}: ${await delRes.text().catch(() => "")}`,
+              );
             }
           }
           // found is empty = file was never routed to Documents (not yet approved) — nothing to delete
         }
       } else if (action === "Pending") {
-        const res = await context.spHttpClient.fetch(itemBase, SPHttpClient.configurations.v1, {
-          method: "POST",
-          headers: { ...headers, "X-HTTP-Method": "MERGE", "IF-MATCH": "*", "Content-Type": "application/json;odata=nometadata" },
-          body: JSON.stringify({ OData__ModerationStatus: 2, OData__ModerationComments: safeComment }),
-        });
-        if (!res.ok) throw new Error(`Pending returned ${res.status}: ${await res.text().catch(() => "")}`);
+        const res = await context.spHttpClient.fetch(
+          itemBase,
+          SPHttpClient.configurations.v1,
+          {
+            method: "POST",
+            headers: {
+              ...headers,
+              "X-HTTP-Method": "MERGE",
+              "IF-MATCH": "*",
+              "Content-Type": "application/json;odata=nometadata",
+            },
+            body: JSON.stringify({
+              OData__ModerationStatus: 2,
+              OData__ModerationComments: safeComment,
+            }),
+          },
+        );
+        if (!res.ok)
+          throw new Error(
+            `Pending returned ${res.status}: ${await res.text().catch(() => "")}`,
+          );
 
         // Remove from Documents — file is no longer approved so readers shouldn't see it.
         const safeLeaf = item.FileLeafRef.replace(/'/g, "''");
         const searchRes = await context.spHttpClient.get(
           `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(approvedLibTitle())}')/items?$filter=FileLeafRef eq '${safeLeaf}'&$select=FileRef&$top=1`,
-          SPHttpClient.configurations.v1
+          SPHttpClient.configurations.v1,
         );
         if (searchRes.ok) {
-          const searchData = await searchRes.json() as { value: { FileRef: string }[] };
+          const searchData = (await searchRes.json()) as {
+            value: { FileRef: string }[];
+          };
           const found = searchData.value?.[0];
           if (found?.FileRef) {
             const safeDocUrl = found.FileRef.replace(/'/g, "''");
             const delRes = await context.spHttpClient.fetch(
               `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)?@f='${safeDocUrl}'`,
               SPHttpClient.configurations.v1,
-              { method: "POST", headers: { ...headers, "X-HTTP-Method": "DELETE" } }
+              {
+                method: "POST",
+                headers: { ...headers, "X-HTTP-Method": "DELETE" },
+              },
             );
             if (!delRes.ok && delRes.status !== 404) {
-              throw new Error(`Delete from Documents returned ${delRes.status}: ${await delRes.text().catch(() => "")}`);
+              throw new Error(
+                `Delete from Documents returned ${delRes.status}: ${await delRes.text().catch(() => "")}`,
+              );
             }
           }
         }
       }
       // Mark this position decided so it stays navigable but cannot be resubmitted, and so
       // "Approve another file" can find the next piece of real work.
-      setQueue((q) => q.map((e, i) => (i === pos ? { ...e, decided: action } : e)));
+      setQueue((q) =>
+        q.map((e, i) => (i === pos ? { ...e, decided: action } : e)),
+      );
       setSubmitted(action);
     } catch (err) {
       console.error("[ApprovalDoc] submitDecision failed:", err);
-      setSubmitError(err instanceof Error ? err.message : "Could not submit your decision. Please try again.");
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : "Could not submit your decision. Please try again.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -1022,7 +1487,10 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * visibility there can never disagree about who may approve what.
    */
   useEffect(() => {
-    if (!item) { setApproveRight("unknown"); return undefined; }
+    if (!item) {
+      setApproveRight("unknown");
+      return undefined;
+    }
     let cancelled = false;
     checkApproveRight({
       sp: context.spHttpClient,
@@ -1030,9 +1498,15 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       listTitle: libTitle(),
       itemId: item.ID,
     })
-      .then((v) => { if (!cancelled) setApproveRight(v); })
-      .catch(() => { if (!cancelled) setApproveRight("unknown"); });
-    return () => { cancelled = true; };
+      .then((v) => {
+        if (!cancelled) setApproveRight(v);
+      })
+      .catch(() => {
+        if (!cancelled) setApproveRight("unknown");
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [item === null ? 0 : item.ID, lib]);
 
   /**
@@ -1042,26 +1516,48 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * above it.
    */
   useEffect(() => {
-    if (!item) { setClashCheck(undefined); return undefined; }
+    if (!item) {
+      setClashCheck(undefined);
+      return undefined;
+    }
     let cancelled = false;
     documentsFileClash(item.File.ServerRelativeUrl, item.FileLeafRef)
-      .then((r) => { if (!cancelled) setClashCheck(r); })
-      .catch(() => { if (!cancelled) setClashCheck(undefined); });
-    return () => { cancelled = true; };
+      .then((r) => {
+        if (!cancelled) setClashCheck(r);
+      })
+      .catch(() => {
+        if (!cancelled) setClashCheck(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [item === null ? 0 : item.ID, lib]);
 
   // ── Loading ────────────────────────────────────────────────────────────────
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: 200, color: "#605e5c", fontSize: 14 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          height: 200,
+          color: "#605e5c",
+          fontSize: 14,
+        }}
+      >
         Loading document…
       </div>
     );
   }
 
   if (fetchError) {
-    return <div style={{ padding: 32, color: "#a4262c", fontSize: 14 }}>{fetchError}</div>;
+    return (
+      <div style={{ padding: 32, color: "#a4262c", fontSize: 14 }}>
+        {fetchError}
+      </div>
+    );
   }
 
   /* ⚠ NEVER `return null` HERE — that rendered a BLANK PAGE, reported on site 2026-08-20.
@@ -1074,13 +1570,24 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
      else: it says neither "could not read" nor "nothing here". */
   if (!item) {
     return (
-      <div style={{ padding: 32, fontSize: 14, color: "#323130", maxWidth: 640, lineHeight: 1.6 }}>
-        <div style={{ fontWeight: 600, marginBottom: 8 }}>This document is no longer in the approval queue.</div>
+      <div
+        style={{
+          padding: 32,
+          fontSize: 14,
+          color: "#323130",
+          maxWidth: 640,
+          lineHeight: 1.6,
+        }}
+      >
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>
+          This document is no longer in the approval queue.
+        </div>
         <div style={{ color: "#605e5c" }}>
-          If you have just approved it, that is expected — approved documents are moved into the
-          Documents library and no longer appear here. A rejected document stays in the approval
-          library, so you would still see it.
-          {" "}Otherwise the link may point at a document that has since been moved or deleted.
+          If you have just approved it, that is expected — approved documents
+          are moved into the Documents library and no longer appear here. A
+          rejected document stays in the approval library, so you would still
+          see it. Otherwise the link may point at a document that has since been
+          moved or deleted.
         </div>
       </div>
     );
@@ -1094,17 +1601,58 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       { title: string; message: string; icon: React.ReactNode }
     > = {
       Approved: {
-        title: "Approval Successful",
+        title: "Document Approved",
         message: "Your document has been approved successfully.",
         icon: (
-          <svg width="120" height="120" viewBox="0 0 184 184" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle opacity="0.3" cx="92.0001" cy="91.9999" r="75.4872" fill="#14C7A5" />
+          <svg
+            width="120"
+            height="120"
+            viewBox="0 0 184 184"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <circle
+              opacity="0.3"
+              cx="92.0001"
+              cy="91.9999"
+              r="75.4872"
+              fill="#14C7A5"
+            />
             <circle cx="92" cy="92" r="92" fill="#14C7A5" fillOpacity="0.2" />
-            <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#14C7A5" strokeWidth="3" />
-            <path d="M102 106.841L111 114.841L122 99.8413" stroke="#14C7A5" strokeWidth="7" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M98 121H65L65 77.5L82 58H113V91" stroke="#14C7A5" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M80 81H99" stroke="#14C7A5" strokeWidth="6" strokeLinecap="round" />
-            <path d="M80 92H87" stroke="#14C7A5" strokeWidth="6" strokeLinecap="round" />
+            <circle
+              cx="92.0003"
+              cy="91.9998"
+              r="61.3333"
+              fill="white"
+              stroke="#14C7A5"
+              strokeWidth="3"
+            />
+            <path
+              d="M102 106.841L111 114.841L122 99.8413"
+              stroke="#14C7A5"
+              strokeWidth="7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M98 121H65L65 77.5L82 58H113V91"
+              stroke="#14C7A5"
+              strokeWidth="6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M80 81H99"
+              stroke="#14C7A5"
+              strokeWidth="6"
+              strokeLinecap="round"
+            />
+            <path
+              d="M80 92H87"
+              stroke="#14C7A5"
+              strokeWidth="6"
+              strokeLinecap="round"
+            />
           </svg>
         ),
       },
@@ -1112,15 +1660,60 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         title: "Document Rejected",
         message: "The document has been returned for revision.",
         icon: (
-          <svg width="120" height="120" viewBox="0 0 184 184" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle opacity="0.3" cx="92.0001" cy="91.9999" r="75.4872" fill="#FF4646" />
+          <svg
+            width="120"
+            height="120"
+            viewBox="0 0 184 184"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <circle
+              opacity="0.3"
+              cx="92.0001"
+              cy="91.9999"
+              r="75.4872"
+              fill="#FF4646"
+            />
             <circle cx="92" cy="92" r="92" fill="#FF4646" fillOpacity="0.2" />
-            <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#FF4646" strokeWidth="3" />
-            <path d="M119.801 98.5981L104.598 113.801" stroke="#FF4646" strokeWidth="7" strokeLinecap="round" />
-            <path d="M104.598 98.605L119.801 113.808" stroke="#FF4646" strokeWidth="7" strokeLinecap="round" />
-            <path d="M98 121H65L65 77.5L82 58H113V91" stroke="#FF4646" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M80 81H99" stroke="#FF4646" strokeWidth="6" strokeLinecap="round" />
-            <path d="M80 92H87" stroke="#FF4646" strokeWidth="6" strokeLinecap="round" />
+            <circle
+              cx="92.0003"
+              cy="91.9998"
+              r="61.3333"
+              fill="white"
+              stroke="#FF4646"
+              strokeWidth="3"
+            />
+            <path
+              d="M119.801 98.5981L104.598 113.801"
+              stroke="#FF4646"
+              strokeWidth="7"
+              strokeLinecap="round"
+            />
+            <path
+              d="M104.598 98.605L119.801 113.808"
+              stroke="#FF4646"
+              strokeWidth="7"
+              strokeLinecap="round"
+            />
+            <path
+              d="M98 121H65L65 77.5L82 58H113V91"
+              stroke="#FF4646"
+              strokeWidth="6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M80 81H99"
+              stroke="#FF4646"
+              strokeWidth="6"
+              strokeLinecap="round"
+            />
+            <path
+              d="M80 92H87"
+              stroke="#FF4646"
+              strokeWidth="6"
+              strokeLinecap="round"
+            />
           </svg>
         ),
       },
@@ -1128,28 +1721,75 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         title: "Still pending Approval",
         message: "You can monitor its status anytime.",
         icon: (
-          <svg width="120" height="120" viewBox="0 0 184 184" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle opacity="0.3" cx="92.0001" cy="91.9999" r="75.4872" fill="#FF8800" />
+          <svg
+            width="120"
+            height="120"
+            viewBox="0 0 184 184"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <circle
+              opacity="0.3"
+              cx="92.0001"
+              cy="91.9999"
+              r="75.4872"
+              fill="#FF8800"
+            />
             <circle cx="92" cy="92" r="92" fill="#FF8800" fillOpacity="0.2" />
-            <circle cx="92.0003" cy="91.9998" r="61.3333" fill="white" stroke="#FF8800" strokeWidth="3" />
-            <path d="M98 121H65L65 77.5L82 58H113V91" stroke="#FF8800" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" />
+            <circle
+              cx="92.0003"
+              cy="91.9998"
+              r="61.3333"
+              fill="white"
+              stroke="#FF8800"
+              strokeWidth="3"
+            />
+            <path
+              d="M98 121H65L65 77.5L82 58H113V91"
+              stroke="#FF8800"
+              strokeWidth="6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
             <circle cx="113" cy="110" r="11" stroke="#FF8800" strokeWidth="5" />
-            <path d="M113 105V112L118 109.5" stroke="#FF8800" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M80 81H99" stroke="#FF8800" strokeWidth="6" strokeLinecap="round" />
-            <path d="M80 92H87" stroke="#FF8800" strokeWidth="6" strokeLinecap="round" />
+            <path
+              d="M113 105V112L118 109.5"
+              stroke="#FF8800"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M80 81H99"
+              stroke="#FF8800"
+              strokeWidth="6"
+              strokeLinecap="round"
+            />
+            <path
+              d="M80 92H87"
+              stroke="#FF8800"
+              strokeWidth="6"
+              strokeLinecap="round"
+            />
           </svg>
         ),
       },
     };
-    const { title, message, icon } = popups[submitted];
+    const { title, icon } = popups[submitted];
     const nextIdx = nextUndecidedIndex(queue, pos);
     return (
       <div style={s.popupOverlay} role="dialog" aria-modal="true">
         <div style={s.popupCard}>
           <div style={{ marginBottom: 20 }}>{icon}</div>
-          <div style={s.popupTitle}>{title}</div>
+          <div
+            style={{
+              ...s.popupTitle,
+              ...(submitted === "Rejected" ? { color: "#a4262c" } : {}),
+            }}
+          >
+            {title}
+          </div>
           <div style={s.popupMsg}>
-            {message}
             {/* Only when the queue exists and is finished. Saying "that was the last one" when the
                 queue query failed would be a claim we cannot support. */}
             {queue.length > 0 && nextIdx === -1 && (
@@ -1163,15 +1803,26 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
               browsing, they want the next document in the list. */}
           <div style={s.popupBtnRow}>
             {nextIdx !== -1 && (
-              <button style={s.popupBtn} onClick={() => { goTo(nextIdx).catch(() => undefined); }}>
+              <button
+                style={s.popupBtn}
+                onClick={() => {
+                  goTo(nextIdx).catch(() => undefined);
+                }}
+              >
                 Approve another file
               </button>
             )}
             <button
-              style={nextIdx !== -1 ? { ...s.popupBtn, ...s.popupBtnGhost } : s.popupBtn}
-              onClick={() => { window.location.href = backUrl(); }}
+              style={
+                nextIdx !== -1
+                  ? { ...s.popupBtn, ...s.popupBtnGhost }
+                  : s.popupBtn
+              }
+              onClick={() => {
+                window.location.href = pendingFilesUrl();
+              }}
             >
-              Back to library
+              Back to Approval & Request
             </button>
           </div>
         </div>
@@ -1191,22 +1842,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   const preview = previewTarget(
     item.FileLeafRef,
     item.File.ServerRelativeUrl,
-    webUrl.split('/sites/')[0],
+    webUrl.split("/sites/")[0],
     webUrl,
   );
-
-
-  // Location = the org folder path (Segment › … › Unit), derived from the file's live
-  // Staging path so it is segment-agnostic (GHO, Upstream, Projects — any depth). Drops
-  // the deepest three path segments — Year, Document Type, and the filename — which are
-  // shown separately below and are not part of the org location.
-  const orgLocation = ((): string => {
-    const after = item.File.ServerRelativeUrl.split(`/${libSeg()}/`)[1];
-    if (!after) return "—";
-    const parts = after.split("/");
-    const org = parts.slice(0, Math.max(0, parts.length - 3));
-    return org.length ? org.join(" › ") : "—";
-  })();
 
   // Every column an approver is deciding on, in the same order as the Staging
   // views (memory `dms-staging-column-order`): where it is, then what it is,
@@ -1215,11 +1853,6 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   // FieldValuesAsText returns EVERY field on the item, so nothing here needs a
   // wider $select — only the right response key. It double-encodes underscores,
   // hence the _x005f_ form first with the plain internal name as a fallback.
-  //
-  // Business Segment / Department / Unit are not redundant with Location:
-  // Location is the folder path, which is ABBREVIATED (GHO › GCA › EG), while
-  // these three carry the terms' full labels. An approver needs the full label
-  // to be sure which unit they are publishing to.
   /**
    * What to call the top of the hierarchy for THIS document.
    *
@@ -1232,33 +1865,70 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
    * rather than from the metadata, because the metadata VALUE is identical for both families.
    */
   const segmentLabel = ((): string => {
-    const prefix = `${context.pageContext.web.serverRelativeUrl}/${libSeg()}/`.toLowerCase();
+    const prefix =
+      `${context.pageContext.web.serverRelativeUrl}/${libSeg()}/`.toLowerCase();
     const url = item.File.ServerRelativeUrl.toLowerCase();
-    if (url.indexOf(prefix) !== 0) return "Business Segment";
+    // "Business Segment" standardised to "Segment" (client QA item #53, 2026-09-13) — matches the
+    // shared default `documentDetails.ts`'s `tierRows` now falls back to.
+    if (url.indexOf(prefix) !== 0) return "Segment";
     const folder = url.slice(prefix.length).split("/")[0] ?? "";
     // Unread, unreadable, or a segment with no Category row all land here — today's wording, which
     // is right for twelve of the thirteen segments and never leaves the row unlabelled.
-    return segmentSides?.[folder] === "Project" ? "Group-Led Project" : "Business Segment";
+    return segmentSides?.[folder] === "Project"
+      ? "Group-Led Project"
+      : "Segment";
   })();
 
   /* ⚠ ONE LIST, SHARED WITH MY SUBMISSIONS (2026-09-10). This panel used to name `Department` and
      `Unit` literally, so Region / Estate·Mill / Refinery segments read blank, a below-Unit layer
      (Sub Unit, a New Folder Layer) never appeared, and Keyword was missing — while My Submissions,
      reading `buildDetailRows`, showed all of them. Tier rows are now DERIVED from their `<Base>Tid`
-     twins, so a level added next year appears here with no code change. Do NOT re-inline a list.
-     Location stays this page's own leading row: the abbreviated folder path, beside the full labels. */
-  const liveDetailRows: DetailRow[] = buildDetailRows({
-    fieldText,
-    leading: [{ label: "Location", value: orgLocation }],
-    segmentLabel,
-  });
+     twins, so a level added next year appears here with no code change. Do NOT re-inline a list. */
+  /* THE FIXED-FIELD LABELS `documentDetails.ts` PRODUCES TODAY — a closed, known set, used to tell a
+     FIXED row apart from a TIER row (Segment, Department, Unit, or whatever THIS segment calls its
+     own tiers) without hardcoding tier names, which differ per segment. */
+  const CURRENT_FIXED_LABELS = new Set([
+    "Document Type", "Year", "Document Date", "Confidentiality",
+    "Legally Privileged", "Project Name", "Vendor / Customer", "Remark", "Keyword",
+  ]);
+  const orderedDetailRows = (rows: DetailRow[]): DetailRow[] => {
+    // Client's exact requested order and relabelling (2026-09-17), on THIS page only — the shared
+    // order and labels in documentDetails.ts are untouched, so My Submissions is unaffected.
+    const byLabel = new Map(rows.map((r) => [r.label, r] as const));
+    const tiers = rows.filter((r) => !CURRENT_FIXED_LABELS.has(r.label));
+    const wanted: Array<{ from?: string; label: string }> = [
+      { from: "Year", label: "Year" },
+      { from: "Document Type", label: "Document Type" },
+      { from: "Project Name", label: "Project Name" },
+      { from: "Vendor / Customer", label: "Vendor/Customer Name" },
+      // Not one of the fixed fields — the file's own name, sourced directly rather than through
+      // `documentDetails.ts`, since no other screen asked for this row.
+      { label: "Document Name" },
+      { from: "Document Date", label: "Document Date" },
+      { from: "Confidentiality", label: "Confidential Level" },
+      { from: "Legally Privileged", label: "Legally Privileged" },
+      { from: "Keyword", label: "Keyword" },
+      { from: "Remark", label: "Remark for Approval" },
+    ];
+    const fixed: DetailRow[] = wanted.map((w) =>
+      w.from === undefined
+        ? { label: w.label, value: item.FileLeafRef }
+        : { label: w.label, value: byLabel.get(w.from)?.value ?? "—" },
+    );
+    return [...tiers, ...fixed];
+  };
+  const liveDetailRows: DetailRow[] = orderedDetailRows(
+    buildDetailRows({ fieldText, segmentLabel }),
+  );
   const fieldsLoaded = Object.keys(fieldText).length > 0;
-  if (fieldsLoaded) lastDetailLabels.current = liveDetailRows.map((r) => r.label);
+  if (fieldsLoaded)
+    lastDetailLabels.current = liveDetailRows.map((r) => r.label);
   // Mid-swap: the previous document's labels with a dash, as the old fixed list did — never its
   // VALUES, which belong to a different document.
-  const detailRows: DetailRow[] = !fieldsLoaded && lastDetailLabels.current
-    ? lastDetailLabels.current.map((label) => ({ label, value: label === "Location" ? orgLocation : "—" }))
-    : liveDetailRows;
+  const detailRows: DetailRow[] =
+    !fieldsLoaded && lastDetailLabels.current
+      ? lastDetailLabels.current.map((label) => ({ label, value: "—" }))
+      : liveDetailRows;
 
   // Pending is a system state only — approvers pick Approved or Rejected.
   /* ⚠ THE LABEL IS THE ACTION; THE `val` IS THE STORED DECISION, and they are deliberately
@@ -1273,6 +1943,12 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
 
   return (
     <div style={s.root}>
+      {/* Page title — hardcoded here rather than left to a native SharePoint text web part above it
+          (client, 2026-09-17), matching the same `.dms-page-title` convention already used on the
+          upload form and Bulk Upload. ⚠ THE PAGE'S OWN SEPARATE TITLE TEXT WEB PART MUST BE DELETED
+          when this ships, or "Approval Document" renders TWICE — the same required deployment step
+          those two other pages already needed, and nothing in code can detect the duplicate. */}
+      <h1 className="dms-page-title">Approval Document</h1>
       {/* ⚠⚠ NO BACKTICKS ANYWHERE INSIDE THIS TEMPLATE LITERAL, not even in a CSS comment — one ends
           the literal, and `tsc` then reports a JSX error naming neither the cause nor the line. That
           has broken a file six times in this project.
@@ -1289,6 +1965,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           and a class cannot beat an inline style. It sits inside a query that only exists below
           640px, so it cannot reach any desktop. */}
       <style>{`
+        .dms-page-title { margin: 0 0 24px; font-size: 28px; font-weight: 700; color: #1b1b1b; }
         @media (max-width: 640px) {
           .crs-ad-grid { grid-template-columns: minmax(0, 1fr) !important; }
         }
@@ -1298,15 +1975,25 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         <a href={backUrl()} style={s.backLink}>
           {/* A bare "<" must be escaped as an expression — JSX reads a literal
               left angle bracket in children as the start of a tag. */}
-          <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 700 }}>{"<"}</span>
-          Back to document list
+          <span style={{ fontSize: 16, lineHeight: 1, fontWeight: 700 }}>
+            {"<"}
+          </span>
+          Back to Approval & Request
         </a>
       </div>
 
       <h1 style={s.docTitle}>{item.FileLeafRef}</h1>
       <div style={s.docMeta}>
-        <img src={`${webUrl}/_layouts/15/images/ic${(item.FileLeafRef.split('.').pop() ?? 'txt').toLowerCase()}.png`} width={16} height={16} alt="" style={{ flexShrink: 0 }} />
-        <span>{(item.FileLeafRef.split('.').pop() ?? 'File').toUpperCase()} document</span>
+        <img
+          src={`${webUrl}/_layouts/15/images/ic${(item.FileLeafRef.split(".").pop() ?? "txt").toLowerCase()}.png`}
+          width={16}
+          height={16}
+          alt=""
+          style={{ flexShrink: 0 }}
+        />
+        <span>
+          {(item.FileLeafRef.split(".").pop() ?? "File").toUpperCase()} document
+        </span>
         <span style={s.dot}>•</span>
         <span>{formatSize(item.File.Length)}</span>
         <span style={s.dot}>•</span>
@@ -1323,14 +2010,23 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         style={{
           ...s.grid,
           gridTemplateColumns:
-            approveRight === "denied" ? "196px minmax(0, 1fr)" : "196px minmax(0, 1fr) 280px",
+            approveRight === "denied"
+              ? "196px minmax(0, 1fr)"
+              : "196px minmax(0, 1fr) 280px",
         }}
       >
-
         {/* Left — Uploaded by + Details */}
         <div>
           <div style={s.sectionTitle}>Uploaded by</div>
-          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 28, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "flex-start",
+              marginBottom: 28,
+              flexWrap: "wrap",
+            }}
+          >
             <div style={s.avatar}>{initials(item.Author.Title)}</div>
             <div>
               <div style={s.authorName}>{item.Author.Title}</div>
@@ -1338,13 +2034,25 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             </div>
           </div>
 
-          <hr style={{ border: "none", borderTop: "1px solid #edebe9", margin: "0 0 16px" }} />
+          <hr
+            style={{
+              border: "none",
+              borderTop: "1px solid #edebe9",
+              margin: "0 0 16px",
+            }}
+          />
           <div style={s.sectionTitle}>Details</div>
           {/* Muted rather than blanked during a swap: the labels come from a per-item endpoint
               that cannot be batched into the queue query, so they are always a moment behind the
               document itself. Hiding the rows would collapse the column and shift the layout on
               every Next press. */}
-          <div style={swapping ? { opacity: 0.45, transition: "opacity .15s" } : undefined}>
+          <div
+            style={
+              swapping
+                ? { opacity: 0.45, transition: "opacity .15s" }
+                : undefined
+            }
+          >
             {detailRows.map((r, i) => (
               <div key={`${i}-${r.label}`} style={s.detailRow}>
                 <div style={s.metaLabel}>{r.label}</div>
@@ -1363,25 +2071,46 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
               <div style={s.sectionTitle}>Preview</div>
               <div style={s.navControls}>
                 <button
-                  style={{ ...s.navBtn, ...(pos === 0 || swapping ? s.navBtnOff : {}) }}
+                  style={{
+                    ...s.navBtn,
+                    ...(pos === 0 || swapping ? s.navBtnOff : {}),
+                  }}
                   disabled={pos === 0 || swapping}
-                  onClick={() => { goTo(pos - 1).catch(() => undefined); }}
+                  onClick={() => {
+                    goTo(pos - 1).catch(() => undefined);
+                  }}
                 >
                   ‹ Prev
                 </button>
                 {/* Position in the WHOLE queue, decided items included. A number that moved
                     backwards as you worked would be worse than no number at all. */}
-                <span style={s.navCount}>{pos + 1} of {queue.length}</span>
+                <span style={s.navCount}>
+                  {pos + 1} of {queue.length}
+                </span>
                 <button
-                  style={{ ...s.navBtn, ...(pos >= queue.length - 1 || swapping ? s.navBtnOff : {}) }}
+                  style={{
+                    ...s.navBtn,
+                    ...(pos >= queue.length - 1 || swapping ? s.navBtnOff : {}),
+                  }}
                   disabled={pos >= queue.length - 1 || swapping}
-                  onClick={() => { goTo(pos + 1).catch(() => undefined); }}
+                  onClick={() => {
+                    goTo(pos + 1).catch(() => undefined);
+                  }}
                 >
                   Next ›
                 </button>
                 {currentDecided && (
-                  <span style={{ ...s.navBadge, ...(currentDecided === "Approved" ? s.navBadgeOk : s.navBadgeNo) }}>
-                    {currentDecided === "Approved" ? "✓ Approved" : "✕ Rejected"}
+                  <span
+                    style={{
+                      ...s.navBadge,
+                      ...(currentDecided === "Approved"
+                        ? s.navBadgeOk
+                        : s.navBadgeNo),
+                    }}
+                  >
+                    {currentDecided === "Approved"
+                      ? "✓ Approved"
+                      : "✕ Rejected"}
                   </span>
                 )}
               </div>
@@ -1417,11 +2146,24 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           ) : preview.kind === "none" ? (
             // Say so, and offer the file. A blank pane reads as a broken page, and an approver
             // who cannot see the document must not be nudged into deciding anyway.
-            <div style={{ ...s.previewBox, flexDirection: "column", gap: 12, color: "#605e5c", fontSize: 14 }}>
+            <div
+              style={{
+                ...s.previewBox,
+                flexDirection: "column",
+                gap: 12,
+                color: "#605e5c",
+                fontSize: 14,
+              }}
+            >
               <div>
                 No preview is available for <strong>{item.FileLeafRef}</strong>.
               </div>
-              <a href={preview.openUrl} target="_blank" rel="noopener noreferrer" style={s.previewLink}>
+              <a
+                href={preview.openUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={s.previewLink}
+              >
                 Open the file in a new tab
               </a>
             </div>
@@ -1429,7 +2171,14 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             <div>
               <iframe
                 src={preview.url}
-                style={{ width: "100%", height: "calc(100vh - 240px)", minHeight: 600, border: "none", borderRadius: 4, display: "block" }}
+                style={{
+                  width: "100%",
+                  height: "calc(100vh - 240px)",
+                  minHeight: 600,
+                  border: "none",
+                  borderRadius: 4,
+                  display: "block",
+                }}
                 title={`Preview of ${item.FileLeafRef}`}
                 allowFullScreen
               />
@@ -1453,124 +2202,285 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             `denied` ONLY. `unknown` keeps the panel, because a failed probe must never take the
             approval controls away from a real approver; the 403 at submit is still the backstop. */}
         {approveRight !== "denied" && (
-        <div style={s.panel}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
-            <span style={s.panelTitle}>Approval</span>
-          </div>
-          {/* ⚠ A DECIDED DOCUMENT GETS A READ-ONLY SUMMARY, NOT THE SAME FORM DISABLED (client's
+          <div style={s.panel}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <span style={s.panelTitle}>Approval</span>
+            </div>
+            {/* ⚠ A DECIDED DOCUMENT GETS A READ-ONLY SUMMARY, NOT THE SAME FORM DISABLED (client's
               mockup, 2026-09-03: "having clickable radio buttons and CTA buttons ... displayed out
               in the layout is really confusing"). Before this, the panel kept showing live-looking
               radio buttons, a comment box and Approve/Cancel buttons after a decision had already
               been made in this session — every control merely `disabled`, which still READS as an
               interactive form. Status / Comment / who-and-when is the whole story once a decision
               exists; nothing below it can be acted on again. */}
-          {currentDecided ? (
-            <>
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#605e5c", marginBottom: 4 }}>STATUS</div>
-                <span style={{ ...s.navBadge, ...(currentDecided === "Approved" ? s.navBadgeOk : s.navBadgeNo) }}>
-                  {currentDecided === "Approved" ? "Approved" : "Rejected"}
-                </span>
-              </div>
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "#605e5c", marginBottom: 4 }}>COMMENT</div>
-                <div style={{ fontSize: 13 }}>{comments.trim() || <em style={{ color: "#a19f9d" }}>No comment was given.</em>}</div>
-              </div>
-              <div style={{ borderTop: "1px solid #edebe9", paddingTop: 10, fontSize: 12, color: "#605e5c" }}>
-                Reviewed by <strong>{context.pageContext.user.displayName}</strong> on{" "}
-                {formatDate(new Date().toISOString())} &mdash; no further action is needed.
-              </div>
-            </>
-          ) : (
-            <>
-              <p style={s.panelHint}>Please review the document and its details.</p>
+            {currentDecided ? (
+              <>
+                <div style={{ marginBottom: 16 }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#605e5c",
+                      marginBottom: 4,
+                    }}
+                  >
+                    STATUS
+                  </div>
+                  <span
+                    style={{
+                      ...s.navBadge,
+                      ...(currentDecided === "Approved"
+                        ? s.navBadgeOk
+                        : s.navBadgeNo),
+                    }}
+                  >
+                    {currentDecided === "Approved" ? "Approved" : "Rejected"}
+                  </span>
+                </div>
+                <div style={{ marginBottom: 16 }}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#605e5c",
+                      marginBottom: 4,
+                    }}
+                  >
+                    COMMENT
+                  </div>
+                  <div style={{ fontSize: 13 }}>
+                    {comments.trim() || (
+                      <em style={{ color: "#a19f9d" }}>
+                        No comment was given.
+                      </em>
+                    )}
+                  </div>
+                </div>
+                <div
+                  style={{
+                    borderTop: "1px solid #edebe9",
+                    paddingTop: 10,
+                    fontSize: 12,
+                    color: "#605e5c",
+                  }}
+                >
+                  Reviewed by{" "}
+                  <strong>{context.pageContext.user.displayName}</strong> on{" "}
+                  {formatDate(new Date().toISOString())} &mdash; no further
+                  action is needed.
+                </div>
+              </>
+            ) : (
+              <>
+                <p style={s.panelHint}>
+                  Please review the document and its details.
+                </p>
 
-              <div style={{ marginBottom: 16 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Approval status</div>
-                {radioOptions.map(({ val, label }) => (
-                  <label key={val} style={{ display: "block", marginBottom: 10, cursor: "pointer" }}>
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                      <input
-                        type="radio"
-                        name="decision"
-                        value={val}
-                        checked={decision === val}
-                        onChange={() => setDecision(val)}
-                        style={{ flexShrink: 0 }}
-                      />
-                      <div style={{ fontSize: 13, fontWeight: decision === val ? 600 : 400 }}>{label}</div>
-                    </div>
-                  </label>
-                ))}
-              </div>
+                <div style={{ marginBottom: 16 }}>
+                  <div
+                    style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}
+                  >
+                    Approval status
+                  </div>
+                  {radioOptions.map(({ val, label }) => (
+                    <label
+                      key={val}
+                      style={{
+                        display: "block",
+                        marginBottom: 10,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "center",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <input
+                          type="radio"
+                          name="decision"
+                          value={val}
+                          checked={decision === val}
+                          onChange={() => setDecision(val)}
+                          style={{ flexShrink: 0 }}
+                        />
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: decision === val ? 600 : 400,
+                          }}
+                        >
+                          {label}
+                        </div>
+                      </div>
+                    </label>
+                  ))}
+                </div>
 
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Comment</div>
-                <textarea
-                  value={comments}
-                  onChange={e => setComments(e.target.value.slice(0, 500))}
-                  placeholder="Use this field to enter any comments about why the item was approved or rejected."
-                  style={s.textarea}
-                />
-                <div style={s.charCount}>{comments.length}/500</div>
-                {/* ⚠ REPLACES A NATIVE `window.confirm()` THAT USED TO FIRE ON APPROVE (client,
+                <div>
+                  <div
+                    style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}
+                  >
+                    {/* Reject requires a reason; Approve's comment stays optional — mirrors the
+                        settled rule on Requests.tsx (reason required to reject, note optional to
+                        approve), so the two screens read the same way. */}
+                    {decision === "Rejected" ? "Reason" : "Comment"}
+                  </div>
+                  <textarea
+                    value={comments}
+                    onChange={(e) => {
+                      setComments(e.target.value.slice(0, 500));
+                      if (showCommentError) setShowCommentError(false);
+                    }}
+                    placeholder={
+                      decision === "Rejected"
+                        ? "Explain why this document is being rejected."
+                        : "Use this field to enter any comments about why the item was approved or rejected."
+                    }
+                    style={
+                      decision === "Rejected" &&
+                      showCommentError &&
+                      comments.trim() === ""
+                        ? {
+                            ...s.textarea,
+                            borderColor: "#a4262c",
+                            background: "#fdf6f6",
+                          }
+                        : s.textarea
+                    }
+                  />
+                  {/* Shown only after Reject was attempted with nothing typed — never on load,
+                      which would mark an untouched box as being in error. */}
+                  {decision === "Rejected" &&
+                    showCommentError &&
+                    comments.trim() === "" && (
+                      <p
+                        style={{
+                          fontSize: 11.5,
+                          color: "#a4262c",
+                          margin: "4px 0 0",
+                        }}
+                      >
+                        Reasoning is required
+                      </p>
+                    )}
+                  <div style={s.charCount}>{comments.length}/500</div>
+                  {/* ⚠ REPLACES A NATIVE `window.confirm()` THAT USED TO FIRE ON APPROVE (client,
                     2026-09-02: *"the native one is annoying to client … its best to just add a text
                     under the comment box, precheck the file against the Document Library"*). Same
                     two messages the confirm used to carry — confirmed clash vs. an unanswerable check —
                     shown here instead, so Approve is a single click with nothing left to ask again. */}
-                {clashCheck && !clashCheck.ok && (
-                  <div style={{ ...s.charCount, textAlign: "left" as const, color: "#8a4b00", marginTop: 6 }}>
-                    {clashCheck.clash === true
-                      ? `A document called "${item.FileLeafRef}" is already filed in ${approvedLibTitle()} ` +
-                        `for this folder. Approving REPLACES it — the document it replaces moves to the ` +
-                        `site recycle bin, restorable for 93 days.`
-                      : `The existing-document check could not be completed: ${clashCheck.reason}. ` +
-                        `Approving may replace a document already filed in ${approvedLibTitle()}, or may ` +
-                        `not — that could not be established.`}
-                  </div>
-                )}
-              </div>
-
-              <div style={{ marginBottom: 20 }}>
-                <div style={s.publishLabel}>Publish to</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" as const }}>
-                  {(() => {
-                    // Segment › … › Unit, from the live Staging path (segment-agnostic).
-                    const after = item.File.ServerRelativeUrl.split(`/${libSeg()}/`)[1];
-                    const parts = after ? after.split('/') : [];
-                    const crumbs = parts.slice(0, Math.max(0, parts.length - 3));
-                    return crumbs.map((crumb, i) => (
-                      <React.Fragment key={crumb}>
-                        {i > 0 && <span style={{ color: "#c8c6c4", fontSize: 12 }}>›</span>}
-                        <span style={{ color: i === crumbs.length - 1 ? "#0f6cbd" : "#605e5c", fontSize: 13 }}>{crumb}</span>
-                      </React.Fragment>
-                    ));
-                  })()}
+                  {clashCheck && !clashCheck.ok && (
+                    <div
+                      style={{
+                        ...s.charCount,
+                        textAlign: "left" as const,
+                        color: "#8a4b00",
+                        marginTop: 6,
+                      }}
+                    >
+                      {clashCheck.clash === true
+                        ? `A document called "${item.FileLeafRef}" is already filed in ${approvedLibTitle()} ` +
+                          `for this folder. Approving REPLACES it — the document it replaces moves to the ` +
+                          `site recycle bin, restorable for 93 days.`
+                        : `The existing-document check could not be completed: ${clashCheck.reason}. ` +
+                          `Approving may replace a document already filed in ${approvedLibTitle()}, or may ` +
+                          `not — that could not be established.`}
+                    </div>
+                  )}
                 </div>
-              </div>
 
-              {submitError && <div style={s.errText}>{submitError}</div>}
+                <div style={{ marginBottom: 20 }}>
+                  <div style={s.publishLabel}>Publish to</div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                      flexWrap: "wrap" as const,
+                    }}
+                  >
+                    {(() => {
+                      // Segment › … › Unit, from the live Staging path (segment-agnostic).
+                      const after = item.File.ServerRelativeUrl.split(
+                        `/${libSeg()}/`,
+                      )[1];
+                      const parts = after ? after.split("/") : [];
+                      const crumbs = parts.slice(
+                        0,
+                        Math.max(0, parts.length - 3),
+                      );
+                      return crumbs.map((crumb, i) => (
+                        <React.Fragment key={crumb}>
+                          {i > 0 && (
+                            <span style={{ color: "#c8c6c4", fontSize: 12 }}>
+                              ›
+                            </span>
+                          )}
+                          <span
+                            style={{
+                              color:
+                                i === crumbs.length - 1 ? "#0f6cbd" : "#605e5c",
+                              fontSize: 13,
+                            }}
+                          >
+                            {crumb}
+                          </span>
+                        </React.Fragment>
+                      ));
+                    })()}
+                  </div>
+                </div>
 
-              {/* Pending is no longer selectable — require an explicit Approved/Rejected choice. */}
-              <button
-                onClick={() => { submitDecision(decision).catch(() => undefined); }}
-                disabled={submitting || swapping || decision === "Pending"}
-                style={{
-                  ...s.btnApprove,
-                  opacity: submitting || swapping || decision === "Pending" ? 0.7 : 1,
-                  cursor: decision === "Pending" ? "not-allowed" : "pointer",
-                }}
-              >
-                {submitting ? "Saving…" : "Proceed"}
-              </button>
-              <button onClick={() => { window.location.href = backUrl(); }} disabled={submitting} style={{ ...s.btnSendBack, opacity: submitting ? 0.7 : 1 }}>
-                Cancel
-              </button>
-            </>
-          )}
-        </div>
+                {submitError && <div style={s.errText}>{submitError}</div>}
+
+                {/* Pending is no longer selectable — require an explicit Approved/Rejected choice. */}
+                <button
+                  onClick={() => {
+                    // Refused, not silently blocked — mirrors Requests.tsx: reject demands a
+                    // reason, approve does not.
+                    if (decision === "Rejected" && comments.trim() === "") {
+                      setShowCommentError(true);
+                      return;
+                    }
+                    submitDecision(decision).catch(() => undefined);
+                  }}
+                  disabled={submitting || swapping || decision === "Pending"}
+                  style={{
+                    ...s.btnApprove,
+                    opacity:
+                      submitting || swapping || decision === "Pending"
+                        ? 0.7
+                        : 1,
+                    cursor: decision === "Pending" ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {submitting ? "Saving…" : "Proceed"}
+                </button>
+                <button
+                  onClick={() => {
+                    window.location.href = backUrl();
+                  }}
+                  disabled={submitting}
+                  style={{ ...s.btnSendBack, opacity: submitting ? 0.7 : 1 }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
         )}
-
       </div>
     </div>
   );

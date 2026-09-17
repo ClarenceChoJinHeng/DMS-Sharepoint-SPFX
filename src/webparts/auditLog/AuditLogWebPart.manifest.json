@@ -14,7 +14,7 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "CRS Audit Log" },
+    "title": { "default": "GDC Audit Log" },
     "description": { "default": "Admin tool — what happened in the document management system, and who did it" },
     "officeFabricIconFontName": "ComplianceAudit",
     "properties": {}

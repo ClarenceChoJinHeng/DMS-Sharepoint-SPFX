@@ -4,6 +4,9 @@ import {
   UPLOAD_PAUSE_MESSAGE,
   uploadsArePaused,
 } from "../../../shared/uploadPause";
+// So the "Upload is temporarily disabled" banner clears itself once uploads resume, rather than
+// only ever being set at mount — see the note beside its one call site.
+import { useLiveRefresh } from "../../../shared/liveRefresh";
 import {
   libraryHasColumns,
   REF_COLUMNS,
@@ -1840,6 +1843,24 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       setDeptLoading(false);
     });
   }, []);
+
+  /* ⚠ THE BANNER ABOVE READS `paused` FROM THE MOUNT-TIME LOAD ONLY, AND NEVER UPDATED AGAIN — the
+     write-time re-check in `handleUpload` is what actually protects an upload, and it only ever
+     flips `paused` to TRUE (found the setting still on) or leaves it alone. Nothing set it back to
+     FALSE, so a tab left open across an admin resuming uploads went on showing "Upload is
+     temporarily disabled" for the rest of the session — even though the very next upload would
+     succeed. Client, 2026-09-14: "the banner stays there despite an uploader can upload, this
+     confuses uploader."
+
+     Reuses `useLiveRefresh` VERBATIM rather than a bespoke poll — the same hook already used for
+     the Requests/My Submissions queues, for the identical reason: no push channel exists, so
+     "live" here means refresh on focus/visibility-change plus a slow backstop poll while the tab
+     is visible. Blocked on `busy`, so a refresh landing mid-upload cannot flip the banner under an
+     admin who is watching the "Uploading…" status — the write-time check is what decides that
+     specific attempt regardless. */
+  useLiveRefresh(async () => {
+    setPaused(await readUploadPause());
+  }, busy);
 
   /* ---------- Helpers ----------------------------------------------------- */
 
@@ -4427,7 +4448,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           value={remark}
           maxLength={250}
           rows={3}
-          style={{ resize: "vertical", minHeight: 60 }}
+          style={{ resize: "vertical", minHeight: 60, maxHeight: 200 }}
           onChange={(e) => guard("remark", e.target.value, setRemark)}
         />
         {blockedChar.remark ? (
@@ -5110,7 +5131,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                            and the client settled it on 2026-09-04: hyphenated, everywhere. */
                             return m.side === "Project"
                               ? "Group-Led Project"
-                              : "Business Segment";
+                              : "Segment";
                           })()}
                         </strong>
                       </span>
@@ -5393,7 +5414,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     (the generic "Project" wording this replaces was correct for that case and
                     wrong for this one; there is no label that is right for both). */}
                         {side === "BusinessSegment"
-                          ? "Business Segment"
+                          ? "Segment"
                           : "Group-Led Project"}
                       </label>
                     );

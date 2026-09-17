@@ -355,7 +355,11 @@ const s: Record<string, React.CSSProperties> = {
      inside. A scroll cap has clipped an absolutely positioned child on three other screens in this
      project (Group Management's people picker, the upload form's two info panels, the member-add
      dropdown), so re-check this if a scroller is ever added here. */
-  labelRow:  { display: "flex", alignItems: "center", gap: 5, marginTop: 14 },
+  // ⚠ `marginBottom: 4` MATCHES `label` BELOW — same fix as `SegmentCreator.tsx`'s identical row,
+  // same cause: split into a flex row to hold the "Open the Term Store" link and re-check button
+  // beside the label, and the bottom gap `label` always had got dropped in the process. Found live
+  // 2026-09-17: "button is sticking the input".
+  labelRow:  { display: "flex", alignItems: "center", gap: 5, marginTop: 14, marginBottom: 4 },
   infoWrap:  { position: "relative", display: "inline-flex", alignItems: "center" },
   /* Sits on the label row, so it reads as help for THAT field rather than as a page-level action —
      the term set ID is the one value on this form that has to be fetched from somewhere else. */

@@ -14,7 +14,7 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "CRS Configuration" },
+    "title": { "default": "GDC Configuration" },
     "description": { "default": "Admin tool — control which file types can be uploaded to the repository" },
     "officeFabricIconFontName": "Settings",
     "properties": {}

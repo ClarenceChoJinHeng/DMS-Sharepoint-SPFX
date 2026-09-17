@@ -564,6 +564,113 @@ export async function probeFolderApproveAccess(
   return hasPermissionBit(Number(d.Low), APPROVE_ITEMS_BIT) ? "granted" : "denied";
 }
 
+/** Same enum, same `kind - 1` rule: deleteListItems = 4, so bit index 3. */
+const DELETE_LIST_ITEMS_BIT = 3;
+/**
+ * managePermissions = 26, so bit index 25.
+ *
+ * ⚠ THIS IS THE RIGHT BIT FOR "CAN SHARE", and it is not obvious. Sharing a document grants another
+ * principal access to it, which is a permission change — and the custom `CRS Share` level exists
+ * precisely because it CONTAINS Manage Permissions (the same fact that let share-revoke ship on
+ * 2026-08-28 needing no new role). `SP.Web.ShareObject` fails without it.
+ */
+const MANAGE_PERMISSIONS_BIT = 25;
+
+/** What this viewer may do to one FILE, each answered independently. */
+export interface FileRights {
+  /** Recycle it outright, with no approval. */
+  remove: UploadAccess;
+  /** Grant somebody else access to it. */
+  share: UploadAccess;
+}
+
+/**
+ * What can THIS viewer actually do to THIS document?
+ *
+ * ⚠⚠ ASKS THE ITEM, NEVER THE GROUP MAP — and that distinction is the whole reason this exists
+ * (2026-09-15). My Submissions decided whether to offer a direct Delete/Share or a reason-required
+ * request by reconstructing the answer from Group Map rows: read the viewer's groups, read every
+ * mapping row, keep the ones carrying DEL/SHARE, collect those rows' tier term GUIDs, then match
+ * them against the tier GUIDs stamped on the document's own `<Base>Tid` columns. Five moving parts,
+ * each of which fails SILENTLY and identically — as "you must raise a request":
+ *
+ *   - the Group Map cannot be read by this account, or the read is truncated
+ *   - a row's `Role` is spelled a way `normalizeRoleValue` does not recognise
+ *   - the group is mapped at one tier and the document filed under another
+ *   - the document was filed without its tier `Tid` values at all
+ *   - a list title resolves to a legacy name before `primeNames` settles
+ *
+ * An approver holding `CRS Delete` on the folder hits every one of those as a wrong "no", while a
+ * site collection administrator sails past because Full Control is checked separately — which is
+ * exactly the shape reported: *"it seems only system admin works"*.
+ *
+ * `EffectiveBasePermissions` answers for this user on this item in ONE read, accounting for the
+ * folder ACL, inheritance, group membership and site-admin status together. It is the same reasoning
+ * the approval page's own Approve probe and `probeFolderApproveAccess` above already rest on: *a role
+ * lookup can say a persona holds something while reconciliation has not granted it; an ACL read
+ * cannot be wrong that way.*
+ *
+ * ⚠ IT ANSWERS ABOUT PERMISSION ONLY. Whether an action is APPROPRIATE is still the caller's rule —
+ * an archived document is read-only to everybody by design, and `validateDraft` refuses requests
+ * against one regardless of what this returns.
+ *
+ * Every non-"granted" answer leaves the caller on its existing path, so an unreadable or throttled
+ * probe costs a redundant request and never a lost route.
+ */
+export async function probeFileRights(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  uniqueId: string,
+): Promise<FileRights> {
+  const url =
+    `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(uniqueId)}')` +
+    `/ListItemAllFields/EffectiveBasePermissions`;
+  const get = async (): Promise<SPHttpClientResponse> =>
+    spHttpClient.get(url, SPHttpClient.configurations.v1, {
+      // ⚠ NO-CACHE, for the reason the two probes above carry verbatim: this URL is keyed on the
+      // FILE's id and not on who is asking, so a cached "granted" from an approver's session can be
+      // handed to a PIC in the same browser profile — and here that decides whether a delete happens
+      // with no approval at all.
+      headers: {
+        Accept: "application/json;odata=nometadata",
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+      },
+    });
+
+  const both = (v: UploadAccess): FileRights => ({ remove: v, share: v });
+
+  let res: SPHttpClientResponse = await get();
+  for (
+    let attempt = 0;
+    (res.status === 429 || res.status === 503) && attempt < 3;
+    attempt++
+  ) {
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(8000, 500 * 2 ** attempt);
+    await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+    res = await get();
+  }
+
+  if (res.status === 401 || res.status === 403) return both("denied");
+  // Security trimming answers 404 for an item this user cannot see, so 404 is not proof the file has
+  // gone — and it does not matter here: both mean this viewer cannot act on it directly.
+  if (res.status === 404) return both("missing");
+  if (!res.ok) {
+    console.warn(
+      `File-rights probe was inconclusive (HTTP ${res.status}) for file ${uniqueId} — the request route stays offered.`,
+    );
+    return both("unknown");
+  }
+  const d = await res.json().catch(() => null);
+  if (!d || d.Low === undefined) return both("unknown");
+  const low = Number(d.Low);
+  return {
+    remove: hasPermissionBit(low, DELETE_LIST_ITEMS_BIT) ? "granted" : "denied",
+    share: hasPermissionBit(low, MANAGE_PERMISSIONS_BIT) ? "granted" : "denied",
+  };
+}
+
 /**
  * The same question, asked by PATH instead of by UniqueId.
  *

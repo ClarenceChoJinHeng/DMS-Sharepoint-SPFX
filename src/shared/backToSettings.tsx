@@ -22,18 +22,26 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { AdminLink, SitePage, resolveLink } from "./adminPages";
 
 /**
- * How CRS Settings is recognised.
+ * How the settings page is recognised.
  *
- * `crs.?settings` covers both `CRS-Settings.aspx` and the title `CRS Settings`; the anchored
- * `^settings` catches a site that dropped the prefix. NOT a bare `/settings/i` — that would claim a
- * `Site Settings` or `List Settings` page and send the admin somewhere nobody meant, the same
- * collision the landing page's patterns are pinned against.
+ * `crs.?settings` covers both `CRS-Settings.aspx` and the title `CRS Settings` — the ORIGINAL
+ * naming, kept so a site still on it (any environment not yet rebranded) keeps resolving. `gdc.?
+ * settings` covers the rebrand (client, 2026-09-17: "CRS" → "GDC" — confirmed live, the site's own
+ * nav now reads "GDC Settings"). The anchored `^settings` catches a site that dropped the prefix
+ * entirely. NOT a bare `/settings/i` — that would claim a `Site Settings` or `List Settings` page
+ * and send the admin somewhere nobody meant, the same collision the landing page's patterns are
+ * pinned against.
+ *
+ * ⚠ WIDENED, NEVER NARROWED. Dropping `crs.?settings` the moment `gdc.?settings` was added would
+ * break this exact "Back to..." band on any site whose rename has not happened (or landed) yet —
+ * the display label can move on ahead of the live page rename, but the MATCH must keep recognising
+ * both names until every site is confirmed rebranded.
  */
 export const SETTINGS_LINK: AdminLink = {
   key: "settings",
-  label: "CRS Settings",
-  match: /crs.?settings|^settings\b/i,
-  pageName: "CRS Settings",
+  label: "GDC Settings",
+  match: /crs.?settings|gdc.?settings|^settings\b/i,
+  pageName: "GDC Settings",
 };
 
 /**
@@ -140,7 +148,7 @@ export async function readSitePages(context: WebPartContext, siteUrl: string): P
 }
 
 /**
- * "‹ Back to CRS Settings" — or a plain "‹ Back" while the page is unknown.
+ * "‹ Back to GDC Settings" — or a plain "‹ Back" while the page is unknown.
  *
  * `override` is the same escape hatch the landing page offers: on a site whose page names this code
  * cannot guess, an address typed into the property pane wins outright and is never pattern-checked.
@@ -182,7 +190,7 @@ export function BackToSettings({
       />
     );
   }
-  return <BackBand label="Back to CRS Settings" href={url} />;
+  return <BackBand label="Back to GDC Settings" href={url} />;
 }
 
 /**

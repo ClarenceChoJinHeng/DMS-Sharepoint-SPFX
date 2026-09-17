@@ -1,7 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx heft *)"
+      "Bash(npx heft *)",
+      "Bash(node harness.js)",
+      "Bash(npx eslint *)",
+      "Bash(grep -E \"Successes:|Failures:|Total:|warnings$\")",
+      "Bash(npm run *)",
+      "Bash(unzip -p sharepoint/solution/sd-gatrie.sppkg AppManifest.xml)",
+      "Bash(unzip -l sharepoint/solution/sd-gatrie.sppkg)",
+      "Bash(unzip -p sharepoint/solution/sd-gatrie.sppkg \"ClientSideAssets/my-submissions-web-part_*.js\")",
+      "Read(//tmp/**)"
     ]
   }
 }

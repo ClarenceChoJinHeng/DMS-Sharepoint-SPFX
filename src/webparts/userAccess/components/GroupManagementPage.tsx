@@ -37,12 +37,14 @@ export default function GroupManagementPage({ context }: IAccessProps): React.Re
         siteUrl={context.pageContext.web.absoluteUrl}
         hideCreateForm={true}
         refreshKey={refreshKey}
+        collapsedByDefault={true}
       />
 
       <BulkGroupProvisioner
         context={context}
         siteUrl={context.pageContext.web.absoluteUrl}
         onRunComplete={() => setRefreshKey((n) => n + 1)}
+        collapsedByDefault={true}
       />
     </AccessShell>
   );

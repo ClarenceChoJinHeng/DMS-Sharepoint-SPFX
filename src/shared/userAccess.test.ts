@@ -1,8 +1,10 @@
 import {
   AccessRow,
   UserGroupRef,
+  GroupMapRenameRow,
   personDisplay,
   personaForRoles,
+  plannedGroupRenames,
   summarizeUserAccess,
   describeGroupAccess,
 } from "./userAccess";
@@ -28,24 +30,23 @@ const g = (id: number, title: string): UserGroupRef => ({ id, title });
 
 describe("personaForRoles", () => {
   it("matches a persona on its exact role set, whatever the order or case", () => {
-    // pic regained DELS on 2026-09-11 (client: "now pic can delete without approval on staging"),
-    // so its exact set is ["UPL", "DELS"] again, as it was before the 2026-08-20 correction.
-    expect(personaForRoles(["UPL", "DELS"])?.key).toBe("pic");
-    expect(personaForRoles(["dels", "upl"])?.key).toBe("pic");
-    // hod's set gained DELHC/SHAREHC on 2026-08-24, so it is a five-role match now.
-    expect(personaForRoles(["SHARE", "DEL", "DEPTVIEW", "DELHC", "SHAREHC"])?.key).toBe("hod");
-    // hou_hc's full set since the 2026-08-24 clarification ("only HC HOU can see and approve") —
-    // APRHC in place of APR, plus DELHC and SHAREHC, none of which the plain hou holds any more.
-    expect(
-      personaForRoles(["APRHC", "DELS", "DEL", "SHARE", "UPLHC", "DELSHC", "DELHC", "SHAREHC"])?.key,
-    ).toBe("hou_hc");
+    // pic lost DELS a THIRD time on 2026-09-17 — direct delete moved to a Power Automate proxy
+    // (client: "they cannot directly delete anymore but someone do it on their behalf via power
+    // automate"), so its exact set is back down to ["UPL"] alone.
+    // See 2026-09-17-proxy-deletion-via-power-automate-design.md.
+    expect(personaForRoles(["UPL"])?.key).toBe("pic");
+    expect(personaForRoles(["upl"])?.key).toBe("pic");
+    // hod's set lost DEL/DELHC the same day — SHARE/SHAREHC stay, deletion moved to the proxy.
+    expect(personaForRoles(["SHARE", "DEPTVIEW", "SHAREHC"])?.key).toBe("hod");
+    // hou_hc's set lost DELS/DEL/DELSHC/DELHC the same day — APRHC/SHARE/UPLHC/SHAREHC remain.
+    expect(personaForRoles(["APRHC", "SHARE", "UPLHC", "SHAREHC"])?.key).toBe("hou_hc");
     // The plain hou set: no HC role reaches it at all — a role held by two personas cannot grant to
     // one and withhold from the other, so any single HC role here would match nothing.
-    expect(personaForRoles(["APR", "DELS", "DEL", "SHARE", "UPL"])?.key).toBe("hou");
+    expect(personaForRoles(["APR", "SHARE", "UPL"])?.key).toBe("hou");
   });
 
   it("ignores duplicates, which a row set legitimately contains", () => {
-    expect(personaForRoles(["UPL", "DELS", "UPL"])?.key).toBe("pic");
+    expect(personaForRoles(["UPL", "UPL"])?.key).toBe("pic");
   });
 
   // The whole reason this is an exact match. `employee` is ["MEMBER"] and `employee_hc` is
@@ -73,16 +74,17 @@ describe("personaForRoles", () => {
 
 describe("summarizeUserAccess", () => {
   it("reports the persona, the roles and the place for a mapped group", () => {
-    // pic's mapping rows carry BOTH roles again since 2026-09-11 (DELS regained).
+    // pic's mapping row is back to UPL alone since 2026-09-17 (DELS moved to a Power Automate
+    // proxy). See 2026-09-17-proxy-deletion-via-power-automate-design.md.
     const s = summarizeUserAccess(
       [g(42, "GHO_GF_TAX_UPLOADER")],
-      [row({ groupId: 42, role: "UPL" }), row({ groupId: 42, role: "DELS" })],
+      [row({ groupId: 42, role: "UPL" })],
       resolve,
     );
     expect(s.none).toBe(false);
     expect(s.groups).toHaveLength(1);
     expect(s.groups[0].persona?.key).toBe("pic");
-    expect(s.groups[0].roles).toEqual(["UPL", "DELS"]);
+    expect(s.groups[0].roles).toEqual(["UPL"]);
     expect(s.groups[0].places).toEqual([
       {
         segmentLabel: "Group Head Office",
@@ -96,9 +98,9 @@ describe("summarizeUserAccess", () => {
   // An approver group carries six role rows at ONE term. Listing that term six times says nothing
   // the first line did not.
   it("collapses many rows at one place into a single place", () => {
-    // Plain hou's role set as of 2026-08-24 — DELSHC left this persona for hou_hc alone, so a
-    // fixture mixing it with UPL/APR (as this once did) matches no persona at all.
-    const roles = ["APR", "DELS", "DEL", "SHARE", "UPL"];
+    // Plain hou's role set as of 2026-09-17 — DEL and DELS left the persona entirely (deletion moved
+    // to a Power Automate proxy), leaving APR/SHARE/UPL.
+    const roles = ["APR", "SHARE", "UPL"];
     const s = summarizeUserAccess(
       [g(7, "GHO_GF_TAX_APPROVER")],
       roles.map((r) => row({ groupId: 7, role: r })),
@@ -270,5 +272,201 @@ describe("personDisplay", () => {
   it("matches the local part exactly, not as a prefix", () => {
     expect(personDisplay("clarence", "clarencechojinheng@gmail.com"))
       .toBe("clarence · clarencechojinheng@gmail.com");
+  });
+});
+
+describe("plannedGroupRenames", () => {
+  const chains: Record<string, string[] | undefined> = {
+    "term-tax": ["GF", "TAX"],
+    "term-tax-new": ["GF", "TAXX"],
+  };
+  const chainFor = (guid: string): string[] | undefined => chains[guid.toLowerCase()];
+
+  // ONE row, matching `pic`'s EXACT role set since DELS moved to a Power Automate proxy on
+  // 2026-09-17 (see 2026-09-17-proxy-deletion-via-power-automate-design.md) — pic is back down to
+  // `["UPL"]` alone, so a lone `UPL` row is now the correctly-shaped fixture rather than a trap.
+  const picRows = (overUpl?: Partial<GroupMapRenameRow>): GroupMapRenameRow[] => [
+    { GroupId: "101", GroupName: "GHO_GF_TAX_UPLOADER", Role: "UPL", UnitTermGuid: "term-tax", ...overUpl },
+  ];
+
+  it("offers a rename for a group mapped at a just-renamed term, when the name is now stale", () => {
+    // "TAX" -> "TAXX": the chain the caller supplies already reflects the new code.
+    const out = plannedGroupRenames(
+      ["term-tax"],
+      false,
+      "GHO",
+      picRows(),
+      (guid) => (guid.toLowerCase() === "term-tax" ? ["GF", "TAXX"] : chainFor(guid)),
+    );
+    expect(out).toEqual([{ groupId: 101, from: "GHO_GF_TAX_UPLOADER", to: "GHO_GF_TAXX_UPLOADER" }]);
+  });
+
+  it("offers nothing for a term that was not renamed", () => {
+    const out = plannedGroupRenames(["term-other"], false, "GHO", picRows(), chainFor);
+    expect(out).toEqual([]);
+  });
+
+  it("offers nothing when the computed name already matches the stored one", () => {
+    // Nothing actually changed for this term, so the group's current name is already correct.
+    const out = plannedGroupRenames(["term-tax"], false, "GHO", picRows(), chainFor);
+    expect(out).toEqual([]);
+  });
+
+  it("collapses a multi-role group (hou) to ONE entry, not one per role row", () => {
+    // hou's role set as of 2026-09-17 — DEL and DELS left the persona entirely (deletion moved to a
+    // Power Automate proxy), leaving APR/SHARE/UPL.
+    const rows: GroupMapRenameRow[] = [
+      { GroupId: "202", GroupName: "GHO_GF_TAX_APPROVER", Role: "APR", UnitTermGuid: "term-tax" },
+      { GroupId: "202", GroupName: "GHO_GF_TAX_APPROVER", Role: "SHARE", UnitTermGuid: "term-tax" },
+      { GroupId: "202", GroupName: "GHO_GF_TAX_APPROVER", Role: "UPL", UnitTermGuid: "term-tax" },
+    ];
+    const out = plannedGroupRenames(
+      ["term-tax"],
+      false,
+      "GHO",
+      rows,
+      (guid) => (guid.toLowerCase() === "term-tax" ? ["GF", "TAXX"] : chainFor(guid)),
+    );
+    expect(out).toEqual([{ groupId: 202, from: "GHO_GF_TAX_APPROVER", to: "GHO_GF_TAXX_APPROVER" }]);
+  });
+
+  // This blank-guid shape is what `buildGroupMapRow` actually writes for GLOBAL ("C-Level — all
+  // segments") — its `UnitTermGuid` is forced empty because GLOBAL carries no term at all. A SEGVIEW
+  // ("C-Level — one segment") row is NOT blank in production — see the test right below this one.
+  it("offers a segment-tier row (blank UnitTermGuid, the GLOBAL shape) ONLY when the segment itself was recoded", () => {
+    const segRow: GroupMapRenameRow = {
+      GroupId: "303",
+      GroupName: "PCAR_C_LEVEL",
+      Role: "SEGVIEW",
+      UnitTermGuid: "",
+    };
+    expect(plannedGroupRenames(["term-tax"], false, "PCT", [segRow], chainFor)).toEqual([]);
+    expect(plannedGroupRenames([], true, "PCT", [segRow], chainFor)).toEqual([
+      { groupId: 303, from: "PCAR_C_LEVEL", to: "PCT_C_LEVEL" },
+    ]);
+  });
+
+  // ⚠⚠ THE BUG FOUND LIVE ON GHO, 2026-09-16 (a second one, reported right after the unit/department
+  // fix above shipped): "I notice c Level is still not renamed." A SEGVIEW row's `UnitTermGuid` is
+  // NOT blank in production — `bulkGroups.ts`'s `push()` sets it to the SEGMENT's own term-SET guid
+  // (`tierGuid: segment.termSetGuid`), which `codeChainFor` has never heard of (it only knows terms
+  // walked from INSIDE that set) — so the row failed the "chain could not be resolved" guard and was
+  // silently dropped, exactly like an ordinary unit row with a broken parent link. Fixed by threading
+  // the segment's own guid through as a 6th, optional parameter.
+  it("offers a segment-tier (SEGVIEW) row whose UnitTermGuid equals the segment's OWN term set guid", () => {
+    const segRow: GroupMapRenameRow = {
+      GroupId: "606",
+      GroupName: "GHO_C_LEVEL",
+      Role: "SEGVIEW",
+      UnitTermGuid: "seg-guid-gho", // the segment's own term SET id — not a term chainFor() can resolve
+    };
+    // Without the segment's own guid supplied, this is the bug: the row is silently skipped.
+    expect(plannedGroupRenames([], true, "GHOS", [segRow], chainFor)).toEqual([]);
+    // With it supplied, the row is recognised as segment-tier (no chain to resolve) and renamed.
+    expect(
+      plannedGroupRenames([], true, "GHOS", [segRow], chainFor, "seg-guid-gho"),
+    ).toEqual([{ groupId: 606, from: "GHO_C_LEVEL", to: "GHOS_C_LEVEL" }]);
+    // Case-insensitive, matching every other guid comparison in this function.
+    expect(
+      plannedGroupRenames([], true, "GHOS", [segRow], chainFor, "SEG-GUID-GHO"),
+    ).toEqual([{ groupId: 606, from: "GHO_C_LEVEL", to: "GHOS_C_LEVEL" }]);
+  });
+
+  // ⚠⚠ THE BUG FOUND LIVE ON GHO, 2026-09-16: a UNIT-tier group (the overwhelming majority of every
+  // segment's groups) was never offered a rename by a pure segment recode — `renamedTermGuids` is
+  // empty in that case (no term was renamed, only the segment's own code), so the old gate asked
+  // "was THIS term renamed" and always answered no. Recoding GHO to GHOS therefore left every
+  // `GHO_<dept>_<unit>_<role>` group stale, and re-running bulk provisioning built a parallel
+  // `GHOS_*` set instead of renaming the real one.
+  it("offers a unit-tier row too when the SEGMENT was recoded, with no term guid renamed", () => {
+    // `renamedTermGuids` is deliberately empty — this is a pure segment recode, exactly GHO's case.
+    const out = plannedGroupRenames(
+      [],
+      true,
+      "GHOS",
+      picRows(),
+      (guid) => (guid.toLowerCase() === "term-tax" ? ["GF", "TAX"] : chainFor(guid)),
+    );
+    expect(out).toEqual([{ groupId: 101, from: "GHO_GF_TAX_UPLOADER", to: "GHOS_GF_TAX_UPLOADER" }]);
+  });
+
+  // The safety this fix must not lose: a segment recode alone must never GUESS a name for a unit
+  // whose code chain could not be resolved — it still has to be skipped, exactly as for a term rename.
+  it("still skips a unit row on a segment recode when its code chain could not be resolved", () => {
+    const out = plannedGroupRenames([], true, "GHOS", picRows(), () => undefined);
+    expect(out).toEqual([]);
+  });
+
+  // ⚠ THE THIRD TIER, checked explicitly rather than inferred from the unit-tier test above — this is
+  // a DEPARTMENT-scope group (`hod`'s five-role set: DEPTVIEW/DEL/SHARE/DELHC/SHAREHC), mapped at the
+  // DEPARTMENT's own term guid with a one-element chain, not a unit's two-element one. Same code path
+  // as the unit-tier fix, but worth pinning on its own rather than trusted by similarity.
+  it("offers a department-tier (HOD) row too on a segment recode", () => {
+    // hod's role set as of 2026-09-17 — DEL and DELHC left the persona entirely (deletion moved to a
+    // Power Automate proxy), leaving DEPTVIEW/SHARE/SHAREHC.
+    const rows: GroupMapRenameRow[] = [
+      { GroupId: "505", GroupName: "GHO_GF_HOD", Role: "DEPTVIEW", UnitTermGuid: "term-gf" },
+      { GroupId: "505", GroupName: "GHO_GF_HOD", Role: "SHARE", UnitTermGuid: "term-gf" },
+      { GroupId: "505", GroupName: "GHO_GF_HOD", Role: "SHAREHC", UnitTermGuid: "term-gf" },
+    ];
+    const out = plannedGroupRenames(
+      [],
+      true,
+      "GHOS",
+      rows,
+      (guid) => (guid.toLowerCase() === "term-gf" ? ["GF"] : undefined),
+    );
+    expect(out).toEqual([{ groupId: 505, from: "GHO_GF_HOD", to: "GHOS_GF_HOD" }]);
+  });
+
+  it("skips a term whose code chain could not be resolved, rather than guessing a name", () => {
+    const out = plannedGroupRenames(["term-tax"], false, "GHO", picRows(), () => undefined);
+    expect(out).toEqual([]);
+  });
+
+  it("skips a group whose role set matches no persona exactly", () => {
+    const rows: GroupMapRenameRow[] = [
+      { GroupId: "404", GroupName: "GHO_GF_TAX_ODD", Role: "ENTRY", UnitTermGuid: "term-tax" },
+    ];
+    const out = plannedGroupRenames(
+      ["term-tax"],
+      false,
+      "GHO",
+      rows,
+      (guid) => (guid.toLowerCase() === "term-tax" ? ["GF", "TAXX"] : chainFor(guid)),
+    );
+    expect(out).toEqual([]);
+  });
+
+  it("skips a row with no GroupId, and matches case-insensitively on the term guid", () => {
+    const rows: GroupMapRenameRow[] = [
+      { GroupId: "", GroupName: "orphan", Role: "UPL", UnitTermGuid: "term-tax" },
+      ...picRows({ UnitTermGuid: "TERM-TAX" }),
+    ];
+    const out = plannedGroupRenames(
+      ["Term-Tax"],
+      false,
+      "GHO",
+      rows,
+      (guid) => (guid.toLowerCase() === "term-tax" ? ["GF", "TAXX"] : chainFor(guid)),
+    );
+    expect(out).toEqual([{ groupId: 101, from: "GHO_GF_TAX_UPLOADER", to: "GHO_GF_TAXX_UPLOADER" }]);
+  });
+
+  it("sorts results by the OLD name", () => {
+    // `employee` ("MEMBER" alone) is an exact one-role persona, so one row per group is enough here.
+    const rows: GroupMapRenameRow[] = [
+      { GroupId: "2", GroupName: "GHO_ZZ_VIEWER", Role: "MEMBER", UnitTermGuid: "term-zz" },
+      { GroupId: "1", GroupName: "GHO_AA_VIEWER", Role: "MEMBER", UnitTermGuid: "term-aa" },
+    ];
+    const out = plannedGroupRenames(
+      ["term-zz", "term-aa"],
+      false,
+      "GHO",
+      rows,
+      (guid) =>
+        guid.toLowerCase() === "term-zz" ? ["ZZZ"] : guid.toLowerCase() === "term-aa" ? ["AAA"] : undefined,
+    );
+    expect(out.map((r) => r.from)).toEqual(["GHO_AA_VIEWER", "GHO_ZZ_VIEWER"]);
   });
 });

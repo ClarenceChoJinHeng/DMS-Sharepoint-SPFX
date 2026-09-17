@@ -138,26 +138,31 @@ export const CARDS: AdminCard[] = [
   },
   {
     key: "config",
-    /* ⚠ THE CARD TITLE IS THE CLIENT'S WORDING (2026-08-30); `self.label` and `match` below are
-       NOT renamed with it. Those resolve the real page, which is still called "CRS Configuration"
-       on the site, and `match` is what finds it in Site Pages — renaming either turns this row into
-       a dead link, which is the one failure a directory page must never have. */
+    /* ⚠ THE CARD TITLE IS THE CLIENT'S WORDING (2026-08-30); `self.label` is display-only (only
+       ever shown in the "No page yet — create X" fallback), and `match` below is what actually
+       resolves the real page in Site Pages — renaming `match` alone could turn this row into a
+       dead link, so it stays a generic word ("configuration") that matches the page under EITHER
+       the "CRS" or the "GDC" naming (client, 2026-09-17: confirmed live rebrand). `self.label` was
+       updated to match — it carries no resolution risk since `match` never depended on it. */
     title: "File Type Management",
-    blurb: "Control which file types can be uploaded to the repository.",
+    // Widened 2026-09-13 (QA item #23) — this page now also carries the Bulk Upload access
+    // toggle, a second setting on the same `CrsConfigurationWebPart` sibling-component page.
+    blurb: "Control which file types can be uploaded, and who may open Bulk Upload.",
     icon: "config",
     column: 2,
     links: [],
-    self: { key: "config", label: "CRS Configuration", match: /configuration|crs.?config/i },
+    self: { key: "config", label: "GDC Configuration", match: /configuration|crs.?config|gdc.?config/i },
   },
   {
     key: "audit",
-    /* Title is the client's wording; `self.label`/`match` still name the real page. */
+    /* Title is the client's wording; `match` is the generic word "audit", which matches the real
+       page under either naming — see the "config" card's comment above for the full reasoning. */
     title: "Audit Log",
     blurb: "Track user activities and changes made across the repository.",
     icon: "audit",
     column: 2,
     links: [],
-    self: { key: "audit", label: "CRS Audit Log", match: /audit/i },
+    self: { key: "audit", label: "GDC Audit Log", match: /audit/i },
   },
   /* ⚠ BULK UPLOAD WAS A CARD HERE UNTIL 2026-08-22, AND ITS REMOVAL IS NOT TIDYING.
      It was listed because it was an ADMIN tool — `pageAccessPolicy` made it `adminOnly` and nobody

@@ -281,7 +281,7 @@ describe("tabFromHash", () => {
 
 describe("suggestedPageName", () => {
   it("suggests a name that matches the row's own label", () => {
-    expect(suggestedPageName(linkFor("audit"))).toBe("CRS-Audit-Log.aspx");
+    expect(suggestedPageName(linkFor("audit"))).toBe("GDC-Audit-Log.aspx");
     expect(suggestedPageName(linkFor("groups"))).toBe("Group-Management.aspx");
   });
 

@@ -46,72 +46,168 @@ const s: Record<string, React.CSSProperties> = {
   // Description column readable on a wide monitor; without `margin auto` it pinned hard left inside a
   // full-width section, which reads as a rendering fault rather than a deliberate measure.
   /* The Upload Form's page shell - see the note in AuditLog.tsx. Centred but unpadded before. */
-  wrap: { fontFamily: "Arial, sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px" },
+  wrap: {
+    fontFamily: "Arial, sans-serif",
+    color: "#1b1b1b",
+    maxWidth: 1100,
+    margin: "32px auto",
+    padding: "0 24px 48px",
+  },
   h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
-  subtitle: { fontSize: 13, color: "#605e5c", margin: "0 0 20px", lineHeight: 1.5 },
-  card: { border: "1px solid #e1dfdd", borderRadius: 8, padding: "16px 18px", marginBottom: 16 },
+  subtitle: {
+    fontSize: 13,
+    color: "#605e5c",
+    margin: "0 0 20px",
+    lineHeight: 1.5,
+  },
+  card: {
+    border: "1px solid #e1dfdd",
+    borderRadius: 8,
+    padding: "16px 18px",
+    marginBottom: 16,
+  },
   cardTitle: {
-    fontSize: 12, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase",
-    color: "#0f6c3f", margin: "0 0 4px",
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: ".06em",
+    textTransform: "uppercase",
+    color: "#0f6c3f",
+    margin: "0 0 4px",
   },
   hint: { fontSize: 12, color: "#605e5c", margin: "0 0 14px", lineHeight: 1.5 },
-  msg: { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.55 },
+  msg: {
+    fontSize: 13,
+    padding: "10px 12px",
+    borderRadius: 6,
+    marginBottom: 16,
+    lineHeight: 1.55,
+  },
   err: { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
   warn: { ...NOTICE_ATTENTION },
   ok: { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
-  info: { background: "#f3f2f1", border: "1px solid #e1dfdd", color: "#323130" },
+  info: {
+    background: "#f3f2f1",
+    border: "1px solid #e1dfdd",
+    color: "#323130",
+  },
   head: {
-    display: "grid", gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px) minmax(0,84px)", columnGap: 12,
-    padding: "0 10px 8px", fontSize: 12, fontWeight: 600, color: "#605e5c",
+    display: "grid",
+    gridTemplateColumns:
+      "minmax(0,84px) minmax(0,1fr) minmax(0,92px) minmax(0,84px)",
+    columnGap: 12,
+    padding: "0 10px 8px",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#605e5c",
     borderBottom: "1px solid #edebe9",
   },
   row: {
-    display: "grid", gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px) minmax(0,84px)", columnGap: 12, rowGap: 4,
-    alignItems: "center", padding: "10px", borderBottom: "1px solid #f3f2f1",
+    display: "grid",
+    gridTemplateColumns:
+      "minmax(0,84px) minmax(0,1fr) minmax(0,92px) minmax(0,84px)",
+    columnGap: 12,
+    rowGap: 4,
+    alignItems: "center",
+    padding: "10px",
+    borderBottom: "1px solid #f3f2f1",
   },
   /** Quiet by default — removing a type is rarer than toggling one, so it must not compete. */
   removeLink: {
-    background: "none", border: "none", padding: 0, fontSize: 12, color: "#a4262c",
-    cursor: "pointer", textDecoration: "underline",
+    background: "none",
+    border: "none",
+    padding: 0,
+    fontSize: 12,
+    color: "#a4262c",
+    cursor: "pointer",
+    textDecoration: "underline",
   },
   removeOff: {
-    background: "none", border: "none", padding: 0, fontSize: 12, color: "#c8c6c4",
+    background: "none",
+    border: "none",
+    padding: 0,
+    fontSize: 12,
+    color: "#c8c6c4",
     cursor: "not-allowed",
   },
   danger: {
-    background: "#a4262c", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px",
-    fontSize: 13, cursor: "pointer",
+    background: "#a4262c",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    padding: "8px 16px",
+    fontSize: 13,
+    cursor: "pointer",
   },
   badge: {
-    display: "inline-block", fontSize: 10, fontWeight: 700, letterSpacing: ".04em",
-    background: "#f3f2f1", border: "1px solid #e1dfdd", borderRadius: 4, padding: "3px 6px",
-    color: "#605e5c", minWidth: 34, textAlign: "center",
+    display: "inline-block",
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: ".04em",
+    background: "#f3f2f1",
+    border: "1px solid #e1dfdd",
+    borderRadius: 4,
+    padding: "3px 6px",
+    color: "#605e5c",
+    minWidth: 34,
+    textAlign: "center",
   },
   ext: { fontSize: 13, fontWeight: 600, fontFamily: "Consolas, monospace" },
   desc: { fontSize: 13, color: "#323130" },
   locked: { fontSize: 11, color: "#a4262c", fontWeight: 600 },
   input: {
-    padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4, width: 180,
+    padding: "7px 9px",
+    fontSize: 13,
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    width: 180,
     boxSizing: "border-box",
   },
   btn: {
-    background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "8px 16px",
-    fontSize: 13, cursor: "pointer",
+    background: "#0f6c3f",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    padding: "8px 16px",
+    fontSize: 13,
+    cursor: "pointer",
   },
   ghost: {
-    background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4,
-    padding: "7px 14px", fontSize: 13, cursor: "pointer",
+    background: "#fff",
+    color: "#1b1b1b",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    padding: "7px 14px",
+    fontSize: 13,
+    cursor: "pointer",
   },
   off: {
-    background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4,
-    padding: "8px 16px", fontSize: 13, cursor: "not-allowed",
+    background: "#f3f2f1",
+    color: "#a19f9d",
+    border: "1px solid #e1dfdd",
+    borderRadius: 4,
+    padding: "8px 16px",
+    fontSize: 13,
+    cursor: "not-allowed",
   },
   overlay: {
-    position: "fixed", top: 0, right: 0, bottom: 0, left: 0, background: "rgba(0,0,0,.35)",
-    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16,
+    position: "fixed",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    background: "rgba(0,0,0,.35)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+    padding: 16,
   },
   modal: {
-    background: "#fff", borderRadius: 8, padding: "20px 22px", maxWidth: 460, width: "100%",
+    background: "#fff",
+    borderRadius: 8,
+    padding: "20px 22px",
+    maxWidth: 460,
+    width: "100%",
     boxShadow: "0 8px 30px rgba(0,0,0,.2)",
   },
 };
@@ -131,17 +227,27 @@ const Toggle = (props: {
     disabled={props.disabled === true || props.busy === true}
     onClick={props.onClick}
     style={{
-      width: 46, height: 24, borderRadius: 12, position: "relative", padding: 0,
+      width: 46,
+      height: 24,
+      borderRadius: 12,
+      position: "relative",
+      padding: 0,
       cursor: props.disabled === true ? "not-allowed" : "pointer",
       border: `1px solid ${props.on ? "#0f6c3f" : "#c8c8c8"}`,
-      background: props.disabled === true ? "#f3f2f1" : props.on ? "#0f6c3f" : "#fff",
+      background:
+        props.disabled === true ? "#f3f2f1" : props.on ? "#0f6c3f" : "#fff",
       opacity: props.busy === true ? 0.6 : 1,
     }}
   >
     <span
       style={{
-        position: "absolute", top: 2, left: props.on ? 24 : 2, width: 18, height: 18,
-        borderRadius: "50%", background: props.on ? "#fff" : "#a19f9d",
+        position: "absolute",
+        top: 2,
+        left: props.on ? 24 : 2,
+        width: 18,
+        height: 18,
+        borderRadius: "50%",
+        background: props.on ? "#fff" : "#a19f9d",
       }}
     />
   </button>
@@ -173,12 +279,15 @@ export default function FileTypeSettings({
   const [draft, setDraft] = useState("");
   const [adding, setAdding] = useState(false);
   const [confirmLast, setConfirmLast] = useState<string | undefined>(undefined);
-  const [suggest, setSuggest] = useState<{ typed: string; better: string } | undefined>(undefined);
+  const [suggest, setSuggest] = useState<
+    { typed: string; better: string } | undefined
+  >(undefined);
   const [highlight, setHighlight] = useState<string | undefined>(undefined);
   /** Set when a change was applied but not recorded. Never blocks — see logPolicy. */
   const [auditWarn, setAuditWarn] = useState(false);
 
-  const configList = (): string => encodeURIComponent(cachedListTitle(LIST_SUFFIX.config));
+  const configList = (): string =>
+    encodeURIComponent(cachedListTitle(LIST_SUFFIX.config));
 
   /**
    * Record a policy change in the audit log.
@@ -258,14 +367,18 @@ export default function FileTypeSettings({
       { headers: { Accept: "application/json;odata=nometadata" } },
     );
     if (!itemRes.ok) {
-      throw new Error(`The ${CONFIG_ROW_TITLE} row could not be read (HTTP ${itemRes.status}).`);
+      throw new Error(
+        `The ${CONFIG_ROW_TITLE} row could not be read (HTTP ${itemRes.status}).`,
+      );
     }
     const rows = ((await itemRes.json()).value ?? []) as Array<{ Id?: number }>;
     const row = rows[0];
     setItemId(row?.Id);
     // readAllowedFileTypesField distinguishes "emptied" (null -> []) from "absent" (undefined) — the
     // difference between a deliberate block and an unprovisioned column.
-    const raw = row ? readAllowedFileTypesField(row as { AllowedFileTypes?: unknown }) : undefined;
+    const raw = row
+      ? readAllowedFileTypesField(row as { AllowedFileTypes?: unknown })
+      : undefined;
     setTicked(normalizeFileTypes(raw ?? []));
     if (present && !row) {
       setNote({
@@ -298,7 +411,8 @@ export default function FileTypeSettings({
 
   /** MERGE the ITEM's value. Needs item edit only. */
   const writeTicked = async (next: string[]): Promise<void> => {
-    if (itemId === undefined) throw new Error(`there is no "${CONFIG_ROW_TITLE}" row to update`);
+    if (itemId === undefined)
+      throw new Error(`there is no "${CONFIG_ROW_TITLE}" row to update`);
     const token = await digest();
     const res: SPHttpClientResponse = await context.spHttpClient.post(
       `${siteUrl}/_api/web/lists/getbytitle('${configList()}')/items(${itemId})`,
@@ -395,7 +509,10 @@ export default function FileTypeSettings({
       );
     } catch (err) {
       setTicked(before);
-      setNote({ tone: "err", text: `Could not save ${ext} — ${(err as Error).message}` });
+      setNote({
+        tone: "err",
+        text: `Could not save ${ext} — ${(err as Error).message}`,
+      });
     } finally {
       setBusyExt(undefined);
     }
@@ -447,7 +564,10 @@ export default function FileTypeSettings({
       setDraft("");
       setHighlight(ext);
     } catch (err) {
-      setNote({ tone: "err", text: `Could not add ${ext} — ${(err as Error).message}` });
+      setNote({
+        tone: "err",
+        text: `Could not add ${ext} — ${(err as Error).message}`,
+      });
     } finally {
       setAdding(false);
     }
@@ -488,14 +608,20 @@ export default function FileTypeSettings({
         text:
           `${ext} removed. It is no longer offered on this page` +
           (wasOn ? " and is blocked for new uploads." : ".") +
-          " Files already uploaded are untouched, and you can add it again at any time.",
+          " Files already uploaded are untouched, and you can add it again anytime.",
       });
       await logPolicy(`File type ${ext} removed`, [
         `Removed ${ext} from the list of choices.`,
         wasOn
           ? `It was ALLOWED at the time, so this also blocked it for new uploads.`
           : `It was already blocked, so what may be uploaded did not change.`,
-        `Allowed after this change: ${ticked.filter((t) => t !== ext).slice().sort().join(", ") || "(none — all uploads blocked)"}`,
+        `Allowed after this change: ${
+          ticked
+            .filter((t) => t !== ext)
+            .slice()
+            .sort()
+            .join(", ") || "(none — all uploads blocked)"
+        }`,
       ]);
       setRemovingExt(undefined);
     } catch (err) {
@@ -543,7 +669,10 @@ export default function FileTypeSettings({
       return;
     }
     if (verdict.kind === "exists-enabled") {
-      setNote({ tone: "info", text: `${verdict.ext} is already in the list and already allowed.` });
+      setNote({
+        tone: "info",
+        text: `${verdict.ext} is already in the list and already allowed.`,
+      });
       setHighlight(verdict.ext);
       setDraft("");
       return;
@@ -593,13 +722,21 @@ export default function FileTypeSettings({
   const listName = cachedListTitle(LIST_SUFFIX.config);
 
   const toneStyle = (tone: Note["tone"]): React.CSSProperties =>
-    tone === "err" ? s.err : tone === "warn" ? s.warn : tone === "ok" ? s.ok : s.info;
+    tone === "err"
+      ? s.err
+      : tone === "warn"
+        ? s.warn
+        : tone === "ok"
+          ? s.ok
+          : s.info;
 
   if (loading) {
     return (
       <section style={s.wrap}>
         <h2 style={s.h2}>File Type Management</h2>
-        <p style={{ fontSize: 13, color: "#605e5c" }}>Loading file type settings&hellip;</p>
+        <p style={{ fontSize: 13, color: "#605e5c" }}>
+          Loading file type settings&hellip;
+        </p>
       </section>
     );
   }
@@ -607,18 +744,22 @@ export default function FileTypeSettings({
   return (
     <section style={s.wrap}>
       <h2 style={s.h2}>File Type Management</h2>
-      <p style={s.subtitle}>Control which file types can be uploaded to the repository.</p>
+      <p style={s.subtitle}>
+        Control which file types can be uploaded to the repository.
+      </p>
 
       {loadError && <div style={{ ...s.msg, ...s.err }}>{loadError}</div>}
-      {note && <div style={{ ...s.msg, ...toneStyle(note.tone) }}>{note.text}</div>}
+      {note && (
+        <div style={{ ...s.msg, ...toneStyle(note.tone) }}>{note.text}</div>
+      )}
 
       {/* An audit gap an admin KNOWS about is worth far more than one nobody does — so this is said
           plainly, while never having blocked the change itself. */}
       {auditWarn && (
         <div style={{ ...s.msg, ...toneStyle("warn") }}>
-          Your change was applied, but could not be recorded in the audit log. The audit log may not be
-          set up yet, or may not be writable by you — worth checking, because the change itself went
-          through.
+          Your change was applied, but could not be recorded in the audit log.
+          The audit log may not be set up yet, or may not be writable by you —
+          worth checking, because the change itself went through.
         </div>
       )}
 
@@ -626,43 +767,65 @@ export default function FileTypeSettings({
           hand edit or a migration. Said loudly, with the fix one click away. */}
       {stray.length > 0 && (
         <div style={{ ...s.msg, ...s.err }}>
-          <strong>{stray.join(", ")}</strong> {stray.length === 1 ? "is" : "are"} currently allowed and
-          should not be — {stray.length === 1 ? "it is a program or script" : "they are programs or scripts"}.
-          Switch {stray.length === 1 ? "it" : "them"} off below.
+          <strong>{stray.join(", ")}</strong>{" "}
+          {stray.length === 1 ? "is" : "are"} currently allowed and should not
+          be —{" "}
+          {stray.length === 1
+            ? "it is a program or script"
+            : "they are programs or scripts"}
+          . Switch {stray.length === 1 ? "it" : "them"} off below.
         </div>
       )}
 
       {state === "no-column" ? (
         <>
           <div style={{ ...s.msg, ...s.warn }}>
-            This site has no <strong>{COLUMN_INTERNAL_NAME}</strong> column, so uploads are running on the
-            built-in list below and the client&apos;s own policy is <strong>not in force</strong>. To
-            manage file types here, add a column to <strong>{listName}</strong>: type{" "}
-            <strong>Choice</strong>, name <strong>{COLUMN_INTERNAL_NAME}</strong> (no space), allow{" "}
+            This site has no <strong>{COLUMN_INTERNAL_NAME}</strong> column, so
+            uploads are running on the built-in list below and the client&apos;s
+            own policy is <strong>not in force</strong>. To manage file types
+            here, add a column to <strong>{listName}</strong>: type{" "}
+            <strong>Choice</strong>, name{" "}
+            <strong>{COLUMN_INTERNAL_NAME}</strong> (no space), allow{" "}
             <strong>multiple selections</strong>, and leave{" "}
             <strong>&quot;Allow fill-in choices&quot; off</strong>.
           </div>
           <div style={s.card}>
             <p style={s.cardTitle}>Built-in file types — currently in force</p>
             <div style={s.hint}>
-              Read-only. These come from the code and apply only while the column is missing.
+              Read-only. These come from the code and apply only while the
+              column is missing.
             </div>
             {/* THREE columns here, not the shared four: this panel is read-only (the column is
                 missing, so these come from the code) and can never carry a Remove. Inheriting the
                 four-column grid would reserve an empty 84px gutter on every row. */}
-            <div style={{ ...s.head, gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px)" }}>
+            <div
+              style={{
+                ...s.head,
+                gridTemplateColumns:
+                  "minmax(0,84px) minmax(0,1fr) minmax(0,92px)",
+              }}
+            >
               <span>Extension</span>
               <span>Description</span>
               <span />
             </div>
             {normalizeFileTypes(FALLBACK_FILE_TYPES).map((ext) => (
-              <div key={ext} style={{ ...s.row, gridTemplateColumns: "minmax(0,84px) minmax(0,1fr) minmax(0,92px)" }}>
+              <div
+                key={ext}
+                style={{
+                  ...s.row,
+                  gridTemplateColumns:
+                    "minmax(0,84px) minmax(0,1fr) minmax(0,92px)",
+                }}
+              >
                 <span>
                   <span style={s.badge}>{badgeFor(ext)}</span>
                 </span>
                 <span>
                   <span style={s.ext}>{ext}</span>
-                  <span style={{ ...s.desc, marginLeft: 10 }}>{describeExtension(ext)}</span>
+                  <span style={{ ...s.desc, marginLeft: 10 }}>
+                    {describeExtension(ext)}
+                  </span>
                 </span>
                 <span style={{ fontSize: 11, color: "#8a8886" }}>in force</span>
               </div>
@@ -673,8 +836,11 @@ export default function FileTypeSettings({
         <>
           {state === "all-blocked" && (
             <div style={{ ...s.msg, ...s.err }}>
-              <strong>No file types are allowed — uploads are blocked for everyone.</strong> Files already
-              uploaded are untouched. Switch on any type below to allow uploads again.
+              <strong>
+                No file types are allowed — uploads are blocked for everyone.
+              </strong>{" "}
+              Files already uploaded are untouched. Switch on any type below to
+              allow uploads again.
             </div>
           )}
 
@@ -683,8 +849,9 @@ export default function FileTypeSettings({
                 is now titled File Type Management, so a card heading repeating it was one label too
                 many on a page that does exactly one thing. */}
             <div style={s.hint}>
-              Enable or disable file extensions. Applies to <strong>new uploads</strong> — anyone with the
-              upload form open will need to refresh. Disabling a type never affects files already
+              Enable or disable file extensions. Applies to{" "}
+              <strong>new uploads</strong> — anyone with the upload form open
+              will need to refresh. Disabling a type never affects files already
               uploaded.
             </div>
 
@@ -697,7 +864,8 @@ export default function FileTypeSettings({
 
             {rows.length === 0 && (
               <div style={{ fontSize: 13, color: "#8a8886", padding: 10 }}>
-                The {COLUMN_INTERNAL_NAME} column has no choices yet — add the first file type below.
+                The {COLUMN_INTERNAL_NAME} column has no choices yet — add the
+                first file type below.
               </div>
             )}
 
@@ -709,56 +877,79 @@ export default function FileTypeSettings({
                 checkbox, a label and a Remove button. That check is not a formality: a scroll cap has
                 already clipped a popover on three screens in this project. */}
             <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
-            {rows.map((ext) => {
-              const on = ticked.indexOf(ext) !== -1;
-              const blocked = isBlockedType(ext);
-              return (
-                <div
-                  key={ext}
-                  style={{ ...s.row, background: highlight === ext ? "#fff8e1" : undefined }}
-                >
-                  <span>
-                    <span style={s.badge}>{badgeFor(ext)}</span>
-                  </span>
-                  <span>
-                    <span style={s.ext}>{ext}</span>
-                    <span style={{ ...s.desc, marginLeft: 10 }}>{describeExtension(ext)}</span>
-                    {blocked && <span style={{ ...s.locked, marginLeft: 10 }}>Blocked by policy</span>}
-                  </span>
-                  <span>
-                    <Toggle
-                      on={on && !blocked}
-                      disabled={blocked}
-                      busy={busyExt === ext}
-                      label={`Allow ${ext}`}
-                      onClick={() => onToggle(ext, on)}
-                    />
-                  </span>
-                  <span>
-                    {/* NOT offered for a blocked type. Those rows exist as the guard itself — the list
+              {rows.map((ext) => {
+                const on = ticked.indexOf(ext) !== -1;
+                const blocked = isBlockedType(ext);
+                return (
+                  <div
+                    key={ext}
+                    style={{
+                      ...s.row,
+                      background: highlight === ext ? "#fff8e1" : undefined,
+                    }}
+                  >
+                    <span>
+                      <span style={s.badge}>{badgeFor(ext)}</span>
+                    </span>
+                    <span>
+                      <span style={s.ext}>{ext}</span>
+                      <span style={{ ...s.desc, marginLeft: 10 }}>
+                        {describeExtension(ext)}
+                      </span>
+                      {blocked && (
+                        <span style={{ ...s.locked, marginLeft: 10 }}>
+                          Blocked by policy
+                        </span>
+                      )}
+                    </span>
+                    <span>
+                      <Toggle
+                        on={on && !blocked}
+                        disabled={blocked}
+                        busy={busyExt === ext}
+                        label={`Allow ${ext}`}
+                        onClick={() => onToggle(ext, on)}
+                      />
+                    </span>
+                    <span>
+                      {/* NOT offered for a blocked type. Those rows exist as the guard itself — the list
                         is how an admin sees that `.exe` is refused by policy, and removing the row
                         would remove the evidence while `BLOCKED_TYPES` goes on refusing it anyway. */}
-                    {blocked ? (
-                      <span style={{ fontSize: 11, color: "#c8c6c4" }}>—</span>
-                    ) : (
-                      <button
-                        style={busyExt === ext || removeBusy ? s.removeOff : s.removeLink}
-                        disabled={busyExt === ext || removeBusy}
-                        title={`Remove ${ext} from the list`}
-                        onClick={() => setRemovingExt(ext)}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </span>
-                </div>
-              );
-            })}
+                      {blocked ? (
+                        <span style={{ fontSize: 11, color: "#c8c6c4" }}>
+                          —
+                        </span>
+                      ) : (
+                        <button
+                          style={
+                            busyExt === ext || removeBusy
+                              ? s.removeOff
+                              : s.removeLink
+                          }
+                          disabled={busyExt === ext || removeBusy}
+                          title={`Remove ${ext} from the list`}
+                          onClick={() => setRemovingExt(ext)}
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
 
             {/* The add box stays OUTSIDE the scroll box — a control that scrolls away from the list it
                 adds to is the rule the abbreviation editor already follows with its Save button. */}
-            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 14, flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                paddingTop: 14,
+                flexWrap: "wrap",
+              }}
+            >
               <input
                 style={s.input}
                 value={draft}
@@ -794,26 +985,26 @@ export default function FileTypeSettings({
         <div style={s.overlay}>
           <div style={s.modal}>
             <p style={{ ...s.h2, fontSize: 17 }}>Remove {removingExt}?</p>
+            {/* Client QA item #46, 2026-09-13: replaces the old two-branch wording ("It stops being
+                offered on this page, and can no longer be uploaded" / "...it already could not be
+                uploaded") with one line. The still-important "only allowed type left" warning below
+                is untouched — it is a separate, still-triggered warning. */}
             <p style={{ fontSize: 13, lineHeight: 1.6, color: "#323130" }}>
-              It stops being offered on this page, and{" "}
-              {ticked.indexOf(removingExt) !== -1 ? (
-                <strong>can no longer be uploaded.</strong>
-              ) : (
-                <>it already could not be uploaded, so what may be uploaded does not change.</>
-              )}
+              Remarks: Files already uploaded won&rsquo;t be affected.
             </p>
             {/* The one genuinely consequential case: this was the last thing anyone could upload. Same
                 fact the toggle's own last-one-off confirm exists for, said here too because removing is
                 a different button and an admin may only ever meet this one. */}
             {ticked.length === 1 && ticked.indexOf(removingExt) !== -1 && (
               <div style={{ ...s.msg, ...s.warn }}>
-                This is the only allowed file type left. Removing it <strong>blocks every upload
-                across the whole site</strong> until another type is added.
+                This is the only allowed file type left. Removing it{" "}
+                <strong>blocks every upload across the whole site</strong> until
+                another type is added.
               </div>
             )}
             <p style={{ fontSize: 12, lineHeight: 1.6, color: "#605e5c" }}>
-              Files already uploaded are untouched — this only affects new uploads. You can add{" "}
-              {removingExt} again at any time.
+              Files already uploaded are untouched — this only affects new
+              uploads. You can add {removingExt} again anytime.
             </p>
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
               <button
@@ -821,7 +1012,8 @@ export default function FileTypeSettings({
                 disabled={removeBusy}
                 onClick={() => {
                   const ext = removingExt;
-                  if (ext !== undefined) commitRemove(ext).catch(() => undefined);
+                  if (ext !== undefined)
+                    commitRemove(ext).catch(() => undefined);
                 }}
               >
                 {removeBusy ? "Removing…" : `Remove ${removingExt}`}
@@ -844,15 +1036,22 @@ export default function FileTypeSettings({
           <div style={s.modal}>
             <p style={{ ...s.h2, fontSize: 17 }}>Check the spelling</p>
             <p style={{ fontSize: 13, lineHeight: 1.6, color: "#323130" }}>
-              <strong>{suggest.typed}</strong> isn&apos;t a known file type — did you mean{" "}
-              <strong>{suggest.better}</strong>?
+              <strong>{suggest.typed}</strong> isn&apos;t a known file type —
+              did you mean <strong>{suggest.better}</strong>?
             </p>
             <p style={{ fontSize: 12, lineHeight: 1.6, color: "#605e5c" }}>
               A mistyped extension blocks the real one: nobody could upload{" "}
-              <strong>{suggest.better}</strong> files, and they would be told the file type is not
-              permitted.
+              <strong>{suggest.better}</strong> files, and they would be told
+              the file type is not permitted.
             </p>
-            <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                marginTop: 16,
+                flexWrap: "wrap",
+              }}
+            >
               <button
                 style={s.btn}
                 onClick={() => {
@@ -887,20 +1086,33 @@ export default function FileTypeSettings({
           <div style={s.modal}>
             <p style={{ ...s.h2, fontSize: 17 }}>Block all uploads?</p>
             <p style={{ fontSize: 13, lineHeight: 1.6, color: "#323130" }}>
-              <strong>{confirmLast}</strong> is the only file type still allowed. Switching it off means:
+              <strong>{confirmLast}</strong> is the only file type still
+              allowed. Switching it off means:
             </p>
             <ul
               style={{
-                fontSize: 13, lineHeight: 1.7, color: "#323130", paddingLeft: 20, margin: "8px 0 0",
+                fontSize: 13,
+                lineHeight: 1.7,
+                color: "#323130",
+                paddingLeft: 20,
+                margin: "8px 0 0",
               }}
             >
               <li>
-                <strong>Nobody can upload anything</strong>, in any unit, until a type is switched back on
+                <strong>Nobody can upload anything</strong>, in any unit, until
+                a type is switched back on
               </li>
               <li>Documents already uploaded are untouched and stay visible</li>
               <li>Switching any type back on restores uploads immediately</li>
             </ul>
-            <div style={{ display: "flex", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                marginTop: 18,
+                flexWrap: "wrap",
+              }}
+            >
               <button
                 style={{ ...s.btn, background: "#a4262c" }}
                 onClick={() => {

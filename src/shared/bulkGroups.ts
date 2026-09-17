@@ -79,8 +79,12 @@ function key(guid: string): string {
  *
  * Walks `parentGuid` rather than assuming two tiers, so a family with a different depth needs no change
  * here. Bounded by the row count, so a cyclic parent link cannot spin.
+ *
+ * ⚠ EXPORTED 2026-09-15 so `plannedGroupRenames` (shared/userAccess.ts) can build its
+ * `codeChainFor` from the SAME walk this planner already uses — one definition of "this term's code
+ * chain", not a second copy the two could come to disagree about.
  */
-function codeChain(
+export function codeChain(
   row: AbbrevRowDraft,
   byGuid: Record<string, AbbrevRowDraft>,
 ): string[] | undefined {

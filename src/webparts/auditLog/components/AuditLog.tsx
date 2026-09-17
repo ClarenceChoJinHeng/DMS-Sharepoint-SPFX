@@ -2,6 +2,10 @@ import * as React from "react";
 import { useEffect, useState } from "react";
 // The Action list is 26 entries and grows with every new flow event — too long for a native menu.
 import { FilterSelect } from "../../../shared/filterSelect";
+// The native `<input type="date">` popup cannot be restyled across browsers — see `DatePicker`.
+import { DatePicker } from "../../../shared/datePicker";
+// Caps how many numbered page buttons render at once — see the note beside `PAGER_WINDOW_SIZE`.
+import { pagerWindow } from "../../../shared/pagerWindow";
 // The Event column prints a SHORT library name - see `shortLibrary`.
 import { documentsLibraryTitle } from "../../../shared/naming";
 import { SPHttpClient } from "@microsoft/sp-http";
@@ -49,6 +53,36 @@ import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
    earlier the same day, then this. An audit row is three lines tall once its path is shown, so ten is
    about a screen. The pager below handles the rest; this only changes how much arrives at once. */
 const PAGE_SIZE = 10;
+
+/* ⚠⚠ ADDED 2026-09-14 — WITHOUT THIS THE PAGER GROWS ONE BUTTON PER PAGE VISITED, FOR EVER. `tokens`
+   (below) records the cursor for every page reached so far, and the numbered buttons used to render
+   ONE PER ENTRY unbounded — reported live at page 9 of a 955-row log: ten buttons and climbing. 7
+   keeps a real windowed pager (`‹ … 5 6 [7] 8 9 … ›`) whatever page you are on; `pagerWindow` decides
+   which slice of `tokens` gets a button, `tokens` itself is untouched so Prev/backward jumps to a
+   page whose button has scrolled out of the window still work exactly as before. */
+const PAGER_WINDOW_SIZE = 7;
+
+/**
+ * A readable name derived from an email address, for the "Who" column.
+ *
+ * `r.ActorName || r.ActorEmail || "—"` already prefers the stored name; this covers the rows where
+ * `ActorName` was never written (mostly flow-authored rows) and the fallback would otherwise show a
+ * bare address. Client QA item #48.4, 2026-09-13: *"standardise all email address to user name"*.
+ *
+ * DISPLAY ONLY — the stored `ActorEmail` is untouched, and the CSV export still writes the raw
+ * address, not this derived label. Splits on the local part only (before `@`), replaces dots and
+ * underscores with spaces, and title-cases each word — `chiew.wei.chien@sdguthrie.com` reads as
+ * "Chiew Wei Chien" rather than the bare address.
+ */
+function nameFromEmail(email: string): string {
+  const local = email.split("@")[0] ?? "";
+  if (!local) return email;
+  return local
+    .split(/[._]+/)
+    .filter((w) => w.length > 0)
+    .map((w) => w[0].toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
 /**
  * The library name as the Event column should PRINT it (client, 2026-09-04: *"For this Restricted &
@@ -187,7 +221,6 @@ const s: Record<string, React.CSSProperties> = {
     color: "#8a8886",
     textAlign: "right",
     alignSelf: "stretch",
-    margin: "10px 0px 0px",
   },
   /* ⚠ NO `gridColumn: "1 / -1"` — the Date pair occupies ONE column, so Action lands beside it
      (client, 2026-09-07: *"Can you move the Action to be on the same row as From date"*). Spanning
@@ -199,7 +232,14 @@ const s: Record<string, React.CSSProperties> = {
     flexDirection: "column",
     gap: 4,
   },
-  pairRow: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  datePicker: {
+    width: "100%",
+  },
+  pairRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+  },
   pairTag: {
     fontSize: 14,
     color: "rgba(50, 49, 48, 1)",
@@ -252,6 +292,11 @@ const s: Record<string, React.CSSProperties> = {
     boxSizing: "border-box",
     minWidth: 180,
   },
+  /* `DatePicker`'s own wrapper carries the ~118px width — see the `style={{ width: 118 }}` passed
+     at each call site. Client QA item #48.1, 2026-09-13: "Rearrange Date From & To to be in the
+     same line" — a dedicated width (rather than spanning both grid columns, which would push
+     Action back onto its own row and undo the 2026-09-07 "Action beside Date" fix) is what lets
+     both sit on one line inside `pairRow`, which wraps only if they genuinely do not fit. */
   select: {
     padding: "7px 9px",
     fontSize: 13,
@@ -721,12 +766,29 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
    * ⚠ ONLY A PAGE ALREADY REACHED, OR THE NEXT ONE. Anything further has no token, so there is
    * nothing to fetch it with — the buttons for those are not rendered, and this refuses as well, so
    * the rule holds even if a caller is added later.
+   *
+   * ⚠⚠ FIXED 2026-09-14 — "Next" did NOTHING on its first press, ever. `token` used to be read as
+   * `idx === 0 ? undefined : tokens[idx]`, which assumes `tokens[idx]` is already populated for
+   * EVERY page beyond the first — but the page one step past whatever has been reached so far
+   * (`idx === tokens.length`) has never had its cursor stored in `tokens`; that cursor lives ONLY
+   * in the `next` state set by the last `load`/`goToPage` call. So `tokens[idx]` read `undefined`,
+   * the very next line's `if (idx > 0 && token === undefined) return;` fired, and the click
+   * silently did nothing — no fetch, no error, no visible change. The fix: fall back to `next` for
+   * exactly that one case (the page immediately beyond what is known), and then record the cursor
+   * actually used at `tokens[idx]` below — the OLD tail (`prev.slice(0, idx + 1)` then
+   * `out[idx + 1] = page.next`) silently assumed `tokens[idx]` was already there too, which left a
+   * HOLE at that index the first time a new page was reached (a sparse array `tokens.map` then
+   * skips), dropping that page's own numbered button from the pager.
    */
   const goToPage = async (idx: number): Promise<void> => {
     if (idx < 0 || idx > tokens.length) return;
-    const token = idx === 0 ? undefined : tokens[idx];
+    const token =
+      idx === 0 ? undefined : idx < tokens.length ? tokens[idx] : next;
     if (idx > 0 && token === undefined) return;
     setLoading(true);
+    /* Branched on `token`, not `idx` — this is what lets TypeScript narrow `token` to `string` in
+       the `readAuditPage` branch below without a cast; the two are equivalent given the guard
+       above (idx===0 is the only case `token` is legitimately undefined by this point). */
     const page =
       token === undefined
         ? await readAudit(sp, siteUrl, currentQuery())
@@ -734,10 +796,13 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
     setRows(page.rows);
     setPageIdx(idx);
     setNext(page.next);
-    /* Remember how to fetch the page AFTER this one, so Next works from wherever we land — including
-       after jumping backwards, where `next` would otherwise still describe the page we left. */
+    /* Record the cursor used to reach THIS page at `tokens[idx]` (never merely inherited via
+       slicing — see the note above), then the cursor for the page after it, so Next works from
+       wherever we land, including after jumping backwards where `next` would otherwise still
+       describe the page we left. */
     setTokens((prev) => {
-      const out = prev.slice(0, idx + 1);
+      const out = prev.slice(0, idx);
+      out[idx] = token;
       if (page.next !== undefined) out[idx + 1] = page.next;
       return out;
     });
@@ -794,7 +859,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
 
   const header = (
     <>
-      <h2 style={s.h2}>CRS Audit Log</h2>
+      <h2 style={s.h2}>GDC Audit Log</h2>
       {/* ⚠ THE "cannot be edited or deleted" SENTENCE IS NOT DECORATION and is kept below. It is the
           claim that makes this log worth reading at all — writes are restricted to Owners and the
           service account by design, and an admin who does not know that has no reason to trust a row
@@ -821,7 +886,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
   );
 
   const limitsPanel = (
-    <div style={s.card}>
+    <div style={s.card} className="hide-limits-panel">
       <button style={s.disclose} onClick={() => setShowLimits(!showLimits)}>
         {showLimits ? "▾" : "▸"} What this log cannot tell you
       </button>
@@ -988,6 +1053,15 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
         @media (max-width: 640px) {
           .crs-al-filters { grid-template-columns: minmax(0, 1fr) !important; }
         }
+        .hide-limits-panel {
+        display: none;
+        }
+        .pair-row {
+        display: "grid",
+        gridTemplateColumns: "auto 1fr",
+        alignItems: "center",
+        gap: 8,
+        }
       `}</style>
       {header}
 
@@ -1035,20 +1109,20 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 means "since then", which is the old behaviour with a date the admin chose. */}
             <div style={s.fieldPair}>
               <span style={s.label}>Date</span>
-              <div style={s.pairRow}>
+              <div style={s.pairRow} className="pair-row">
                 <span style={s.pairTag}>From</span>
-                <input
-                  type="date"
-                  style={s.input}
+                <DatePicker
                   value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
+                  onChange={setDateFrom}
+                  placeholder="From"
+                  style={s.datePicker}
                 />
                 <span style={s.pairTag}>To</span>
-                <input
-                  type="date"
-                  style={s.input}
+                <DatePicker
                   value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
+                  onChange={setDateTo}
+                  placeholder="To"
+                  style={s.datePicker}
                 />
               </div>
             </div>
@@ -1162,19 +1236,12 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               <DownloadIcon />
               Export
             </button>
+            {/* Client QA item #48.3, 2026-09-13: "Move Export button to the bottom, make sure
+                Export what is shown is right below the Export button" — moved from a separate row
+                spanning the whole filter card into this column, directly under Export, rather than
+                merely aligning near it. */}
+            <span style={s.actionsNote}>export what is shown</span>
           </div>
-        </div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <p style={{ fontSize: 11, color: "#605e5c", margin: "10px 0 0" }}>
-            Press Apply to use the filters.
-          </p>
-          <span style={s.actionsNote}>export what is shown</span>
         </div>
       </div>
 
@@ -1370,10 +1437,14 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                       showing it invites exactly that reading (client, 2026-09-06). The row keeps
                       `ActorName`/`ActorEmail` for an investigation; only this cell is blanked. */}
                   <div>
+                    {/* Client QA item #48.4, 2026-09-13: falls back to a NAME derived from the
+                        email's local part rather than the raw address, when `ActorName` was never
+                        written. `r.ActorEmail` itself, and the CSV export, are untouched. */}
                     {r.EventType === EVENT.archived ||
                     r.EventType === EVENT.routed
                       ? "-"
-                      : r.ActorName || r.ActorEmail || "—"}
+                      : r.ActorName ||
+                        (r.ActorEmail ? nameFromEmail(r.ActorEmail) : "—")}
                   </div>
                 </div>
               </div>
@@ -1381,7 +1452,11 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
           })}
           {/* PAGINATION (client design, 2026-08-30). Numbered, but only over pages that have a
               token — see the note on `tokens`. `…` is shown when more exist beyond them, which is
-              honest about there being more without claiming to know how many. */}
+              honest about there being more without claiming to know how many.
+
+              ⚠ THE NUMBERED RANGE IS WINDOWED (`pagerWindow`, 2026-09-14) — `tokens` itself holds
+              every page ever reached and is NOT trimmed, so Prev and backward numbered clicks into
+              an out-of-window page still work; only which buttons RENDER is bounded. */}
           <div style={s.pager}>
             <span style={s.pagerNote}>
               Showing {rows.length === 0 ? 0 : pageIdx * PAGE_SIZE + 1} to{" "}
@@ -1415,18 +1490,40 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               >
                 &lsaquo;
               </button>
-              {tokens.map((_, i) => (
-                <button
-                  key={i}
-                  style={
-                    i === pageIdx ? { ...s.pageBtn, ...s.pageBtnOn } : s.pageBtn
-                  }
-                  disabled={loading}
-                  onClick={() => goToPage(i).catch(() => undefined)}
-                >
-                  {i + 1}
-                </button>
-              ))}
+              {(() => {
+                const win = pagerWindow(
+                  pageIdx,
+                  tokens.length,
+                  PAGER_WINDOW_SIZE,
+                );
+                const btns: React.ReactElement[] = [];
+                // A LEADING ellipsis whenever the window does not start at page 1 — mirrors the
+                // existing trailing one below, so both edges say "there is more here" the same way.
+                if (win.start > 0) {
+                  btns.push(
+                    <span key="lead-ellipsis" style={s.pagerNote}>
+                      &hellip;
+                    </span>,
+                  );
+                }
+                for (let i = win.start; i <= win.end; i++) {
+                  btns.push(
+                    <button
+                      key={i}
+                      style={
+                        i === pageIdx
+                          ? { ...s.pageBtn, ...s.pageBtnOn }
+                          : s.pageBtn
+                      }
+                      disabled={loading}
+                      onClick={() => goToPage(i).catch(() => undefined)}
+                    >
+                      {i + 1}
+                    </button>,
+                  );
+                }
+                return btns;
+              })()}
               {next !== undefined && <span style={s.pagerNote}>&hellip;</span>}
               <button
                 style={s.pageBtn}

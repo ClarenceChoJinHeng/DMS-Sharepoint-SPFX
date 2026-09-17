@@ -24,6 +24,7 @@ import {
   suggestedPageName,
 } from "../../../shared/adminPages";
 import { CardIcon } from "./icons";
+import { UploadPauseToggle } from "../../userAccess/components/UploadPauseToggle";
 
 export interface CrsSettingsProps {
   context: WebPartContext;
@@ -45,40 +46,134 @@ const s: Record<string, React.CSSProperties> = {
      grid is `auto-fit minmax(min(100%, 380px), 1fr)`, so on a wide screen it currently spreads to
      three or four columns and a 1100px cap would silently drop it to two. The client asked for the
      padding; the columns are a separate decision. */
-  wrap:      { fontFamily: 'Arial, sans-serif', color: "#242424", padding: "0 24px 48px" },
-  head:      { padding: "0 0 18px", borderBottom: "1px solid #eceaea", marginBottom: 22 },
-  h1:        { margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: "-0.01em" },
-  sub:       { margin: "6px 0 0", fontSize: 13.5, color: "#5f5f5f" },
+  wrap: {
+    fontFamily: "Arial, sans-serif",
+    color: "#242424",
+    padding: "0 24px 48px",
+  },
+  head: {
+    padding: "0 0 18px",
+    borderBottom: "1px solid #eceaea",
+    marginBottom: 22,
+  },
+  h1: { margin: 0, fontSize: 26, fontWeight: 600, letterSpacing: "-0.01em" },
+  sub: { margin: "6px 0 0", fontSize: 13.5, color: "#5f5f5f" },
   // Two columns that collapse to one. `minmax(min(100%, 380px), 1fr)` rather than `1fr`: a long blurb
   // in a grid child otherwise refuses to shrink and pushes the second column off screen.
-  grid:      { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 20, alignItems: "start" },
-  col:       { display: "flex", flexDirection: "column", gap: 20 },
-  card:      { border: "1px solid #e8e6e6", borderRadius: 12, background: "#fff", padding: 20, boxShadow: "0 1px 2px rgba(0,0,0,.04)" },
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))",
+    gap: 20,
+    alignItems: "start",
+  },
+  col: { display: "flex", flexDirection: "column", gap: 20 },
+  card: {
+    border: "1px solid #e8e6e6",
+    borderRadius: 12,
+    background: "#fff",
+    padding: 20,
+    boxShadow: "0 1px 2px rgba(0,0,0,.04)",
+  },
   /* Added when the WHOLE card is the link (client, 2026-09-04). Spread ON TOP of `card`, so the look
      is unchanged and only the anchor's own defaults are corrected: an `<a>` brings underlined blue
      text and inline layout with it, and a card wearing those reads as a broken paragraph.
      ⚠ THIS OBJECT IS A `Record<string, CSSProperties>` — a key that does not exist yields `undefined`
      and the element renders UNSTYLED with a green build. This key was referenced before it was
      declared, which is that mistake caught one step early. */
-  linkCard:  { display: "block", textDecoration: "none", color: "inherit", cursor: "pointer" },
-  cardHead:  { display: "flex", alignItems: "flex-start", gap: 14 },
-  cardText:  { flex: 1, minWidth: 0 },
+  linkCard: {
+    display: "block",
+    textDecoration: "none",
+    color: "inherit",
+    cursor: "pointer",
+  },
+  cardHead: { display: "flex", alignItems: "flex-start", gap: 14 },
+  cardText: { flex: 1, minWidth: 0 },
   cardTitle: { margin: 0, fontSize: 17, fontWeight: 600, lineHeight: 1.3 },
-  cardBlurb: { margin: "5px 0 0", fontSize: 12.5, color: "#616161", lineHeight: 1.5 },
-  rows:      { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))", gap: 12, marginTop: 18 },
-  row:       { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 14px", border: "1px solid #e8e6e6", borderRadius: 8, background: "#fff", textDecoration: "none", color: "#242424", fontSize: 12.5, fontWeight: 500, lineHeight: 1.35, cursor: "pointer" },
-  rowDead:   { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 14px", border: "1px dashed #dcdcdc", borderRadius: 8, background: "#fafafa", color: "#9a9a9a", fontSize: 12.5, fontWeight: 500, lineHeight: 1.35, cursor: "default" },
-  arrow:     { color: "#0f6c3f", fontSize: 15, flexShrink: 0 },
-  arrowBox:  { display: "flex", alignItems: "center", justifyContent: "center", width: 38, height: 38, border: "1px solid #e8e6e6", borderRadius: 8, color: "#0f6c3f", fontSize: 15, textDecoration: "none", flexShrink: 0 },
-  note:      { fontSize: 11, color: "#8a8886", marginTop: 4, lineHeight: 1.4 },
-  warnNote:  { fontSize: 11, color: "#8a4b00", marginTop: 4, lineHeight: 1.4 },
-  danger:    { marginBottom: 20, padding: "10px 12px", border: "1px solid #f1b0b3", background: "#fdf3f4", borderRadius: 8, fontSize: 12, color: "#a4262c", lineHeight: 1.5 },
-  loading:   { fontSize: 13, color: "#8a8886", padding: "8px 0" },
-  mono:      { fontFamily: "Consolas, monospace", fontSize: 11, overflowWrap: "break-word" },
+  cardBlurb: {
+    margin: "5px 0 0",
+    fontSize: 12.5,
+    color: "#616161",
+    lineHeight: 1.5,
+  },
+  rows: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))",
+    gap: 12,
+    marginTop: 18,
+  },
+  row: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    padding: "12px 14px",
+    border: "1px solid #e8e6e6",
+    borderRadius: 8,
+    background: "#fff",
+    textDecoration: "none",
+    color: "#242424",
+    fontSize: 12.5,
+    fontWeight: 500,
+    lineHeight: 1.35,
+    cursor: "pointer",
+  },
+  rowDead: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    padding: "12px 14px",
+    border: "1px dashed #dcdcdc",
+    borderRadius: 8,
+    background: "#fafafa",
+    color: "#9a9a9a",
+    fontSize: 12.5,
+    fontWeight: 500,
+    lineHeight: 1.35,
+    cursor: "default",
+  },
+  arrow: { color: "#0f6c3f", fontSize: 15, flexShrink: 0 },
+  arrowBox: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: 38,
+    height: 38,
+    border: "1px solid #e8e6e6",
+    borderRadius: 8,
+    color: "#0f6c3f",
+    fontSize: 15,
+    textDecoration: "none",
+    flexShrink: 0,
+  },
+  note: { fontSize: 11, color: "#8a8886", marginTop: 4, lineHeight: 1.4 },
+  warnNote: { fontSize: 11, color: "#8a4b00", marginTop: 4, lineHeight: 1.4 },
+  danger: {
+    marginBottom: 20,
+    padding: "10px 12px",
+    border: "1px solid #f1b0b3",
+    background: "#fdf3f4",
+    borderRadius: 8,
+    fontSize: 12,
+    color: "#a4262c",
+    lineHeight: 1.5,
+  },
+  loading: { fontSize: 13, color: "#8a8886", padding: "8px 0" },
+  mono: {
+    fontFamily: "Consolas, monospace",
+    fontSize: 11,
+    overflowWrap: "break-word",
+  },
 };
 
 /** One clickable row, or a disabled one naming the page to create. */
-function Row({ link, target }: { link: AdminLink; target: LinkTarget }): React.ReactElement {
+function Row({
+  link,
+  target,
+}: {
+  link: AdminLink;
+  target: LinkTarget;
+}): React.ReactElement {
   if (target === undefined || target.state === "missing") {
     // NOT a dead arrow. A navigation page whose links go nowhere teaches the client the tool is
     // broken, so the row says what is missing and what to call it.
@@ -87,7 +182,8 @@ function Row({ link, target }: { link: AdminLink; target: LinkTarget }): React.R
         <span>
           {link.label}
           <div style={s.note}>
-            No page yet — create <span style={s.mono}>{suggestedPageName(link)}</span>
+            No page yet — create{" "}
+            <span style={s.mono}>{suggestedPageName(link)}</span>
           </div>
         </span>
       </div>
@@ -135,8 +231,12 @@ function Card({
   const Box = wholeCardHref === undefined ? "div" : "a";
   return (
     <Box
-      style={wholeCardHref === undefined ? s.card : { ...s.card, ...s.linkCard }}
-      {...(wholeCardHref === undefined ? {} : { href: wholeCardHref, title: card.title })}
+      style={
+        wholeCardHref === undefined ? s.card : { ...s.card, ...s.linkCard }
+      }
+      {...(wholeCardHref === undefined
+        ? {}
+        : { href: wholeCardHref, title: card.title })}
     >
       <div style={s.cardHead} className="crs-card-head">
         <CardIcon name={card.icon} />
@@ -148,7 +248,8 @@ function Card({
               identical to a working one. */}
           {card.self && selfMissing && (
             <div style={s.warnNote}>
-              No page yet — create <span style={s.mono}>{suggestedPageName(card.self)}</span>
+              No page yet — create{" "}
+              <span style={s.mono}>{suggestedPageName(card.self)}</span>
             </div>
           )}
           {card.self && self && self.state === "ambiguous" && (
@@ -162,7 +263,11 @@ function Card({
             the affordance that says the card goes somewhere; it simply is not the hit target any
             more. `aria-hidden` because the card's own link already carries the name. */}
         {wholeCardHref !== undefined && (
-          <span style={s.arrowBox} className="crs-card-arrow" aria-hidden="true">
+          <span
+            style={s.arrowBox}
+            className="crs-card-arrow"
+            aria-hidden="true"
+          >
             &#8594;
           </span>
         )}
@@ -178,7 +283,9 @@ function Card({
   );
 }
 
-export default function CrsSettings(props: CrsSettingsProps): React.ReactElement {
+export default function CrsSettings(
+  props: CrsSettingsProps,
+): React.ReactElement {
   const [pages, setPages] = useState<SitePage[] | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
 
@@ -199,8 +306,16 @@ export default function CrsSettings(props: CrsSettingsProps): React.ReactElement
       if (!res.ok) throw new Error(`Site Pages: HTTP ${res.status}`);
       const data = await res.json();
       setPages(
-        ((data.value ?? []) as Array<{ FileLeafRef?: string; Title?: string; FileRef?: string }>)
-          .filter((p) => (p.FileLeafRef ?? "").toLowerCase().indexOf(".aspx") !== -1)
+        (
+          (data.value ?? []) as Array<{
+            FileLeafRef?: string;
+            Title?: string;
+            FileRef?: string;
+          }>
+        )
+          .filter(
+            (p) => (p.FileLeafRef ?? "").toLowerCase().indexOf(".aspx") !== -1,
+          )
           .map((p) => ({
             fileName: p.FileLeafRef ?? "",
             title: p.Title ?? "",
@@ -253,17 +368,19 @@ export default function CrsSettings(props: CrsSettingsProps): React.ReactElement
         }
       `}</style>
       <div style={s.head}>
-        <h1 style={s.h1}>{props.heading || "CRS Settings"}</h1>
+        <h1 style={s.h1}>{props.heading || "GDC Settings"}</h1>
         <p style={s.sub}>
-          {props.subheading || "Manage repository settings, folders, access, and mappings."}
+          {props.subheading ||
+            "Manage repository settings, folders, access, and mappings."}
         </p>
       </div>
 
       {error !== undefined && (
         <div style={s.danger}>
-          Could not read this site&rsquo;s pages ({error}), so the links below could not be worked
-          out. This does <strong>not</strong> mean those pages are missing. Reload the page, or set the
-          addresses by hand in this web part&rsquo;s settings.
+          Could not read this site&rsquo;s pages ({error}), so the links below
+          could not be worked out. This does <strong>not</strong> mean those
+          pages are missing. Reload the page, or set the addresses by hand in
+          this web part&rsquo;s settings.
         </div>
       )}
 
@@ -280,6 +397,27 @@ export default function CrsSettings(props: CrsSettingsProps): React.ReactElement
           ))}
         </div>
       )}
+
+      {/* Embedded directly (client, 2026-09-17), below every card, deliberately last on the page — a
+          deliberate exception to this page being "a DIRECTORY and nothing more", since every other
+          section here is a link, never a live control. `UploadPauseToggle` carries no heading of its
+          own by design (it is mounted inside a guided-flow step everywhere else, which already
+          prints one) — reused verbatim here, so this page and the flow's own "Temporarily disable
+          uploads" step never say two different things about the same setting. */}
+      <div style={{ ...s.card, marginTop: 20 }}>
+        <h2 style={s.cardTitle}>Temporarily disable uploads</h2>
+        <p style={s.cardBlurb}>
+          Temporarily restrict document uploads across the site while you
+          reorganise the folder structure.
+        </p>
+        <div style={{ marginTop: 14 }}>
+          <UploadPauseToggle
+            context={props.context}
+            siteUrl={props.siteUrl}
+            mode="pause"
+          />
+        </div>
+      </div>
     </section>
   );
 }

@@ -394,7 +394,7 @@ export const PERSONAS: Persona[] = [
   // DEL maps to "CRS Delete", which is Read + Delete Items. The read was already there; the
   // second membership only made it look as though it were not.
   {
-    key: "hod", namingRole: "DEPTVIEW", family: "Head of Department", scope: "department", label: "View, delete + share, department-wide",
+    key: "hod", namingRole: "DEPTVIEW", family: "Head of Department", scope: "department", label: "View + share, department-wide",
     /* VIEW-ONLY SINCE 2026-08-17 (client: "HOD no need deletion power, he only view" and "Head of
        Department do not have share functionality that is HOU, just needs View"). Both DEL and SHARE
        left; deletion authority is now entirely the Head of Unit's, which is where the request
@@ -436,8 +436,33 @@ export const PERSONAS: Persona[] = [
        ⚠ MIGRATION FOR HoD IS ADDITIVE, unlike the approver groups: the _HOD groups keep their name
        and their DEPTVIEW/DEL/SHARE rows, so re-running bulk provisioning maps the two NEW rows onto
        the EXISTING groups (name check first), then reconciliation grants them. No deletion. */
-    roles: ["DEPTVIEW", "DEL", "SHARE", "DELHC", "SHAREHC"],
-    summary: "Reads every unit under their department, in Documents and in HC Documents, and can delete or share an approved document anywhere in that department without asking — Highly Confidential ones included. Cannot upload, cannot approve, and has no access to either approval library.",
+    /* DEL AND DELHC REMOVED 2026-09-17 (client: "they cannot directly delete anymore but someone do
+       it on their behalf via power automate via admin account. Reason being they can delete folders
+       which is dangerous... I think HOD also have to done by proxy."). The underlying SharePoint
+       permission (`CRS Delete`) is what let a HoD delete a FOLDER, not just a file — removing it is
+       the only way to close that, since the UI alone cannot restrict what a real grant allows.
+
+       SHARE and SHAREHC are UNTOUCHED — sharing stays direct, executed in the HoD's own session via
+       SP.Web.ShareObject, exactly as before. Only delete moves to proxy.
+
+       See 2026-09-17-proxy-deletion-via-power-automate-design.md.
+
+       MIGRATION: same shape as every prior change to this array — an existing HoD mapping's rows
+       still say DEL/DELHC and reconciliation will keep granting them until the group is deleted and
+       re-created (SharePoint drops a deleted principal's role assignments; a removed Group Map row
+       alone does not). */
+    /* ⚠⚠ SUPERSEDED THE SAME DAY: HOD IS OUT OF DELETION ENTIRELY, NOT MERELY PROXIED. Client, a
+       follow-up message the same day: "Can you remove HOD? HOD no need deletion as well, and
+       Approver cannot delete on Documents Library anymore." Confirmed: Approver is unaffected —
+       still decides both stages, execution alone moved to the proxy — but HOD is removed from
+       DECIDING a Documents-library deletion request too, not just from executing one. That half is
+       NOT expressed in this array (HOD never held a Staging-side role that would let them decide a
+       request anyway) — it lives in `shared/requests.ts`'s `inScope`, whose `hodUnits` branch now
+       excludes `RequestType: "Deletion"` outright. So as of 2026-09-17, a HoD's role in deletion is
+       zero: no grant, no proxy self-approval capability (the roles above already ensured that), and
+       no decision authority in the Requests queue either. The summary below reflects this. */
+    roles: ["DEPTVIEW", "SHARE", "SHAREHC"],
+    summary: "Reads every unit under their department, in Documents and in HC Documents, and can share an approved document anywhere in that department without asking — Highly Confidential ones included, and can decide a PIC's share request too. Has no role in deletion at all: cannot delete directly, and does not decide a deletion request either — that is the Head of Unit's alone. Cannot upload, cannot approve, has no access to either approval library, and has no access to the seven-year archive.",
   },
 
   // ── Head of Unit — the approver, at the UNIT tier ──────────────────────────
@@ -491,7 +516,24 @@ export const PERSONAS: Persona[] = [
        Management CSV (members), DELETE every _APPROVER group, bulk provision, reconcile, re-add
        people. Until a unit's group is re-created, its HoU keeps every HC power this change
        removes. */
-    roles: ["APR", "DELS", "DEL", "SHARE", "UPL"],
+    /* DELS AND DEL REMOVED 2026-09-17 (client: "they cannot directly delete anymore but someone do
+       it on their behalf via power automate via admin account. Reason being they can delete folders
+       which is dangerous."). Same reasoning as the HoD entry above in the file and the plain PIC
+       below it: the SharePoint grant behind DEL/DELS also permits deleting a FOLDER, which is the
+       actual hazard — a UI-only restriction cannot close that.
+
+       SHARE is UNTOUCHED — sharing still executes directly in the HoU's own session.
+
+       The request-and-approve UI is unchanged: a PIC raises a deletion request, this HoU still
+       decides it with no code-visible difference. What changes is the LAST step — Requests.tsx no
+       longer calls .recycle() itself; it resolves the file's live location, writes Status=Approved
+       onto the CRS Requests row, and a Power Automate flow (crs@sdguthrie.com) performs the actual
+       recycle. See 2026-09-17-proxy-deletion-via-power-automate-design.md.
+
+       MIGRATION: existing _APPROVER groups keep their DELS/DEL rows and reconciliation keeps
+       granting them until the group is deleted and re-created — deleting a mapping row alone does
+       not withdraw a live grant. */
+    roles: ["APR", "SHARE", "UPL"],
     // SUMMARY CORRECTED 2026-08-17. It still read "Cannot upload, cannot delete approved
     // documents" — written for the pre-2026-08-15 role set and never updated when UPL, DEL and
     // SHARE were added directly above. The persona picker therefore told an administrator, on
@@ -499,7 +541,7 @@ export const PERSONAS: Persona[] = [
     // correctly. Cost real time on 2026-08-17: a Head of Unit could not upload, and this line
     // read as confirmation that they were never meant to. A roles array and its description
     // drifting apart is invisible to every test, because nothing asserts on prose.
-    summary: "Approves every ORDINARY file in their own unit, uploads to it, and deletes pending or rejected files there. Reads the unit's approved documents and can delete or share them — the unit's sharing authority for ordinary documents. Touches nothing Highly Confidential: cannot see, approve or enter the HC libraries at all (that is the HC Head of Unit below). Sees no sibling unit.",
+    summary: "Approves every ORDINARY file in their own unit, uploads to it, and can have pending, rejected or approved files there deleted on their say-so, carried out by an automated process with no further approval. Reads the unit's approved documents and can share them directly — the unit's sharing authority for ordinary documents. Touches nothing Highly Confidential: cannot see, approve or enter the HC libraries at all (that is the HC Head of Unit below). Sees no sibling unit.",
   },
 
   // ── Head of Unit, Highly Confidential ────────────────────────────────────────
@@ -523,10 +565,21 @@ export const PERSONAS: Persona[] = [
     key: "hou_hc", namingRole: "APRHC", family: "Head of Unit", scope: "unit",
     label: "Approve, upload, delete + share own unit — incl. Highly Confidential",
     /* Deliberately a SUPERSET of the plain persona's capabilities: an HC Head of Unit is still the
-       unit's ordinary approver (APRHC covers the normal approval library; DELS/DEL/SHARE are the
-       plain ones), so a unit needs ONE Head of Unit group per person, never both. */
-    roles: ["APRHC", "DELS", "DEL", "SHARE", "UPLHC", "DELSHC", "DELHC", "SHAREHC"],
-    summary: "Everything the plain Head of Unit can do, plus the Highly Confidential side: sees, approves, files, deletes and shares HC documents in their own unit. The ONLY Head of Unit role with any HC access — a unit that files HC documents must have someone in this group, or those uploads wait forever with nobody able to approve them. Give a Head of Unit THIS group or the plain one, never both.",
+       unit's ordinary approver (APRHC covers the normal approval library; SHARE is the plain one),
+       so a unit needs ONE Head of Unit group per person, never both. */
+    /* DELS, DEL, DELSHC AND DELHC REMOVED 2026-09-17, same change and same reasoning as the plain
+       `hou` persona above: direct delete permission also permits deleting a FOLDER, which is the
+       actual hazard the client named ("they can delete folders which is dangerous"). SHARE and
+       SHAREHC are untouched.
+
+       Approving/deciding a deletion request is unchanged — this persona still makes the call with
+       no code-visible difference; a Power Automate flow (crs@sdguthrie.com) performs the actual
+       recycle afterward. See 2026-09-17-proxy-deletion-via-power-automate-design.md.
+
+       MIGRATION: same as `hou` — existing groups keep their old DEL/DELS/DELHC/DELSHC rows and
+       reconciliation keeps granting them until the group is deleted and re-created. */
+    roles: ["APRHC", "SHARE", "UPLHC", "SHAREHC"],
+    summary: "Everything the plain Head of Unit can do, plus the Highly Confidential side: sees, approves, files and shares HC documents in their own unit, and can have one deleted on their say-so, carried out by an automated process with no further approval. The ONLY Head of Unit role with any HC access — a unit that files HC documents must have someone in this group, or those uploads wait forever with nobody able to approve them. Give a Head of Unit THIS group or the plain one, never both.",
   },
 
   // ── PIC ────────────────────────────────────────────────────────────────────
@@ -609,8 +662,23 @@ export const PERSONAS: Persona[] = [
        file. A PENDING/REJECTED file deleted this way reads `Cancelled`; an APPROVED document is
        still only ever removed via the request Requests/HoU decide, unaffected by this and still
        reading `Deleted`. See `RecordState.withdrawn` in `shared/submissionRecords.ts`. */
-    roles: ["UPL", "DELS"],
-    summary: "Uploads to their unit at any confidentiality level. Reads the unit's approved documents but cannot approve; can delete their own pending or rejected file directly. Deleting an approved document is still a request the Head of Unit decides.",
+    /* DELS REMOVED 2026-09-17, THE THIRD REVERSAL OF THIS ONE LINE (2026-08-15 added it,
+       2026-08-20 removed it, 2026-09-11 restored it, this removes it again) — but unlike the
+       earlier two, this is not a change of WHO may act, only of HOW. Client: "they cannot directly
+       delete anymore but someone do it on their behalf via power automate via admin account...
+       Pending files as well, PIC will still delete but without approval so crs@sdguthrie.com via
+       power automate flow will just delete." A PIC can still press Delete on their own pending or
+       rejected file with no approval step — the SharePoint grant behind that action just moves to
+       the service account, because DELS also permits deleting a FOLDER, which is the actual hazard.
+
+       `MySubmissions.tsx`'s direct-delete action no longer calls .recycle() itself: it writes a
+       `CRS Requests` row with Status pre-set to Approved (never Pending, since nobody needs to
+       decide it) and the same Power Automate flow that executes an HoU-approved deletion executes
+       this one too. `RecordState.withdrawn`'s "Cancelled" label on My Submissions is UNCHANGED —
+       that distinction is about which STAGE a file was in, not who performed the recycle.
+       See 2026-09-17-proxy-deletion-via-power-automate-design.md. */
+    roles: ["UPL"],
+    summary: "Uploads to their unit at any confidentiality level. Reads the unit's approved documents but cannot approve; can have their own pending or rejected file deleted with no approval step, carried out on their behalf by an automated process. Deleting an approved document is still a request the Head of Unit decides.",
   },
 
   // ── PIC, Highly Confidential ───────────────────────────────────────────────
@@ -642,8 +710,12 @@ export const PERSONAS: Persona[] = [
        instruction was "pic" generically, and an HC-cleared PIC left without the parallel grant
        would be the one persona still unable to delete their own pending file directly. Same scope,
        same `withdrawn` status on My Submissions; see the note on `pic` above. */
-    roles: ["UPLHC", "DELSHC"],
-    summary: "Everything a PIC does, plus filing and reading Highly Confidential documents for this unit, and can delete their own pending or rejected Highly Confidential file directly.",
+    /* DELSHC REMOVED 2026-09-17, alongside DELS on the plain `pic` persona above — same instruction,
+       same reasoning, same mechanism (a proxy-executed delete via Power Automate, no approval step,
+       no code-visible change to the uploader). See the note on `pic` above and
+       2026-09-17-proxy-deletion-via-power-automate-design.md. */
+    roles: ["UPLHC"],
+    summary: "Everything a PIC does, plus filing and reading Highly Confidential documents for this unit, and can have their own pending or rejected Highly Confidential file deleted with no approval step, carried out on their behalf by an automated process.",
   },
 
   // ── SDG Employee, Highly Confidential ──────────────────────────────────────

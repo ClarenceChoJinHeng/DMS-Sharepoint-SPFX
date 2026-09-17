@@ -30,6 +30,16 @@ import {
   validateRows,
 } from "../../../shared/abbreviationDraft";
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+import { ExistingSegment } from "../../../shared/newSegment";
+import { SegmentCounts, unknownCounts } from "../../../shared/segmentDeletion";
+import {
+  canOfferAnyRecode,
+  folderRecodeConflict,
+  folderRecodeIsNoOp,
+  recodeRefusalReason,
+  recodeSummaryLive,
+} from "../../../shared/segmentRecode";
+import { countSegmentDocuments, performLiveSegmentRecode } from "../../../shared/spSegmentRecode";
 
 /**
  * Term Abbreviations — name the folders a segment's terms produce.
@@ -51,6 +61,8 @@ import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 interface SegmentOption {
   key: string;
   label: string;
+  /** The `CRS Config` mode row's item id — needed to re-code this segment's top folder. */
+  itemId?: number;
   termSetGuid: string;
   stagingFolder: string;
   /** Permissioned level names, shallowest first — these are the tiers that need codes. */
@@ -207,6 +219,47 @@ export default function AbbreviationManager({
   /** Existing list item ids by term GUID, so a save updates rather than duplicating. */
   const [itemIds, setItemIds] = useState<Record<string, number>>({});
 
+  /* ── Segment re-code ───────────────────────────────────────────────────────────
+     Spec: docs/superpowers/specs/2026-09-15-segment-rename-and-group-rename-design.md (Part 1)
+
+     Offers the SAME action `SegmentCreator.tsx`'s Segments tab already offers — its whole write
+     sequence lives in `shared/spSegmentRecode.ts` now, reused here rather than duplicated, so this
+     screen cannot disagree with that one about what "empty" means or how the write is sequenced.
+
+     `recodeCounts === undefined` means "still counting" — its OWN read, run fresh on every segment
+     change, never borrowed from anywhere else: submission stays held back until it resolves (see
+     `recodeCanSubmit`), and an unreadable count (`canOfferAnyRecode` false) is the one refusal.
+
+     `recodeOpen`/`recodeTyped` are GONE (client, 2026-09-16: "remove the Type ... to confirm, put
+     it above the current existing Department section, copy the same design as Department"). The
+     row is now always visible and always editable, like a Department/Unit code — no open/close
+     toggle, no typed-confirmation gate. The destructive write sequence underneath (collision
+     check, live-vs-empty branching) is UNCHANGED; only that extra confirmation step is gone.
+
+     ⚠ `recodeBusy` AND `recodeLog` ARE ALSO GONE (client, same day: "remove the Rename button
+     instead allow the Next button below to do the renaming" + "remove this messages" — the
+     library-by-library log lines). The row no longer has its OWN button or busy flag — the whole
+     write now runs inside `save()`, reusing the PAGE's existing `busy`/`result` Toast exactly the
+     way the abbreviation rows already do. No separate gray log box any more; a failure's detail is
+     folded into the ONE Toast message instead of a persistent list of technical lines. */
+  const [recodeCounts, setRecodeCounts] = useState<SegmentCounts | undefined>(undefined);
+  const [recodeFolder, setRecodeFolder] = useState("");
+
+  /* ── "Rename matching groups" — MOVED to Group Management, 2026-09-16 ─────────────
+     Spec: docs/superpowers/specs/2026-09-15-segment-rename-and-group-rename-design.md (Part 2)
+
+     Was Part 2 of the segment-recode spec above, offered automatically right after a successful
+     save. Client, after recoding GHO and then running "Create group" on it: *"I honestly thought
+     you would put the group renaming in the Group management instead"* — bulk provisioning has no
+     idea a recode ever happened, so it built a whole parallel `GHOS_*` set beside the untouched
+     `GHO_*` one, and there was no way to re-ask "does anything here still disagree with the current
+     code" without redoing the save that had already been superseded by that point.
+
+     The SAME check (`plannedGroupRenames` in `shared/userAccess.ts`, unchanged) now lives on Group
+     Management as "Check for groups with a stale name" — reachable any time, for any segment, not
+     only in the instant right after a recode save. It still preserves the group's id on every
+     rename, so nothing about access ever depends on whether this ran. */
+
   const segment = (): SegmentOption | undefined => segments.filter((x) => x.key === chosen)[0];
 
   const configList = (): string => encodeURIComponent(cachedListTitle(LIST_SUFFIX.config));
@@ -224,14 +277,17 @@ export default function AbbreviationManager({
       // and went with page-load timing. Priming is idempotent and cached; a FAILURE must not stop the
       // read, because the legacy title is still correct on a site that was never renamed.
       await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      // `Id` is added for the segment re-code section (2026-09-15) — it is the mode row's item id,
+      // needed by `performLiveSegmentRecode`'s MERGE. Everything else on this screen worked without it.
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${configList()}')/items` +
-          `?$select=Title,ModeLabel,TermSetGuid,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200`,
+          `?$select=Id,Title,ModeLabel,TermSetGuid,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200`,
         SPHttpClient.configurations.v1,
         { headers: { Accept: "application/json;odata=nometadata" } },
       );
       if (!res.ok) throw new Error(`the configuration list returned HTTP ${res.status}`);
       const raw = ((await res.json()).value ?? []) as Array<{
+        Id?: number;
         Title?: string;
         ModeLabel?: string;
         TermSetGuid?: string;
@@ -278,6 +334,7 @@ export default function AbbreviationManager({
           return {
             key: (r.Title ?? "").trim(),
             label: (r.ModeLabel ?? r.Title ?? "").trim(),
+            itemId: r.Id,
             termSetGuid: (r.TermSetGuid ?? "").trim(),
             stagingFolder: (r.StagingFolder ?? "").trim(),
             // A row predating the Levels schema still needs codes for its terms, so fall back to
@@ -525,10 +582,66 @@ export default function AbbreviationManager({
     };
   }, [chosen, segments.length]);
 
+  /** `SegmentOption` carries extra fields `ExistingSegment` does not need; this is the join. */
+  const toExistingSegment = (o: SegmentOption): ExistingSegment => ({
+    key: o.key,
+    label: o.label,
+    stagingFolder: o.stagingFolder,
+    itemId: o.itemId,
+    termSetGuid: o.termSetGuid,
+  });
+
+  /* Re-runs whenever the chosen segment changes — never borrowed from the term-tree effect above,
+     which answers a different question (does this segment have terms) and can legitimately finish
+     before or after this one. Pre-fills the box with the segment's CURRENT top folder code, same as
+     a Department/Unit row shows its current abbreviation — so switching segments cannot leave the
+     box showing a value that belongs to the wrong one. */
+  useEffect(() => {
+    const seg = segment();
+    if (!seg) {
+      setRecodeCounts(undefined);
+      setRecodeFolder("");
+      return undefined;
+    }
+    setRecodeFolder(seg.stagingFolder);
+    let cancelled = false;
+    setRecodeCounts(undefined);
+    countSegmentDocuments(context, siteUrl, toExistingSegment(seg))
+      .then((c) => {
+        if (!cancelled) setRecodeCounts(c);
+      })
+      .catch((e) => {
+        if (!cancelled) setRecodeCounts(unknownCounts((e as Error).message));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [chosen, segments.length]);
+
   /* ── Dirty ─────────────────────────────────────────────────────────────────── */
 
   const pending = changedRows(rows);
-  const dirty = pending.length > 0;
+
+  /* The SEGMENT row's own pending-edit checks — moved UP here (ahead of `save()`, which now needs
+     them: `no-use-before-define` is on, the same rule this project already follows for
+     `onAddTyped`/`onAdd`) rather than only being computed down in the render section. Same rules
+     `SegmentCreator.tsx`'s Segments tab already runs, applied to `segments` here instead of its
+     `existing`. `segNow` avoids shadowing the render section's OWN `const seg = segment();`
+     further down — both call the identical pure function within the same render pass, so they can
+     never disagree. */
+  const segNow = segment();
+  const recodeConflict = segNow
+    ? folderRecodeConflict(recodeFolder, segments.map(toExistingSegment), segNow.key)
+    : "";
+  const recodeIsNoOp = segNow ? folderRecodeIsNoOp(recodeFolder, segNow.stagingFolder) : true;
+  /* Is there a REAL pending edit to the segment's own top folder — not yet whether it is safe to
+     act on (that needs `recodeCounts` too, checked inside `save()` itself), just whether the field
+     differs from what is saved. This is what makes switching segments (and leaving the page)
+     refuse exactly as it already does for a changed Department/Unit code, now that this field has
+     no Cancel button of its own to fall back on. */
+  const segmentTouched = segNow !== undefined && !recodeIsNoOp;
+
+  const dirty = pending.length > 0 || segmentTouched;
 
   useEffect(() => {
     if (onDirtyChange) onDirtyChange(dirty);
@@ -578,15 +691,103 @@ export default function AbbreviationManager({
    * would lose them silently. `false` for a refusal as well as an error: a sibling collision is not
    * an exception, and reconciliation would abort on it three steps later.
    */
+
   const save = async (): Promise<boolean> => {
-    const seg = segment();
     // Nothing to save is SUCCESS — an admin who changed nothing must still be able to walk on.
-    if (!seg) return false;
+    if (!segNow) return false;
     if (blocked) return false;
     if (!dirty) return true;
     setBusy(true);
     setResult(undefined);
     try {
+      // ── The segment's own top folder, only if the field genuinely differs from what is saved ──
+      // Folded in HERE, first, because a live rename across every library is the more consequential
+      // of the two writes — a failure stops here rather than after the abbreviation rows have
+      // already been written. See the file-header comment: the row's own button and log box are
+      // gone (2026-09-16), and this is what replaced them.
+      let segmentPrefix = "";
+      if (segmentTouched) {
+        // A collision, an unresolved count, or an unreadable count all refuse OUTRIGHT — nothing is
+        // written, including the abbreviation rows below, so the admin fixes the segment field and
+        // presses Next again rather than half of one press landing.
+        if (recodeConflict) {
+          setResult({ ok: false, text: recodeConflict });
+          return false;
+        }
+        if (recodeCounts === undefined) {
+          setResult({
+            ok: false,
+            text:
+              "Still checking whether this segment's top folder can be renamed — wait a moment " +
+              "and press Next again.",
+          });
+          return false;
+        }
+        if (!canOfferAnyRecode(recodeCounts)) {
+          setResult({ ok: false, text: recodeRefusalReason(recodeCounts) });
+          return false;
+        }
+
+        const existingSeg = toExistingSegment(segNow);
+        const oldRoot = (segNow.stagingFolder ?? "").trim();
+        const newRoot = stripFolderChars(recodeFolder).trim();
+        const { ok: recOk, renamed, lines } = await performLiveSegmentRecode(
+          context,
+          siteUrl,
+          existingSeg,
+          recodeFolder,
+        );
+
+        // Gated on `renamed`, NOT `recOk` — see the identical comment on `SegmentCreator.tsx`'s own
+        // `onRecode`: `recOk` also folds in a non-fatal Folder Map tidy-up failure, and reflecting
+        // the new name (or re-counting expecting to see it) when the write never landed would show
+        // a folder name the server does not have. The LAST line of the write sequence's own log is
+        // the specific reason — the pre-check refusal, the per-library stop message, or a thrown
+        // error — and is the whole replacement for the removed gray log box.
+        if (!renamed) {
+          setResult({
+            ok: false,
+            text: `"${segNow.label}"'s top folder was NOT changed — ${lines[lines.length - 1] ?? "see below"}`,
+          });
+          return false;
+        }
+
+        setSegments(segments.map((o) => (o.key === segNow.key ? { ...o, stagingFolder: newRoot } : o)));
+        // The box KEEPS showing the new value, same as a Department/Unit code row after Save.
+        setRecodeFolder(newRoot);
+        const fresh = await countSegmentDocuments(context, siteUrl, { ...existingSeg, stagingFolder: newRoot }).catch(
+          (e) => unknownCounts((e as Error).message),
+        );
+        setRecodeCounts(fresh);
+
+        writeAudit(context.spHttpClient, siteUrl, {
+          event: EVENT.segmentRecoded,
+          outcome: recOk ? "Success" : "Failed",
+          source: "AbbreviationManager",
+          at: new Date(),
+          actorName: context.pageContext.user.displayName,
+          actorEmail: context.pageContext.user.email,
+          segment: segNow.label,
+          summary: `Segment top folder re-coded — ${segNow.label}: "${oldRoot}" → "${newRoot}"`,
+          details: [
+            `Key: ${segNow.key}`,
+            `Old top folder: ${oldRoot}`,
+            `New top folder: ${newRoot}`,
+            "Mode: live rename (in place, every library, nothing recycled)",
+            ...lines,
+          ],
+        }).catch(() => undefined);
+
+        segmentPrefix = `"${segNow.label}" ${recodeSummaryLive(oldRoot, newRoot, recodeCounts)} `;
+      }
+
+      // ── The Department/Unit abbreviation rows — `pending`, never the combined `dirty`, since the
+      //    segment write above (if it ran) does not change how many rows are pending. ──
+      if (pending.length === 0) {
+        if (segmentPrefix) setResult({ ok: true, text: segmentPrefix.trim() });
+        return true;
+      }
+
       const digestRes: SPHttpClientResponse = await context.spHttpClient.post(
         `${siteUrl}/_api/contextinfo`,
         SPHttpClient.configurations.v1,
@@ -639,7 +840,7 @@ export default function AbbreviationManager({
         written++;
       }
 
-      const renamed = renames.length;
+      const renamedCount = renames.length;
 
       // Recorded BEFORE re-baselining, because `original` is about to be overwritten and the
       // old → new pair is the whole value of the record: it is the only place that says which folder
@@ -650,10 +851,10 @@ export default function AbbreviationManager({
         at: new Date(),
         actorName: context.pageContext.user.displayName,
         actorEmail: context.pageContext.user.email,
-        segment: seg.label,
+        segment: segNow.label,
         summary:
-          `Abbreviations saved for ${seg.label} — ${written} changed` +
-          (renamed > 0 ? `, ${renamed} rename${renamed === 1 ? "" : "s"}` : ""),
+          `Abbreviations saved for ${segNow.label} — ${written} changed` +
+          (renamedCount > 0 ? `, ${renamedCount} rename${renamedCount === 1 ? "" : "s"}` : ""),
         details: pending
           .map(
             (r) =>
@@ -664,7 +865,7 @@ export default function AbbreviationManager({
               `${r.abbreviation.trim() === "" ? "(blank)" : r.abbreviation.trim()}`,
           )
           .concat([
-            renamed > 0
+            renamedCount > 0
               ? "No folder has changed yet. The next reconciliation will RENAME the folders whose code changed."
               : "No folder has changed yet. Reconciliation creates the folders.",
           ]),
@@ -677,11 +878,12 @@ export default function AbbreviationManager({
         ok: true,
         warn: !auditOk,
         text:
-          `Saved ${written} abbreviation${written === 1 ? "" : "s"} for ${seg.label}. ` +
+          segmentPrefix +
+          `Saved ${written} abbreviation${written === 1 ? "" : "s"} for ${segNow.label}. ` +
           `No folder has changed yet — run Folder Reconciliation to create or rename them.` +
-          (renamed > 0
-            ? ` ${renamed} of these replaced an existing code, so reconciliation will RENAME ${
-                renamed === 1 ? "that folder" : "those folders"
+          (renamedCount > 0
+            ? ` ${renamedCount} of these replaced an existing code, so reconciliation will RENAME ${
+                renamedCount === 1 ? "that folder" : "those folders"
               } in both libraries. Documents, permissions and approval status are kept.`
             : "") +
           // Said on the panel already being read, rather than as a second banner. The save itself
@@ -748,6 +950,25 @@ export default function AbbreviationManager({
   /* ── Render ────────────────────────────────────────────────────────────────── */
 
   if (loading) return <p style={{ fontSize: 13, color: "#605e5c" }}>Loading segments&hellip;</p>;
+
+  // `recodeConflict`/`recodeIsNoOp` are NOT recomputed here — they are the SAME `segNow`-based
+  // consts declared up near `dirty`, reused rather than duplicated so the render and `save()` can
+  // never disagree about whether the segment field has a real pending edit.
+  //
+  // WARN: `recodeCounts !== undefined && canOfferAnyRecode(recodeCounts)` is EXPLICIT here rather
+  // than relied on structurally. Before 2026-09-16 the whole row only ever rendered once the count
+  // was known good, so this could omit the check; now the row is reachable WHILE the count is still
+  // running, so submission must stay held back on its own.
+  //
+  // `busy`, never a `recodeBusy` of its own — the row no longer runs its own write; it rides the
+  // page's ONE save via `save()`, so the page's ONE busy flag is the only one that applies.
+  const recodeCanSubmit =
+    segNow !== undefined &&
+    recodeCounts !== undefined &&
+    canOfferAnyRecode(recodeCounts) &&
+    !busy &&
+    recodeConflict === "" &&
+    !recodeIsNoOp;
 
   return (
     <div>
@@ -830,6 +1051,77 @@ export default function AbbreviationManager({
       </div>
       )}
 
+      {/* Segment re-code — the SAME action `SegmentCreator.tsx`'s Segments tab already offers.
+          REDESIGNED 2026-09-16 (client: "remove the Type ... to confirm, put it above the current
+          existing Department section, copy the same design as Department") — no more card, no
+          more open/close toggle, no more typed-confirmation step. It is now a single ROW using the
+          exact same grid style (`s.row`) and section heading style (`s.tierHead`) as a
+          Department/Unit level below, in its own bordered box that matches `s.scrollBox`'s
+          look — visually just the first "section" in this list, sitting directly above it.
+
+          ⚠ THE COLLISION CHECK IS UNCHANGED — only the confirmation UI around it is gone.
+          `performLiveSegmentRecode` still runs the same pre-check across every library before
+          touching anything; `recodeCanSubmit` still refuses until the document count has actually
+          resolved (see its own comment). The one safety that is genuinely GONE is the typed-label
+          confirmation — removed on the client's explicit instruction, to match how a
+          Department/Unit code is edited with no confirmation step at all.
+
+          ⚠ AND SINCE THE SAME DAY, THE WRITE ITSELF IS SIMPLER TOO: it always uses the live,
+          in-place rename now, whether the segment is empty or holds documents — the old
+          recycle-and-rebuild path (`performSegmentRecode`) is no longer called (client: "Can we
+          ensure for renaming the term abbreviations doesn't move it to recycle bin if its
+          empty"). Nothing is ever sent to the recycle bin any more.
+
+          ⚠ THE ROW HAS NO BUTTON OF ITS OWN AND NO LOG BOX, EITHER (client, same day: "remove the
+          Rename button instead allow the Next button below to do the renaming" + "remove this
+          messages"). A code edit here rides the page's ONE save, exactly like a Department/Unit
+          row — pressing Next calls `save()`, which runs this write FIRST (see its own comment) and
+          folds any failure into the ONE Toast message. There is nothing left to click or read
+          inside this box; the field itself is the whole control. */}
+      {seg && (
+        <div
+          style={{
+            border: "1px solid #ececec",
+            borderRadius: 6,
+            padding: "10px 12px",
+            background: "#fff",
+            marginBottom: 14,
+          }}
+        >
+          <div style={s.tierHead}>
+            <span>SEGMENT (1)</span>
+          </div>
+          <div style={s.row}>
+            <span style={{ fontSize: 13 }}>{seg.label}</span>
+            <input
+              style={{ ...s.input, ...(recodeConflict ? s.inputBad : {}) }}
+              value={recodeFolder}
+              placeholder="code"
+              maxLength={20}
+              disabled={busy}
+              onChange={(e) => setRecodeFolder(stripFolderChars(e.target.value))}
+            />
+            {/* Same slot a Department/Unit row uses for its "✎ was X" rename marker — shown only
+                once there is a real, submittable change pending, never on an untouched or a
+                blocked field. */}
+            {recodeCanSubmit ? (
+              <span style={{ fontSize: 11, color: "#7a4f00", fontWeight: 600 }}>
+                ✎ will be renamed — in place, nothing recycled
+              </span>
+            ) : recodeCounts === undefined && !recodeConflict && !recodeIsNoOp ? (
+              <span style={s.hint}>checking&hellip;</span>
+            ) : (
+              <span />
+            )}
+            {recodeConflict ? (
+              <div style={{ ...s.problem, color: "#a4262c" }}>{recodeConflict}</div>
+            ) : recodeCounts !== undefined && !canOfferAnyRecode(recodeCounts) ? (
+              <div style={{ ...s.problem, color: "#a4262c" }}>{recodeRefusalReason(recodeCounts)}</div>
+            ) : undefined}
+          </div>
+
+        </div>
+      )}
 
       {treeLoading ? (
         <p style={{ fontSize: 13, color: "#605e5c" }}>Reading the term store&hellip;</p>

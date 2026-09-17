@@ -19,7 +19,14 @@
  * arguments, so it can be tested without a tenant.
  */
 
-import { PERSONAS, Persona, roleLabel, isSiteEntryGroupTitle } from "./groupMapModel";
+import {
+  PERSONAS,
+  Persona,
+  roleLabel,
+  isSiteEntryGroupTitle,
+  normalizeRoleValue,
+  suggestGroupName,
+} from "./groupMapModel";
 import { roleSetKey } from "./bulkGroups";
 
 /** One SharePoint group the person belongs to. */
@@ -161,6 +168,127 @@ export function personaForRoles(roles: readonly string[]): Persona | undefined {
     if (roleSetKey(p.roles as unknown as string[]) === key) return p;
   }
   return undefined;
+}
+
+/** A CRS Group Map row as read back from SharePoint, already scoped to one segment. */
+export interface GroupMapRenameRow {
+  GroupId?: string;
+  GroupName?: string;
+  Role?: string;
+  UnitTermGuid?: string;
+}
+
+/**
+ * Which SharePoint groups now carry a STALE code in their own name — after a Department/Unit
+ * abbreviation rename or a segment top-folder recode — and what they should be called instead.
+ *
+ * Spec: docs/superpowers/specs/2026-09-15-segment-rename-and-group-rename-design.md (Part 2)
+ *
+ * A rename NEVER changes what a group grants — Group Map rows are keyed on `GroupId`, which a
+ * SharePoint rename preserves — so this is always optional and always safe to skip (see 1.0.261.0's
+ * "safe because a rename preserves the group id"). It exists only because `suggestGroupName` derives
+ * a group's NAME from the same codes the Abbreviations screen edits (`GHO_GCA_TAX_APPROVER` from the
+ * segment code plus the term chain's codes), so a code rename leaves every group naming that term
+ * pointing at a folder name that no longer exists.
+ *
+ * ⚠ `rows` MUST ALREADY BE SCOPED TO THE ONE SEGMENT BEING EDITED (the caller's own
+ * `Segment eq '<guid>'` read) — this never widens that scope itself, so a GLOBAL group (blank
+ * `Segment`, site-wide by definition) is never a candidate here, matching `suggestGroupName`'s own
+ * special-casing of it.
+ *
+ * `codeChainFor` is caller-supplied, because building it needs the abbreviation rows the caller has
+ * already loaded — see `codeChain` in `bulkGroups.ts`, reused verbatim by both callers of this
+ * function rather than re-fingerprinted here. `undefined` means the chain could not be resolved (a
+ * broken parent link), and a group on such a chain is SKIPPED rather than guessed at — a wrong
+ * suggested rename is worse than none, since acting on it points the group at a name nobody chose.
+ */
+export function plannedGroupRenames(
+  renamedTermGuids: readonly string[],
+  segmentRecoded: boolean,
+  segmentCode: string,
+  rows: readonly GroupMapRenameRow[],
+  codeChainFor: (termGuid: string) => string[] | undefined,
+  /**
+   * ⚠⚠ FIXED 2026-09-16 — a second real bug found live right after the first, on the very same GHO
+   * recode: the segment's own C-Level group (`GHO_C_LEVEL`, role SEGVIEW) was ALSO silently skipped.
+   *
+   * `GroupMapWriteRow.UnitTermGuid` is documented (and, checked directly in `bulkGroups.ts`'s
+   * `rowsFor`/`push`, actually written) as `"" unless Scope is Folder; equals Segment for a
+   * segment-tier row` — so a SEGVIEW row's `UnitTermGuid` is NOT blank in production, it is the
+   * SEGMENT's own term SET guid. `codeChainFor` only knows Department/Unit TERM guids walked from
+   * inside that set (from `loadPermissionedAbbreviationRows`), never the set's own id — so without
+   * being told which guid IS the segment, `codeChainFor(entry.unitGuid)` returns `undefined` for a
+   * segment-tier row and it was dropped by the very "never guess without a resolvable chain" guard
+   * that exists to protect ordinary unit/department rows. (A GLOBAL row is unaffected — its
+   * `UnitTermGuid` is forced blank by `buildGroupMapRow`'s termless rule, and blank already resolved
+   * to `chain = []` before this parameter existed.)
+   *
+   * Optional, defaulting to `""` — no supplied guid can ever equal a non-empty `entry.unitGuid`, so
+   * every existing caller and test that never passed one keeps its old (blank ⇒ `[]`, anything else
+   * ⇒ ask `codeChainFor`) behaviour exactly.
+   */
+  segmentTermSetGuid: string = "",
+): Array<{ groupId: number; from: string; to: string }> {
+  const renamed = new Set(renamedTermGuids.map((g) => (g ?? "").trim().toLowerCase()));
+
+  // Group Map rows are one per (group, term, role), so a group holding six roles carries six rows —
+  // all sharing the same GroupId, GroupName and UnitTermGuid. Collapsed to one entry per group
+  // BEFORE any name is computed, or `suggestGroupName` would be asked for six different suffixes on
+  // the same group and whichever role was seen last would silently win.
+  const byGroup: Record<string, { name: string; unitGuid: string; roles: string[] }> = {};
+  for (const row of rows) {
+    const groupId = (row.GroupId ?? "").trim();
+    if (!groupId) continue;
+    const unitGuid = (row.UnitTermGuid ?? "").trim();
+    // ⚠⚠ FIXED 2026-09-16 — a real bug, found live on GHO's own recode. The STEM every group name is
+    // built from (`suggestGroupName(segmentCode, …)`) is the SEGMENT's code for every row, unit-tier
+    // included — so recoding the segment goes stale for ALL of them, not only the segment-tier ones.
+    // The line this replaces read `unitGuid ? renamed.has(unitGuid) : segmentRecoded` — which checked
+    // `segmentRecoded` ONLY for a row with NO unit guid (SEGVIEW/GLOBAL), and for every ordinary
+    // unit/department row asked SOLELY whether that row's own term had just been renamed, ignoring
+    // `segmentRecoded` entirely. So a pure segment recode (no term renamed, `renamedTermGuids` empty)
+    // offered to fix `GHO_SEGVIEW` and left every `GHO_<dept>_<unit>_<role>` group silently stale —
+    // exactly what the caller then went and re-provisioned as a parallel `GHOS_*` set, because bulk
+    // provisioning had no way to know the old names were meant to become these.
+    // `segmentRecoded` now makes EVERY row a candidate, tier notwithstanding — a TERM rename still
+    // narrows to just that term's own row via the second half. Neither direction widens who gets
+    // RENAMED beyond who was already a candidate: `to === entry.name` still drops a row unchanged
+    // two lines down, so this only ever adds rows whose computed name has actually gone stale.
+    const affected = segmentRecoded || (unitGuid !== "" && renamed.has(unitGuid.toLowerCase()));
+    if (!affected) continue;
+    const entry = byGroup[groupId] ?? { name: "", unitGuid, roles: [] };
+    if (!entry.name) entry.name = (row.GroupName ?? "").trim();
+    const role = normalizeRoleValue(row.Role ?? "");
+    if (role) entry.roles.push(role);
+    byGroup[groupId] = entry;
+  }
+
+  const out: Array<{ groupId: number; from: string; to: string }> = [];
+  // `Object.entries` is unavailable at this tsconfig's target (the same ES-level limitation as
+  // `Promise.allSettled` — see CLAUDE.md gotcha #3), so `Object.keys` is the house pattern.
+  for (const groupId of Object.keys(byGroup)) {
+    const entry = byGroup[groupId];
+    const id = Number(groupId);
+    if (!Number.isFinite(id)) continue;
+    // Matched EXACTLY, same rule `planBulkGroups`'s rename recovery already follows — a role set
+    // that matches no persona cannot be confidently named, so it is skipped rather than guessed at.
+    const persona = personaForRoles(entry.roles);
+    if (!persona) continue;
+    // A row whose `unitGuid` IS the segment's own term-set guid is the segment-tier (SEGVIEW) group
+    // itself — it has no unit chain to resolve, exactly like a blank `unitGuid` (GLOBAL). Checked
+    // BEFORE calling `codeChainFor`, which only knows terms walked from INSIDE the set and would
+    // otherwise answer `undefined` for the set's own id and drop this row via the very next guard.
+    const isSegmentTierGuid =
+      entry.unitGuid !== "" &&
+      segmentTermSetGuid !== "" &&
+      entry.unitGuid.toLowerCase() === segmentTermSetGuid.trim().toLowerCase();
+    const chain = entry.unitGuid === "" || isSegmentTierGuid ? [] : codeChainFor(entry.unitGuid);
+    if (entry.unitGuid !== "" && !isSegmentTierGuid && chain === undefined) continue;
+    const to = suggestGroupName(segmentCode, chain ?? [], persona.namingRole);
+    if (!to || entry.name.toUpperCase() === to.toUpperCase()) continue;
+    out.push({ groupId: id, from: entry.name, to });
+  }
+  return out.sort((a, b) => a.from.localeCompare(b.from));
 }
 
 /**

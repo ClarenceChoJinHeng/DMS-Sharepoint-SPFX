@@ -13535,3 +13535,286 @@ checkbox first, rejected: *"no need checkbox as an option, make it mandatory."*
   confirming its abbreviation rows are gone from `CRS Term Abbreviation` afterwards, plus a run on
   a segment whose terms happen to be unreachable (to confirm the count goes `unknown` and the
   typed-confirmation gate still fires rather than silently reporting zero).
+
+## QUICK SEARCH GAINED A REMOVE BUTTON PER GROUP (2026-09-13)
+Spec: `docs/superpowers/specs/2026-09-13-quick-search-remove-button-design.md`. Client, looking at
+a Quick Search result: *"add a remove button for the group the person is in, makes it easier to
+remove someone."* **BUILT, NOT site-tested.**
+- **NOT A SECOND IMPLEMENTATION OF GROUP REMOVAL.** It calls the same `removeGroupMember` /
+  `setSiteAdmin` / `countSiteAdmins` primitives `GroupMembersEditor.onRemove` already uses, and
+  applies the SAME site-collection-administrator guard when the row IS the Owners group — never
+  demote the signed-in admin, never demote the last site collection administrator
+  (`countSiteAdmins` answering `undefined` REFUSES the demotion rather than guessing "there must be
+  others"). A second, looser rule for this one call site is exactly how somebody removed via Quick
+  Search could keep full control of the site while the toast says otherwise.
+- **⚠ THE WRINKLE QUICK SEARCH HAS THAT `GroupMembersEditor` DOES NOT: it has no site-user id to
+  remove with.** `GroupMembersEditor` reads ONE group's members, so each row already carries its
+  own site-user id. Quick Search's `runLookup` instead walks `GetUserById(u.Id)/groups` **per site
+  user** (a guest can exist twice on this site for one address, 2026-08-18), merging into
+  group-shaped `UserGroupRef[]` with no site-user id at all. A new map,
+  `lookupMemberIds: Record<groupId, userId[]>`, is built alongside the existing walk — in the
+  COMPONENT only, never added to `UserGroupRef` or `summarizeUserAccess` in `shared/userAccess.ts`,
+  which stays pure and SPFx-free by design and has no reason to know about site-user ids. Every
+  site-user id that holds a given group is recorded, so a genuinely duplicated membership (both of
+  a person's accounts in the same group) is fully removed, not silently half-fixed.
+- **Same confirm pattern as `GroupMembersEditor`** — click **Remove**, the row shows
+  **Confirm remove** / **Cancel** in its place, no modal. Rendered for EVERY group, Owners and
+  site-entry included: `describeGroupAccess` already tells the admin what a row is, and hiding the
+  button on those two would silently reintroduce the detour this feature exists to remove.
+- **After a successful removal, `runLookup(lookupPerson)` re-runs** rather than patching
+  `lookupGroups` by hand — it is already the single source of truth for "what groups is this
+  person in right now", and a hand-patched copy could not see a membership changed elsewhere.
+- **Removing from ONE group is removing from ONE group**, same as `GroupMembersEditor`:
+  `CRS_SITE_MEMBERS` (site entry) and every other group are untouched. Audit row written via the
+  existing `log()` helper, `EVENT.membersChanged`, source `"GroupManagement"`.
+- **Verified**: `tsc --noEmit` clean, `eslint` on the file shows only its documented pre-existing
+  `max-lines` warning (no new categories), full suite **1872/0**. **NOT yet site-tested.**
+
+## AN APPROVER DELETES AND SHARES WITHOUT A REQUEST — AND THE RIGHTS CHECK NOW ASKS THE ITEM (2026-09-15, 1.0.538.0 → 1.0.546.0)
+Client: *"Ensure approver can just delete or share a file through my submission without raising a
+request... the popup for reason is showing which doesnt make sense for approver and system admin"*,
+then, on seeing the approved-file case hidden behind "do it in the library": *"the Delete and Share
+button stays exactly where it is in the My Submission page for easy access instead of going into the
+library, its only that system admin or approver do not need to self approve themselves and also they
+do not need to receive any of the delete/share request email."* **BUILT AND SITE-VERIFIED.**
+
+- **THE BUTTONS STAY ON THE PAGE FOR AN APPROVED DOCUMENT, and that REVERSES the 2026-08-30
+  text-only treatment** (*"You can delete or share this document yourself, in the library"*). That
+  answered a different question — should a REQUEST be offered to somebody who can already act — and
+  is still why no "Request…" button appears for them; it was never meant to remove the in-app action
+  as well. Each action type is now mutually exclusive between request and direct, never both and
+  never neither, so the page cannot present two contradictory routes for one click.
+- **NO `CRS Requests` ROW IS WRITTEN ON THE DIRECT PATH, and that is what satisfies both halves of
+  the ask for free.** Nothing lands in the approver's queue to self-approve, and
+  `CRS — Notify request activity` triggers off writes to that list, so no email is sent either.
+  Neither needed a flow change.
+- **⚠ A DIRECT DELETE OF AN APPROVED DOCUMENT DOES NOT STAMP THE RECORD "withdrawn".** That label
+  renders as **Cancelled** and is reserved for an uploader pulling back their own unreviewed
+  submission (`RecordState.withdrawn`: *"no other state may use it"*). An approved document deleted
+  directly reaches the SAME end state the existing request-and-approval path produces, and that path
+  writes no stamp at all — the record stops resolving and reads **Deleted** on its own.
+- **⚠ THE SHARE DIALOG DROPS ITS EXPIRY FIELD IN DIRECT MODE.** Expiry is enforced by a flow that
+  reads `ExpiresAt` off the REQUEST ROW, and a direct share never writes one — offering the field
+  would promise something nothing checks. The reason field goes too (nobody reads it), via
+  `validateDraft` filtered to drop the reason problem so every OTHER check still applies.
+
+### ⚠⚠ THE RIGHTS CHECK ASKED THE GROUP MAP, AND IT FAILED SILENTLY FOR A GENUINELY MAPPED APPROVER
+Client, after the feature shipped: *"as an approver I still need to provide reason, as of now it seems
+only systme admin works."* True, and the cause is the MECHANISM rather than any one bug.
+
+- **`canActDirectly` RECONSTRUCTS the answer in five steps**: read the viewer's groups, read every
+  Group Map row, keep those carrying `DEL`/`SHARE`, collect those rows' tier term GUIDs, then match
+  them against the tier GUIDs stamped on the document's own `<Base>Tid` columns. **Every step fails
+  silently and identically, as "you must raise a request"**: an unreadable or truncated Group Map, a
+  `Role` spelled a way `normalizeRoleValue` misses, a group mapped at one tier while the document is
+  filed under another, a document filed with no `Tid` values at all, or a list title still answering
+  its legacy `DMS …` name before `primeNames` settles.
+- **A SYSTEM ADMIN SAILS PAST ALL OF IT** because Full Control is checked separately — which is
+  exactly why the report reads *"only system admin works"*. That symptom is the signature of this
+  whole class of failure, not of any single one of them.
+- **FIXED BY ASKING THE ITEM: `probeFileRights` in `dmsFolderMap.ts`**, reading
+  `GetFileById(guid'…')/ListItemAllFields/EffectiveBasePermissions` once and testing
+  **`deleteListItems` (bit 3)** and **`managePermissions` (bit 25)**. One read, and it accounts for
+  the folder ACL, inheritance, group membership and site-admin status together.
+  - **⚠ `managePermissions` IS THE RIGHT BIT FOR "CAN SHARE" and it is not obvious.** `CRS Share`
+    exists precisely because it CONTAINS Manage Permissions — the same fact that let share-revoke
+    ship on 2026-08-28 with no new role — and `SP.Web.ShareObject` fails without it.
+  - Arithmetic bit test via the existing `hasPermissionBit`, never `&`: Full Control returns
+    `Low = "4294967295"` and JS bitwise coerces that to a signed 32-bit int.
+  - **NO-CACHE, like its two neighbours.** The URL is keyed on the FILE's id and not on who is
+    asking, so a cached "granted" from an approver's session can be served to a PIC in the same
+    browser profile — and here that decides whether a delete happens with no approval at all.
+- **THE GROUP MAP ROUTE IS KEPT, NOT REPLACED.** It is what a Head of Department's department-tier
+  fan-out rests on, it costs no request, and it answers at render where the probe has to arrive.
+  **Either saying yes is enough and neither is a veto**, so a slow, failed or unreadable probe leaves
+  the request route exactly as it was rather than removing somebody's only way to act.
+- **THE GENERAL RULE, now paid for a fourth time in this project**: *a role lookup can say a persona
+  holds something while reconciliation has not granted it; an ACL read cannot be wrong that way.* The
+  approval panel's Approve probe, `probeFolderUploadAccess` and `probeFolderApproveAccess` all already
+  rest on it. **Whenever a screen decides what somebody may do, ask `EffectiveBasePermissions` — do
+  not rebuild the answer from the Group Map.**
+- **⚠ STILL OPEN, AND WORTH KNOWING: WHICH of the five actually broke was never established.**
+  `scripts/check-approver-direct-rights.js` (read-only, browser console, run AS THE APPROVER with
+  `FILE_NAME` set) prints the viewer's groups, their Group Map rows and the document's own tier
+  GUIDs, and names which side is at fault. It matters beyond this screen: the SAME read fills
+  `approverUnits`, so if it is failing for non-admins then `routeToApprover` is returning undefined
+  for them and requests are routing on the document's deepest tier fallback rather than to a mapped
+  approver. Verified against four synthetic scenarios before use, per the standing rule for these
+  scripts.
+
+### ⚠⚠ THE CONFIRM POPUP'S MARKUP WAS NOT ON THE LIST PAGE AT ALL — four rounds to find
+Client, three times on consecutive builds: *"I click delete it shows checking but when i open any
+files it shows the delete popup"*, then *"clicking on the delete button itself shows checking but no
+popup at all"*. **Four distinct bugs in one small feature; the first three were real but were not what
+was being reported.**
+1. **Cancel looked disabled always** — `style={s.askOff}` was unconditional while only `disabled`
+   switched, so it carried the not-allowed cursor while perfectly clickable. Pre-existing since
+   2026-08-11.
+2. **A stale check applied after navigating away** — the row-level Delete needs the document's tier
+   chain, which is not on the row, so it fetches first and decides after. Guarded with a ref claimed
+   SYNCHRONOUSLY at click time. **⚠ THE FIRST VERSION GUARDED VIA A `useEffect` MIRRORING `open` AND
+   STILL LOST THE RACE**: passive effects run after commit and nothing guarantees that beats a
+   fast-resolving fetch. **A guard against a fetch must be claimed in the same tick as the click.**
+3. **The same-file case slipped through** — opening the row's OWN file left the two keys equal, so a
+   second, stricter veto (`openActiveRef`, "has anything been opened since") was needed.
+4. **⚠⚠ THE ACTUAL BUG: the modal was rendered INSIDE the `if (open !== undefined)` detail-view early
+   return.** Written in 2026-08-11 for the detail view's own Delete button, its JSX only existed while
+   VIEWING a document — so clicking Delete from the LIST set the state correctly and there was
+   physically nowhere for it to render. Extracted to a `withdrawDialog` const rendered at BOTH sites,
+   the pattern `{requestDialog}` has always used (which is why THAT dialog always worked from the
+   list). **`{requestDialog}` appearing twice in this file is the shape to copy for any dialog
+   reachable from both views — one definition, two render sites.**
+- **THE PROCESS LESSON, and it is the one worth keeping**: three of these were found by reasoning
+  about timing when the answer was structural. **Before theorising about when a modal fires, check
+  that its markup is in the tree at all** — grep for its render site in each branch. Rounds 2 and 3
+  were correct fixes to real defects and still did not address the report.
+
+### The tab order
+Client: *"can you also move the All tabs to the first instead."* `TABS` is now
+**All · Permission · Submissions · Pending · Approved · Rejected · Archive**, and **the landing tab
+moved with it** — the default has followed the leftmost tab since Permission was put there on
+2026-09-11, and a page opening on its second tab reads as having lost the first. Internal ids are
+unchanged, so every `tab === "Requests"` branch still works; `Archive` stays last for its own reason.
+
+**Verified throughout**: `tsc --noEmit` clean, lint clean of new warnings, full suite **1910/0**, and
+every build checked INSIDE the `.sppkg` (version in `AppManifest.xml`, a string the change
+introduced, and a bundle hash different from the previous build) rather than from the build log.
+
+## DELETE IS PERFORMED BY PROXY (`crs@sdguthrie.com` VIA POWER AUTOMATE) — CODE HALF BUILT 2026-09-17
+Spec: `docs/superpowers/specs/2026-09-17-proxy-deletion-via-power-automate-design.md`. Client:
+*"they cannot directly delete anymore but someone do it on their behalf via power automate via admin
+account. Reason being they can delete folders which is dangerous... The flow process must stay the
+same its just that behind the scenes its done via power automate to make it look like it is the same
+flow process but behind the scenes its not."* **Reverses the 2026-09-11/2026-09-15 direct-delete
+work**, on purpose: the grant behind `DEL`/`DELS`/`DELHC`/`DELSHC` also permits deleting a FOLDER,
+which no UI restriction can close — only removing the SharePoint role itself does.
+- **PERSONA ROLES CHANGED, ALL FIVE, IN `groupMapModel.ts`**: `pic` → `["UPL"]`, `pic_hc` →
+  `["UPLHC"]`, `hou` → `["APR", "SHARE", "UPL"]`, `hou_hc` → `["APRHC", "SHARE", "UPLHC", "SHAREHC"]`,
+  `hod` → `["DEPTVIEW", "SHARE", "SHAREHC"]`. **SHARE/SHAREHC are untouched everywhere** — sharing
+  stays direct, in the approver's own session via `SP.Web.ShareObject`, exactly as before.
+  - **⚠ THIS IS THE FOURTH TIME `pic` HAS LOST/REGAINED `DELS`** (2026-08-15 added, 2026-08-20
+    removed, 2026-09-11 restored, this removes it a third time) — but unlike the earlier reversals,
+    this one changes MECHANISM, not CAPABILITY: a PIC still presses Delete on their own
+    pending/rejected file with no approval step, the grant behind it just moves to the service
+    account.
+  - **MIGRATION IS THE WHOLE JOB, AND NOTHING FAILS IF IT IS SKIPPED** — same as every prior role
+    change here. Existing groups keep their old DEL/DELS/DELHC/DELSHC rows and reconciliation keeps
+    granting them until the group is deleted and re-created (SharePoint drops a deleted principal's
+    role assignments; a removed Group Map row alone does not).
+- **15 PINNED TESTS UPDATED across `groupMapModel.test.ts` (4), `userAccess.test.ts` (9) and
+  `bulkGroups.test.ts` (2)** — all were pinning the OLD role shapes and needed either their expected
+  role arrays updated or, for the two `bulkGroups` rename-recovery tests, their current/stale
+  fixtures literally SWAPPED (what used to be the "stale, pre-2026-08-20" shape `["UPL"]` is now the
+  CURRENT shape, and what used to be current `["UPL","DELS"]` is now stale) — `roleSetKey` is an
+  exact fingerprint, so a persona losing a role breaks rename-recovery for pre-change groups exactly
+  as gaining one does. `tsc --noEmit` clean, full suite **1921/0** after the fixes.
+- **`Requests.tsx`'s `applyDecision` NO LONGER CALLS `.recycle()`.** `performDeletion` (which POSTed
+  the recycle) is replaced by `resolveDeletionTarget`, which does the SAME two-identifier resolution
+  (`ItemUniqueId` first, `SubmissionFileId`-stamp fallback on a 404 — reusing `resolveStamped`/
+  `findByStamp`, the 2026-09-10 "a request survives its document being routed" mechanism) but
+  **stops at resolution** — returns `{ itemUniqueId }` or `{ failure }`, never posts a recycle. The
+  resolved id is written onto the row's `ItemUniqueId` column in the SAME MERGE that already writes
+  `Status=Approved`/`DecidedBy`/`DecisionNote`, **only when it differs from what's already there**
+  (the pending-stage-then-routed case) — so the new flow (§3.3 below) can always find the document by
+  GUID after this write with no further help.
+  - **`StampedCandidate`/`StampLookup` in `shared/requests.ts` gained an optional `itemUniqueId`
+    field**, and `findByStamp`'s `$select` now asks for `UniqueId` alongside `Id`/`FileRef` — needed
+    because the OLD stamp-fallback only ever addressed the found document by list-item id
+    (`items(N)/recycle()`), never by GUID, and this new path needs the GUID to write back onto
+    `ItemUniqueId`. Optional field, so no existing caller/fixture had to change.
+- **`MySubmissions.tsx`'s direct-delete path (`recycleFileCore`) IS REPLACED BY
+  `writeApprovedDeletionRequest`**, which writes a `CRS Requests` row with `Status` **pre-set to
+  `Approved`** (never `Pending`, since nobody needs to decide it) instead of posting a recycle — same
+  field shape `submitRequest` (same file) already writes for an ordinary request, just
+  self-approved: `RequestedBy`/`DecidedBy` are both the person pressing the button,
+  `RequestedAt`/`DecidedAt` are both "now". Covers, uniformly: a PIC's own pending/rejected draft
+  (2026-09-11) and the 2026-09-15 direct-delete button for an approver/system admin on an approved
+  document — one shape, one flow, whether or not a second person had to approve it.
+  - **⚠ NO STAMP-FALLBACK NEEDED HERE, UNLIKE `Requests.tsx`'s.** A pending/rejected file has never
+    been routed, and an approved document is not routed again once it lands in
+    `Documents`/`HC Documents` — so `row.uniqueId` is always the live id.
+  - **⚠ THE CLIENT-SIDE `writeAudit` CALL NOW LOGS `EVENT.requestApproved`, NOT `EVENT.deleted`** —
+    the actual `recycle()` has not happened yet at that point (it is the new flow's job,
+    asynchronously), so claiming `Deleted` would overclaim. This call is also mostly a no-op for a
+    non-Owner PIC/approver anyway (`CRS Audit Log` restricts writes to Owners and the service
+    account by design, same fact that made `CRS — Audit request activity` necessary on 2026-08-26) —
+    the accurate `Deleted` row is the new flow's own (§3.5).
+  - **`markRecordWithdrawn`'s "Cancelled" stamping for a staging-stage delete is UNCHANGED** — it
+    fires on the same success path, now meaning "the deletion request was written and self-approved"
+    rather than "the file was just recycled". Functionally equivalent from the uploader's point of
+    view, and matches the client's explicit ask that this "look like the same flow process… behind
+    the scenes its not."
+- **⚠⚠ NOT YET BUILT, and this is the part that makes any of the above actually delete anything:**
+  the Power Automate flow itself, `CRS — Execute approved deletion` (spec §3.3) — trigger
+  `CRS Requests` created/modified, condition `RequestType eq 'Deletion' and Status eq 'Approved'`,
+  action `POST GetFileById(guid'<ItemUniqueId>')/recycle()` as `crs@sdguthrie.com`. **Until this flow
+  exists, pressing Delete anywhere in the app now writes a Requests row and deletes NOTHING** — a
+  genuine regression from the shipped 2026-09-11/2026-09-15 behaviour until the flow is built and
+  turned on. Do not deploy the code half without the flow, or without telling the client this order
+  matters.
+  - Also not yet done: adding `crs@sdguthrie.com` to `CRS Owners` (§4, needed for the flow's delete
+    rights); confirming the exact library reference to swap into those four flows (open question
+    §5.1).
+  - **⚠⚠ `DeletedByUserName` ON A DELETE TRIGGER RETURNS THE ACCOUNT'S DISPLAY NAME, NOT ITS EMAIL —
+    THE EXCLUSION CLAUSE MUST COMPARE AGAINST `"Guthrie Central Repository System"`, never
+    `"crs@sdguthrie.com"`.** Verified live on the first of the four audit-deletion flows
+    (`Audit — Documents deletions`): the recycle-bin-derived `DeletedByUserName` field the delete
+    trigger already carries (see "THE AUDIT FLOWS" §, "no path and no UniqueId… `DeletedByUserName`,
+    and `TimeDeleted`") holds the exact string `Guthrie Central Repository System` — the proxy
+    account's DISPLAY NAME, which happens to spell out what `CRS` abbreviates. Comparing against the
+    email, as first drafted, would never match and every proxy-performed deletion would double-log.
+    - **APPLY THE SAME COMPARISON TO ALL FOUR AUDIT-DELETION FLOWS** — `Audit — Documents
+      deletions`, `Audit — HC Documents deletions`, `Audit — approval deletions`, `Audit — HC
+      approval deletions` — not just the one already fixed. The two `Documents`-side flows read
+      `DeletedByUserName` directly off the delete trigger; the two approval-side flows
+      (created/modified trigger, `{ModerationStatus}`) do not have this field at all and need a
+      different signal to skip a proxy-performed action — check whether `Editor`/`ActorEmail`
+      resolves to `crs@sdguthrie.com` there instead, since that pair never goes through the recycle
+      bin.
+    - **DO NOT TRUST A "Succeeded" RUN AS PROOF THE COMPARISON IS RIGHT** — a mismatched exclusion
+      value produces a flow that runs green and logs every proxy deletion as a duplicate anyway;
+      only reading the actual field value (or the resulting audit row) proves the clause compares
+      against the right string.
+- **Verified (code half only)**: `tsc --noEmit` clean, `eslint` clean of new warnings on all four
+  touched files (`groupMapModel.ts`, `groupMapModel.test.ts`, `userAccess.test.ts`,
+  `bulkGroups.test.ts`, `requests.ts`, `Requests.tsx`, `MySubmissions.tsx`), full suite **1921/0**, 41
+  lint warnings — the documented pre-existing baseline, zero new categories. `npm run build` (the full
+  `heft test --clean --production && heft package-solution --production` pipeline, never
+  `package-solution` alone) completed, and both new code paths' distinctive strings (`"could not be
+  located"`, `"No approval needed"`) were confirmed present **inside the actual `.sppkg`** — not just
+  `release/assets` — via direct zip inspection. **NOT site-tested, and cannot meaningfully be until
+  the Power Automate flow exists.**
+
+### ⚠⚠ A HEAD OF DEPARTMENT NO LONGER DECIDES A DELETION REQUEST AT ALL — DEEPER THAN THE PERSONA EDIT (2026-09-17)
+Client, the same day: *"Can you remove HOD? HOD no need deletion as well, and Approver cannot delete
+on Documents Library anymore."* Confirmed via clarifying question: **Approver (`hou`) still decides
+BOTH pending- and approved-stage deletion requests, unchanged; HOD is removed from deciding
+Documents-library deletion requests entirely** (HOD keeps deciding Share requests).
+- **⚠ THIS IS A SEPARATE MECHANISM FROM THE PERSONA-ROLE REMOVAL ABOVE, AND EASY TO CONFLATE.**
+  Removing `DEL`/`DELHC` from `hod`'s `roles` array (already done) only stops HOD holding the
+  SharePoint GRANT — it says nothing about `Requests.tsx`'s `ViewerScope`/`inScope`, which decides
+  who may **approve/reject a queued request**, entirely independently of any SharePoint role. HOD's
+  `hodUnits` decision scope came from `DEPTVIEW`, never from `DEL`, so removing `DEL` alone left HOD
+  still able to decide (approve/reject) a Documents-library deletion request in the queue — the
+  proxy account would then execute it regardless of who approved.
+- **`inScope` in `shared/requests.ts` NOW EXCLUDES `RequestType: "Deletion"` FROM THE `hodUnits`
+  BRANCH.** `UnitScoped` (the structural type `inScope` accepts) gained an optional `type?:
+  RequestType` field; the `hodUnits` check is now `stageOf(row) === "approved" && row?.type !==
+  "Deletion" && matchesUnit(row, s.hodUnits)`. HOD's Share decision authority is untouched.
+  - **`canRevoke`'s hand-built literal has no `type` field, and that is deliberately safe** — revoke
+    only ever applies to a Share, so `undefined !== "Deletion"` reads correctly as "not a deletion"
+    with no change needed there.
+  - **`aprUnits` (Approver) is UNCHANGED — any stage, either request type** — matching the confirmed
+    answer that Approver keeps deciding deletion requests exactly as before; only the EXECUTION
+    (§ the section above) moved to the proxy flow.
+- **The HoD-only banner on `Requests.tsx` updated to say "You decide **share** requests... Deletion
+  requests, and anything still awaiting approval, are handled by the unit's Head of Unit."** — same
+  house rule as the 2026-08-21 original: says what they decide, never why the rest is absent.
+- **6 pinned tests in `requests.test.ts` updated/added** (`describe("ViewerScope — a Head of
+  Department", ...)` and the union test) — several existing assertions used the `row()` fixture's
+  default `type: "Deletion"`, so they had to be given `type: "Share"` explicitly to keep testing what
+  they originally meant, plus two new tests pinning the Deletion exclusion directly. Full suite
+  **1923/0** after the fix.
+- **Verified**: `tsc --noEmit` clean, full suite **1923/0**, 41 lint warnings (same baseline, zero
+  new). `npm run build` completed and the updated banner text confirmed present inside the shipped
+  `.sppkg`. **NOT site-tested, and still blocked on the same missing Power Automate flow as above.**

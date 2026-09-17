@@ -198,11 +198,12 @@ describe("splitPlannedRows", () => {
 
 describe("planBulkGroups recognises a unit whose code was renamed", () => {
   // One PIC group for Tax, provisioned under the OLD code and still named for it.
-  // The persona's CURRENT role set (`pic` regained DELS on 2026-09-11). `roleSetKey` is an exact
-  // fingerprint, so this must track PERSONAS — see the note on the second test for what happens
-  // when a live site's rows do not.
+  // The persona's CURRENT role set (`pic` lost DELS a third time on 2026-09-17 — deletion moved to
+  // a Power Automate proxy, see 2026-09-17-proxy-deletion-via-power-automate-design.md — back down
+  // to `["UPL"]` alone). `roleSetKey` is an exact fingerprint, so this must track PERSONAS — see the
+  // note on the second test for what happens when a live site's rows do not.
   const picRowsFor = (groupId: string, groupName: string, term: string): GroupMapWriteRow[] =>
-    (["UPL", "DELS"] as GroupMapRole[]).map((r) => ({
+    (["UPL"] as GroupMapRole[]).map((r) => ({
       GroupId: groupId,
       GroupName: groupName,
       Segment: SET,
@@ -234,9 +235,11 @@ describe("planBulkGroups recognises a unit whose code was renamed", () => {
   it("does NOT recognise a renamed unit whose rows predate a persona's role change", () => {
     /**
      * ⚠ PINS A KNOWN LIMIT, not a desired behaviour. `roleSetKey` is an EXACT fingerprint, so when
-     * a persona sheds OR gains a role — PIC lost DELS on 2026-08-20, then regained it on
-     * 2026-09-11 — every group provisioned under the OLD set no longer matches. Only the RENAME
-     * path is affected: the name check runs first, so an un-renamed group is still recognised.
+     * a persona sheds OR gains a role — PIC lost DELS on 2026-08-20, regained it on 2026-09-11, then
+     * lost it a third time on 2026-09-17 (deletion moved to a Power Automate proxy, see
+     * 2026-09-17-proxy-deletion-via-power-automate-design.md) — every group provisioned under the
+     * OLD set no longer matches. Only the RENAME path is affected: the name check runs first, so an
+     * un-renamed group is still recognised.
      *
      * Subset matching was considered and REJECTED: `employee` is ["MEMBER"] and `employee_hc` is
      * ["MEMBER","MEMBERHC"], so a subset rule would let a cleared viewer group answer for the plain
@@ -245,7 +248,7 @@ describe("planBulkGroups recognises a unit whose code was renamed", () => {
      * The operational answer is the one the persona change needs anyway: re-create the affected
      * mappings, which rewrites the rows to the new set.
      */
-    const stale = (["UPL"] as GroupMapRole[]).map((r) => ({
+    const stale = (["UPL", "DELS"] as GroupMapRole[]).map((r) => ({
       GroupId: "7", GroupName: "GHO_GF_TAX_UPLOADER", Segment: SET,
       UnitTermGuid: "u1", Role: r, Scope: "Folder", Target: "",
     })) as GroupMapWriteRow[];

@@ -14,7 +14,7 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "CRS Search" },
+    "title": { "default": "GDC Search" },
     "description": { "default": "Search the document repository by metadata. Results are limited to what each person is already allowed to open." },
     "officeFabricIconFontName": "Search",
     "properties": {

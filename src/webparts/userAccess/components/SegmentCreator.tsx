@@ -5,19 +5,15 @@ import { WebPartContext } from "@microsoft/sp-webpart-base";
 import { Level, sanitizeFolderSegment } from "../../../shared/formModel";
 import { effectiveOnDemandTiers } from "../../../shared/folderChain";
 import { EVENT } from "../../../shared/auditLog";
-// `libraryTargets()` carries BOTH names per library. Use `.urlSegment` for anything that builds a
-// PATH and `.title` only for display: the two differ ("Approval Document" vs "/ApprovalDocument",
-// "Documents" vs "/Shared Documents") and a title in a URL fails SILENTLY — gotcha #12.
-import {
-  allLibraryTitles,
-  archiveAvailable,
-  cachedListTitle,
-  libraryTargets,
-  LIST_SUFFIX,
-} from "../../../shared/naming";
+// `libraryTargets()` (used inside `shared/spSegmentRecode.ts`'s `retireLibraries`/`archiveTargets`)
+// carries BOTH names per library. Use `.urlSegment` for anything that builds a PATH and `.title`
+// only for display: the two differ ("Approval Document" vs "/ApprovalDocument", "Documents" vs
+// "/Shared Documents") and a title in a URL fails SILENTLY — gotcha #12.
+import { allLibraryTitles, archiveAvailable, cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { ensureColumn } from "../../../shared/spColumns";
+import { openInNewTab } from "../../../shared/newTab";
 import {
   SegmentCounts,
   canDeleteArchive,
@@ -29,12 +25,24 @@ import {
   unknownCounts,
 } from "../../../shared/segmentDeletion";
 import {
-  canOfferRecode,
+  canOfferAnyRecode,
   folderRecodeConflict,
   folderRecodeIsNoOp,
   recodeRefusalReason,
-  recodeSummary,
+  recodeSummaryLive,
 } from "../../../shared/segmentRecode";
+import {
+  archiveTargets,
+  countArchiveDocuments,
+  countArchiveDocumentsForCode,
+  countSegmentDocuments,
+  deleteItem,
+  loadSegmentAbbreviationRowIds,
+  loadSegmentGroupMapRows,
+  performLiveSegmentRecode,
+  recycleFolder,
+  retireLibraries,
+} from "../../../shared/spSegmentRecode";
 import {
   buildSegmentLevels,
   columnNameFor,
@@ -82,6 +90,20 @@ type SetCheck =
   | { state: "notfound" }
   | { state: "unknown"; status: number };
 
+/**
+ * Whether a re-check is worth offering — same rule as `StructureManager.tsx`'s identical helper.
+ *
+ * ONLY WHERE THE VERDICT CAME FROM THE SERVER. `blank` and `malformed` are decided locally from the
+ * field itself, so re-asking cannot change either — a button there would be a control that visibly
+ * does nothing, which is how the ones that DO work stop being trusted.
+ */
+function setCheckIsRecheckable(c: SetCheck): boolean {
+  return (
+    c.state === "checking" || c.state === "found" ||
+    c.state === "notfound" || c.state === "unknown"
+  );
+}
+
 const s: Record<string, React.CSSProperties> = {
   msg: { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err: { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
@@ -99,6 +121,17 @@ const s: Record<string, React.CSSProperties> = {
   off: { background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4, padding: "8px 16px", fontSize: 13, cursor: "not-allowed" },
   iconBtn: { background: "#fff", border: "1px solid #c8c8c8", borderRadius: 4, padding: "3px 8px", fontSize: 12, cursor: "pointer", marginRight: 4 },
   danger: { background: "#fff", color: "#a4262c", border: "1px solid #e6b3b5", borderRadius: 4, padding: "4px 9px", fontSize: 12, cursor: "pointer" },
+  // Term Store link + Re-check button (client QA item #57, 2026-09-13), mirroring
+  // `StructureManager.tsx`'s identical pairing beside its own Term set ID field.
+  // ⚠ `marginBottom: 4` MATCHES `label` BELOW — dropped when this was split into a flex row to
+  // hold the "Open the Term Store" link and the re-check button beside the label, so the row's
+  // bottom edge sat flush against the input underneath it (found live, 2026-09-17: "button is
+  // sticking the input"). `label` is a plain block and always had this gap; this row needs the
+  // same one, or the taller bordered re-check button reads as glued to the box below it.
+  labelRow: { display: "flex", alignItems: "center", gap: 5, marginTop: 14, marginBottom: 4 },
+  labelLink: { fontSize: 12, fontWeight: 400, marginLeft: "auto" },
+  recheckBtn: { border: "1px solid #c7c7c7", background: "#fff", borderRadius: 4, cursor: "pointer", fontSize: 12, lineHeight: 1, padding: "3px 8px", color: "#0f6c3f", fontWeight: 400 },
+  recheckOff: { border: "1px solid #e1dfdd", background: "#f3f2f1", borderRadius: 4, cursor: "not-allowed", fontSize: 12, lineHeight: 1, padding: "3px 8px", color: "#a19f9d", fontWeight: 400 },
   tierRow: { display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderRadius: 6, background: "#fafafa", marginBottom: 6, fontSize: 13, flexWrap: "wrap" },
   tierLock: { background: "#f3f2f1", color: "#605e5c" },
   tierName: { fontWeight: 600, flex: "0 0 170px" },
@@ -258,6 +291,11 @@ export default function SegmentCreator({
   const [recodeLog, setRecodeLog] = useState<string[]>([]);
 
   const [check, setCheck] = useState<SetCheck>({ state: "blank" });
+  /* Bumped by the "Re-check" button (client QA item #57, 2026-09-13), mirroring
+     `StructureManager.tsx`'s identical below-Unit-level pairing. It is a DEP on the check effect
+     rather than a second call site for the check — one definition of "run the check", so the debounce
+     and the `cancelled` guard apply to a manual re-check exactly as they do to typing. */
+  const [recheck, setRecheck] = useState(0);
   const [busy, setBusy] = useState(false);
   /* Red on the required fields, and ONLY after a save has actually been refused.
      Client, 2026-09-08: *"I notice a bug when I click on the Create Segment it doesnt show the
@@ -399,7 +437,9 @@ export default function SegmentCreator({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [termSetGuid]);
+    // `recheck` IS A DEP SO THE BUTTON RE-RUNS THIS EFFECT, rather than calling the check function a
+    // second way — see the state's own comment and `StructureManager.tsx`'s identical shape.
+  }, [termSetGuid, recheck]);
 
   /* ── Dirty tracking ────────────────────────────────────────────────────────── */
 
@@ -522,156 +562,15 @@ export default function SegmentCreator({
     setTiers(next);
   };
 
-  /* ── Folder/file primitives shared by Create and Delete ───────────────────────
-     Moved here 2026-09-13, ahead of `create()`, so its archive-clash guard can call
-     `countArchiveDocumentsForCode` — these used to sit beside the Delete flow only, which is
-     still their main caller (`countSegment`, `onDelete`), but they are now genuinely shared. */
-
-  /**
-   * The libraries a retire actually touches — ONE definition, read by BOTH the count and the delete.
-   *
-   * ⚠ THIS REPLACED A TWO-ELEMENT LITERAL, AND THAT LITERAL WAS TWO BUGS AT ONCE (found live
-   * 2026-08-26, client: *"I deleted all the GHO but it only delete approval document"*):
-   *
-   *  1. **Register #15, third instance.** The literal was `[libraryUrlSegment(), "Documents"]`,
-   *     written before the HC pair and the archive existed and never revisited — so HC Approval
-   *     Document and HC Documents were never counted and never deleted. `libraryTargets()` is
-   *     derived, so a library added later is picked up here for free: that is why it exists.
-   *  2. **Gotcha #12.** That second element was the library's TITLE (`Documents`), while every URL
-   *     below is built from a URL SEGMENT — and that library's segment is `Shared Documents`. So the
-   *     normal Documents library resolved to a path that does not exist, `walkFolders` took its
-   *     deliberate 404-means-absent branch, and it counted as zero folders and zero documents:
-   *     silently, for as long as this screen has existed. ALWAYS `.urlSegment`, never `.title`.
-   *
-   * **The archive pair is excluded deliberately** (client's decision, 2026-08-26): 7-year retained
-   * records outlive the segment that produced them. Filtered by KEY rather than by taking a slice, so
-   * a future non-archive library still arrives automatically and cannot be dropped by accident.
-   *
-   * ⚠ THE COUNT AND THE DELETE MUST READ THE SAME SET. The count decides both the "(they are empty)"
-   * claim and whether the folder-delete box is pre-ticked, so a count covering more libraries than
-   * the delete warns about files nothing will touch, and a count covering FEWER pre-ticks "empty"
-   * over documents that are then recycled. That is why this is one function and not two lists.
-   */
-  const retireLibraries = (): { key: string; title: string; urlSegment: string }[] =>
-    libraryTargets().filter((t) => t.key !== "Archive" && t.key !== "ArchiveHC");
-
-  /**
-   * The other half of `retireLibraries()` — Archive/ArchiveHC only, whichever exist on this site.
-   *
-   * Spec: docs/superpowers/specs/2026-09-12-empty-archive-deletion-on-retire-design.md
-   */
-  const archiveTargets = (): { key: string; title: string; urlSegment: string }[] =>
-    libraryTargets().filter((t) => t.key === "Archive" || t.key === "ArchiveHC");
-
-  /** Every subfolder path beneath `root`, depth-first. Throws — the caller reports `unknown`. */
-  const walkFolders = async (lib: string, root: string): Promise<string[]> => {
-    const found: string[] = [];
-    const queue = [`${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`];
-    while (queue.length > 0 && found.length < 5000) {
-      const here = queue.shift() as string;
-      const res: SPHttpClientResponse = await context.spHttpClient.get(
-        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Folders?@f='${encodeURIComponent(here)}'&$select=ServerRelativeUrl,Name`,
-        SPHttpClient.configurations.v1,
-        { headers: { Accept: "application/json;odata=nometadata" } },
-      );
-      // 404 = this branch does not exist in this library, which is not an error: a segment can
-      // have folders in one library and not the other.
-      if (res.status === 404) continue;
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const kids = ((await res.json()).value ?? []) as Array<{ ServerRelativeUrl?: string; Name?: string }>;
-      for (const k of kids) {
-        const url = (k.ServerRelativeUrl ?? "").trim();
-        // Forms is SharePoint's own; it is not part of anyone's segment.
-        if (!url || (k.Name ?? "") === "Forms") continue;
-        found.push(url);
-        queue.push(url);
-      }
-    }
-    return found;
-  };
-
-  /**
-   * Files directly in one folder. Throws — the caller reports `unknown`.
-   *
-   * ⚠ NEVER `Files/$count` — FOUND LIVE 2026-09-13 on SDG's real tenant (sdguthrie.sharepoint.com),
-   * confirmed by pasting the raw request straight into a browser tab: that scalar OData segment
-   * throws `-1, Microsoft.SharePoint.Client.ResourceNotFoundException — Cannot find resource for
-   * the request $count` UNCONDITIONALLY on this tenant, even against the root of `Documents` with
-   * no folder involved at all. The old code's `if (res.status === 404) return 0` treated that as
-   * "folder is empty" — conflating "SharePoint refuses this endpoint shape" with "confirmed empty",
-   * exactly the empty-≠-unknown mistake this whole module exists to avoid elsewhere. It silently
-   * reported a folder holding real files as having none, on the ONE screen whose job is deciding
-   * whether to recycle a folder tree.
-   *
-   * Fixed by never asking for a count at all: list the Files collection itself
-   * (`/Files?$select=Name&$top=5000`, the same shape `walkFolders`'s `/Folders` call already uses
-   * and which is proven working on this tenant) and count the array. A 404 HERE still means the
-   * FOLDER itself does not exist — a different, legitimate case, matching `walkFolders`'s own 404
-   * handling one function up — because the failure mode above is specific to the `$count` shorthand,
-   * never seen on a plain collection GET.
-   */
-  const countFiles = async (folderUrl: string): Promise<number> => {
-    const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Files?@f='${encodeURIComponent(folderUrl)}'&$select=Name&$top=5000`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (res.status === 404) return 0;
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const files = ((await res.json()).value ?? []) as unknown[];
-    return files.length;
-  };
-
-  /**
-   * Documents in Archive/ArchiveHC for this segment — counted SEPARATELY from `countSegment`'s own
-   * total, on purpose (see `canDeleteArchive`'s comment for why merging them would be wrong).
-   *
-   * `undefined` on ANY failure, including "there is genuinely no archive on this site" (the caller
-   * distinguishes that case separately via `archiveAvailable()` before this is even called) — never
-   * guess empty. Both libraries are summed into ONE number rather than reported independently,
-   * because `canDeleteArchive` treats the pair as one fact by design: deleting one half while
-   * leaving the other orphaned would create a new, asymmetric version of the exact problem this
-   * whole feature exists to close.
-   */
-  /**
-   * The shared core of `countArchiveDocuments`, keyed on a raw top-folder CODE rather than an
-   * existing segment row.
-   *
-   * Extracted 2026-09-13 so the same, already-fixed counting logic can be reused by the
-   * new-segment creation guard, which needs to ask "does Archive already hold files under this
-   * code" BEFORE any segment row exists to hand it a `seg`. See
-   * docs/superpowers/specs/2026-09-13-archive-code-reuse-guard-design.md. One definition, two
-   * callers — duplicating this would risk the exact `Files/$count` bug fixed today recurring in an
-   * untested second copy.
-   */
-  const countArchiveDocumentsForCode = async (rawRoot: string): Promise<number | undefined> => {
-    const root = rawRoot.trim();
-    if (!root) return undefined;
-    const targets = archiveTargets();
-    // ⚠ FOUND LIVE 2026-09-13, before this shipped to a second test: an empty `targets` array (this
-    // site's archive cache not yet what the caller expected, or a future change that narrows
-    // `libraryTargets()`) made the loop below run zero times, leaving `total` at its initial `0` —
-    // indistinguishable from "checked both archive libraries and found nothing in them". The caller
-    // already gated this function behind `archiveAvailable()`, so reaching here with NO targets is
-    // itself the unexpected case, and it must read as "could not confirm", never "confirmed empty".
-    if (targets.length === 0) return undefined;
-    try {
-      let total = 0;
-      for (const target of targets) {
-        const lib = target.urlSegment;
-        const rootUrl = `${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`;
-        total += await countFiles(rootUrl);
-        const subs = await walkFolders(lib, root);
-        for (const f of subs) total += await countFiles(f);
-      }
-      return total;
-    } catch {
-      return undefined;
-    }
-  };
-
-  const countArchiveDocuments = (seg: ExistingSegment): Promise<number | undefined> =>
-    countArchiveDocumentsForCode(seg.stagingFolder ?? "");
+  /* ── Folder/file primitives shared by Create, Delete and Re-code ──────────────
+     Extracted 2026-09-15 to `shared/spSegmentRecode.ts` so the CRS Term Abbreviations screen can
+     offer the same re-code action with no second, drifting copy of this destructive-write logic.
+     `retireLibraries`, `archiveTargets`, `walkFolders`, `countFiles`, `countArchiveDocumentsForCode`,
+     `countArchiveDocuments`, `loadSegmentGroupMapRows`, `loadSegmentTermGuids`,
+     `loadAbbreviationTermRows`, `loadSegmentAbbreviationRowIds`, `deleteItem`, `recycleFolder`,
+     `countSegmentDocuments` (was `countSegment`) and `performSegmentRecode` all live there now,
+     unchanged in behaviour — only parameterised on `(context, siteUrl, …)` instead of closing over
+     component props. See docs/superpowers/specs/2026-09-15-segment-rename-and-group-rename-design.md. */
 
   /* ── Create ────────────────────────────────────────────────────────────────── */
 
@@ -741,7 +640,7 @@ export default function SegmentCreator({
       await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
       if (archiveAvailable()) {
         setProgress("Checking the Archive library…");
-        const archiveCount = await countArchiveDocumentsForCode(folder);
+        const archiveCount = await countArchiveDocumentsForCode(context, siteUrl, folder);
         if (archiveCount === undefined) {
           setResult({
             ok: false,
@@ -923,215 +822,13 @@ export default function SegmentCreator({
      the failure here is not a wrong number on screen: it is an archive nobody could confirm was
      empty being deleted.
 
-     ⚠ `retireLibraries`, `archiveTargets`, `walkFolders`, `countFiles`, `countArchiveDocumentsForCode`
-     and `countArchiveDocuments` — the low-level folder/file primitives this delete flow is built
-     on — moved 2026-09-13 to BEFORE `create()`, because the new-segment archive-clash guard added
-     that day needs `countArchiveDocumentsForCode` before any segment row exists to build a delete
-     flow around. Look there for their definitions; nothing about their behaviour changed. */
-
-  /**
-   * The Group Map rows carrying this segment.
-   *
-   * Matched on the term-set GUID, which is what a folder-scope row stores in `Segment`.
-   */
-  const loadSegmentGroupMapRows = async (seg: ExistingSegment): Promise<number[]> => {
-    const guid = (seg.termSetGuid ?? "").trim();
-    if (!guid) return [];
-    const list = encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap));
-    const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${list}')/items?$select=Id,Segment&$top=5000`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rows = ((await res.json()).value ?? []) as Array<{ Id: number; Segment?: string }>;
-    return rows
-      .filter((r) => (r.Segment ?? "").trim().toLowerCase() === guid.toLowerCase())
-      .map((r) => r.Id);
-  };
-
-  const MAX_TERM_WALK_REQUESTS = 400;
-
-  /**
-   * Every term GUID under this segment's term set, at any depth — department, unit, subunit,
-   * whatever below-Unit terms it has. This is the ONLY reliable way to answer "does this
-   * abbreviation row belong to segment X": abbreviation rows carry no segment field of their own
-   * (see docs/superpowers/specs/2026-09-11-retire-deletes-abbreviations-design.md), so the live
-   * term tree is asked directly, at retire time, before the segment or its terms are touched.
-   *
-   * Bounded and reported INCOMPLETE rather than partial. A term-store outage that stops the walk
-   * part-way must never look like "this segment has only 6 abbreviation rows" — the caller treats
-   * an incomplete walk as `unknown`, the same fail-closed rule `canOfferFolderDelete` already uses.
-   */
-  const loadSegmentTermGuids = async (
-    seg: ExistingSegment,
-  ): Promise<{ complete: boolean; guids: Set<string> }> => {
-    const setGuid = (seg.termSetGuid ?? "").trim();
-    if (!setGuid) return { complete: true, guids: new Set() };
-    const guids = new Set<string>();
-    let requests = 0;
-    let frontier: string[] = [""]; // "" walks the set's own top level
-    try {
-      while (frontier.length > 0) {
-        const next: string[] = [];
-        const kidLists = await Promise.all(
-          frontier.map(async (parentId) => {
-            if (requests >= MAX_TERM_WALK_REQUESTS) return [] as Array<{ id?: string }>;
-            requests++;
-            const url = parentId
-              ? `${siteUrl}/_api/v2.1/termStore/sets/${setGuid}/terms/${parentId}/children?$select=id`
-              : `${siteUrl}/_api/v2.1/termStore/sets/${setGuid}/children?$select=id`;
-            const res: SPHttpClientResponse = await context.spHttpClient.get(
-              url,
-              SPHttpClient.configurations.v1,
-              { headers: { Accept: "application/json;odata=nometadata" } },
-            );
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            return ((data.value ?? []) as Array<{ id?: string }>);
-          }),
-        );
-        if (requests >= MAX_TERM_WALK_REQUESTS) return { complete: false, guids };
-        for (const kids of kidLists) {
-          for (const k of kids) {
-            const id = (k.id ?? "").toLowerCase();
-            if (id && !guids.has(id)) {
-              guids.add(id);
-              next.push(k.id as string);
-            }
-          }
-        }
-        frontier = next;
-      }
-      return { complete: true, guids };
-    } catch {
-      return { complete: false, guids };
-    }
-  };
-
-  /** `CRS Term Abbreviation` rows, Id + TermGuid only — all this pass needs to count and delete. */
-  const loadAbbreviationTermRows = async (): Promise<Array<{ id: number; termGuid: string }>> => {
-    const list = encodeURIComponent(cachedListTitle(LIST_SUFFIX.abbreviation));
-    const res: SPHttpClientResponse = await context.spHttpClient.get(
-      `${siteUrl}/_api/web/lists/getbytitle('${list}')/items?$select=Id,TermGuid&$top=5000`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const rows = ((await res.json()).value ?? []) as Array<{ Id: number; TermGuid?: string }>;
-    return rows.map((r) => ({ id: r.Id, termGuid: (r.TermGuid ?? "").trim().toLowerCase() }));
-  };
-
-  /**
-   * The segment's abbreviation-row ids, matched by walking the live term tree. Shared by the
-   * preview count and the actual deletion, so the two can never disagree about which rows belong
-   * to this segment.
-   */
-  const loadSegmentAbbreviationRowIds = async (
-    seg: ExistingSegment,
-  ): Promise<{ complete: boolean; ids: number[] }> => {
-    const walk = await loadSegmentTermGuids(seg);
-    if (!walk.complete) return { complete: false, ids: [] };
-    if (walk.guids.size === 0) return { complete: true, ids: [] };
-    const rows = await loadAbbreviationTermRows();
-    return {
-      complete: true,
-      ids: rows.filter((r) => r.termGuid && walk.guids.has(r.termGuid)).map((r) => r.id),
-    };
-  };
-
-  /**
-   * Count what a segment holds, across BOTH libraries, plus its Group Map rows.
-   *
-   * Any failure makes the whole count `unknown` rather than a partial number. A partial count is
-   * worse than none here: it would read as authoritative and could show "0 documents" for a
-   * segment whose second library simply did not answer.
-   */
-  const countSegment = async (seg: ExistingSegment): Promise<SegmentCounts> => {
-    const root = (seg.stagingFolder ?? "").trim();
-    if (!root) {
-      return unknownCounts("this segment has no top folder recorded, so its folders cannot be found");
-    }
-    let folders = 0;
-    let documents = 0;
-    try {
-      for (const target of retireLibraries()) {
-        const lib = target.urlSegment;
-        const rootUrl = `${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`;
-        documents += await countFiles(rootUrl);
-        const subs = await walkFolders(lib, root);
-        folders += subs.length;
-        for (const f of subs) documents += await countFiles(f);
-      }
-    } catch (e) {
-      return unknownCounts(`the folders could not be read (${(e as Error).message})`);
-    }
-
-    // The Group Map read is separate and NOT fatal to the count: a segment can have unreadable
-    // folders and readable rows, or the reverse. An unreadable Group Map is reported as unknown
-    // too, because deleting rows we could not see is the same class of blind act.
-    let groupMapRows = 0;
-    try {
-      const rows = await loadSegmentGroupMapRows(seg);
-      groupMapRows = rows.length;
-    } catch (e) {
-      return unknownCounts(`the ${cachedListTitle(LIST_SUFFIX.groupMap)} list could not be read (${(e as Error).message})`);
-    }
-
-    // Abbreviation rows this segment's LIVE term tree still covers — retiring deletes these
-    // unconditionally now (2026-09-11), so an incomplete walk makes the whole count unknown, same
-    // as an unreadable Group Map above. See loadSegmentTermGuids' own comment for why.
-    let abbreviationRows = 0;
-    try {
-      const abbrev = await loadSegmentAbbreviationRowIds(seg);
-      if (!abbrev.complete) {
-        return unknownCounts(
-          `the ${cachedListTitle(LIST_SUFFIX.abbreviation)} list or the term store could not be fully read`,
-        );
-      }
-      abbreviationRows = abbrev.ids.length;
-    } catch (e) {
-      return unknownCounts(`the ${cachedListTitle(LIST_SUFFIX.abbreviation)} list could not be read (${(e as Error).message})`);
-    }
-
-    // Archive is counted independently and is NEVER allowed to make the whole count `unknown` — a
-    // failed or missing archive read only means "leave the archive alone" (canDeleteArchive is
-    // false for anything but an explicit 0), never "we cannot say anything about this segment at
-    // all". Only asked when this site HAS an archive at all; otherwise left undefined, which
-    // `survivorLines`/`canDeleteArchive` both already treat correctly via the separate
-    // `archiveAvailable()` check the caller makes.
-    const archiveDocuments = archiveAvailable() ? await countArchiveDocuments(seg) : undefined;
-
-    return { state: "counted", folders, documents, groupMapRows, abbreviationRows, archiveDocuments };
-  };
-
-  const deleteItem = async (listTitle: string, itemId: number): Promise<void> => {
-    const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})`,
-      SPHttpClient.configurations.v1,
-      {
-        headers: {
-          Accept: "application/json;odata=nometadata",
-          "IF-MATCH": "*",
-          "X-HTTP-Method": "DELETE",
-        },
-      },
-    );
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  };
-
-  /** Recycle (not purge) a folder, so it is restorable for 93 days — see the dialog's promise. */
-  const recycleFolder = async (lib: string, root: string): Promise<boolean> => {
-    const url = `${siteUrl.replace(/^https?:\/\/[^/]+/, "")}/${lib}/${root}`;
-    const res: SPHttpClientResponse = await context.spHttpClient.post(
-      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Recycle()?@f='${encodeURIComponent(url)}'`,
-      SPHttpClient.configurations.v1,
-      { headers: { Accept: "application/json;odata=nometadata" } },
-    );
-    if (res.status === 404) return false;
-    if (!res.ok) throw new Error(`${lib}: HTTP ${res.status}`);
-    return true;
-  };
+     ⚠ `retireLibraries`, `archiveTargets`, `walkFolders`, `countFiles`, `countArchiveDocumentsForCode`,
+     `countArchiveDocuments`, `loadSegmentGroupMapRows`, `loadSegmentTermGuids`,
+     `loadAbbreviationTermRows`, `loadSegmentAbbreviationRowIds`, `deleteItem`, `recycleFolder` and
+     `countSegmentDocuments` (was `countSegment`) — every low-level primitive this delete flow is
+     built on — now live in `shared/spSegmentRecode.ts` (moved 2026-09-15, alongside the recode
+     flow's own write sequence, for the same reason). Look there for their definitions; nothing
+     about their behaviour changed, only where they are declared. */
 
   const openDelete = (seg: ExistingSegment): void => {
     setDeleting(seg);
@@ -1140,7 +837,7 @@ export default function SegmentCreator({
     setDelTyped("");
     setDelLog([]);
     setDelProgress(undefined);
-    countSegment(seg)
+    countSegmentDocuments(context, siteUrl, seg)
       .then((c) => {
         setDelCounts(c);
         /**
@@ -1179,7 +876,7 @@ export default function SegmentCreator({
       let rowsRemoved = 0;
       let rowIds: number[] = [];
       try {
-        rowIds = await loadSegmentGroupMapRows(seg);
+        rowIds = await loadSegmentGroupMapRows(context, siteUrl, seg);
       } catch (e) {
         lines.push(`Could not read the folder-access mappings (${(e as Error).message}) — none were removed.`);
         ok = false;
@@ -1191,7 +888,7 @@ export default function SegmentCreator({
       );
       for (let i = 0; i < rowIds.length; i++) {
         try {
-          await deleteItem(cachedListTitle(LIST_SUFFIX.groupMap), rowIds[i]);
+          await deleteItem(context, siteUrl, cachedListTitle(LIST_SUFFIX.groupMap), rowIds[i]);
           rowsRemoved++;
         } catch {
           ok = false;
@@ -1213,7 +910,7 @@ export default function SegmentCreator({
       let abbrevIds: number[] = [];
       let abbrevKnown = true;
       try {
-        const abbrev = await loadSegmentAbbreviationRowIds(seg);
+        const abbrev = await loadSegmentAbbreviationRowIds(context, siteUrl, seg);
         if (!abbrev.complete) {
           abbrevKnown = false;
           lines.push("Could not fully read the term store, so its abbreviation rows were not removed — check for leftovers after reconciliation runs.");
@@ -1234,7 +931,7 @@ export default function SegmentCreator({
         );
         for (let i = 0; i < abbrevIds.length; i++) {
           try {
-            await deleteItem(cachedListTitle(LIST_SUFFIX.abbreviation), abbrevIds[i]);
+            await deleteItem(context, siteUrl, cachedListTitle(LIST_SUFFIX.abbreviation), abbrevIds[i]);
             abbrevRemoved++;
           } catch {
             ok = false;
@@ -1250,7 +947,7 @@ export default function SegmentCreator({
       // 3. The mode row. If THIS fails, stop: a run that removed the grants but left the segment
       //    live is a segment whose uploaders have quietly lost their access.
       if (seg.itemId === undefined) throw new Error("this segment's configuration row has no id, so it cannot be deleted");
-      await deleteItem(cachedListTitle(LIST_SUFFIX.config), seg.itemId);
+      await deleteItem(context, siteUrl, cachedListTitle(LIST_SUFFIX.config), seg.itemId);
       lines.push("The segment is no longer offered in the upload form, and reconciliation will not walk it.");
 
       // 4. Folders, only if asked. After the row, never before — see the spec's D6.
@@ -1259,7 +956,7 @@ export default function SegmentCreator({
         for (const target of retireLibraries()) {
           try {
             // urlSegment builds the request; title is what the admin recognises in the log.
-            const went = await recycleFolder(target.urlSegment, root);
+            const went = await recycleFolder(context, siteUrl, target.urlSegment, root);
             lines.push(
               went
                 ? `${target.title}/${root} moved to the recycle bin.`
@@ -1277,11 +974,11 @@ export default function SegmentCreator({
         // `loadSegmentAbbreviationRowIds` above are re-walked fresh, not read from `delCounts`).
         // Spec: docs/superpowers/specs/2026-09-12-empty-archive-deletion-on-retire-design.md
         if (archiveAvailable()) {
-          const freshArchiveCount = await countArchiveDocuments(seg).catch(() => undefined);
+          const freshArchiveCount = await countArchiveDocuments(context, siteUrl, seg).catch(() => undefined);
           if (canDeleteArchive({ ...delCounts, archiveDocuments: freshArchiveCount })) {
             for (const target of archiveTargets()) {
               try {
-                const went = await recycleFolder(target.urlSegment, root);
+                const went = await recycleFolder(context, siteUrl, target.urlSegment, root);
                 lines.push(
                   went
                     ? `${target.title}/${root} was empty and moved to the recycle bin.`
@@ -1318,7 +1015,12 @@ export default function SegmentCreator({
             );
             let gone = 0;
             for (const r of mine) {
-              try { await deleteItem(cachedListTitle(LIST_SUFFIX.folderMap), r.Id); gone++; } catch { ok = false; }
+              try {
+                await deleteItem(context, siteUrl, cachedListTitle(LIST_SUFFIX.folderMap), r.Id);
+                gone++;
+              } catch {
+                ok = false;
+              }
             }
             if (mine.length > 0) lines.push(`Folder Map rows removed: ${gone} of ${mine.length}.`);
           }
@@ -1393,103 +1095,41 @@ export default function SegmentCreator({
     setRecodeNewFolder(seg.stagingFolder);
     setRecodeTyped("");
     setRecodeLog([]);
-    countSegment(seg)
+    countSegmentDocuments(context, siteUrl, seg)
       .then((c) => setRecodeCounts(c))
       .catch((e) => setRecodeCounts(unknownCounts((e as Error).message)));
   };
 
+  /**
+   * A thin wrapper around `performLiveSegmentRecode` — this component keeps only its own state
+   * updates, the result banner, the audit-row write (with its own `source: "SegmentCreator"`) and
+   * the list reload.
+   *
+   * ⚠ ALWAYS THE LIVE, IN-PLACE RENAME NOW — the recycle-and-rebuild path (`performSegmentRecode`)
+   * is NO LONGER CALLED from here (client, 2026-09-16, watching the empty-segment case recycle its
+   * folders: *"Can we ensure for renaming the term abbreviations doesn't move it to recycle bin if
+   * its empty"*). `performLiveSegmentRecode` already handles a confirmed-empty segment correctly —
+   * `renameFolder` treats a library where the old folder does not exist as a no-op skip, not a
+   * failure — so there is no longer a reason to prefer the destructive recycle for that case: the
+   * in-place rename does strictly less (nothing is ever sent to the recycle bin, and any already-
+   * provisioned Department/Unit subfolders survive the rename rather than being blown away and
+   * left for reconciliation to rebuild from scratch). `performSegmentRecode`/`recodeSummary` stay
+   * defined in `shared/spSegmentRecode.ts`/`shared/segmentRecode.ts` — kept, not deleted — in case
+   * a reason to recycle ever comes back; nothing here calls them any more.
+   */
   const onRecode = async (): Promise<void> => {
     if (!recoding || !recodeCounts) return;
     const seg = recoding;
     const oldRoot = (seg.stagingFolder ?? "").trim();
     const newRoot = sanitizeFolderSegment(recodeNewFolder).trim();
     setBusy(true);
-    const lines: string[] = [];
-    let ok = true;
     try {
-      // 1. Recycle the OLD (empty, per the gate above) tree in every library it might exist in —
-      //    exactly the same set and the same recycle call the delete flow already uses.
-      for (const target of retireLibraries()) {
-        try {
-          const went = await recycleFolder(target.urlSegment, oldRoot);
-          lines.push(
-            went
-              ? `${target.title}/${oldRoot} moved to the recycle bin.`
-              : `${target.title}/${oldRoot} did not exist.`,
-          );
-        } catch (e) {
-          lines.push(`Could not recycle ${target.title}/${oldRoot} — ${(e as Error).message}`);
-          ok = false;
-        }
-      }
-
-      // 2. The mode row. If THIS fails, stop — a run that recycled the old folders but left the
-      //    row naming the old key is a segment now pointing at a folder that no longer exists.
-      if (seg.itemId === undefined) {
-        throw new Error("this segment's configuration row has no id, so it cannot be updated");
-      }
-      const write: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items(${seg.itemId})`,
-        SPHttpClient.configurations.v1,
-        {
-          headers: {
-            Accept: "application/json;odata=nometadata",
-            "Content-Type": "application/json;odata=nometadata",
-            // JSON light: no `__metadata`, and `odata-version` blanked because SPFx injects 4.0,
-            // under which SharePoint cannot infer the entity set for a light payload — the same
-            // contract every other list write in this project uses.
-            "odata-version": "",
-            "X-HTTP-Method": "MERGE",
-            "IF-MATCH": "*",
-          },
-          body: JSON.stringify({ StagingFolder: newRoot }),
-        },
-      );
-      if (!write.ok) {
-        throw new Error(
-          `The old folders were recycled, but the segment row could not be updated (HTTP ` +
-            `${write.status}). Fix the "${cachedListTitle(LIST_SUFFIX.config)}" row by hand — its ` +
-            `Title is "${seg.key}" — and set StagingFolder to "${newRoot}".`,
-        );
-      }
-      lines.push(`The segment's top folder is now "${newRoot}".`);
-
-      // 3. Folder Map rows for the OLD Section — derivable, so they go exactly when the folder does.
-      //    A row left behind would point at a UniqueId now in the recycle bin.
-      try {
-        const list = encodeURIComponent(cachedListTitle(LIST_SUFFIX.folderMap));
-        const res: SPHttpClientResponse = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/lists/getbytitle('${list}')/items?$select=Id,Section&$top=5000`,
-          SPHttpClient.configurations.v1,
-          { headers: { Accept: "application/json;odata=nometadata" } },
-        );
-        if (res.ok) {
-          const rows = ((await res.json()).value ?? []) as Array<{ Id: number; Section?: string }>;
-          const mine = rows.filter(
-            (r) => (r.Section ?? "").trim().toLowerCase() === oldRoot.toLowerCase(),
-          );
-          let gone = 0;
-          for (const r of mine) {
-            try {
-              await deleteItem(cachedListTitle(LIST_SUFFIX.folderMap), r.Id);
-              gone++;
-            } catch {
-              ok = false;
-            }
-          }
-          if (mine.length > 0) lines.push(`Folder Map rows removed: ${gone} of ${mine.length}.`);
-        }
-      } catch {
-        lines.push("The Folder Map rows could not be tidied up; reconciliation will report them.");
-        ok = false;
-      }
-
-      lines.push("Run Folder Reconciliation to rebuild the folder tree under the new name.");
+      const { ok, renamed, lines } = await performLiveSegmentRecode(context, siteUrl, seg, recodeNewFolder);
       setRecodeLog(lines);
       setResult({
         ok,
         text: ok
-          ? `"${seg.label}" ${recodeSummary(oldRoot, newRoot, recodeCounts)}`
+          ? `"${seg.label}" ${recodeSummaryLive(oldRoot, newRoot, recodeCounts)}`
           : `"${seg.label}"'s top folder change did not fully succeed — see below.`,
       });
 
@@ -1506,19 +1146,29 @@ export default function SegmentCreator({
           `Key: ${seg.key}`,
           `Old top folder: ${oldRoot}`,
           `New top folder: ${newRoot}`,
+          "Mode: live rename (in place, every library, nothing recycled)",
           recodeCounts.state === "counted"
-            ? `Counted before recoding: ${recodeCounts.folders} folder(s), 0 documents`
+            ? `Counted before recoding: ${recodeCounts.folders} folder(s), ${recodeCounts.documents} document(s)`
             : `Counts were UNKNOWN before recoding (${recodeCounts.reason ?? "unreadable"})`,
           ...lines,
         ],
       }).catch(() => undefined);
 
-      // Reflect the new folder locally so the list does not show the stale value until a reload.
-      setExisting(existing.map((e) => (e.key === seg.key ? { ...e, stagingFolder: newRoot } : e)));
-      setRecoding(undefined);
-      await reload();
+      // Gated on `renamed`, NOT `ok`: `ok` also folds in a non-fatal Folder Map tidy-up failure,
+      // and the mode row's `StagingFolder` may or may not actually have been written. Reflecting the
+      // new name (or reloading expecting to see it) when the write never landed would show a folder
+      // name the server does not have — `renamed` is true only once that write is confirmed.
+      if (renamed) {
+        // Reflect the new folder locally so the list does not show the stale value until a reload.
+        setExisting(existing.map((e) => (e.key === seg.key ? { ...e, stagingFolder: newRoot } : e)));
+        setRecoding(undefined);
+        await reload();
+      }
     } catch (e) {
-      setRecodeLog([...lines, `Stopped: ${(e as Error).message}`]);
+      // Neither write sequence throws — this only catches a failure in the surrounding
+      // bookkeeping (the audit write, the reload) so the admin still sees SOMETHING rather than a
+      // silently dead button.
+      setRecodeLog([`Stopped: ${(e as Error).message}`]);
       setResult({ ok: false, text: `"${seg.label}"'s top folder was NOT changed — ${(e as Error).message}` });
     } finally {
       setBusy(false);
@@ -1557,9 +1207,11 @@ export default function SegmentCreator({
     deleting !== undefined &&
     (!needsTypedConfirmation(delCounts, delFolders) || confirmationMatches(delTyped, deleting.label));
 
-  /* Recode's own readiness: the count must have found an empty segment, the sanitized new folder
-     must not collide with another segment or be the current value unchanged, and — always, since
-     this action never has a "harmless" case once offered — the segment's label must be typed out. */
+  /* Recode's own readiness: the count must have succeeded (empty OR holding documents — since
+     2026-09-16 a documented segment is a VALID, different path, not a refusal), the sanitized new
+     folder must not collide with another segment or be the current value unchanged, and — always,
+     since this action never has a "harmless" case once offered — the segment's label must be
+     typed out. */
   const recodeConflictMsg = recoding
     ? folderRecodeConflict(recodeNewFolder, existing, recoding.key)
     : "";
@@ -1568,7 +1220,7 @@ export default function SegmentCreator({
   const recodeOk =
     recoding !== undefined &&
     recodeCounts !== undefined &&
-    canOfferRecode(recodeCounts) &&
+    canOfferAnyRecode(recodeCounts) &&
     recodeSanitized.length > 0 &&
     !recodeConflictMsg &&
     !recodeIsNoOp &&
@@ -1819,10 +1471,15 @@ export default function SegmentCreator({
       )}
 
       {/* ── Re-code a segment's top folder ───────────────────────────────────────
-          Spec: 2026-08-14-delete-segment-design.md's sibling, 2026-09-11-segment-recode-design.md.
-          A physical rename of the segment's TOP FOLDER, offered only for a genuinely empty segment
-          (zero documents — folders may already exist, that is the ordinary provisioned-but-unused
-          case). Reuses the same count the delete dialog runs. */}
+          Spec: 2026-08-14-delete-segment-design.md's sibling, 2026-09-11-segment-recode-design.md,
+          widened 2026-09-16 to a segment holding documents too, then SIMPLIFIED the same day: the
+          top folder is now ALWAYS renamed IN PLACE, in every library including the archive, with
+          every document, version, approval status and permission preserved — whether the segment
+          is empty or holds real documents. Nothing is ever recycled (client, watching the empty
+          case recycle its folders: "Can we ensure for renaming the term abbreviations doesn't move
+          it to recycle bin if its empty"). Reuses the same count the delete dialog runs; only the
+          ONE refusal left (the count itself came back unreadable) still shows the error branch
+          below. */}
       {recoding !== undefined && (
         <div
           style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center" }}
@@ -1836,11 +1493,17 @@ export default function SegmentCreator({
               Re-code the top folder for &quot;{recoding.label}&quot;?
             </p>
 
-            {recodeCounts === undefined && (
-              <p style={{ fontSize: 13, color: "#605e5c" }}>Counting what this segment holds&hellip;</p>
-            )}
-
-            {recodeCounts !== undefined && !canOfferRecode(recodeCounts) && (
+            {/* WARN: the whole form used to be GATED on `recodeCounts !== undefined`, so for a
+                large segment (GHO — 8 departments, 62 units, deep below-Unit chains, 4 libraries)
+                the count's fully-sequential folder walk can take well over a minute, and for that
+                whole minute the admin saw nothing but "Checking…" with no input anywhere on
+                screen (client, 2026-09-16: "still no input for segment for term abbreviation").
+                The FORM now renders immediately — typing and the typed confirmation do not need
+                the count at all — and only the SUBMIT is held back until `recodeCounts` resolves,
+                via the existing `recodeOk`/button-disabled logic below. Only once the count comes
+                back UNKNOWN (a genuine failure, not merely "still running") does this swap to the
+                refusal-only view, since at that point there is nothing left to fill in for. */}
+            {recodeCounts !== undefined && !canOfferAnyRecode(recodeCounts) ? (
               <>
                 <div style={{ ...s.msg, ...s.err, marginBottom: 10 }}>
                   {recodeRefusalReason(recodeCounts)}
@@ -1851,21 +1514,33 @@ export default function SegmentCreator({
                   </button>
                 </div>
               </>
-            )}
-
-            {recodeCounts !== undefined && canOfferRecode(recodeCounts) && (
+            ) : (
               <>
-                <p style={{ fontSize: 13, margin: "0 0 10px" }}>
-                  This segment is empty — <strong>{recodeCounts.folders}</strong> folder
-                  {recodeCounts.folders === 1 ? "" : "s"} and no documents. Its top folder is
-                  currently <strong>{recoding.stagingFolder || "—"}</strong>.
-                </p>
-                <div style={{ ...s.msg, ...s.warn, marginBottom: 10 }}>
-                  The old folders are recycled (restorable for 93 days) and nothing new is built
-                  here — <strong>run Folder Reconciliation afterwards</strong> to create the tree
-                  under the new name. Groups and their mappings are untouched; they are keyed on the
-                  segment&apos;s term set, never on this folder name.
-                </div>
+                {recodeCounts === undefined && (
+                  <p style={{ fontSize: 13, color: "#605e5c", marginBottom: 10 }}>
+                    Checking what this segment holds — this can take a while for a large segment.
+                    You can start filling in the form below now; the button unlocks once the check
+                    finishes.
+                  </p>
+                )}
+
+                {recodeCounts !== undefined && (
+                  <>
+                    <p style={{ fontSize: 13, margin: "0 0 10px" }}>
+                      This segment holds <strong>{recodeCounts.documents}</strong> document
+                      {recodeCounts.documents === 1 ? "" : "s"}. Its top folder is currently{" "}
+                      <strong>{recoding.stagingFolder || "—"}</strong>.
+                    </p>
+                    <div style={{ ...s.msg, ...s.warn, marginBottom: 10 }}>
+                      The top folder is renamed <strong>in place</strong>, in every library
+                      including the archive — nothing is ever recycled or re-created, even for an
+                      empty segment. Every document, version, approval status and permission
+                      travels with it. <strong>Run Folder Reconciliation afterwards</strong> to
+                      confirm everything still resolves. Groups and their mappings are untouched;
+                      they are keyed on the segment&apos;s term set, never on this folder name.
+                    </div>
+                  </>
+                )}
 
                 <label style={s.label}>New top folder name</label>
                 <input
@@ -1880,8 +1555,12 @@ export default function SegmentCreator({
                   <p style={s.fieldErr}>Give the segment a top folder name.</p>
                 ) : recodeIsNoOp ? (
                   <p style={s.hint}>That is the current folder — type a different code to change it.</p>
+                ) : recodeCounts === undefined ? (
+                  <p style={s.hint}>Ready — waiting for the check to finish before this can be submitted.</p>
                 ) : (
-                  <p style={s.hint}>Folders will be created here as &quot;{recodeSanitized}&quot;.</p>
+                  <p style={s.hint}>
+                    Every folder will be renamed to &quot;{recodeSanitized}&quot; here — in place.
+                  </p>
                 )}
 
                 <label style={s.label}>
@@ -1900,7 +1579,11 @@ export default function SegmentCreator({
                     disabled={!recodeOk || busy}
                     onClick={() => { onRecode().catch(() => undefined); }}
                   >
-                    {busy ? "Re-coding…" : "Re-code folder"}
+                    {recodeCounts === undefined
+                      ? "Waiting for the check…"
+                      : busy
+                        ? "Renaming…"
+                        : "Re-code folder"}
                   </button>
                   <button style={s.ghost} disabled={busy} onClick={() => setRecoding(undefined)}>
                     Cancel
@@ -1953,8 +1636,16 @@ export default function SegmentCreator({
           stops being useful advice and starts reading as a second active problem next to whatever
           real error the admin is looking at, even though nothing about the term set is wrong. It
           returns the instant the field goes blank or unresolved again (check.state leaves "found"),
-          since that IS the case this banner exists for. */}
-      {check.state !== "found" && (
+          since that IS the case this banner exists for.
+          ⚠⚠ ALSO HIDDEN ON "blank" — a second live report (2026-09-17): "the error box keeps
+          showing the moment I go in, I haven't even trigger anything yet." An untouched, empty
+          field is not a problem to flag red — it is the state every admin starts in, the same
+          reasoning `showErrors`/`requiredFieldErrors` already apply elsewhere on this exact form
+          (colouring or alarming a blank field before anyone has typed into it trains people to stop
+          reading red). The banner now waits for either a genuine finding (malformed/notfound/
+          unknown) or the field being actively checked, matching the hint right under the input two
+          lines below, which already used this same "blank" exclusion. */}
+      {check.state !== "found" && check.state !== "blank" && (
       <div style={{ ...s.msg, ...s.warn }}>
         The segment&apos;s <strong>term set must already exist</strong> in the term store, with its
         full structure of terms. This page does not create terms — reconciliation builds one folder
@@ -1997,14 +1688,47 @@ export default function SegmentCreator({
                 Every consumer tests `Category === "Project"` — the upload form's own tab
                 (`Form.tsx`), and the detail-panel labels on the approver's screen and My
                 Submissions. Edit that cell in CRS Config to match this wording and the comparison
-                stops matching: the segment moves under the Business Segment tab and both panels
-                revert to saying "Business Segment", with nothing erroring and nothing logged.
-                Wording is the client's, settled 2026-09-04: "Group-Led Project", capitalised. */}
-            {f === "BusinessSegment" ? "Business Segment" : "Group-Led Project"}
+                stops matching: the segment moves under the Segment tab and both panels revert to
+                saying "Segment", with nothing erroring and nothing logged.
+                Wording is the client's: "Group-Led Project", capitalised, settled 2026-09-04;
+                "Business Segment" standardised to "Segment", client QA item #53, 2026-09-13. */}
+            {f === "BusinessSegment" ? "Segment" : "Group-Led Project"}
           </label>
         ))}
 
-        <label style={s.label}>Term set ID</label>
+        <span style={s.labelRow}>
+          <label style={{ ...s.label, marginTop: 0 }}>Term set ID</label>
+          {/* Client QA item #57, 2026-09-13: "Include a Refresh button beside Open Term Store
+              Management" — the same pairing `StructureManager.tsx` already has beside its own
+              below-Unit level's Term set ID field. THE CLASSIC, SITE-LEVEL PAGE — the modern one
+              (`SiteAdmin.aspx#/termStoreAdminCenter`) is the TENANT admin centre and answers "Access
+              denied" to a site collection administrator (found 2026-08-30). Built from `siteUrl`,
+              never hardcoded. New tab: this screen holds an unsaved-changes guard, and the admin is
+              going there precisely to fetch a value to paste back into the field below. */}
+          <a
+            style={s.labelLink}
+            href={`${siteUrl}/_layouts/15/termstoremanager.aspx`}
+            onClick={openInNewTab}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Open the Term Store
+          </a>
+          {/* Offered only where the verdict came from the server — see `setCheckIsRecheckable`.
+              Disabled WHILE checking rather than hidden, or hiding it moves the Term Store link as
+              the row reflows out from under the cursor of an admin reaching for it. */}
+          {setCheckIsRecheckable(check) && (
+            <button
+              type="button"
+              style={check.state === "checking" ? s.recheckOff : s.recheckBtn}
+              disabled={check.state === "checking"}
+              title="Check this term set again — use it after editing the set in the Term Store"
+              onClick={() => setRecheck((n) => n + 1)}
+            >
+              {check.state === "checking" ? "…" : "↻ Re-check"}
+            </button>
+          )}
+        </span>
         <input
           style={fieldError.termSet ? { ...s.input, ...s.inputBad } : s.input}
           value={termSetGuid}

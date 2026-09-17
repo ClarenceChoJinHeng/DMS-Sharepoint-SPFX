@@ -31,6 +31,7 @@ import {
   suggestGroupName,
   validateGroupName,
   canonicalGroupRename,
+  siteEntryGroupTitle,
 } from "../../../shared/groupMapModel";
 import { addMemberWithSiteEntry } from "../../../shared/siteEntryGroup";
 import GroupMembersEditor from "./GroupMembersEditor";
@@ -39,6 +40,9 @@ import {
   isSystemAdmin,
   renameSiteGroup,
   isSiteCollectionAdmin,
+  removeGroupMember,
+  setSiteAdmin,
+  countSiteAdmins,
 } from "../../../shared/spGroups";
 import {
   searchSiteGroups,
@@ -56,7 +60,12 @@ import {
   personDisplay,
   summarizeUserAccess,
   describeGroupAccess,
+  GroupMapRenameRow,
+  plannedGroupRenames,
 } from "../../../shared/userAccess";
+import { AbbrevRowDraft } from "../../../shared/abbreviationDraft";
+import { codeChain } from "../../../shared/bulkGroups";
+import { loadPermissionedAbbreviationRows } from "../../../shared/spAbbreviationTree";
 import { csvCell, downloadCsv } from "../../../shared/groupExportCsv";
 import { EVENT } from "../../../shared/auditLog";
 import { cachedListTitle, LIST_SUFFIX } from "../../../shared/naming";
@@ -85,6 +94,18 @@ type Props = {
    * never refreshed, so the standalone page is unaffected unless it opts in.
    */
   refreshKey?: number;
+  /**
+   * "Quick Search" and "Groups on this site" render COLLAPSED, not expanded, when their own toggle
+   * is pressed once already having started open.
+   *
+   * Set ONLY by `GroupManagementPage.tsx` (the standalone Group Management page), per the client's
+   * CR: *"Change Group Management into a collapsible button by default — Quick Search / Groups on
+   * this site / Create Group."* Absent means both start OPEN — the flow-embedded mount
+   * (`FolderAdmin.tsx`'s "Add a new segment" group step) never sets this, because an admin who has
+   * just landed on that step to create and check groups should see them without an extra click; only
+   * the standalone page, visited for many different reasons, benefits from starting tidy.
+   */
+  collapsedByDefault?: boolean;
 };
 
 /** Resolved per site — the client renames these to "CRS …" at import. */
@@ -105,10 +126,13 @@ type ModePick = {
   levelNames: string[];
 };
 type TermLite = { id: string; label: string };
-/** A Group Map row, only as much of it as the delete dialog has to describe. */
+/** A Group Map row, only as much of it as the delete dialog — and now the stale-name check — need. */
 type MapRow = {
   itemId: number;
   groupId: string;
+  /** Was fetched and silently discarded before 2026-09-16; the stale-name check needs it to build
+      `GroupMapRenameRow`s without a second, duplicate read of a list already loaded once per page. */
+  groupName: string;
   role: GroupMapRole;
   segment: string;
   tier: string;
@@ -123,6 +147,28 @@ const s: Record<string, React.CSSProperties> = {
     background: "#fafafa",
   },
   head: { fontWeight: 700, fontSize: 20, margin: "0 0 8px" },
+  // Same visual weight as `head`, as a `<button>` — the collapsible section headers ("Quick Search",
+  // "Groups on this site"). `all: "unset"` isn't used because it would also drop the font this
+  // inherits from the page; each property `head` doesn't already carry is reset by hand instead.
+  sectionHead: {
+    fontWeight: 700,
+    fontSize: 20,
+    margin: "0 0 8px",
+    background: "none",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    // Label left, arrow pinned to the far right of the row (client, 2026-09-17: match the icon
+    // placement already used on Approval Library Access / Page Access / Site Access, where the
+    // toggle sits at the end of the row rather than leading it).
+    justifyContent: "space-between",
+    width: "100%",
+    color: "inherit",
+    textAlign: "left",
+  },
+  sectionHeadArrow: { flexShrink: 0, marginLeft: 8 },
   label: {
     display: "block",
     fontSize: 12,
@@ -358,10 +404,16 @@ export default function GroupManager({
   siteUrl,
   hideCreateForm,
   refreshKey,
+  collapsedByDefault,
 }: Props): React.ReactElement {
   const [canManage, setCanManage] = useState<boolean | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
+  // Two independent toggles — the client's ask names two SEPARATE sections, and a shared boolean
+  // would collapse or expand both together the moment either was clicked, which is not what
+  // "collapsible" means for either of them on their own.
+  const [quickSearchOpen, setQuickSearchOpen] = useState(!collapsedByDefault);
+  const [groupsListOpen, setGroupsListOpen] = useState(!collapsedByDefault);
   const [groups, setGroups] = useState<SpGroup[]>([]);
   /**
    * The site OWNERS group - system administrators.
@@ -401,6 +453,32 @@ export default function GroupManager({
     { done: number; total: number; failed: number } | undefined
   >(undefined);
   const [mapRows, setMapRows] = useState<MapRow[] | undefined>(undefined);
+
+  /* ── "Check for groups with a stale name" ──────────────────────────────────────
+     MOVED here from the CRS Term Abbreviations screen, 2026-09-16 (client, after recoding GHO and
+     then running "Create group" on it: *"I thought that would rename the GHO group name.."* — bulk
+     provisioning has no idea a recode ever happened; it just builds whatever names the segment's
+     CURRENT code implies and creates a parallel set beside the untouched old one). That screen's
+     version only ever fired automatically, right after a save that JUST changed something — once an
+     admin has moved past that moment (reconciled, re-provisioned, or simply navigated away), there
+     was no way to ask "does anything here still disagree with the current code" without redoing the
+     save. This is the SAME underlying check (`plannedGroupRenames`, unchanged since its 2026-09-16
+     fix so it catches segment/department/unit tiers alike), reachable any time, for any segment,
+     from the page that already owns every other group lifecycle action. */
+  const [renameCheckSeg, setRenameCheckSeg] = useState("");
+  const [groupRenamePlan, setGroupRenamePlan] = useState<
+    Array<{ groupId: number; from: string; to: string }> | undefined
+  >(undefined);
+  /** Which segment the CURRENT `groupRenamePlan` was computed for — carried into the audit row and
+      kept separate from `renameCheckSeg` so switching the dropdown mid-review cannot relabel a plan
+      that was computed for a DIFFERENT segment. */
+  const [groupRenameSegLabel, setGroupRenameSegLabel] = useState("");
+  const [groupRenameConfirming, setGroupRenameConfirming] = useState(false);
+  const [groupRenameProgress, setGroupRenameProgress] = useState<
+    { done: number; total: number; failed: number } | undefined
+  >(undefined);
+  const [groupCheckBusy, setGroupCheckBusy] = useState(false);
+
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<
@@ -516,6 +594,24 @@ export default function GroupManager({
   );
   const [lookupNote, setLookupNote] = useState<string | undefined>(undefined);
   const [lookupBusy, setLookupBusy] = useState(false);
+  /**
+   * GROUP id -> every site-user id (of this person's possibly-duplicate accounts) that holds it.
+   *
+   * `UserGroupRef` (used for display and for `summarizeUserAccess`) is deliberately group-shaped,
+   * not person-shaped, and carries no site-user id — removing someone needs one, so this map is kept
+   * alongside it rather than added to the shared, SPFx-free `userAccess.ts` module.
+   */
+  const [lookupMemberIds, setLookupMemberIds] = useState<
+    Record<number, number[]>
+  >({});
+  /** The group whose row is showing "Confirm remove" — one at a time, keyed on group id. */
+  const [lookupRemoveConfirm, setLookupRemoveConfirm] = useState<
+    number | undefined
+  >(undefined);
+  /** The group currently being removed from, so its own button (and only its own) disables. */
+  const [lookupRemoveBusy, setLookupRemoveBusy] = useState<
+    number | undefined
+  >(undefined);
 
   /**
    * Segment filter for the group list. "" = every segment, "__none__" = groups with no mapping rows.
@@ -558,6 +654,7 @@ export default function GroupManager({
         (data.value ?? []) as Array<{
           Id: number;
           GroupId?: string;
+          GroupName?: string;
           Segment?: string;
           UnitTermGuid?: string;
           Role?: string;
@@ -565,6 +662,7 @@ export default function GroupManager({
       ).map((r) => ({
         itemId: r.Id,
         groupId: (r.GroupId ?? "").trim(),
+        groupName: (r.GroupName ?? "").trim(),
         role: normalizeRoleValue(r.Role ?? "") as GroupMapRole,
         segment: (r.Segment ?? "").trim(),
         tier: (r.UnitTermGuid ?? "").trim(),
@@ -869,6 +967,8 @@ export default function GroupManager({
     setLookupPerson(undefined);
     setLookupGroups(undefined);
     setLookupNote(undefined);
+    setLookupMemberIds({});
+    setLookupRemoveConfirm(undefined);
   };
 
   const runLookup = async (p: PersonPick): Promise<void> => {
@@ -877,6 +977,8 @@ export default function GroupManager({
     setLookupNote(undefined);
     setLookupResults([]);
     setLookupQuery("");
+    setLookupMemberIds({});
+    setLookupRemoveConfirm(undefined);
     setLookupBusy(true);
     try {
       // Matched on LOGIN NAME, not email: a guest can exist TWICE on one site for one address
@@ -929,6 +1031,10 @@ export default function GroupManager({
         );
       }
       const all: UserGroupRef[] = [];
+      // GROUP id -> every site-user id that holds it — what `removeFromLookupGroup` needs to act on
+      // a row. A group already seen from an earlier `u.Id` still records the new one, so a genuine
+      // duplicate membership (both of a person's accounts in the same group) is fully addressable.
+      const memberIds: Record<number, number[]> = {};
       for (const u of users) {
         // $top well past any real membership: a truncated read is indistinguishable from a group the
         // person is not in, which here would UNDERSTATE their access.
@@ -944,9 +1050,13 @@ export default function GroupManager({
         }>) {
           if (!all.some((a) => a.id === x.Id))
             all.push({ id: x.Id, title: (x.Title ?? "").trim() });
+          if (!memberIds[x.Id]) memberIds[x.Id] = [];
+          if (memberIds[x.Id].indexOf(u.Id) === -1)
+            memberIds[x.Id].push(u.Id);
         }
       }
       setLookupGroups(all);
+      setLookupMemberIds(memberIds);
     } catch (e) {
       // `undefined`, never [] — "could not read" must not render as "no access", which is the answer
       // that stops an admin looking.
@@ -979,6 +1089,112 @@ export default function GroupManager({
       summary,
       details,
     }).catch(() => undefined);
+  };
+
+  /**
+   * Remove `lookupPerson` from one group listed under Quick Search.
+   *
+   * DECLARED AFTER `log` because it calls it, and `no-use-before-define` is on.
+   *
+   * Spec: docs/superpowers/specs/2026-09-13-quick-search-remove-button-design.md
+   *
+   * ⚠ NOT A SECOND DEFINITION OF "REMOVE FROM A GROUP" — it calls the same
+   * `removeGroupMember`/`setSiteAdmin`/`countSiteAdmins` primitives `GroupMembersEditor.onRemove`
+   * already uses, and applies the SAME site-collection-admin guard when the group IS the Owners
+   * group (`owners?.id`, the same value the administrators card above already resolves). A second,
+   * looser rule here is exactly how a person removed via Quick Search could keep full control of the
+   * site while the toast says otherwise.
+   *
+   * Removing from ONE group is removing from ONE group: `CRS_SITE_MEMBERS` (site entry) and every
+   * other group this person holds are untouched, same as `GroupMembersEditor`.
+   */
+  const removeFromLookupGroup = async (
+    groupId: number,
+    groupTitle: string,
+  ): Promise<void> => {
+    if (!lookupPerson) return;
+    const userIds = lookupMemberIds[groupId] ?? [];
+    if (userIds.length === 0) {
+      showToast(
+        `Could not remove — the underlying membership for "${groupTitle}" is not known. Re-run the search and try again.`,
+        true,
+      );
+      return;
+    }
+    setLookupRemoveConfirm(undefined);
+    setLookupRemoveBusy(groupId);
+    try {
+      /* SITE COLLECTION ADMIN, on the Owners group only — same two guards as `GroupMembersEditor`,
+         because both protect against a lock-out nothing in this app could undo:
+           1. NEVER THE SIGNED-IN USER — demoting yourself removes the very right this call needs.
+           2. NEVER THE LAST ONE — `countSiteAdmins` answering `undefined` REFUSES the demotion,
+              because guessing "there must be others" is exactly how a site is lost. */
+      let scaNote = "";
+      if (owners !== undefined && groupId === owners.id) {
+        const mine = (context.pageContext.user.loginName ?? "").toLowerCase();
+        if ((lookupPerson.loginName ?? "").toLowerCase() === mine) {
+          scaNote =
+            " Their site collection administrator rights were left in place: this would have" +
+            " removed your own, and you would lose the rights this page needs.";
+        } else {
+          const admins = await countSiteAdmins(context.spHttpClient, siteUrl);
+          if (admins === undefined) {
+            scaNote =
+              " Their site collection administrator rights were left in place: the number of" +
+              " administrators could not be read, and removing the last one leaves nobody able to" +
+              " administer this site.";
+          } else if (admins <= 1) {
+            scaNote =
+              " Their site collection administrator rights were left in place: they are the" +
+              " only one, and a site with no administrator cannot be recovered from here.";
+          } else {
+            try {
+              await setSiteAdmin(
+                context.spHttpClient,
+                siteUrl,
+                lookupPerson.loginName,
+                false,
+              );
+              scaNote = "";
+            } catch (e) {
+              scaNote =
+                ` ⚠ Their site collection administrator rights could NOT be removed` +
+                ` (${(e as Error).message}) — they still have full control of this site. Remove them` +
+                ` by hand in Site settings.`;
+            }
+          }
+        }
+      }
+      for (const uid of userIds) {
+        await removeGroupMember(context.spHttpClient, siteUrl, groupId, uid);
+      }
+      showToast(
+        `${lookupPerson.displayName} removed from ${groupTitle}` + scaNote,
+        scaNote.indexOf("could NOT") !== -1 ||
+          scaNote.indexOf("left in place") !== -1,
+      );
+      log(
+        EVENT.membersChanged,
+        `Member removed — ${lookupPerson.displayName} from ${groupTitle}`,
+        [
+          `Group: ${groupTitle}`,
+          `Removed: ${personDisplay(lookupPerson.displayName, lookupPerson.email)}`,
+          `This removes ONE group. Their membership of ${siteEntryGroupTitle()} and any other group is unchanged.`,
+        ],
+        scaNote.indexOf("could NOT") !== -1 ? "Failed" : "Success",
+      );
+      // Re-run the lookup rather than patching state by hand: it is already the single source of
+      // truth for "what groups is this person in right now", and a hand-patched copy could not see a
+      // membership changed from another tab in the meantime.
+      await runLookup(lookupPerson);
+    } catch (e) {
+      showToast(
+        `Could not remove ${lookupPerson.displayName} from ${groupTitle}: ${(e as Error).message}`,
+        true,
+      );
+    } finally {
+      setLookupRemoveBusy(undefined);
+    }
   };
 
   /* ── The name builder ──────────────────────────────────────────────────── */
@@ -1325,6 +1541,148 @@ export default function GroupManager({
       if (to !== undefined) out.push({ id: g.id, from: g.title, to });
     }
     return out;
+  };
+
+  /**
+   * Compute whether any group under ONE picked segment currently disagrees with that segment's LIVE
+   * code — segment, department or unit tier alike (see `plannedGroupRenames`'s own 2026-09-16 fix,
+   * which is what makes this catch UNIT/DEPARTMENT groups too, not only segment-wide ones).
+   *
+   * Reuses the already-loaded `mapRows` for the Group Map half rather than a second read of the
+   * whole list. Reads the segment's CURRENT codes via `loadPermissionedAbbreviationRows` — narrower
+   * than the abbreviation screen's own walk: PERMISSIONED tiers only, because nothing below Unit
+   * ever has a group mapped to it, so there is nothing there for a caller building name CHAINS to use.
+   */
+  const checkStaleGroupNames = async (): Promise<void> => {
+    const picked = modes.filter(
+      (m) => m.termSetGuid.toLowerCase() === renameCheckSeg.toLowerCase(),
+    )[0];
+    if (!picked) return;
+    if (mapRows === undefined) {
+      showToast("The Group Map could not be read, so groups cannot be checked.", true);
+      return;
+    }
+    setGroupCheckBusy(true);
+    try {
+      const abbrevRows = await loadPermissionedAbbreviationRows(
+        context,
+        siteUrl,
+        picked.termSetGuid,
+        picked.levelNames.length,
+      );
+      if (abbrevRows === undefined) {
+        showToast(`Could not read "${picked.label}"'s codes — try again in a moment.`, true);
+        return;
+      }
+      const byGuid: Record<string, AbbrevRowDraft> = {};
+      abbrevRows.forEach((r) => {
+        byGuid[r.termGuid.toLowerCase()] = r;
+      });
+      const codeChainFor = (guid: string): string[] | undefined => {
+        const row = byGuid[(guid ?? "").trim().toLowerCase()];
+        return row ? codeChain(row, byGuid) : undefined;
+      };
+      // ⚠⚠ FIXED 2026-09-17 — "even when one group is not renamed it shows the entire group not
+      // renamed". `mapRows[].groupName` is the `CRS Group Map` list's own stored copy of the name,
+      // which `runGroupRenames` never writes back to — only the SHAREPOINT GROUP OBJECT gets renamed
+      // (`renameSiteGroup`), the Group Map list column is untouched. So on the NEXT check, every
+      // group this tool had already renamed successfully was still compared against its OLD stored
+      // name, never matched the freshly-computed "to", and the whole set reappeared as stale — not
+      // just whichever one genuinely failed. `groups` (live SharePoint titles, re-read by `reload()`
+      // at the end of every run) is the one place the CURRENT name actually lives; matched by id,
+      // falling back to the stale stored name only for a group `groups` could not account for (a
+      // failed live read, or one deleted since the map row was written).
+      const liveNameByGroupId: Record<string, string> = {};
+      groups.forEach((g) => {
+        liveNameByGroupId[String(g.id)] = g.title;
+      });
+      const gmRows: GroupMapRenameRow[] = mapRows
+        .filter((r) => r.segment.toLowerCase() === picked.termSetGuid.toLowerCase())
+        .map((r) => ({
+          GroupId: r.groupId,
+          GroupName: liveNameByGroupId[r.groupId] ?? r.groupName,
+          Role: r.role,
+          UnitTermGuid: r.tier,
+        }));
+      // `picked.termSetGuid` doubles as the segment's own term-set id — passed through so a
+      // segment-tier (SEGVIEW/C-Level) row's `UnitTermGuid`, which EQUALS that guid in production
+      // rather than being blank, is recognised as having no unit chain instead of being silently
+      // skipped. See `plannedGroupRenames`'s own comment on this parameter, 2026-09-16.
+      const plan = plannedGroupRenames(
+        [],
+        true,
+        picked.code,
+        gmRows,
+        codeChainFor,
+        picked.termSetGuid,
+      );
+      setGroupRenameSegLabel(picked.label);
+      setGroupRenamePlan(plan.length > 0 ? plan : undefined);
+      setGroupRenameConfirming(false);
+      if (plan.length === 0) {
+        showToast(`No groups currently carry a stale name for "${picked.label}".`, false);
+      }
+    } catch (e) {
+      showToast(`Could not check "${picked.label}"'s groups — ${(e as Error).message}`, true);
+    } finally {
+      setGroupCheckBusy(false);
+    }
+  };
+
+  /**
+   * Executes `groupRenamePlan` — sequential, carries on past a failure, same shape as
+   * `runStandardiseNames` right above and for the same reason: a burst of writes against a
+   * throttling tenant is the shape that gets cut off half way. Shares `bulkRunning` with delete and
+   * the suffix-standardisation run, so the three destructive bulk actions on this page can never
+   * overlap.
+   *
+   * A rename preserves the group's id, so every mapping, folder grant and page ACL survives
+   * untouched either way — only the NAME changes.
+   */
+  const runGroupRenames = async (): Promise<void> => {
+    const plan = groupRenamePlan;
+    if (!plan || plan.length === 0) return;
+    if (bulkRunning.current) return;
+    bulkRunning.current = true;
+    setBusy(true);
+    setGroupRenameProgress({ done: 0, total: plan.length, failed: 0 });
+    let done = 0;
+    let failed = 0;
+    const failures: string[] = [];
+    for (const t of plan) {
+      try {
+        await renameSiteGroup(context.spHttpClient, siteUrl, t.groupId, t.to);
+      } catch (e) {
+        failed++;
+        failures.push(`${t.from} → ${t.to} — ${(e as Error).message}`);
+      }
+      done++;
+      setGroupRenameProgress({ done, total: plan.length, failed });
+    }
+    log(
+      EVENT.groupMapChanged,
+      `${done - failed} group(s) renamed to match "${groupRenameSegLabel}"'s current code`,
+      [
+        `Segment: ${groupRenameSegLabel}`,
+        `Renamed: ${done - failed} of ${plan.length}`,
+        ...plan.map((t) => `${t.from} → ${t.to}`),
+        ...(failures.length > 0 ? [`FAILED: ${failures.join(" | ")}`] : []),
+        "A rename preserves the group id, so mappings, folder grants and page access are unchanged.",
+      ],
+      failed === 0 ? "Success" : "Failed",
+    );
+    setGroupRenameProgress(undefined);
+    setGroupRenamePlan(undefined);
+    setGroupRenameConfirming(false);
+    bulkRunning.current = false;
+    setBusy(false);
+    showToast(
+      failed === 0
+        ? `${done} group(s) renamed. Access is unchanged — a rename keeps the group id.`
+        : `${done - failed} renamed, ${failed} failed. See the audit log for the names.`,
+      failed !== 0,
+    );
+    await reload();
   };
 
   /**
@@ -1825,7 +2183,7 @@ export default function GroupManager({
                       .join(", ")}
                   </strong>
                   , so the name uses the full term name instead. Give it a code
-                  on <strong>CRS Term Abbreviations</strong> first —
+                  on <strong>GDC Term Abbreviations</strong> first —
                   reconciliation names the folder from that code, and a group
                   named after the term will not line up with it.
                 </p>
@@ -1911,7 +2269,19 @@ export default function GroupManager({
         {/* "Quick Search" / shorter hint (client's mockup, 2026-09-03) — was "What can this person
             reach?" with a longer explanation. The screen still does exactly what it did; only the
             heading and the one-line description are shorter. */}
-        <p style={s.head}>Quick Search</p>
+        {/* Collapsible, collapsed by default on the standalone page (client's CR, 2026-09-17) —
+            never on the guided-flow mount, which never sets `collapsedByDefault`. */}
+        <button
+          type="button"
+          style={s.sectionHead}
+          aria-expanded={quickSearchOpen}
+          onClick={() => setQuickSearchOpen(!quickSearchOpen)}
+        >
+          <span>Quick Search</span>
+          <span style={s.sectionHeadArrow}>{quickSearchOpen ? "▾" : "▸"}</span>
+        </button>
+        {quickSearchOpen && (
+          <>
         <p style={s.hint}>
           Search anyone in the directory to see which groups they are in on this
           site.
@@ -1963,9 +2333,33 @@ export default function GroupManager({
                 `name · email` read as two different people when the display name is a mangled
                 directory form of the same address. The display name is the fallback rather than a
                 blank line — a guest account can legitimately have no email. */}
-            <p style={s.lkWho}>
-              {personDisplay(lookupPerson.displayName, lookupPerson.email)}
-            </p>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 8,
+              }}
+            >
+              <p style={s.lkWho}>
+                {personDisplay(lookupPerson.displayName, lookupPerson.email)}
+              </p>
+              {/* Client, 2026-09-14: "add a refresh button for quick search" — a fresh lookup could
+                  otherwise only be had by clearing the box and re-typing the same address. Re-runs
+                  the SAME lookup rather than re-reading from `lookupResults` (cleared once a person
+                  is picked), so it answers correctly for the person currently shown even after they
+                  are added to or removed from a group elsewhere. */}
+              <button
+                type="button"
+                style={s.ghost}
+                disabled={lookupBusy}
+                onClick={() => {
+                  runLookup(lookupPerson).catch(() => undefined);
+                }}
+              >
+                {lookupBusy ? "Refreshing…" : "↻ Refresh"}
+              </button>
+            </div>
 
             {lookupBusy && <p style={s.hint}>Reading their groups&hellip;</p>}
 
@@ -1977,6 +2371,20 @@ export default function GroupManager({
                 {lookupNote}
               </p>
             )}
+
+            {/* A REAL account, read successfully, holding zero groups — client QA item #54b,
+                2026-09-13. First built to exclude the "no account matches that address" case
+                above (`lookupNote`, when `users.length === 0`) on the reasoning that its own note
+                already covers it — but the client corrected that the same day: this line should
+                ALSO show for someone who has never been added at all, not only for someone who was
+                added and then removed. `lookupGroups` is already `[]` in BOTH cases (`runLookup`
+                sets it before either note is decided), so dropping the `lookupNote === undefined`
+                guard is the whole fix — no new state, no new branch. */}
+            {!lookupBusy &&
+              lookupGroups !== undefined &&
+              lookupGroups.length === 0 && (
+                <p style={s.hint}>Not in any group yet.</p>
+              )}
 
             {!lookupBusy &&
               lookupGroups !== undefined &&
@@ -1992,11 +2400,16 @@ export default function GroupManager({
                         GRANT is not known. The groups themselves are listed
                         below.
                       </p>
-                      {lookupGroups.map((g) => (
-                        <p key={g.id} style={s.row}>
-                          <span style={s.chip}>{g.title}</span>
-                        </p>
-                      ))}
+                      {/* SCROLLS, same reason as the detailed list below — a person in many groups
+                          can make this run long, and each row is plain text with no popover to
+                          clip. */}
+                      <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+                        {lookupGroups.map((g) => (
+                          <p key={g.id} style={s.row}>
+                            <span style={s.chip}>{g.title}</span>
+                          </p>
+                        ))}
+                      </div>
                     </>
                   );
                 }
@@ -2037,22 +2450,80 @@ export default function GroupManager({
                         ? ` · ${summary.unmappedCount} of them grant nothing`
                         : ""}
                     </p>
+                    {/* SCROLLS (client, 2026-09-16: *"the list is too long"*) — someone in many
+                        groups (an approver mapped to every unit in a department, say) can push this
+                        card far down the page. Nothing inside a row is absolutely positioned — the
+                        Remove/Confirm buttons are plain inline buttons, no dropdown, no popover — so
+                        capping the whole list here is safe, unlike the group editor below. */}
+                    <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
                     {summary.groups.map((g) => (
                       <div key={g.groupId} style={s.lkRow}>
-                        {/* Name left, segment right — not a column of its own. */}
+                        {/* Name left, segment + Remove right — not a column of its own.
+                          Client, 2026-09-13: "Move the Delete button on quick search to beside
+                          the label Group Head Office" — moved from its own row at the bottom of
+                          the card into this row, grouped with the segment label it sits beside. */}
                         <div style={s.lkTop}>
                           <p style={s.lkName}>{g.groupTitle}</p>
-                          {g.places.length > 0 && (
-                            <p style={s.lkSeg}>
-                              {g.places
-                                .map(
-                                  (pl) =>
-                                    pl.segmentLabel || "segment not known",
-                                )
-                                .filter((v, i, a) => a.indexOf(v) === i)
-                                .join(", ")}
-                            </p>
-                          )}
+                          <div
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            {g.places.length > 0 && (
+                              <p style={s.lkSeg}>
+                                {g.places
+                                  .map(
+                                    (pl) =>
+                                      pl.segmentLabel || "segment not known",
+                                  )
+                                  .filter((v, i, a) => a.indexOf(v) === i)
+                                  .join(", ")}
+                              </p>
+                            )}
+                            {/* Removing someone used to mean leaving this panel, finding the
+                              same group below in the group list, expanding it, and finding them
+                              again in `GroupMembersEditor`. Rendered for EVERY row, Owners and
+                              site-entry included — hiding it on those two would silently
+                              reintroduce that detour for exactly the groups an admin is most
+                              likely to be here about.
+                              Spec: docs/superpowers/specs/2026-09-13-quick-search-remove-button-design.md */}
+                            {lookupRemoveConfirm === g.groupId ? (
+                              <>
+                                <button
+                                  type="button"
+                                  style={s.danger}
+                                  disabled={lookupRemoveBusy === g.groupId}
+                                  onClick={() => {
+                                    removeFromLookupGroup(
+                                      g.groupId,
+                                      g.groupTitle,
+                                    ).catch(() => undefined);
+                                  }}
+                                >
+                                  Confirm remove
+                                </button>
+                                <button
+                                  type="button"
+                                  style={s.ghost}
+                                  onClick={() => setLookupRemoveConfirm(undefined)}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                style={s.ghost}
+                                disabled={lookupRemoveBusy !== undefined}
+                                onClick={() => setLookupRemoveConfirm(g.groupId)}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {/* The site-entry group is a NORMAL state, so it is a hint, not the red
@@ -2102,6 +2573,7 @@ export default function GroupManager({
                         )}
                       </div>
                     ))}
+                    </div>
                     {/* ⚠ "Roles and scope come from the CRS Group Map..." REMOVED (client's mockup,
                       2026-09-03). The fact is unchanged — this screen still reads live SharePoint
                       state alongside Group Map rows exactly as before — only the explanatory footer
@@ -2111,14 +2583,28 @@ export default function GroupManager({
               })()}
           </div>
         )}
+          </>
+        )}
       </div>
 
       {/* ── The groups ─────────────────────────────────────────────────── */}
       <div style={s.card}>
-        <p style={s.head}>
-          Groups on this site ({visible.length}
-          {visible.length === groups.length ? "" : ` of ${groups.length}`})
-        </p>
+        {/* Collapsible, collapsed by default on the standalone page (client's CR, 2026-09-17) — the
+            count stays visible either way, since it is useful on its own without opening the list. */}
+        <button
+          type="button"
+          style={s.sectionHead}
+          aria-expanded={groupsListOpen}
+          onClick={() => setGroupsListOpen(!groupsListOpen)}
+        >
+          <span>
+            Groups on this site ({visible.length}
+            {visible.length === groups.length ? "" : ` of ${groups.length}`})
+          </span>
+          <span style={s.sectionHeadArrow}>{groupsListOpen ? "▾" : "▸"}</span>
+        </button>
+        {groupsListOpen && (
+          <>
         <div
           style={{
             display: "flex",
@@ -2360,6 +2846,109 @@ export default function GroupManager({
           )}
         </div>
 
+        {/* "Check for groups with a stale name" — MOVED here from the CRS Term Abbreviations screen,
+            2026-09-16. See the reasoning at `checkStaleGroupNames`/`runGroupRenames` above. Segment-
+            scoped and user-driven, unlike the auto-detected "Group names are not consistent" tool
+            just below it: that one scans every group's SUFFIX spelling on load; this one needs a
+            picked segment and a fresh read of its codes before it can say anything. */}
+        {canManage === true && (
+          <div style={{ ...s.card, marginTop: 16 }}>
+            <p style={{ ...s.head, marginTop: 0 }}>Check for groups with a stale name</p>
+            <p style={s.hint}>
+              After a segment, department or unit is renamed, its groups do not follow
+              automatically — only the folders do. Pick a segment to check whether any of its
+              groups still carry an old code.
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <select
+                style={{ ...s.select, flex: "0 1 260px" }}
+                value={renameCheckSeg}
+                onChange={(e) => setRenameCheckSeg(e.target.value)}
+              >
+                <option value="">Select a segment…</option>
+                {modes.map((m) => (
+                  <option key={m.termSetGuid} value={m.termSetGuid}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                style={s.btn}
+                disabled={!renameCheckSeg || groupCheckBusy}
+                onClick={() => {
+                  checkStaleGroupNames().catch(() => undefined);
+                }}
+              >
+                {groupCheckBusy ? "Checking…" : "Check"}
+              </button>
+            </div>
+
+            {groupRenamePlan && groupRenamePlan.length > 0 && (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "10px 12px",
+                  borderRadius: 6,
+                  background: "#f3f9ff",
+                  border: "1px solid #cfe4fb",
+                  fontSize: 13,
+                }}
+              >
+                {groupRenameProgress ? (
+                  <p style={{ margin: 0 }}>
+                    Renaming {groupRenameProgress.done} of {groupRenameProgress.total}
+                    {groupRenameProgress.failed > 0 ? ` (${groupRenameProgress.failed} failed)` : ""}…
+                  </p>
+                ) : (
+                  <>
+                    <p style={{ fontWeight: 600, margin: "0 0 6px" }}>
+                      {groupRenamePlan.length} group{groupRenamePlan.length === 1 ? "" : "s"} under
+                      &quot;{groupRenameSegLabel}&quot; now{" "}
+                      {groupRenamePlan.length === 1 ? "carries" : "carry"} a stale code
+                    </p>
+                    <p style={{ ...s.hint, marginBottom: 8 }}>
+                      Renaming {groupRenamePlan.length === 1 ? "it" : "them"} changes{" "}
+                      <strong>nothing about access</strong> — a rename keeps the group&apos;s id, so
+                      every mapping, folder permission and page grant stays exactly as it is.
+                    </p>
+                    {groupRenameConfirming ? (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          style={s.btn}
+                          disabled={busy}
+                          onClick={() => {
+                            runGroupRenames().catch(() => undefined);
+                          }}
+                        >
+                          Confirm — rename {groupRenamePlan.length} group
+                          {groupRenamePlan.length === 1 ? "" : "s"}
+                        </button>
+                        <button
+                          type="button"
+                          style={s.ghost}
+                          onClick={() => setGroupRenameConfirming(false)}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        style={s.ghost}
+                        onClick={() => setGroupRenameConfirming(true)}
+                      >
+                        Rename {groupRenamePlan.length} group{groupRenamePlan.length === 1 ? "" : "s"}…
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* STANDARDISE NAMES (client, 2026-08-27). 1.0.261.0 changed what NEW names are written and
             left existing groups alone, so a provisioned site is MIXED - `_APR_HIGHLY_CONFIDENTIAL`
             beside `_VIEWER_HIGHLY_CONFIDENTIAL`. Shown only when there is something to do, so it
@@ -2549,6 +3138,8 @@ export default function GroupManager({
             );
           })}
         </div>
+          </>
+        )}
       </div>
 
       {/* ── Delete confirmation ────────────────────────────────────────── */}

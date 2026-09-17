@@ -1,9 +1,11 @@
 import {
+  canOfferAnyRecode,
   canOfferRecode,
   folderRecodeConflict,
   folderRecodeIsNoOp,
   recodeRefusalReason,
   recodeSummary,
+  recodeSummaryLive,
 } from "./segmentRecode";
 import { ExistingSegment } from "./newSegment";
 import { SegmentCounts, unknownCounts } from "./segmentDeletion";
@@ -23,7 +25,7 @@ describe("canOfferRecode", () => {
     expect(canOfferRecode(counted(12, 0))).toBe(true);
   });
 
-  it("refuses a segment that holds even one document", () => {
+  it("is false for a segment that holds even one document — the LIVE path applies instead now, not a refusal", () => {
     expect(canOfferRecode(counted(3, 1))).toBe(false);
   });
 
@@ -32,19 +34,24 @@ describe("canOfferRecode", () => {
   });
 });
 
+describe("canOfferAnyRecode", () => {
+  it("is true whenever the count succeeded, whatever it found — 0 documents or many", () => {
+    expect(canOfferAnyRecode(counted(0, 0))).toBe(true);
+    expect(canOfferAnyRecode(counted(4, 7))).toBe(true);
+  });
+
+  it("fails CLOSED on an unreadable count, same as canOfferRecode", () => {
+    expect(canOfferAnyRecode(unknownCounts("the folders could not be read"))).toBe(false);
+  });
+});
+
 describe("recodeRefusalReason", () => {
-  it("is blank exactly when canOfferRecode is true", () => {
+  it("is blank exactly when canOfferAnyRecode is true — including a segment that holds documents", () => {
     expect(recodeRefusalReason(counted(5, 0))).toBe("");
-  });
-
-  it("names the document count and the real route when documents exist", () => {
-    const msg = recodeRefusalReason(counted(4, 7));
-    expect(msg).toContain("7 documents");
-    expect(msg).toContain("Move or archive");
-  });
-
-  it("uses singular wording for exactly one document", () => {
-    expect(recodeRefusalReason(counted(1, 1))).toContain("1 document,");
+    // 2026-09-16: a documented segment used to be refused here; it is now a valid (live) path,
+    // so the count alone must never produce a refusal message any more.
+    expect(recodeRefusalReason(counted(4, 7))).toBe("");
+    expect(recodeRefusalReason(counted(1, 1))).toBe("");
   });
 
   it("names the read failure, never guesses empty, on an unknown count", () => {
@@ -107,5 +114,24 @@ describe("recodeSummary", () => {
 
   it("reports zero folders rather than throwing when the count was unknown", () => {
     expect(recodeSummary("A", "B", unknownCounts("x"))).toContain("0 empty folders");
+  });
+});
+
+describe("recodeSummaryLive", () => {
+  it("names both folders, the document count, and says nothing was recycled", () => {
+    const msg = recodeSummaryLive("GHO", "GHONEW", counted(9, 62));
+    expect(msg).toContain('"GHO"');
+    expect(msg).toContain('"GHONEW"');
+    expect(msg).toContain("62 documents");
+    expect(msg).toContain("archive");
+    expect(msg).toContain("nothing was recycled or");
+  });
+
+  it("uses singular wording for exactly one document", () => {
+    expect(recodeSummaryLive("A", "B", counted(1, 1))).toContain("1 document ");
+  });
+
+  it("reports zero documents rather than throwing when the count was unknown", () => {
+    expect(recodeSummaryLive("A", "B", unknownCounts("x"))).toContain("0 documents");
   });
 });

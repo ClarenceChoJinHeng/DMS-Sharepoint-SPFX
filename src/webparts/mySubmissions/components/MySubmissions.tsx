@@ -1,4 +1,9 @@
-import { SCROLL_X, TABLE_MIN, WRAP_ROW, BREAK_LONG } from "../../../shared/responsive";
+import {
+  SCROLL_X,
+  TABLE_MIN,
+  WRAP_ROW,
+  BREAK_LONG,
+} from "../../../shared/responsive";
 // My Submissions — what happened to the files I uploaded.
 //
 // Spec: docs/superpowers/specs/2026-08-14-my-submissions-design.md
@@ -22,9 +27,17 @@ import { useEffect, useRef, useState } from "react";
 import { paginate, Pager } from "../../../shared/pagination";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IMySubmissionsProps } from "./IMySubmissionsProps";
-import { PersonPick, searchTenantPeople } from "../../../shared/spGroups";
+import {
+  PersonPick,
+  searchTenantPeople,
+  isSystemAdmin,
+} from "../../../shared/spGroups";
 import { useLiveRefresh } from "../../../shared/liveRefresh";
-import { groupSubmissions, statusCounts, SubmissionGroup } from "../../../shared/submissionGroups";
+import {
+  groupSubmissions,
+  statusCounts,
+  SubmissionGroup,
+} from "../../../shared/submissionGroups";
 import {
   Submission,
   countByStatus,
@@ -47,15 +60,30 @@ import {
    Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md
    `MergedRow` is a `Submission` plus `recordState`, so every existing helper here still applies. */
 import {
-  MergedRow, mergeRecords, mergedKey, liveRowsOnly, recordCounts, SubmissionRecord,
-  isBulkUploadRow, snapshotFolderRows, snapshotFileRows, recordStateParts, archivedRowsOnly,
+  MergedRow,
+  mergeRecords,
+  mergedKey,
+  liveRowsOnly,
+  recordCounts,
+  SubmissionRecord,
+  isBulkUploadRow,
+  snapshotFolderRows,
+  snapshotFileRows,
+  recordStateParts,
+  archivedRowsOnly,
 } from "../../../shared/submissionRecords";
-import { readSubmissionRecords, markRecordWithdrawn } from "../../../shared/spSubmissionRecords";
+import {
+  readSubmissionRecords,
+  markRecordWithdrawn,
+} from "../../../shared/spSubmissionRecords";
 // The metadata panel's rows. It DERIVES the tier rows from the item's own fields rather than naming
 // them, which is what makes Region/Estate·Mill appear on a segment nobody wrote code for.
 import {
-  buildBatchRows, buildFileRows,
-  documentUnit, formatBytes, routeToApprover,
+  buildBatchRows,
+  buildFileRows,
+  documentUnit,
+  formatBytes,
+  routeToApprover,
 } from "../../../shared/documentDetails";
 import {
   cachedHcLibraries,
@@ -69,6 +97,10 @@ import {
 } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { normalizeRoleValue } from "../../../shared/groupMapModel";
+/* Asks SharePoint what this viewer may actually do to a given document, instead of reconstructing it
+   from Group Map rows — see `probeFileRights`'s own comment for the five silent ways the derived
+   answer was getting it wrong. */
+import { probeFileRights, FileRights } from "../../../shared/dmsFolderMap";
 // The request rules — validation, recipient parsing and the inside/outside test — live under test in
 // shared/requests.ts and are shared with the approver's queue. Two copies of "what counts as external"
 // is how one screen ends up permitting what the other refuses.
@@ -140,7 +172,8 @@ const NO_CACHE = {
  *  page and the approval guard (2026-08-30/2026-09-02), to still let a stale response through — the
  *  symptom is exactly "shows the old value until a hard refresh". Used on `fetchFieldText`, the
  *  per-item read that supplies Keyword and every other detail-panel field. */
-const bust = (): string => `_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+const bust = (): string =>
+  `_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
 /* ⚠ `Archive` FILTERS ON A RECORD STATE, NOT A STATUS — see `archivedRowsOnly`. It sits after
    the three approval outcomes because it is not one of them: a file reaches it by ageing out,
@@ -149,8 +182,22 @@ const bust = (): string => `_=${Date.now().toString(36)}${Math.random().toString
 /* ⚠ REORDERED 2026-09-11 (client: *"Rearrange Requests tab to the most left tab, change 'Requests'
    label to 'Permission'... Rearrange Archive tab to the last"*). The internal id stays "Requests" —
    every branch in this file that checks `tab === "Requests"` keeps working unchanged; only its
-   POSITION and its DISPLAYED label change. See TAB_LABEL below for the label swap. */
-const TABS = ["Requests", "Submissions", "All", "Pending", "Approved", "Rejected", "Archive"];
+   POSITION and its DISPLAYED label change. See TAB_LABEL below for the label swap.
+
+   ⚠ REORDERED AGAIN 2026-09-15 (client: *"can you also move the All tabs to the first instead"*),
+   which moves `Requests`/Permission one place right. `Archive` stays last for its own reason above.
+   ⚠ THE LANDING TAB MOVED WITH IT — see the `tab` state's default below. The two are kept in step
+   deliberately: the default has followed the leftmost tab since Permission was put there, and a
+   page that opens on its SECOND tab reads as having lost the first one. */
+const TABS = [
+  "All",
+  "Requests",
+  "Submissions",
+  "Pending",
+  "Approved",
+  "Rejected",
+  "Archive",
+];
 /** Display label per tab — a rename that must not touch the internal id every branch checks
  *  against. Anything not listed here just renders its own name. */
 const TAB_LABEL: Record<string, string> = { Requests: "Permission" };
@@ -163,57 +210,231 @@ const s: Record<string, React.CSSProperties> = {
      than", so this shell already fits a phone. What FIT would have added is
      `boxSizing: border-box`, which moves the 24px padding INSIDE the 1100 cap and narrows
      the content column by 48px ON A DESKTOP. A responsive pass must not do that. */
-  wrap:     { fontFamily: "Arial, sans-serif", color: "#1b1b1b", maxWidth: 1100, margin: "32px auto", padding: "0 24px 48px" },
-  headRow:  { display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8, ...WRAP_ROW },
-  h2:       { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
-  headRefresh: {
-    border: "1px solid #c7c7c7", background: "#fff", borderRadius: 4, cursor: "pointer",
-    fontSize: 13, lineHeight: 1, padding: "3px 9px", color: "#0f6c3f",
+  wrap: {
+    fontFamily: "Arial, sans-serif",
+    color: "#1b1b1b",
+    maxWidth: 1100,
+    margin: "32px auto",
+    padding: "0 24px 48px",
   },
-  sub:      { fontSize: 13, color: "#666", margin: "0 0 20px" },
-  tabs:     { display: "flex", gap: 4, borderBottom: "1px solid #edebe9", marginBottom: 16, flexWrap: "wrap" },
-  tab:      { background: "none", border: "none", borderBottom: "2px solid transparent", color: "#605e5c", fontSize: 13, fontFamily: "inherit", padding: "8px 14px", cursor: "pointer", marginBottom: -1 },
-  tabOn:    { borderBottom: "2px solid #0f6c3f", color: "#0f6c3f", fontWeight: 700 },
+  headRow: {
+    display: "flex",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    gap: 8,
+    ...WRAP_ROW,
+  },
+  h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
+  headRefresh: {
+    border: "1px solid #c7c7c7",
+    background: "#fff",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontSize: 13,
+    lineHeight: 1,
+    padding: "3px 9px",
+    color: "#0f6c3f",
+  },
+  sub: { fontSize: 13, color: "#666", margin: "0 0 20px" },
+  tabs: {
+    display: "flex",
+    gap: 4,
+    borderBottom: "1px solid #edebe9",
+    marginBottom: 16,
+    flexWrap: "wrap",
+  },
+  tab: {
+    background: "none",
+    border: "none",
+    borderBottom: "2px solid transparent",
+    color: "#605e5c",
+    fontSize: 13,
+    fontFamily: "inherit",
+    padding: "8px 14px",
+    cursor: "pointer",
+    marginBottom: -1,
+  },
+  tabOn: {
+    borderBottom: "2px solid #0f6c3f",
+    color: "#0f6c3f",
+    fontWeight: 700,
+  },
   /* Responsive, 2026-09-07. The table keeps `width: 100%` so nothing changes on a desktop;
      TABLE_MIN is a FLOOR that stops columns being crushed on a phone, and `tableWrap` below
      takes the horizontal scroll. The scroll must be on the WRAPPER -- `display: block` on a
      table stops it establishing a table formatting context and the columns stop lining up. */
-  table:    { width: "100%", borderCollapse: "collapse", fontSize: 13, ...TABLE_MIN },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: 13,
+    ...TABLE_MIN,
+  },
   tableWrap: { ...SCROLL_X },
-  th:       { textAlign: "left", padding: "8px 10px", borderBottom: "2px solid #edebe9", fontWeight: 600, color: "#555", fontSize: 12 },
-  td:       { padding: "9px 10px", borderBottom: "1px solid #f4f4f4", verticalAlign: "top" },
-  link:     { color: "#0f6cbd", textDecoration: "none", fontWeight: 600 },
-  trail:    { fontSize: 12, color: "#605e5c", ...BREAK_LONG },
-  badge:    { display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 10, whiteSpace: "nowrap" },
-  bPending: { color: "#7a5c00", background: "#fff4ce", border: "1px solid #f2d98c" },
-  bOk:      { color: "#0f6c3f", background: "#e7f4ec", border: "1px solid #b7dcc4" },
-  bNo:      { color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3" },
-  comment:  { fontSize: 12, color: "#a4262c", marginTop: 4, lineHeight: 1.45 },
+  th: {
+    textAlign: "left",
+    padding: "8px 10px",
+    borderBottom: "2px solid #edebe9",
+    fontWeight: 600,
+    color: "#555",
+    fontSize: 12,
+  },
+  td: {
+    padding: "9px 10px",
+    borderBottom: "1px solid #f4f4f4",
+    verticalAlign: "top",
+  },
+  link: { color: "#0f6cbd", textDecoration: "none", fontWeight: 600 },
+  trail: { fontSize: 12, color: "#605e5c", ...BREAK_LONG },
+  badge: {
+    display: "inline-block",
+    fontSize: 11,
+    fontWeight: 700,
+    padding: "2px 9px",
+    borderRadius: 10,
+    whiteSpace: "nowrap",
+  },
+  bPending: {
+    color: "#7a5c00",
+    background: "#fff4ce",
+    border: "1px solid #f2d98c",
+  },
+  bOk: { color: "#0f6c3f", background: "#e7f4ec", border: "1px solid #b7dcc4" },
+  bNo: { color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3" },
+  comment: { fontSize: 12, color: "#a4262c", marginTop: 4, lineHeight: 1.45 },
   // Approved By / Comment columns (2026-09-10). The comment is clamped to three lines so one long
   // approval note cannot make a row tower over its neighbours; the full text is in `title` and in
   // the detail view.
-  apprBy:      { fontSize: 12.5, color: "#201f1e", ...BREAK_LONG },
-  apprComment: { fontSize: 12, color: "#323130", lineHeight: 1.45, whiteSpace: "pre-wrap", display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden", ...BREAK_LONG },
-  dash:        { color: "#a19f9d" },
-  approveBox:  { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #b7dcc4", background: "#e7f4ec", color: "#0f6c3f", lineHeight: 1.55, marginBottom: 16, whiteSpace: "pre-wrap", ...BREAK_LONG },
-  empty:    { fontSize: 13, color: "#605e5c", padding: "28px 4px", lineHeight: 1.6 },
-  errBox:   { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #f1c9c9", background: "#fdf3f3", color: "#a4262c", lineHeight: 1.55, marginBottom: 16 },
-  note:     { fontSize: 12, color: "#605e5c", marginTop: 24, paddingTop: 12, borderTop: "1px solid #f0f0f0", lineHeight: 1.55 },
+  apprBy: { fontSize: 12.5, color: "#201f1e", ...BREAK_LONG },
+  apprComment: {
+    fontSize: 12,
+    color: "#323130",
+    lineHeight: 1.45,
+    whiteSpace: "pre-wrap",
+    display: "-webkit-box",
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+    ...BREAK_LONG,
+  },
+  dash: { color: "#a19f9d" },
+  approveBox: {
+    fontSize: 13,
+    padding: "12px 14px",
+    borderRadius: 6,
+    border: "1px solid #b7dcc4",
+    background: "#e7f4ec",
+    color: "#0f6c3f",
+    lineHeight: 1.55,
+    marginBottom: 16,
+    whiteSpace: "pre-wrap",
+    ...BREAK_LONG,
+  },
+  empty: {
+    fontSize: 13,
+    color: "#605e5c",
+    padding: "28px 4px",
+    lineHeight: 1.6,
+  },
+  errBox: {
+    fontSize: 13,
+    padding: "12px 14px",
+    borderRadius: 6,
+    border: "1px solid #f1c9c9",
+    background: "#fdf3f3",
+    color: "#a4262c",
+    lineHeight: 1.55,
+    marginBottom: 16,
+  },
+  note: {
+    fontSize: 12,
+    color: "#605e5c",
+    marginTop: 24,
+    paddingTop: 12,
+    borderTop: "1px solid #f0f0f0",
+    lineHeight: 1.55,
+  },
   // A button styled as a link: it opens the in-page detail view, so it must not look or behave
   // like navigation away from the page.
-  nameBtn:  { background: "none", border: "none", padding: 0, font: "inherit", fontWeight: 600, fontSize: 13, color: "#0f6cbd", cursor: "pointer", textAlign: "left" },
+  nameBtn: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    font: "inherit",
+    fontWeight: 600,
+    fontSize: 13,
+    color: "#0f6cbd",
+    cursor: "pointer",
+    textAlign: "left",
+  },
   // ── Detail view ──
-  backBand: { background: "rgba(15, 108, 63, 0.08)", borderRadius: 4, padding: "10px 16px", marginBottom: 20 },
-  backLink: { background: "none", border: "none", padding: 0, font: "inherit", fontSize: 14, fontWeight: 600, color: "#0f6c3f", cursor: "pointer" },
+  backBand: {
+    background: "rgba(15, 108, 63, 0.08)",
+    borderRadius: 4,
+    padding: "10px 16px",
+    marginBottom: 20,
+  },
+  backLink: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    font: "inherit",
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#0f6c3f",
+    cursor: "pointer",
+  },
   // minmax(0, 1fr) on the preview column: a bare 1fr floors at the iframe's min-content width, so
   // the preview could never give ground. Learned on the approval page.
-  detailGrid:  { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 300px)", gap: 20, alignItems: "start" },
-  sectionTitle:{ fontSize: 14, fontWeight: 600, color: "#201f1e", marginBottom: 10 },
-  detailRow:   { marginBottom: 12 },
-  detailLabel: { fontSize: 11, fontWeight: 600, color: "#605e5c", textTransform: "uppercase", letterSpacing: 0.3 },
-  detailValue: { fontSize: 13, color: "#201f1e", marginTop: 2, overflowWrap: "break-word" },
-  imageBox:    { display: "flex", alignItems: "flex-start", justifyContent: "center", width: "100%", height: "calc(100vh - 320px)", minHeight: 520, background: "#faf9f8", border: "1px solid #edebe9", borderRadius: 4, overflow: "auto", padding: 12, boxSizing: "border-box" },
-  rejectBox:   { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #f1b0b3", background: "#fde7e9", color: "#a4262c", lineHeight: 1.55, marginBottom: 16 },
+  detailGrid: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr) minmax(0, 300px)",
+    gap: 20,
+    alignItems: "start",
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#201f1e",
+    marginBottom: 10,
+  },
+  detailRow: { marginBottom: 12 },
+  detailLabel: {
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#605e5c",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  detailValue: {
+    fontSize: 13,
+    color: "#201f1e",
+    marginTop: 2,
+    overflowWrap: "break-word",
+  },
+  imageBox: {
+    display: "flex",
+    alignItems: "flex-start",
+    justifyContent: "center",
+    width: "100%",
+    height: "calc(100vh - 320px)",
+    minHeight: 520,
+    background: "#faf9f8",
+    border: "1px solid #edebe9",
+    borderRadius: 4,
+    overflow: "auto",
+    padding: 12,
+    boxSizing: "border-box",
+  },
+  rejectBox: {
+    fontSize: 13,
+    padding: "12px 14px",
+    borderRadius: 6,
+    border: "1px solid #f1b0b3",
+    background: "#fde7e9",
+    color: "#a4262c",
+    lineHeight: 1.55,
+    marginBottom: 16,
+  },
   // ── Requests ──
   /* Every key used must EXIST here - `s` is a `Record<string, CSSProperties>`, so a missing one
      yields `undefined` and renders unstyled with a green build. */
@@ -223,57 +444,266 @@ const s: Record<string, React.CSSProperties> = {
   // ⚠ `batchChip` REMOVED 2026-09-03 with the "Upload" column — Batch is the unmarked default now,
   // and only Bulk is tagged (`bulkChip`, rendered inline beside the folder path). Deleted rather
   // than parked: lint cannot flag an unused key on this object, so a dead style stays for ever.
-  bulkChip:  { display: "inline-block", background: "#eef3fb", color: "#1d4f91", borderRadius: 999, padding: "2px 10px", fontSize: 11.5, fontWeight: 600 },
-  askQuiet: { borderTop: "1px solid #edebe9", paddingTop: 10, marginTop: 12, fontSize: 12.5, color: "#605e5c" },
+  bulkChip: {
+    display: "inline-block",
+    background: "#eef3fb",
+    color: "#1d4f91",
+    borderRadius: 999,
+    padding: "2px 10px",
+    fontSize: 11.5,
+    fontWeight: 600,
+  },
+  askQuiet: {
+    borderTop: "1px solid #edebe9",
+    paddingTop: 10,
+    marginTop: 12,
+    fontSize: 12.5,
+    color: "#605e5c",
+  },
   // Background is the client's own exact value (2026-09-03 mockup): rgba(255, 225, 159, 1) = #FFE19F.
-  pendingChip: { display: "inline-block", background: "rgba(255, 225, 159, 1)", border: "1px solid #f0d5a8", color: "#8a5a00", borderRadius: 999, padding: "2px 10px", fontSize: 12, fontWeight: 600, whiteSpace: "nowrap" },
-  askPending: { background: "#fff9f0", border: "1px solid #f3e3c3", borderRadius: 4, padding: "10px 12px", fontSize: 12.5, color: "#6b4a12", lineHeight: 1.5, margin: "12px 0" },
-  askDecided: { background: "#f3f9f5", border: "1px solid #cde8d8", borderRadius: 4, padding: "10px 12px", fontSize: 12.5, color: "#1c5334", lineHeight: 1.5, margin: "12px 0" },
-  rowBtn: { padding: "3px 9px", marginLeft: 6, fontSize: 11.5, background: "#fff", color: "#0f6c3f", border: "1px solid #cde8d8", borderRadius: 3, cursor: "pointer" },
-  rowBtnOff: { padding: "3px 9px", marginLeft: 6, fontSize: 11.5, background: "#f3f2f1", color: "#a19f9d", border: "1px solid #edebe9", borderRadius: 3, cursor: "default" },
+  pendingChip: {
+    display: "inline-block",
+    background: "rgba(255, 225, 159, 1)",
+    border: "1px solid #f0d5a8",
+    color: "#8a5a00",
+    borderRadius: 999,
+    padding: "2px 10px",
+    fontSize: 12,
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+  },
+  askPending: {
+    background: "#fff9f0",
+    border: "1px solid #f3e3c3",
+    borderRadius: 4,
+    padding: "10px 12px",
+    fontSize: 12.5,
+    color: "#6b4a12",
+    lineHeight: 1.5,
+    margin: "12px 0",
+  },
+  askDecided: {
+    background: "#f3f9f5",
+    border: "1px solid #cde8d8",
+    borderRadius: 4,
+    padding: "10px 12px",
+    fontSize: 12.5,
+    color: "#1c5334",
+    lineHeight: 1.5,
+    margin: "12px 0",
+  },
+  rowBtn: {
+    padding: "3px 9px",
+    marginLeft: 6,
+    fontSize: 11.5,
+    background: "#fff",
+    color: "#0f6c3f",
+    border: "1px solid #cde8d8",
+    borderRadius: 3,
+    cursor: "pointer",
+  },
+  rowBtnOff: {
+    padding: "3px 9px",
+    marginLeft: 6,
+    fontSize: 11.5,
+    background: "#f3f2f1",
+    color: "#a19f9d",
+    border: "1px solid #edebe9",
+    borderRadius: 3,
+    cursor: "default",
+  },
   /* The recipient chips. `wordBreak` because an address can be longer than the dialog is wide, and a
      chip that cannot wrap would force the whole box to scroll sideways. */
-  recipChip: { display: "inline-flex", alignItems: "center", gap: 4, maxWidth: "100%", padding: "2px 4px 2px 8px", borderRadius: 12, fontSize: 12, background: "#eff6f2", color: "#0b4f2e", border: "1px solid #cfe3d8", wordBreak: "break-all" },
-  recipX: { border: "none", background: "transparent", color: "#0b4f2e", fontSize: 15, lineHeight: 1, padding: "0 4px", cursor: "pointer", fontFamily: "inherit" },
-  askedTag: { display: "inline-block", marginLeft: 8, padding: "1px 6px", borderRadius: 8, fontSize: 10.5, fontWeight: 600, background: "#fdf5e6", color: "#8a5a00", border: "1px solid #f0dcb4" },
+  recipChip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    maxWidth: "100%",
+    padding: "2px 4px 2px 8px",
+    borderRadius: 12,
+    fontSize: 12,
+    background: "#eff6f2",
+    color: "#0b4f2e",
+    border: "1px solid #cfe3d8",
+    wordBreak: "break-all",
+  },
+  recipX: {
+    border: "none",
+    background: "transparent",
+    color: "#0b4f2e",
+    fontSize: 15,
+    lineHeight: 1,
+    padding: "0 4px",
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  askedTag: {
+    display: "inline-block",
+    marginLeft: 8,
+    padding: "1px 6px",
+    borderRadius: 8,
+    fontSize: 10.5,
+    fontWeight: 600,
+    background: "#fdf5e6",
+    color: "#8a5a00",
+    border: "1px solid #f0dcb4",
+  },
   // Client, 2026-09-03: "add auto scroll for All tabs, pending, approved, Rejected and request, it
   // is sooo long of a list." Same 60vh pattern this codebase already uses elsewhere (the abbreviation
   // editor, Group Management's group list) — wraps the table only, so headers stay put while the
   // rows scroll, and nothing absolutely positioned lives inside any of these three tables (unlike
   // the cases in this codebase where a 60vh cap has clipped a popover — checked, none apply here).
   scroller: { maxHeight: "60vh", overflowY: "auto" },
-  askBar:   { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 16 },
-  askBtn:   { padding: "6px 14px", fontSize: 12.5, fontFamily: "inherit", border: "1px solid #c7c7c7", borderRadius: 4, background: "#fff", cursor: "pointer" },
-  askOff:   { padding: "6px 14px", fontSize: 12.5, fontFamily: "inherit", border: "1px solid #e6e6e6", borderRadius: 4, background: "#f4f4f4", color: "#9a9a9a", cursor: "not-allowed" },
-  okBox:    { fontSize: 13, padding: "12px 14px", borderRadius: 6, border: "1px solid #b7dcc4", background: "#f3faf5", color: "#1c4d33", lineHeight: 1.55, marginBottom: 16 },
-  warnBox:  { fontSize: 12.5, padding: "12px 14px", borderRadius: 6, border: "1px solid #f2c9a0", background: "#fff8f0", color: "#8a4b00", lineHeight: 1.55, marginBottom: 12 },
-  modalBg:  { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 },
-  modal:    { background: "#fff", borderRadius: 8, padding: 20, width: "min(560px, 94vw)", maxHeight: "86vh", overflowY: "auto", fontSize: 13 },
-  label:    { display: "block", marginTop: 12, marginBottom: 4, fontSize: 12, fontWeight: 600, color: "#3b3a39" },
+  askBar: {
+    display: "flex",
+    gap: 8,
+    alignItems: "center",
+    flexWrap: "wrap",
+    marginBottom: 16,
+  },
+  askBtn: {
+    padding: "6px 14px",
+    fontSize: 12.5,
+    fontFamily: "inherit",
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+    background: "#fff",
+    cursor: "pointer",
+  },
+  askOff: {
+    padding: "6px 14px",
+    fontSize: 12.5,
+    fontFamily: "inherit",
+    border: "1px solid #e6e6e6",
+    borderRadius: 4,
+    background: "#f4f4f4",
+    color: "#9a9a9a",
+    cursor: "not-allowed",
+  },
+  okBox: {
+    fontSize: 13,
+    padding: "12px 14px",
+    borderRadius: 6,
+    border: "1px solid #b7dcc4",
+    background: "#f3faf5",
+    color: "#1c4d33",
+    lineHeight: 1.55,
+    marginBottom: 16,
+  },
+  warnBox: {
+    fontSize: 12.5,
+    padding: "12px 14px",
+    borderRadius: 6,
+    border: "1px solid #f2c9a0",
+    background: "#fff8f0",
+    color: "#8a4b00",
+    lineHeight: 1.55,
+    marginBottom: 12,
+  },
+  modalBg: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(0,0,0,.4)",
+    zIndex: 100,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  },
+  modal: {
+    background: "#fff",
+    borderRadius: 8,
+    padding: 20,
+    width: "min(560px, 94vw)",
+    maxHeight: "86vh",
+    overflowY: "auto",
+    fontSize: 13,
+  },
+  label: {
+    display: "block",
+    marginTop: 12,
+    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#3b3a39",
+  },
   /* The client's inline-error pattern (2026-09-05), matching the sample they supplied: red label,
      red-bordered box, message beneath. `#a4262c` is this project's established danger red — the same
      one the attention banners and the rejected pill use, so an error looks like an error everywhere.
      ⚠ THREE KEYS, AND EVERY ONE MUST EXIST HERE. `s` is a `Record<string, CSSProperties>`, so a
      mistyped key yields `undefined` and the field renders perfectly normally on a green build — the
      failure being that a required field never turns red. */
-  labelBad: { display: "block", marginTop: 12, marginBottom: 4, fontSize: 12, fontWeight: 600, color: "#a4262c" },
+  labelBad: {
+    display: "block",
+    marginTop: 12,
+    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#a4262c",
+  },
   fieldBad: { borderColor: "#a4262c", background: "#fdf6f6" },
-  fieldErr: { margin: "4px 0 0", fontSize: 11.5, color: "#a4262c", lineHeight: 1.45 },
-  field:    { width: "100%", boxSizing: "border-box", padding: "7px 10px", fontSize: 13, fontFamily: "inherit", border: "1px solid #c7c7c7", borderRadius: 4 },
-  hint:     { fontSize: 12, color: "#605e5c", marginTop: 6, lineHeight: 1.5 },
+  fieldErr: {
+    margin: "4px 0 0",
+    fontSize: 11.5,
+    color: "#a4262c",
+    lineHeight: 1.45,
+  },
+  field: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "7px 10px",
+    fontSize: 13,
+    fontFamily: "inherit",
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+  },
+  hint: { fontSize: 12, color: "#605e5c", marginTop: 6, lineHeight: 1.5 },
   // Amber rather than red: this is a CLASSIFICATION, not a problem with the row.
   /* ⚠ VISUALLY DISTINCT FROM `hcTag`, deliberately. They can appear on the SAME row — an archived
      Highly Confidential document — and two amber pills side by side read as one badge that wrapped.
      Slate rather than amber: archived is a state, not a warning. */
-  arcTag:   { display: "inline-block", marginLeft: 8, padding: "1px 7px", borderRadius: 10, fontSize: 11, fontWeight: 700, letterSpacing: 0.3, background: "#eef1f5", color: "#3b4a5a", border: "1px solid #c8d2de", verticalAlign: "middle" },
-  hcTag:    { display: "inline-block", marginLeft: 8, padding: "1px 7px", borderRadius: 10, fontSize: 11, fontWeight: 700, letterSpacing: 0.3, background: "#fff4ce", color: "#8a5700", border: "1px solid #f2d18b", verticalAlign: "middle" },
+  arcTag: {
+    display: "inline-block",
+    marginLeft: 8,
+    padding: "1px 7px",
+    borderRadius: 10,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    background: "#eef1f5",
+    color: "#3b4a5a",
+    border: "1px solid #c8d2de",
+    verticalAlign: "middle",
+  },
+  hcTag: {
+    display: "inline-block",
+    marginLeft: 8,
+    padding: "1px 7px",
+    borderRadius: 10,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    background: "#fff4ce",
+    color: "#8a5700",
+    border: "1px solid #f2d18b",
+    verticalAlign: "middle",
+  },
   /* ── The submission RECORD's own states (2026-08-27) ──────────────────────────
      A row for a file that is no longer here. GREY, never red: a deleted document is a fact about the
      past, and colouring it as a failure would read as something being wrong with this page.
      `goneName` is a span, not a button — there is nothing to open. */
-  goneRow:   { opacity: 0.62 },
-  goneName:  { fontSize: 13, color: "#605e5c", fontStyle: "italic" },
-  goneBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#f3f2f1", color: "#605e5c", border: "1px solid #d6d4d2" },
+  goneRow: { opacity: 0.62 },
+  goneName: { fontSize: 13, color: "#605e5c", fontStyle: "italic" },
+  goneBadge: {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 10,
+    fontSize: 11.5,
+    fontWeight: 600,
+    background: "#f3f2f1",
+    color: "#605e5c",
+    border: "1px solid #d6d4d2",
+  },
   /* "Not checked" is a THIRD answer and must not read as either of the others: the libraries could
      not all be read, so this row's file may be perfectly fine. Empty ≠ unknown, again. */
   /* ⚠ BLUE, NOT GREY AND NOT AMBER. Grey is `Deleted` (a loss) and amber is `Not checked` (a
@@ -286,38 +716,154 @@ const s: Record<string, React.CSSProperties> = {
        `RequestStatus.Cancelled` — the requester WITHDREW their request  → still reads "Cancelled"
      Renamed from `cancelBadge` along with its text, so it cannot be reached for the request badge by
      someone searching for "cancel". */
-  replacedBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#eff6fc", color: "#005a9e", border: "1px solid #c7e0f4" },
-  unsureBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#fdf5e6", color: "#8a5a00", border: "1px solid #f0dcb4" },
+  replacedBadge: {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 10,
+    fontSize: 11.5,
+    fontWeight: 600,
+    background: "#eff6fc",
+    color: "#005a9e",
+    border: "1px solid #c7e0f4",
+  },
+  unsureBadge: {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 10,
+    fontSize: 11.5,
+    fontWeight: 600,
+    background: "#fdf5e6",
+    color: "#8a5a00",
+    border: "1px solid #f0dcb4",
+  },
   /* ⚠ SLATE, AND DELIBERATELY THE SAME PALETTE AS `arcTag` — the "Archived" chip this page already
      uses for a row LIVING in the archive. The two say the same word about the same fact and would be
      read as two different things if they were coloured differently. It must not share GREY with
      `Deleted`: an archived document is retained, not lost, and telling those apart is the entire
      reason the state exists (client, 2026-09-03). */
-  archivedBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#eef1f5", color: "#3b4a5a", border: "1px solid #c8d2de" },
+  archivedBadge: {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 10,
+    fontSize: 11.5,
+    fontWeight: 600,
+    background: "#eef1f5",
+    color: "#3b4a5a",
+    border: "1px solid #c8d2de",
+  },
   /* ⚠⚠ THE THIRD "Cancelled", added 2026-09-11 — see the warning above `replacedBadge`. This one
      literally says "Cancelled" (client's own word for a PIC's direct staging delete), and it must
      be neither `goneBadge`'s grey (that would read as "Deleted", a loss the uploader chose, told the
      same way as one nobody chose) nor `replacedBadge`'s blue (a REPLACE means somebody else filed a
      newer document — a different fact). Its own muted lavender, distinct from all four siblings. */
-  withdrawnBadge: { display: "inline-block", padding: "2px 8px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, background: "#f4f0fb", color: "#5b4b8a", border: "1px solid #ddd3f0" },
-  goneNote:  { margin: "0 0 10px", fontSize: 12.5, color: "#605e5c" },
+  withdrawnBadge: {
+    display: "inline-block",
+    padding: "2px 8px",
+    borderRadius: 10,
+    fontSize: 11.5,
+    fontWeight: 600,
+    background: "#f4f0fb",
+    color: "#5b4b8a",
+    border: "1px solid #ddd3f0",
+  },
+  goneNote: { margin: "0 0 10px", fontSize: 12.5, color: "#605e5c" },
   /* ⚠ ADDED WITH THE SUBMISSIONS VIEW (2026-08-22). `s` is a Record<string, CSSProperties>, so a key
      that does not exist yields `undefined` and React simply renders the element unstyled — the build
      stays green and the page looks broken. Any new style referenced above must be declared here. */
-  backBtn:  { background: "none", border: "none", padding: 0, marginBottom: 12, fontSize: 13, fontFamily: "inherit", color: "#0b6a3a", cursor: "pointer" },
-  card:     { border: "1px solid #e1dfdd", borderRadius: 6, padding: "12px 14px", marginBottom: 16, background: "#faf9f8" },
-  cardHead: { fontSize: 13, fontWeight: 600, color: "#3b3a39", margin: "0 0 6px" },
-  refLine:  { fontSize: 12, color: "#605e5c", marginTop: 6, fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
+  backBtn: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    marginBottom: 12,
+    fontSize: 13,
+    fontFamily: "inherit",
+    color: "#0b6a3a",
+    cursor: "pointer",
+  },
+  card: {
+    border: "1px solid #e1dfdd",
+    borderRadius: 6,
+    padding: "12px 14px",
+    marginBottom: 16,
+    background: "#faf9f8",
+  },
+  cardHead: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#3b3a39",
+    margin: "0 0 6px",
+  },
+  refLine: {
+    fontSize: 12,
+    color: "#605e5c",
+    marginTop: 6,
+    fontFamily: "Consolas, monospace",
+    overflowWrap: "break-word",
+  },
   /* The read-only upload form (2026-08-22). Two columns so a batch's five or six destination fields
      read as a filled-in form rather than a long ladder; one column below 720px via `minmax`. */
-  grid2:    { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "10px 24px" },
-  fileCard: { border: "1px solid #e1dfdd", borderRadius: 6, padding: "12px 14px", marginBottom: 12, background: "#fff" },
-  fileHead: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 10, paddingBottom: 8, borderBottom: "1px solid #f3f2f1" },
-  openBtn:  { marginLeft: "auto", background: "none", border: "1px solid #c8c6c4", borderRadius: 4, padding: "3px 10px", fontSize: 12, fontFamily: "inherit", color: "#0f6cbd", cursor: "pointer" },  // Capped and scrolling: the people picker returns up to 10, and an unbounded list pushes the
+  grid2: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: "10px 24px",
+  },
+  fileCard: {
+    border: "1px solid #e1dfdd",
+    borderRadius: 6,
+    padding: "12px 14px",
+    marginBottom: 12,
+    background: "#fff",
+  },
+  fileHead: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap",
+    marginBottom: 10,
+    paddingBottom: 8,
+    borderBottom: "1px solid #f3f2f1",
+  },
+  openBtn: {
+    marginLeft: "auto",
+    background: "none",
+    border: "1px solid #c8c6c4",
+    borderRadius: 4,
+    padding: "3px 10px",
+    fontSize: 12,
+    fontFamily: "inherit",
+    color: "#0f6cbd",
+    cursor: "pointer",
+  }, // Capped and scrolling: the people picker returns up to 10, and an unbounded list pushes the
   // permission dropdown and Send button below the fold inside a dialog.
-  pickList: { marginTop: 6, maxHeight: 168, overflowY: "auto", border: "1px solid #e1dfdd", borderRadius: 4 },
-  pickRow:  { display: "block", width: "100%", textAlign: "left", padding: "7px 10px", fontSize: 13, fontFamily: "inherit", background: "#fff", border: "none", borderBottom: "1px solid #f3f2f1", cursor: "pointer" },
-  primary:  { padding: "7px 16px", fontSize: 12.5, fontFamily: "inherit", background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer" },
+  pickList: {
+    marginTop: 6,
+    maxHeight: 168,
+    overflowY: "auto",
+    border: "1px solid #e1dfdd",
+    borderRadius: 4,
+  },
+  pickRow: {
+    display: "block",
+    width: "100%",
+    textAlign: "left",
+    padding: "7px 10px",
+    fontSize: 13,
+    fontFamily: "inherit",
+    background: "#fff",
+    border: "none",
+    borderBottom: "1px solid #f3f2f1",
+    cursor: "pointer",
+  },
+  primary: {
+    padding: "7px 16px",
+    fontSize: 12.5,
+    fontFamily: "inherit",
+    background: "#0f6c3f",
+    color: "#fff",
+    border: "none",
+    borderRadius: 4,
+    cursor: "pointer",
+  },
 };
 
 function badgeFor(status: string): React.CSSProperties {
@@ -411,12 +957,18 @@ interface MyRequest {
 }
 
 const BLANK_POLICY: RequestPolicy = {
-  known: false, allowExternal: false, tenantDomains: [], approverUnits: [], listExists: true,
+  known: false,
+  allowExternal: false,
+  tenantDomains: [],
+  approverUnits: [],
+  listExists: true,
   /* ⚠ EMPTY MEANS "OFFER THE REQUEST", and that is the safe direction. A failed read here must
      never HIDE the buttons: a PIC who cannot ask is stuck with no route at all, whereas a Head of
      Unit shown a button they did not need raises one request their own screen then decides. Cost of
      being wrong: a redundant request. Cost of the other way: somebody blocked. */
-  directDelete: [], directDeleteStaging: [], directShare: [],
+  directDelete: [],
+  directDeleteStaging: [],
+  directShare: [],
 };
 
 /* JSON light with NO `__metadata`, and BOTH header halves saying nometadata — plus `odata-version: ""`
@@ -428,12 +980,17 @@ const WRITE_HEADERS = {
   "odata-version": "",
 };
 
-export default function MySubmissions({ context }: IMySubmissionsProps): React.ReactElement {
+export default function MySubmissions({
+  context,
+}: IMySubmissionsProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
   // Origin with no /sites/… — a server-relative path already carries the site, so previewTarget
   // needs the bare host to build an absolute file URL.
   const tenantRoot = siteUrl.replace(/^(https?:\/\/[^/]+).*$/, "$1");
-  const [tab, setTab] = useState("Submissions");
+  /* The LANDING tab, kept in step with `TABS[0]` above — see that comment. "All" since 2026-09-15,
+     when the client moved that tab to the front; it was "Requests"/Permission while that one was
+     leftmost. */
+  const [tab, setTab] = useState("All");
 
   /* Which page each of the three lists is on (client, 2026-09-04: *"apply for pagination for My
      Submission, File Request, no need to use auto scroll"*). Keyed, not three numbers, because the
@@ -470,8 +1027,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * row's `Category` knows. `undefined` means unread, unreadable, or no such column — every one of
    * which keeps today's `Business Segment`.
    */
-  const [segmentSides, setSegmentSides] =
-    useState<Record<string, "BusinessSegment" | "Project"> | undefined>(undefined);
+  const [segmentSides, setSegmentSides] = useState<
+    Record<string, "BusinessSegment" | "Project"> | undefined
+  >(undefined);
 
   const goTab = (next: string): void => {
     setTab(next);
@@ -484,8 +1042,16 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   /* How many recorded uploads could not be found, and how many could not be CHECKED. Shown as a
      quiet line rather than an error: a deleted document is a fact about the past, not a failure of
      this page. `undefined` until the first load settles. */
-  const [recordNote, setRecordNote] =
-    useState<{ deleted: number; cancelled: number; archived: number; withdrawn: number; unknown: number } | undefined>(undefined);
+  const [recordNote, setRecordNote] = useState<
+    | {
+        deleted: number;
+        cancelled: number;
+        archived: number;
+        withdrawn: number;
+        unknown: number;
+      }
+    | undefined
+  >(undefined);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [commentsMissing, setCommentsMissing] = useState(false);
   /* True when a library lacked the reference columns, so the page can say WHY nothing is
@@ -500,7 +1066,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   /* Where the reader is in submission → batch → files. Held as the reference strings rather than
      indices: the list is reloaded on focus and by the poll, and an index would silently point at a
      different submission after anything was added. */
-  const [openSubmission, setOpenSubmission] = useState<string | undefined>(undefined);
+  const [openSubmission, setOpenSubmission] = useState<string | undefined>(
+    undefined,
+  );
   const [openBatch, setOpenBatch] = useState<string | undefined>(undefined);
   /**
    * The Documents library's real URL SEGMENT, resolved rather than assumed.
@@ -514,7 +1082,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   /** The row being examined. `undefined` = the list. */
   const [open, setOpen] = useState<Submission | undefined>(undefined);
   /** Per-item metadata labels for the open row. `undefined` while in flight. */
-  const [fieldText, setFieldText] = useState<Record<string, string> | undefined>(undefined);
+  const [fieldText, setFieldText] = useState<
+    Record<string, string> | undefined
+  >(undefined);
   /**
    * Per-item metadata for EVERY file in the batch being read, keyed by `submissionKey`.
    *
@@ -524,7 +1094,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * asked for. `undefined` for the whole map means still reading; `{}` for one file means that
    * file's details could not be read, which the panel says rather than showing an empty card.
    */
-  const [batchText, setBatchText] = useState<Record<string, Record<string, string>> | undefined>(undefined);
+  const [batchText, setBatchText] = useState<
+    Record<string, Record<string, string>> | undefined
+  >(undefined);
   /* Which batch `batchText` describes — "this batch, with these item ids". Declared with the state it
      guards, and NOT next to the effect that uses it, because `loadBatchText` reads it too and
      `no-use-before-define` is on. See that effect for why a signature rather than a boolean. */
@@ -534,6 +1106,18 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
      An uploader cannot delete or share in Documents, so they ask and a Head of Unit decides.
      Spec: docs/superpowers/specs/2026-08-15-deletion-and-share-requests-design.md */
   const [policy, setPolicy] = useState<RequestPolicy>(BLANK_POLICY);
+  /* ⚠⚠ 2026-09-15, client: "as a system admin or approver the popup for reason is showing which
+     doesnt make sense". `canActDirectly` below is driven ENTIRELY by the CRS Group Map — a system
+     administrator (`CRS Owners`) holds Full Control via SharePoint itself, never via a mapped
+     Group Map row, so they could never match it and always fell through to "raise a request".
+     Same gap the Requests page found and fixed on 2026-08-27 (`isSystemAdmin`, added there after
+     FOUR other screens had already been checked for it and this shape had not) — never applied
+     here. FAILS CLOSED (false on any read failure), same reasoning as there: a transient failure
+     costs an admin one redundant request, where a wrong `true` would let anyone claim admin rights
+     to skip the reason a real request needs. Declared with the other hooks below, never behind an
+     early return — a hook added after one of those in this file has blanked the whole web part
+     before (the approval panel's `ApproveItems` probe, 1.0.243.0). */
+  const [systemAdmin, setSystemAdmin] = useState(false);
   /* Keyed by lower-cased UniqueId. Empty means "none raised, or the list could not be read" —
      which is safe HERE and only here: the worst outcome is a badge that does not appear, and
      the buttons stay usable either way. */
@@ -547,13 +1131,61 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
      it through the load-error banner produced "Could not read your submissions … please try again
      rather than uploading again" over a page that had loaded perfectly and a request that had been
      decided correctly. Reported on site 2026-08-21, the same afternoon the guard was added. */
-  const [requestNotice, setRequestNotice] = useState<string | undefined>(undefined);
+  const [requestNotice, setRequestNotice] = useState<string | undefined>(
+    undefined,
+  );
   /* Direct staging delete (2026-09-11) — separate from `asking`/`askRow`, which raise a REQUEST for
      somebody else to decide. This one carries the row out for confirmation and acts immediately;
      `undefined` means the confirm dialog is closed. */
-  const [withdrawRow, setWithdrawRow] = useState<Submission | undefined>(undefined);
+  const [withdrawRow, setWithdrawRow] = useState<Submission | undefined>(
+    undefined,
+  );
   const [withdrawing, setWithdrawing] = useState(false);
-  const [withdrawError, setWithdrawError] = useState<string | undefined>(undefined);
+  const [withdrawError, setWithdrawError] = useState<string | undefined>(
+    undefined,
+  );
+  /* ⚠⚠ "WHICH ROW'S `fieldText`/action-check IS CURRENTLY THE ONE THAT MAY APPLY" (2026-09-15).
+     Single ref, SET SYNCHRONOUSLY by whoever wants the answer — never derived from `open`/`askRow`
+     via a `useEffect`. The first version of this DID go through an effect mirroring `open`, and it
+     still let a stale row-Delete check apply: `useEffect` runs in a PASSIVE phase after commit, and
+     nothing guarantees that finishes before a fast-resolving fetch's `.then()` does (a cached
+     response, or React's effect scheduling losing a race under load) — found live, reported twice
+     by the client on the same build before this was traced to the effect itself rather than to the
+     guard's logic. Setting the ref as the literal FIRST synchronous statement of whoever initiates a
+     fetch (here, and in `loadFieldText` below) closes the race entirely: it happens in the exact same
+     tick as the click that started the fetch, with no scheduler in between.
+     Every fetch that wants to write `fieldText`, or act on a row's rights, claims this ref for its
+     own `mergedKey` the instant it starts; whichever claimed it LAST is the only one allowed to act
+     when it resolves. Covers row-against-row (two Delete clicks) and document-against-row. */
+  const fieldSubjectRef = useRef<string | undefined>(undefined);
+  /* What SharePoint says this viewer may do to a given document, keyed by `mergedKey`. Filled by
+     whoever makes that document the current subject — see `probeFileRights`. An absent entry simply
+     means "not asked yet", which changes nothing: every decision below treats it as one more route
+     to YES and never as a veto, so a slow or failed probe leaves the request route exactly as it
+     was. */
+  const [subjectRights, setSubjectRights] = useState<Record<string, FileRights>>(
+    {},
+  );
+  /* ⚠⚠ A SECOND, STRICTER GUARD FOR THE ROW-DELETE CHECK SPECIFICALLY (2026-09-15, reported live
+     TWICE on the same build). `fieldSubjectRef` alone was not enough: opening the SAME row's own
+     file while its delete check was still in flight leaves the two `mergedKey`s equal, so the check
+     passes and the confirm pops up OVER the detail view the viewer had just opened to look at the
+     document — reported as "I go into the file and the popup automatically appears", which is exactly
+     what it is, just via a real (and sometimes slow) network round trip rather than a coding race.
+     `openActiveRef` is a plain "is ANY document currently open" veto, set SYNCHRONOUSLY the instant
+     `openRow` runs — so once the viewer has navigated anywhere, a still-pending row-Delete check is
+     abandoned outright rather than resurfacing later, same file or not. If they still want to delete
+     it, the DETAIL VIEW'S OWN Delete button is right there and needs no fetch at all — `canDeleteSelf`
+     is computed from `fieldText`, already loaded the moment the document opened. */
+  const openActiveRef = useRef(false);
+  /* Visible feedback for the row-Delete check — client, 2026-09-15: "I can't seem to trigger the
+     popup". The fetch is not instant, and with nothing on screen saying so a click reads as having
+     done nothing, which is what invited clicking elsewhere while it was still in flight. Cleared
+     unconditionally once the fetch settles, whether or not its result is still the current subject —
+     it describes THIS button's own state, not whether the check ultimately applied anywhere. */
+  const [checkingDeleteFor, setCheckingDeleteFor] = useState<
+    string | undefined
+  >(undefined);
   /* WHICH FILE the request dialog is about. Separate from `open`, because the dialog is now reachable
      from a row in the list as well as from the detail view — the client asked for the buttons "beside
      the uploaded for each file so its easier ... instead of going into each file manually". */
@@ -601,7 +1233,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
      the same shape as the approver dialog's `if (showNoteError) setShowNoteError(false)`. */
   const clearFieldProblem = (field: "reason" | "shareWith"): void =>
     setProblems((prev) => prev.filter((p) => fieldForMessage(p) !== field));
-  const generalProblems = problems.filter((p) => fieldForMessage(p) === undefined);
+  const generalProblems = problems.filter(
+    (p) => fieldForMessage(p) === undefined,
+  );
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<string | undefined>(undefined);
 
@@ -641,8 +1275,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     // rename or move that a path does not. It is a built-in field on every list item, so it costs
     // nothing and is safe on both libraries; the minimal fallback below drops it, and the request
     // buttons check for it rather than assuming.
-    const common = "Id,FileLeafRef,FileRef,UniqueId,Created,Modified,File/Length";
-    const withStatus = approvalLibrary ? `${common},OData__ModerationStatus` : common;
+    const common =
+      "Id,FileLeafRef,FileRef,UniqueId,Created,Modified,File/Length";
+    const withStatus = approvalLibrary
+      ? `${common},OData__ModerationStatus`
+      : common;
     // FSObjType eq 0 = FILES ONLY. Without it every folder the uploader ever caused to be
     // created comes back as a "submission": 443 rows on the test site, and clicking one opened
     // the library rather than a document, because a folder's link IS a library link. The uploader
@@ -745,9 +1382,15 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         // whose read had to fall back — see `stampMissingRef`.
         submissionFileId: pickField(r, "SubmissionFileId") || undefined,
         // Documents rows carry no status: they are there because they were approved.
-        status: approvalLibrary ? statusToDecision(Number(r.OData__ModerationStatus)) : "Approved",
+        status: approvalLibrary
+          ? statusToDecision(Number(r.OData__ModerationStatus))
+          : "Approved",
         created: createdRaw.length > 0 ? new Date(createdRaw) : undefined,
-        comment: pickField(r, "OData__ModerationComments", "OData__x005f_ModerationComments"),
+        comment: pickField(
+          r,
+          "OData__ModerationComments",
+          "OData__x005f_ModerationComments",
+        ),
         approvedBy: pickField(r, "ApprovedBy") || undefined,
         approvalComment: pickField(r, "ApprovalComment") || undefined,
         size: textOf(file?.Length) || undefined,
@@ -772,7 +1415,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       );
       if (!res.ok) return listTitle;
       const url = textOf((await res.json()).ServerRelativeUrl);
-      const last = url.split("/").filter((p) => p.length > 0).pop();
+      const last = url
+        .split("/")
+        .filter((p) => p.length > 0)
+        .pop();
       return last && last.length > 0 ? last : listTitle;
     } catch {
       return listTitle;
@@ -788,7 +1434,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * It also returns LABELS, not raw values — which is what makes a taxonomy field readable. The
    * plain `$select` gives a lookup id, and a bare `15` reached the screen on 2026-08-14.
    */
-  const fetchFieldText = async (row: Submission): Promise<Record<string, string>> => {
+  const fetchFieldText = async (
+    row: Submission,
+  ): Promise<Record<string, string>> => {
     /* Which library this row came from, by its URL segment.
        A two-way guess (`docsSegment ? Documents : approval`) sent every Highly Confidential row to
        the NORMAL approval library, which answers 404 for an item id it does not have — so the panel
@@ -803,12 +1451,17 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     const hc = cachedHcLibraries();
     const arc = cachedArchiveLibraries();
     const listTitle =
-      row.library === docsSegment ? documentsTitle()
-      : hc && row.library === hc.approval.urlSegment ? hc.approval.title
-      : hc && row.library === hc.documents.urlSegment ? hc.documents.title
-      : arc && row.library === arc.normal.urlSegment ? arc.normal.title
-      : arc && arc.hc && row.library === arc.hc.urlSegment ? arc.hc.title
-      : libraryTitle();
+      row.library === docsSegment
+        ? documentsTitle()
+        : hc && row.library === hc.approval.urlSegment
+          ? hc.approval.title
+          : hc && row.library === hc.documents.urlSegment
+            ? hc.documents.title
+            : arc && row.library === arc.normal.urlSegment
+              ? arc.normal.title
+              : arc && arc.hc && row.library === arc.hc.urlSegment
+                ? arc.hc.title
+                : libraryTitle();
     try {
       const res: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${row.itemId})/FieldValuesAsText?${bust()}`,
@@ -839,11 +1492,13 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           { headers: NO_CACHE },
         );
         if (raw.ok) {
-          const iso = ((await raw.json()) as { DocumentDate?: string }).DocumentDate;
+          const iso = ((await raw.json()) as { DocumentDate?: string })
+            .DocumentDate;
           const d = iso ? new Date(iso) : undefined;
           // Only overwrite on a date we could actually read. A blank column, an unparseable value
           // or a failed request all leave SharePoint's own string standing — uglier, never wrong.
-          if (d && !isNaN(d.getTime())) text.DocumentDate = formatSubmittedOn(d);
+          if (d && !isNaN(d.getTime()))
+            text.DocumentDate = formatSubmittedOn(d);
         }
       } catch {
         /* keep the formatted string — a decoration must never cost the panel its details */
@@ -876,13 +1531,17 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * holds the new file and the approved side still holds the old one — as though it were this row.
    * So the source is probed first, and anything other than a 404 leaves the row alone.
    */
-  const reresolveRouted = async (row: Submission): Promise<Submission | undefined> => {
+  const reresolveRouted = async (
+    row: Submission,
+  ): Promise<Submission | undefined> => {
     const hc = cachedHcLibraries();
     // Approval libraries only. A row already on the approved side, or in the archive, has not moved.
     const dest =
-      row.library === libraryUrlSegment() ? docsSegment
-      : hc && row.library === hc.approval.urlSegment ? hc.documents.urlSegment
-      : undefined;
+      row.library === libraryUrlSegment()
+        ? docsSegment
+        : hc && row.library === hc.approval.urlSegment
+          ? hc.documents.urlSegment
+          : undefined;
     if (dest === undefined) return undefined;
     if (!row.fileRef) return undefined;
     // Locals, so the narrowing above survives the awaits below — a `const` of a union type loses it
@@ -899,7 +1558,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       );
     try {
       const src = await exists(srcRef);
-      if (src.status !== 404) return undefined;   // still there, or unreadable — not a move
+      if (src.status !== 404) return undefined; // still there, or unreadable — not a move
       const moved = swapLibrarySegment(srcRef, row.library, destSeg);
       // ⚠ IT RETURNS  RATHER THAN FALLING BACK — the HC rule, and right here too: a path
       // it could not swap must not be guessed at, or the panel could resolve to a file in another
@@ -917,10 +1576,41 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     }
   };
 
+  /**
+   * Ask SharePoint what this viewer may do to one document, and remember the answer.
+   *
+   * ⚠ NEVER THROWS AND NEVER AWAITS ITS CALLER. Its answer only ever ADDS a route ("you can do this
+   * yourself"), so a failure costs one redundant request and nothing else — exactly the direction
+   * every other probe in this codebase fails in.
+   *
+   * ⚠ DECLARED ABOVE `loadFieldText`, which calls it: `no-use-before-define` is on in this project,
+   * and that rule is caught by LINT rather than by `tsc`.
+   */
+  const probeRightsFor = (row: Submission): void => {
+    const key = mergedKey(row);
+    const id = row.uniqueId;
+    if (!id) return;
+    probeFileRights(context.spHttpClient, siteUrl, id)
+      .then((rights) => setSubjectRights((prev) => ({ ...prev, [key]: rights })))
+      .catch(() => undefined);
+  };
+
   /** Fill `fieldText` for one row — the single-document detail view's loader. */
   const loadFieldText = async (row: Submission): Promise<void> => {
+    /* ⚠ CLAIMS `fieldSubjectRef` AS THE VERY FIRST STATEMENT — synchronous, in the same tick as
+       whatever caller just called this (see the ref's own comment for why an effect-based version
+       of this was not enough). Calling `loadFieldText` for ANY row is a caller declaring "this row
+       is now the current subject" — opening a document, or opening the row-level Share dialog — so
+       it needs no separate touch from `openRow`/the row buttons; this line IS that touch. */
+    const key = mergedKey(row);
+    fieldSubjectRef.current = key;
     setFieldText(undefined);
+    /* Fired alongside the metadata read, never awaited into it: this decides whether the viewer is
+       offered a direct Delete/Share, and it must not be able to delay — or fail — the panel that
+       shows the document itself. Stored under the same key the readers look it up by. */
+    probeRightsFor(row);
     const ft = await fetchFieldText(row);
+    if (fieldSubjectRef.current !== key) return;
     if (Object.keys(ft).length > 0) {
       setFieldText(ft);
       return;
@@ -930,7 +1620,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
        all read from it, so patching only `fieldText` would leave a panel with correct details and a
        broken image beside them. */
     const moved = await reresolveRouted(row);
+    if (fieldSubjectRef.current !== key) return;
     if (moved !== undefined) {
+      openActiveRef.current = true;
       setOpen(moved as MergedRow);
       setFieldText(await fetchFieldText(moved));
       return;
@@ -945,15 +1637,21 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * catch INSIDE `Promise.all` — one unreadable file must never blank the whole batch. `fetchFieldText`
    * already resolves to `{}` rather than rejecting, which the per-file panel reports honestly.
    */
-  const loadBatchText = async (files: MergedRow[], sig: string): Promise<void> => {
+  const loadBatchText = async (
+    files: MergedRow[],
+    sig: string,
+  ): Promise<void> => {
     setBatchText(undefined);
     const pairs = await Promise.all(
       files.map(async (f) => {
         /* ⚠ A GONE FILE IS NOT FETCHED. `FieldValuesAsText` is a per-ITEM endpoint and the item no
            longer exists, so this would be one guaranteed-failing request per deleted file — and the
            batch card reads its details from the record's own snapshot instead. */
-        if (f.recordState) return { key: mergedKey(f), ft: {} as Record<string, string> };
-        const ft = await fetchFieldText(f).catch(() => ({} as Record<string, string>));
+        if (f.recordState)
+          return { key: mergedKey(f), ft: {} as Record<string, string> };
+        const ft = await fetchFieldText(f).catch(
+          () => ({}) as Record<string, string>,
+        );
         return { key: mergedKey(f), ft };
       }),
     );
@@ -968,6 +1666,18 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   };
 
   const openRow = (row: Submission): void => {
+    /* ⚠⚠ THE ACTUAL BUG, found after two guards that fixed a DIFFERENT ordering of the same race
+       (2026-09-15, reported three times on the same build before this was traced correctly). Those
+       two only stop a row-Delete check from APPLYING once it resolves AFTER navigation has already
+       happened. But the check can just as easily resolve WHILE the viewer is still on the list — the
+       normal, fast case, not a rare one — and when it does, it correctly calls `setWithdrawRow(r)`
+       right then. That state does not go anywhere on its own: NOTHING was clearing it here, so the
+       very next click — opening any document — left the confirm modal from the earlier row sitting
+       in state, and it simply rendered on top of whatever page came next. Clearing it here closes
+       the gap regardless of which order the race actually lands in. */
+    setWithdrawRow(undefined);
+    setWithdrawError(undefined);
+    openActiveRef.current = true;
     setOpen(row);
     setAsking(undefined);
     setSent(undefined);
@@ -1001,7 +1711,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     const keyFor = (g: SubmissionGroup): string =>
       g.reference || (g.files[0] ? submissionKey(g.files[0]) : "");
     const g = groups.filter((x) => keyFor(x) === openSubmission)[0];
-    const b = g ? g.batches.filter((x) => (x.reference || "—") === openBatch)[0] : undefined;
+    const b = g
+      ? g.batches.filter((x) => (x.reference || "—") === openBatch)[0]
+      : undefined;
     if (!b) return;
     // The signature is what identifies "this batch, as it stands now" — the files it holds and the
     // ids they hold. `join` on a stable separator: a mergedKey cannot contain one.
@@ -1026,6 +1738,20 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * approved deletion is exactly the email that links to a file that is gone - so that case lands on
    * the Requests tab, where the outcome is, with a line saying why.
    */
+  useEffect(() => {
+    let live = true;
+    isSystemAdmin(context.spHttpClient, siteUrl)
+      .then((yes) => {
+        if (live) setSystemAdmin(yes);
+      })
+      .catch(() => {
+        if (live) setSystemAdmin(false);
+      });
+    return () => {
+      live = false;
+    };
+  }, [siteUrl]);
+
   const linkedFile = useRef<{ id: string; sfi: string } | undefined>(undefined);
   const linkRead = useRef(false);
   if (!linkRead.current) {
@@ -1049,7 +1775,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     }
     const matches = (r: MergedRow): boolean =>
       (link.id !== "" && (r.uniqueId ?? "").toLowerCase() === link.id) ||
-      (link.sfi !== "" && (r.submissionFileId ?? "").toLowerCase() === link.sfi);
+      (link.sfi !== "" &&
+        (r.submissionFileId ?? "").toLowerCase() === link.sfi);
     const live = rows.filter((r) => !r.recordState && matches(r))[0];
     if (live) {
       openRow(live);
@@ -1091,7 +1818,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         { headers: NO_CACHE },
       );
       if (res.ok) {
-        for (const r of ((await res.json()).value ?? []) as Array<{ Title?: string; SettingValue?: string }>) {
+        for (const r of ((await res.json()).value ?? []) as Array<{
+          Title?: string;
+          SettingValue?: string;
+        }>) {
           const value = (r.SettingValue ?? "").trim();
           if (r.Title === "allowExternalSharing") {
             // Only an explicit yes turns it on. Anything else — blank, "no", a typo — stays off.
@@ -1099,7 +1829,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           } else if (r.Title === "tenantDomains") {
             for (const d of value.split(/[,;\s]+/)) {
               const clean = d.trim().toLowerCase();
-              if (clean && next.tenantDomains.indexOf(clean) === -1) next.tenantDomains.push(clean);
+              if (clean && next.tenantDomains.indexOf(clean) === -1)
+                next.tenantDomains.push(clean);
             }
           }
         }
@@ -1127,7 +1858,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         { headers: NO_CACHE },
       );
       if (gr.ok) {
-        for (const g of ((await gr.json()).value ?? []) as Array<{ Id?: number }>) {
+        for (const g of ((await gr.json()).value ?? []) as Array<{
+          Id?: number;
+        }>) {
           if (typeof g.Id === "number") myGroupIds.push(g.Id);
         }
       }
@@ -1144,7 +1877,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       );
       if (res.ok) {
         const rows = ((await res.json()).value ?? []) as Array<{
-          GroupId?: number; Role?: string; UnitTermGuid?: string;
+          GroupId?: number;
+          Role?: string;
+          UnitTermGuid?: string;
         }>;
         for (const r of rows) {
           // normalizeRoleValue, NOT a raw toUpperCase — see the same match in Requests.tsx. The
@@ -1158,7 +1893,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           // holds APRHC and no APR row at all, so matching APR alone routes its requests to nobody.
           // Site-wide, because this ROUTES a request rather than authorising one.
           if (role === "APR" || role === "APRHC") {
-            if (next.approverUnits.indexOf(guid) === -1) next.approverUnits.push(guid);
+            if (next.approverUnits.indexOf(guid) === -1)
+              next.approverUnits.push(guid);
           }
 
           /* ⚠ THE REST IS ABOUT THIS VIEWER ONLY, hence the GroupId test. Read the rows of groups
@@ -1171,7 +1907,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           // DEL / DELHC — delete an APPROVED document. Held by `hou` and by `hod` at department tier.
           if (role === "DEL" || role === "DELHC") add(next.directDelete);
           // DELS / DELSHC — delete one still awaiting approval, in the approval library. `hou` only.
-          if (role === "DELS" || role === "DELSHC") add(next.directDeleteStaging);
+          if (role === "DELS" || role === "DELSHC")
+            add(next.directDeleteStaging);
           if (role === "SHARE" || role === "SHAREHC") add(next.directShare);
         }
       }
@@ -1207,14 +1944,19 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       // failed rather than being sent to an administrator over what may be a transient error.
       if (res.status === 404) next.listExists = false;
       else if (res.ok) {
-        const rows = ((await res.json()).value ?? []) as Array<Record<string, string>>;
+        const rows = ((await res.json()).value ?? []) as Array<
+          Record<string, string>
+        >;
         const byFile: Record<string, MyRequest> = {};
         const all: MyRequest[] = [];
         for (const r of rows) {
           // `Id desc`, so the FIRST row seen for a file is the most recent — and a file may have
           // been asked about more than once (asked, rejected, asked again). Only the latest is worth
           // showing; the rest are history the Requests page carries.
-          const uid = (r.ItemUniqueId ?? "").replace(/[{}]/g, "").trim().toLowerCase();
+          const uid = (r.ItemUniqueId ?? "")
+            .replace(/[{}]/g, "")
+            .trim()
+            .toLowerCase();
           const one: MyRequest = {
             id: Number(r.Id ?? 0),
             type: r.RequestType === "Share" ? "Share" : "Deletion",
@@ -1291,10 +2033,15 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       );
       if (!fresh.ok) {
         setCancelling(undefined);
-        setRequestNotice(`Could not check whether this request has already been decided (HTTP ${fresh.status}). Nothing was changed — refresh and try again.`);
+        setRequestNotice(
+          `Could not check whether this request has already been decided (HTTP ${fresh.status}). Nothing was changed — refresh and try again.`,
+        );
         return;
       }
-      const now = (await fresh.json()) as { Status?: string; DecidedBy?: string };
+      const now = (await fresh.json()) as {
+        Status?: string;
+        DecidedBy?: string;
+      };
       if ((now.Status ?? "").trim() !== "Pending") {
         setCancelling(undefined);
         // Names the decider and the outcome: "it is too late" without saying WHAT happened leaves
@@ -1323,7 +2070,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       writeAudit(context.spHttpClient, siteUrl, {
-        event: req.type === "Deletion" ? EVENT.deletionRequested : EVENT.shareRequested,
+        event:
+          req.type === "Deletion"
+            ? EVENT.deletionRequested
+            : EVENT.shareRequested,
         outcome: "Failed",
         source: "MySubmissions",
         at: new Date(),
@@ -1353,7 +2103,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * actually mapped to wins: a below-Unit tier such as SubUnit carries a Tid column exactly like a
    * permissioned one, so routing on "deepest" alone would file the request where nobody can see it.
    */
-  const submitRequest = async (row: Submission, type: RequestType): Promise<void> => {
+  const submitRequest = async (
+    row: Submission,
+    type: RequestType,
+  ): Promise<void> => {
     const ft = fieldText ?? {};
     const where = documentUnit(ft);
     const routed = routeToApprover(where, policy.approverUnits);
@@ -1361,7 +2114,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     // A row with a moderation status is still in an approval library; a Documents row has none,
     // because everything there is approved by definition. Same discriminator the read uses, so the
     // two cannot disagree.
-    const stage: RequestStage = row.status === "Approved" ? "approved" : "pending";
+    const stage: RequestStage =
+      row.status === "Approved" ? "approved" : "pending";
 
     const draft: RequestDraft = {
       type,
@@ -1376,7 +2130,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
          StagingAccess `listBase` bug, 2026-08-14). */
       archived: (() => {
         const a = cachedArchiveLibraries();
-        return isArchivedRow(row.library, a ? { normal: a.normal.urlSegment, hc: a.hc?.urlSegment } : undefined);
+        return isArchivedRow(
+          row.library,
+          a ? { normal: a.normal.urlSegment, hc: a.hc?.urlSegment } : undefined,
+        );
       })(),
       itemUniqueId: row.uniqueId ?? "",
       /* ⚠⚠ THE IDENTIFIER THAT SURVIVES ROUTING, and the reason this request can still be carried
@@ -1437,16 +2194,20 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         body.SharePermission = permission;
         // OMITTED when blank rather than sent as "". A DateTime column rejects an empty string, and
         // the whole write fails over an optional field.
-        if (expiresAt.trim().length > 0) body.ExpiresAt = new Date(`${expiresAt.trim()}T12:00:00`).toISOString();
+        if (expiresAt.trim().length > 0)
+          body.ExpiresAt = new Date(
+            `${expiresAt.trim()}T12:00:00`,
+          ).toISOString();
       }
 
-      const itemsUrl =
-        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')/items`;
-      const send = async (payload: Record<string, string>): Promise<SPHttpClientResponse> =>
-        context.spHttpClient.post(
-          itemsUrl, SPHttpClient.configurations.v1,
-          { headers: WRITE_HEADERS, body: JSON.stringify(payload) },
-        );
+      const itemsUrl = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')/items`;
+      const send = async (
+        payload: Record<string, string>,
+      ): Promise<SPHttpClientResponse> =>
+        context.spHttpClient.post(itemsUrl, SPHttpClient.configurations.v1, {
+          headers: WRITE_HEADERS,
+          body: JSON.stringify(payload),
+        });
 
       let res: SPHttpClientResponse = await send(body);
       /**
@@ -1496,7 +2257,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       try {
         const created = await res.json();
         const createdId = Number(created?.Id ?? 0);
-        const uid = (draft.itemUniqueId ?? "").replace(/[{}]/g, "").trim().toLowerCase();
+        const uid = (draft.itemUniqueId ?? "")
+          .replace(/[{}]/g, "")
+          .trim()
+          .toLowerCase();
         if (uid && createdId > 0) {
           const mine: MyRequest = {
             id: createdId,
@@ -1520,7 +2284,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
       }
 
       writeAudit(context.spHttpClient, siteUrl, {
-        event: type === "Deletion" ? EVENT.deletionRequested : EVENT.shareRequested,
+        event:
+          type === "Deletion" ? EVENT.deletionRequested : EVENT.shareRequested,
         source: "MySubmissions",
         at: new Date(),
         actorName: context.pageContext.user.displayName,
@@ -1534,11 +2299,17 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         summary: `${type} requested — ${row.name}`,
         details: [
           `Reason: ${reason.trim()}`,
-          type === "Share" ? `Recipients: ${parseRecipients(shareWith).join(", ")} (${permission})` : "",
-          type === "Share" && expiresAt.trim() ? `Expires: ${expiresAt.trim()}` : "",
+          type === "Share"
+            ? `Recipients: ${parseRecipients(shareWith).join(", ")} (${permission})`
+            : "",
+          type === "Share" && expiresAt.trim()
+            ? `Expires: ${expiresAt.trim()}`
+            : "",
           // Recorded because it decides whether anyone ever sees the request, and it is invisible
           // afterwards: the row looks identical either way.
-          routed ? `Routed to the ${routed.label} approver: ${routed.value}` : "No approver mapping matched this document.",
+          routed
+            ? `Routed to the ${routed.label} approver: ${routed.value}`
+            : "No approver mapping matched this document.",
         ].filter((d) => d.length > 0),
       }).catch(() => undefined);
 
@@ -1568,19 +2339,29 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   const load = async (): Promise<void> => {
     /* Reset per load, or a single transient fallback would suppress the deleted state for the rest
          of the session — including across the live refresh, which re-runs this on focus. */
-      stampMissingRef.current = false;
-      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
-      const segment = await resolveSegment(documentsTitle());
-      setDocsSegment(segment);
-      const userId = await currentUserId();
-      // Sequential, not Promise.all: per-call try/catch is required anyway because
-      // Promise.allSettled is unavailable on this tsconfig target (CLAUDE.md #3), and either
-      // library failing must produce the "could not read" state rather than a half list.
-      const staging = await readLibrary(libraryTitle(), libraryUrlSegment(), true, userId);
-      // The resolved segment, not the title — otherwise "Shared Documents" stays in every
-      // approved file's folder trail.
-      const documents = await readLibrary(documentsTitle(), segment, false, userId);
-      /* The Highly Confidential pair, when the site has one.
+    stampMissingRef.current = false;
+    await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+    const segment = await resolveSegment(documentsTitle());
+    setDocsSegment(segment);
+    const userId = await currentUserId();
+    // Sequential, not Promise.all: per-call try/catch is required anyway because
+    // Promise.allSettled is unavailable on this tsconfig target (CLAUDE.md #3), and either
+    // library failing must produce the "could not read" state rather than a half list.
+    const staging = await readLibrary(
+      libraryTitle(),
+      libraryUrlSegment(),
+      true,
+      userId,
+    );
+    // The resolved segment, not the title — otherwise "Shared Documents" stays in every
+    // approved file's folder trail.
+    const documents = await readLibrary(
+      documentsTitle(),
+      segment,
+      false,
+      userId,
+    );
+    /* The Highly Confidential pair, when the site has one.
          An HC uploader's files are invisible on this page without it, and "you have not uploaded
          anything yet" to someone who filed a Highly Confidential document last week is the worst
          possible answer — it invites them to upload it again.
@@ -1588,34 +2369,48 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
          Read with the SAME AuthorId filter, so this adds no visibility whatsoever: a person sees
          their own HC files, and only where they already hold the grant. An uncleared uploader's
          read returns nothing because SharePoint refuses it, not because this code decided so. */
-      const hc = cachedHcLibraries();
-      let hcRows: Submission[] = [];
-      /* ⚠ WHETHER EACH CHAIN WAS FULLY READ, and it decides whether a missing file may be called
+    const hc = cachedHcLibraries();
+    let hcRows: Submission[] = [];
+    /* ⚠ WHETHER EACH CHAIN WAS FULLY READ, and it decides whether a missing file may be called
          DELETED. The swallowed catches below are correct — an unreadable HC library is the normal
          case for everyone without clearance — but a swallowed failure leaves the live set silently
          incomplete, and judging a record against an incomplete set is how this page would tell an
          uploader their documents were destroyed. Tracked per CHAIN rather than globally: a single
          flag would be false for every uncleared user on every HC site, and then nothing would ever
          be reported as deleted at all. See `mergeRecords`. */
-      let hcChainComplete = true;
-      if (hc) {
-        // Each in its own try. An HC library the viewer cannot read at all is the NORMAL case for
-        // everyone without clearance, and must never take the page down or blank the two libraries
-        // that already loaded successfully.
-        try {
-          hcRows = hcRows.concat(await readLibrary(hc.approval.title, hc.approval.urlSegment, true, userId));
-        } catch {
-          /* not cleared, or unreachable — either way, nothing of theirs to show */
-          hcChainComplete = false;
-        }
-        try {
-          hcRows = hcRows.concat(await readLibrary(hc.documents.title, hc.documents.urlSegment, false, userId));
-        } catch {
-          /* as above */
-          hcChainComplete = false;
-        }
+    let hcChainComplete = true;
+    if (hc) {
+      // Each in its own try. An HC library the viewer cannot read at all is the NORMAL case for
+      // everyone without clearance, and must never take the page down or blank the two libraries
+      // that already loaded successfully.
+      try {
+        hcRows = hcRows.concat(
+          await readLibrary(
+            hc.approval.title,
+            hc.approval.urlSegment,
+            true,
+            userId,
+          ),
+        );
+      } catch {
+        /* not cleared, or unreachable — either way, nothing of theirs to show */
+        hcChainComplete = false;
       }
-      /* ⚠ THE ARCHIVE IS DELIBERATELY NOT READ HERE (reversed 2026-09-02; was read 2026-08-22 to
+      try {
+        hcRows = hcRows.concat(
+          await readLibrary(
+            hc.documents.title,
+            hc.documents.urlSegment,
+            false,
+            userId,
+          ),
+        );
+      } catch {
+        /* as above */
+        hcChainComplete = false;
+      }
+    }
+    /* ⚠ THE ARCHIVE IS DELIBERATELY NOT READ HERE (reversed 2026-09-02; was read 2026-08-22 to
          2026-09-02). Client: "only C level and system administrator have access to archive... that
          would mean My Submission should not update to archive either." Access to Archive/ArchiveHC
          narrowed to the two C-Level roles in FolderManager.tsx's LIBRARY_ROLES — and My Submissions is
@@ -1627,66 +2422,88 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
          `arc` itself is STILL read (a synchronous cache lookup, no request) — `isHcRecord` below still
          needs the archive HC library's title to correctly classify a SUBMISSION RECORD stamped against
          it, independent of whether this page ever fetches rows FROM that library. */
-      const arc = cachedArchiveLibraries();
-      /* Staging and Documents above are read un-guarded (no per-call try/catch): either failing throws
+    const arc = cachedArchiveLibraries();
+    /* Staging and Documents above are read un-guarded (no per-call try/catch): either failing throws
          out of this function before reaching here, so by the time this line runs both were read in
          full. Kept as a named flag, not a literal `true`, because `mergeRecords` below still takes it
          as a predicate alongside `hcChainComplete` and a literal would obscure why the two differ. */
-      const normalChainComplete = true;
-      const liveRows = [...staging, ...documents, ...hcRows];
+    const normalChainComplete = true;
+    const liveRows = [...staging, ...documents, ...hcRows];
 
-      /* ── THE SUBMISSION RECORD ────────────────────────────────────────────────
+    /* ── THE SUBMISSION RECORD ────────────────────────────────────────────────
          Read LAST and never awaited into the two library reads above: a file an uploader can see
          must never be hidden because a record could not be read.
 
          `undefined` means NOT-READ (unprovisioned list, throttle, ACL not yet applied) and is not
          `[]`. In that case nothing is merged and this page behaves exactly as it did before the
          feature — which is a degradation, not a lie. */
-      let merged: MergedRow[] = liveRows;
-      let note: { deleted: number; cancelled: number; archived: number; withdrawn: number; unknown: number } | undefined;
-      try {
-        const records = await readSubmissionRecords(context.spHttpClient, siteUrl, userId);
-        if (records) {
-          /* Which chain is this record's file living in? Decided by the library it was WRITTEN to,
+    let merged: MergedRow[] = liveRows;
+    let note:
+      | {
+          deleted: number;
+          cancelled: number;
+          archived: number;
+          withdrawn: number;
+          unknown: number;
+        }
+      | undefined;
+    try {
+      const records = await readSubmissionRecords(
+        context.spHttpClient,
+        siteUrl,
+        userId,
+      );
+      if (records) {
+        /* Which chain is this record's file living in? Decided by the library it was WRITTEN to,
              because that is what the record stores — and a file only ever moves within its own
              chain (approval → documents → archive), never across. */
-          const hcTitles = hc
-            ? [hc.approval.title.toLowerCase(), hc.documents.title.toLowerCase()]
-            : [];
-          if (arc?.hc) hcTitles.push(arc.hc.title.toLowerCase());
-          const isHcRecord = (r: SubmissionRecord): boolean =>
-            hcTitles.indexOf((r.libraryTitle ?? "").toLowerCase()) > -1;
-          /* ⚠ NO STAMP ON THE LIVE ROWS MEANS NOTHING CAN BE JUDGED, WHATEVER ELSE SUCCEEDED. If any
+        const hcTitles = hc
+          ? [hc.approval.title.toLowerCase(), hc.documents.title.toLowerCase()]
+          : [];
+        if (arc?.hc) hcTitles.push(arc.hc.title.toLowerCase());
+        const isHcRecord = (r: SubmissionRecord): boolean =>
+          hcTitles.indexOf((r.libraryTitle ?? "").toLowerCase()) > -1;
+        /* ⚠ NO STAMP ON THE LIVE ROWS MEANS NOTHING CAN BE JUDGED, WHATEVER ELSE SUCCEEDED. If any
              library had to fall back to a read without `SubmissionFileId`, its rows carry no key, so
              every record would fail to match and be reported as DELETED — the worst false positive
              this page can produce. Deliberately global rather than per chain: the flag does not say
              WHICH library fell back, and understating costs a grey "not checked" while overstating
              tells someone their documents were destroyed. */
-          const stampReadable = !stampMissingRef.current;
-          const result = mergeRecords(records, liveRows, (r) =>
-            stampReadable && (isHcRecord(r) ? hcChainComplete : normalChainComplete));
-          merged = result.rows;
-          if (result.deleted > 0 || result.cancelled > 0 || result.archived > 0
-              || result.withdrawn > 0 || result.unknown > 0) {
-            note = {
-              deleted: result.deleted,
-              cancelled: result.cancelled,
-              archived: result.archived,
-              withdrawn: result.withdrawn,
-              unknown: result.unknown,
-            };
-          }
+        const stampReadable = !stampMissingRef.current;
+        const result = mergeRecords(
+          records,
+          liveRows,
+          (r) =>
+            stampReadable &&
+            (isHcRecord(r) ? hcChainComplete : normalChainComplete),
+        );
+        merged = result.rows;
+        if (
+          result.deleted > 0 ||
+          result.cancelled > 0 ||
+          result.archived > 0 ||
+          result.withdrawn > 0 ||
+          result.unknown > 0
+        ) {
+          note = {
+            deleted: result.deleted,
+            cancelled: result.cancelled,
+            archived: result.archived,
+            withdrawn: result.withdrawn,
+            unknown: result.unknown,
+          };
         }
-      } catch {
-        /* Never fatal. The record is an addition; the list of live files is the page. */
       }
-      setRecordNote(note);
-      setRows(sortNewestFirst(merged));
-      setLoadError(undefined);
-      // Last, and never awaited into the same try: this decides whether the request buttons can be
-      // offered, and nothing about it may cost an uploader the list of their own files.
-      loadPolicy().catch(() => setPolicy({ ...BLANK_POLICY, known: false }));
-    };
+    } catch {
+      /* Never fatal. The record is an addition; the list of live files is the page. */
+    }
+    setRecordNote(note);
+    setRows(sortNewestFirst(merged));
+    setLoadError(undefined);
+    // Last, and never awaited into the same try: this decides whether the request buttons can be
+    // offered, and nothing about it may cost an uploader the list of their own files.
+    loadPolicy().catch(() => setPolicy({ ...BLANK_POLICY, known: false }));
+  };
 
   useEffect(() => {
     load().catch((e) => {
@@ -1725,7 +2542,7 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         SPHttpClient.configurations.v1,
         { headers: NO_CACHE },
       );
-      if (!res.ok) return;   // stays undefined — every label falls back to "Business Segment"
+      if (!res.ok) return; // stays undefined — every label falls back to "Business Segment"
       const rows = ((await res.json()).value ?? []) as Array<{
         StagingFolder?: string;
         Category?: string;
@@ -1736,7 +2553,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         /* The SAME rule as the upload form and the approver's screen (`Category === "Project"`,
            everything else a business segment) — one meaning for the value, so the three screens
            cannot disagree about what an uploader filed. */
-        if (key.length > 0) sides[key] = r.Category === "Project" ? "Project" : "BusinessSegment";
+        if (key.length > 0)
+          sides[key] = r.Category === "Project" ? "Project" : "BusinessSegment";
       }
       setSegmentSides(sides);
     })().catch(() => undefined);
@@ -1751,39 +2569,117 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * staging stage. Declared AFTER `load` (lint's `no-use-before-define`), since it calls it on
    * success to re-read the merged rows.
    *
-   * ⚠ `GetFileById` IS WEB-SCOPED, so it reaches the file wherever it sits without knowing which
-   * library — the same call `Requests.tsx`'s `performDeletion` uses for an approved-side deletion.
-   * A pending/rejected file has never been routed, so there is no stamp-fallback to write here: the
-   * `UniqueId` recorded on the row is still the live one.
+   * Write a `CRS Requests` row with `Status` ALREADY `Approved` — never a direct `.recycle()`.
    *
-   * ⚠ THE RECORD IS MARKED *AFTER* THE RECYCLE SUCCEEDS, mirroring `markRecordReplaced`/the routing
-   * flows' own ordering: the delete is the real action, and a failure to stamp the record afterwards
-   * must cost only the LABEL (it falls back to reading `deleted`), never the other way round.
+   * ⚠⚠ THIS REPLACES A DIRECT RECYCLE (2026-09-17). Client: *"they cannot directly delete anymore
+   * but someone do it on their behalf via power automate via admin account. Reason being they can
+   * delete folders which is dangerous... Pending files as well, PIC will still delete but without
+   * approval so crs@sdguthrie.com via power automate flow will just delete."* The SharePoint delete
+   * grant is what let the person pressing this button also delete a FOLDER — a UI-only restriction
+   * cannot close that, only removing the grant can — so the grant comes off every persona
+   * (`groupMapModel.ts`) and the actual `GetFileById(...)/recycle()` moves to
+   * `CRS — Execute approved deletion` (Power Automate, `crs@sdguthrie.com`), triggered off
+   * `Status eq 'Approved' and RequestType eq 'Deletion'`.
+   *
+   * ⚠ EXTRACTED 2026-09-15 (as `recycleFileCore`, now rewritten here) so this ONE write serves both
+   * the staging-only path (a PIC's own pending/rejected draft, 2026-09-11) and the direct-delete
+   * button on an APPROVED document (a system admin or a genuinely mapped approver, 2026-09-15) —
+   * one shape, one flow, whether or not a second person had to approve it. `GetFileById` is
+   * web-scoped and reaches a file wherever it sits, so nothing here is actually staging-specific —
+   * only the CALLERS decide when to offer it.
+   *
+   * ⚠ NO STAMP-FALLBACK NEEDED, UNLIKE `Requests.tsx`'s equivalent resolution. A pending/rejected
+   * file has never been routed, and an approved document is not routed again once it lands in
+   * `Documents`/`HC Documents` — so `row.uniqueId` is always the live id here.
+   *
+   * Returns an error message, or `undefined` on success, and manages NO component state: the
+   * caller owns its own busy/error/close-the-dialog bookkeeping.
+   *
+   * See `2026-09-17-proxy-deletion-via-power-automate-design.md` §3.2.
    */
-  const performWithdraw = async (row: Submission): Promise<void> => {
+  const writeApprovedDeletionRequest = async (
+    row: Submission,
+  ): Promise<string | undefined> => {
     if (!row.uniqueId) {
-      setWithdrawError("This file has no recorded id, so it cannot be deleted from here.");
-      return;
+      return "This file has no recorded id, so it cannot be deleted from here.";
     }
+    const me = (context.pageContext.user.email ?? "").toLowerCase();
+    const ft = fieldText ?? {};
+    // Same resolution `submitRequest` uses — only for record-keeping consistency on a row that,
+    // being written straight to Approved, is never queued to anyone and needs no visibility scope.
+    const where = Object.keys(ft).length > 0 ? documentUnit(ft) : undefined;
+    const now = new Date().toISOString();
+    const body: Record<string, string> = {
+      Title: `Deletion — ${row.name}`.slice(0, 255),
+      RequestType: "Deletion",
+      Status: "Approved",
+      Stage: row.status === "Approved" ? "approved" : "pending",
+      ItemUniqueId: row.uniqueId,
+      ItemName: row.name,
+      ItemUrl: row.fileRef,
+      Segment: where?.segment ?? "",
+      Unit: where?.unit ?? "",
+      UnitTermGuid: where?.unitTermGuid ?? "",
+      RequestedBy: me,
+      RequestedAt: now,
+      Reason: "",
+      DecidedBy: me,
+      DecidedAt: now,
+      DecisionNote: "No approval needed — carried out automatically.",
+    };
+    /* Same optional-column ladder `submitRequest` uses — a site that has never reconciled this
+       list must still be able to record the deletion. */
+    if ((row.submissionFileId ?? "").trim().length > 0) {
+      body.SubmissionFileId = (row.submissionFileId ?? "").trim();
+    }
+    try {
+      const itemsUrl = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')/items`;
+      const send = (
+        payload: Record<string, string>,
+      ): Promise<SPHttpClientResponse> =>
+        context.spHttpClient.post(itemsUrl, SPHttpClient.configurations.v1, {
+          headers: WRITE_HEADERS,
+          body: JSON.stringify(payload),
+        });
+      let res = await send(body);
+      if (res.status === 400 && body.SubmissionFileId !== undefined) {
+        const without = { ...body };
+        delete without.SubmissionFileId;
+        res = await send(without);
+      }
+      if (res.status === 400 && body.Stage !== undefined) {
+        const without = { ...body };
+        delete without.Stage;
+        delete without.SubmissionFileId;
+        res = await send(without);
+      }
+      if (res.ok) return undefined;
+      return res.status === 404
+        ? "The requests list does not exist yet — ask an administrator to open the Requests page, which creates it."
+        : `The deletion could not be recorded (HTTP ${res.status}).`;
+    } catch (e) {
+      return `Could not record the deletion: ${(e as Error).message}`;
+    }
+  };
+
+  const performWithdraw = async (row: Submission): Promise<void> => {
     setWithdrawing(true);
     setWithdrawError(undefined);
     try {
-      const res: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/GetFileById(guid'${row.uniqueId}')/recycle()`,
-        SPHttpClient.configurations.v1,
-        { headers: { Accept: "application/json;odata=nometadata" } },
-      );
-      if (!res.ok) {
-        setWithdrawError(
-          res.status === 403
-            ? "You do not have permission to delete that document."
-            : res.status === 404
-              ? "That document could not be found — it may already be gone."
-              : `The document could not be deleted (HTTP ${res.status}).`,
-        );
+      const err = await writeApprovedDeletionRequest(row);
+      if (err) {
+        setWithdrawError(err);
         return;
       }
-      if (row.submissionFileId) {
+      const approved = row.status === "Approved";
+      /* ⚠ ONLY A STAGING DELETE STAMPS THE RECORD "withdrawn" (shown as "Cancelled") — that label is
+         reserved for the uploader's own act of pulling back their unreviewed submission (see
+         `RecordState.withdrawn`'s own comment: "no other state may use it"). Deleting an APPROVED
+         document directly — a system admin or approver bypassing the request flow, added 2026-09-15
+         — is the SAME end state the existing request-and-approval deletion already produces, and
+         that path writes no stamp at all: the record simply stops resolving and reads "Deleted" on
+         its own. Stamping it "Cancelled" here would say something untrue about who did what. */
+      if (!approved && row.submissionFileId) {
         await markRecordWithdrawn(
           context.spHttpClient,
           siteUrl,
@@ -1791,24 +2687,150 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           (context.pageContext.user.email ?? "").toLowerCase(),
         );
       }
+      /* ⚠ `EVENT.requestApproved`, NOT `EVENT.deleted` — the actual recycle() has not happened yet
+         at this point (it is the Power Automate flow's job, asynchronously), so claiming "Deleted"
+         here would overclaim. This write is also mostly a no-op for a non-Owner PIC/approver —
+         `CRS Audit Log` restricts writes to Owners and the service account by design — the accurate
+         "Deleted" row is the new flow's own, per §3.5 of the design spec. */
       writeAudit(context.spHttpClient, siteUrl, {
-        event: EVENT.deleted,
+        event: EVENT.requestApproved,
         outcome: "Success",
         source: "MySubmissions",
         at: new Date(),
         actorName: context.pageContext.user.displayName,
         actorEmail: (context.pageContext.user.email ?? "").toLowerCase(),
         itemName: row.name,
-        summary: `Deleted directly on staging, no approval — ${row.name}`,
+        summary: approved
+          ? `Deletion recorded, no approval needed — ${row.name}`
+          : `Deletion recorded on staging, no approval — ${row.name}`,
         details: [],
       }).catch(() => undefined);
       setWithdrawRow(undefined);
+      openActiveRef.current = false;
       setOpen(undefined);
       await load();
-    } catch (e) {
-      setWithdrawError(`Could not delete that document: ${(e as Error).message}`);
     } finally {
       setWithdrawing(false);
+    }
+  };
+
+  /**
+   * Share a document DIRECTLY, bypassing the request-and-approval flow — offered only when the
+   * viewer already holds the right themselves (system admin, or a genuinely mapped approver via
+   * `canActDirectly`). No `CRS Requests` row is ever written, so there is nothing to self-approve
+   * and nothing to notify anyone about: `CRS — Notify request activity` triggers off writes to that
+   * list, and this path never touches it.
+   *
+   * Reuses `validateDraft` for the recipient / email-shape / external-domain checks a direct share
+   * must still honour — SharePoint's own sharing policy applies regardless of how access is
+   * requested — filtered to drop the "reason" problem, because nobody has to read a reason before
+   * an approver acts on their own document. Same `SP.Web.ShareObject` call `Requests.tsx`'s
+   * `performShare` uses, so both routes honour tenant/site sharing settings identically.
+   */
+  const submitDirectShare = async (row: Submission): Promise<void> => {
+    const draft: RequestDraft = {
+      type: "Share",
+      stage: "approved",
+      itemUniqueId: row.uniqueId ?? "",
+      itemName: row.name,
+      archived: (() => {
+        const a = cachedArchiveLibraries();
+        return isArchivedRow(
+          row.library,
+          a ? { normal: a.normal.urlSegment, hc: a.hc?.urlSegment } : undefined,
+        );
+      })(),
+      segment: "",
+      unit: "",
+      reason,
+      shareWith,
+      sharePermission: permission,
+    };
+    const found = validateDraft(draft, {
+      allowExternal: policy.allowExternal,
+      tenantDomains: policy.tenantDomains,
+    }).filter((p) => fieldForMessage(p) !== "reason");
+    if (found.length > 0) {
+      setProblems(found);
+      return;
+    }
+    setSending(true);
+    setProblems([]);
+    try {
+      const people = parseRecipients(shareWith).map((e) => ({ Key: e }));
+      const roleValue =
+        permission === "Edit" ? "role:1073741827" : "role:1073741826";
+      const res = await context.spHttpClient.post(
+        `${siteUrl}/_api/SP.Web.ShareObject`,
+        SPHttpClient.configurations.v1,
+        {
+          headers: WRITE_HEADERS,
+          body: JSON.stringify({
+            url: `${window.location.origin}${row.fileRef}`,
+            peoplePickerInput: JSON.stringify(people),
+            roleValue,
+            groupId: 0,
+            propagateAcl: false,
+            sendEmail: true,
+            includeAnonymousLinkInEmail: false,
+            emailSubject: `A document has been shared with you: ${row.name}`,
+            emailBody: reason.trim(),
+            useSimplifiedRoles: true,
+          }),
+        },
+      );
+      if (!res.ok) {
+        setProblems([
+          res.status === 403
+            ? "You do not have permission to share that document."
+            : `The document could not be shared (HTTP ${res.status}).`,
+        ]);
+        return;
+      }
+      // HTTP 200 does NOT mean it worked — the per-recipient result is in the body (gotcha #4).
+      try {
+        const body = await res.json();
+        const results = (body?.value ?? []) as Array<{
+          Status?: boolean;
+          Message?: string;
+          User?: string;
+        }>;
+        const failed = results.filter((r) => r && r.Status === false);
+        if (failed.length > 0) {
+          setProblems([
+            failed
+              .map((f) => `${f.User ?? "recipient"}: ${f.Message ?? "refused"}`)
+              .join("; "),
+          ]);
+          return;
+        }
+      } catch {
+        /* an unreadable body after a 200 counts as success — the grant is what matters */
+      }
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.accessGranted,
+        outcome: "Success",
+        source: "MySubmissions",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: (context.pageContext.user.email ?? "").toLowerCase(),
+        itemName: row.name,
+        itemUniqueId: row.uniqueId,
+        itemPath: row.fileRef,
+        summary: `Shared directly, no approval needed — ${row.name}`,
+        details: [
+          `Recipients: ${parseRecipients(shareWith).join(", ")} (${permission})`,
+        ],
+      }).catch(() => undefined);
+      setAsking(undefined);
+      setAskRow(undefined);
+      setShareWith("");
+      setPeopleQ("");
+      setReason("");
+      setExpiresAt("");
+      await load();
+    } finally {
+      setSending(false);
     }
   };
 
@@ -1869,11 +2891,12 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
      row carries `status: "Pending"` only because the type demands a value. Handled here beside the
      `All` exception rather than as a fourth string comparison inside a function about approval
      outcomes. */
-  const shown = tab === "All"
-    ? filterByTab(rows ?? [], tab)
-    : tab === "Archive"
-      ? archivedRowsOnly(rows ?? [])
-      : filterByTab(liveRowsOnly(rows ?? []), tab);
+  const shown =
+    tab === "All"
+      ? filterByTab(rows ?? [], tab)
+      : tab === "Archive"
+        ? archivedRowsOnly(rows ?? [])
+        : filterByTab(liveRowsOnly(rows ?? []), tab);
   /* The tabs that FILTER the flat file list. `Submissions` and `Requests` render their own views and
      their own empty states, so the shared ones below must not fire for them. */
   const isStatusTab = tab !== "Requests" && tab !== "Submissions";
@@ -1886,7 +2909,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   /* Page sizes are the client's own numbers (2026-09-04): six submissions, three requests. They are
      NOT the shared default - a submission row is several lines tall (name, path, badges), so twenty
      of them is the long page pagination was meant to replace. */
-  const pg_submissions = paginate(groupSubmissions(rows ?? []), pageOf("submissions"), 6);
+  const pg_submissions = paginate(
+    groupSubmissions(rows ?? []),
+    pageOf("submissions"),
+    6,
+  );
   const pg_requests = paginate(myRequestList, pageOf("requests"), 3);
   const pg_rows = paginate(shown, pageOf("rows"), 6);
   // Every library segment the trail builder must strip. Without the HC pair, an HC file's folder
@@ -1895,7 +2922,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   /* The two HC URL segments, in the shape `isHcRow` takes. `undefined` when the pair is unresolved,
      which tags nothing — see that function for why guessing from a name prefix would be worse. */
   const hcSegs = hcLibs
-    ? { approval: hcLibs.approval.urlSegment, documents: hcLibs.documents.urlSegment }
+    ? {
+        approval: hcLibs.approval.urlSegment,
+        documents: hcLibs.documents.urlSegment,
+      }
     : undefined;
   /* The archive segments, in the shape `isArchivedRow` takes. Same rules as `hcSegs`: `undefined`
      tags nothing, and a missing tag is safer than a wrong one. */
@@ -1904,12 +2934,21 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     ? { normal: arcLibs.normal.urlSegment, hc: arcLibs.hc?.urlSegment }
     : undefined;
   const libs = [
-    libraryUrlSegment(), docsSegment, documentsTitle(),
-    ...(hcLibs ? [hcLibs.approval.urlSegment, hcLibs.documents.urlSegment] : []),
+    libraryUrlSegment(),
+    docsSegment,
+    documentsTitle(),
+    ...(hcLibs
+      ? [hcLibs.approval.urlSegment, hcLibs.documents.urlSegment]
+      : []),
     /* ⚠ THE ARCHIVE SEGMENTS BELONG HERE TOO, or an archived file's folder trail reads
        "Archive › GHO › GF › TAX" — the library name presented as though it were a folder, which is
        exactly the "Shared Documents" bug of 2026-08-14 at a new library. */
-    ...(arcLibs ? [arcLibs.normal.urlSegment, ...(arcLibs.hc ? [arcLibs.hc.urlSegment] : [])] : []),
+    ...(arcLibs
+      ? [
+          arcLibs.normal.urlSegment,
+          ...(arcLibs.hc ? [arcLibs.hc.urlSegment] : []),
+        ]
+      : []),
   ];
 
   /**
@@ -1925,7 +2964,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
    * the OPTIONAL argument and unknown keeps `Business Segment` without anyone deciding to.
    */
   const segmentLabelFor = (fileRef: string): string | undefined =>
-    segmentSides?.[(folderTrail(fileRef, libs)[0] ?? "").toLowerCase()] === "Project"
+    segmentSides?.[(folderTrail(fileRef, libs)[0] ?? "").toLowerCase()] ===
+    "Project"
       ? "Group-Led Project"
       : undefined;
 
@@ -2004,7 +3044,11 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
   /** Drop one recipient. Matched case-insensitively, because that is how it was added. */
   const removeRecipient = (email: string): void => {
     const gone = (email || "").trim().toLowerCase();
-    setShareWith(parseRecipients(shareWith).filter((r) => r.toLowerCase() !== gone).join("\n"));
+    setShareWith(
+      parseRecipients(shareWith)
+        .filter((r) => r.toLowerCase() !== gone)
+        .join("\n"),
+    );
   };
 
   /* Keep the request statuses current without the uploader pressing refresh (client, 2026-08-21).
@@ -2012,7 +3056,10 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
      libraries, which are the expensive reads and barely change while someone watches this page.
      Blocked while a request dialog is open, a send is in flight, or a cancel is running.
      Declared here, above the detail view's early return, because a hook must run every render. */
-  useLiveRefresh(loadPolicy, sending || asking !== undefined || cancelling !== undefined);
+  useLiveRefresh(
+    loadPolicy,
+    sending || asking !== undefined || cancelling !== undefined,
+  );
 
   const requestDialog = ((): React.ReactNode => {
     const subject = askRow;
@@ -2021,63 +3068,111 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
        truth — the chip list and the external check both read this, so what is displayed and what is
        validated can never diverge. */
     const shareRecipients = parseRecipients(shareWith);
+    /* ⚠ DIRECT MODE — added 2026-09-15. This is the SAME dialog whichever button opened it (the
+       detail view's "Share" vs "Request share"), because the recipient picker/external-domain check
+       below must not be duplicated. `fieldText` tracks whichever document is currently being asked
+       about for BOTH entry points (the detail view sets `askRow = open`; the table's row buttons
+       call `loadFieldText(r)` before opening this dialog), so this mirrors the detail view's own
+       `canShareSelf` computation exactly rather than re-deriving a second definition of it. Deletion
+       never reaches this dialog in direct mode — a direct delete goes through the separate
+       `withdrawRow` confirm instead — so `directOk` only ever matters for Share. */
+    const directChain = fieldText
+      ? documentUnit(fieldText).tiers.map((t) => t.guid)
+      : [];
+    const directOk =
+      asking === "Share" &&
+      subject.status === "Approved" &&
+      (systemAdmin ||
+        /* Same three routes as the detail view's `canShareSelf`, and for the same reason — the ACL
+           answer is the one that cannot be wrong. Kept in step with it deliberately: the two decide
+           the same thing about the same document, and a dialog that asks for a reason the button
+           behind it said was unnecessary is worse than either behaviour on its own. */
+        subjectRights[mergedKey(subject)]?.share === "granted" ||
+        canActDirectly(directChain, policy.directShare));
     /* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. Selecting text in this
        dialog and releasing a few pixels outside it dispatches the click on the backdrop, which used
        to shut the dialog and throw away the typed reason and recipients. */
     return (
-      <div style={s.modalBg} onMouseDown={closeOnBackdrop(() => { if (!sending) setAsking(undefined); })}>
-            <div style={s.modal} onClick={(e) => e.stopPropagation()}>
-              {/* Client's wording, 2026-08-30: the title states the ACTION being requested rather
+      <div
+        style={s.modalBg}
+        onMouseDown={closeOnBackdrop(() => {
+          if (!sending) setAsking(undefined);
+        })}
+      >
+        <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+          {/* Client's wording, 2026-08-30: the title states the ACTION being requested rather
                   than narrating it. */}
-              <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>
-                {asking === "Deletion" ? "Delete this file?" : "Share this file?"}
-              </p>
-              <p style={{ fontSize: 12.5, color: "#605e5c", margin: "0 0 4px", lineHeight: 1.5 }}>
-                {subject.name}
-                {/* Repeated here, not only on the row: by the dialog the uploader has committed to a
+          <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>
+            {asking === "Deletion" ? "Delete this file?" : "Share this file?"}
+          </p>
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "#605e5c",
+              margin: "0 0 4px",
+              lineHeight: 1.5,
+            }}
+          >
+            {subject.name}
+            {/* Repeated here, not only on the row: by the dialog the uploader has committed to a
                     file, and this is the last moment they can notice it is the HC copy rather than
                     the same-named ordinary one. */}
-                {isHcRow(subject.library, hcSegs) && <span style={s.hcTag}>HC</span>}
-                {isArchivedRow(subject.library, arcSegs) && <span style={s.arcTag}>Archived</span>}
-              </p>
-              <p style={{ fontSize: 12.5, color: "#605e5c", margin: "0 0 8px", lineHeight: 1.5 }}>
-                {/* ⚠ "93 days", NOT the 90 in the client's mock — confirmed with them 2026-08-30 and
-                    again 2026-09-03: *"stay 93, they might not know that is why they say 90."*
-                    SharePoint's recycle bin really is 93, and that number is the only thing making an
-                    approved deletion reversible. A promise of 90 would be wrong in the safe direction
-                    on the day it mattered, but it would still be wrong, in a dialog people act on.
-                    "HOD/HOU" -> "approver" is the client's own wording, 2026-09-03 — same fact,
-                    said the way whoever is deciding actually holds the role (a Head of Unit for most
-                    units, a Head of Department where they fan down). */}
-                {asking !== "Deletion"
-                  ? "Your approver must approve this request. If approved, the person will be able to view the file."
-                  : subject.status === "Approved"
-                  ? "Your approver must approve this request. If approved, the file moves to the recycle bin and can be restored within 93 days."
-                  // Named for what it IS from the uploader's side. "Withdraw" was considered and
-                  // rejected: it reads as something they can do themselves, and the whole point of
-                  // this change is that they no longer can.
-                  /* Client's own copy, 2026-09-04, on two lines.
-                     ⚠ 93 DAYS, NOT THE 90 IN THEIR MOCK. Same conflict, same resolution as
-                     2026-08-30, when they were asked directly and said *"stay 93, they might not
-                     know that is why they say 90"*. SharePoint's site recycle bin really is 93.
-                     The dropped clause was *"so only you and your approver can see it"* — still
-                     TRUE (Draft Item Security), just no longer stated here. */
-                  : (
-                    <>
-                      This file has not been approved yet.
-                      <br />
-                      To delete this file, your approver must approve this request. If approved, the
-                      file moves to the recycle bin and can be restored within 93 days.
-                    </>
-                  )}
-              </p>
+            {isHcRow(subject.library, hcSegs) && (
+              <span style={s.hcTag}>HC</span>
+            )}
+            {isArchivedRow(subject.library, arcSegs) && (
+              <span style={s.arcTag}>Archived</span>
+            )}
+          </p>
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "#605e5c",
+              margin: "0 0 8px",
+              lineHeight: 1.5,
+            }}
+          >
+            {/* ⚠ THE "recycle bin ... 93 days" CLAUSE IS GONE FROM BOTH DELETION BRANCHES (client,
+                    2026-09-17: does not want it stated here at all — same instruction that dropped
+                    it from the approver's own outcome banner in Requests.tsx). What survives is the
+                    fact that matters procedurally — an approver has to decide — with no
+                    restorability detail attached. "HOD/HOU" -> "approver" is still the client's own
+                    wording, 2026-09-03. */}
+            {asking !== "Deletion" ? (
+              directOk ? (
+                // Client, 2026-09-15: no reason to read, nobody to approve — say so plainly rather
+                // than narrating a workflow that is not happening.
+                "This shares it right away — no approval needed. The person will be able to view the file immediately."
+              ) : (
+                "Your approver must approve this request. If approved, the person will be able to view the file."
+              )
+            ) : subject.status === "Approved" ? (
+              "Your approver must approve this request."
+            ) : (
+              // Named for what it IS from the uploader's side. "Withdraw" was considered and
+              // rejected: it reads as something they can do themselves, and the whole point of
+              // this change is that they no longer can.
+              <>
+                This file has not been approved yet.
+                <br />
+                To delete this file, your approver must approve this request.
+              </>
+            )}
+          </p>
 
-              <label style={fieldProblem("reason") ? s.labelBad : s.label}>Reason</label>
+          {/* ⚠ HIDDEN IN DIRECT MODE — nobody reads it, since there is no approver deciding on this
+                  request. `validateDraft`'s reason-required check is filtered out for the direct
+                  path in `submitDirectShare`, so leaving this blank cannot block Submit. */}
+          {!directOk && (
+            <>
+              <label style={fieldProblem("reason") ? s.labelBad : s.label}>
+                Reason
+              </label>
               <textarea
                 /* ⚠ `resize: "none"` (client, 2026-09-05: *"Ensure to also not allow client to
-                   expand the textbox so big"*). This dialog is a fixed-width column, and a
-                   drag-resized textarea pushes Submit and Cancel out of view with no way back short
-                   of reopening it — the same reason the Bulk Approve comment box is fixed. */
+                       expand the textbox so big"*). This dialog is a fixed-width column, and a
+                       drag-resized textarea pushes Submit and Cancel out of view with no way back short
+                       of reopening it — the same reason the Bulk Approve comment box is fixed. */
                 style={{
                   ...s.field,
                   minHeight: 64,
@@ -2093,45 +3188,53 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
               {fieldProblem("reason") !== undefined && (
                 <p style={s.fieldErr}>{fieldProblem("reason")}</p>
               )}
+            </>
+          )}
 
-              {asking === "Share" && (
-                <>
-                  <label style={fieldProblem("shareWith") ? s.labelBad : s.label}>
-                    Share with
-                  </label>
-                  <input
-                    style={{ ...s.field, ...(fieldProblem("shareWith") ? s.fieldBad : {}) }}
-                    placeholder="Search for a person, or type an email address below"
-                    value={peopleQ}
-                    onChange={(e) => setPeopleQ(e.target.value)}
-                  />
-                  {peopleBusy && <div style={s.hint}>Searching&hellip;</div>}
-                  {!peopleBusy && peopleQ.trim().length >= 3 && peopleHits.length === 0 && (
-                    /* NOT an error, and must not read as one. Nobody matching is the NORMAL case for
+          {asking === "Share" && (
+            <>
+              <label style={fieldProblem("shareWith") ? s.labelBad : s.label}>
+                Share with
+              </label>
+              <input
+                style={{
+                  ...s.field,
+                  ...(fieldProblem("shareWith") ? s.fieldBad : {}),
+                }}
+                placeholder="Search for a person, or type an email address below"
+                value={peopleQ}
+                onChange={(e) => setPeopleQ(e.target.value)}
+              />
+              {peopleBusy && <div style={s.hint}>Searching&hellip;</div>}
+              {!peopleBusy &&
+                peopleQ.trim().length >= 3 &&
+                peopleHits.length === 0 && (
+                  /* NOT an error, and must not read as one. Nobody matching is the NORMAL case for
                        a share request — the person is usually outside the organisation, which is the
                        whole reason this workflow exists. So it points at the box below rather than
                        reporting a failure. */
-                    <div style={s.hint}>
-                      Nobody on this site matches. If they are outside the organisation, type their
-                      full email address in the box below.
-                    </div>
-                  )}
-                  {peopleHits.length > 0 && (
-                    <div style={s.pickList}>
-                      {peopleHits.map((h) => (
-                        <button
-                          key={h.loginName}
-                          type="button"
-                          style={s.pickRow}
-                          onClick={() => addRecipient(h.email)}
-                        >
-                          <strong>{h.displayName}</strong>
-                          <span style={{ color: "#605e5c" }}> — {h.email}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {/* WARN: THIS WAS A FREE-TEXT textarea AND IS NOW READ-ONLY (client, 2026-09-03:
+                  <div style={s.hint}>
+                    Nobody on this site matches. If they are outside the
+                    organisation, type their full email address in the box
+                    below.
+                  </div>
+                )}
+              {peopleHits.length > 0 && (
+                <div style={s.pickList}>
+                  {peopleHits.map((h) => (
+                    <button
+                      key={h.loginName}
+                      type="button"
+                      style={s.pickRow}
+                      onClick={() => addRecipient(h.email)}
+                    >
+                      <strong>{h.displayName}</strong>
+                      <span style={{ color: "#605e5c" }}> — {h.email}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {/* WARN: THIS WAS A FREE-TEXT textarea AND IS NOW READ-ONLY (client, 2026-09-03:
                       "Ensure client cannot type directly into the Email Address text box, but rather
                       let them type one by one in the share with"). Recipients are added through the
                       picker above and removed with the X here; `shareWith` is still the single
@@ -2155,44 +3258,52 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                       its own. Nothing inside is absolutely positioned — the people picker sits ABOVE
                       this box, not in it — so the cap cannot clip a popover, which is the trap that
                       has caught three other screens in this project. */}
-                  {/* Beneath the box it belongs to, which is what the client's mock shows — the
+              {/* Beneath the box it belongs to, which is what the client's mock shows — the
                       chip list below merely displays what the box collected. */}
-                  {fieldProblem("shareWith") !== undefined && (
-                    <p style={s.fieldErr}>{fieldProblem("shareWith")}</p>
-                  )}
-                  <label style={s.label}>Email addresses</label>
-                  <div
-                    style={{
-                      ...s.field, minHeight: 56, maxHeight: 140, overflowY: "auto", height: "auto",
-                      display: "flex", flexWrap: "wrap", alignContent: "flex-start", gap: 6,
-                      padding: "8px 10px", cursor: "default",
-                    }}
-                  >
-                    {shareRecipients.length === 0 ? (
-                      <span style={{ fontSize: 12, color: "#8a8886" }}>
-                        Nobody yet — find a person in the box above.
-                      </span>
-                    ) : (
-                      shareRecipients.map((addr) => (
-                        <span key={addr} style={s.recipChip}>
-                          {addr}
-                          <button
-                            type="button"
-                            style={s.recipX}
-                            title={"Remove " + addr}
-                            aria-label={"Remove " + addr}
-                            onClick={() => removeRecipient(addr)}
-                          >
-                            &times;
-                          </button>
-                        </span>
-                      ))
-                    )}
-                  </div>
-                  {/* Named as it is typed, not only after submitting: whether someone is outside the
+              {fieldProblem("shareWith") !== undefined && (
+                <p style={s.fieldErr}>{fieldProblem("shareWith")}</p>
+              )}
+              <label style={s.label}>Email addresses</label>
+              <div
+                style={{
+                  ...s.field,
+                  minHeight: 56,
+                  maxHeight: 140,
+                  overflowY: "auto",
+                  height: "auto",
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignContent: "flex-start",
+                  gap: 6,
+                  padding: "8px 10px",
+                  cursor: "default",
+                }}
+              >
+                {shareRecipients.length === 0 ? (
+                  <span style={{ fontSize: 12, color: "#8a8886" }}>
+                    Nobody yet — find a person in the box above.
+                  </span>
+                ) : (
+                  shareRecipients.map((addr) => (
+                    <span key={addr} style={s.recipChip}>
+                      {addr}
+                      <button
+                        type="button"
+                        style={s.recipX}
+                        title={"Remove " + addr}
+                        aria-label={"Remove " + addr}
+                        onClick={() => removeRecipient(addr)}
+                      >
+                        &times;
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+              {/* Named as it is typed, not only after submitting: whether someone is outside the
                       organisation is the fact that decides whether this is refused, and finding out
                       at the end means retyping the lot. */}
-                  {/* WARN: IT USED TO ASSERT "outside the organisation" WITH NO WAY TO CHECK, and
+              {/* WARN: IT USED TO ASSERT "outside the organisation" WITH NO WAY TO CHECK, and
                       that is exactly what the client hit: a colleague on their own tenant was
                       flagged as outside it. `isExternal` fails CLOSED on purpose — NO DOMAINS
                       SUPPLIED MEANS UNKNOWN, AND UNKNOWN COUNTS AS EXTERNAL — so one sentence was
@@ -2202,41 +3313,59 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                       outside" or "this site has never been told what inside means". The check itself
                       is unchanged: guessing INTERNAL on an unconfigured site is how a document
                       leaves the organisation on the strength of nothing. */}
-                  {shareRecipients.some((r) => isExternal(r, policy.tenantDomains)) && (
-                    <div style={{ ...s.warnBox, marginTop: 8 }}>
-                      {policy.tenantDomains.length === 0 ? (
-                        <>
-                          This site has not been told which email domains belong to your
-                          organisation, so <strong>every</strong> address is treated as outside it.
-                          An administrator sets <strong>tenantDomains</strong> on the CRS Config list
-                          — until then no share request can be sent.
-                        </>
-                      ) : policy.allowExternal ? (
-                        <>
-                          Some of these are outside your organisation ({policy.tenantDomains.join(", ")}).
-                          Your approver will be told.
-                        </>
-                      ) : (
-                        <>
-                          Some of these are outside your organisation ({policy.tenantDomains.join(", ")}),
-                          and sharing outside it is switched off on this site — the request cannot be
-                          sent until you remove them.
-                        </>
-                      )}
-                    </div>
+              {shareRecipients.some((r) =>
+                isExternal(r, policy.tenantDomains),
+              ) && (
+                <div style={{ ...s.warnBox, marginTop: 8 }}>
+                  {policy.tenantDomains.length === 0 ? (
+                    <>
+                      This site has not been told which email domains belong to
+                      your organisation, so <strong>every</strong> address is
+                      treated as outside it. An administrator sets{" "}
+                      <strong>tenantDomains</strong> on the CRS Config list —
+                      until then no share request can be sent.
+                    </>
+                  ) : policy.allowExternal ? (
+                    <>
+                      Some of these are outside your organisation (
+                      {policy.tenantDomains.join(", ")}). Your approver will be
+                      told.
+                    </>
+                  ) : (
+                    <>
+                      Some of these are outside your organisation (
+                      {policy.tenantDomains.join(", ")}), and sharing outside it
+                      is switched off on this site — the request cannot be sent
+                      until you remove them.
+                    </>
                   )}
+                </div>
+              )}
 
-                  {/* ⚠ "VIEW AND EDIT" REMOVED FROM THE DROPDOWN (client, 2026-09-03: "Should not
+              {/* ⚠ "VIEW AND EDIT" REMOVED FROM THE DROPDOWN (client, 2026-09-03: "Should not
                       have the VIEW and EDIT here"). `permission` stays a fixed "View" — an
                       uploader-raised share request grants read access to the recipient; letting them
                       also ask for Edit rights was never the intent of this screen. `SharePermission`
                       itself is untouched (Requests.tsx still reads it), so this is display-only: the
                       state simply never becomes anything but "View" from this dialog now. */}
-                  <label style={s.label}>They may</label>
-                  <div style={{ ...s.field, display: "flex", alignItems: "center", background: "#f3f2f1", color: "#605e5c" }}>
-                    View only
-                  </div>
+              <label style={s.label}>They may</label>
+              <div
+                style={{
+                  ...s.field,
+                  display: "flex",
+                  alignItems: "center",
+                  background: "#f3f2f1",
+                  color: "#605e5c",
+                }}
+              >
+                View only
+              </div>
 
+              {/* ⚠ HIDDEN IN DIRECT MODE. Expiry is enforced by a flow that reads it off the
+                      `CRS Requests` ROW — a direct share never writes one, so offering this field
+                      here would promise an expiry that nothing ever checks. */}
+              {!directOk && (
+                <>
                   <label style={s.label}>Access ends on (optional)</label>
                   <input
                     type="date"
@@ -2244,38 +3373,162 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                     value={expiresAt}
                     onChange={(e) => setExpiresAt(e.target.value)}
                   />
-                  <p style={{ fontSize: 11.5, color: "#605e5c", marginTop: 4, lineHeight: 1.45 }}>
-                    Leave blank for permanent access. Access remains until manually removed.
+                  <p
+                    style={{
+                      fontSize: 11.5,
+                      color: "#605e5c",
+                      marginTop: 4,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    Leave blank for permanent access. Access remains until
+                    manually removed.
                   </p>
                 </>
               )}
+            </>
+          )}
 
-              {generalProblems.length > 0 && (
-                <div style={{ ...s.rejectBox, marginTop: 12, marginBottom: 0 }}>
-                  {generalProblems.map((p) => <div key={p}>{p}</div>)}
-                </div>
-              )}
+          {generalProblems.length > 0 && (
+            <div style={{ ...s.rejectBox, marginTop: 12, marginBottom: 0 }}>
+              {generalProblems.map((p) => (
+                <div key={p}>{p}</div>
+              ))}
+            </div>
+          )}
 
-              <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
-                <button
-                  style={sending ? s.askOff : s.primary}
-                  disabled={sending || fieldText === undefined}
-                  onClick={() => { submitRequest(subject, asking).catch(() => undefined); }}
-                >
-                  {/* "Reading the file…" is a real state, not a spinner for its own sake: routing to the
+          <div
+            style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}
+          >
+            <button
+              style={sending ? s.askOff : s.primary}
+              disabled={sending || fieldText === undefined}
+              onClick={() => {
+                if (directOk) {
+                  submitDirectShare(subject).catch(() => undefined);
+                } else {
+                  submitRequest(subject, asking).catch(() => undefined);
+                }
+              }}
+            >
+              {/* "Reading the file…" is a real state, not a spinner for its own sake: routing to the
                       right approver needs this file's tier fields, and FieldValuesAsText is a
                       per-ITEM endpoint the list has not called. Sending without it would route
-                      on a blank unit — into nobody's queue, reported as sent. */}
-                  {sending ? "Sending…" : fieldText === undefined ? "Reading the file…" : "Submit"}
-                </button>
-                <button style={s.askBtn} disabled={sending} onClick={() => setAsking(undefined)}>
-                  Cancel
-                </button>
-              </div>
-            </div>
+                      on a blank unit — into nobody's queue, reported as sent. Direct mode reads no
+                      approver's queue, but `fieldText` still gates it: `canActDirectly` above needs
+                      the same tiers to have been loaded, or a slow read could let the button fire
+                      before the rights check it depends on has actually run. */}
+              {sending
+                ? directOk
+                  ? "Sharing…"
+                  : "Sending…"
+                : fieldText === undefined
+                  ? "Reading the file…"
+                  : directOk
+                    ? "Share now"
+                    : "Submit"}
+            </button>
+            <button
+              style={s.askBtn}
+              disabled={sending}
+              onClick={() => setAsking(undefined)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
       </div>
     );
   })();
+
+  /* ⚠⚠ COMPUTED HERE, NOT INLINE INSIDE THE DETAIL VIEW — the actual cause of "clicking Delete shows
+     Checking… but no popup at all" (2026-09-15, the fourth report on this feature). This modal was
+     written on 2026-08-11 for the detail view's OWN synchronous Delete button, and its JSX lived
+     entirely inside the `if (open !== undefined)` early return below — which only executes while
+     VIEWING a document. When the row-level async Delete button was added this session, clicking it
+     from the LIST correctly set `withdrawRow`, but the modal's markup was never part of the tree
+     being rendered there at all: `open` is `undefined` on the list, so the whole branch containing it
+     is skipped, and nothing — not a missing check, an actually-absent element — was there to show it.
+     `requestDialog` right above already follows the correct pattern for exactly this situation (a
+     dialog reachable from BOTH the list and the detail view): computed ONCE here, rendered at BOTH
+     `{requestDialog}` sites below. This mirrors it rather than duplicating the JSX a second time,
+     which would be a second definition of the confirm free to drift from the first. */
+  const withdrawDialog: React.ReactNode = withdrawRow && (
+    <div
+      style={s.modalBg}
+      onMouseDown={closeOnBackdrop(() => {
+        if (!withdrawing) setWithdrawRow(undefined);
+      })}
+    >
+      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+        <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>
+          Delete this file?
+        </p>
+        <p
+          style={{
+            fontSize: 12.5,
+            color: "#605e5c",
+            margin: "0 0 4px",
+            lineHeight: 1.5,
+          }}
+        >
+          {withdrawRow.name}
+          {isHcRow(withdrawRow.library, hcSegs) && (
+            <span style={s.hcTag}>HC</span>
+          )}
+        </p>
+        <p
+          style={{
+            fontSize: 12.5,
+            color: "#605e5c",
+            margin: "0 0 8px",
+            lineHeight: 1.5,
+          }}
+        >
+          This deletes it straight away — no approver decides this. It moves
+          to the recycle bin and can be restored within 93 days.
+        </p>
+        {withdrawError && (
+          <p
+            style={{
+              fontSize: 12.5,
+              color: "#a4262c",
+              margin: "0 0 8px",
+            }}
+          >
+            {withdrawError}
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button
+            /* WAS ALWAYS `s.askOff`, REGARDLESS OF `withdrawing` — a pre-existing bug from
+               2026-09-11 (the style never switched, only `disabled` did), so this button showed the
+               not-allowed cursor and greyed-out look even while perfectly clickable. Client,
+               2026-09-15: "the cancel button when i hover over it its showing I can't click." */
+            style={withdrawing ? s.askOff : s.askBtn}
+            disabled={withdrawing}
+            onClick={() => setWithdrawRow(undefined)}
+          >
+            Cancel
+          </button>
+          <button
+            style={{
+              ...s.askBtn,
+              background: "#a4262c",
+              borderColor: "#a4262c",
+              color: "#fff",
+            }}
+            disabled={withdrawing}
+            onClick={() => {
+              performWithdraw(withdrawRow).catch(() => undefined);
+            }}
+          >
+            {withdrawing ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   /* Why requests cannot be raised AT ALL right now — the half that is about the SITE rather than any
      one file, so both the detail view and every row in the list can say the same thing. Unknown is
@@ -2306,14 +3559,23 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
     /* Why a request cannot be raised for THIS file, or undefined when it can.
        A reason, never a disappeared button: an uploader who cannot see the control assumes the
        system does not do this and goes to ask someone in person. */
-    const requestBlock = requestsUnavailable ?? (!open.uniqueId
-      ? "This file's id could not be read, so a request would not find it. Reload the page and try again."
-      : undefined);
+    const requestBlock =
+      requestsUnavailable ??
+      (!open.uniqueId
+        ? "This file's id could not be read, so a request would not find it. Reload the page and try again."
+        : undefined);
 
     return (
       <section style={s.wrap}>
         <div style={s.backBand}>
-          <button style={s.backLink} onClick={() => { setOpen(undefined); setFieldText(undefined); }}>
+          <button
+            style={s.backLink}
+            onClick={() => {
+              openActiveRef.current = false;
+              setOpen(undefined);
+              setFieldText(undefined);
+            }}
+          >
             ‹ Back to my submissions
           </button>
         </div>
@@ -2329,7 +3591,15 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             REVISES the 2026-08-30 single-line layout above. The client's own words: "our current one
             is almost correct already, its just that the text is not below." Same facts, same chip,
             just no longer sharing a line with the Uploaded/path text. */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 }}>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+            marginBottom: 6,
+          }}
+        >
           <span style={badgeFor(open.status)}>{open.status}</span>
           {openRequest !== undefined && openRequest.status === "Pending" && (
             <span style={s.pendingChip}>
@@ -2353,22 +3623,23 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         )}
         {/* Who approved it, and what they wrote (2026-09-10) — the same two values as the list's
             new columns, in full rather than clamped. Shown only when there is something to say. */}
-        {open.status === "Approved" && (open.approvedBy || open.approvalComment) && (
-          <div style={s.approveBox}>
-            {open.approvedBy && (
-              <>
-                <strong>Approved by</strong> {open.approvedBy}
-                {open.approvalComment ? "." : ""}
-              </>
-            )}
-            {open.approvalComment && (
-              <>
-                {open.approvedBy ? " " : ""}
-                <strong>Comment:</strong> {open.approvalComment}
-              </>
-            )}
-          </div>
-        )}
+        {open.status === "Approved" &&
+          (open.approvedBy || open.approvalComment) && (
+            <div style={s.approveBox}>
+              {open.approvedBy && (
+                <>
+                  <strong>Approved by</strong> {open.approvedBy}
+                  {open.approvalComment ? "." : ""}
+                </>
+              )}
+              {open.approvalComment && (
+                <>
+                  {open.approvedBy ? " " : ""}
+                  <strong>Comment:</strong> {open.approvalComment}
+                </>
+              )}
+            </div>
+          )}
 
         {/* ── Asking for something to be done to this file ─────────────────────────
             EVERY file, not only approved ones — changed 2026-08-20 when the PIC lost `DELS` (client:
@@ -2394,13 +3665,16 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             they cannot tell a mistake from a reminder. A decided request does NOT hide them — a
             rejected deletion may legitimately be asked for again once the reason is fixed. */}
         {openRequest !== undefined && (
-          <div style={openRequest.status === "Pending" ? s.askQuiet : s.askDecided}>
+          <div
+            style={openRequest.status === "Pending" ? s.askQuiet : s.askDecided}
+          >
             {openRequest.status === "Pending" ? (
               <>
                 {/* The reassurance that nothing had happened to the file yet came off on the
                     client's instruction (2026-09-05). The badge beside the status already says
                     "Deletion Requested", so the sentence restated it. */}
-                {openRequest.type === "Share" ? "Share" : "Deletion"} request submitted
+                {openRequest.type === "Share" ? "Share" : "Deletion"} request
+                submitted
                 {askedOn ? ` on ${askedOn}` : ""}.
               </>
             ) : (
@@ -2430,7 +3704,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                 {/* Nobody "decided" a withdrawal but the requester, and on a revoke `decidedBy` is
                     the person who APPROVED it — naming them beside "taken back" would credit the
                     wrong act to the wrong person. `revokedBy` is not carried on this page's row. */}
-                {openRequest.status !== "Cancelled" && openRequest.status !== "Revoked" && openRequest.decidedBy
+                {openRequest.status !== "Cancelled" &&
+                openRequest.status !== "Revoked" &&
+                openRequest.decidedBy
                   ? ` by ${openRequest.decidedBy}`
                   : ""}
                 .
@@ -2438,11 +3714,17 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                     holds the appended line, which names EVERY principal dropped from the file —
                     including people granted outside CRS whom this uploader never named and has no
                     reason to be shown. For Approved/Rejected/Failed it is the reason they came for. */}
-                {openRequest.status !== "Revoked" && openRequest.status !== "Cancelled" && openRequest.note
+                {openRequest.status !== "Revoked" &&
+                openRequest.status !== "Cancelled" &&
+                openRequest.note
                   ? ` “${openRequest.note}”`
                   : ""}
-                {openRequest.status === "Rejected" ? " You can ask again if something has changed." : ""}
-                {openRequest.status === "Revoked" ? " You can ask again if it is still needed." : ""}
+                {openRequest.status === "Rejected"
+                  ? " You can ask again if something has changed."
+                  : ""}
+                {openRequest.status === "Revoked"
+                  ? " You can ask again if it is still needed."
+                  : ""}
               </>
             )}
           </div>
@@ -2454,121 +3736,147 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
             of the comparison. `fieldText` is undefined until the per-item read lands, which yields
             an empty chain and therefore offers the buttons: unknown must never HIDE a route. */}
         {(() => {
-          const chain = fieldText ? documentUnit(fieldText).tiers.map((t) => t.guid) : [];
+          const chain = fieldText
+            ? documentUnit(fieldText).tiers.map((t) => t.guid)
+            : [];
           const approved = open.status === "Approved";
-          const canDeleteSelf = canActDirectly(
-            chain,
-            approved ? policy.directDelete : policy.directDeleteStaging,
-          );
-          const canShareSelf = approved && canActDirectly(chain, policy.directShare);
+          // ⚠ SYSTEM ADMIN BYPASSES THE GROUP MAP ENTIRELY — see the `systemAdmin` state's own
+          // comment. Full Control means there is nothing a reason-requiring request could gate
+          // that they cannot already do directly, so they get exactly the same treatment as a
+          // genuinely mapped Head of Unit / Head of Department.
+          /* ⚠ THREE ROUTES TO YES, AND THE ACL IS THE ONE THAT ACTUALLY DECIDES (2026-09-15).
+             `canActDirectly` reconstructs the answer from Group Map rows, which failed silently for a
+             genuinely-mapped approver — reported as *"as an approver I still need to provide reason,
+             it seems only system admin works"*. `probeFileRights` asks SharePoint about THIS item
+             instead, which cannot be wrong that way; see its own comment for the five ways the
+             derived answer was getting it wrong.
+             The Group Map route is KEPT rather than replaced: it is what a Head of Department's
+             department-tier fan-out rests on, it needs no extra request, and it answers instantly at
+             render where the probe has to arrive. Either saying yes is enough; neither is a veto, so
+             a probe that has not landed or could not be read changes nothing. */
+          const rights = subjectRights[mergedKey(open)];
+          const canDeleteSelf =
+            systemAdmin ||
+            rights?.remove === "granted" ||
+            canActDirectly(
+              chain,
+              approved ? policy.directDelete : policy.directDeleteStaging,
+            );
+          const canShareSelf =
+            approved &&
+            (systemAdmin ||
+              rights?.share === "granted" ||
+              canActDirectly(chain, policy.directShare));
+          /* ⚠ THE BUTTON STAYS ON THIS PAGE FOR BOTH APPROVED AND STAGING FILES NOW (client,
+             2026-09-15: "the Delete and Share button stays exactly where it is in the My Submission
+             page for easy access instead of going into the library, its only that system admin or
+             approver do not need to self approve themselves and also they do not need to receive
+             any of the delete/share request email"). REVERSES the 2026-08-30 "do it yourself, in the
+             library" text-only treatment for an approved document — that answered a different
+             question (should a request even be OFFERED to someone who can already act) and is still
+             the reason no "Request…" button appears here; it was never meant to also remove the
+             in-app action itself.
+             Each action type is mutually exclusive between "request" and "direct" — never both, and
+             never neither — so this can never present two contradictory routes for the same click. */
           const showDelete = !canDeleteSelf;
           const showShare = approved && !canShareSelf;
-          /* ⚠ STAGING-ONLY, and that is what makes it safe to fire immediately with no approver in
-             the loop. Approved documents keep the "yourself, in the library" text below — going
-             through the library there still leaves nothing to stamp, so it is unaffected by this. */
-          const showDirectDelete = !approved && canDeleteSelf;
+          const showDirectDelete = canDeleteSelf;
+          const showDirectShare = approved && canShareSelf;
           return (
-        <div style={s.askBar}>
-          {sent === undefined && openRequest?.status !== "Pending" && (
-            <>
-              {showDelete && (
-              <button
-                style={requestBlock === undefined ? s.askBtn : s.askOff}
-                disabled={requestBlock !== undefined}
-                title={requestBlock}
-                onClick={() => { setProblems([]); setAskRow(open); setAsking("Deletion"); }}
-              >
-                Request deletion
-              </button>
+            <div style={s.askBar}>
+              {sent === undefined && openRequest?.status !== "Pending" && (
+                <>
+                  {showDelete && (
+                    <button
+                      style={requestBlock === undefined ? s.askBtn : s.askOff}
+                      disabled={requestBlock !== undefined}
+                      title={requestBlock}
+                      onClick={() => {
+                        setProblems([]);
+                        setAskRow(open);
+                        setAsking("Deletion");
+                      }}
+                    >
+                      Request deletion
+                    </button>
+                  )}
+                  {/* Client, 2026-09-11: "now pic can delete without approval on staging" — a real
+                  delete, not a request, offered for any file (staging OR approved) the viewer
+                  already holds delete rights on directly. `performWithdraw` recycles the file
+                  immediately — no `CRS Requests` row, no self-approval, no notification email. */}
+                  {showDirectDelete && (
+                    <button
+                      style={s.askBtn}
+                      onClick={() => {
+                        setWithdrawError(undefined);
+                        setWithdrawRow(open);
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                  {showShare && (
+                    <button
+                      style={requestBlock === undefined ? s.askBtn : s.askOff}
+                      disabled={requestBlock !== undefined}
+                      title={requestBlock}
+                      onClick={() => {
+                        setProblems([]);
+                        setAskRow(open);
+                        setAsking("Share");
+                      }}
+                    >
+                      Request share
+                    </button>
+                  )}
+                  {/* Same treatment as direct delete, added 2026-09-15 — opens the SAME dialog as
+                  "Request share" (so the recipient picker is not duplicated), but `requestDialog`
+                  detects `directOk` for this subject and skips the reason field + request write in
+                  favour of `submitDirectShare`, an immediate `SP.Web.ShareObject` call. */}
+                  {showDirectShare && (
+                    <button
+                      style={s.askBtn}
+                      onClick={() => {
+                        setProblems([]);
+                        setAskRow(open);
+                        setAsking("Share");
+                      }}
+                    >
+                      Share
+                    </button>
+                  )}
+                </>
               )}
-              {/* Client, 2026-09-11: "now pic can delete without approval on staging" — a real
-                  delete, not a request, offered only for a PENDING or REJECTED file the viewer
-                  already holds delete rights on (now true for a PIC's own unit, as it already was
-                  for a Head of Unit). */}
-              {showDirectDelete && (
-                <button
-                  style={s.askBtn}
-                  onClick={() => { setWithdrawError(undefined); setWithdrawRow(open); }}
-                >
-                  Delete
-                </button>
-              )}
-              {showShare && (
-                <button
-                  style={requestBlock === undefined ? s.askBtn : s.askOff}
-                  disabled={requestBlock !== undefined}
-                  title={requestBlock}
-                  onClick={() => { setProblems([]); setAskRow(open); setAsking("Share"); }}
-                >
-                  Request share
-                </button>
-              )}
-            </>
-          )}
-          {/* SAYS WHY THE BUTTONS ARE ABSENT, OR WHAT THE BUTTON ABOVE DOES. A row with no
+              {/* SAYS WHY THE BUTTONS ARE ABSENT, OR WHAT THE BUTTON ABOVE DOES. A row with no
               explanation reads as a page that failed to finish loading. */}
-          <span style={{ fontSize: 12, color: "#605e5c" }}>
-            {showDirectDelete
-              ? "Deletes it now, to the recycle bin — no approval needed."
-              : !showDelete && !showShare
-              ? "You can delete or share this document yourself, in the library — no request is needed."
-              : requestBlock ??
-                /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
+              <span style={{ fontSize: 12, color: "#605e5c" }}>
+                {showDirectDelete && showDirectShare
+                  ? "Deletes or shares it now — no approval needed."
+                  : showDirectDelete
+                    ? "Deletes it now, to the recycle bin — no approval needed."
+                    : showDirectShare
+                      ? "Shares it now — no approval needed."
+                      : (requestBlock ??
+                        /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
                    REPLACES the buttons in that state, so "Your Approver decides these" was pointing
                    at controls that were not on the screen — which reads as a page that failed to
                    render rather than as a state. It stays where the buttons ARE shown, because
                    there it explains who acts on them. */
-                (openRequest?.status === "Pending"
-                  ? undefined
-                  : approved
-                    ? "Your Approver decides these."
-                    : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted.")}
-          </span>
-        </div>
+                        (openRequest?.status === "Pending"
+                          ? undefined
+                          : approved
+                            ? "Your Approver decides these."
+                            : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted."))}
+              </span>
+            </div>
           );
         })()}
 
         {sent !== undefined && <div style={s.okBox}>{sent}</div>}
 
-        {/* Direct staging delete confirm (2026-09-11). Same backdrop pattern as the request dialog —
-            onMouseDown, not onClick, so selecting the text in here cannot dismiss it. */}
-        {withdrawRow && (
-          <div
-            style={s.modalBg}
-            onMouseDown={closeOnBackdrop(() => { if (!withdrawing) setWithdrawRow(undefined); })}
-          >
-            <div style={s.modal} onClick={(e) => e.stopPropagation()}>
-              <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>Delete this file?</p>
-              <p style={{ fontSize: 12.5, color: "#605e5c", margin: "0 0 4px", lineHeight: 1.5 }}>
-                {withdrawRow.name}
-                {isHcRow(withdrawRow.library, hcSegs) && <span style={s.hcTag}>HC</span>}
-              </p>
-              <p style={{ fontSize: 12.5, color: "#605e5c", margin: "0 0 8px", lineHeight: 1.5 }}>
-                This deletes it straight away — no approver decides this. It moves to the recycle
-                bin and can be restored within 93 days.
-              </p>
-              {withdrawError && (
-                <p style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}>{withdrawError}</p>
-              )}
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                <button
-                  style={s.askOff}
-                  disabled={withdrawing}
-                  onClick={() => setWithdrawRow(undefined)}
-                >
-                  Cancel
-                </button>
-                <button
-                  style={{ ...s.askBtn, background: "#a4262c", borderColor: "#a4262c", color: "#fff" }}
-                  disabled={withdrawing}
-                  onClick={() => { performWithdraw(withdrawRow).catch(() => undefined); }}
-                >
-                  {withdrawing ? "Deleting…" : "Delete"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Direct staging delete confirm (2026-08-11) — extracted 2026-09-15, see `withdrawDialog`'s
+            own comment above for why it had to leave this inline position. */}
+        {withdrawDialog}
 
         <FileDetailPanel
           name={open.name}
@@ -2605,7 +3913,8 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
         </button>
       </div>
       <p style={s.sub}>
-        Every file you have uploaded, and where it has got to. Only your own files are listed here.
+        {/* Client QA item #34.1, 2026-09-13: replaces the previous copy verbatim. */}
+        Files that you have uploaded and the location will be shown here.
       </p>
 
       {requestNotice !== undefined && (
@@ -2616,9 +3925,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
 
       {loadError !== undefined && (
         <div style={s.errBox}>
-          <strong>Could not read your submissions.</strong> {loadError}
+          <strong>Could not read your submissions.</strong>
           <div style={{ marginTop: 6 }}>
-            This is not the same as having none — please try again rather than uploading again.
+            Please try refreshing the entire page instead.
           </div>
         </div>
       )}
@@ -2647,33 +3956,37 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           drilling in filters what is on screen and issues no request. The per-file metadata panel is
           the existing detail view, reached from level 3, which is the one place that reads
           FieldValuesAsText (a per-ITEM endpoint, so it can only ever be one file at a time). */}
-      {tab === "Submissions" && (() => {
-        /* EVERY submission, however it was filed. The bulk runs used to be filtered out to their own
+      {tab === "Submissions" &&
+        (() => {
+          /* EVERY submission, however it was filed. The bulk runs used to be filtered out to their own
            tab; they are rows in this list now, told apart by the Upload column. */
-        const groups = groupSubmissions(rows ?? []);
-        /* ⚠ `some`, NOT `every`, and it matches the rule the old tab partition used. A group made by
+          const groups = groupSubmissions(rows ?? []);
+          /* ⚠ `some`, NOT `every`, and it matches the rule the old tab partition used. A group made by
            the import tool is entirely bulk, so the two agree in every real case — but an INFERRED
            group (folder + date, for files uploaded before submissions were recorded) can legitimately
            mix the two, and calling such a row "Batch" would hide that a bulk import is in it. */
-        const isBulkGroup = (g: SubmissionGroup): boolean => g.files.some(isBulkUploadRow);
-        const keyOf = (g: SubmissionGroup): string =>
-          g.reference || (g.files[0] ? submissionKey(g.files[0]) : "");
-        const current = groups.filter((g) => keyOf(g) === openSubmission)[0];
-        const batch = current
-          ? current.batches.filter((b) => (b.reference || "—") === openBatch)[0]
-          : undefined;
+          const isBulkGroup = (g: SubmissionGroup): boolean =>
+            g.files.some(isBulkUploadRow);
+          const keyOf = (g: SubmissionGroup): string =>
+            g.reference || (g.files[0] ? submissionKey(g.files[0]) : "");
+          const current = groups.filter((g) => keyOf(g) === openSubmission)[0];
+          const batch = current
+            ? current.batches.filter(
+                (b) => (b.reference || "—") === openBatch,
+              )[0]
+            : undefined;
 
-        const countLine = (files: MergedRow[]): string => {
-          /* Live rows only for the APPROVAL states — a deleted file has no approval outcome, and
+          const countLine = (files: MergedRow[]): string => {
+            /* Live rows only for the APPROVAL states — a deleted file has no approval outcome, and
              counting its placeholder `Pending` would report a destroyed document as awaiting
              approval. */
-          const c = statusCounts(liveRowsOnly(files));
-          // Only the non-zero states. "0 rejected" on every row is noise, and the one number that
-          // matters is buried among the ones that do not.
-          const parts = (["Approved", "Pending", "Rejected"] as const)
-            .filter((k) => c[k] > 0)
-            .map((k) => `${c[k]} ${k.toLowerCase()}`);
-          /* ⚠ AND THE GONE ONES, COUNTED SEPARATELY AND SHOWN LAST (client, 2026-08-27: *"what would
+            const c = statusCounts(liveRowsOnly(files));
+            // Only the non-zero states. "0 rejected" on every row is noise, and the one number that
+            // matters is buried among the ones that do not.
+            const parts = (["Approved", "Pending", "Rejected"] as const)
+              .filter((k) => c[k] > 0)
+              .map((k) => `${c[k]} ${k.toLowerCase()}`);
+            /* ⚠ AND THE GONE ONES, COUNTED SEPARATELY AND SHOWN LAST (client, 2026-08-27: *"what would
              be great is if you put the status as deleted"*).
              Excluding them from the approval tally was right; leaving them out of the line ENTIRELY
              was not — a submission whose only file has been deleted rendered a BLANK Status cell,
@@ -2682,23 +3995,25 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
              of a file is the one thing it must never show.
              `unknown` is worded differently on purpose: it means the libraries could not all be read,
              so those files may be perfectly fine. */
-          /* ⚠ EVERY RECORD STATE, FROM ONE LIST — and it is a list because this line has now been
+            /* ⚠ EVERY RECORD STATE, FROM ONE LIST — and it is a list because this line has now been
              short twice. `cancelled` was left out on 2026-08-28 and `archived` on 2026-09-03, each
              time leaving a submission whose files were ALL in that state with a **blank Status
              cell** (client: *"the files in Status for Archive is not showing"*). On the page whose
              whole job is saying what became of a file, blank is the one answer it must never give.
              `recordStateParts` is driven by a `Record` over the union, so a fifth state is a compile
              error rather than another blank cell. */
-          return parts.concat(recordStateParts(recordCounts(files))).join(" · ");
-        };
+            return parts
+              .concat(recordStateParts(recordCounts(files)))
+              .join(" · ");
+          };
 
-        if (rows === undefined) return <p style={s.empty}>Loading&hellip;</p>;
-        if (groups.length === 0) {
-          return <p style={s.empty}>You have not uploaded anything yet.</p>;
-        }
+          if (rows === undefined) return <p style={s.empty}>Loading&hellip;</p>;
+          if (groups.length === 0) {
+            return <p style={s.empty}>You have not uploaded anything yet.</p>;
+          }
 
-        // ── Level 3: one batch, as the upload form that created it ───────────────
-        /* Client, 2026-08-22: "when I say upload Form I literally meant a copy of the upload form
+          // ── Level 3: one batch, as the upload form that created it ───────────────
+          /* Client, 2026-08-22: "when I say upload Form I literally meant a copy of the upload form
            with the details in it but view based only."
 
            So this is the form's own shape: the destination chosen ONCE at the top — the permissioned
@@ -2709,92 +4024,105 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
            ⚠ THIS IS THE ONE PLACE THAT COSTS REQUESTS — one `FieldValuesAsText` per file, because it
            is a per-ITEM endpoint. Bounded (a batch is a handful of files) and deliberate (they opened
            it). Everything above is served from rows already loaded. */
-        if (current && batch) {
-          // Keyed by `mergedKey`, matching what `loadBatchText` writes — a record row's item id
-          // belongs to another list, so `submissionKey` could collide across the two kinds of row.
-          /* ⚠ A KEY THAT IS NOT IN THE MAP IS `undefined`, NEVER `{}`. It used to answer `{}`, which
+          if (current && batch) {
+            // Keyed by `mergedKey`, matching what `loadBatchText` writes — a record row's item id
+            // belongs to another list, so `submissionKey` could collide across the two kinds of row.
+            /* ⚠ A KEY THAT IS NOT IN THE MAP IS `undefined`, NEVER `{}`. It used to answer `{}`, which
              says "read, and there was nothing" — and that is a different fact from "not read", which
              is what a missing key actually means. It went wrong the moment a file was approved:
              `mergedKey` is `library#itemId` for a live row, Auto-route re-creates the file in the
              approved-side library with a NEW id, and the map loaded while it was pending then had no
              key for it. The card fell back to `{}` and rendered File size alone — a document that
              looked like it had never carried any metadata. */
-          const ftFor = (f: MergedRow): Record<string, string> | undefined =>
-            batchText ? batchText[mergedKey(f)] : undefined;
-          /* The destination, taken from whichever file in the batch could be read. A batch IS one
+            const ftFor = (f: MergedRow): Record<string, string> | undefined =>
+              batchText ? batchText[mergedKey(f)] : undefined;
+            /* The destination, taken from whichever file in the batch could be read. A batch IS one
              folder, so any of them answers — but the FIRST one may be the one whose read failed, and
              falling back to it would show an empty destination for a batch that has one. */
-          const destSource = batchText
-            ? batch.files.map(ftFor).filter((ft) => ft && Object.keys(ft).length > 0)[0]
-            : undefined;
-          /* ⚠ AND WHEN NO FILE IN THE BATCH IS STILL IN A LIBRARY, THE FOLDER CARD COMES FROM THE
+            const destSource = batchText
+              ? batch.files
+                  .map(ftFor)
+                  .filter((ft) => ft && Object.keys(ft).length > 0)[0]
+              : undefined;
+            /* ⚠ AND WHEN NO FILE IN THE BATCH IS STILL IN A LIBRARY, THE FOLDER CARD COMES FROM THE
              RECORD. Every file archived or deleted means no live item to read, so `destSource` is
              undefined and this card showed nothing but Location — the client's report, verbatim:
              *"the archived files wont show Document folder information like a normal file does."*
              The snapshot holds the tiers, so a gone batch renders the same card a live one does.
              Taken from whichever gone file HAS a snapshot: one written before the record feature
              existed is empty, and it must not stand in for a sibling that has one. */
-          const destRows = destSource
-            ? buildBatchRows(destSource, segmentLabelFor(batch.files[0]?.fileRef ?? ""))
-            : batch.files
-              .map((f) => snapshotFolderRows(f.record?.metadata))
-              .filter((r) => r.length > 0)[0] ?? [];
-          return (
-            <div>
-              {/* ⚠ A BULK RUN GOES STRAIGHT BACK TO THE LIST. Its batch level is a list of one,
+            const destRows = destSource
+              ? buildBatchRows(
+                  destSource,
+                  segmentLabelFor(batch.files[0]?.fileRef ?? ""),
+                )
+              : (batch.files
+                  .map((f) => snapshotFolderRows(f.record?.metadata))
+                  .filter((r) => r.length > 0)[0] ?? []);
+            return (
+              <div>
+                {/* ⚠ A BULK RUN GOES STRAIGHT BACK TO THE LIST. Its batch level is a list of one,
                   and it was skipped on the way in - so clearing only `openBatch` would land the
                   reader on a level they never saw and cannot act on. */}
-              <button
-                style={s.backBtn}
-                onClick={() => {
-                  setOpenBatch(undefined);
-                  setBatchText(undefined);
-                  /* ⚠ CLEARING THE MAP WITHOUT CLEARING ITS SIGNATURE WOULD STRAND THE NEXT VISIT.
+                <button
+                  style={s.backBtn}
+                  onClick={() => {
+                    setOpenBatch(undefined);
+                    setBatchText(undefined);
+                    /* ⚠ CLEARING THE MAP WITHOUT CLEARING ITS SIGNATURE WOULD STRAND THE NEXT VISIT.
                      Reopening the same batch computes the same signature, the effect would decide it
                      had already loaded it, and nothing would ever fill the map it just emptied. The
                      two are one fact and are cleared together. */
-                  batchSigRef.current = "";
-                  /* ⚠ KEYED ON THE GROUP, not on the tab it was reached from (the tab is gone).
+                    batchSigRef.current = "";
+                    /* ⚠ KEYED ON THE GROUP, not on the tab it was reached from (the tab is gone).
                      A bulk run has ONE destination, so its batch level lists exactly one row and
                      answers nothing — the client asked for it to be skipped on the way in
                      (2026-08-28), so it has to be skipped on the way out too, or Back lands on the
                      empty level that was deliberately jumped. */
-                  if (isBulkGroup(current)) setOpenSubmission(undefined);
-                }}
-              >
-                &larr; Back to {isBulkGroup(current) ? "the list" : current.reference || "this submission"}
-              </button>
+                    if (isBulkGroup(current)) setOpenSubmission(undefined);
+                  }}
+                >
+                  &larr; Back to{" "}
+                  {isBulkGroup(current)
+                    ? "the list"
+                    : current.reference || "this submission"}
+                </button>
 
-              <div style={s.card}>
-                <p style={s.cardHead}>Document folder information</p>
-                <div style={s.grid2}>
-                  {/* Location leads and is ALWAYS shown, blank or not: it comes from the file path
+                <div style={s.card}>
+                  <p style={s.cardHead}>Document folder information</p>
+                  <div style={s.grid2}>
+                    {/* Location leads and is ALWAYS shown, blank or not: it comes from the file path
                       rather than the metadata, so it is the one row that is right even when the
                       per-item read failed. */}
-                  <div style={s.detailRow}>
-                    <div style={s.detailLabel}>Location</div>
-                    <div style={s.detailValue}>
-                      {trailText(folderTrail(batch.files[0]?.fileRef ?? "", libs)) || "the library root"}
+                    <div style={s.detailRow}>
+                      <div style={s.detailLabel}>Location</div>
+                      <div style={s.detailValue}>
+                        {trailText(
+                          folderTrail(batch.files[0]?.fileRef ?? "", libs),
+                        ) || "the library root"}
+                      </div>
                     </div>
+                    {destRows.map((r) => (
+                      <div key={r.label} style={s.detailRow}>
+                        <div style={s.detailLabel}>{r.label}</div>
+                        <div style={s.detailValue}>{r.value}</div>
+                      </div>
+                    ))}
                   </div>
-                  {destRows.map((r) => (
-                    <div key={r.label} style={s.detailRow}>
-                      <div style={s.detailLabel}>{r.label}</div>
-                      <div style={s.detailValue}>{r.value}</div>
-                    </div>
-                  ))}
-                </div>
-                {batchText === undefined && <div style={s.trail}>Reading the details&hellip;</div>}
-                {/* ⚠ THE BATCH REFERENCE WAS SHOWN HERE TOO, AND IS NOW GONE (client, 2026-09-03,
+                  {batchText === undefined && (
+                    <div style={s.trail}>Reading the details&hellip;</div>
+                  )}
+                  {/* ⚠ THE BATCH REFERENCE WAS SHOWN HERE TOO, AND IS NOW GONE (client, 2026-09-03,
                     same reasoning as the table two levels up on 2026-08-30: "User will be confused
                     with this info"). Still stored, still what groups these files — only the display
                     is gone, on both screens now. */}
-              </div>
+                </div>
 
-              <p style={s.cardHead}>
-                Document details &mdash; {batch.files.length} file{batch.files.length === 1 ? "" : "s"}
-              </p>
-              {/* ⚠ SCROLLED (client, 2026-08-28). A Bulk Upload run holds up to 50 files, each
+                <p style={s.cardHead}>
+                  Document details &mdash; {batch.files.length} file
+                  {batch.files.length === 1 ? "" : "s"}
+                </p>
+                {/* ⚠ SCROLLED (client, 2026-08-28). A Bulk Upload run holds up to 50 files, each
                   rendering a card with a metadata grid — long enough to bury the footer explaining
                   what Pending and Rejected mean, and to put the Back link a long scroll away.
 
@@ -2807,308 +4135,376 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                   it has caught three screens here (the people-picker in GroupManager, the info panels
                   in `.dms-staged-row`, the add-box dropdown). Anything added inside these cards later
                   must re-check it. */}
-              <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
-              {batch.files.map((f) => {
-                /* ⚠ A GONE FILE'S DETAILS COME FROM THE RECORD, NOT FROM THE ITEM. `FieldValuesAsText`
+                <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+                  {batch.files.map((f) => {
+                    /* ⚠ A GONE FILE'S DETAILS COME FROM THE RECORD, NOT FROM THE ITEM. `FieldValuesAsText`
                    is a per-ITEM endpoint, so for a deleted document it answers nothing and the card
                    would read "no details were recorded" — which is false and defeats the point of
                    keeping the row. The snapshot was written at upload for exactly this moment.
                    No `File size`: that came from the live list query and there is nothing to size. */
-                const gone = f.recordState !== undefined;
-                const ft = gone ? undefined : ftFor(f);
-                /* ⚠ "STILL READING" IS A SEPARATE FACT FROM "NOTHING TO READ", AND `ft` CANNOT
+                    const gone = f.recordState !== undefined;
+                    const ft = gone ? undefined : ftFor(f);
+                    /* ⚠ "STILL READING" IS A SEPARATE FACT FROM "NOTHING TO READ", AND `ft` CANNOT
                    CARRY BOTH. A gone file is never fetched, so its `ft` is `undefined` — and the
                    line below keyed the "Reading the details…" message on exactly that, so every
                    archived and deleted file sat under a message saying its details were on their
                    way, for ever, directly above the details themselves. Seen on site 2026-09-03. */
-                const readingFt = !gone && ft === undefined;
-                /* ⚠ ONLY THE PER-DOCUMENT HALF OF THE SNAPSHOT. It used to render every key, which
+                    const readingFt = !gone && ft === undefined;
+                    /* ⚠ ONLY THE PER-DOCUMENT HALF OF THE SNAPSHOT. It used to render every key, which
                    put Business Segment, Department and Unit on the file card — the folder card's
                    job, one card above, and the reason that card looked empty. */
-                const rows2 = gone
-                  ? snapshotFileRows(f.record?.metadata)
-                  : ft
-                    ? buildFileRows({
-                      fieldText: ft,
-                      // From the list query, not FieldValuesAsText — no extra round trip.
-                      trailing: [{ label: "File size", value: formatBytes(f.size) || "unknown" }],
-                    })
-                    : [];
-                return (
-                  <div key={mergedKey(f)} style={f.recordState ? { ...s.fileCard, ...s.goneRow } : s.fileCard}>
-                    <div style={s.fileHead}>
-                      <strong style={{ fontSize: 13 }}>{f.name}</strong>
-                      {isHcRow(f.library, hcSegs) && <span style={s.hcTag}>HC</span>}
-                {isArchivedRow(f.library, arcSegs) && <span style={s.arcTag}>Archived</span>}
-                      {/* ⚠ THE GONE STATES COME FIRST, and there is no `Open file`. This is the view
+                    const rows2 = gone
+                      ? snapshotFileRows(f.record?.metadata)
+                      : ft
+                        ? buildFileRows({
+                            fieldText: ft,
+                            // From the list query, not FieldValuesAsText — no extra round trip.
+                            trailing: [
+                              {
+                                label: "File size",
+                                value: formatBytes(f.size) || "unknown",
+                              },
+                            ],
+                          })
+                        : [];
+                    return (
+                      <div
+                        key={mergedKey(f)}
+                        style={
+                          f.recordState
+                            ? { ...s.fileCard, ...s.goneRow }
+                            : s.fileCard
+                        }
+                      >
+                        <div style={s.fileHead}>
+                          <strong style={{ fontSize: 13 }}>{f.name}</strong>
+                          {isHcRow(f.library, hcSegs) && (
+                            <span style={s.hcTag}>HC</span>
+                          )}
+                          {isArchivedRow(f.library, arcSegs) && (
+                            <span style={s.arcTag}>Archived</span>
+                          )}
+                          {/* ⚠ THE GONE STATES COME FIRST, and there is no `Open file`. This is the view
                           the client actually asked for — the file still listed inside its own batch,
                           with what was submitted — so the row must stay and only the actions go. */}
-                      {f.recordState === "deleted" ? (
-                        <span style={s.goneBadge}>Deleted</span>
-                      ) : f.recordState === "cancelled" ? (
-                        <span style={s.replacedBadge}>Replaced</span>
-                      ) : f.recordState === "withdrawn" ? (
-                        <span style={s.withdrawnBadge}>Cancelled</span>
-                      ) : f.recordState === "archived" ? (
-                        <span style={s.archivedBadge}>Archived</span>
-                      ) : f.recordState === "unknown" ? (
-                        <span style={s.unsureBadge}>Not checked</span>
-                      ) : (
-                        <span style={badgeFor(f.status)}>{f.status}</span>
-                      )}
-                      {/* The way to the full panel — preview, rejection reason, and the deletion and
+                          {f.recordState === "deleted" ? (
+                            <span style={s.goneBadge}>Deleted</span>
+                          ) : f.recordState === "cancelled" ? (
+                            <span style={s.replacedBadge}>Replaced</span>
+                          ) : f.recordState === "withdrawn" ? (
+                            <span style={s.withdrawnBadge}>Cancelled</span>
+                          ) : f.recordState === "archived" ? (
+                            <span style={s.archivedBadge}>Archived</span>
+                          ) : f.recordState === "unknown" ? (
+                            <span style={s.unsureBadge}>Not checked</span>
+                          ) : (
+                            <span style={badgeFor(f.status)}>{f.status}</span>
+                          )}
+                          {/* The way to the full panel — preview, rejection reason, and the deletion and
                           share buttons. This view is read-only by design; that one is where an
                           uploader ACTS on a file. */}
-                      {!f.recordState && (
-                        <button style={s.openBtn} onClick={() => openRow(f)}>Open file</button>
-                      )}
-                    </div>
-                    {/* ⚠ WHO AND WHEN, or "Cancelled" is just a politer "Deleted". The client asked
+                          {!f.recordState && (
+                            <button
+                              style={s.openBtn}
+                              onClick={() => openRow(f)}
+                            >
+                              Open file
+                            </button>
+                          )}
+                        </div>
+                        {/* ⚠ WHO AND WHEN, or "Cancelled" is just a politer "Deleted". The client asked
                         for this state so a replaced document reads as superseded rather than lost —
                         which only helps if the uploader can see who filed the newer version and go
                         and look at it. Rendered from the record, so it survives the document. */}
-                    {/* ⚠ SAYS WHERE IT WENT, or "Archived" is just a politer "Deleted" again. The
+                        {/* ⚠ SAYS WHERE IT WENT, or "Archived" is just a politer "Deleted" again. The
                         uploader cannot open it from here and cannot browse to it — archive access is
                         C-Level only — so without this the row states a fact and leaves them with
                         nowhere to go. Naming who to ask is the actionable part. */}
-                    {f.recordState === "archived" && (
-                      <p style={s.trail}>
-                        Moved to the archive
-                        {f.record?.archivedAt
-                          ? ` on ${f.record.archivedAt.toISOString().slice(0, 10)}`
-                          : ""}
-                        {" "}under the seven-year retention rule. It is still kept, but only C-level
-                        users and system administrators can open the archive — ask them if you need a
-                        copy. The details below are what <em>this</em> submission carried.
-                      </p>
-                    )}
-                    {f.recordState === "cancelled" && (
-                      <p style={s.trail}>
-                        Replaced by a newer upload
-                        {f.record?.replacedBy ? ` from ${f.record.replacedBy}` : ""}
-                        {f.record?.replacedAt
-                          ? ` on ${f.record.replacedAt.toISOString().slice(0, 10)}`
-                          : ""}
-                        . The details below are what <em>this</em> submission carried.
-                      </p>
-                    )}
-                    {/* ⚠ WHO, or "Cancelled" reads as somebody else's decision. `withdrawnBy` is
+                        {f.recordState === "archived" && (
+                          <p style={s.trail}>
+                            Moved to the archive
+                            {f.record?.archivedAt
+                              ? ` on ${f.record.archivedAt.toISOString().slice(0, 10)}`
+                              : ""}{" "}
+                            under the seven-year retention rule. It is still
+                            kept, but only C-level users and system
+                            administrators can open the archive — ask them if
+                            you need a copy. The details below are what{" "}
+                            <em>this</em> submission carried.
+                          </p>
+                        )}
+                        {f.recordState === "cancelled" && (
+                          <p style={s.trail}>
+                            Replaced by a newer upload
+                            {f.record?.replacedBy
+                              ? ` from ${f.record.replacedBy}`
+                              : ""}
+                            {f.record?.replacedAt
+                              ? ` on ${f.record.replacedAt.toISOString().slice(0, 10)}`
+                              : ""}
+                            . The details below are what <em>this</em>{" "}
+                            submission carried.
+                          </p>
+                        )}
+                        {/* ⚠ WHO, or "Cancelled" reads as somebody else's decision. `withdrawnBy` is
                         always the uploader themselves — this action only ever runs against their own
                         pending/rejected file — but naming them is what makes it read as an act the
                         uploader chose, not something that happened to them. */}
-                    {f.recordState === "withdrawn" && (
-                      <p style={s.trail}>
-                        Deleted directly, before it was approved
-                        {f.record?.withdrawnAt
-                          ? ` on ${f.record.withdrawnAt.toISOString().slice(0, 10)}`
-                          : ""}
-                        . The details below are what <em>this</em> submission carried.
-                      </p>
-                    )}
-                    {readingFt && <p style={s.trail}>Reading the details&hellip;</p>}
-                    {/* Empty ≠ unknown: `{}` here is a read that failed or an item with nothing
+                        {f.recordState === "withdrawn" && (
+                          <p style={s.trail}>
+                            Deleted directly, before it was approved
+                            {f.record?.withdrawnAt
+                              ? ` on ${f.record.withdrawnAt.toISOString().slice(0, 10)}`
+                              : ""}
+                            . The details below are what <em>this</em>{" "}
+                            submission carried.
+                          </p>
+                        )}
+                        {readingFt && (
+                          <p style={s.trail}>Reading the details&hellip;</p>
+                        )}
+                        {/* Empty ≠ unknown: `{}` here is a read that failed or an item with nothing
                         recorded, and the two are indistinguishable from the response. Say so rather
                         than showing a card that looks like a document with no metadata.
                         Gone files reach this too, when the record predates the snapshot — the
                         sentence is true of both, and a blank card is what it exists to prevent. */}
-                    {!readingFt && rows2.length === 0 && (
-                      <p style={s.trail}>No details were recorded for this file, or they could not be read.</p>
-                    )}
-                    {rows2.length > 0 && (
-                      <div style={s.grid2}>
-                        {rows2.map((r) => (
-                          <div key={r.label} style={s.detailRow}>
-                            <div style={s.detailLabel}>{r.label}</div>
-                            <div style={s.detailValue}>{r.value}</div>
+                        {!readingFt && rows2.length === 0 && (
+                          <p style={s.trail}>
+                            No details were recorded for this file, or they
+                            could not be read.
+                          </p>
+                        )}
+                        {rows2.length > 0 && (
+                          <div style={s.grid2}>
+                            {rows2.map((r) => (
+                              <div key={r.label} style={s.detailRow}>
+                                <div style={s.detailLabel}>{r.label}</div>
+                                <div style={s.detailValue}>{r.value}</div>
+                              </div>
+                            ))}
                           </div>
-                        ))}
+                        )}
                       </div>
-                    )}
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          );
-        }
+            );
+          }
 
-        // ── Level 2: the batches inside one submission ───────────────────────────
-        if (current) {
-          return (
-            <div>
-              <button style={s.backBtn} onClick={() => setOpenSubmission(undefined)}>
-                &larr; Back to all submissions
-              </button>
-              <p style={s.cardHead}>
-                {current.reference || "Grouped by folder and date — uploaded before submissions were recorded"}
-                {" — "}{formatSubmittedAt(current.at)}
-              </p>
-              <div style={s.tableWrap}>
-                <table style={s.table}>
-                  <thead>
-                    <tr>
-                      {/* "Set", not "Batch" (client, 2026-09-06) — matching what the upload form calls
+          // ── Level 2: the batches inside one submission ───────────────────────────
+          if (current) {
+            return (
+              <div>
+                <button
+                  style={s.backBtn}
+                  onClick={() => setOpenSubmission(undefined)}
+                >
+                  &larr; Back to all submissions
+                </button>
+                <p style={s.cardHead}>
+                  {/* Client QA item #34.3, 2026-09-13: "Form Submission No.: " prefix. Only when a
+                      real reference exists — the inferred-grouping sentence is not a reference. */}
+                  {current.reference
+                    ? `Form Submission No.: ${current.reference}`
+                    : "Grouped by folder and date — uploaded before submissions were recorded"}
+                  {" — "}
+                  {formatSubmittedAt(current.at)}
+                </p>
+                <div style={s.tableWrap}>
+                  <table style={s.table}>
+                    <thead>
+                      <tr>
+                        {/* "Set", not "Batch" (client, 2026-09-06) — matching what the upload form calls
                           it, so one thing has one name across the two screens.
                           ⚠ DISPLAY ONLY. `BatchId` and `BatchRef` are columns on all four libraries
                           and on `CRS Submissions`, and every stored value keeps the old name — this
                           renames the word on screen and nothing else. */}
-                      <th style={s.th}>Set &mdash; where these files went</th>
-                      <th style={s.th}>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {current.batches.map((b) => (
-                      <tr key={b.reference || submissionKey(b.files[0])}>
-                        <td style={s.td}>
-                          {/* ⚠ THIS DOES NOT LOAD THE DETAILS, DELIBERATELY. The effect near the top
+                        <th style={s.th}>Set &mdash; where these files went</th>
+                        <th style={s.th}>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {current.batches.map((b) => (
+                        <tr key={b.reference || submissionKey(b.files[0])}>
+                          <td style={s.td}>
+                            {/* ⚠ THIS DOES NOT LOAD THE DETAILS, DELIBERATELY. The effect near the top
                               watches `openBatch` and loads them — because level 1 opens a bulk run's
                               batch directly and forgot to, which left every card reading "Reading the
                               details…" for ever. One route in, one loader. */}
-                          <button
-                            style={s.nameBtn}
-                            onClick={() => setOpenBatch(b.reference || "—")}
-                          >
-                            {trailText(folderTrail(b.files[0]?.fileRef ?? "", libs)) || "—"}
-                          </button>
-                          {/* ⚠ THE BATCH REFERENCE (`BAT-20260827-WFDZ`) IS NO LONGER SHOWN (client,
+                            <button
+                              style={s.nameBtn}
+                              onClick={() => setOpenBatch(b.reference || "—")}
+                            >
+                              {trailText(
+                                folderTrail(b.files[0]?.fileRef ?? "", libs),
+                              ) || "—"}
+                            </button>
+                            {/* ⚠ THE BATCH REFERENCE (`BAT-20260827-WFDZ`) IS NO LONGER SHOWN (client,
                               2026-08-30: *"User will be confused with this info"*). It is still
                               STORED and still what groups these files — only the display is gone. The
                               SUBMISSION reference above is kept: that is the one an uploader quotes to
                               their approver, which is the whole reason references are readable rather
                               than GUIDs. A batch is an internal subdivision of it. */}
-                          <div style={s.trail}>
-                            {b.files.length} file{b.files.length === 1 ? "" : "s"}
-                          </div>
-                        </td>
-                        <td style={s.td}>{countLine(b.files)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                            <div style={s.trail}>
+                              {b.files.length} file
+                              {b.files.length === 1 ? "" : "s"}
+                            </div>
+                          </td>
+                          <td style={s.td}>{countLine(b.files)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          );
-        }
+            );
+          }
 
-        // ── Level 1: every submission ────────────────────────────────────────────
-        return (
-          <div>
-            {refsMissing && (
-              /* Says WHY rather than looking broken. Not an error: grouping is an addition, and
+          // ── Level 1: every submission ────────────────────────────────────────────
+          return (
+            <div>
+              {refsMissing && (
+                /* Says WHY rather than looking broken. Not an error: grouping is an addition, and
                  everything below still lists correctly without it. */
-              <div style={s.warnBox}>
-                These libraries have not been reconciled since submissions were introduced, so older
-                files carry no reference and are grouped by folder and date instead &mdash; a good
-                guess, not a record. An administrator running <strong>Folder Reconciliation</strong>{" "}
-                adds the columns; every upload after that is grouped by what was actually sent.
-              </div>
-            )}
-            {/* PAGED, not scrolled (client, 2026-09-04). The 60vh box is gone; the pager below
+                <div style={s.warnBox}>
+                  These libraries have not been reconciled since submissions
+                  were introduced, so older files carry no reference and are
+                  grouped by folder and date instead &mdash; a good guess, not a
+                  record. An administrator running{" "}
+                  <strong>Folder Reconciliation</strong> adds the columns; every
+                  upload after that is grouped by what was actually sent.
+                </div>
+              )}
+              {/* PAGED, not scrolled (client, 2026-09-04). The 60vh box is gone; the pager below
                 states the total, which the scroll box never did. */}
-            <div style={s.tableWrap}>
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    <th style={s.th}>Submission</th>
-                    <th style={s.th}>Sets</th>
-                    {/* ⚠ THE "Upload" COLUMN IS GONE (client, 2026-09-03: "you forgot to remove the
+              <div style={s.tableWrap}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>Submission</th>
+                      <th style={s.th}>Sets</th>
+                      {/* ⚠ THE "Upload" COLUMN IS GONE (client, 2026-09-03: "you forgot to remove the
                         upload column, add Bulk tagging beside the folder name"). It read `Batch` on
                         almost every row — the ordinary case, saying nothing — so a whole column was
                         spent distinguishing the rare one. The `Bulk` chip moved INLINE beside the
                         folder path in the Submission cell, and `Batch` is now simply the unmarked
                         default. Supersedes the 2026-08-30 note that put this column beside Batches. */}
-                    <th style={s.th}>Files</th>
-                    <th style={s.th}>Status</th>
-                    <th style={s.th}>Uploaded</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pg_submissions.slice.map((g) => {
-                    /* ⚠ THE ROW IS LABELLED BY ITS DESTINATION, NOT BY A REFERENCE OR A FILE NAME
+                      <th style={s.th}>Files</th>
+                      <th style={s.th}>Status</th>
+                      <th style={s.th}>Uploaded</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pg_submissions.slice.map((g) => {
+                      /* ⚠ THE ROW IS LABELLED BY ITS DESTINATION, NOT BY A REFERENCE OR A FILE NAME
                        (client, 2026-08-22, sketching it: `GHO › GF › TAX › 2024 › Term Sheet`).
                        A reference is what you QUOTE to an approver; a path is what you RECOGNISE, and
                        recognising the one you want is the whole job of this list. The reference stays,
                        below and in monospace, for the quoting. */
-                    const where = trailText(folderTrail(g.batches[0]?.files[0]?.fileRef ?? "", libs));
-                    const more = g.batches.length - 1;
-                    return (
-                    <tr key={keyOf(g)}>
-                      <td style={s.td}>
-                        <button
-                          style={s.nameBtn}
-                          onClick={() => {
-                            setOpenSubmission(keyOf(g));
-                            /* ⚠ A BULK RUN HAS ONE DESTINATION, so its batch level lists exactly one
+                      const where = trailText(
+                        folderTrail(
+                          g.batches[0]?.files[0]?.fileRef ?? "",
+                          libs,
+                        ),
+                      );
+                      const more = g.batches.length - 1;
+                      return (
+                        <tr key={keyOf(g)}>
+                          <td style={s.td}>
+                            <button
+                              style={s.nameBtn}
+                              onClick={() => {
+                                setOpenSubmission(keyOf(g));
+                                /* ⚠ A BULK RUN HAS ONE DESTINATION, so its batch level lists exactly one
                                row - a click that answers nothing. Opening the batch at the same time
                                takes the reader straight to the files (client, 2026-08-28: *"it will
                                open the second page immediately ... because there isn't any
                                batches"*). */
-                            setOpenBatch(isBulkGroup(g) ? g.batches[0]?.reference || "—" : undefined);
-                          }}
-                        >
-                          {where || g.files[0]?.name || "—"}
-                          {/* Named rather than silently showing only the first: a submission that went
+                                setOpenBatch(
+                                  isBulkGroup(g)
+                                    ? g.batches[0]?.reference || "—"
+                                    : undefined,
+                                );
+                              }}
+                            >
+                              {where || g.files[0]?.name || "—"}
+                              {/* Named rather than silently showing only the first: a submission that went
                               to three places must not look like one that went to one. */}
-                          {more > 0 && ` + ${more} more destination${more === 1 ? "" : "s"}`}
-                        </button>
-                        {/* ⚠ ONLY BULK IS TAGGED (client, 2026-09-03). A batch upload is the ordinary
+                              {more > 0 &&
+                                ` + ${more} more destination${more === 1 ? "" : "s"}`}
+                            </button>
+                            {/* ⚠ ONLY BULK IS TAGGED (client, 2026-09-03). A batch upload is the ordinary
                             way files arrive here, so marking it said nothing; the tag now marks the
                             exception, beside the path it belongs to rather than in a column of its
                             own. `isBulkGroup` is unchanged — this is where its answer is shown, not
                             what it answers. */}
-                        {isBulkGroup(g) && <span style={s.bulkChip}>Bulk</span>}
-                        {g.inferred ? (
-                          /* Said plainly. These rows are grouped by folder and day because nothing on
+                            {isBulkGroup(g) && (
+                              <span style={s.bulkChip}>Bulk</span>
+                            )}
+                            {g.inferred ? (
+                              /* Said plainly. These rows are grouped by folder and day because nothing on
                              them records the upload — a good guess, and the screen must not pass it
                              off as a recorded submission. */
-                          <div style={s.trail}>Grouped by folder and date &mdash; uploaded before submissions were recorded</div>
-                        ) : (
-                          <div style={s.refLine}>{g.reference}</div>
-                        )}
-                      </td>
-                      <td style={s.td}>{g.batches.length}</td>
-                      <td style={s.td}>{g.files.length}</td>
-                      <td style={s.td}>{countLine(g.files)}</td>
-                      <td style={s.td}>{formatSubmittedAt(g.at)}</td>
-                    </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                              <div style={s.trail}>
+                                Grouped by folder and date &mdash; uploaded
+                                before submissions were recorded
+                              </div>
+                            ) : (
+                              // Client QA item #34.3, 2026-09-13: "Form Submission No.: " prefix.
+                              <div style={s.refLine}>
+                                Form Submission No.: {g.reference}
+                              </div>
+                            )}
+                          </td>
+                          <td style={s.td}>{g.batches.length}</td>
+                          <td style={s.td}>{g.files.length}</td>
+                          <td style={s.td}>{countLine(g.files)}</td>
+                          <td style={s.td}>{formatSubmittedAt(g.at)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <Pager
+                page={pg_submissions}
+                onPage={(n) => setPage("submissions", n)}
+                label="submissions"
+              />
             </div>
-            <Pager page={pg_submissions} onPage={(n) => setPage("submissions", n)} label="submissions" />
-          </div>
-        );
-      })()}
+          );
+        })()}
 
       {tab === "Requests" && (
         <>
           {!policy.known && <p style={s.empty}>Checking&hellip;</p>}
           {policy.known && myRequestList.length === 0 && (
             <p style={s.empty}>
-              You have not asked for anything yet. Open one of your files and use{" "}
-              <strong>Request deletion</strong> or <strong>Request share</strong>.
+              You have not asked for anything yet. Open one of your files and
+              use <strong>Request deletion</strong> or{" "}
+              <strong>Request share</strong>.
             </p>
           )}
           {myRequestList.length > 0 && (
             <>
-            <div style={s.tableWrap}>
-              <table style={s.table}>
-                <thead>
-                  <tr>
-                    <th style={s.th}>File</th>
-                    <th style={s.th}>Asked for</th>
-                    <th style={s.th}>Status</th>
-                    <th style={s.th}>Raised</th>
-                    <th style={s.th} />
-                  </tr>
-                </thead>
-                <tbody>
-                  {pg_requests.slice.map((rq) => {
-                    const on = new Date(rq.at);
-                    return (
-                      <tr key={rq.id}>
-                        {/* ⚠ NAME ALONE IS NOT AN IDENTIFIER HERE (client, 2026-09-10: *"I can't
+              <div style={s.tableWrap}>
+                <table style={s.table}>
+                  <thead>
+                    <tr>
+                      <th style={s.th}>File</th>
+                      <th style={s.th}>Asked for</th>
+                      <th style={s.th}>Status</th>
+                      <th style={s.th}>Raised</th>
+                      <th style={s.th} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pg_requests.slice.map((rq) => {
+                      const on = new Date(rq.at);
+                      return (
+                        <tr key={rq.id}>
+                          {/* ⚠ NAME ALONE IS NOT AN IDENTIFIER HERE (client, 2026-09-10: *"I can't
                             really tell which file to cancel the delete request"*). The same filename
                             can exist in BOTH libraries — one upload Highly Confidential, one not —
                             and on 2026-08-21 an approved deletion took the HC copy while an
@@ -3117,66 +4513,118 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                             was the one place a requester still chose blind.
                             Derived from the row's own `ItemUrl`, so it costs no extra read, and
                             rendered in the same shape as the file rows below. */}
-                        <td style={s.td}>
-                          {rq.itemName || <em style={{ color: "#605e5c" }}>unnamed</em>}
-                          {(() => {
-                            const seg = librarySegmentOf(rq.itemPath, libs);
-                            /* `seg` is undefined when the path named no library we know — which tags
+                          <td style={s.td}>
+                            {rq.itemName || (
+                              <em style={{ color: "#605e5c" }}>unnamed</em>
+                            )}
+                            {(() => {
+                              const seg = librarySegmentOf(rq.itemPath, libs);
+                              /* `seg` is undefined when the path named no library we know — which tags
                                NOTHING rather than guessing. A wrong HC tag on an ordinary document is
                                worse than an absent one. */
-                            return (
-                              <>
-                                {isHcRow(seg ?? "", hcSegs) && <span style={s.hcTag}>HC</span>}
-                                {isArchivedRow(seg ?? "", arcSegs) && <span style={s.arcTag}>Archived</span>}
-                              </>
-                            );
-                          })()}
-                          {/* An em dash rather than an empty cell: a blank reads as a failed load,
+                              return (
+                                <>
+                                  {isHcRow(seg ?? "", hcSegs) && (
+                                    <span style={s.hcTag}>HC</span>
+                                  )}
+                                  {isArchivedRow(seg ?? "", arcSegs) && (
+                                    <span style={s.arcTag}>Archived</span>
+                                  )}
+                                </>
+                              );
+                            })()}
+                            {/* An em dash rather than an empty cell: a blank reads as a failed load,
                               and a path is missing only for a row written before `ItemUrl` was
                               recorded — which is a fact about the row, not about this page. */}
-                          <div style={s.trail}>{trailText(folderTrail(rq.itemPath, libs)) || "—"}</div>
-                        </td>
-                        <td style={s.td}>{rq.type === "Share" ? "Share" : "Deletion"}</td>
-                        <td style={s.td}>
-                          <span style={badgeFor(rq.status === "Cancelled" ? "Rejected" : rq.status)}>
-                            {rq.status}
-                          </span>
-                          {rq.decidedBy ? (
-                            <div style={{ fontSize: 11, color: "#605e5c", marginTop: 2 }}>by {rq.decidedBy}</div>
-                          ) : null}
-                          {rq.note ? (
-                            <div style={{ fontSize: 11, color: "#605e5c", marginTop: 2 }}>&ldquo;{rq.note}&rdquo;</div>
-                          ) : null}
-                        </td>
-                        <td style={s.td}>{isNaN(on.getTime()) ? "—" : formatSubmittedOn(on)}</td>
-                        <td style={s.td}>
-                          {/* Only the requester's own PENDING rows, and this list only ever holds their
+                            <div style={s.trail}>
+                              {trailText(folderTrail(rq.itemPath, libs)) || "—"}
+                            </div>
+                          </td>
+                          <td style={s.td}>
+                            {rq.type === "Share" ? "Share" : "Deletion"}
+                          </td>
+                          <td style={s.td}>
+                            <span
+                              style={badgeFor(
+                                rq.status === "Cancelled"
+                                  ? "Rejected"
+                                  : rq.status,
+                              )}
+                            >
+                              {rq.status}
+                            </span>
+                            {rq.decidedBy ? (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: "#605e5c",
+                                  marginTop: 2,
+                                }}
+                              >
+                                by {rq.decidedBy}
+                              </div>
+                            ) : null}
+                            {rq.note ? (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: "#605e5c",
+                                  marginTop: 2,
+                                }}
+                              >
+                                &ldquo;{rq.note}&rdquo;
+                              </div>
+                            ) : null}
+                          </td>
+                          <td style={s.td}>
+                            {/* formatSubmittedAt (date + time), matching the Submissions tab and every
+                              status tab's own date column — the Permission tab was the one place a
+                              request's timestamp dropped its time, which read as an inconsistency
+                              (client, 2026-09-17: "we must ensure that the time is there for all
+                              tabs... permission tab is the only one that do not have it"). */}
+                            {isNaN(on.getTime()) ? "—" : formatSubmittedAt(on)}
+                          </td>
+                          <td style={s.td}>
+                            {/* Only the requester's own PENDING rows, and this list only ever holds their
                               own. Cancelling a DECIDED request is refused by canCancel: it could not
                               un-recycle a file or take back a share, so offering it would promise
                               something the button cannot do. */}
-                          {rq.status === "Pending" ? (
-                            <button
-                              style={cancelling === rq.id ? s.askOff : s.askBtn}
-                              disabled={cancelling !== undefined}
-                              onClick={() => { cancelRequest(rq).catch(() => undefined); }}
-                            >
-                              {cancelling === rq.id ? "Cancelling…" : "Cancel"}
-                            </button>
-                          ) : null}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            <Pager page={pg_requests} onPage={(n) => setPage("requests", n)} label="requests" />
+                            {rq.status === "Pending" ? (
+                              <button
+                                style={
+                                  cancelling === rq.id ? s.askOff : s.askBtn
+                                }
+                                disabled={cancelling !== undefined}
+                                onClick={() => {
+                                  cancelRequest(rq).catch(() => undefined);
+                                }}
+                              >
+                                {cancelling === rq.id
+                                  ? "Cancelling…"
+                                  : "Cancel"}
+                              </button>
+                            ) : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <Pager
+                page={pg_requests}
+                onPage={(n) => setPage("requests", n)}
+                label="requests"
+              />
             </>
           )}
         </>
       )}
 
       {requestDialog}
+      {/* ⚠ THE MISSING SITE — see `withdrawDialog`'s own comment above for why the row-level Delete
+          button's confirm was setting state that had nowhere to render while on this list. */}
+      {withdrawDialog}
 
       {/* ⚠ THESE BELONG TO THE STATUS TABS ALONE, and gating them on `!== "Requests"` was not enough
           once `Submissions` was added (2026-08-22). `filterByTab` has no case for it, so `shown` is
@@ -3184,7 +4632,9 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           seven of them — a screen contradicting itself, which reads as a bug. Named as a predicate
           rather than a second literal, so the next tab added cannot walk back into it: anything that
           is not a status filter belongs here. */}
-      {isStatusTab && rows === undefined && loadError === undefined && <p style={s.empty}>Loading&hellip;</p>}
+      {isStatusTab && rows === undefined && loadError === undefined && (
+        <p style={s.empty}>Loading&hellip;</p>
+      )}
 
       {/* ⚠ THE DELETED / REPLACED / ARCHIVED SENTENCES ARE GONE (client, 2026-09-03: *"Remove these
           text in My Submissions"*, quoting the whole paragraph). Each row already carries the same
@@ -3197,137 +4647,159 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
           may be missing from this page entirely and the ones marked "not checked" may be perfectly
           fine. Dropping it would leave a page that is quietly incomplete with nothing saying so —
           the opposite of the other three, which describe rows that ARE listed. */}
-      {recordNote !== undefined && recordNote.unknown > 0 && (tab === "All" || tab === "Submissions") && (
-        <p style={s.goneNote}>
-          {recordNote.unknown} could not be checked, because one of the libraries did not respond{" "}
-          — {recordNote.unknown === 1 ? "it" : "they"} may be perfectly fine. Reload to try again.
-        </p>
-      )}
+      {recordNote !== undefined &&
+        recordNote.unknown > 0 &&
+        (tab === "All" || tab === "Submissions") && (
+          <p style={s.goneNote}>
+            {recordNote.unknown} could not be checked, because one of the
+            libraries did not respond —{" "}
+            {recordNote.unknown === 1 ? "it" : "they"} may be perfectly fine.
+            Reload to try again.
+          </p>
+        )}
 
       {/* Three empty states, kept apart on purpose — spec §4.2. */}
       {isStatusTab && rows !== undefined && rows.length === 0 && (
         <p style={s.empty}>
-          You have not uploaded anything yet. Files you submit on the upload form appear here, with
-          their approval status.
+          You have not uploaded anything yet. Files you submit on the upload
+          form appear here, with their approval status.
         </p>
       )}
-      {isStatusTab && rows !== undefined && rows.length > 0 && shown.length === 0 && (
-        <p style={s.empty}>
-          {/* ⚠ `Archive` NEEDS ITS OWN WORDING: the generic form is built from the tab name, which
+      {isStatusTab &&
+        rows !== undefined &&
+        rows.length > 0 &&
+        shown.length === 0 && (
+          <p style={s.empty}>
+            {/* ⚠ `Archive` NEEDS ITS OWN WORDING: the generic form is built from the tab name, which
               would read "Nothing is archive right now". It is also the one tab whose empty state is
               the NORMAL case for years — nothing on either site is close to seven years old — so it
               says why rather than implying something is missing. */}
-          {tab === "Archive"
-            ? "No files of yours have been archived yet. Documents move here seven years after they were filed."
-            : `Nothing ${tab === "All" ? "here" : `is ${tab.toLowerCase()}`} right now. Your other files are under the tabs above.`}
-        </p>
-      )}
+            {tab === "Archive"
+              ? "No files of yours have been archived yet. Documents move here seven years after they were filed."
+              : `Nothing ${tab === "All" ? "here" : `is ${tab.toLowerCase()}`} right now. Your other files are under the tabs above.`}
+          </p>
+        )}
 
       {shown.length > 0 && (
         <>
-        <div style={s.tableWrap}>
-          <table style={s.table}>
-            <thead>
-              <tr>
-                <th style={s.th}>File</th>
-                <th style={s.th}>Status</th>
-                <th style={s.th}>Uploaded</th>
-                <th style={s.th}>Approved By</th>
-                <th style={s.th}>Comment</th>
-                <th style={s.th} />
-              </tr>
-            </thead>
-            <tbody>
-              {pg_rows.slice.map((r) => (
-                /* ⚠ KEYED BY `mergedKey`, NOT `submissionKey`. The latter is `library#itemId`, and a
+          <div style={s.tableWrap}>
+            <table style={s.table}>
+              <thead>
+                <tr>
+                  <th style={s.th}>File</th>
+                  <th style={s.th}>Status</th>
+                  <th style={s.th}>Uploaded</th>
+                  <th style={s.th}>Approved By</th>
+                  <th style={s.th}>Comment</th>
+                  <th style={s.th} />
+                </tr>
+              </thead>
+              <tbody>
+                {pg_rows.slice.map((r) => (
+                  /* ⚠ KEYED BY `mergedKey`, NOT `submissionKey`. The latter is `library#itemId`, and a
                    record row's item id belongs to a DIFFERENT list — so two records could collide with
                    each other and with a live document, and React would silently drop a row. */
-                <tr key={mergedKey(r)} style={r.recordState ? s.goneRow : undefined}>
-                  <td style={s.td}>
-                    {/* ⚠ A GONE FILE IS NOT A BUTTON. There is nothing to open: no preview, no Open
+                  <tr
+                    key={mergedKey(r)}
+                    style={r.recordState ? s.goneRow : undefined}
+                  >
+                    <td style={s.td}>
+                      {/* ⚠ A GONE FILE IS NOT A BUTTON. There is nothing to open: no preview, no Open
                         file, and the detail view would read the item live and find nothing. Branching
                         on `recordState` BEFORE anything else is the rule the whole record rests on. */}
-                    {r.recordState ? (
-                      <span style={s.goneName}>{r.name}</span>
-                    ) : (
-                      /* A button, not a link. It opens the detail view INSIDE this page — the client's
+                      {r.recordState ? (
+                        <span style={s.goneName}>{r.name}</span>
+                      ) : (
+                        /* A button, not a link. It opens the detail view INSIDE this page — the client's
                          request, and the fix for a click that used to land the uploader in the
                          document library. The file itself is still one click further, from there. */
-                      <button style={s.nameBtn} onClick={() => openRow(r)}>
-                        {r.name}
-                      </button>
-                    )}
-                    {/* ⚠ THE SAME NAME CAN EXIST IN BOTH LIBRARIES — one upload classified Highly
+                        <button style={s.nameBtn} onClick={() => openRow(r)}>
+                          {r.name}
+                        </button>
+                      )}
+                      {/* ⚠ THE SAME NAME CAN EXIST IN BOTH LIBRARIES — one upload classified Highly
                         Confidential, one not — and without this they are indistinguishable here: same
                         name, same tier path, same status. An uploader raising a deletion was choosing
                         blind, and only the recycle bin's Original location revealed which went. */}
-                    {isHcRow(r.library, hcSegs) && <span style={s.hcTag}>HC</span>}
-                  {isArchivedRow(r.library, arcSegs) && <span style={s.arcTag}>Archived</span>}
-                    <div style={s.trail}>{trailText(folderTrail(r.fileRef, libs)) || "—"}</div>
-                    {/* The rejection reason moved to the Comment column (2026-09-10) — one place per
+                      {isHcRow(r.library, hcSegs) && (
+                        <span style={s.hcTag}>HC</span>
+                      )}
+                      {isArchivedRow(r.library, arcSegs) && (
+                        <span style={s.arcTag}>Archived</span>
+                      )}
+                      <div style={s.trail}>
+                        {trailText(folderTrail(r.fileRef, libs)) || "—"}
+                      </div>
+                      {/* The rejection reason moved to the Comment column (2026-09-10) — one place per
                         row for what the approver wrote, whichever way they decided. */}
-                  </td>
-                  <td style={s.td}>
-                    {/* ⚠ NEVER THE APPROVAL BADGE FOR A GONE FILE. `status` is `Pending` on a record
+                    </td>
+                    <td style={s.td}>
+                      {/* ⚠ NEVER THE APPROVAL BADGE FOR A GONE FILE. `status` is `Pending` on a record
                         row only because `Submission` demands a value; showing it would tell an uploader
                         a destroyed document is awaiting approval. `unknown` is its own answer — the
                         libraries could not all be read, so this says so rather than claiming either. */}
-                    {r.recordState === "deleted" ? (
-                      <span style={s.goneBadge}>Deleted</span>
-                    ) : r.recordState === "cancelled" ? (
-                      <span style={s.replacedBadge}>Replaced</span>
-                    ) : r.recordState === "withdrawn" ? (
-                      <span style={s.withdrawnBadge}>Cancelled</span>
-                    ) : r.recordState === "archived" ? (
-                      <span style={s.archivedBadge}>Archived</span>
-                    ) : r.recordState === "unknown" ? (
-                      <span style={s.unsureBadge}>Not checked</span>
-                    ) : (
-                      <span style={badgeFor(r.status)}>{r.status}</span>
-                    )}
-                    {/* A REQUEST is not a document status, so it gets its own quiet tag rather than
+                      {r.recordState === "deleted" ? (
+                        <span style={s.goneBadge}>Deleted</span>
+                      ) : r.recordState === "cancelled" ? (
+                        <span style={s.replacedBadge}>Replaced</span>
+                      ) : r.recordState === "withdrawn" ? (
+                        <span style={s.withdrawnBadge}>Cancelled</span>
+                      ) : r.recordState === "archived" ? (
+                        <span style={s.archivedBadge}>Archived</span>
+                      ) : r.recordState === "unknown" ? (
+                        <span style={s.unsureBadge}>Not checked</span>
+                      ) : (
+                        <span style={badgeFor(r.status)}>{r.status}</span>
+                      )}
+                      {/* A REQUEST is not a document status, so it gets its own quiet tag rather than
                         replacing the badge — a file can be Approved AND have a deletion pending, and
                         collapsing the two would hide whichever mattered less to whoever wrote the
                         code. Only PENDING is shown: a decided request is history, and the detail view
                         carries the outcome and the approver's note. */}
-                    {myRequests[(r.uniqueId ?? "").toLowerCase()]?.status === "Pending" && (
-                      // "asked" -> "requested" (client, 2026-09-03) — same fact, the word the rest of
-                      // this screen already uses ("Your approver must approve this request").
-                      <span style={s.askedTag}>
-                        {myRequests[(r.uniqueId ?? "").toLowerCase()].type === "Share"
-                          ? "Share Requested"
-                          : "Deletion Requested"}
-                      </span>
-                    )}
-                  </td>
-                  <td style={s.td}>{formatSubmittedAt(r.created)}</td>
-                  {/* ── Approved By / Comment (2026-09-10) ───────────────────────────────
+                      {myRequests[(r.uniqueId ?? "").toLowerCase()]?.status ===
+                        "Pending" && (
+                        // "asked" -> "requested" (client, 2026-09-03) — same fact, the word the rest of
+                        // this screen already uses ("Your approver must approve this request").
+                        <span style={s.askedTag}>
+                          {myRequests[(r.uniqueId ?? "").toLowerCase()].type ===
+                          "Share"
+                            ? "Share Requested"
+                            : "Deletion Requested"}
+                        </span>
+                      )}
+                    </td>
+                    <td style={s.td}>{formatSubmittedAt(r.created)}</td>
+                    {/* ── Approved By / Comment (2026-09-10) ───────────────────────────────
                       Client: *"to be able to know who approve and can still be track in the system
                       and not just email"*. A gone row (deleted, replaced, archived, not checked) has
                       no live item to read, so it shows a dash rather than a stale or guessed value. */}
-                  <td style={s.td}>
-                    {!r.recordState && r.status === "Approved" && r.approvedBy ? (
-                      <span style={s.apprBy}>{r.approvedBy}</span>
-                    ) : (
-                      <span style={s.dash}>—</span>
-                    )}
-                  </td>
-                  <td style={s.td}>
-                    {r.recordState ? (
-                      <span style={s.dash}>—</span>
-                    ) : r.status === "Rejected" ? (
-                      <div style={s.comment} title={r.comment || undefined}>
-                        {r.comment
-                          ? r.comment
-                          : "No reason was recorded. Ask your approver what needs changing."}
-                      </div>
-                    ) : r.status === "Approved" && r.approvalComment ? (
-                      <div style={s.apprComment} title={r.approvalComment}>{r.approvalComment}</div>
-                    ) : (
-                      <span style={s.dash}>—</span>
-                    )}
-                  </td>
-                  {/* ── Ask from the ROW ────────────────────────────────────────────────
+                    <td style={s.td}>
+                      {!r.recordState &&
+                      r.status === "Approved" &&
+                      r.approvedBy ? (
+                        <span style={s.apprBy}>{r.approvedBy}</span>
+                      ) : (
+                        <span style={s.dash}>—</span>
+                      )}
+                    </td>
+                    <td style={s.td}>
+                      {r.recordState ? (
+                        <span style={s.dash}>—</span>
+                      ) : r.status === "Rejected" ? (
+                        <div style={s.comment} title={r.comment || undefined}>
+                          {r.comment
+                            ? r.comment
+                            : "No reason was recorded. Ask your approver what needs changing."}
+                        </div>
+                      ) : r.status === "Approved" && r.approvalComment ? (
+                        <div style={s.apprComment} title={r.approvalComment}>
+                          {r.approvalComment}
+                        </div>
+                      ) : (
+                        <span style={s.dash}>—</span>
+                      )}
+                    </td>
+                    {/* ── Ask from the ROW ────────────────────────────────────────────────
                       Client, 2026-08-20: "put a button beside the uploaded for each file so its
                       easier to share or delete instead of going into each file manually."
 
@@ -3340,12 +4812,18 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                       approver reads the document's own `<Base>Tid` fields and this list does not carry
                       them (FieldValuesAsText is a per-ITEM endpoint). The dialog's Send button waits
                       for it rather than sending with nothing, which would route on a blank unit. */}
-                  <td style={{ ...s.td, whiteSpace: "nowrap", textAlign: "right" }}>
-                    {/* ⚠ NO REQUEST BUTTONS ON A GONE FILE. A deletion request for a document that is
+                    <td
+                      style={{
+                        ...s.td,
+                        whiteSpace: "nowrap",
+                        textAlign: "right",
+                      }}
+                    >
+                      {/* ⚠ NO REQUEST BUTTONS ON A GONE FILE. A deletion request for a document that is
                         already gone is meaningless, and a share request would be APPROVED by a Head of
                         Unit and then fail in their own session — after the requester was told it was
                         being handled. The approval executes against the document, and there is none. */}
-                    {/* ⚠ NOTHING IS RENDERED FOR A GONE ROW, and the empty branch is doing the work.
+                      {/* ⚠ NOTHING IS RENDERED FOR A GONE ROW, and the empty branch is doing the work.
                         The words "no longer here" / "replaced" / "in the archive" are gone (client,
                         2026-09-03) — each repeated, in the next column, what the row's own badge
                         already says. What must NOT be lost is the branch itself: a gone row gets no
@@ -3353,77 +4831,234 @@ export default function MySubmissions({ context }: IMySubmissionsProps): React.R
                         `validateDraft` REFUSES a deletion or share request against one outright
                         (2026-08-22), because every role holds only Read on the archive and an approved
                         request would fail in the approver's own session days later. */}
-                    {/* ⚠ EMPTY WHILE A REQUEST IS PENDING, NOT the word "requested" (client,
+                      {/* ⚠ EMPTY WHILE A REQUEST IS PENDING, NOT the word "requested" (client,
                         2026-09-03). The chip beside the file name already says `Deletion Requested` /
                         `Share Requested`, so this column was the same fact a third time. The BRANCH
                         stays and is what matters: while a request is open the Delete and Share buttons
                         must not be offered, or the uploader raises a second row for a decision the
                         approver has not made yet — which is exactly what the 2026-08-20 "you already
                         asked" work exists to prevent. */}
-                    {r.recordState ? undefined : myRequests[(r.uniqueId ?? "").toLowerCase()]?.status === "Pending" ? undefined : (
-                      <>
-                        <button
-                          style={requestsUnavailable === undefined && r.uniqueId ? s.rowBtn : s.rowBtnOff}
-                          disabled={requestsUnavailable !== undefined || !r.uniqueId}
-                          title={requestsUnavailable ?? "Ask your Approver to delete this file"}
-                          onClick={() => {
-                            setProblems([]);
-                            setAskRow(r);
-                            setFieldText(undefined);
-                            setAsking("Deletion");
-                            loadFieldText(r).catch(() => setFieldText({}));
-                          }}
-                        >
-                          Delete
-                        </button>
-                        {r.status === "Approved" && (
+                      {r.recordState ? undefined : myRequests[
+                          (r.uniqueId ?? "").toLowerCase()
+                        ]?.status === "Pending" ? undefined : (
+                        <>
                           <button
-                            style={requestsUnavailable === undefined && r.uniqueId ? s.rowBtn : s.rowBtnOff}
-                            disabled={requestsUnavailable !== undefined || !r.uniqueId}
-                            title={requestsUnavailable ?? "Ask your Approver to share this file"}
+                            style={
+                              requestsUnavailable === undefined && r.uniqueId
+                                ? s.rowBtn
+                                : s.rowBtnOff
+                            }
+                            disabled={
+                              requestsUnavailable !== undefined ||
+                              !r.uniqueId ||
+                              checkingDeleteFor === mergedKey(r)
+                            }
+                            title={
+                              requestsUnavailable ??
+                              "Ask your Approver to delete this file"
+                            }
                             onClick={() => {
+                              /* ⚠ ROUTES TO THE RIGHT MODAL BEFORE OPENING EITHER ONE — added
+                                 2026-09-15, mirroring the detail view's `canDeleteSelf`. Without this
+                                 a system admin or a genuinely mapped approver clicking Delete from the
+                                 ROW would raise a request they then had to approve themselves, exactly
+                                 what this change exists to remove. The tier chain has to be READ
+                                 first (it is not carried on the row), so this is async where every
+                                 other row action here is not; `fetchFieldText` never throws (it
+                                 resolves to `{}` on failure), so the chain simply reads empty and
+                                 `canActDirectly` fails the same way it already does everywhere else —
+                                 offering the safer of the two routes rather than guessing.
+
+                                 ⚠ NEITHER `askRow` NOR `fieldText` IS TOUCHED UNTIL THE CHECK
+                                 RESOLVES, AND ONLY IF `fieldSubjectRef` STILL NAMES THIS ROW *AND*
+                                 `openActiveRef` says nothing has been opened since — see that second
+                                 ref's own comment. Matching `fieldSubjectRef` alone is not enough:
+                                 opening THIS SAME row's own file while its check is still in flight
+                                 leaves the keys equal, so the check would pass and pop the confirm
+                                 OVER the detail view the viewer just navigated into to look at the
+                                 document — reported live, "I go into the file and the popup
+                                 automatically appears." Setting them eagerly (the first version of
+                                 this) corrupted the detail panel of whatever document the viewer had
+                                 since opened, and popped this row's confirm on top of it. */
+                              const key = mergedKey(r);
+                              fieldSubjectRef.current = key;
                               setProblems([]);
-                              setAskRow(r);
-                              setFieldText(undefined);
-                              setAsking("Share");
-                              loadFieldText(r).catch(() => setFieldText({}));
+                              setCheckingDeleteFor(key);
+                              /* ⚠ BOTH READS, IN PARALLEL, AND THE ACL ONE IS WHAT ACTUALLY DECIDES
+                                 (2026-09-15) — see `probeFileRights`. `Promise.all` rather than two
+                                 awaits: they are independent, and this already sits behind a
+                                 "Checking…" the client has told us feels slow. `probeFileRights`
+                                 resolves rather than rejecting, so one unreadable answer cannot lose
+                                 the other. */
+                              Promise.all([
+                                fetchFieldText(r),
+                                r.uniqueId
+                                  ? probeFileRights(
+                                      context.spHttpClient,
+                                      siteUrl,
+                                      r.uniqueId,
+                                    ).catch(() => undefined)
+                                  : Promise.resolve(undefined),
+                              ])
+                                .then(([ft, rights]) => {
+                                  setCheckingDeleteFor(undefined);
+                                  if (
+                                    openActiveRef.current ||
+                                    fieldSubjectRef.current !== key
+                                  ) {
+                                    return;
+                                  }
+                                  setFieldText(ft);
+                                  setAskRow(r);
+                                  if (rights) {
+                                    setSubjectRights((prev) => ({
+                                      ...prev,
+                                      [key]: rights,
+                                    }));
+                                  }
+                                  const chain =
+                                    Object.keys(ft).length > 0
+                                      ? documentUnit(ft).tiers.map((t) => t.guid)
+                                      : [];
+                                  const approved = r.status === "Approved";
+                                  const canDelete =
+                                    systemAdmin ||
+                                    rights?.remove === "granted" ||
+                                    canActDirectly(
+                                      chain,
+                                      approved
+                                        ? policy.directDelete
+                                        : policy.directDeleteStaging,
+                                    );
+                                  if (canDelete) {
+                                    setWithdrawError(undefined);
+                                    setWithdrawRow(r);
+                                  } else {
+                                    setAsking("Deletion");
+                                  }
+                                })
+                                .catch(() => {
+                                  setCheckingDeleteFor(undefined);
+                                  if (
+                                    openActiveRef.current ||
+                                    fieldSubjectRef.current !== key
+                                  ) {
+                                    return;
+                                  }
+                                  setFieldText({});
+                                  setAskRow(r);
+                                  setAsking("Deletion");
+                                });
                             }}
                           >
-                            Share
+                            {checkingDeleteFor === mergedKey(r)
+                              ? "Checking…"
+                              : "Delete"}
                           </button>
-                        )}
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <Pager page={pg_rows} onPage={(n) => setPage("rows", n)} label="documents" />
+                          {r.status === "Approved" && (
+                            <button
+                              style={
+                                requestsUnavailable === undefined && r.uniqueId
+                                  ? s.rowBtn
+                                  : s.rowBtnOff
+                              }
+                              disabled={
+                                requestsUnavailable !== undefined || !r.uniqueId
+                              }
+                              title={
+                                requestsUnavailable ??
+                                "Ask your Approver to share this file"
+                              }
+                              onClick={() => {
+                                /* Same reason as `openRow`: a row-Delete check started earlier (on
+                                   THIS row or another) can still be in flight and resolve after this
+                                   click, and nothing else would clear the confirm it might set. */
+                                setWithdrawRow(undefined);
+                                setWithdrawError(undefined);
+                                setProblems([]);
+                                setAskRow(r);
+                                setFieldText(undefined);
+                                setAsking("Share");
+                                loadFieldText(r).catch(() => setFieldText({}));
+                              }}
+                            >
+                              Share
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager
+            page={pg_rows}
+            onPage={(n) => setPage("rows", n)}
+            label="documents"
+          />
         </>
       )}
 
       {/* A BULLET LIST since 2026-08-30 (client's own wording). It was one paragraph of four facts,
           which is exactly the shape people skip — and the fourth, that the request buttons live
-          inside an opened file, is the one nobody finds on their own. */}
+          inside an opened file, is the one nobody finds on their own.
+
+          ⚠ THE FIRST SEVEN (Pending through Archived) ARE FILE-STATUS NOTES AND ARE HIDDEN ON THE
+          PERMISSION TAB (client, 2026-09-13: "Only for permission hide the Pending till Archived
+          notes below"). That tab lists REQUESTS, not documents — none of Pending/Rejected/Approved/
+          Deleted/Cancelled/Replaced/Archived is a state a request itself can be in, so on that one
+          tab they explained nothing on screen. The last two items describe a REQUEST'S own kind
+          (share vs deletion) and stay visible everywhere, Permission included. */}
       <ul style={s.note}>
-        <li><strong>Pending</strong> means your file is waiting for your approver.</li>
-        <li><strong>Rejected</strong> files stay here so you can see the reason for rejection.</li>
-        <li>
-          <strong>Approved</strong> files are moved to the main <strong>{documentsTitle()}</strong>{" "}
-          library, where the rest of your unit can find them too.
-        </li>
-        <li>
-          Open an approved file to request that it be <strong>deleted</strong> or{" "}
-          <strong>shared</strong>. Your <strong>approver</strong> will review and decide.
-        </li>
+        {tab !== "Requests" && (
+          <>
+            <li>
+              <strong>Pending:</strong> The file is pending approval from the
+              approver.
+            </li>
+            <li>
+              <strong>Rejected:</strong> The file has been rejected by the
+              approver and action required from uploader.
+            </li>
+            <li>
+              <strong>Approved:</strong> Approved file is moved to the main
+              Restricted & Confidential or High Confidential Document library.
+            </li>
+            <li>
+              <strong>Deleted:</strong> File has been removed from the
+              Restricted & Confidential or High Confidential Document library.
+            </li>
+            <li>
+              <strong>Cancelled:</strong> The file has been withdrawn before
+              approval.
+            </li>
+            <li>
+              <strong>Replaced:</strong> Approved / Pending file is replaced
+              with a newly uploaded file.
+            </li>
+            <li>
+              <strong>Archived:</strong> File is automatically archived after 7
+              years from the upload date.
+            </li>
+            <li>
+              <strong>Share Requested:</strong> A request to share a file with
+              someone who does not have access to the files of the unit,
+              department or segment.
+            </li>
+            <li>
+              <strong>Delete Requested:</strong> A request to delete a file.
+            </li>
+          </>
+        )}
       </ul>
       {/* Its own paragraph, and rendered ONLY when it applies — an always-present empty <p> under
           the list is a gap nobody can explain. */}
       {commentsMissing && (
         <p style={s.note}>
-          Rejection reasons cannot be shown on this site — the comment column could not be read.
+          Rejection reasons cannot be shown on this site — the comment column
+          could not be read.
         </p>
       )}
     </section>

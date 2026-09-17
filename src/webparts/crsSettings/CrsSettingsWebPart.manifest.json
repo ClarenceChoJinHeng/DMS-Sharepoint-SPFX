@@ -14,7 +14,7 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "CRS Settings" },
+    "title": { "default": "GDC Settings" },
     "description": { "default": "Admin landing page — links to folder management, user access, configuration and the audit log" },
     "officeFabricIconFontName": "Settings",
     "properties": {

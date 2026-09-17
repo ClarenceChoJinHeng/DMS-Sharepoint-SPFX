@@ -211,7 +211,7 @@ export async function provisionAuditList(
           Title: title,
           BaseTemplate: 100,
           Description:
-            "Audit trail for the CRS document management system. Written automatically — do not edit rows by hand.",
+            "Audit trail for the GDC document management system. Written automatically — do not edit rows by hand.",
         }),
       },
     );
@@ -520,7 +520,10 @@ export async function countAudit(
       if (!res.ok) return undefined;
       const data = await res.json();
       total += ((data.value ?? []) as unknown[]).length;
-      const nextLink = data["odata.nextLink"];
+      // ⚠ BOTH KEYS — see the identical note on `fetchPage` below. Harmless here in practice (this
+      // walk's own $top=5000 rarely needs a second page), but a genuine second page would otherwise
+      // be silently uncounted, understating the total.
+      const nextLink = data["odata.nextLink"] ?? data["@odata.nextLink"];
       if (typeof nextLink !== "string" || nextLink.length === 0) {
         return { total, exact: true };
       }
@@ -544,7 +547,24 @@ async function fetchPage(sp: SPHttpClient, url: string): Promise<AuditPage> {
     });
     if (!res.ok) return { rows: [], failed: true, status: res.status };
     const data = await res.json();
-    const nextLink = data["odata.nextLink"];
+    /* ⚠⚠ FIXED 2026-09-14 — THIS WAS WHY THE PAGER COULD NEVER GO PAST PAGE 1. SPFx's `SPHttpClient`
+       injects an `odata-version: 4.0` header on EVERY request regardless of what `Accept` says (the
+       exact trap this project's `odata-version: ""` override exists for on every WRITE in this
+       file) — and under OData v4 the pagination annotation SharePoint returns is spelled
+       `@odata.nextLink`, not the OData v3 `odata.nextLink` this used to read alone. So `nextLink`
+       here read `undefined` on every page, `next` on the caller's `AuditPage` was always
+       `undefined`, and the Next button in `AuditLog.tsx` stayed permanently disabled — reported live
+       as "Showing 1 to 10 of 954 events" with no way to reach page 2.
+
+       Reading BOTH keys is the established fix for this exact endpoint shape elsewhere in this
+       project — `SubtreeMigrator.tsx`'s `readLibraryFiles` (the identical
+       `/_api/web/lists/.../items?...&$top=…` + `odata=nometadata` combination) already does
+       `data["odata.nextLink"] ?? data["@odata.nextLink"]`, and `BulkGroupProvisioner.tsx` the same.
+       `spGroups.ts`'s `fetchAllGroupMembers` abandoned the link entirely for a DIFFERENT reason (the
+       non-list `/sitegroups` endpoint strips the annotation outright under `nometadata`, so neither
+       key ever appears there) — that does not apply here, where the annotation is present, just
+       under the OTHER key. */
+    const nextLink = data["odata.nextLink"] ?? data["@odata.nextLink"];
     return {
       rows: (data.value ?? []) as AuditRecord[],
       next: typeof nextLink === "string" ? nextLink : undefined,

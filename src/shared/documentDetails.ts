@@ -135,14 +135,21 @@ export function discoverTierFields(fieldText: Record<string, string>): string[] 
 /**
  * The tier rows, blanks dropped. A tier with no value does not apply to this document.
  *
- * `segmentLabel` renames the TOP row only — `Group-Led Project` in place of `Business Segment`
- * (client, 2026-09-02: the label *"is not dynamic"*).
+ * `segmentLabel` renames the TOP row only — `Group-Led Project` in place of the default `Segment`
+ * (client, 2026-09-02: the label *"is not dynamic"*; the default itself was standardised from
+ * "Business Segment" to "Segment" on 2026-09-13, client QA item #53).
  *
  * ⚠ IT HAS TO BE PASSED IN; IT CANNOT BE DERIVED HERE. Both families write the SAME physical column,
  * `Business_x0020_Segment`, so the field name AND its value are identical for a business segment and
  * for a project. Only the mode row's `Category` distinguishes them, and this module is pure — it
  * never reads a list. Omitted keeps today's wording, which is right for twelve of the thirteen
  * segments and can never leave the row unlabelled.
+ *
+ * ⚠ THE DEFAULT IS A LITERAL `"Segment"`, NOT `labelFromInternalName(name)`. That decoder is a
+ * general-purpose column-name-to-label function (still correctly returns "Business Segment" for the
+ * raw internal name, and its own test still pins that) — this is the one place that decides what the
+ * TOP ROW is actually called on screen, and the client's word for that is "Segment", not whatever the
+ * column's internal name happens to decode to.
  */
 export function tierRows(
   fieldText: Record<string, string>,
@@ -151,8 +158,8 @@ export function tierRows(
   return discoverTierFields(fieldText)
     .map((name) => ({
       label:
-        segmentLabel !== undefined && tidBase(name) === "BusinessSegment"
-          ? segmentLabel
+        tidBase(name) === "BusinessSegment"
+          ? (segmentLabel ?? "Segment")
           : labelFromInternalName(name),
       value: readField(fieldText, name),
     }))

@@ -75,7 +75,10 @@ let siteEntryLookup: Promise<void> | undefined;
  * concurrently, and a flag set after the await would let two of them issue the request before
  * either recorded that it had. Sharing the promise makes concurrent callers await one lookup.
  */
-async function primeSiteEntry(sp: SPHttpClient, siteUrl: string): Promise<void> {
+async function primeSiteEntry(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<void> {
   if (!siteEntryLookup) {
     siteEntryLookup = (async () => {
       try {
@@ -100,7 +103,9 @@ async function primeSiteEntry(sp: SPHttpClient, siteUrl: string): Promise<void> 
         );
         if (res.ok) {
           const data = await res.json();
-          titles = ((data.value ?? []) as Array<{ Title?: string }>).map((g) => g.Title ?? "");
+          titles = ((data.value ?? []) as Array<{ Title?: string }>).map(
+            (g) => g.Title ?? "",
+          );
         }
         if (titles === undefined) {
           /* Insurance against the FIX. If `$filter` on Title were ever rejected, falling through to
@@ -113,7 +118,9 @@ async function primeSiteEntry(sp: SPHttpClient, siteUrl: string): Promise<void> 
           );
           if (!all.ok) return;
           const data = await all.json();
-          titles = ((data.value ?? []) as Array<{ Title?: string }>).map((g) => g.Title ?? "");
+          titles = ((data.value ?? []) as Array<{ Title?: string }>).map(
+            (g) => g.Title ?? "",
+          );
         }
         setSiteEntryName(titles);
       } catch {
@@ -151,7 +158,10 @@ async function primeLibrary(sp: SPHttpClient, siteUrl: string): Promise<void> {
           );
           if (!res.ok) continue; // not under this title; try the next
           const data = await res.json();
-          setLibraryNames(data?.Title ?? candidate, data?.RootFolder?.ServerRelativeUrl ?? "");
+          setLibraryNames(
+            data?.Title ?? candidate,
+            data?.RootFolder?.ServerRelativeUrl ?? "",
+          );
           return;
         } catch {
           // A network failure on one candidate must not stop the others being tried.
@@ -202,7 +212,10 @@ async function probeLibrary(
       );
       if (!res.ok) continue; // not under this title; try the next
       const data = await res.json();
-      return { title: data?.Title ?? candidate, url: data?.RootFolder?.ServerRelativeUrl ?? "" };
+      return {
+        title: data?.Title ?? candidate,
+        url: data?.RootFolder?.ServerRelativeUrl ?? "",
+      };
     } catch {
       // A network failure on one candidate must not stop the others being tried.
     }
@@ -225,7 +238,10 @@ async function probeLibrary(
  */
 let documentsLookup: Promise<void> | undefined;
 
-async function primeDocumentsLibrary(sp: SPHttpClient, siteUrl: string): Promise<void> {
+async function primeDocumentsLibrary(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<void> {
   if (!documentsLookup) {
     documentsLookup = (async () => {
       const found = await probeLibrary(sp, siteUrl, DOCUMENTS_CANDIDATES);
@@ -237,10 +253,15 @@ async function primeDocumentsLibrary(sp: SPHttpClient, siteUrl: string): Promise
 
 let hcLookup: Promise<void> | undefined;
 
-async function primeHcLibraries(sp: SPHttpClient, siteUrl: string): Promise<void> {
+async function primeHcLibraries(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<void> {
   if (!hcLookup) {
     hcLookup = (async () => {
-      const probe = (candidates: string[]): Promise<{ title: string; url: string } | undefined> =>
+      const probe = (
+        candidates: string[],
+      ): Promise<{ title: string; url: string } | undefined> =>
         probeLibrary(sp, siteUrl, candidates);
       const approval = await probe(HC_APPROVAL_CANDIDATES);
       // Short-circuit: with no approval library there is nothing to pair, and the second probe would
@@ -248,7 +269,12 @@ async function primeHcLibraries(sp: SPHttpClient, siteUrl: string): Promise<void
       if (!approval) return;
       const documents = await probe(HC_DOCUMENTS_CANDIDATES);
       if (!documents) return;
-      setHcLibraryNames(approval.title, approval.url, documents.title, documents.url);
+      setHcLibraryNames(
+        approval.title,
+        approval.url,
+        documents.title,
+        documents.url,
+      );
     })();
   }
   return hcLookup;
@@ -269,7 +295,10 @@ async function primeHcLibraries(sp: SPHttpClient, siteUrl: string): Promise<void
  */
 let archiveLookup: Promise<void> | undefined;
 
-async function primeArchiveLibraries(sp: SPHttpClient, siteUrl: string): Promise<void> {
+async function primeArchiveLibraries(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<void> {
   if (!archiveLookup) {
     archiveLookup = (async () => {
       const normal = await probeLibrary(sp, siteUrl, ARCHIVE_CANDIDATES);
@@ -277,8 +306,16 @@ async function primeArchiveLibraries(sp: SPHttpClient, siteUrl: string): Promise
       // spend requests on every page load of every site that has no archive at all.
       if (!normal) return;
       const needsHc = hcAvailable();
-      const hc = needsHc ? await probeLibrary(sp, siteUrl, ARCHIVE_HC_CANDIDATES) : undefined;
-      setArchiveLibraryNames(normal.title, normal.url, needsHc, hc?.title, hc?.url);
+      const hc = needsHc
+        ? await probeLibrary(sp, siteUrl, ARCHIVE_HC_CANDIDATES)
+        : undefined;
+      setArchiveLibraryNames(
+        normal.title,
+        normal.url,
+        needsHc,
+        hc?.title,
+        hc?.url,
+      );
     })();
   }
   return archiveLookup;
@@ -318,7 +355,10 @@ export function cachedReadableApprovedSide(): ReadableApprovedSide | undefined {
   return readableSide;
 }
 
-export async function primeReadableApprovedSide(sp: SPHttpClient, siteUrl: string): Promise<void> {
+export async function primeReadableApprovedSide(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<void> {
   if (!readableLookup) {
     readableLookup = (async () => {
       const toLib = (
@@ -328,20 +368,32 @@ export async function primeReadableApprovedSide(sp: SPHttpClient, siteUrl: strin
         const title = (found.title ?? "").trim();
         // Same rule as the pair setters in naming.ts: a blank segment would reduce a path match to
         // matching every separator in the document tree.
-        const urlSegment = (found.url ?? "").split("/").filter(Boolean).pop() ?? "";
-        return title.length === 0 || urlSegment.length === 0 ? undefined : { title, urlSegment };
+        const urlSegment =
+          (found.url ?? "").split("/").filter(Boolean).pop() ?? "";
+        return title.length === 0 || urlSegment.length === 0
+          ? undefined
+          : { title, urlSegment };
       };
       // Sequential, like primeNames: three small reads, and a burst buys nothing worth having.
-      const hcDocuments = toLib(await probeLibrary(sp, siteUrl, HC_DOCUMENTS_CANDIDATES));
-      const archive = toLib(await probeLibrary(sp, siteUrl, ARCHIVE_CANDIDATES));
-      const archiveHc = toLib(await probeLibrary(sp, siteUrl, ARCHIVE_HC_CANDIDATES));
+      const hcDocuments = toLib(
+        await probeLibrary(sp, siteUrl, HC_DOCUMENTS_CANDIDATES),
+      );
+      const archive = toLib(
+        await probeLibrary(sp, siteUrl, ARCHIVE_CANDIDATES),
+      );
+      const archiveHc = toLib(
+        await probeLibrary(sp, siteUrl, ARCHIVE_HC_CANDIDATES),
+      );
       readableSide = { hcDocuments, archive, archiveHc };
     })();
   }
   return readableLookup;
 }
 
-export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<void> {
+export async function primeNames(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<void> {
   await primeSiteEntry(sp, siteUrl);
   await primeLibrary(sp, siteUrl);
   // Independent of the HC and archive probes — no ordering constraint, unlike those two.
@@ -360,12 +412,20 @@ export async function primeNames(sp: SPHttpClient, siteUrl: string): Promise<voi
 }
 
 /** Live title of one of our lists, e.g. listTitle(sp, url, LIST_SUFFIX.groupMap). */
-export function listTitle(sp: SPHttpClient, siteUrl: string, suffix: string): Promise<string> {
+export function listTitle(
+  sp: SPHttpClient,
+  siteUrl: string,
+  suffix: string,
+): Promise<string> {
   return resolveListTitle(suffix, makeListProbe(sp, siteUrl));
 }
 
 /** URL-encoded live title, for dropping straight into a getbytitle() call. */
-export async function listTitleEncoded(sp: SPHttpClient, siteUrl: string, suffix: string): Promise<string> {
+export async function listTitleEncoded(
+  sp: SPHttpClient,
+  siteUrl: string,
+  suffix: string,
+): Promise<string> {
   return encodeURIComponent(await listTitle(sp, siteUrl, suffix));
 }
 
@@ -375,22 +435,31 @@ export async function listTitleEncoded(sp: SPHttpClient, siteUrl: string, suffix
  * Used for the names that cannot be probed the way a list can — the folder content type, the
  * site-entry group, and the three custom permission levels.
  */
-export function writePrefix(sp: SPHttpClient, siteUrl: string): Promise<string> {
+export function writePrefix(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<string> {
   return resolveWritePrefix(makeListProbe(sp, siteUrl));
 }
 
 /** `<P> Folder` content type name for this site. */
-export async function folderContentType(sp: SPHttpClient, siteUrl: string): Promise<string> {
+export async function folderContentType(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<string> {
   return folderContentTypeName(await writePrefix(sp, siteUrl));
 }
 
 /** `<P>_SITE_MEMBERS` for this site. */
-export async function siteEntryGroup(sp: SPHttpClient, siteUrl: string): Promise<string> {
+export async function siteEntryGroup(
+  sp: SPHttpClient,
+  siteUrl: string,
+): Promise<string> {
   return siteEntryGroupName(await writePrefix(sp, siteUrl));
 }
 
 /**
- * The three custom permission levels, named for this site.
+ * The four custom permission levels, named for this site.
  *
  * Missed by the original spec and added on discovery: ROLE_TO_PERMISSION hardcoded
  * "DMS Upload" / "DMS Approve" / "DMS Delete", so a client who renames those levels along
@@ -405,9 +474,14 @@ export async function siteEntryGroup(sp: SPHttpClient, siteUrl: string): Promise
 export async function permissionLevelNames(
   sp: SPHttpClient,
   siteUrl: string,
-): Promise<{ upload: string; approve: string; del: string }> {
+): Promise<{ read: string; upload: string; approve: string; del: string }> {
   const p = await writePrefix(sp, siteUrl);
-  return { upload: `${p} Upload`, approve: `${p} Approve`, del: `${p} Delete` };
+  return {
+    read: `${p} Read`,
+    upload: `${p} Upload`,
+    approve: `${p} Approve`,
+    del: `${p} Delete`,
+  };
 }
 
 export { LIST_SUFFIX };

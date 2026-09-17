@@ -185,7 +185,7 @@ describe("discoverTierFields — the fix for the vanished tiers", () => {
 describe("tierRows", () => {
   it("labels and orders the tiers as the hierarchy reads", () => {
     expect(tierRows(UPOPSMY)).toEqual([
-      { label: "Business Segment", value: "Upstream Operations Malaysia" },
+      { label: "Segment", value: "Upstream Operations Malaysia" },
       { label: "Region", value: "Johor" },
       { label: "Estate Mill", value: "Bukit Example" },
     ]);
@@ -202,9 +202,9 @@ describe("tierRows", () => {
     ]);
   });
 
-  it("keeps Business Segment when no label is given — the twelve-of-thirteen case", () => {
-    expect(tierRows(UPOPSMY)[0].label).toBe("Business Segment");
-    expect(tierRows(UPOPSMY, undefined)[0].label).toBe("Business Segment");
+  it("keeps Segment when no label is given — the twelve-of-thirteen case", () => {
+    expect(tierRows(UPOPSMY)[0].label).toBe("Segment");
+    expect(tierRows(UPOPSMY, undefined)[0].label).toBe("Segment");
   });
 
   it("drops a tier column that exists but has no value for this document", () => {
@@ -224,7 +224,7 @@ describe("buildDetailRows", () => {
   it("includes every fixed field, in the library's own order, whether or not it has a value", () => {
     const labels = buildDetailRows({ fieldText: UPOPSMY }).map((r) => r.label);
     expect(labels).toEqual([
-      "Business Segment", "Region", "Estate Mill",
+      "Segment", "Region", "Estate Mill",
       "Document Type", "Year", "Document Date", "Confidentiality",
       "Legally Privileged", "Project Name", "Vendor / Customer", "Remark", "Keyword",
     ]);
@@ -431,7 +431,7 @@ describe("batch and file field split", () => {
       Remark: "please review",
     };
     const labels = buildBatchRows(ft).map((r) => r.label);
-    expect(labels).toEqual(["Business Segment", "Unit", "Document Type", "Year"]);
+    expect(labels).toEqual(["Segment", "Unit", "Document Type", "Year"]);
     expect(labels).not.toContain("Remark");
   });
 

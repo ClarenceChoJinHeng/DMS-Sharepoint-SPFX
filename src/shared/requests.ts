@@ -65,7 +65,9 @@ export type SharePermission = "View" | "Edit";
 export type RequestStage = "approved" | "pending";
 
 /** `stage` with the pre-2026-08-20 default applied. Never read `row.stage` directly. */
-export function stageOf(row: { stage?: RequestStage } | undefined): RequestStage {
+export function stageOf(
+  row: { stage?: RequestStage } | undefined,
+): RequestStage {
   return (row ?? {}).stage === "pending" ? "pending" : "approved";
 }
 
@@ -261,13 +263,18 @@ export const RECIPIENT_REQUIRED = "At least one recipient is required";
  * cannot be made at all. Rendering them under a field would invite the requester to edit their way
  * out of a refusal that no edit can lift.
  */
-export function fieldForMessage(message: string): "reason" | "shareWith" | undefined {
+export function fieldForMessage(
+  message: string,
+): "reason" | "shareWith" | undefined {
   if (message === REASON_REQUIRED) return "reason";
   if (message === RECIPIENT_REQUIRED) return "shareWith";
   return undefined;
 }
 
-export function validateDraft(draft: RequestDraft, ctx: ValidationContext): string[] {
+export function validateDraft(
+  draft: RequestDraft,
+  ctx: ValidationContext,
+): string[] {
   const out: string[] = [];
   const d = draft ?? ({} as RequestDraft);
 
@@ -317,8 +324,12 @@ export function validateDraft(draft: RequestDraft, ctx: ValidationContext): stri
       const bad = list.filter((e) => !looksLikeEmail(e));
       if (bad.length > 0) out.push(`Not an email address: ${bad.join(", ")}.`);
 
-      const domains = (ctx?.tenantDomains ?? []).filter((d) => (d ?? "").trim().length > 0);
-      const external = list.filter((e) => looksLikeEmail(e) && isExternal(e, domains));
+      const domains = (ctx?.tenantDomains ?? []).filter(
+        (d) => (d ?? "").trim().length > 0,
+      );
+      const external = list.filter(
+        (e) => looksLikeEmail(e) && isExternal(e, domains),
+      );
       if (external.length > 0 && !(ctx && ctx.allowExternal)) {
         /* WARN: TWO STATES REACHED THIS MESSAGE AND IT NAMED ONLY ONE OF THEM. `isExternal` fails
            CLOSED — no domains supplied means UNKNOWN, and unknown counts as external — so a site
@@ -331,11 +342,11 @@ export function validateDraft(draft: RequestDraft, ctx: ValidationContext): stri
            true one, and it names the fix that actually applies. */
         out.push(
           domains.length === 0
-            ? "This site has not been told which email domains belong to your organisation, so every "
-              + "address counts as outside it and no share request can be sent. An administrator sets "
-              + "tenantDomains on the CRS Config list."
-            : `Sharing outside the organisation is switched off, so ${external.join(", ")} cannot be added. `
-              + `Your organisation is ${domains.join(", ")}. An administrator changes this on the CRS Config list.`,
+            ? "This site has not been told which email domains belong to your organisation, so every " +
+                "address counts as outside it and no share request can be sent. An administrator sets " +
+                "tenantDomains on the CRS Config list."
+            : `Sharing outside the organisation is switched off, so ${external.join(", ")} cannot be added. ` +
+                `Your organisation is ${domains.join(", ")}. An administrator changes this on the CRS Config list.`,
         );
       }
     }
@@ -347,7 +358,8 @@ export function validateDraft(draft: RequestDraft, ctx: ValidationContext): stri
       // it lands on the previous day west of Greenwich, so today would read as already past.
       const pad = (n: number): string => (n < 10 ? `0${n}` : `${n}`);
       const t = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
-      if (expires.slice(0, 10) < t) out.push("The expiry date has already passed.");
+      if (expires.slice(0, 10) < t)
+        out.push("The expiry date has already passed.");
     }
   }
 
@@ -361,16 +373,25 @@ export function validateDraft(draft: RequestDraft, ctx: ValidationContext): stri
  *
  * TWO SETS, and they are not interchangeable (2026-08-21, spec
  * `2026-08-21-requests-page-hod-access-design.md`):
- *   - `aprUnits` — units this person APPROVES for, from their `APR` mappings. Any stage.
+ *   - `aprUnits` — units this person APPROVES for, from their `APR` mappings. Any stage, either
+ *     request type.
  *   - `hodUnits` — units under a department this person HEADS, expanded from their `DEPTVIEW`
- *     mappings. **APPROVED-stage only.**
+ *     mappings. **APPROVED-stage Share requests only — never Deletion, since 2026-09-17.**
  *
  * ⚠ THE STAGE LIMIT ON `hodUnits` IS NOT A POLICY CHOICE — IT IS WHAT A HoD CAN PHYSICALLY DO.
- * `hod` is `DEPTVIEW + DEL + SHARE`, and none of those three is in `LIBRARY_ROLES.Staging`, so a
+ * `hod` was `DEPTVIEW + DEL + SHARE` and none of those three is in `LIBRARY_ROLES.Staging`, so a
  * Head of Department holds NOTHING in either approval library. Since an approval executes in the
  * approver's own browser session, approving a pending-file deletion would fail as them and record
  * `Failed` — the requester told their request was handled, and nothing done. So those rows are
  * hidden from a HoD rather than shown un-actionable (client's choice, 2026-08-21).
+ *
+ * ⚠⚠ THE TYPE LIMIT (Share only) IS A DIFFERENT REASON, ADDED 2026-09-17. `hod` no longer carries
+ * `DEL`/`DELHC` at all (deletion moved to a Power Automate proxy, see
+ * `2026-09-17-proxy-deletion-via-power-automate-design.md`), and the client went further: *"HOD no
+ * need deletion as well"* — a HoD should not even DECIDE a Documents-library deletion request, only
+ * a Share one. Unlike the stage limit above, this is not "would fail if attempted" (the proxy
+ * account performs the recycle regardless of who approves), it is a deliberate narrowing of who may
+ * approve at all.
  *
  * A person who is a Head of Unit somewhere AND a Head of Department elsewhere gets the UNION: the
  * sets are additive, never an override.
@@ -408,8 +429,11 @@ export interface ViewerScope {
  * a new type. Nothing is inferred: an array can never grant HoD scope, and it can never grant
  * `systemAdmin` either — the widest right in this file must not arrive from the oldest call shape.
  */
-export function toScope(scope: string[] | ViewerScope | undefined): ViewerScope {
-  if (Array.isArray(scope)) return { aprUnits: scope, hodUnits: [], systemAdmin: false };
+export function toScope(
+  scope: string[] | ViewerScope | undefined,
+): ViewerScope {
+  if (Array.isArray(scope))
+    return { aprUnits: scope, hodUnits: [], systemAdmin: false };
   const s = scope ?? { aprUnits: [], hodUnits: [] };
   return {
     aprUnits: s.aprUnits ?? [],
@@ -429,7 +453,10 @@ export function toScope(scope: string[] | ViewerScope | undefined): ViewerScope 
  * `scope` is what this viewer may act on — see `ViewerScope`. An empty scope decides nothing, which
  * is what a PIC gets.
  */
-export function canDecide(row: RequestRow, scope: string[] | ViewerScope): boolean {
+export function canDecide(
+  row: RequestRow,
+  scope: string[] | ViewerScope,
+): boolean {
   if (!row || row.status !== "Pending") return false;
   return inScope(row, scope);
 }
@@ -443,7 +470,17 @@ export function canDecide(row: RequestRow, scope: string[] | ViewerScope): boole
  * obvious alternative and is exactly how the revoke button and the queue would come to disagree
  * about which units a Head of Department may act on.
  */
-type UnitScoped = { unit?: string; unitTermGuid?: string; stage?: RequestStage };
+type UnitScoped = {
+  unit?: string;
+  unitTermGuid?: string;
+  stage?: RequestStage;
+  /**
+   * Absent for a `canRevoke` literal (SHARE-only by construction, so absence must never be read as
+   * a Deletion). Present on every real `RequestRow` and is what lets `inScope` tell a Deletion row
+   * apart from a Share one for the `hodUnits` restriction below — see 2026-09-17.
+   */
+  type?: RequestType;
+};
 
 /**
  * Does this row belong to one of these units?
@@ -451,8 +488,13 @@ type UnitScoped = { unit?: string; unitTermGuid?: string; stage?: RequestStage }
  * Matches on the term GUID when the row carries one, and only falls back to the label otherwise —
  * see `RequestRow.unitTermGuid`.
  */
-function matchesUnit(row: UnitScoped | undefined, approverUnits: string[]): boolean {
-  const key = ((row?.unitTermGuid ?? "").trim() || (row?.unit ?? "").trim()).toLowerCase();
+function matchesUnit(
+  row: UnitScoped | undefined,
+  approverUnits: string[],
+): boolean {
+  const key = (
+    (row?.unitTermGuid ?? "").trim() || (row?.unit ?? "").trim()
+  ).toLowerCase();
   if (key.length === 0) return false;
   const units = (approverUnits ?? [])
     .map((u) => (u ?? "").trim().toLowerCase())
@@ -467,7 +509,10 @@ function matchesUnit(row: UnitScoped | undefined, approverUnits: string[]): bool
  * Department is allowed to know about. Hidden means hidden — a row they cannot decide is a row they
  * do not see, because a visible-but-inert row reads as a broken button.
  */
-function inScope(row: UnitScoped | undefined, scope: string[] | ViewerScope | undefined): boolean {
+function inScope(
+  row: UnitScoped | undefined,
+  scope: string[] | ViewerScope | undefined,
+): boolean {
   const s = toScope(scope);
   /* A system administrator acts on EVERY unit and BOTH stages — see `ViewerScope.systemAdmin`.
      Placed in `inScope` rather than in the two callers so visibility and decide-rights cannot
@@ -478,7 +523,18 @@ function inScope(row: UnitScoped | undefined, scope: string[] | ViewerScope | un
   if (matchesUnit(row, s.aprUnits)) return true;
   // APPROVED stage only for a department head. `stageOf` defaults to "approved", so every row
   // written before the `Stage` column existed is treated as the approved document it was.
-  return stageOf(row) === "approved" && matchesUnit(row, s.hodUnits);
+  //
+  // ⚠⚠ AND NEVER A DELETION, SINCE 2026-09-17. Client: "HOD no need deletion as well" — HoD's
+  // department-wide DEL/DELHC grant was already removed from the persona (see
+  // 2026-09-17-proxy-deletion-via-power-automate-design.md), and this closes the other half: a HoD
+  // must not be able to DECIDE a Documents-library deletion request either, only Share. Their SHARE
+  // decision authority is untouched — `row.type` is absent on `canRevoke`'s hand-built literal
+  // (share-only by construction), so `!== "Deletion"` there reads correctly as "not a deletion".
+  return (
+    stageOf(row) === "approved" &&
+    row?.type !== "Deletion" &&
+    matchesUnit(row, s.hodUnits)
+  );
 }
 
 /**
@@ -494,7 +550,8 @@ export function isVisibleTo(
   scope: string[] | ViewerScope,
 ): boolean {
   const me = (viewerEmail ?? "").trim().toLowerCase();
-  if (me.length > 0 && (row?.requestedBy ?? "").trim().toLowerCase() === me) return true;
+  if (me.length > 0 && (row?.requestedBy ?? "").trim().toLowerCase() === me)
+    return true;
   return inScope(row, scope);
 }
 
@@ -567,10 +624,25 @@ export interface StampedCandidate {
   itemId: number;
   /** Server-relative path, as the library holds it NOW — never the path recorded on the request. */
   fileRef: string;
+  /**
+   * The file's own `UniqueId` GUID, as it holds it NOW — never the one recorded on the request.
+   * OPTIONAL only so an older caller/fixture that never asked for it keeps compiling; every current
+   * caller supplies it. Added 2026-09-17 for the proxy-deletion design: when a routed document is
+   * found by its stamp, this is what gets written back onto the request's `ItemUniqueId` column so
+   * `CRS — Execute approved deletion` (Power Automate) can `GetFileById(guid'...')` it later —
+   * without this, the flow would have no way to address the document it is meant to recycle.
+   */
+  itemUniqueId?: string;
 }
 
 export type StampLookup =
-  | { kind: "found"; library: string; itemId: number; fileRef: string }
+  | {
+      kind: "found";
+      library: string;
+      itemId: number;
+      fileRef: string;
+      itemUniqueId?: string;
+    }
   | { kind: "none" }
   /** More than one document carries the stamp. REFUSED — see `resolveStamped`. */
   | { kind: "ambiguous"; count: number }
@@ -611,14 +683,23 @@ export function resolveStamped(
   const usable = (candidates ?? []).filter((c) => c && c.itemId > 0);
   if (usable.length === 1) {
     const c = usable[0];
-    return { kind: "found", library: c.library, itemId: c.itemId, fileRef: c.fileRef };
+    return {
+      kind: "found",
+      library: c.library,
+      itemId: c.itemId,
+      fileRef: c.fileRef,
+      itemUniqueId: c.itemUniqueId,
+    };
   }
   if (usable.length > 1) return { kind: "ambiguous", count: usable.length };
   return anyLibraryUnreadable ? { kind: "unknown" } : { kind: "none" };
 }
 
 /** Pending requests for the units this person approves, oldest first — a queue, not a list. */
-export function queueFor(rows: RequestRow[], scope: string[] | ViewerScope): RequestRow[] {
+export function queueFor(
+  rows: RequestRow[],
+  scope: string[] | ViewerScope,
+): RequestRow[] {
   return (rows ?? [])
     .filter((r) => canDecide(r, scope))
     .sort((a, b) => (a.requestedAt ?? "").localeCompare(b.requestedAt ?? ""));
@@ -644,10 +725,17 @@ export function queueFor(rows: RequestRow[], scope: string[] | ViewerScope): Req
  * adding it here is a COMPILE ERROR, where a `RequestStatus[]` literal would silently be short.
  */
 const STATUS_SET: Record<RequestStatus, true> = {
-  Pending: true, Approved: true, Rejected: true, Failed: true, Cancelled: true, Revoked: true,
+  Pending: true,
+  Approved: true,
+  Rejected: true,
+  Failed: true,
+  Cancelled: true,
+  Revoked: true,
 };
 
-export const REQUEST_STATUSES: RequestStatus[] = Object.keys(STATUS_SET) as RequestStatus[];
+export const REQUEST_STATUSES: RequestStatus[] = Object.keys(
+  STATUS_SET,
+) as RequestStatus[];
 
 /**
  * The stored `Status` text as a `RequestStatus`.
@@ -658,35 +746,41 @@ export const REQUEST_STATUSES: RequestStatus[] = Object.keys(STATUS_SET) as Requ
  */
 export function parseRequestStatus(raw: string | undefined): RequestStatus {
   const value = (raw ?? "").trim();
-  return STATUS_SET[value as RequestStatus] === true ? (value as RequestStatus) : "Pending";
+  return STATUS_SET[value as RequestStatus] === true
+    ? (value as RequestStatus)
+    : "Pending";
 }
 
 /** Counts for the page heading. Separate from the queue, so an empty queue still reports history. */
 export function counts(rows: RequestRow[]): Record<RequestStatus, number> {
   const out: Record<RequestStatus, number> = {
-    Pending: 0, Approved: 0, Rejected: 0, Failed: 0, Cancelled: 0, Revoked: 0,
+    Pending: 0,
+    Approved: 0,
+    Rejected: 0,
+    Failed: 0,
+    Cancelled: 0,
+    Revoked: 0,
   };
-  for (const r of rows ?? []) if (out[r.status] !== undefined) out[r.status] += 1;
+  for (const r of rows ?? [])
+    if (out[r.status] !== undefined) out[r.status] += 1;
   return out;
 }
 
 /**
- * One sentence describing what approving this request will actually do.
+ * One sentence describing what approving this request will actually do, or "" for nothing extra.
  *
- * Shown in the confirmation, because "Approve" alone does not say whether a document is about to be
- * recycled or handed to someone outside the company.
+ * Shown in the confirmation for a SHARE, because "Approve" alone does not say who is about to gain
+ * access or for how long. A DELETION gets no sentence at all (client, 2026-09-17: "only want the
+ * label to show Approved upon approving a deletion request") — the outcome banner then reads bare
+ * "Approved." with nothing appended, rather than restating the recycle-bin fact a second time.
  */
 export function decisionSummary(row: RequestRow): string {
-  if (!row) return "";
-  if (row.type === "Deletion") {
-    /* The NAME is shown on its own line by the dialog since 2026-08-30, so this sentence no longer
-       repeats it. 93 days, not the 90 in the client's mock — confirmed with them: the recycle bin
-       really is 93, and that number is what makes an approved deletion reversible. */
-    return "This file will be moved to the recycle bin, where it can be restored for 93 days.";
-  }
+  if (!row || row.type !== "Share") return "";
   const who = (row.shareWith ?? []).join(", ");
   const level = row.sharePermission === "Edit" ? "edit" : "view";
-  const until = row.expiresAt ? ` until ${row.expiresAt.slice(0, 10)}` : ", with no expiry date";
+  const until = row.expiresAt
+    ? ` until ${row.expiresAt.slice(0, 10)}`
+    : ", with no expiry date";
   return `${who} will be able to ${level} ${row.itemName}${until}.`;
 }
 
@@ -859,7 +953,9 @@ export function collectSharedFiles(
     // Oldest first, so a plain overwrite in the merge below leaves the NEWEST row's detail standing.
     .slice()
     .sort((a, b) =>
-      (a.decidedAt || a.requestedAt || "").localeCompare(b.decidedAt || b.requestedAt || ""),
+      (a.decidedAt || a.requestedAt || "").localeCompare(
+        b.decidedAt || b.requestedAt || "",
+      ),
     );
 
   for (const r of relevant) {
@@ -890,7 +986,8 @@ export function collectSharedFiles(
       const email = lower(raw);
       if (email.length === 0) continue;
       const existing = f.recipients.filter((x) => x.email === email)[0];
-      const permission: SharePermission = r.sharePermission === "Edit" ? "Edit" : "View";
+      const permission: SharePermission =
+        r.sharePermission === "Edit" ? "Edit" : "View";
       if (existing) {
         existing.permission = permission;
         existing.requestedBy = r.requestedBy;
@@ -925,11 +1022,17 @@ export function collectSharedFiles(
  * file, so every shared file carries its unit's own groups on its ACL. Counting them would report a
  * unit's ordinary access as a share — on the one screen that answers "who can reach this document".
  */
-export function mergeShareAcl(file: SharedFile, acl: FileAcl | undefined): SharedFile {
+export function mergeShareAcl(
+  file: SharedFile,
+  acl: FileAcl | undefined,
+): SharedFile {
   if (!acl) {
     return {
       ...file,
-      recipients: file.recipients.map((r) => ({ ...r, state: "unknown" as ShareState })),
+      recipients: file.recipients.map((r) => ({
+        ...r,
+        state: "unknown" as ShareState,
+      })),
       state: "unknown",
     };
   }
@@ -953,7 +1056,10 @@ export function mergeShareAcl(file: SharedFile, acl: FileAcl | undefined): Share
      response shape we did not anticipate errs towards SHOWING a grant rather than hiding one — the
      safe direction on a screen about who can reach a document. */
   const users = (acl.principals || []).filter(
-    (p) => p && (p.principalType === undefined || p.principalType === 1) && holdsRealAccess(p),
+    (p) =>
+      p &&
+      (p.principalType === undefined || p.principalType === 1) &&
+      holdsRealAccess(p),
   );
   const byEmail: { [key: string]: AclPrincipal } = {};
   for (const p of users) {
@@ -1005,12 +1111,15 @@ function rollUp(recipients: ShareRecipient[]): ShareState {
 function emailFromLogin(login: string | undefined): string {
   const raw = lower(login);
   if (raw.length === 0) return "";
-  const tail = raw.indexOf("|") === -1 ? raw : raw.slice(raw.lastIndexOf("|") + 1);
+  const tail =
+    raw.indexOf("|") === -1 ? raw : raw.slice(raw.lastIndexOf("|") + 1);
   const ext = tail.indexOf("#ext#");
   if (ext === -1) return tail.indexOf("@") === -1 ? "" : tail;
   const guest = tail.slice(0, ext);
   const under = guest.lastIndexOf("_");
-  return under === -1 ? "" : guest.slice(0, under) + "@" + guest.slice(under + 1);
+  return under === -1
+    ? ""
+    : guest.slice(0, under) + "@" + guest.slice(under + 1);
 }
 
 /**
@@ -1028,9 +1137,15 @@ function emailFromLogin(login: string | undefined): string {
  * fail in their own session AFTER the screen had offered it — the "visible but inert" state this
  * codebase already rejected for pending-stage requests shown to a Head of Department.
  */
-export function canRevoke(file: SharedFile | undefined, scope: string[] | ViewerScope): boolean {
+export function canRevoke(
+  file: SharedFile | undefined,
+  scope: string[] | ViewerScope,
+): boolean {
   if (!file) return false;
-  return inScope({ unit: file.unit, unitTermGuid: file.unitTermGuid, stage: "approved" }, scope);
+  return inScope(
+    { unit: file.unit, unitTermGuid: file.unitTermGuid, stage: "approved" },
+    scope,
+  );
 }
 
 /**
@@ -1066,9 +1181,13 @@ export function canRevoke(file: SharedFile | undefined, scope: string[] | Viewer
  * dropped: a row vanishing with no explanation is how a tab about access quietly stops being
  * trusted.
  */
-export function goneFiles(files: SharedFile[], acls: Record<string, FileAcl | undefined>): number {
+export function goneFiles(
+  files: SharedFile[],
+  acls: Record<string, FileAcl | undefined>,
+): number {
   let n = 0;
-  for (const f of files ?? []) if (f && acls[f.itemUniqueId]?.fileGone === true) n += 1;
+  for (const f of files ?? [])
+    if (f && acls[f.itemUniqueId]?.fileGone === true) n += 1;
   return n;
 }
 
@@ -1077,14 +1196,18 @@ export function withoutGoneFiles(
   files: SharedFile[],
   acls: Record<string, FileAcl | undefined>,
 ): SharedFile[] {
-  return (files ?? []).filter((f) => f && acls[f.itemUniqueId]?.fileGone !== true);
+  return (files ?? []).filter(
+    (f) => f && acls[f.itemUniqueId]?.fileGone !== true,
+  );
 }
 
 export function currentlyShared(files: SharedFile[]): SharedFile[] {
   const out: SharedFile[] = [];
   for (const f of files ?? []) {
     if (!f) continue;
-    const recipients = (f.recipients ?? []).filter((r) => r && r.state !== "revoked");
+    const recipients = (f.recipients ?? []).filter(
+      (r) => r && r.state !== "revoked",
+    );
     // Nobody left who can reach it — the file itself has stopped being shared.
     if (recipients.length === 0) continue;
     out.push({ ...f, recipients, state: rollUp(recipients) });
@@ -1115,7 +1238,13 @@ export function endsTheShare(file: SharedFile, revoking: string[]): boolean {
  */
 export function localDateStamp(when: Date): string {
   const pad = (n: number): string => (n < 10 ? "0" + n : String(n));
-  return when.getFullYear() + "-" + pad(when.getMonth() + 1) + "-" + pad(when.getDate());
+  return (
+    when.getFullYear() +
+    "-" +
+    pad(when.getMonth() + 1) +
+    "-" +
+    pad(when.getDate())
+  );
 }
 
 /**
@@ -1124,12 +1253,20 @@ export function localDateStamp(when: Date): string {
  * `whenDate` is a plain `YYYY-MM-DD` (see `localDateStamp`); a full ISO string still works, since
  * only the first ten characters are read — but passing one puts the UTC day back into the record.
  */
-export function revocationNote(emails: string[], actor: string, whenDate: string): string {
+export function revocationNote(
+  emails: string[],
+  actor: string,
+  whenDate: string,
+): string {
   const who = (emails || []).filter((e) => (e || "").length > 0).join(", ");
   return (
-    "Access for " + (who || "the recipients") +
-    " revoked by " + (actor || "an approver") +
-    " on " + (whenDate || "").slice(0, 10) + "."
+    "Access for " +
+    (who || "the recipients") +
+    " revoked by " +
+    (actor || "an approver") +
+    " on " +
+    (whenDate || "").slice(0, 10) +
+    "."
   );
 }
 
@@ -1161,8 +1298,18 @@ export function longDate(iso: string | undefined): string {
   if (!isFinite(y) || !isFinite(m) || !isFinite(d)) return raw;
   if (m < 1 || m > 12 || d < 1 || d > 31) return raw;
   const months = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
   ];
   // Two digits, matching the client's own example ("02 September 2026").
   return (d < 10 ? "0" + d : String(d)) + " " + months[m - 1] + " " + y;

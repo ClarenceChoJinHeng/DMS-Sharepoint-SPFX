@@ -144,7 +144,7 @@ import {
  * folder routing are cloned from Form.tsx unchanged.
  * -------------------------------------------------------------------------- */
 
-const MAX_FILES = 50;
+const MAX_FILES = 10;
 
 // The Documents library's real URL segment differs from its display title:
 //   URL segment   = "Shared Documents"  (used to build server-relative paths)
@@ -3550,7 +3550,7 @@ export default function BulkUpload({
                     exists. Keep the two upload screens' wording in sync deliberately — this
                     project's own history is full of the two drifting apart. */}
                     {side === "BusinessSegment"
-                      ? "Business Segment"
+                      ? "Segment"
                       : "Group-Led Project"}
                   </label>
                 );

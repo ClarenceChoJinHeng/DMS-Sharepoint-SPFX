@@ -112,7 +112,7 @@ const s: Record<string, React.CSSProperties> = {
      overridden by a class and the client asked for the side padding to go on a phone and stay on a
      desktop. Everything else stays inline. */
   wrap: {
-    fontFamily: 'Arial, sans-serif',
+    fontFamily: "Arial, sans-serif",
     color: "#242424",
     margin: "32px auto",
   },
@@ -175,7 +175,6 @@ const s: Record<string, React.CSSProperties> = {
      fifth tile in the same grid invites it to be clicked as casually as the others. */
   cardDanger: {
     display: "flex",
-    flexWrap: "wrap",
     alignItems: "flex-start",
     gap: 10,
     width: "100%",
@@ -508,7 +507,11 @@ const SHELL_CSS = `
 /* One definition of the page shell, used by all three of this component's roots — the flow picker,
    the flow runner and All tools. Rendering the style tag inside it means the CSS travels with
    whichever root is mounted, and there is never more than one. */
-function Shell({ children }: { children: React.ReactNode }): React.ReactElement {
+function Shell({
+  children,
+}: {
+  children: React.ReactNode;
+}): React.ReactElement {
   return (
     <section style={s.wrap} className="crs-shell">
       <style>{SHELL_CSS}</style>
@@ -545,6 +548,15 @@ export default function FolderAdmin({
   /** True while that save is in flight, so Next cannot be pressed twice. */
   const [abbrevSaving, setAbbrevSaving] = useState(false);
   const [allTools, setAllTools] = useState(() => readHash().wantsTabs);
+  /**
+   * Which tab "All tools" opens on when entered from the signpost below, as a deep-link slug
+   * (`FolderManager`'s `initialTab` prop). `undefined` everywhere else, so the normal "All tools"
+   * entry (there isn't one from the picker any more, but the standalone `#tab=` route still exists)
+   * is unaffected and lands on its usual default.
+   */
+  const [allToolsInitialTab, setAllToolsInitialTab] = useState<
+    string | undefined
+  >(undefined);
 
   const [segments, setSegments] = useState<Segment[] | undefined>(undefined);
   const [segKey, setSegKey] = useState("");
@@ -825,7 +837,9 @@ export default function FolderAdmin({
           { headers: GET },
         );
         if (fm.ok) {
-          const fmRows = ((await fm.json()).value ?? []) as Array<{ Section?: string }>;
+          const fmRows = ((await fm.json()).value ?? []) as Array<{
+            Section?: string;
+          }>;
           const codes: string[] = [];
           for (const r of fmRows) {
             const c = (r.Section ?? "").trim().toLowerCase();
@@ -867,7 +881,9 @@ export default function FolderAdmin({
    * and the picked segment is kept whatever its state, or the control would display a different
    * segment from the one the flow is carrying.
    */
-  const resumable = (segments ?? []).filter((x) => x.built !== true || x.key === segKey);
+  const resumable = (segments ?? []).filter(
+    (x) => x.built !== true || x.key === segKey,
+  );
 
   /**
    * The cheap facts for the chosen segment: groups, mappings, folders.
@@ -1053,7 +1069,7 @@ export default function FolderAdmin({
     // The list read fine, so "nothing picked" is the admin not having answered — not a failure.
     if (!segment) return { ...facts, subjectGiven: false };
     return { ...facts, subjectGiven: true, segmentExists: true };
-  /* WARN: EVERY FACT ABOVE MUST APPEAR HERE, AND `migrateScanned` WAS MISSED - found by the client
+    /* WARN: EVERY FACT ABOVE MUST APPEAR HERE, AND `migrateScanned` WAS MISSED - found by the client
      on the first live run, 2026-09-09. This is a `useMemo`, so a fact whose source is not in the deps
      is read ONCE and then frozen: pressing Check flipped the state, the memo did not recompute, and
      Next stayed greyed under "Run the check first" permanently. The gate could never release.
@@ -1266,9 +1282,12 @@ export default function FolderAdmin({
       <Shell>
         <BackBand
           label="Back to Folder Management"
-          onClick={() => setAllTools(false)}
+          onClick={() => {
+            setAllTools(false);
+            setAllToolsInitialTab(undefined);
+          }}
         />
-        <FolderManager context={context} />
+        <FolderManager context={context} initialTab={allToolsInitialTab} />
       </Shell>
     );
   }
@@ -1307,9 +1326,10 @@ export default function FolderAdmin({
    * `steps.length` when nothing blocks, so the cap is inert on a clean flow.
    */
   const firstBlockedIdx = firstBlockedStepIndex(steps, effectiveFacts);
-  const blockedReason = firstBlockedIdx < steps.length
-    ? blocksNext(steps[firstBlockedIdx], effectiveFacts)
-    : "";
+  const blockedReason =
+    firstBlockedIdx < steps.length
+      ? blocksNext(steps[firstBlockedIdx], effectiveFacts)
+      : "";
 
   const renderStep = (st: FlowStep): React.ReactElement => {
     // The segment picker stands in front of every step that HAS a subject: without it the screens below
@@ -1781,20 +1801,20 @@ export default function FolderAdmin({
             </div>
             <div style={s.hint}>
               {segments === undefined
-                /* ⚠ IT USED TO END "use the list of steps to move between them", AND THAT WAS
+                ? /* ⚠ IT USED TO END "use the list of steps to move between them", AND THAT WAS
                    FALSE. The rail stopped navigating forward on 2026-08-30, so this pointed at a
                    control that does nothing — the same dead escape hatch already corrected in the
                    `createSegment` gate message, missed on this sibling string. What is true is that
                    nothing is gated when the list cannot be read (see `segmentChosen`), so the way
                    on is Next, and the way to try again is the Refresh list button beside this. */
-                ? "The segment list could not be read, so a segment cannot be picked here. Press Refresh list to try again — Next is not held, so you can carry on either way."
+                  "The segment list could not be read, so a segment cannot be picked here. Press Refresh list to try again — Next is not held, so you can carry on either way."
                 : resumable.length === 0
-                /* ⚠ SAID PLAINLY, because an empty dropdown beside a Refresh button reads as a list
+                  ? /* ⚠ SAID PLAINLY, because an empty dropdown beside a Refresh button reads as a list
                    that failed to load — and the admin's next move would be pressing Refresh for ever.
                    This is the NORMAL state on a settled site: every segment has folders, so none of
                    them is an unfinished creation. */
-                ? "Every segment on this site is already set up, so there is nothing here to continue. Create one above, or press Refresh list if you have just made one."
-                : "Only needed if you created it earlier, or reopened this page. A segment you create above is selected for you. Picking one takes the remaining steps straight to it — it does not create anything. Segments that are already set up are not listed."}
+                    "Every segment on this site is already set up, so there is nothing here to continue. Create one above, or press Refresh list if you have just made one."
+                  : "Only needed if you created it earlier, or reopened this page. A segment you create above is selected for you. Picking one takes the remaining steps straight to it — it does not create anything. Segments that are already set up are not listed."}
             </div>
           </div>
         )}
@@ -1971,7 +1991,10 @@ export default function FolderAdmin({
                   REFUSED, not confirmed: Save is on the same screen, and a "discard?" prompt puts
                   losing the work one click behind ordinary-looking navigation. */}
               <select
-                style={{ ...s.select, ...(runBusy || segSwitchDirty ? s.off : {}) }}
+                style={{
+                  ...s.select,
+                  ...(runBusy || segSwitchDirty ? s.off : {}),
+                }}
                 value={segKey}
                 disabled={runBusy || segSwitchDirty}
                 onChange={(e) => {
@@ -2026,7 +2049,9 @@ export default function FolderAdmin({
                       NOT gated on uploads, with the site accepting documents. Finish and the "Back to
                       Folder Management" band are the two exits, so nobody is trapped. */}
                   <button
-                    style={idx === 0 || runBusy || flowComplete ? s.off : s.ghost}
+                    style={
+                      idx === 0 || runBusy || flowComplete ? s.off : s.ghost
+                    }
                     disabled={idx === 0 || runBusy || flowComplete}
                     onClick={() => setStepIdx(Math.max(0, idx - 1))}
                   >
@@ -2066,7 +2091,9 @@ export default function FolderAdmin({
                       const go = (): void =>
                         setStepIdx(Math.min(steps.length - 1, idx + 1));
                       const save =
-                        step.id === "abbreviations" ? abbrevSaveRef.current : undefined;
+                        step.id === "abbreviations"
+                          ? abbrevSaveRef.current
+                          : undefined;
                       if (!save) {
                         go();
                         return;
@@ -2117,7 +2144,8 @@ export default function FolderAdmin({
                   !migratePending && (
                     <div style={s.hint}>
                       {blocked}
-                      {last && " Once it has run, press Finish. You can also leave with Back to Folder Management."}
+                      {last &&
+                        " Once it has run, press Finish. You can also leave with Back to Folder Management."}
                     </div>
                   )}
                 {/* Its own reason, again: "a run is in progress" would be wrong — nothing is running,
@@ -2126,10 +2154,13 @@ export default function FolderAdmin({
                     two ways out, because "you cannot go back" without them reads as a trap. */}
                 {flowComplete && !runBusy && (
                   <div style={s.hint}>
-                    Uploads are back on, so this run is finished — going back is closed off, because
-                    the earlier steps move folders and the site is accepting documents again. Press{" "}
-                    <strong>Finish</strong>, or leave with <strong>Back to Folder Management</strong>.
-                    To change the structure again, start the flow afresh and turn uploads off first.
+                    Uploads are back on, so this run is finished — going back is
+                    closed off, because the earlier steps move folders and the
+                    site is accepting documents again. Press{" "}
+                    <strong>Finish</strong>, or leave with{" "}
+                    <strong>Back to Folder Management</strong>. To change the
+                    structure again, start the flow afresh and turn uploads off
+                    first.
                   </div>
                 )}
                 {migratePending && !runBusy && (

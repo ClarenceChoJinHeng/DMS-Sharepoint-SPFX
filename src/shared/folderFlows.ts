@@ -206,7 +206,7 @@ function abbreviationsStep(label: string, hint: string): FlowStep {
 
 const ABBREVIATIONS: FlowStep = {
   id: "abbreviations",
-  label: "CRS Term Abbreviations",
+  label: "GDC Term Abbreviations",
   /* The mandatory sentence the client asked for (2026-09-06) sits here rather than in the screen,
      because this is the hint the flow renders above it — the screen has no intro of its own once the
      top-folder and below-Unit notes came off. */
@@ -470,8 +470,17 @@ export const FLOWS: Flow[] = [
       },
       abbreviationsStep(
         "Rename Term Abbreviation",
-        "Rename the folder in the Term Store and on this page, where applicable. Always RENAME a " +
-          "term — never delete and re-add it, which orphans its abbreviation, folder and group rows.",
+        /* ⚠ CLARIFIED 2026-09-14 — the client asked "why do I need to open the Term Store if I am
+           renaming the term abbreviation", and the old wording earned that question. "Rename ... in
+           the Term Store AND on this page" reads as one combined mandatory step, when only changing
+           a department or unit's actual NAME needs the Term Store — changing just its SHORT CODE
+           (the abbreviation, edited below) never touches it. The two are now stated as separate,
+           independent actions rather than one instruction. */
+        "Changing a department or unit's actual NAME happens in the Term Store — open it above only " +
+          "for that. Changing just its short code (the abbreviation used for the folder name) is " +
+          "done entirely below; the Term Store is not needed for that alone. Always RENAME a term in " +
+          "the Term Store — never delete and re-add it, which orphans its abbreviation, folder and " +
+          "group rows.",
       ),
       /* ⚠⚠ ADDED 2026-09-09 BECAUSE THIS FLOW WAS ACTIVELY DANGEROUS WITHOUT IT, on a level named by
          abbreviations. Its own blurb promises *"or by changing its short code"* — which reconciliation

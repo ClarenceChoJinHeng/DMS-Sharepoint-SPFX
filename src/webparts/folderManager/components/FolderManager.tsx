@@ -400,7 +400,23 @@ type ProvTarget = {
 //
 // HC is absent by design: Highly Confidential is Phase 2 (see groupMapModel).
 const ROLE_TO_PERMISSION: Record<string, string> = {
-  MEMBER: "Read",
+  // ⚠⚠ MEMBER/GLOBAL/SEGVIEW CHANGED FROM "Read" TO "Restricted View" (2026-09-14, client: "change
+  // read to restricted view for all the groups for a more narrower read only to prevent user from
+  // download" — scoped, on their confirmation, to "only the pure viewer roles"). Built-in level,
+  // present on every SharePoint site with no creation or prefix step — unlike the custom "CRS …"
+  // levels, it needs no line in `applyPermissionPrefix` below, the same reason "Read" itself needs
+  // none. If a tenant's own copy of this level is ever named differently, reconciliation already
+  // fails LOUD and NAMED (`no "Restricted View" role definition on site`) rather than silently
+  // granting nothing — the same safety net every other level here relies on.
+  //
+  // MEMBERHC remains DELIBERATELY UNTOUCHED — still plain "Read", further down this table. It was
+  // never asked about; only DEPTVIEW has been widened in since.
+  //
+  // See `PURE_VIEWER_ROLES` below: `READ_ONLY_LIBS` (Archive/ArchiveHC) hardcodes plain "Read" for
+  // every OTHER role regardless of what it holds elsewhere, and that rule stays. DEPTVIEW does not
+  // need adding there — it is not in `LIBRARY_ROLES.Archive`/`.ArchiveHC` at all (only GLOBAL/SEGVIEW
+  // reach the archive today), so it never reaches those two libraries regardless of this table.
+  MEMBER: "Restricted View",
   // Re-pointed at the site's actual prefix by applyPermissionPrefix() below. The DMS values are
   // the legacy default, used until the role definitions have been read.
   UPL: "DMS Upload",
@@ -412,12 +428,12 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   DELHC: "DMS Delete",
   SHAREHC: "DMS Share",
   DELS: "DMS Delete",
-  // The C-level view role, 2026-08-04. Plain Read, like MEMBER — the difference is not
-  // the level but how far the grant travels: every folder in every segment.
+  // The C-level view role, 2026-08-04. The custom viewer level, like MEMBER — the difference is
+  // not the level but how far the grant travels: every folder in every segment.
   // Documents-only (see LIBRARY_ROLES); a viewer on Staging would be reading other
   // people's pending drafts, which is the isolation rule the whole model rests on.
   //
-  GLOBAL: "Read",
+  GLOBAL: "Restricted View",
   // SEGVIEW — un-retired 2026-08-07 for the client's second C-Level shape, "view its own
   // business segment only". Same level as GLOBAL and the same fan-DOWN; the difference is
   // only how far it travels. A GLOBAL row is termless and reaches every segment; a SEGVIEW
@@ -426,7 +442,7 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // Documents-only, like GLOBAL, and for the same reason — see LIBRARY_ROLES. This is the
   // one role where a mistake is both quiet and wide: a SEGVIEW row wrongly accepted on
   // Staging hands one person every unapproved draft in an entire business segment.
-  SEGVIEW: "Read",
+  SEGVIEW: "Restricted View",
   // SHARE, 2026-08-15 — the right to grant someone else access, needed by whoever APPROVES a share
   // request, because an approver can only approve what they can perform.
   //
@@ -447,9 +463,25 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // (LIBRARY_ROLES); a parallel set of levels would be a second place for it to drift.
   DELSHC: "DMS Delete",
   MEMBERHC: "Read",
-  // Plain Read, like MEMBER and SEGVIEW — the difference is reach, not level: every unit beneath one
-  // department, in Documents and HC Documents.
-  DEPTVIEW: "Read",
+  // ⚠⚠ WIDENED FROM "Read" TO "Restricted View" (2026-09-15, client: "You forgot about HOD" — the
+  // 2026-09-14 change had deliberately scoped DEPTVIEW out, on the client's own confirmation at the
+  // time; asked directly whether to include it now, they said yes, and "same rule everywhere DEPTVIEW
+  // appears" — both `Documents` and `DocumentsHC`, where `LIBRARY_ROLES` already grants it).
+  //
+  // The custom viewer level, like MEMBER and SEGVIEW — the difference is reach, not level: every
+  // unit beneath one department, in Documents and HC Documents.
+  //
+  // A Head of Department ALSO holds `DEL` and `SHARE` (2026-08-20's persona), and this does not touch
+  // either — those are SEPARATE role assignments on the same folder (`LIBRARY_ROLES.Documents` lists
+  // DEPTVIEW, DEL and SHARE as three independent entries for the `hod` persona), never merged into
+  // this one level. So a Head of Department keeps deleting and sharing approved documents exactly as
+  // before; only their OWN base view right — the one that let them browse and download without
+  // deleting or sharing anything — is narrowed. Reconciliation will ADD the new Restricted View
+  // grant to every HOD group without removing the old Read, exactly the same leftover the one-time
+  // "stale Read" repair tool (built 2026-09-15, removed 2026-09-16 after use) existed to clean up —
+  // if that class of leftover needs clearing again, `removeSingleRoleBinding` further down still
+  // has the shape for it.
+  DEPTVIEW: "Restricted View",
   // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
   // library at all — Limited Access on the parent chain lets a direct folder URL through but
   // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without
@@ -660,16 +692,40 @@ const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR", "UPLHC", "APRHC"];
 const APPROVED_SIDE_LIBS: LibTarget[] = ["Documents", "DocumentsHC"];
 
 /**
- * The libraries the SITE-ENTRY group may hold Read on: `Documents`, and nothing else.
+ * The libraries the SITE-ENTRY group may hold Read on.
  *
- * NOT the same set as APPROVED_SIDE_LIBS, and the difference is the whole point. That table answers
- * "where is an uploader's grant downgraded to Read", which is true of both approved-side libraries.
- * This one answers "who may reach the library at all", and for the HC pair the answer is only people
- * with HC clearance.
+ * ⚠⚠ STAGED FOR A LIVE TEST — EMPTIED 2026-09-14, NOT A PERMANENT DECISION YET. Client: *"what is
+ * the point of CRS_SITE_MEMBERS on the Document Library? … CRS_SITE_MEMBERS go into Document
+ * library and see nothing, so I see there is no need to assign CRS_SITE_MEMBERS to documents
+ * library."* They are right that it is a useless VIEWER grant — a bare `CRS_SITE_MEMBERS` member
+ * sees only an empty-looking segment folder, never a document — but that was never why it existed.
  *
- * `Documents` needs it because the approval guard resolves the destination folder AS THE APPROVER,
- * and that read depends on it. `HC Documents` does not: an HC approver reaches it through their own
- * `_APR_HC` group, and HC Auto-route runs as the service account. Neither needs a site-wide grant.
+ * This USED TO read `["Documents"]`, with the reasoning kept below because it is what the next run
+ * has to prove or disprove: *"`Documents` needs it because the approval guard resolves the
+ * destination folder AS THE APPROVER, and that read depends on it."* The theory being tested is that
+ * the ancestor-browse corridor (the block right above this one) already gets every approver's own
+ * role-group Read up to the library via SharePoint's automatic Limited-Access cascade, making this
+ * SEPARATE site-wide grant redundant. Nobody has verified that live.
+ *
+ * ⚠⚠ THE TEST: emptying this makes the site-entry pass below REMOVE `CRS_SITE_MEMBERS` from
+ * `Documents` on its next run (it already asserts both directions — grants when it should hold and
+ * does not, removes when it should not and does — so no other code change was needed for the
+ * removal half). After that run, approve ONE real document as an ordinary approver.
+ *   — Succeeds → the theory holds. Remove the whole site-entry-library-state pass (~200 lines,
+ *     starting at "SITE-ENTRY LIBRARY STATE" a few hundred lines below) in a follow-up change, since
+ *     nothing needs it any more.
+ *   — Fails, specifically on resolving the destination (not a folder-map or clash refusal) → put
+ *     `["Documents"]` back on the line below and reconcile again. One line, one run, nothing was
+ *     ever broken for a real approver in the meantime because this is caught BEFORE going live.
+ *
+ * ⚠ DO NOT DEPLOY THIS TO A PRODUCTION SITE WITHOUT BEING READY TO IMMEDIATELY REVERT IT. This
+ * exact grant has a real incident behind it (2026-08-16): wrong once before, and it broke every
+ * approval on the site with reconciliation reporting success — the run log gave no hint anything
+ * was wrong until an approver actually tried to use the page.
+ *
+ * `HC Documents` was NEVER in this set (see the retained reasoning) and stays untouched either way:
+ * an HC approver reaches it through their own `_APR_HC` group, and HC Auto-route runs as the
+ * service account — neither ever needed a site-wide grant, and this test does not concern them.
  *
  * A separate set rather than a reuse of APPROVED_SIDE_LIBS because the first version of this pass DID
  * reuse it, and so granted the site-entry group Read on `HC Documents` — every site member able to
@@ -677,7 +733,7 @@ const APPROVED_SIDE_LIBS: LibTarget[] = ["Documents", "DocumentsHC"];
  * HC design directly: `MEMBER` is absent from the `DocumentsHC` row of LIBRARY_ROLES, and what is
  * ABSENT from those rows is the feature. Site entry is that same grant wearing a different name.
  */
-const SITE_ENTRY_LIBS: LibTarget[] = ["Documents"];
+const SITE_ENTRY_LIBS: LibTarget[] = [];
 
 /**
  * The libraries where EVERY role is Read, whatever it means elsewhere.
@@ -693,14 +749,32 @@ const SITE_ENTRY_LIBS: LibTarget[] = ["Documents"];
  */
 const READ_ONLY_LIBS: LibTarget[] = ["Archive", "ArchiveHC"];
 
+/**
+ * The three roles narrowed from "Read" to "Restricted View" — see the long note on `MEMBER` in
+ * `ROLE_TO_PERMISSION` above for why and when this changed. Kept as a local `string[]` rather than
+ * importing `pageAccessPolicy.ts`'s `VIEW_ONLY_ROLES` (the SAME three roles, a different concern —
+ * which PAGES they may reach): that one is typed to the narrower `GroupMapRole` union, and
+ * `permissionForRole`'s `role` parameter here is a plain `string`, so `.indexOf(role)` against the
+ * narrower type would not compile.
+ */
+const PURE_VIEWER_ROLES: string[] = ["MEMBER", "GLOBAL", "SEGVIEW"];
+
 /** The level a role grants IN A GIVEN LIBRARY. Always use this, never the raw table. */
 function permissionForRole(lib: LibTarget, role: string): string | undefined {
-  /* ⚠ STILL `undefined` FOR AN UNKNOWN ROLE. Returning "Read" unconditionally would grant on a
+  /* ⚠ STILL `undefined` FOR AN UNKNOWN ROLE. Returning a level unconditionally would grant on a
      hand-written Group Map row naming a role that does not exist, and `ENTRY` — deliberately absent
      from LIBRARY_ROLES — must keep being skipped rather than approximated. The lookup is what
      answers "is this a role at all"; the library only decides the LEVEL. */
-  if (READ_ONLY_LIBS.indexOf(lib) > -1)
-    return ROLE_TO_PERMISSION[role] ? "Read" : undefined;
+  if (READ_ONLY_LIBS.indexOf(lib) > -1) {
+    if (!ROLE_TO_PERMISSION[role]) return undefined;
+    /* The 2026-08-22 client rule ("for all the Archive files make sure all groups have read only")
+       still forces every OTHER role down to plain "Read" here, whatever it holds elsewhere — a
+       deleter or sharer on Archive gets Read, not Delete/Share. Only the pure viewer roles get
+       their OWN narrower level here too, rather than being widened back up to plain Read. */
+    return PURE_VIEWER_ROLES.indexOf(role) > -1
+      ? ROLE_TO_PERMISSION[role]
+      : "Read";
+  }
   if (
     APPROVED_SIDE_LIBS.indexOf(lib) > -1 &&
     DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1
@@ -1819,6 +1893,46 @@ export default function FolderManager({
     }
   };
 
+  // ⚠ THE ONE-BINDING FORM `removeRoleAssignment` ABOVE DELIBERATELY REFUSES: it drops EVERY
+  // binding a principal holds on a folder, which was exactly wrong for the one-time "stale Read"
+  // repair this served (built + run 2026-09-15/16, then REMOVED per the client, 2026-09-16 —
+  // "remove that tool for now", same convention this file's earlier archive-prune tools followed:
+  // build it, run it on every site, take it back out so it does not sit in front of the client as
+  // an unexplained feature). ⚠ UNREACHABLE ON PURPOSE, KEPT NOT DELETED — this is the
+  // ROLE-DEFINITION-SPECIFIC form (`roledefid=`), already proven at LIST scope in this file
+  // (Site Pages, CRS Requests, CRS Submissions removals) and confirmed to work identically at
+  // FOLDER/item scope — same `RoleAssignmentCollection.RemoveRoleAssignment` overload either way.
+  // If a future repair needs to strip ONE role binding without touching a principal's other grants
+  // on the same folder, this is the shape; re-wire it rather than rebuilding it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const removeSingleRoleBinding = async (
+    path: string,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(() =>
+      context.spHttpClient.post(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/removeroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeServerRelativePath(path)}'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const json = await res.json();
+        const sp =
+          json?.error?.message?.value ??
+          json?.error?.message ??
+          json?.["odata.error"]?.message?.value;
+        if (sp) msg += ` — ${sp}`;
+      } catch {
+        msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      }
+      throw new Error(msg);
+    }
+  };
+
   // Library-scope grant. Separate from addRoleAssignment because that one addresses a
   // FOLDER by server-relative path; a list is addressed by its GUID, and the two endpoints
   // are not interchangeable. Takes the `/_api/web/lists(guid'…')` base already built by the
@@ -1981,8 +2095,38 @@ export default function FolderManager({
     // Detect the custom-level prefix from the UNFILTERED list, before the hidden/system levels
     // are dropped — the filter is about what an admin may pick, not about what exists.
     applyPermissionPrefix(all.map((r) => r.Name));
+    /* ⚠⚠ FIXED 2026-09-15 — THIS USED TO FILTER ON `!r.Hidden`, AND THAT WAS THE WHOLE BUG BEHIND
+       "no Restricted View role definition on site" on SDG's live tenant. Verified directly via
+       `/_api/web/roledefinitions?$select=Id,Name,Hidden,RoleTypeKind` on that site: `Restricted
+       View` genuinely exists, spelled EXACTLY that, at Id 1073741832 — but with `Hidden: true`. So
+       this filter silently threw it out of `kept` on EVERY run, on EVERY site, before reconciliation
+       ever got to search for it by name. No redeploy, cache-clear or reinstall could ever have fixed
+       this — it was deterministic, in the matching logic itself, not a deployment problem, and it
+       cost a genuinely alarming detour (a stuck app reinstall, an emptied recycle bin) chasing what
+       turned out to be one wrong filter condition.
+
+       `Hidden` was never a reliable signal for "must never be granted" — it also covers levels
+       SharePoint hides from the admin's Permission Levels LISTING page (`role.aspx`) purely to stop
+       them being hand-edited/deleted there, while leaving them fully real and assignable (Restricted
+       View is exactly this: hidden from that one listing, present and correct in the "Edit User
+       Permissions" checkbox dialog, and a completely legitimate level to grant by name). It was
+       never the right test for "is this genuine internal plumbing" — `RoleTypeKind` already was.
+
+       Filtering on `RoleTypeKind` alone: `1` is Guest (`Limited Access`, SharePoint's automatic
+       traversal entry — never something to grant by name), `7` is the original code's own
+       System-kind exclusion, and `255` is what `Hidden` was ACTUALLY doing the real work of
+       excluding for `System.LimitedView`/`System.LimitedEdit` (both RoleTypeKind 255, confirmed on
+       the same live read) — neither of those two ever had a distinct RoleTypeKind of their own to
+       filter on before, so `Hidden` was carrying that weight alone. Restricted View's own
+       RoleTypeKind is `8`, which was never excluded by the RoleTypeKind half of the old condition —
+       only ever caught by the `Hidden` half, and that half is what had to go. */
     const kept = all
-      .filter((r) => !r.Hidden && r.RoleTypeKind !== 1 && r.RoleTypeKind !== 7)
+      .filter(
+        (r) =>
+          r.RoleTypeKind !== 1 &&
+          r.RoleTypeKind !== 7 &&
+          r.RoleTypeKind !== 255,
+      )
       .map((r) => ({ id: r.Id, name: r.Name }));
     setRoleDefs(kept);
     return kept;
@@ -3851,8 +3995,16 @@ export default function FolderManager({
            so nothing here tries to create a column on a library that does not exist. */
         for (const title of allLibraryTitles()) {
           for (const col of [
-            { name: APPROVED_BY_COLUMN, display: "Approved By", kind: "Text" as const },
-            { name: APPROVAL_COMMENT_COLUMN, display: "Approval Comment", kind: "Note" as const },
+            {
+              name: APPROVED_BY_COLUMN,
+              display: "Approved By",
+              kind: "Text" as const,
+            },
+            {
+              name: APPROVAL_COMMENT_COLUMN,
+              display: "Approval Comment",
+              kind: "Note" as const,
+            },
           ]) {
             try {
               const made = await ensureColumn(
@@ -5116,7 +5268,8 @@ export default function FolderManager({
               const derivedFiles = items
                 .filter(
                   (p) =>
-                    p.file !== "" && derivedRolesForPage(p.file).length > 0,
+                    p.file !== "" &&
+                    derivedRolesForPage(p.file).length > 0,
                 )
                 .map((p) => p.file);
               const rowFiles = pageRows.map((r) =>
@@ -8358,6 +8511,13 @@ export default function FolderManager({
             </div>
           </div>
 
+          {/* ⚠ "Remove stale Read grants" — the one-time repair for the leftover Read binding the
+              2026-09-14 Restricted View change left behind on MEMBER/GLOBAL/SEGVIEW/DEPTVIEW groups
+              — was built and run on both sites 2026-09-15/16, then REMOVED here on the client's
+              instruction (2026-09-16: "remove that tool for now"), same convention this file's
+              earlier archive-prune tools followed. Recoverable: the write it used
+              (`removeSingleRoleBinding`) is kept, not deleted, a few hundred lines up. */}
+
           {(reconRunning ||
             folderFeeds.Staging.length > 0 ||
             folderFeeds.Documents.length > 0 ||
@@ -8595,7 +8755,12 @@ export default function FolderManager({
                                 {/* `minWidth: 0` is what lets this shrink inside the flex row at all
                                     — a flex item's default `min-width: auto` floors it at its
                                     min-content width, which for a long path is most of the sentence. */}
-                                <span style={{ minWidth: 0, overflowWrap: "break-word" }}>
+                                <span
+                                  style={{
+                                    minWidth: 0,
+                                    overflowWrap: "break-word",
+                                  }}
+                                >
                                   {it.text}
                                 </span>
                               </div>

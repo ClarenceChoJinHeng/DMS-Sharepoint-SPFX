@@ -65,6 +65,16 @@ type Props = {
    * over, and the one that invites a needless second press.
    */
   onRunComplete?: () => void;
+  /**
+   * The "Create Group" card renders COLLAPSED behind its own header toggle when this is set.
+   *
+   * Set ONLY by `GroupManagementPage.tsx` (the standalone page), per the client's CR: *"Change
+   * Group Management into a collapsible button by default — Quick Search / Groups on this site /
+   * Create Group."* Absent means expanded, so the guided flow's group step (`FolderAdmin.tsx`,
+   * where creating groups IS the whole point of that step) is unaffected — an admin who has just
+   * landed there should see the segment picker and preview immediately, not have to click first.
+   */
+  collapsedByDefault?: boolean;
 };
 
 type Seg = BulkSegment & { key: string; label: string };
@@ -185,6 +195,25 @@ const s: Record<string, React.CSSProperties> = {
   /* 20px and title case (client, 2026-09-06). This is the heading of the whole card, and at 13px it
      read as a field label rather than the start of a section. */
   head: { fontWeight: 600, fontSize: 20, margin: "0 0 8px" },
+  // Same visual weight as `head`, as a `<button>` — the collapsible "Create Group" card header.
+  sectionHead: {
+    fontWeight: 600,
+    fontSize: 20,
+    margin: "0 0 8px",
+    background: "none",
+    border: "none",
+    padding: 0,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    // Label left, arrow pinned to the far right of the row (client, 2026-09-17: match the icon
+    // placement already used on Approval Library Access / Page Access / Site Access).
+    justifyContent: "space-between",
+    width: "100%",
+    color: "inherit",
+    textAlign: "left",
+  },
+  sectionHeadArrow: { flexShrink: 0, marginLeft: 8 },
   label: {
     display: "block",
     fontSize: 12,
@@ -381,7 +410,9 @@ export default function BulkGroupProvisioner({
   siteUrl,
   onBusyChange,
   onRunComplete,
+  collapsedByDefault,
 }: Props): React.ReactElement {
+  const [cardOpen, setCardOpen] = useState(!collapsedByDefault);
   const [segments, setSegments] = useState<Seg[] | undefined>(undefined);
   const [chosen, setChosen] = useState("");
   /**
@@ -998,7 +1029,19 @@ export default function BulkGroupProvisioner({
           list"). The stale "set on Folder Access" reference is gone WITH this rewrite — Folder
           Access itself was retired 2026-08-23, and membership editing moved to Group Management;
           the client's own shorter sentence happens to drop the dangling reference along with it. */}
-      <p style={s.head}>Create Group</p>
+      {/* Collapsible, collapsed by default on the standalone page (client's CR, 2026-09-17) — never
+          on the guided-flow mount, which never sets `collapsedByDefault`. */}
+      <button
+        type="button"
+        style={s.sectionHead}
+        aria-expanded={cardOpen}
+        onClick={() => setCardOpen(!cardOpen)}
+      >
+        <span>Create Group</span>
+        <span style={s.sectionHeadArrow}>{cardOpen ? "▾" : "▸"}</span>
+      </button>
+      {cardOpen && (
+        <>
       <div style={s.okBox}>
         Set up the groups a segment needs. Creating a group also writes its
         folder mapping — permissions apply once you run folder reconciliation.
@@ -1094,7 +1137,7 @@ export default function BulkGroupProvisioner({
                 {plan.skipped.length} term{plan.skipped.length === 1 ? "" : "s"}{" "}
                 left out.
               </strong>{" "}
-              Give them a code on <strong>CRS Term Abbreviations</strong>, then
+              Give them a code on <strong>GDC Term Abbreviations</strong>, then
               run this again.
               <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
                 {plan.skipped.slice(0, 12).map((x) => (
@@ -1271,6 +1314,8 @@ export default function BulkGroupProvisioner({
           text={toast.text}
           onDismiss={() => setToast(undefined)}
         />
+      )}
+        </>
       )}
     </div>
   );

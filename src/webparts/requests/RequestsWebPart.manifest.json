@@ -14,7 +14,7 @@
   "preconfiguredEntries": [{
     "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
     "group": { "default": "Advanced" },
-    "title": { "default": "CRS Requests" },
+    "title": { "default": "GDC Requests" },
     "description": { "default": "Deletion and share requests — raised by uploaders, decided by the Head of Unit" },
     "officeFabricIconFontName": "TaskManager",
     "properties": {}

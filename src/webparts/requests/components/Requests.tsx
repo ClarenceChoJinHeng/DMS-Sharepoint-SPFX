@@ -29,6 +29,11 @@ import {
   libraryTargets,
   noteCreatedList,
   titleForNewList,
+  /* For the HC/Archived tags beside a request's file name (2026-09-13) — same pair My Submissions
+     already reads for the same purpose. `undefined` when the pair is unresolved, which tags
+     nothing rather than guessing. */
+  cachedHcLibraries,
+  cachedArchiveLibraries,
 } from "../../../shared/naming";
 import { primeNames } from "../../../shared/spNaming";
 import { useLiveRefresh } from "../../../shared/liveRefresh";
@@ -39,7 +44,14 @@ import { isSystemAdmin } from "../../../shared/spGroups";
 import { closeOnBackdrop } from "../../../shared/backdropClose";
 // The file view is SHARED with My Submissions (client, 2026-09-10) - one component, two mounts.
 import { FileDetailPanel } from "../../../shared/fileDetailPanel";
-import { folderTrail, trailText, formatSubmittedOn } from "../../../shared/mySubmissions";
+import {
+  folderTrail,
+  trailText,
+  formatSubmittedOn,
+  isHcRow,
+  isArchivedRow,
+  librarySegmentOf,
+} from "../../../shared/mySubmissions";
 import { encodeServerRelativePath } from "../../../shared/pathEncoding";
 import {
   RequestRow,
@@ -48,7 +60,6 @@ import {
   REQUEST_STATUSES,
   applyDecision,
   canDecide,
-  counts,
   decisionSummary,
   isExternal,
   isVisibleTo,
@@ -128,7 +139,7 @@ type FileView =
 
 const s: Record<string, React.CSSProperties> = {
   wrap: {
-    fontFamily: 'Arial, sans-serif',
+    fontFamily: "Arial, sans-serif",
     color: "#242424",
     fontSize: 13,
     lineHeight: 1.5,
@@ -148,7 +159,8 @@ const s: Record<string, React.CSSProperties> = {
        what was asked. The whole shell is what produces the effect, so the whole shell is copied.
        1100 matches My Submissions - its closest sibling, and the other card list in the product. */
     maxWidth: 1100,
-    margin: "32px auto", padding: "0 24px 48px",
+    margin: "32px auto",
+    padding: "0 24px 48px",
   },
   h2: { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 6px" },
   sub: { fontSize: 13, color: "#5f5f5f", margin: "0 0 20px", lineHeight: 1.55 },
@@ -219,10 +231,72 @@ const s: Record<string, React.CSSProperties> = {
     cursor: "pointer",
   },
   meta: { fontSize: 11.5, color: "#6b7a71", marginTop: 4 },
+  /* The folder trail, and the HC/Archived tags beside a request's file name (client, 2026-09-13:
+     "I cannot tell where does the file comes from"). Same shape as My Submissions' own Requests
+     tab, which carries the same tags for the same reason: the same filename can exist in BOTH the
+     normal and the HC library, and on 2026-08-21 an approved deletion took the HC copy while an
+     identically named file remained. */
+  trail: {
+    fontSize: 11.5,
+    color: "#6b7a71",
+    marginTop: 2,
+    wordBreak: "break-word",
+  },
+  hcTag: {
+    display: "inline-block",
+    marginLeft: 8,
+    padding: "1px 7px",
+    borderRadius: 10,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    background: "#fff4ce",
+    color: "#8a5700",
+    border: "1px solid #f2d18b",
+    verticalAlign: "middle",
+  },
+  arcTag: {
+    display: "inline-block",
+    marginLeft: 8,
+    padding: "1px 7px",
+    borderRadius: 10,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.3,
+    background: "#eef1f5",
+    color: "#3b4a5a",
+    border: "1px solid #c8d2de",
+    verticalAlign: "middle",
+  },
   /* The file name as a link into the file view, and the band back out - My Submissions' own. */
-  nameBtn: { background: "none", border: "none", padding: 0, font: "inherit", fontWeight: 600, color: "#0f6cbd", cursor: "pointer", textAlign: "left", flex: "1 1 240px", wordBreak: "break-word" },
-  backBand: { background: "rgba(15, 108, 63, 0.08)", borderRadius: 4, padding: "10px 16px", marginBottom: 20 },
-  backLink: { background: "none", border: "none", padding: 0, font: "inherit", fontSize: 14, fontWeight: 600, color: "#0f6c3f", cursor: "pointer" },
+  nameBtn: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    font: "inherit",
+    fontWeight: 600,
+    color: "#0f6cbd",
+    cursor: "pointer",
+    textAlign: "left",
+    flex: "1 1 240px",
+    wordBreak: "break-word",
+  },
+  backBand: {
+    background: "rgba(15, 108, 63, 0.08)",
+    borderRadius: 4,
+    padding: "10px 16px",
+    marginBottom: 20,
+  },
+  backLink: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    font: "inherit",
+    fontSize: 14,
+    fontWeight: 600,
+    color: "#0f6c3f",
+    cursor: "pointer",
+  },
   /* ⚠ `s` IS A `Record<string, CSSProperties>`: a key that does not exist yields `undefined`
      and the element renders UNSTYLED with a green build. Add every new key here. */
   reasonLabel: {
@@ -280,7 +354,12 @@ const s: Record<string, React.CSSProperties> = {
      yields `undefined` and the element renders with no styling and a green build — which is exactly
      what happened to the accordion headers earlier today. */
   /** The filename, on its own line under the title. Quiet, because it identifies rather than states. */
-  modalFile: { fontSize: 12, color: "#8a8886", margin: "0 0 10px", wordBreak: "break-word" },
+  modalFile: {
+    fontSize: 12,
+    color: "#8a8886",
+    margin: "0 0 10px",
+    wordBreak: "break-word",
+  },
   /** A textarea rather than the single-line input the dialog used: a reason runs to a sentence. */
   noteArea: {
     width: "100%",
@@ -723,7 +802,9 @@ export default function Requests({
   const linkRead = useRef(false);
   if (!linkRead.current) {
     linkRead.current = true;
-    const n = Number(new URLSearchParams(window.location.search).get("request") ?? "");
+    const n = Number(
+      new URLSearchParams(window.location.search).get("request") ?? "",
+    );
     if (isFinite(n) && n > 0) linkedRequest.current = n;
   }
 
@@ -1509,7 +1590,7 @@ export default function Requests({
       try {
         const res = await context.spHttpClient.get(
           `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib.title)}')/items` +
-            `?$select=Id,FileRef&$filter=SubmissionFileId eq '${encodeURIComponent(wanted)}'` +
+            `?$select=Id,FileRef,UniqueId&$filter=SubmissionFileId eq '${encodeURIComponent(wanted)}'` +
             `&$top=5${bust()}`,
           SPHttpClient.configurations.v1,
           { headers: GET },
@@ -1521,12 +1602,14 @@ export default function Requests({
         const rows = ((await res.json()).value ?? []) as Array<{
           Id?: number;
           FileRef?: string;
+          UniqueId?: string;
         }>;
         for (const r of rows) {
           found.push({
             library: lib.title,
             itemId: Number(r.Id ?? 0),
             fileRef: r.FileRef ?? "",
+            itemUniqueId: r.UniqueId ?? "",
           });
         }
       } catch {
@@ -1559,40 +1642,52 @@ export default function Requests({
   };
 
   /**
-   * Recycle, never delete outright — restorable for 93 days, which is what makes approving a deletion
-   * reasonable at all.
+   * Resolve where a Deletion request's document currently lives — and do nothing else.
+   *
+   * ⚠⚠ THIS NO LONGER RECYCLES ANYTHING (2026-09-17). Client: *"they cannot directly delete anymore
+   * but someone do it on their behalf via power automate via admin account. Reason being they can
+   * delete folders which is dangerous."* The SharePoint delete grant is what let the person deciding
+   * a request also delete a FOLDER — a hazard the UI never exposed but the permission still allowed —
+   * so the grant itself comes off every persona (`groupMapModel.ts`) and the actual
+   * `GetFileById(...)/recycle()` moves to a new flow, `CRS — Execute approved deletion`, signed in as
+   * `crs@sdguthrie.com` and triggered off `Status eq 'Approved' and RequestType eq 'Deletion'`.
+   *
+   * So this function's whole job is finding the CURRENT `ItemUniqueId` to write onto the row before
+   * `Status` flips to `Approved` — `GetFileById` is web-scoped, so once this resolves correctly the
+   * flow needs no further help locating the document.
    *
    * ⚠⚠ TWO IDENTIFIERS, AND THE RECORDED ONE CAN BE DEAD. `ItemUniqueId` is tried first: it is
    * right in the common case (an approved-stage request), and a rename or a move does not disturb
    * it. But `Auto-route` is copy-stamp-delete, so a PENDING-stage document that has since been
    * approved leaves that id resolving to nothing — and until 2026-09-10 the 404 was reported as
    * *"that document no longer exists"* about a file sitting in plain sight, permanently, because
-   * nothing repoints the id. The stamp is the second route.
+   * nothing repointed the id. The stamp is the second route — it now resolves a DIFFERENT id rather
+   * than acting on it.
+   *
+   * See `2026-09-17-proxy-deletion-via-power-automate-design.md`.
    */
-  const performDeletion = async (
+  const resolveDeletionTarget = async (
     row: RequestRow,
-  ): Promise<string | undefined> => {
-    const res = await post(
-      `${siteUrl}/_api/web/GetFileById(guid'${row.itemUniqueId}')/recycle()`,
+  ): Promise<{ itemUniqueId: string } | { failure: string }> => {
+    const probe = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/GetFileById(guid'${row.itemUniqueId}')?$select=UniqueId${bust()}`,
+      SPHttpClient.configurations.v1,
+      { headers: GET },
     );
-    if (res.ok) return undefined;
-    if (res.status === 403)
-      return "You do not have permission to delete that document.";
-    if (res.status !== 404)
-      return `The document could not be deleted (HTTP ${res.status}).`;
+    if (probe.ok) return { itemUniqueId: row.itemUniqueId };
+    if (probe.status === 403)
+      return { failure: "You do not have permission to view that document." };
+    if (probe.status !== 404)
+      return {
+        failure: `The document could not be located (HTTP ${probe.status}).`,
+      };
 
     // 404 — the recorded id resolves to nothing. Either the document really has gone, or it was
     // routed and this id died with the source. Only the stamp can tell those apart.
     const lookup = await findByStamp(row.submissionFileId ?? "");
-    if (lookup.kind !== "found") return stampProblem(lookup, "deleted");
-    const again = await post(
-      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lookup.library)}')` +
-        `/items(${lookup.itemId})/recycle()`,
-    );
-    if (again.ok) return undefined;
-    if (again.status === 403)
-      return `That document has since been filed in ${lookup.library}, and you do not have permission to delete it there.`;
-    return `That document has since been filed in ${lookup.library} and could not be deleted there (HTTP ${again.status}).`;
+    if (lookup.kind !== "found" || !lookup.itemUniqueId)
+      return { failure: stampProblem(lookup, "deleted") };
+    return { itemUniqueId: lookup.itemUniqueId };
   };
 
   /**
@@ -1642,7 +1737,8 @@ export default function Requests({
     }
     /* Anything other than a definite 404 degrades to the recorded path, which is what this did
        before the probe existed. A refusal here would take sharing down over a throttle. */
-    if (row.itemUrl && row.itemUrl.trim().length > 0) return { path: row.itemUrl };
+    if (row.itemUrl && row.itemUrl.trim().length > 0)
+      return { path: row.itemUrl };
     return { problem: "This request has no document address recorded." };
   };
 
@@ -1755,12 +1851,22 @@ export default function Requests({
         return;
       }
 
+      // ⚠⚠ A DELETION IS RESOLVED, NEVER EXECUTED, HERE (2026-09-17). Approving a deletion used to
+      // call performDeletion(row), which recycled the file itself. It now only finds the document's
+      // CURRENT ItemUniqueId — the actual recycle() is performed by `CRS — Execute approved
+      // deletion` (Power Automate, crs@sdguthrie.com), triggered off the Status=Approved write
+      // below. See 2026-09-17-proxy-deletion-via-power-automate-design.md. Share is unaffected —
+      // it still executes directly in the approver's own session, unchanged.
       let failure: string | undefined;
+      let resolvedItemUniqueId: string | undefined;
       if (approve) {
-        failure =
-          row.type === "Deletion"
-            ? await performDeletion(row)
-            : await performShare(row);
+        if (row.type === "Deletion") {
+          const resolved = await resolveDeletionTarget(row);
+          if ("failure" in resolved) failure = resolved.failure;
+          else resolvedItemUniqueId = resolved.itemUniqueId;
+        } else {
+          failure = await performShare(row);
+        }
       }
       const decided = applyDecision(row, {
         approve,
@@ -1784,6 +1890,12 @@ export default function Requests({
             DecidedBy: decided.decidedBy,
             DecidedAt: decided.decidedAt,
             DecisionNote: decided.decisionNote,
+            // Only present when a Deletion resolved to a DIFFERENT id than the one already on the
+            // row (the pending-stage-then-routed case) — re-pointing it is what lets the proxy flow
+            // find the document by GUID after this write, since it is never told anything else.
+            ...(resolvedItemUniqueId !== undefined
+              ? { ItemUniqueId: resolvedItemUniqueId }
+              : {}),
           }),
         },
       );
@@ -1878,7 +1990,9 @@ export default function Requests({
     };
     setFileView({ state: "loading" });
     const read = (url: string): Promise<SPHttpClientResponse> =>
-      context.spHttpClient.get(url, SPHttpClient.configurations.v1, { headers: GET });
+      context.spHttpClient.get(url, SPHttpClient.configurations.v1, {
+        headers: GET,
+      });
     try {
       let path: string | undefined;
       if (row.itemUniqueId) {
@@ -1886,9 +2000,13 @@ export default function Requests({
           `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(row.itemUniqueId)}')?$select=ServerRelativeUrl${bust()}`,
         );
         if (res.ok) {
-          path = ((await res.json()) as { ServerRelativeUrl?: string }).ServerRelativeUrl;
+          path = ((await res.json()) as { ServerRelativeUrl?: string })
+            .ServerRelativeUrl;
         } else if (res.status !== 404) {
-          settle({ state: "gone", message: `The document could not be read (HTTP ${res.status}). Refresh and try again.` });
+          settle({
+            state: "gone",
+            message: `The document could not be read (HTTP ${res.status}). Refresh and try again.`,
+          });
           return;
         }
       }
@@ -1912,13 +2030,16 @@ export default function Requests({
       /* Parameter alias, never an inline literal - a deep path answers 400 otherwise (gotcha #9). */
       const alias = `@f='${encodeServerRelativePath(path)}'`;
       const base = `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)`;
-      const fr = await read(`${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`);
+      const fr = await read(
+        `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`,
+      );
       if (!fr.ok) {
         settle({
           state: "gone",
-          message: fr.status === 404
-            ? "This document is no longer in the library - it may already have been deleted."
-            : `The document could not be read (HTTP ${fr.status}). Refresh and try again.`,
+          message:
+            fr.status === 404
+              ? "This document is no longer in the library - it may already have been deleted."
+              : `The document could not be read (HTTP ${fr.status}). Refresh and try again.`,
         });
         return;
       }
@@ -1932,7 +2053,9 @@ export default function Requests({
          the panel says so rather than blanking. */
       let fieldText: Record<string, string> = {};
       try {
-        const t = await read(`${base}/ListItemAllFields/FieldValuesAsText?${alias}${bust()}`);
+        const t = await read(
+          `${base}/ListItemAllFields/FieldValuesAsText?${alias}${bust()}`,
+        );
         if (t.ok) fieldText = (await t.json()) as Record<string, string>;
       } catch {
         /* keep {} */
@@ -1940,16 +2063,22 @@ export default function Requests({
       /* Document Date re-read RAW and formatted locally, as My Submissions does: FieldValuesAsText
          hands back a US-locale string, and parsing that back is gotcha #1's trap. */
       try {
-        const raw = await read(`${base}/ListItemAllFields?$select=DocumentDate&${alias}${bust()}`);
+        const raw = await read(
+          `${base}/ListItemAllFields?$select=DocumentDate&${alias}${bust()}`,
+        );
         if (raw.ok) {
-          const iso = ((await raw.json()) as { DocumentDate?: string }).DocumentDate;
+          const iso = ((await raw.json()) as { DocumentDate?: string })
+            .DocumentDate;
           const d = iso ? new Date(iso) : undefined;
-          if (d && !isNaN(d.getTime())) fieldText.DocumentDate = formatSubmittedOn(d);
+          if (d && !isNaN(d.getTime()))
+            fieldText.DocumentDate = formatSubmittedOn(d);
         }
       } catch {
         /* keep SharePoint's own string */
       }
-      const modified = f.TimeLastModified ? new Date(f.TimeLastModified) : undefined;
+      const modified = f.TimeLastModified
+        ? new Date(f.TimeLastModified)
+        : undefined;
       settle({
         state: "ready",
         name: f.Name || row.itemName,
@@ -1959,7 +2088,10 @@ export default function Requests({
         fieldText,
       });
     } catch (e) {
-      settle({ state: "gone", message: `The document could not be read: ${(e as Error).message}` });
+      settle({
+        state: "gone",
+        message: `The document could not be read: ${(e as Error).message}`,
+      });
     }
   };
 
@@ -2045,7 +2177,6 @@ export default function Requests({
      existence of the pending-stage request that `ViewerScope` deliberately hides from them.
      `isVisibleTo` is the SAME rule the cards use, so the tally and the queue cannot disagree. */
   const visible = all.filter((r) => isVisibleTo(r, me, scope));
-  const tally = counts(visible);
 
   /* ── Derived views ────────────────────────────────────────────────────────
      Every one of these filters the SAME `visible` array the tally uses, so a tab and the tally can
@@ -2166,6 +2297,23 @@ export default function Requests({
     </button>
   );
 
+  /* Computed once, ahead of `requestCard`, rather than per row: `libraryTargets()`,
+     `cachedHcLibraries()` and `cachedArchiveLibraries()` all read a resolved cache, but there is
+     no reason to re-read that cache once per card when the whole list renders together. Same
+     shapes `MySubmissions.tsx` builds for its own Requests tab (2026-09-10). */
+  const cardLibSegments = libraryTargets().map((t) => t.urlSegment);
+  const cardHcLibs = cachedHcLibraries();
+  const cardHcSegs = cardHcLibs
+    ? {
+        approval: cardHcLibs.approval.urlSegment,
+        documents: cardHcLibs.documents.urlSegment,
+      }
+    : undefined;
+  const cardArcLibs = cachedArchiveLibraries();
+  const cardArcSegs = cardArcLibs
+    ? { normal: cardArcLibs.normal.urlSegment, hc: cardArcLibs.hc?.urlSegment }
+    : undefined;
+
   const requestCard = (
     r: RequestRow,
     actionable: boolean,
@@ -2189,7 +2337,9 @@ export default function Requests({
             title="Open the document"
             onClick={(e) => {
               try {
-                (e.currentTarget.closest("section") as HTMLElement | null)?.scrollIntoView({ block: "start" });
+                (
+                  e.currentTarget.closest("section") as HTMLElement | null
+                )?.scrollIntoView({ block: "start" });
               } catch {
                 /* scrolling is a courtesy */
               }
@@ -2201,6 +2351,31 @@ export default function Requests({
         ) : (
           <span style={s.name}>{r.itemName}</span>
         )}
+        {/* ⚠ NAME ALONE IS NOT AN IDENTIFIER HERE (client, 2026-09-13: "I cannot tell where does the
+            file comes from"). The same filename can exist in BOTH the normal and the HC library —
+            on 2026-08-21 an approved deletion took the HC copy while an identically named file
+            remained — and an approver deciding here has no other way to tell them apart. `seg` is
+            `undefined` when the path names no library we recognise, which tags NOTHING rather than
+            guessing; a wrong HC tag on an ordinary document is worse than an absent one. */}
+        {(() => {
+          const seg = librarySegmentOf(r.itemUrl ?? "", cardLibSegments);
+          return (
+            <>
+              {isHcRow(seg ?? "", cardHcSegs) && (
+                <span style={s.hcTag}>HC</span>
+              )}
+              {isArchivedRow(seg ?? "", cardArcSegs) && (
+                <span style={s.arcTag}>Archived</span>
+              )}
+            </>
+          );
+        })()}
+      </div>
+      {/* The folder location itself — where the file actually sits, not merely which library. An
+          em dash rather than an empty line: a blank reads as a failed load, while a missing path is
+          a fact about a row written before `ItemUrl` existed. */}
+      <div style={s.trail}>
+        {trailText(folderTrail(r.itemUrl ?? "", cardLibSegments)) || "—"}
       </div>
       <div style={s.meta}>
         {r.requestedBy} · {r.unit} · {longDate(r.requestedAt)}
@@ -2221,9 +2396,7 @@ export default function Requests({
       {r.type === "Share" && (
         <div style={s.meta}>
           {(r.shareWith ?? []).join(", ")} · {r.sharePermission ?? "View"}
-          {r.expiresAt
-            ? " · until " + longDate(r.expiresAt)
-            : " · no expiry"}
+          {r.expiresAt ? " · until " + longDate(r.expiresAt) : " · no expiry"}
           {/* Named on the ROW, not only in the dialog: this is the fact that decides the answer, and
               an approver should see it before reaching for a button. */}
           {(r.shareWith ?? []).some((e) => isExternal(e, tenantDomains)) && (
@@ -2321,7 +2494,8 @@ export default function Requests({
      somebody set and forgot, which is the state the original clause existed to prevent. */
   const applyFilters = (list: RequestRow[]): RequestRow[] =>
     list.filter(
-      (r) => (statusFilter === "All" || r.status === statusFilter) && matchesText(r),
+      (r) =>
+        (statusFilter === "All" || r.status === statusFilter) && matchesText(r),
     );
 
   /* ⚠ A FILE IS KEPT IF *ANY* RECIPIENT MATCHES, AND ITS RECIPIENT LIST IS NEVER NARROWED. Filtering
@@ -2408,9 +2582,16 @@ export default function Requests({
                 return (
                   <>
                     {pg.slice.map((r) =>
-                      requestCard(r, r.status === "Pending" && canDecide(r, scope)),
+                      requestCard(
+                        r,
+                        r.status === "Pending" && canDecide(r, scope),
+                      ),
                     )}
-                    <Pager page={pg} onPage={(n) => setPage(t, n)} label="requests" />
+                    <Pager
+                      page={pg}
+                      onPage={(n) => setPage(t, n)}
+                      label="requests"
+                    />
                   </>
                 );
               })()
@@ -2538,7 +2719,10 @@ export default function Requests({
                 {decisionSummary(deciding.row)}
               </p>
             )}
-            {/* Approvals no longer require a note (client, 2026-09-11), but the box stays available
+            {/* ⚠ THIS TOGGLE HAS FLIPPED THREE TIMES: optional-on-approve (2026-09-11) →
+                mandatory-on-both per the client's own QA deck (#33, 2026-09-13) → back to
+                optional-on-approve the same day, confirmed explicitly when asked directly rather
+                than guessed again. Approvals no longer require a note, but the box stays available
                 for an approver who wants to record one. Rejections still need a reason so the
                 requester knows what to fix. */}
             <p style={{ fontSize: 13, margin: "0 0 4px" }}>
@@ -2668,7 +2852,11 @@ export default function Requests({
           <p style={s.quiet}>This request is not one you can see or act on.</p>
         ) : (
           <>
-            {requestCard(viewing, viewing.status === "Pending" && canDecide(viewing, scope), false)}
+            {requestCard(
+              viewing,
+              viewing.status === "Pending" && canDecide(viewing, scope),
+              false,
+            )}
             <div style={{ marginTop: 20 }}>
               {fileView === undefined || fileView.state === "loading" ? (
                 <p style={s.quiet}>Reading the document&hellip;</p>
@@ -2681,7 +2869,9 @@ export default function Requests({
                   tenantRoot={tenantRoot}
                   siteUrl={siteUrl}
                   fieldText={fileView.fieldText}
-                  location={trailText(folderTrail(fileView.fileRef, libSegments))}
+                  location={trailText(
+                    folderTrail(fileView.fileRef, libSegments),
+                  )}
                   size={fileView.size}
                   modified={fileView.modified}
                 />
@@ -2866,11 +3056,15 @@ export default function Requests({
               limit by naming the approval libraries and the permission a HoD does not hold — true,
               and it described internal structure to someone who has no business with it, in a
               sentence that reads as a shortcoming of their own account. The rule is unchanged; only
-              the explanation is gone. */}
-          You are here as a <strong>Head of Department</strong>. You decide
-          requests about <strong>approved documents</strong> in your department.
-          Anything still awaiting approval is handled by the unit&rsquo;s Head
-          of Unit.
+              the explanation is gone.
+
+              ⚠⚠ NARROWED TO SHARE ONLY, 2026-09-17 (client: "HOD no need deletion as well") — a HoD
+              no longer decides Deletion requests at all, only Share. Same rule as above: say what
+              they decide, not why deletion is now absent. */}
+          You are here as a <strong>Head of Department</strong>. You decide{" "}
+          <strong>share</strong> requests about approved documents in your
+          department. Deletion requests, and anything still awaiting approval,
+          are handled by the unit&rsquo;s Head of Unit.
         </div>
       )}
 
@@ -2981,8 +3175,8 @@ export default function Requests({
                   {rows.state === "error"
                     ? "The requests could not be read, so this is not a statement that nothing is shared."
                     : ofType("Share").length > 0
-                      ? "Nobody currently has access through a CRS share — every share here has been revoked or has ended."
-                      : "No approved share requests, so CRS has granted nobody access to a document."}
+                      ? "Nobody currently has access through a GDC share — every share here has been revoked or has ended."
+                      : "No approved share requests, so GDC has granted nobody access to a document."}
                 </p>
               ) : (
                 /* Paged with the other two — the 60vh box is gone. Wrapped in an IIFE so the page
@@ -2992,135 +3186,145 @@ export default function Requests({
                   const pg = paginate(shownShared, pageOf("shared"));
                   return (
                     <>
-                  {pg.slice.map((f) => {
-                    const mayRevoke = canRevoke(f, scope);
-                    const livePeople = f.recipients.filter(
-                      (r) => r.state === "live",
-                    );
-                    const workingOn = revoking === f.itemUniqueId;
-                    return (
-                      <div key={f.itemUniqueId} style={s.fileRow}>
-                        <div style={s.rowTop}>
-                          <span style={s.name}>{f.itemName}</span>
-                          <span style={{ ...s.chip, ...STATE_CHIP[f.state] }}>
-                            {STATE_LABEL[f.state]}
-                          </span>
-                        </div>
-                        <div style={s.meta}>
-                          {f.segment} · {f.unit}
-                        </div>
-
-                        {f.recipients.length === 0 && (
-                          <p style={{ ...s.quiet, marginLeft: 14 }}>
-                            No recipients were recorded.
-                          </p>
-                        )}
-
-                        {f.recipients.map((r) => (
-                          <div key={r.email} style={s.recip}>
-                            <span
-                              style={{
-                                flex: "1 1 220px",
-                                wordBreak: "break-word",
-                              }}
-                            >
-                              {r.email}
-                              {isExternal(r.email, tenantDomains) && (
-                                <strong style={{ color: "#8a4b00" }}>
-                                  {" "}
-                                  · outside the organisation
-                                </strong>
-                              )}
-                            </span>
-                            <span style={{ ...s.chip, ...STATE_CHIP[r.state] }}>
-                              {STATE_LABEL[r.state]}
-                            </span>
-                            <span style={s.small}>
-                              {r.permission === "Edit"
-                                ? "can edit"
-                                : "can view"}
-                              {r.unrecorded
-                                ? " · granted outside CRS"
-                                : r.decidedBy
-                                  ? " · approved by " +
-                                    r.decidedBy +
-                                    (r.decidedAt
-                                      ? " on " + longDate(r.decidedAt)
-                                      : "")
-                                  : ""}
-                              {!r.unrecorded && r.requestedBy
-                                ? " · asked by " + r.requestedBy
-                                : ""}
-                              {r.expiresAt
-                                ? " · until " + longDate(r.expiresAt)
-                                : ""}
-                            </span>
-                            {mayRevoke && r.state === "live" && (
-                              <button
-                                style={workingOn || busy ? s.off : s.revoke}
-                                disabled={workingOn || busy}
-                                onClick={() => {
-                                  const ok = window.confirm(
-                                    'Remove access to "' +
-                                      f.itemName +
-                                      '" for ' +
-                                      r.email +
-                                      "?" +
-                                      "\n\nThey are not told, and any link they have simply stops working.",
-                                  );
-                                  if (!ok) return;
-                                  revoke(f, false, r.email).catch(
-                                    () => undefined,
-                                  );
-                                }}
+                      {pg.slice.map((f) => {
+                        const mayRevoke = canRevoke(f, scope);
+                        const livePeople = f.recipients.filter(
+                          (r) => r.state === "live",
+                        );
+                        const workingOn = revoking === f.itemUniqueId;
+                        return (
+                          <div key={f.itemUniqueId} style={s.fileRow}>
+                            <div style={s.rowTop}>
+                              <span style={s.name}>{f.itemName}</span>
+                              <span
+                                style={{ ...s.chip, ...STATE_CHIP[f.state] }}
                               >
-                                Revoke
-                              </button>
-                            )}
-                          </div>
-                        ))}
+                                {STATE_LABEL[f.state]}
+                              </span>
+                            </div>
+                            <div style={s.meta}>
+                              {f.segment} · {f.unit}
+                            </div>
 
-                        {mayRevoke && livePeople.length > 0 && (
-                          <div style={s.actions}>
-                            <button
-                              style={workingOn || busy ? s.off : s.revokeAll}
-                              disabled={workingOn || busy}
-                              onClick={() => {
-                                const ok = window.confirm(
-                                  'Remove ALL shared access to "' +
-                                    f.itemName +
-                                    '"?' +
-                                    "\n\n" +
-                                    livePeople.length +
-                                    " recipient(s) lose access immediately, and " +
-                                    "the file goes back to its unit's normal permissions — everyone in the " +
-                                    "unit keeps the access they already had." +
-                                    "\n\nNobody is notified.",
-                                );
-                                if (!ok) return;
-                                revoke(f, true).catch(() => undefined);
-                              }}
-                            >
-                              {workingOn ? "Removing…" : "Revoke all access"}
-                            </button>
-                            {/* ⚠ SAID OUT LOUD, because it is the difference between tidying a list and
+                            {f.recipients.length === 0 && (
+                              <p style={{ ...s.quiet, marginLeft: 14 }}>
+                                No recipients were recorded.
+                              </p>
+                            )}
+
+                            {f.recipients.map((r) => (
+                              <div key={r.email} style={s.recip}>
+                                <span
+                                  style={{
+                                    flex: "1 1 220px",
+                                    wordBreak: "break-word",
+                                  }}
+                                >
+                                  {r.email}
+                                  {isExternal(r.email, tenantDomains) && (
+                                    <strong style={{ color: "#8a4b00" }}>
+                                      {" "}
+                                      · outside the organisation
+                                    </strong>
+                                  )}
+                                </span>
+                                <span
+                                  style={{ ...s.chip, ...STATE_CHIP[r.state] }}
+                                >
+                                  {STATE_LABEL[r.state]}
+                                </span>
+                                <span style={s.small}>
+                                  {r.permission === "Edit"
+                                    ? "can edit"
+                                    : "can view"}
+                                  {r.unrecorded
+                                    ? " · granted outside GDC"
+                                    : r.decidedBy
+                                      ? " · approved by " +
+                                        r.decidedBy +
+                                        (r.decidedAt
+                                          ? " on " + longDate(r.decidedAt)
+                                          : "")
+                                      : ""}
+                                  {!r.unrecorded && r.requestedBy
+                                    ? " · asked by " + r.requestedBy
+                                    : ""}
+                                  {r.expiresAt
+                                    ? " · until " + longDate(r.expiresAt)
+                                    : ""}
+                                </span>
+                                {mayRevoke && r.state === "live" && (
+                                  <button
+                                    style={workingOn || busy ? s.off : s.revoke}
+                                    disabled={workingOn || busy}
+                                    onClick={() => {
+                                      const ok = window.confirm(
+                                        'Remove access to "' +
+                                          f.itemName +
+                                          '" for ' +
+                                          r.email +
+                                          "?" +
+                                          "\n\nThey are not told, and any link they have simply stops working.",
+                                      );
+                                      if (!ok) return;
+                                      revoke(f, false, r.email).catch(
+                                        () => undefined,
+                                      );
+                                    }}
+                                  >
+                                    Revoke
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+
+                            {mayRevoke && livePeople.length > 0 && (
+                              <div style={s.actions}>
+                                <button
+                                  style={
+                                    workingOn || busy ? s.off : s.revokeAll
+                                  }
+                                  disabled={workingOn || busy}
+                                  onClick={() => {
+                                    const ok = window.confirm(
+                                      'Remove ALL shared access to "' +
+                                        f.itemName +
+                                        '"?' +
+                                        "\n\n" +
+                                        livePeople.length +
+                                        " recipient(s) lose access immediately, and " +
+                                        "the file goes back to its unit's normal permissions — everyone in the " +
+                                        "unit keeps the access they already had." +
+                                        "\n\nNobody is notified.",
+                                    );
+                                    if (!ok) return;
+                                    revoke(f, true).catch(() => undefined);
+                                  }}
+                                >
+                                  {workingOn
+                                    ? "Removing…"
+                                    : "Revoke all access"}
+                                </button>
+                                {/* ⚠ SAID OUT LOUD, because it is the difference between tidying a list and
                           fixing the problem: only this button releases the file's permission scope,
                           and unreleased scopes are what the 50,000-per-list ceiling counts. */}
-                            <span style={s.small}>
-                              Also releases this file&rsquo;s permission scope.
-                            </span>
-                          </div>
-                        )}
+                                <span style={s.small}>
+                                  Also releases this file&rsquo;s permission
+                                  scope.
+                                </span>
+                              </div>
+                            )}
 
-                        {!mayRevoke && livePeople.length > 0 && (
-                          <p style={{ ...s.quiet, marginLeft: 14 }}>
-                            Only this unit&rsquo;s Head of Unit, its Head of
-                            Department or an administrator can remove access.
-                          </p>
-                        )}
-                      </div>
-                    );
-                  })}
+                            {!mayRevoke && livePeople.length > 0 && (
+                              <p style={{ ...s.quiet, marginLeft: 14 }}>
+                                Only this unit&rsquo;s Head of Unit, its Head of
+                                Department or an administrator can remove
+                                access.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
                       <Pager
                         page={pg}
                         onPage={(n) => setPage("shared", n)}
@@ -3176,11 +3380,6 @@ export default function Requests({
           )}
         </div>
       )}
-
-      <p style={s.quiet}>
-        {tally.Pending} pending · {tally.Approved} approved · {tally.Rejected}{" "}
-        rejected · {tally.Revoked} revoked · {tally.Failed} failed
-      </p>
 
       {decisionDialog}
     </section>

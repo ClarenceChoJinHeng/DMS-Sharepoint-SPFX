@@ -18,12 +18,20 @@ import { ExistingSegment } from "./newSegment";
 import { SegmentCounts } from "./segmentDeletion";
 
 /**
- * May the re-code action actually run?
+ * May the SIMPLE re-code action run — recycle the (confirmed-empty) old tree, write the new name?
  *
  * ONLY when the count succeeded AND it found zero documents. `folders` may still be non-zero — an
  * empty tree that reconciliation has already built for a segment nobody has uploaded into yet is
  * exactly the ordinary case this exists for — but `documents` must be zero, because a document left
  * behind under the OLD folder name becomes invisible the moment reconciliation stops walking it.
+ *
+ * ⚠ THIS IS NO LONGER THE ONLY WAY A SEGMENT CAN BE RE-CODED. Since 2026-09-16, a segment WITH
+ * documents can be re-coded too — `performLiveSegmentRecode` (spSegmentRecode.ts) renames the top
+ * folder IN PLACE in every library instead, the same proven mechanism reconciliation already uses
+ * for Department/Unit folders, which preserves every document, version, approval status and
+ * permission inside. `canOfferAnyRecode` below is the gate for THAT path. This function keeps its
+ * original, narrower meaning — "is the CHEAP recycle-and-rebuild path available" — because the two
+ * write sequences are genuinely different and a caller must know which one to run.
  *
  * Fails CLOSED on an unreadable count, the same direction as `canOfferFolderDelete` and for the
  * identical reason: an unconfirmed "probably empty" here strands a document tree, and the person who
@@ -34,25 +42,30 @@ export function canOfferRecode(counts: SegmentCounts): boolean {
 }
 
 /**
- * Why the action is refused, when it is. Blank means `canOfferRecode` is true and the form may show.
+ * May EITHER re-code action run — the count merely needs to have succeeded, whatever it found.
  *
- * Never a partial path: a segment holding documents is refused outright, with the real route named,
- * rather than offered a "recode but leave the documents behind" option that would abandon them under
- * a name reconciliation no longer resolves.
+ * The UI checks this FIRST to decide whether to show the recode form at all; `canOfferRecode` then
+ * decides, only once the form is showing, WHICH write sequence a submit should run.
+ */
+export function canOfferAnyRecode(counts: SegmentCounts): boolean {
+  return counts.state === "counted";
+}
+
+/**
+ * Why the action is refused, when it is. Blank means `canOfferAnyRecode` is true and the form may
+ * show — for EITHER path, empty or live.
+ *
+ * ⚠ NO LONGER FIRES FOR "this segment holds documents" — that used to be a refusal and is now a
+ * VALID, DIFFERENT path (the live in-place rename), so a non-zero count is not refused here any
+ * more. The only thing this function still refuses is not knowing the count at all: guessing either
+ * way — empty or live — risks running the wrong write sequence for what the segment actually holds.
  */
 export function recodeRefusalReason(counts: SegmentCounts): string {
   if (counts.state === "unknown") {
     return (
-      `Could not confirm this segment is empty — ${counts.reason}. Re-coding is refused rather ` +
-      `than guessed: reconciliation would build a brand-new tree under the new name and leave ` +
-      `anything already there behind, in a folder nothing recognises any more.`
-    );
-  }
-  if (counts.documents > 0) {
-    return (
-      `This segment holds ${counts.documents} document${counts.documents === 1 ? "" : "s"}, so ` +
-      `its top folder cannot be re-coded. Move or archive the documents first — re-coding a ` +
-      `segment in use would leave them behind under a name reconciliation no longer walks.`
+      `Could not confirm what this segment holds — ${counts.reason}. Re-coding is refused rather ` +
+      `than guessed: which write sequence is safe (an empty-tree recycle, or an in-place rename ` +
+      `that preserves real documents) depends on knowing that first.`
     );
   }
   return "";
@@ -108,5 +121,20 @@ export function recodeSummary(oldFolder: string, newFolder: string, counts: Segm
     `Top folder renamed from "${oldFolder}" to "${folder}". ${folderCount} empty folder` +
     `${folderCount === 1 ? "" : "s"} recycled. Run Folder Reconciliation to rebuild the tree under ` +
     `the new name.`
+  );
+}
+
+/**
+ * One-line summary for the LIVE (in-place) rename — a genuinely different action from
+ * `recodeSummary` above, so it says a different thing: nothing was recycled or rebuilt, the same
+ * folders were simply renamed in place, contents intact.
+ */
+export function recodeSummaryLive(oldFolder: string, newFolder: string, counts: SegmentCounts): string {
+  const folder = sanitizeFolderSegment(newFolder).trim();
+  const docCount = counts.state === "counted" ? counts.documents : 0;
+  return (
+    `Top folder renamed from "${oldFolder}" to "${folder}" in every library, including the archive. ` +
+    `${docCount} document${docCount === 1 ? "" : "s"} moved with it — nothing was recycled or ` +
+    `re-created, only relabelled. Run Folder Reconciliation to confirm everything still resolves.`
   );
 }
