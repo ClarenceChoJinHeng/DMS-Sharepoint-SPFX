@@ -16,8 +16,23 @@
  * Candidate prefixes, in probe order. CRS first, so a fully renamed site costs one request
  * and a legacy site costs two. Adding a third client's prefix here is the whole onboarding
  * change.
+ *
+ * ⚠ THIS DRIVES LIST/LIBRARY/CONTENT-TYPE TITLES ONLY. Client, 2026-09-18: rename the
+ * SharePoint GROUP name from CRS to GDC while every list/library title and permission level
+ * stays "CRS ..." — the first time the two have ever diverged. `GROUP_CANDIDATE_PREFIXES`
+ * below is the SEPARATE list for anything that names a GROUP; do not fold GDC in here, or the
+ * lists this array still resolves would start probing for "GDC Config" etc. that do not exist.
  */
 export const CANDIDATE_PREFIXES = ["CRS", "DMS"];
+
+/**
+ * Candidate prefixes for SharePoint GROUP names — the site-entry group, and anything else that
+ * matches a group by its `<PREFIX>_` stem (`matchesAnyGroupPrefix`). GDC first: it is the new
+ * preferred name, same reasoning CRS was given priority over DMS above. CRS and DMS are kept
+ * as fallbacks, never dropped — sites migrate at different times, and a removed candidate stops
+ * resolving silently for whichever site has not been renamed yet.
+ */
+export const GROUP_CANDIDATE_PREFIXES = ["GDC", ...CANDIDATE_PREFIXES];
 
 /** The historical prefix. Used when nothing resolves, so behaviour matches pre-2026-08-04. */
 export const LEGACY_PREFIX = "DMS";
@@ -229,7 +244,7 @@ export function siteEntryGroupName(prefix: string): string {
 }
 
 /** Every title the site-entry group could have, in preference order. */
-export const SITE_ENTRY_CANDIDATES = CANDIDATE_PREFIXES.map(siteEntryGroupName);
+export const SITE_ENTRY_CANDIDATES = GROUP_CANDIDATE_PREFIXES.map(siteEntryGroupName);
 
 /**
  * The site-entry group's live title.
@@ -284,10 +299,13 @@ export function groupPrefix(prefix: string): string {
  *
  * Matching both costs nothing: a group named for another client's prefix will not exist on
  * this site.
+ *
+ * `GROUP_CANDIDATE_PREFIXES`, not `CANDIDATE_PREFIXES` — this is about a GROUP's name, and the
+ * two diverge since the 2026-09-18 CRS→GDC group rename.
  */
 export function matchesAnyGroupPrefix(title: string): boolean {
   const t = (title ?? "").trim().toUpperCase();
-  return CANDIDATE_PREFIXES.some((p) => t.indexOf(`${p}_`) === 0);
+  return GROUP_CANDIDATE_PREFIXES.some((p) => t.indexOf(`${p}_`) === 0);
 }
 
 /* ---------------------------------------------------------------------------

@@ -1,5 +1,7 @@
 import {
   CANDIDATE_PREFIXES,
+  GROUP_CANDIDATE_PREFIXES,
+  SITE_ENTRY_CANDIDATES,
   LEGACY_PREFIX,
   LIST_SUFFIX,
   candidateTitles,
@@ -151,10 +153,11 @@ describe("derived names", () => {
 });
 
 describe("matchesAnyGroupPrefix", () => {
-  it("accepts BOTH prefixes, whatever resolved", () => {
+  it("accepts ALL THREE prefixes, whatever resolved (CRS/DMS legacy, GDC current)", () => {
     // Load-bearing for the site-entry membership sync. Accepting only the resolved prefix
     // on a half-renamed site would sync one half of the users and silently ignore the
     // other — "only SOME people cannot open the site", reported as a successful run.
+    expect(matchesAnyGroupPrefix("GDC_GHO_GF_CORU_UPL")).toBe(true);
     expect(matchesAnyGroupPrefix("CRS_GHO_GF_CORU_UPL")).toBe(true);
     expect(matchesAnyGroupPrefix("DMS_GHO_GF_CORU_UPL")).toBe(true);
   });
@@ -162,6 +165,7 @@ describe("matchesAnyGroupPrefix", () => {
   it("is case-insensitive and tolerates stray whitespace", () => {
     // The trailing-space bug that silently dropped DMS_GHO_LRC is why this is asserted.
     expect(matchesAnyGroupPrefix("  crs_gho_gf_coru_apr  ")).toBe(true);
+    expect(matchesAnyGroupPrefix("  gdc_gho_gf_coru_apr  ")).toBe(true);
   });
 
   it("rejects anything that is not ours", () => {
@@ -170,6 +174,21 @@ describe("matchesAnyGroupPrefix", () => {
     expect(matchesAnyGroupPrefix("MYCRS_GHO")).toBe(false);   // prefix must be at the start
     expect(matchesAnyGroupPrefix("")).toBe(false);
     expect(matchesAnyGroupPrefix(undefined as unknown as string)).toBe(false);
+  });
+});
+
+describe("GROUP_CANDIDATE_PREFIXES / SITE_ENTRY_CANDIDATES", () => {
+  it("puts GDC first, then keeps CRS and DMS as fallbacks — never drop an older name", () => {
+    expect(GROUP_CANDIDATE_PREFIXES).toEqual(["GDC", "CRS", "DMS"]);
+    expect(SITE_ENTRY_CANDIDATES).toEqual([
+      "GDC_SITE_MEMBERS",
+      "CRS_SITE_MEMBERS",
+      "DMS_SITE_MEMBERS",
+    ]);
+  });
+
+  it("list/library resolution is UNTOUCHED by the group rename — CANDIDATE_PREFIXES has no GDC", () => {
+    expect(CANDIDATE_PREFIXES).toEqual(["CRS", "DMS"]);
   });
 });
 
