@@ -3266,101 +3266,69 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         });
       }
 
-      const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitleForTagging)}')/items(${item.Id})/validateUpdateListItem`,
-        SPHttpClient.configurations.v1,
-        {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ formValues }),
-        },
-      );
-      if (!metaRes.ok) {
-        // NAMES THE STATUS AND THE LIBRARY. "tagging metadata failed" threw both away, and the two
-        // causes need opposite fixes: a 404 is the wrong library title (which is exactly how the HC
-        // mismatch above hid for so long), a 403 is permissions on that list, a 400 is a malformed
-        // payload. An hour went into distinguishing them by hand on 2026-08-19.
-        const body = await metaRes.text().catch(() => "");
-        console.error(
-          "Tagging failed:",
-          metaRes.status,
-          libraryTitleForTagging,
-          body,
-        );
-        return {
-          fileId: sf.id,
-          ok: false,
-          error:
-            `Uploaded, but tagging failed — HTTP ${metaRes.status} on "${libraryTitleForTagging}"` +
-            (metaRes.status === 404 ? " (no library with that title)" : ""),
-        };
-      }
-      const metaJson = await metaRes.json();
-      // HTTP 200 even on field errors (gotcha #4) — the exception is per result, not per response.
-      const fieldError = (metaJson.value ?? []).find(
-        (v: { HasException?: boolean }) => v.HasException,
-      );
-      if (fieldError) {
-        console.error("Field update error:", fieldError);
-        return {
-          fileId: sf.id,
-          ok: false,
-          error: `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
-        };
-      }
+      /* TAGGING NO LONGER WRITES DIRECTLY (client: PIC/Approver lose `Edit Items` on the document
+         libraries, to stop hand-editing tags/renaming files outside the app). The old
+         `validateUpdateListItem` POST is GONE — `formValues` above is built exactly as it always
+         was (same tier values, same `toTaxValue`-encoded taxonomy fields) but is now JSON-encoded
+         and carried as `tagPayload` on the ONE write this function makes for tagging: the
+         `CRS Submissions` record itself. `CRS — Apply pending tags` (Power Automate, not yet built)
+         reads that payload and applies it as `crs@sdguthrie.com`.
 
-      /* RECORD THE UPLOAD, 2026-08-27 (client: *"Client wants to be able to record that file even if
-         someone delete or replace"*). Spec:
+         ⚠ THIS CHANGES THE FAILURE SEMANTICS. Before, a failed `validateUpdateListItem` call meant
+         "uploaded, untagged, right now" — the uploader saw it immediately. Now, a failed
+         `writeSubmissionRecord` call means "will NEVER be tagged" — no row, no flow trigger, no
+         automatic retry. The message below says so rather than reusing the old "tagging metadata
+         failed" wording, which would understate it.
+
+         2026-08-27 spec (record itself, unchanged in shape):
          docs/superpowers/specs/2026-08-27-submission-record-design.md
-
-         ⚠ ONLY WHEN THE STAMP WENT ON. `refs.fileId` is blank when the library has no
-         `SubmissionFileId` column, and a row written without it could never be joined back to its
-         document — it would sit on My Submissions as a permanent false "Deleted", which is worse than
-         recording nothing. Degrading to the previous behaviour is always correct.
-
-         ⚠ NEVER FAILS THE UPLOAD. The document is uploaded and tagged by this point;
-         `writeSubmissionRecord` cannot throw, and its result is deliberately ignored — it logs its
-         own failure. A file that is safely filed must not be reported as failed because a record row
-         did not write.
 
          The snapshot is what an uploader filled in, so a DELETED row can still show it. Tier labels
          come from `levelSelections` rather than the internal column names, because this is read by a
          person, possibly years later. */
-      if (refs.fileId.length > 0) {
-        const snapshot: Record<string, string> = {};
-        for (const l of dest.levelSelections ?? [])
-          snapshot[l.column] = l.label;
-        for (const [k, v] of [
-          ["Document name", meta.documentName ?? ""],
-          ["Project name", meta.projectName ?? ""],
-          ["Vendor/Customer", meta.vendor ?? ""],
-          ["Document date", meta.documentDate ?? ""],
-          ["Confidentiality", confidentialityLabel(meta.confidentiality ?? "")],
-          ["Remark", meta.remark ?? ""],
-          // The derived value, not the checkbox — the same re-derivation the write above uses, so the
-          // record cannot claim a legal marker the document does not carry.
-          [
-            "Legally privileged",
-            privilegedApplies && (meta.legallyPrivileged ?? "") !== ""
-              ? "Yes"
-              : "",
-          ],
-        ] as Array<[string, string]>) {
-          snapshot[k] = v;
-        }
-        await writeSubmissionRecord(context.spHttpClient, siteUrl, {
-          submissionRef: refs.submissionId,
-          batchRef: refs.batchId,
-          fileId: refs.fileId,
-          uniqueId:
-            typeof item.UniqueId === "string" ? item.UniqueId : undefined,
-          fileName: finalName,
-          itemPath: uploadedServerRelativeUrl,
-          libraryTitle: libraryTitleForTagging,
-          uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
-          uploadedAt: new Date(),
-          metadata: snapshot,
-          source: "Form",
-        });
+      const snapshot: Record<string, string> = {};
+      for (const l of dest.levelSelections ?? [])
+        snapshot[l.column] = l.label;
+      for (const [k, v] of [
+        ["Document name", meta.documentName ?? ""],
+        ["Project name", meta.projectName ?? ""],
+        ["Vendor/Customer", meta.vendor ?? ""],
+        ["Document date", meta.documentDate ?? ""],
+        ["Confidentiality", confidentialityLabel(meta.confidentiality ?? "")],
+        ["Remark", meta.remark ?? ""],
+        // The derived value, not the checkbox — the same re-derivation the payload uses, so the
+        // record cannot claim a legal marker the document does not carry.
+        [
+          "Legally privileged",
+          privilegedApplies && (meta.legallyPrivileged ?? "") !== ""
+            ? "Yes"
+            : "",
+        ],
+      ] as Array<[string, string]>) {
+        snapshot[k] = v;
+      }
+      const tagged = await writeSubmissionRecord(context.spHttpClient, siteUrl, {
+        submissionRef: refs.submissionId,
+        batchRef: refs.batchId,
+        fileId: refs.fileId,
+        uniqueId:
+          typeof item.UniqueId === "string" ? item.UniqueId : undefined,
+        fileName: finalName,
+        itemPath: uploadedServerRelativeUrl,
+        libraryTitle: libraryTitleForTagging,
+        uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
+        uploadedAt: new Date(),
+        metadata: snapshot,
+        source: "Form",
+        tagPayload: JSON.stringify(formValues),
+      });
+      if (!tagged) {
+        return {
+          fileId: sf.id,
+          ok: false,
+          error:
+            "Uploaded, but could not record it for tagging. An administrator will need to tag this file by hand.",
+        };
       }
 
       /* ── The record this upload displaced ────────────────────────────────────
@@ -3373,10 +3341,10 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          will itself read as deleted one day. Marking the old row first would spend the run's luck
          on the lesser of the two.
 
-         ⚠ AND IT IS NOT GATED ON THE NEW ROW SUCCEEDING. `writeSubmissionRecord` returns false on
-         an unprovisioned list, and the displaced record can perfectly well exist on a site where
-         this upload's own row could not be written — refusing to mark it then would leave a
-         document reading "deleted" for no reason connected to it.
+         ⚠ THIS CODE IS UNREACHABLE WHEN THE TAG WRITE ITSELF FAILED — `writeSubmissionRecord` now
+         gates the whole upload result (see above), since a failed write means this document will
+         never be tagged at all. That is a deliberate change from the earlier behaviour, where the
+         record write was best-effort and this ran regardless of whether it succeeded.
 
          `markRecordReplaced` cannot throw; its result is ignored for the same reason as the write
          above — it logs its own failures, and none of them is the uploader's problem. */
