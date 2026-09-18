@@ -59,23 +59,23 @@ const listBase = (siteUrl: string): string =>
 /**
  * Record one uploaded file. **Never throws.**
  *
- * ⚠ BOTH CURRENT CALLERS TREAT A `false` RETURN THE SAME WAY NOW, and that is new. Until the
+ * ⚠ BOTH CURRENT CALLERS TREAT A FAILED RESULT THE SAME WAY NOW, and that is new. Until the
  * 2026-09-18 tag/approve-by-proxy change reached `BulkUpload.tsx` too, this row was a courtesy
  * record there — its own `validateUpdateListItem` call did the real tagging, so a failed write
  * here cost only the `CRS Submissions` row. Both `Form.tsx` (`8df5f33`) and `BulkUpload.tsx` (this
  * same change, extended to this screen) have since had their `validateUpdateListItem` call
  * removed entirely, so this write is now the ONLY tagging mechanism either has: it carries the
  * `tagPayload` a not-yet-built Power Automate flow reads to apply the document's actual metadata.
- * A `false` return from either caller now means the document will NEVER be tagged, not merely that
+ * A failed return from either caller now means the document will NEVER be tagged, not merely that
  * a record is missing.
  *
  * ⚠ NEITHER CALLER ABORTS THE WHOLE RUN OVER ONE FAILED WRITE, though. `Form.tsx` reports this one
  * file's result as a failure and moves on; `BulkUpload.tsx` marks this one file `tagFailed` and
  * continues the loop over the rest of the selection. Same underlying fact for both: the physical
- * upload for THIS file has already succeeded by the time this runs, so a `false` here is never "the
+ * upload for THIS file has already succeeded by the time this runs, so a failure here is never "the
  * upload failed" — only "this file will never be tagged."
  *
- * ⚠ AND IT IS NEVER SILENT. It returns false and logs the status and the body. A record gap somebody
+ * ⚠ AND IT IS NEVER SILENT. It logs the status and the body even on failure. A record gap somebody
  * knows about is worth far more than one nobody does — and on this list the only symptom of a missing
  * row is a file that was never tagged at all.
  *
@@ -86,17 +86,22 @@ const listBase = (siteUrl: string): string =>
  * failure that leaves the document permanently untagged. Keeping the guard HERE, and only here, is
  * what stops a caller re-deriving (and possibly getting wrong) the one invariant the whole feature
  * rests on.
+ *
+ * ⚠ THE RETURN CARRIES `status`/`body` ALONGSIDE `ok`, PURELY SO A CALLER CAN REBUILD ITS OWN
+ * PRE-EXISTING, CLIENT-APPROVED FAILURE WORDING (2026-09-18, on the client's explicit instruction —
+ * copy shown to a user is never to be changed as a side effect of a behind-the-scenes rewrite). This
+ * is plumbing only: nothing here renders any text itself.
  */
 export async function writeSubmissionRecord(
   sp: SPHttpClient,
   siteUrl: string,
   record: Omit<SubmissionRecord, "itemId">,
-): Promise<boolean> {
+): Promise<{ ok: boolean; status?: number; body?: string }> {
   const name = record?.fileName ?? "";
   try {
     if ((record?.fileId ?? "").trim().length === 0) {
       console.warn(`[submissions] not recorded (no SubmissionFileId): ${name}`);
-      return false;
+      return { ok: false };
     }
     // Straight to the POST. There is no entity type to look up under JSON light, so an unprovisioned
     // list simply 404s here — one request instead of two, and no state that can go stale.
@@ -115,12 +120,12 @@ export async function writeSubmissionRecord(
       } else {
         console.warn(`[submissions] not recorded (HTTP ${res.status}): ${name}. ${body.slice(0, 300)}`);
       }
-      return false;
+      return { ok: false, status: res.status, body };
     }
-    return true;
+    return { ok: true };
   } catch (e) {
     console.warn(`[submissions] not recorded: ${name} — ${(e as Error).message}`);
-    return false;
+    return { ok: false };
   }
 }
 
