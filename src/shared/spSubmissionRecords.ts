@@ -79,13 +79,17 @@ const listBase = (siteUrl: string): string =>
  * knows about is worth far more than one nobody does — and on this list the only symptom of a missing
  * row is a file that was never tagged at all.
  *
- * ⚠ NEITHER CALLER GATES ON A NON-EMPTY `fileId` BEFORE CALLING THIS ANY MORE — both call it
- * unconditionally and rely on the refusal below rather than duplicating it. A row whose
- * `SubmissionFileId` never made it onto the document can never be joined back to it, so it would sit
- * on My Submissions as a permanent false "Deleted" — worse than no row at all, and now the same
- * failure that leaves the document permanently untagged. Keeping the guard HERE, and only here, is
- * what stops a caller re-deriving (and possibly getting wrong) the one invariant the whole feature
- * rests on.
+ * ⚠ `Form.tsx` CALLS THIS UNCONDITIONALLY and relies on the refusal below rather than duplicating
+ * it. `BulkUpload.tsx` keeps its own `if (fileStamp.length > 0)` gate around the call site — that
+ * is the client's pre-existing, approved behaviour on that screen (2026-09-19: restored verbatim
+ * after briefly being removed, per the standing "never change copy/behaviour the client has already
+ * approved as a side effect of a behind-the-scenes rewrite" rule) — so an empty `fileStamp` there
+ * still falls straight through to `outcome: "uploaded"` rather than reaching this function at all.
+ * Either way, a row whose `SubmissionFileId` never made it onto the document can never be joined
+ * back to it, so it would sit on My Submissions as a permanent false "Deleted" — worse than no row
+ * at all, and now the same failure that leaves the document permanently untagged. Keeping the guard
+ * HERE too is what stops a caller re-deriving (and possibly getting wrong) the one invariant the
+ * whole feature rests on.
  *
  * ⚠ THE RETURN CARRIES `status`/`body` ALONGSIDE `ok`, PURELY SO A CALLER CAN REBUILD ITS OWN
  * PRE-EXISTING, CLIENT-APPROVED FAILURE WORDING (2026-09-18, on the client's explicit instruction —
@@ -379,6 +383,55 @@ export async function readSubmissionRecords(
     return ((data.value ?? []) as Array<Record<string, unknown>>).map((r) => parseRecordRow(r));
   } catch (e) {
     console.info(`[submissions] records not read — showing live files only (${(e as Error).message})`);
+    return undefined;
+  }
+}
+
+/**
+ * Read the ONE record for a single file, by its stamped `SubmissionFileId` — for
+ * `Form.tsx`'s self-approve poll (Task 9, `2026-09-18-tag-approve-proxy.md`), which needs to know
+ * whether `CRS — Apply pending tags` has finished applying this file's metadata yet, not a whole
+ * person's history.
+ *
+ * ⚠ SAME FIVE-RUNG LADDER AS `readSubmissionRecords`, for the identical reason: one unknown field
+ * name fails the WHOLE `$select` (gotcha #11), so a site that has not reconciled since
+ * `TagPayload`/`TagStatus`/`TagError` shipped must not lose the read entirely over three columns
+ * it does not have yet — it would simply never be ABLE to answer "Tagged" without them, which is
+ * exactly what the caller's `undefined`/timeout handling already covers.
+ *
+ * ⚠ `undefined` MEANS "COULD NOT ANSWER", NEVER "NOT TAGGED". The caller (`pollForTagStatus`) reads
+ * a missing/unreadable `TagStatus` as "keep polling", not as a negative — this function refusing to
+ * find the row, or the site lacking the columns that would carry an answer, is not evidence tagging
+ * failed.
+ */
+export async function readSubmissionRecordByFileId(
+  sp: SPHttpClient,
+  siteUrl: string,
+  fileId: string,
+): Promise<SubmissionRecord | undefined> {
+  try {
+    const id = (fileId ?? "").trim();
+    if (id.length === 0) return undefined;
+    const ask = async (select: string): Promise<SPHttpClientResponse> =>
+      sp.get(
+        `${listBase(siteUrl)}/items` +
+          `?$select=${select}` +
+          `&$filter=SubmissionFileId eq '${encodeURIComponent(id)}'` +
+          `&$orderby=Id desc&$top=1`,
+        SPHttpClient.configurations.v1,
+        { headers: GET_HEADERS },
+      );
+
+    let res: SPHttpClientResponse = await ask(RECORD_READ_SELECT);
+    if (res.status === 400) res = await ask(RECORD_READ_SELECT_NO_TAGGING);
+    if (res.status === 400) res = await ask(RECORD_READ_SELECT_NO_WITHDRAWAL);
+    if (res.status === 400) res = await ask(RECORD_READ_SELECT_NO_ARCHIVE);
+    if (res.status === 400) res = await ask(RECORD_READ_SELECT_LEGACY);
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    const rows = (data.value ?? []) as Array<Record<string, unknown>>;
+    return rows.length > 0 ? parseRecordRow(rows[0]) : undefined;
+  } catch {
     return undefined;
   }
 }

@@ -19,6 +19,7 @@ import {
 import {
   writeSubmissionRecord,
   markRecordReplaced,
+  readSubmissionRecordByFileId,
 } from "../../../shared/spSubmissionRecords";
 import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
@@ -653,6 +654,44 @@ const sortTermOptionsForDisplay = (list: TermOption[]): TermOption[] => {
     return pa !== pb ? pa - pb : a.label.localeCompare(b.label);
   });
 };
+
+/**
+ * Polls `CRS Submissions` for confirmation that `CRS — Apply pending tags` (Power Automate) has
+ * finished applying THIS file's actual metadata, before self-approve is allowed to proceed — Task 9
+ * of `docs/superpowers/plans/2026-09-18-tag-approve-proxy.md`.
+ *
+ * ⚠ ONLY THE GATE THIS GUARDS, NOT THE APPROVE ITSELF, CHANGED. Self-approve's own write is still
+ * the original, unmodified direct `OData__ModerationStatus` MERGE — it was never affected by PIC
+ * losing `Edit Items` on `CRS Upload`, because `probeFolderApproveAccess` only ever answers
+ * "granted" for someone who ALSO effectively holds `ApproveItems` on the folder, which on
+ * SharePoint has a hard dependency on `EditListItems` (the same fact the 2026-09-18 design doc's
+ * correction box documents for `CRS Approve` generally). That permission still carries `Edit Items`
+ * unchanged, so a self-approving uploader's direct MERGE keeps working exactly as before — the only
+ * thing missing was confirmation that TAGGING had actually landed first, which this function
+ * supplies. Do NOT reroute this through `writePendingDecision`/`CRS Pending Decisions` — nothing
+ * will ever apply a row written there (see the plan's own correction box, withdrawing Task 11).
+ *
+ * Never throws — a read failure is treated the same as "not yet", not as a negative, since neither
+ * an unreconciled site (missing the TagStatus/TagError columns) nor a transient error means tagging
+ * failed.
+ */
+async function pollForTagStatus(
+  sp: SPHttpClient,
+  siteUrl: string,
+  fileId: string,
+): Promise<"Tagged" | "Failed" | "timeout"> {
+  const MAX_ATTEMPTS = 6;
+  const DELAY_MS = 15000;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const record = await readSubmissionRecordByFileId(sp, siteUrl, fileId);
+    if (record?.tagStatus === "Tagged") return "Tagged";
+    if (record?.tagStatus === "Failed") return "Failed";
+    if (attempt < MAX_ATTEMPTS - 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, DELAY_MS));
+    }
+  }
+  return "timeout";
+}
 
 export default function Form({ context }: IFormProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
@@ -3568,28 +3607,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          built) to apply later. It does NOT mean the document's actual metadata (Document Type, Year,
          Confidentiality, tier values, ...) has been written to the item yet.
 
-         ⚠⚠ DELIBERATELY DISABLED FOR NOW — `SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION` BELOW
-         IS NOT A TYPO. Self-approve flips `OData__ModerationStatus`, which Auto-route picks up and
-         copies to the approved-side library under a NEW item id (a fresh `UniqueId`) — potentially
-         before the not-yet-built flow has had any chance to apply the real metadata to the ORIGINAL
-         item. A document could route with essentially blank metadata, silently, with no future
-         opportunity to catch it (the 2026-08-26 SDG incident, referenced in CLAUDE.md, is the
-         precedent for how seriously this codebase treats exactly this class of failure).
-
-         Task 9 of docs/superpowers/plans/2026-09-18-tag-approve-proxy.md — "Form.tsx — defer the
-         self-approve decision until tagging is confirmed done" — replaces this with a real gate: the
-         browser polls the submission record for confirmation the tag was actually applied before
-         ever attempting self-approve. That polling mechanism does not exist yet. Until it lands,
-         self-approve stays off rather than racing ahead of a write that may not have happened. The
-         block below is left otherwise intact — Task 9 needs its internals, just gated differently.
-
-         (Named rather than a bare `false &&` so the `if` compiles under `allowUnreachableCode: false`
-         — a literal `false` there is flagged as statically unreachable and fails the build outright.) */
-      const SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION = true;
-      if (
-        !SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION &&
-        shouldAttemptSelfApprove(settings.autoApproveOwnUpload)
-      ) {
+         ⚠⚠ GATED ON `pollForTagStatus` NOW (Task 9, 2026-09-18 plan, landed 2026-09-19). Self-approve
+         flips `OData__ModerationStatus`, which Auto-route picks up and copies to the approved-side
+         library under a NEW item id (a fresh `UniqueId`) — so it must never fire before the
+         not-yet-built `CRS — Apply pending tags` flow has actually applied the real metadata to the
+         ORIGINAL item, or a document could route with essentially blank metadata, silently, with no
+         future opportunity to catch it (the 2026-08-26 SDG incident, referenced in CLAUDE.md, is the
+         precedent for how seriously this codebase treats exactly this class of failure). The probe
+         and the MERGE below are otherwise UNCHANGED — only the tag-confirmation poll is new. See
+         `pollForTagStatus`'s own comment for why the WRITE itself needed no change: it depends on
+         `ApproveItems`, which — unlike `CRS Upload` — never lost `Edit Items`. */
+      if (shouldAttemptSelfApprove(settings.autoApproveOwnUpload)) {
         try {
           // RE-CHECKED HERE, not trusted from the read at the top of this function. Seconds have
           // passed — the upload and the tagging call — and a same-named file can have landed in the
@@ -3631,61 +3659,78 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               folderId,
             );
             if (approveAccess === "granted") {
-              const itemUrl = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitleForTagging)}')/items(${item.Id})`;
-              const mergeHeaders = {
-                Accept: "application/json;odata=nometadata",
-                "Content-Type": "application/json;odata=nometadata",
-                "X-HTTP-Method": "MERGE",
-                "IF-MATCH": "*",
-              };
-              // ⚠ A SEPARATE, EARLIER MERGE — SharePoint REJECTS a MERGE that combines
-              // OData__ModerationStatus with any other field (proven live 2026-09-01: HTTP 500
-              // "You cannot change moderation status and set other item properties at that same
-              // time"). This is a THIRD approval write path (alongside ApprovalDocument.tsx and
-              // BulkApprovePanel.tsx) and the approver here IS the uploader, so ApprovedBy is
-              // stamped with their own email before the status flip. Best-effort: a failure here
-              // must never leave the moderation MERGE below unattempted.
-              if (
-                await libraryHasColumns(
-                  context.spHttpClient,
-                  siteUrl,
-                  libraryTitleForTagging,
-                  [APPROVED_BY_COLUMN],
-                )
-              ) {
-                try {
+              // ⚠ POLLED BEFORE THE WRITE, NOT AFTER — see `pollForTagStatus`'s own comment above
+              // its definition. Up to 6 attempts x 15s (~90s), matching the design doc's "up to two
+              // poll cycles" estimate for the tag-apply flow, with margin.
+              const tagStatus = await pollForTagStatus(
+                context.spHttpClient,
+                siteUrl,
+                refs.fileId,
+              );
+              if (tagStatus !== "Tagged") {
+                // "Failed" or "timeout": no decision is written. The document stays Pending; the
+                // failed/incomplete tag is visible via the existing CRS Submissions row, same as any
+                // other tagging failure.
+                console.warn(
+                  `Self-approve skipped: tagging not confirmed (${tagStatus}).`,
+                );
+              } else {
+                const itemUrl = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitleForTagging)}')/items(${item.Id})`;
+                const mergeHeaders = {
+                  Accept: "application/json;odata=nometadata",
+                  "Content-Type": "application/json;odata=nometadata",
+                  "X-HTTP-Method": "MERGE",
+                  "IF-MATCH": "*",
+                };
+                // ⚠ A SEPARATE, EARLIER MERGE — SharePoint REJECTS a MERGE that combines
+                // OData__ModerationStatus with any other field (proven live 2026-09-01: HTTP 500
+                // "You cannot change moderation status and set other item properties at that same
+                // time"). This is a THIRD approval write path (alongside ApprovalDocument.tsx and
+                // BulkApprovePanel.tsx) and the approver here IS the uploader, so ApprovedBy is
+                // stamped with their own email before the status flip. Best-effort: a failure here
+                // must never leave the moderation MERGE below unattempted.
+                if (
+                  await libraryHasColumns(
+                    context.spHttpClient,
+                    siteUrl,
+                    libraryTitleForTagging,
+                    [APPROVED_BY_COLUMN],
+                  )
+                ) {
+                  try {
+                    await context.spHttpClient.post(
+                      itemUrl,
+                      SPHttpClient.configurations.v1,
+                      {
+                        headers: mergeHeaders,
+                        body: JSON.stringify({
+                          ApprovedBy: (
+                            context.pageContext.user.email ?? ""
+                          ).toLowerCase(),
+                        }),
+                      },
+                    );
+                  } catch {
+                    // Swallowed — a missing stamp leaves ApprovedBy blank, which the audit/notification
+                    // flows already treat as "send", never as an error to surface to the uploader.
+                  }
+                }
+                const approveRes: SPHttpClientResponse =
                   await context.spHttpClient.post(
                     itemUrl,
                     SPHttpClient.configurations.v1,
                     {
                       headers: mergeHeaders,
-                      body: JSON.stringify({
-                        ApprovedBy: (
-                          context.pageContext.user.email ?? ""
-                        ).toLowerCase(),
-                      }),
+                      body: JSON.stringify({ OData__ModerationStatus: 0 }),
                     },
                   );
-                } catch {
-                  // Swallowed — a missing stamp leaves ApprovedBy blank, which the audit/notification
-                  // flows already treat as "send", never as an error to surface to the uploader.
+                if (!approveRes.ok) {
+                  // Left Pending — the upload itself already succeeded and is reported as such below.
+                  console.warn(
+                    "Self-approve MERGE failed, item left Pending:",
+                    approveRes.status,
+                  );
                 }
-              }
-              const approveRes: SPHttpClientResponse =
-                await context.spHttpClient.post(
-                  itemUrl,
-                  SPHttpClient.configurations.v1,
-                  {
-                    headers: mergeHeaders,
-                    body: JSON.stringify({ OData__ModerationStatus: 0 }),
-                  },
-                );
-              if (!approveRes.ok) {
-                // Left Pending — the upload itself already succeeded and is reported as such below.
-                console.warn(
-                  "Self-approve MERGE failed, item left Pending:",
-                  approveRes.status,
-                );
               }
             }
           }
