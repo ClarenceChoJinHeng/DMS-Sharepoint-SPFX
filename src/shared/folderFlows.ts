@@ -569,6 +569,12 @@ export const FLOWS: Flow[] = [
        label — the client resolved that the other way. */
     steps: [
       {
+        id: "pauseUploads",
+        label: "Temporarily disable uploads",
+        hint: "Temporarily restrict document uploads across the site while you retire the segment.",
+        screen: { kind: "component", id: "pauseUploads" },
+      },
+      {
         id: "delete",
         label: "Segments → Delete",
         hint:
@@ -581,6 +587,12 @@ export const FLOWS: Flow[] = [
            is a list of the segments that ARE real, each with its own Delete. It would also have been
            inert: no segment picked leaves the fact `undefined`, and unknown never locks. Removed
            rather than left as a lock that can never fire. */
+      },
+      {
+        id: "resumeUploads",
+        label: "Enable Upload",
+        hint: "Enable upload access. Until you do, nobody can file a document.",
+        screen: { kind: "component", id: "pauseUploads" },
       },
     ],
   },

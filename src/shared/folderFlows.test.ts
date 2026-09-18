@@ -117,11 +117,24 @@ describe("the flows", () => {
      abbreviation used to write the row, run a reconciliation that touched nothing, leave the folder
      under its old name, and send the next upload to the new one: TWO FOLDERS FOR ONE TERM, reported
      as success. The migration is the only thing that renames a below-Unit folder. */
-  /* ⚠ THE RETIRE FLOW'S STEPS WERE NEVER PINNED, so removing one broke no test — found on
-     2026-09-09 when "Move the documents out" came out and the suite stayed green. Every other flow
-     has a list pinned; this one now does too. */
-  it("leaves Retire with the delete step alone", () => {
-    expect(flow("retire").steps.map((s) => s.id)).toEqual(["delete"]);
+  it("brackets Retire with the upload pause and resume steps", () => {
+    expect(flow("retire").steps.map((s) => s.id)).toEqual([
+      "pauseUploads", "delete", "resumeUploads",
+    ]);
+  });
+
+  it("gates Retire's pause step exactly like the other flows", () => {
+    expect(
+      blocksNext(step("retire", "pauseUploads"), { uploadsPaused: false }),
+    ).toContain("Uploads are still switched on");
+    expect(blocksNext(step("retire", "pauseUploads"), { uploadsPaused: true })).toBe("");
+  });
+
+  it("gates Retire's closing step until uploads are enabled", () => {
+    expect(
+      blocksNext(step("retire", "resumeUploads"), { uploadsPaused: true }),
+    ).toContain("Uploads are still switched off");
+    expect(blocksNext(step("retire", "resumeUploads"), { uploadsPaused: false })).toBe("");
   });
 
   /* ⚠ "Move the documents out" MOUNTED THE MIGRATOR, which re-shapes folders WITHIN one segment —
