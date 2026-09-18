@@ -13951,3 +13951,30 @@ document libraries. **Code side DONE (Tasks 1–6, 6b, 9); Power Automate side N
   warnings (documented pre-existing baseline, zero new categories). Every fix verified against the
   live suite after landing, not assumed. **Nothing here has been tested against a live site** — it
   cannot be, until Task 10's flow exists.
+
+## ⏭ SERVICE ACCOUNT MIGRATION: crs@sdguthrie.com → gdc@sdguthrie.com — RUNBOOK WRITTEN, NOT STARTED (2026-09-19)
+Client provisioned a new proxy mailbox (`gdc@sdguthrie.com`, display name **"Guthrie Document
+Centre"**) to replace the one every flow in this project has run as since it began. Full runbook:
+`docs/superpowers/specs/2026-09-19-service-account-migration-crs-to-gdc-runbook.md` — read it before
+touching any flow; not summarised further here beyond the one finding worth flagging on its own.
+- **⚠⚠ 8 OF THE 23 EXPORTED FLOWS HAVE `crs@sdguthrie.com` — OR ITS DISPLAY NAME, "Guthrie Central
+  Repository System" — TYPED AS A LITERAL INSIDE THEIR OWN LOGIC, not just in the connection.**
+  Reconnecting the SharePoint/Outlook connection alone (which is all 23 flows need on the surface)
+  is not enough for these 8 — they will keep running green while silently mis-behaving: the two
+  Documents-deletion audit flows and their HC clones stop recognising the NEW proxy account's own
+  deletions as proxy-performed and start double-logging them (the exact failure mode CLAUDE.md's own
+  "DELETE IS PERFORMED BY PROXY" section already warned about, arriving here as predicted); the two
+  archive movers keep stamping `ActorEmail: crs@sdguthrie.com` on every `Archived` audit row forever;
+  `NotifyApprovers`/`HCNotifyApprovers` keep copying the OLD mailbox on every approval-needed email.
+- **✅ The one prerequisite this would otherwise need is already satisfied**: `gdc@sdguthrie.com` is
+  already a `CRS Owners` member, confirmed directly from a live Group Management screenshot — the
+  same screenshot that supplied the display name, since guessing it wrong would have silently broken
+  the exclusion check it's used in.
+- **Found by extracting all 23 exported `.zip` packages and grepping every `definition.json` for the
+  old email/display-name literals** — the connection reference itself (`connectionsMap.json`) is
+  just an opaque GUID resolved at import time and carries no identity, so this had to be found by
+  reading the flow LOGIC, not the export metadata.
+- **NOT STARTED.** Every step is a live Power Automate action this repository cannot perform. The
+  runbook gives an exact before/after for each of the 8 literal fixes, a recommended low-to-high-risk
+  order across all 23, and the same "one fix, one deploy, one check" discipline this project has
+  used for every prior flow build.
