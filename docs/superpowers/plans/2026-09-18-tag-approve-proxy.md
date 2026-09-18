@@ -29,6 +29,17 @@
 >   writes, the staging-replace fix) — all PIC-side, all unaffected by this correction.
 > - **Task 9** (self-approve sequencing) — a different problem (the async gap in PIC's own proxied
 >   tag write), not the Edit/Approve coupling this correction is about. Still needed.
+>   **⚠⚠ SECOND CORRECTION, 2026-09-19 — Task 9's own Step 2 code sample is WRONG and must not be
+>   followed literally.** It shows the decision being written via `writePendingDecision`/
+>   `CRS Pending Decisions` — but that is exactly the mechanism Task 11 above withdraws, and self-
+>   approve is not exempt from that withdrawal: `probeFolderApproveAccess` only ever answers
+>   "granted" for someone who ALSO effectively holds `ApproveItems` on the folder, which (per this
+>   correction's own opening paragraph) has a hard SharePoint dependency on `EditListItems` — a
+>   permission `CRS Approve` never lost. So a self-approving uploader's direct
+>   `OData__ModerationStatus` MERGE was **never actually broken** by `CRS Upload` losing `Edit
+>   Items`, and Task 9's implementation (landed 2026-09-19, see `Form.tsx`'s `pollForTagStatus`)
+>   correctly keeps that original MERGE completely unchanged — it only adds the tag-completion poll
+>   as a new gate in front of it. Read the code, not Step 2's sample, if the two ever disagree again.
 > - **Task 10** (Build `CRS — Apply pending tags`) — still needed, PIC-side only.
 > - **Task 12** (end-to-end verification) — still needed, scoped down to the tagging path only; drop
 >   any approve/reject-specific verification steps it lists.
@@ -1319,20 +1330,31 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ### Task 9: `Form.tsx` — defer the self-approve decision until tagging is confirmed done
 
+**✅ DONE, 2026-09-19 — implemented per the second correction box above, NOT per Step 2's literal
+code sample below.** The write stays the original direct MERGE (`ApprovedBy` stamp then
+`OData__ModerationStatus`); only the poll gate in front of it is new. See `pollForTagStatus` and
+its call site in `Form.tsx`, and `readSubmissionRecordByFileId` in `spSubmissionRecords.ts`. Steps
+below are kept as the historical record of the original (partly wrong) plan, not as instructions to
+re-execute.
+
 **Files:**
 - Modify: `src/webparts/form/components/Form.tsx`
+- Modify: `src/shared/spSubmissionRecords.ts` (added `readSubmissionRecordByFileId`)
 
-- [ ] **Step 1: Read the current `autoApproveOwnUpload` block in full**
+- [x] **Step 1: Read the current `autoApproveOwnUpload` block in full**
 
 Find where this fires today — after tagging succeeds, checking `probeFolderApproveAccess`
 (`EffectiveBasePermissions`, a read), then MERGEing the status directly if eligible. Confirm the
 eligibility probe's exact call shape, since Step 3 below keeps it completely unchanged.
 
-- [ ] **Step 2: After Task 5's change, this block now runs after `writeSubmissionRecord` (the tag
-      request) rather than after a direct tag write — poll for `TagStatus = "Tagged"` before
-      proceeding**
+- [x] **Step 2 — SUPERSEDED, see the correction box above.** ~~poll for `TagStatus = "Tagged"`,
+      then `writePendingDecision`~~ **As actually implemented: poll for `TagStatus = "Tagged"`,
+      then the ORIGINAL direct `OData__ModerationStatus` MERGE (unchanged).** The code sample below
+      is kept as the historical record of the plan's original (wrong) intent — do not follow it.
 
 ```typescript
+      // ⚠ HISTORICAL — NOT WHAT WAS BUILT. `writePendingDecision` here was the error the
+      // correction box above describes; the real implementation keeps the pre-existing MERGE.
       if (autoApproveOwnUpload && tagged) {
         const eligible = await probeFolderApproveAccess(/* unchanged args */);
         if (eligible === "granted") {
@@ -1361,7 +1383,7 @@ eligibility probe's exact call shape, since Step 3 below keeps it completely unc
       }
 ```
 
-- [ ] **Step 3: Write the `pollForTagStatus` helper**
+- [x] **Step 3: Write the `pollForTagStatus` helper**
 
 Add to `Form.tsx` (local helper, not exported — this polling shape is specific to the self-approve
 sequencing need, unlike the general-purpose `liveRefresh.ts` hook, which is UI-refresh polling on a
@@ -1390,28 +1412,26 @@ mounted page, not a one-shot wait during an in-flight upload):
   }
 ```
 
-**This assumes a `readSubmissionRecordByFileId` function exists or needs to be added to
-`spSubmissionRecords.ts`.** Check whether an equivalent read-by-`SubmissionFileId` function already
-exists there (this project's existing pattern for reading records back — the same list is already
-read elsewhere, e.g. My Submissions' own record-merge logic). If it does not exist, add it to
-`spSubmissionRecords.ts` in this same task, following the exact same `listBase()`/`GET_HEADERS`
-pattern as `readPendingDecision` in Phase 2 Task 4, filtering on `SubmissionFileId eq '<fileId>'`.
+**No such function existed** — added `readSubmissionRecordByFileId` to `spSubmissionRecords.ts`,
+following the same five-rung `RECORD_READ_SELECT*` ladder `readSubmissionRecords` already uses
+(gotcha #11: one unknown field name fails the whole `$select`), filtering on
+`SubmissionFileId eq '<fileId>'` with `$top=1`.
 
 **6 attempts x 15 seconds = 90 seconds max wait, matching the design doc's "up to two poll cycles"
 (~2 minutes) estimate for self-approve, with margin.** If this number needs tuning once the actual
 flow's real-world timing is observed live, that's a one-line change here, not a redesign.
 
-- [ ] **Step 4: Run the full test suite**
+- [x] **Step 4: Run the full test suite**
 
 Run: `npx heft test --clean 2>&1 | tail -40`
-Expected: PASS.
+Expected: PASS. — **1951/1951, same as before this task, 45 pre-existing lint warnings.**
 
-- [ ] **Step 5: Type-check**
+- [x] **Step 5: Type-check**
 
 Run: `npx tsc --noEmit 2>&1 | tail -40`
-Expected: no new errors.
+Expected: no new errors. — **clean.**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/webparts/form/components/Form.tsx src/shared/spSubmissionRecords.ts
