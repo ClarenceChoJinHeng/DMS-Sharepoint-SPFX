@@ -125,6 +125,20 @@ export interface UploadResult {
    * the first file"*).
    */
   clashWhere?: ClashWhere;
+  /**
+   * The PHYSICAL file (`Files/Add`) succeeded even though `ok` is false — set ONLY for that specific
+   * shape of failure, e.g. `Form.tsx`'s post-upload write to `CRS Submissions` failing after the file
+   * itself is already on the server (2026-09-18). NEVER set for a genuine upload failure — a network
+   * error, a permission refusal, a name clash refused with no free name — where the file does not
+   * exist and retrying is exactly the right next step.
+   *
+   * Its presence is what tells `applyUploadResults` this file is done and must leave the retry queue
+   * regardless of `ok`: re-running the batch would try to `Files/Add` a file that is already there,
+   * which is either a silent duplicate or an unwanted "replace?" prompt about the uploader's own
+   * moments-old upload. `ok` still carries the true/false verdict for display — the failure that
+   * happened here is real and worth showing, it is just not a reason to upload the file again.
+   */
+  uploaded?: boolean;
 }
 
 /**
@@ -405,10 +419,19 @@ export function inheritDefaults(batch: Batch): FileMeta {
 /**
  * Fold a run's results back into the staged batches.
  *
- * SUCCESS REMOVES; FAILURE STAYS. That one rule is what makes Retry safe: an uploaded file is no longer
- * in the list, so it cannot be sent twice, and what remains on screen is exactly what still needs
- * doing. Rollback was rejected — it would mean deleting files that already uploaded, which can fail on
- * its own, and could delete a document an approver has already opened.
+ * THE FILE LEAVES THE QUEUE IF IT WAS PHYSICALLY UPLOADED; IT STAYS IF IT WAS NOT. That is the rule
+ * that makes Retry safe: a file already sitting on the server is no longer in the list, so it cannot
+ * be sent twice, and what remains on screen is exactly what still needs doing. Rollback was rejected —
+ * it would mean deleting files that already uploaded, which can fail on its own, and could delete a
+ * document an approver has already opened.
+ *
+ * ⚠ "PHYSICALLY UPLOADED" IS `r.ok || r.uploaded`, NOT `r.ok` ALONE (2026-09-18). A result can be
+ * `ok: false` while `Files/Add` genuinely succeeded — e.g. `Form.tsx`'s post-upload write to
+ * `CRS Submissions` failing after the file itself is already on the server. That file must leave the
+ * queue exactly as an outright success would: it exists, and re-running the batch would try to upload
+ * it a second time. `ok` still decides whether the RESULT is reported as a failure (see `summarise`);
+ * `uploaded` only decides whether the FILE is retry-eligible. A result with neither true is a genuine
+ * failure — the file does not exist — and stays, with its reason, exactly as before.
  *
  * A file with NO result is left untouched: the run may have stopped early, and marking it failed would
  * report a failure that never happened. Its stale error from an earlier run IS cleared, so a row never
@@ -423,7 +446,7 @@ export function applyUploadResults(batches: Batch[], results: UploadResult[]): B
     const kept: StagedFile[] = [];
     for (const f of b.files ?? []) {
       const r = byId.get(f.id);
-      if (r && r.ok) continue; // uploaded — it leaves the staging area
+      if (r && (r.ok || r.uploaded)) continue; // physically uploaded — it leaves the staging area
       if (r && !r.ok) {
         kept.push({ ...f, error: r.error ?? "Upload failed" });
         continue;

@@ -57,16 +57,27 @@ const listBase = (siteUrl: string): string =>
   `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.submissions))}')`;
 
 /**
- * Record one uploaded file. **Never throws, and never blocks the upload.**
+ * Record one uploaded file. **Never throws.**
  *
- * ⚠ THE UPLOAD HAS ALREADY SUCCEEDED BY THE TIME THIS RUNS. A failure here must cost the RECORD and
- * nothing else — the document is uploaded, tagged and routed regardless, and the page simply behaves
- * as it did before the feature existed. The same rule as the `SubmissionId`/`BatchId` stamp and as
- * `writeAudit`: degrading to yesterday's behaviour is always correct.
+ * ⚠ WHETHER A `false` RETURN MAY BE IGNORED IS A PER-CALLER CONTRACT, NOT A UNIVERSAL GUARANTEE —
+ * and the two current callers disagree on purpose:
+ *
+ *   - `BulkUpload.tsx` still treats this as fire-and-forget. Its own tagging write
+ *     (`validateUpdateListItem`) is separate and unaffected by this call, so a failed record here
+ *     costs only the `CRS Submissions` row — the document is already uploaded and tagged either way.
+ *   - `Form.tsx`, as of `8df5f33` (2026-09-18), treats a `false` return as FATAL to the whole upload
+ *     result. For that caller this row is no longer a courtesy record — it carries the `tagPayload`
+ *     a not-yet-built Power Automate flow reads to apply the document's actual metadata. A failed
+ *     write there means the document will NEVER be tagged, not merely that a record is missing.
+ *
+ * ⚠ THE UPLOAD ITSELF HAS ALREADY SUCCEEDED BY THE TIME THIS RUNS, for both callers — that part is
+ * still unconditionally true. A failure here never means the physical `Files/Add` call failed; it
+ * means only that this specific write did not land, with the consequence above depending on caller.
  *
  * ⚠ AND IT IS NEVER SILENT. It returns false and logs the status and the body. A record gap somebody
  * knows about is worth far more than one nobody does — and on this list the only symptom of a missing
- * row is a file that will one day disappear from its own submission.
+ * row is a file that will one day disappear from its own submission (or, for `Form.tsx`, one that was
+ * never tagged at all).
  *
  * ⚠ THE CALLER MUST NOT CALL THIS WITHOUT A STAMP. A row whose `SubmissionFileId` never made it onto
  * the document can never be joined back to it, so it would sit on My Submissions as a permanent false

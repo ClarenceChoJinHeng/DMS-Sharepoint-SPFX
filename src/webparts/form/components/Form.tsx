@@ -802,6 +802,21 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [lastRun, setLastRun] = useState<
     { ok: number; failed: number } | undefined
   >(undefined);
+  /**
+   * Files the LAST RUN uploaded but could not record for tagging (2026-09-18). `applyUploadResults`
+   * removes these from the batch the moment `uploaded: true` is set — they are already on the
+   * server, so re-running the batch must never try to `Files/Add` them a second time. But removing a
+   * file from the batch also removes the only place `sf.error` renders (`.dms-batch-err`, beside a
+   * STILL-STAGED file), so without a separate, persistent place for this, the "an administrator will
+   * need to tag this file by hand" message would vanish the instant it appears — the one outcome the
+   * message exists to prevent.
+   *
+   * Held exactly like `lastRun`: it reflects the LATEST run only, and a clean run overwrites it with
+   * an empty array rather than leaving a previous run's warning on screen.
+   */
+  const [taggingFailures, setTaggingFailures] = useState<
+    { name: string; error: string }[]
+  >([]);
   // Which staged files failed the last save attempt. Held so the ROWS can say so — a list of every
   // missing field of every file belongs on the rows, not in one toast.
   const [incompleteIds, setIncompleteIds] = useState<string[]>([]);
@@ -3307,25 +3322,38 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       ] as Array<[string, string]>) {
         snapshot[k] = v;
       }
-      const tagged = await writeSubmissionRecord(context.spHttpClient, siteUrl, {
-        submissionRef: refs.submissionId,
-        batchRef: refs.batchId,
-        fileId: refs.fileId,
-        uniqueId:
-          typeof item.UniqueId === "string" ? item.UniqueId : undefined,
-        fileName: finalName,
-        itemPath: uploadedServerRelativeUrl,
-        libraryTitle: libraryTitleForTagging,
-        uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
-        uploadedAt: new Date(),
-        metadata: snapshot,
-        source: "Form",
-        tagPayload: JSON.stringify(formValues),
-      });
-      if (!tagged) {
+      const recordedForTagging = await writeSubmissionRecord(
+        context.spHttpClient,
+        siteUrl,
+        {
+          submissionRef: refs.submissionId,
+          batchRef: refs.batchId,
+          fileId: refs.fileId,
+          uniqueId:
+            typeof item.UniqueId === "string" ? item.UniqueId : undefined,
+          fileName: finalName,
+          itemPath: uploadedServerRelativeUrl,
+          libraryTitle: libraryTitleForTagging,
+          uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
+          uploadedAt: new Date(),
+          metadata: snapshot,
+          source: "Form",
+          tagPayload: JSON.stringify(formValues),
+        },
+      );
+      if (!recordedForTagging) {
+        // ⚠ `uploaded: true` — the physical `Files/Add` above has already succeeded by this point;
+        // only this record write failed. Without it, `applyUploadResults` would leave this file
+        // sitting in the batch as retry-eligible, and a second press of Upload would try to
+        // `Files/Add` a file that is already on the server — either a silent duplicate or a
+        // confusing "this file already exists, replace it?" prompt about the uploader's own
+        // moments-old upload. `ok: false` is still correct and still drives the failure count: the
+        // file needs an administrator, not a retry, and `summarise`/the toast must not imply
+        // otherwise.
         return {
           fileId: sf.id,
           ok: false,
+          uploaded: true,
           error:
             "Uploaded, but could not record it for tagging. An administrator will need to tag this file by hand.",
         };
@@ -3359,9 +3387,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
       /* AUTO-APPROVE THE UPLOADER'S OWN FILE, 2026-08-24 (client: "if normal HOU or HC HOU upload,
          they dont need to do approval but rather it will automatically approve").
-         Never blocks or fails the upload — this is the LAST thing that happens, after tagging has
-         already succeeded, and a failed attempt here simply leaves the item Pending exactly as
-         before. Fires for BOTH `hou` and `hou_hc` with no persona branch: `folderId` and
+         Fires for BOTH `hou` and `hou_hc` with no persona branch: `folderId` and
          `libraryTitleForTagging` already point at whichever library (normal or HC) this file was
          actually placed in, so the probe answers correctly for either without knowing which.
 
@@ -3374,8 +3400,36 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          The client asked for the existing "your file has been approved" email to keep going to the
          Head of Unit too — so this deliberately does NOT touch Auto-route or suppress anything.
          Once `OData__ModerationStatus` flips here, Auto-route's own poll picks it up exactly as it
-         would a manual approval and sends the same email, to the same person, for the same reason. */
-      if (shouldAttemptSelfApprove(settings.autoApproveOwnUpload)) {
+         would a manual approval and sends the same email, to the same person, for the same reason.
+
+         ⚠ "AFTER TAGGING HAS ALREADY SUCCEEDED" NO LONGER MEANS WHAT IT USED TO (2026-09-18). As of
+         `8df5f33`, "tagging has succeeded" here means only that the `CRS Submissions` ROW was
+         written — carrying a `tagPayload` for `CRS — Apply pending tags` (Power Automate, not yet
+         built) to apply later. It does NOT mean the document's actual metadata (Document Type, Year,
+         Confidentiality, tier values, ...) has been written to the item yet.
+
+         ⚠⚠ DELIBERATELY DISABLED FOR NOW — `SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION` BELOW
+         IS NOT A TYPO. Self-approve flips `OData__ModerationStatus`, which Auto-route picks up and
+         copies to the approved-side library under a NEW item id (a fresh `UniqueId`) — potentially
+         before the not-yet-built flow has had any chance to apply the real metadata to the ORIGINAL
+         item. A document could route with essentially blank metadata, silently, with no future
+         opportunity to catch it (the 2026-08-26 SDG incident, referenced in CLAUDE.md, is the
+         precedent for how seriously this codebase treats exactly this class of failure).
+
+         Task 9 of docs/superpowers/plans/2026-09-18-tag-approve-proxy.md — "Form.tsx — defer the
+         self-approve decision until tagging is confirmed done" — replaces this with a real gate: the
+         browser polls the submission record for confirmation the tag was actually applied before
+         ever attempting self-approve. That polling mechanism does not exist yet. Until it lands,
+         self-approve stays off rather than racing ahead of a write that may not have happened. The
+         block below is left otherwise intact — Task 9 needs its internals, just gated differently.
+
+         (Named rather than a bare `false &&` so the `if` compiles under `allowUnreachableCode: false`
+         — a literal `false` there is flagged as statically unreachable and fails the build outright.) */
+      const SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION = true;
+      if (
+        !SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION &&
+        shouldAttemptSelfApprove(settings.autoApproveOwnUpload)
+      ) {
         try {
           // RE-CHECKED HERE, not trusted from the read at the top of this function. Seconds have
           // passed — the upload and the tagging call — and a same-named file can have landed in the
@@ -3576,6 +3630,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
     setBusy(true);
     setLastRun(undefined);
+    setTaggingFailures([]);
     setStatus("Checking the folder structure…");
 
     // Re-read the pause immediately before writing, NOT only at mount: a tab left open before an
@@ -3935,6 +3990,30 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setBatches(remaining);
 
     /**
+     * A FILE WITH `uploaded: true` LEAVES THE BATCH ABOVE, AND ITS MESSAGE MUST NOT LEAVE WITH IT
+     * (2026-09-18). `applyUploadResults` already dropped it from `remaining` — it is on the server
+     * and must never be offered for retry — so `.dms-batch-err`, which only renders beside a
+     * STILL-STAGED file, can no longer show it. This is read from `marked` (the pre-run batches,
+     * before anything was removed) rather than `remaining`, because that is the only place the name
+     * of a now-departed file still exists.
+     */
+    const taggingFailed: { name: string; error: string }[] = [];
+    for (const b of marked) {
+      for (const f of b.files ?? []) {
+        const r = results.filter((x) => x.fileId === f.id)[0];
+        if (r && r.uploaded && !r.ok) {
+          taggingFailed.push({
+            name: f.finalName ?? f.file.name,
+            error:
+              r.error ??
+              "Uploaded, but could not be recorded for tagging.",
+          });
+        }
+      }
+    }
+    setTaggingFailures(taggingFailed);
+
+    /**
      * EXPAND WHAT FAILED (client, 2026-08-26: *"can you automatically make the dropdown show so I can
      * tell which file is wrong? Right now I cannot tell unless I manually click the dropdown."*).
      *
@@ -4012,6 +4091,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       showToast(
         `${counts.ok} document${counts.ok === 1 ? "" : "s"} uploaded and pending review.`,
         "success",
+      );
+    } else if (taggingFailed.length === counts.failed) {
+      /* EVERY failure this run is a file that DID upload — only its `CRS Submissions` record failed
+         (2026-09-18). "see the reasons below" would be wrong twice over here: that file has already
+         left the batch cards (`applyUploadResults` removed it, since it must never be retried), so
+         there is no "below" to see it under, and nothing about it is fixed by pressing Upload again
+         — it needs an administrator, not a retry. */
+      showToast(
+        taggingFailed.length === 1
+          ? "1 document was uploaded, but could not be recorded for tagging. See the note below — an administrator will need to tag it by hand."
+          : `${taggingFailed.length} documents were uploaded, but could not be recorded for tagging. See the notes below — an administrator will need to tag them by hand.`,
+        "error",
+      );
+    } else if (taggingFailed.length > 0) {
+      // A genuine mix: some files never uploaded at all (still listed above, fixable and retryable),
+      // and some uploaded but could not be recorded for tagging (gone from the list, not retryable).
+      showToast(
+        "Some documents could not be uploaded, and some were uploaded but could not be recorded for tagging — see the notes below.",
+        "error",
       );
     } else {
       /* ⚠ THE COUNTS TOAST CAME OFF 2026-08-30 at the client's request — it duplicated the message
@@ -5153,15 +5251,20 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   </div>
                 );
               })}
-              {lastRun && lastRun.failed > 0 && (
+              {/* ⚠ `lastRun.failed` INCLUDES `taggingFailures` TOO (both come from `summarise`,
+              which counts on `ok` alone) — but a tagging-record failure LEAVES the batch list
+              (`applyUploadResults` removes anything `uploaded: true`), so it is never "still listed
+              above". Subtracting it here is what keeps this sentence honest; the tagging failures
+              get their own notice, below, that does not send anyone hunting for a row that is gone. */}
+              {lastRun && lastRun.failed > taggingFailures.length && (
                 <p className="dms-batch-warn">
                   {/* "Nothing is sent twice" removed 2026-08-30 at the client's request. The GUARANTEE
                   is unchanged and is what makes a second press safe: a successful file leaves the
                   list, so what remains is exactly what still needs doing. Only the sentence is
                   gone. */}
-                  Uploaded {lastRun.ok}. The {lastRun.failed} still listed above
-                  could not be uploaded - fix the reason shown and press Upload
-                  again.
+                  Uploaded {lastRun.ok}. The {lastRun.failed - taggingFailures.length}{" "}
+                  still listed above could not be uploaded - fix the reason
+                  shown and press Upload again.
                 </p>
               )}
               {/* WARN: AN ERROR, NOT A NOTE, AND IT HOLDS THE UPLOAD. Every other message here describes
@@ -5199,6 +5302,33 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 </p>
               )}
             </>
+          )}
+
+          {/* THE FILE ITSELF UPLOADED — ONLY ITS RECORD FOR TAGGING DID NOT (2026-09-18). Deliberately
+          OUTSIDE the `batches.length > 0` block above: `applyUploadResults` already removed this
+          file from every batch (it must never be retry-eligible — the physical upload succeeded, so
+          a second press would try to `Files/Add` a file that is already on the server), which is
+          exactly the state that empties `batches` on a run where nothing else failed. Rendering this
+          only inside that block would have meant the ONE case that most needs a persistent message —
+          a single uploaded-but-unrecorded file, with no genuine failure left in any card — showed
+          nothing at all.
+
+          Never says "press Upload again" — nothing here is fixed by that; the file is already filed
+          and an administrator must tag it by hand. */}
+          {taggingFailures.length > 0 && (
+            <p className="dms-batch-warn">
+              {taggingFailures.length === 1
+                ? "1 document was"
+                : `${taggingFailures.length} documents were`}{" "}
+              uploaded, but could not be recorded for tagging:
+              {taggingFailures.map((t, i) => (
+                <span key={`${t.name}-${i}`} style={{ display: "block" }}>
+                  <strong>{t.name}</strong> — {t.error}
+                </span>
+              ))}
+              These files are already filed - an administrator will need to
+              tag them by hand.
+            </p>
           )}
 
           {/* The batch being filled in. ONE card is open at a time, and that is the STATE MODEL, not a
