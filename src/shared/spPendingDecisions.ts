@@ -58,8 +58,11 @@ const listBase = (siteUrl: string): string =>
 
 /**
  * The columns the list already has, lower-cased. Empty when unreadable — which makes the caller
- * ATTEMPT every column, and an attempt on an existing column merely fails harmlessly. Reading first
- * turns "already exists" from the normal case (a second provisioning run) into a real signal.
+ * ATTEMPT every column even though some may already exist. That attempt does not "fail harmlessly"
+ * on an existing column: SharePoint accepts a duplicate display name outright and silently renames
+ * it with a numeric suffix instead of rejecting it — see the warning below for why that makes this
+ * check load-bearing, not a nicety. Reading first turns "already exists" from the normal case (a
+ * second provisioning run) into a real signal.
  *
  * ⚠ THIS IS NOT OPTIONAL. SharePoint does NOT reject a duplicate DISPLAY name outright — it silently
  * appends a numeric suffix (`Decision`, `Decision0`, `Decision1`, …) and returns success, so without
