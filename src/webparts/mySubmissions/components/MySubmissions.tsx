@@ -1163,9 +1163,9 @@ export default function MySubmissions({
      means "not asked yet", which changes nothing: every decision below treats it as one more route
      to YES and never as a veto, so a slow or failed probe leaves the request route exactly as it
      was. */
-  const [subjectRights, setSubjectRights] = useState<Record<string, FileRights>>(
-    {},
-  );
+  const [subjectRights, setSubjectRights] = useState<
+    Record<string, FileRights>
+  >({});
   /* ⚠⚠ A SECOND, STRICTER GUARD FOR THE ROW-DELETE CHECK SPECIFICALLY (2026-09-15, reported live
      TWICE on the same build). `fieldSubjectRef` alone was not enough: opening the SAME row's own
      file while its delete check was still in flight leaves the two `mergedKey`s equal, so the check
@@ -1591,7 +1591,9 @@ export default function MySubmissions({
     const id = row.uniqueId;
     if (!id) return;
     probeFileRights(context.spHttpClient, siteUrl, id)
-      .then((rights) => setSubjectRights((prev) => ({ ...prev, [key]: rights })))
+      .then((rights) =>
+        setSubjectRights((prev) => ({ ...prev, [key]: rights })),
+      )
       .catch(() => undefined);
   };
 
@@ -2321,8 +2323,7 @@ export default function MySubmissions({
       setSent(
         routed
           ? `Sent. The ${routed.label} approver for ${routed.value} will see it on the Requests page.`
-          : "Sent — but no approver is recorded for this document's unit, so it may sit unanswered. " +
-              "Tell an administrator: an APR mapping is missing on the Folder Access page.",
+          : "Sent.",
       );
     } catch (e) {
       setProblems([`Could not send the request: ${(e as Error).message}`]);
@@ -3315,32 +3316,36 @@ export default function MySubmissions({
                       leaves the organisation on the strength of nothing. */}
               {shareRecipients.some((r) =>
                 isExternal(r, policy.tenantDomains),
-              ) && (
-                <div style={{ ...s.warnBox, marginTop: 8 }}>
-                  {policy.tenantDomains.length === 0 ? (
-                    <>
-                      This site has not been told which email domains belong to
-                      your organisation, so <strong>every</strong> address is
-                      treated as outside it. An administrator sets{" "}
-                      <strong>tenantDomains</strong> on the CRS Config list —
-                      until then no share request can be sent.
-                    </>
-                  ) : policy.allowExternal ? (
-                    <>
-                      Some of these are outside your organisation (
-                      {policy.tenantDomains.join(", ")}). Your approver will be
-                      told.
-                    </>
-                  ) : (
-                    <>
-                      Some of these are outside your organisation (
-                      {policy.tenantDomains.join(", ")}), and sharing outside it
-                      is switched off on this site — the request cannot be sent
-                      until you remove them.
-                    </>
-                  )}
-                </div>
-              )}
+              ) &&
+                (policy.tenantDomains.length === 0 ? (
+                  // ⚠ 2026-09-19: this practically never fires (tenantDomains is always
+                  // configured in practice) — no box shown for it; the detail goes to
+                  // console.log only, so the internal list name never reaches the screen.
+                  (console.log(
+                    "This site has not been told which email domains belong to your " +
+                      "organisation, so every address is treated as outside it. An " +
+                      "administrator sets tenantDomains on the GDC Config list — until " +
+                      "then no share request can be sent.",
+                  ),
+                  null)
+                ) : (
+                  <div style={{ ...s.warnBox, marginTop: 8 }}>
+                    {policy.allowExternal ? (
+                      <>
+                        Some of these are outside your organisation (
+                        {policy.tenantDomains.join(", ")}). Your approver will be
+                        told.
+                      </>
+                    ) : (
+                      <>
+                        Some of these are outside your organisation (
+                        {policy.tenantDomains.join(", ")}), and sharing outside it
+                        is switched off on this site — the request cannot be sent
+                        until you remove them.
+                      </>
+                    )}
+                  </div>
+                ))}
 
               {/* ⚠ "VIEW AND EDIT" REMOVED FROM THE DROPDOWN (client, 2026-09-03: "Should not
                       have the VIEW and EDIT here"). `permission` stays a fixed "View" — an
@@ -3485,8 +3490,8 @@ export default function MySubmissions({
             lineHeight: 1.5,
           }}
         >
-          This deletes it straight away — no approver decides this. It moves
-          to the recycle bin and can be restored within 93 days.
+          This deletes it straight away — no approver decides this. It moves to
+          the recycle bin and can be restored within 93 days.
         </p>
         {withdrawError && (
           <p
@@ -4918,7 +4923,9 @@ export default function MySubmissions({
                                   }
                                   const chain =
                                     Object.keys(ft).length > 0
-                                      ? documentUnit(ft).tiers.map((t) => t.guid)
+                                      ? documentUnit(ft).tiers.map(
+                                          (t) => t.guid,
+                                        )
                                       : [];
                                   const approved = r.status === "Approved";
                                   const canDelete =

@@ -29,7 +29,9 @@ import { readSitePages } from "../../../shared/backToSettings";
  *   - `pageAccessPolicy` still locks this page, so nothing is newly exposed.
  * Delete the page and the registration together, after the migration, as their own reviewable change.
  */
-export default function FolderAccessPage({ context }: IAccessProps): React.ReactElement {
+export default function FolderAccessPage({
+  context,
+}: IAccessProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
   const [href, setHref] = React.useState<string | undefined>(undefined);
 
@@ -42,9 +44,9 @@ export default function FolderAccessPage({ context }: IAccessProps): React.React
    * A failed read leaves the link out rather than guessing: the text below still names the page.
    */
   React.useEffect(() => {
-    const link = CARDS
-      .filter((c) => c.key === "access")[0]
-      ?.links.filter((l) => l.key === "groups")[0];
+    const link = CARDS.filter((c) => c.key === "access")[0]?.links.filter(
+      (l) => l.key === "groups",
+    )[0];
     if (!link) return;
     readSitePages(context, siteUrl)
       .then((pages) => {
@@ -63,29 +65,31 @@ export default function FolderAccessPage({ context }: IAccessProps): React.React
     >
       <div style={{ fontSize: 13, lineHeight: 1.6, maxWidth: 760 }}>
         <p>
-          <strong>Mapping a group to a folder</strong> is no longer a separate step. Creating a group
-          writes its folder mappings, and <em>Create all groups for a segment</em> writes every
-          mapping a segment needs.
+          <strong>Mapping a group to a folder</strong> is no longer a separate
+          step. Creating a group writes its folder mappings, and{" "}
+          <em>Create all groups for a segment</em> writes every mapping a
+          segment needs.
         </p>
         <p>
-          <strong>Adding and removing people</strong> is in the group list on Group Management \u2014
-          expand any group to see who is in it.
+          <strong>Adding and removing people</strong> is in the group list on
+          Group Management \u2014 expand any group to see who is in it.
         </p>
         <p>
-          Nothing has changed about who can reach what. Folder permissions are still applied by a{" "}
-          <strong>Folder Reconciliation</strong> run, from the Folder Administration page.
+          Nothing has changed about who can reach what. Folder permissions are
+          still applied by a <strong>Folder Reconciliation</strong> run, from
+          the Folder Administration page.
         </p>
-        {href !== undefined
-          ? (
-            <p>
-              <a href={href} style={{ fontWeight: 600 }}>Go to Group Management</a>
-            </p>
-          )
-          : (
-            <p style={{ color: "#666" }}>
-              Open the <strong>Group Management</strong> page from CRS Settings.
-            </p>
-          )}
+        {href !== undefined ? (
+          <p>
+            <a href={href} style={{ fontWeight: 600 }}>
+              Go to Group Management
+            </a>
+          </p>
+        ) : (
+          <p style={{ color: "#666" }}>
+            Open the <strong>Group Management</strong> page from GDC Settings.
+          </p>
+        )}
       </div>
     </AccessShell>
   );

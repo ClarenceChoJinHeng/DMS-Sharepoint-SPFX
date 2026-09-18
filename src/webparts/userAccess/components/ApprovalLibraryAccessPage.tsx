@@ -19,7 +19,9 @@ import { readSitePages } from "../../../shared/backToSettings";
  * bookmarked or in site navigation. `pageAccessPolicy` still locks it, so nothing is newly exposed.
  * `StagingAccess.tsx` itself is untouched — this page simply stops mounting it.
  */
-export default function ApprovalLibraryAccessPage({ context }: IAccessProps): React.ReactElement {
+export default function ApprovalLibraryAccessPage({
+  context,
+}: IAccessProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
   const [href, setHref] = React.useState<string | undefined>(undefined);
 
@@ -32,9 +34,9 @@ export default function ApprovalLibraryAccessPage({ context }: IAccessProps): Re
    * A failed read leaves the link out rather than guessing: the text below still names the page.
    */
   React.useEffect(() => {
-    const link = CARDS
-      .filter((c) => c.key === "access")[0]
-      ?.links.filter((l) => l.key === "groups")[0];
+    const link = CARDS.filter((c) => c.key === "access")[0]?.links.filter(
+      (l) => l.key === "groups",
+    )[0];
     if (!link) return;
     readSitePages(context, siteUrl)
       .then((pages) => {
@@ -51,25 +53,27 @@ export default function ApprovalLibraryAccessPage({ context }: IAccessProps): Re
     >
       <div style={{ fontSize: 13, lineHeight: 1.6, maxWidth: 760 }}>
         <p>
-          Adding a person to a unit&rsquo;s uploader or approver group already gives them everything
-          they need — the library entry that used to be shown here, and the folder itself. There is
-          nothing to configure separately.
+          Adding a person to a unit&rsquo;s uploader or approver group already
+          gives them everything they need — the library entry that used to be
+          shown here, and the folder itself. There is nothing to configure
+          separately.
         </p>
         <p>
-          Nothing has changed about who can reach what. Access is still applied by a{" "}
-          <strong>Folder Reconciliation</strong> run, from the Folder Administration page.
+          Nothing has changed about who can reach what. Access is still applied
+          by a <strong>Folder Reconciliation</strong> run, from the Folder
+          Administration page.
         </p>
-        {href !== undefined
-          ? (
-            <p>
-              <a href={href} style={{ fontWeight: 600 }}>Go to Group Management</a>
-            </p>
-          )
-          : (
-            <p style={{ color: "#666" }}>
-              Open the <strong>Group Management</strong> page from CRS Settings.
-            </p>
-          )}
+        {href !== undefined ? (
+          <p>
+            <a href={href} style={{ fontWeight: 600 }}>
+              Go to Group Management
+            </a>
+          </p>
+        ) : (
+          <p style={{ color: "#666" }}>
+            Open the <strong>Group Management</strong> page from GDC Settings.
+          </p>
+        )}
       </div>
     </AccessShell>
   );

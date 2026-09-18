@@ -938,7 +938,7 @@ export default function Requests({
           // deleted or re-parented, a 403 is the term store not being readable by this person, and
           // the two need opposite fixes.
           console.warn(
-            `[CRS Requests] department children ${deptGuid} returned HTTP ${res.status}`,
+            `[GDC Requests] department children ${deptGuid} returned HTTP ${res.status}`,
           );
           expansionFailed = true;
           continue;
@@ -3110,7 +3110,7 @@ export default function Requests({
               settled 2026-07-23 — never appears here at all. A tab implying completeness about who
               can reach the company's documents would be worse than one that admits its edge. */}
               <p style={{ ...s.quiet, marginTop: 0 }}>
-                Shares granted through CRS, checked against each file&rsquo;s
+                Shares granted through GDC, checked against each file&rsquo;s
                 real permissions. A document shared using SharePoint&rsquo;s own{" "}
                 <strong>Share</strong> button is not listed here — only extra
                 people found on the files below.

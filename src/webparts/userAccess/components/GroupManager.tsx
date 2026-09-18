@@ -609,9 +609,9 @@ export default function GroupManager({
     number | undefined
   >(undefined);
   /** The group currently being removed from, so its own button (and only its own) disables. */
-  const [lookupRemoveBusy, setLookupRemoveBusy] = useState<
-    number | undefined
-  >(undefined);
+  const [lookupRemoveBusy, setLookupRemoveBusy] = useState<number | undefined>(
+    undefined,
+  );
 
   /**
    * Segment filter for the group list. "" = every segment, "__none__" = groups with no mapping rows.
@@ -1017,11 +1017,7 @@ export default function GroupManager({
         // `searchTenantPeople` runs with `AllowEmailAddresses: true`, so anything shaped like an
         // email comes back as a candidate whether or not it belongs to anybody. Reporting only
         // "not a member yet" invites an admin to go and add a person who does not exist.
-        setLookupNote(
-          "No account on this site matches that address. Check the spelling — an address typed in " +
-            "full is offered in the list whether or not it belongs to anybody. If the spelling is " +
-            "right, they have simply never been given access to this site.",
-        );
+        setLookupNote("");
         return;
       }
       if (users.length > 1) {
@@ -1051,8 +1047,7 @@ export default function GroupManager({
           if (!all.some((a) => a.id === x.Id))
             all.push({ id: x.Id, title: (x.Title ?? "").trim() });
           if (!memberIds[x.Id]) memberIds[x.Id] = [];
-          if (memberIds[x.Id].indexOf(u.Id) === -1)
-            memberIds[x.Id].push(u.Id);
+          if (memberIds[x.Id].indexOf(u.Id) === -1) memberIds[x.Id].push(u.Id);
         }
       }
       setLookupGroups(all);
@@ -1559,7 +1554,10 @@ export default function GroupManager({
     )[0];
     if (!picked) return;
     if (mapRows === undefined) {
-      showToast("The Group Map could not be read, so groups cannot be checked.", true);
+      showToast(
+        "The Group Map could not be read, so groups cannot be checked.",
+        true,
+      );
       return;
     }
     setGroupCheckBusy(true);
@@ -1571,7 +1569,10 @@ export default function GroupManager({
         picked.levelNames.length,
       );
       if (abbrevRows === undefined) {
-        showToast(`Could not read "${picked.label}"'s codes — try again in a moment.`, true);
+        showToast(
+          `Could not read "${picked.label}"'s codes — try again in a moment.`,
+          true,
+        );
         return;
       }
       const byGuid: Record<string, AbbrevRowDraft> = {};
@@ -1597,7 +1598,9 @@ export default function GroupManager({
         liveNameByGroupId[String(g.id)] = g.title;
       });
       const gmRows: GroupMapRenameRow[] = mapRows
-        .filter((r) => r.segment.toLowerCase() === picked.termSetGuid.toLowerCase())
+        .filter(
+          (r) => r.segment.toLowerCase() === picked.termSetGuid.toLowerCase(),
+        )
         .map((r) => ({
           GroupId: r.groupId,
           GroupName: liveNameByGroupId[r.groupId] ?? r.groupName,
@@ -1620,10 +1623,16 @@ export default function GroupManager({
       setGroupRenamePlan(plan.length > 0 ? plan : undefined);
       setGroupRenameConfirming(false);
       if (plan.length === 0) {
-        showToast(`No groups currently carry a stale name for "${picked.label}".`, false);
+        showToast(
+          `No groups currently carry a stale name for "${picked.label}".`,
+          false,
+        );
       }
     } catch (e) {
-      showToast(`Could not check "${picked.label}"'s groups — ${(e as Error).message}`, true);
+      showToast(
+        `Could not check "${picked.label}"'s groups — ${(e as Error).message}`,
+        true,
+      );
     } finally {
       setGroupCheckBusy(false);
     }
@@ -2025,7 +2034,7 @@ export default function GroupManager({
             readOnly={!advanced}
             placeholder={
               advanced
-                ? "e.g. CRS_SITE_MEMBERS"
+                ? "e.g. GDC_SITE_MEMBERS"
                 : "Choose a segment, tier and persona below"
             }
             onChange={(e) => {
@@ -2282,97 +2291,102 @@ export default function GroupManager({
         </button>
         {quickSearchOpen && (
           <>
-        <p style={s.hint}>
-          Search anyone in the directory to see which groups they are in on this
-          site.
-        </p>
+            <p style={s.hint}>
+              Search anyone in the directory to see which groups they are in on
+              this site.
+            </p>
 
-        <div style={s.ddwrap}>
-          {/* Clear empties the BOX AND THE ANSWER (client, 2026-08-23: *"I cannot clear once I
+            <div style={s.ddwrap}>
+              {/* Clear empties the BOX AND THE ANSWER (client, 2026-08-23: *"I cannot clear once I
               entered, would be confusing UX design for client, put a clear button"*). Selecting a
               person clears the box on purpose — the result below is the answer — but that left no
               way to get back to an empty panel, so the last person looked up stayed on screen for
               the rest of the session. Rendered whenever there is either a query or a result. */}
-          <div style={s.lkSearchRow}>
-            <input
-              style={s.input}
-              value={lookupQuery}
-              placeholder="Search by name or email…"
-              onChange={(e) => setLookupQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") clearLookup();
-              }}
-            />
-            {(lookupQuery.length > 0 || lookupPerson !== undefined) && (
-              <button type="button" style={s.ghost} onClick={clearLookup}>
-                Clear
-              </button>
-            )}
-          </div>
-          {lookupResults.length > 0 && (
-            <div style={s.dd}>
-              {lookupResults.map((p) => (
-                <button
-                  key={p.loginName}
-                  type="button"
-                  style={s.ddItem}
-                  onClick={() => {
-                    runLookup(p).catch(() => undefined);
+              <div style={s.lkSearchRow}>
+                <input
+                  style={s.input}
+                  value={lookupQuery}
+                  placeholder="Search by name or email…"
+                  onChange={(e) => setLookupQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") clearLookup();
                   }}
-                >
-                  {personDisplay(p.displayName, p.email)}
-                </button>
-              ))}
+                />
+                {(lookupQuery.length > 0 || lookupPerson !== undefined) && (
+                  <button type="button" style={s.ghost} onClick={clearLookup}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              {lookupResults.length > 0 && (
+                <div style={s.dd}>
+                  {lookupResults.map((p) => (
+                    <button
+                      key={p.loginName}
+                      type="button"
+                      style={s.ddItem}
+                      onClick={() => {
+                        runLookup(p).catch(() => undefined);
+                      }}
+                    >
+                      {personDisplay(p.displayName, p.email)}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {lookupPerson && (
-          <div style={{ marginTop: 12 }}>
-            {/* THE EMAIL ALONE (client, 2026-08-23: "I think just showing the email is good enough").
+            {lookupPerson && (
+              <div style={{ marginTop: 12 }}>
+                {/* THE EMAIL ALONE (client, 2026-08-23: "I think just showing the email is good enough").
                 `name · email` read as two different people when the display name is a mangled
                 directory form of the same address. The display name is the fallback rather than a
                 blank line — a guest account can legitimately have no email. */}
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 8,
-              }}
-            >
-              <p style={s.lkWho}>
-                {personDisplay(lookupPerson.displayName, lookupPerson.email)}
-              </p>
-              {/* Client, 2026-09-14: "add a refresh button for quick search" — a fresh lookup could
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <p style={s.lkWho}>
+                    {personDisplay(
+                      lookupPerson.displayName,
+                      lookupPerson.email,
+                    )}
+                  </p>
+                  {/* Client, 2026-09-14: "add a refresh button for quick search" — a fresh lookup could
                   otherwise only be had by clearing the box and re-typing the same address. Re-runs
                   the SAME lookup rather than re-reading from `lookupResults` (cleared once a person
                   is picked), so it answers correctly for the person currently shown even after they
                   are added to or removed from a group elsewhere. */}
-              <button
-                type="button"
-                style={s.ghost}
-                disabled={lookupBusy}
-                onClick={() => {
-                  runLookup(lookupPerson).catch(() => undefined);
-                }}
-              >
-                {lookupBusy ? "Refreshing…" : "↻ Refresh"}
-              </button>
-            </div>
+                  <button
+                    type="button"
+                    style={s.ghost}
+                    disabled={lookupBusy}
+                    onClick={() => {
+                      runLookup(lookupPerson).catch(() => undefined);
+                    }}
+                  >
+                    {lookupBusy ? "Refreshing…" : "↻ Refresh"}
+                  </button>
+                </div>
 
-            {lookupBusy && <p style={s.hint}>Reading their groups&hellip;</p>}
+                {lookupBusy && (
+                  <p style={s.hint}>Reading their groups&hellip;</p>
+                )}
 
-            {/* The note carries BOTH kinds of message — a real answer ("not a member yet") and a
+                {/* The note carries BOTH kinds of message — a real answer ("not a member yet") and a
                 failed read. They are told apart by whether `lookupGroups` is undefined, which is why
                 that state is three-way. */}
-            {!lookupBusy && lookupNote !== undefined && (
-              <p style={lookupGroups === undefined ? s.err : s.hint}>
-                {lookupNote}
-              </p>
-            )}
+                {!lookupBusy && lookupNote !== undefined && (
+                  <p style={lookupGroups === undefined ? s.err : s.hint}>
+                    {lookupNote}
+                  </p>
+                )}
 
-            {/* A REAL account, read successfully, holding zero groups — client QA item #54b,
+                {/* A REAL account, read successfully, holding zero groups — client QA item #54b,
                 2026-09-13. First built to exclude the "no account matches that address" case
                 above (`lookupNote`, when `users.length === 0`) on the reasoning that its own note
                 already covers it — but the client corrected that the same day: this line should
@@ -2380,209 +2394,221 @@ export default function GroupManager({
                 added and then removed. `lookupGroups` is already `[]` in BOTH cases (`runLookup`
                 sets it before either note is decided), so dropping the `lookupNote === undefined`
                 guard is the whole fix — no new state, no new branch. */}
-            {!lookupBusy &&
-              lookupGroups !== undefined &&
-              lookupGroups.length === 0 && (
-                <p style={s.hint}>Not in any group yet.</p>
-              )}
+                {!lookupBusy &&
+                  lookupGroups !== undefined &&
+                  lookupGroups.length === 0 && (
+                    <p style={s.hint}>Not in any group yet.</p>
+                  )}
 
-            {!lookupBusy &&
-              lookupGroups !== undefined &&
-              lookupGroups.length > 0 &&
-              (() => {
-                if (mapRows === undefined) {
-                  // The Group Map is what turns a group into an ANSWER. Without it we can list the
-                  // groups honestly but must not imply we know what they grant.
-                  return (
-                    <>
-                      <p style={s.err}>
-                        The Group Map could not be read, so what these groups
-                        GRANT is not known. The groups themselves are listed
-                        below.
-                      </p>
-                      {/* SCROLLS, same reason as the detailed list below — a person in many groups
+                {!lookupBusy &&
+                  lookupGroups !== undefined &&
+                  lookupGroups.length > 0 &&
+                  (() => {
+                    if (mapRows === undefined) {
+                      // The Group Map is what turns a group into an ANSWER. Without it we can list the
+                      // groups honestly but must not imply we know what they grant.
+                      return (
+                        <>
+                          <p style={s.err}>
+                            The Group Map could not be read, so what these
+                            groups GRANT is not known. The groups themselves are
+                            listed below.
+                          </p>
+                          {/* SCROLLS, same reason as the detailed list below — a person in many groups
                           can make this run long, and each row is plain text with no popover to
                           clip. */}
-                      <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
-                        {lookupGroups.map((g) => (
-                          <p key={g.id} style={s.row}>
-                            <span style={s.chip}>{g.title}</span>
-                          </p>
-                        ))}
-                      </div>
-                    </>
-                  );
-                }
-                const summary = summarizeUserAccess(
-                  lookupGroups,
-                  mapRows.map((r) => ({
-                    groupId: Number(r.groupId),
-                    segment: r.segment,
-                    unitTermGuid: r.tier,
-                    role: r.role,
-                  })),
-                  {
-                    segmentLabel: (guid) =>
-                      modes.filter(
-                        (m) =>
-                          m.termSetGuid.toLowerCase() === guid.toLowerCase(),
-                      )[0]?.label ?? "",
-                    // v1 does not resolve the tier chain: the GROUP NAME already carries it in the
-                    // same abbreviations the folders use (GHO_GF_TAX_UPLOADER is GHO / GF / TAX), and
-                    // walking each segment's tree costs ~8 requests per segment for a second copy of
-                    // what the title already says. `summarizeUserAccess` still returns the field, so
-                    // rendering it later needs no change here.
-                    tierChain: () => [],
-                  },
-                  /* The owners group holds Full Control on the WEB and therefore has no Group Map
+                          <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+                            {lookupGroups.map((g) => (
+                              <p key={g.id} style={s.row}>
+                                <span style={s.chip}>{g.title}</span>
+                              </p>
+                            ))}
+                          </div>
+                        </>
+                      );
+                    }
+                    const summary = summarizeUserAccess(
+                      lookupGroups,
+                      mapRows.map((r) => ({
+                        groupId: Number(r.groupId),
+                        segment: r.segment,
+                        unitTermGuid: r.tier,
+                        role: r.role,
+                      })),
+                      {
+                        segmentLabel: (guid) =>
+                          modes.filter(
+                            (m) =>
+                              m.termSetGuid.toLowerCase() ===
+                              guid.toLowerCase(),
+                          )[0]?.label ?? "",
+                        // v1 does not resolve the tier chain: the GROUP NAME already carries it in the
+                        // same abbreviations the folders use (GHO_GF_TAX_UPLOADER is GHO / GF / TAX), and
+                        // walking each segment's tree costs ~8 requests per segment for a second copy of
+                        // what the title already says. `summarizeUserAccess` still returns the field, so
+                        // rendering it later needs no change here.
+                        tierChain: () => [],
+                      },
+                      /* The owners group holds Full Control on the WEB and therefore has no Group Map
                      rows — without this it read "Grants nothing yet", in red, about the widest
                      access on the site. `owners` is already resolved for the administrators card
                      above; `undefined` when that read failed, which simply restores the old
                      behaviour rather than mislabelling some other group. */
-                  owners?.id,
-                );
-                return (
-                  <>
-                    <p style={s.hint}>
-                      In {summary.groups.length} group
-                      {summary.groups.length === 1 ? "" : "s"} on this site
-                      {summary.unmappedCount > 0
-                        ? ` · ${summary.unmappedCount} of them grant nothing`
-                        : ""}
-                    </p>
-                    {/* SCROLLS (client, 2026-09-16: *"the list is too long"*) — someone in many
+                      owners?.id,
+                    );
+                    return (
+                      <>
+                        <p style={s.hint}>
+                          In {summary.groups.length} group
+                          {summary.groups.length === 1 ? "" : "s"} on this site
+                          {summary.unmappedCount > 0
+                            ? ` · ${summary.unmappedCount} of them grant nothing`
+                            : ""}
+                        </p>
+                        {/* SCROLLS (client, 2026-09-16: *"the list is too long"*) — someone in many
                         groups (an approver mapped to every unit in a department, say) can push this
                         card far down the page. Nothing inside a row is absolutely positioned — the
                         Remove/Confirm buttons are plain inline buttons, no dropdown, no popover — so
                         capping the whole list here is safe, unlike the group editor below. */}
-                    <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
-                    {summary.groups.map((g) => (
-                      <div key={g.groupId} style={s.lkRow}>
-                        {/* Name left, segment + Remove right — not a column of its own.
+                        <div style={{ maxHeight: "50vh", overflowY: "auto" }}>
+                          {summary.groups.map((g) => (
+                            <div key={g.groupId} style={s.lkRow}>
+                              {/* Name left, segment + Remove right — not a column of its own.
                           Client, 2026-09-13: "Move the Delete button on quick search to beside
                           the label Group Head Office" — moved from its own row at the bottom of
                           the card into this row, grouped with the segment label it sits beside. */}
-                        <div style={s.lkTop}>
-                          <p style={s.lkName}>{g.groupTitle}</p>
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 10,
-                              flexWrap: "wrap",
-                            }}
-                          >
-                            {g.places.length > 0 && (
-                              <p style={s.lkSeg}>
-                                {g.places
-                                  .map(
-                                    (pl) =>
-                                      pl.segmentLabel || "segment not known",
-                                  )
-                                  .filter((v, i, a) => a.indexOf(v) === i)
-                                  .join(", ")}
-                              </p>
-                            )}
-                            {/* Removing someone used to mean leaving this panel, finding the
+                              <div style={s.lkTop}>
+                                <p style={s.lkName}>{g.groupTitle}</p>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 10,
+                                    flexWrap: "wrap",
+                                  }}
+                                >
+                                  {g.places.length > 0 && (
+                                    <p style={s.lkSeg}>
+                                      {g.places
+                                        .map(
+                                          (pl) =>
+                                            pl.segmentLabel ||
+                                            "segment not known",
+                                        )
+                                        .filter((v, i, a) => a.indexOf(v) === i)
+                                        .join(", ")}
+                                    </p>
+                                  )}
+                                  {/* Removing someone used to mean leaving this panel, finding the
                               same group below in the group list, expanding it, and finding them
                               again in `GroupMembersEditor`. Rendered for EVERY row, Owners and
                               site-entry included — hiding it on those two would silently
                               reintroduce that detour for exactly the groups an admin is most
                               likely to be here about.
                               Spec: docs/superpowers/specs/2026-09-13-quick-search-remove-button-design.md */}
-                            {lookupRemoveConfirm === g.groupId ? (
-                              <>
-                                <button
-                                  type="button"
-                                  style={s.danger}
-                                  disabled={lookupRemoveBusy === g.groupId}
-                                  onClick={() => {
-                                    removeFromLookupGroup(
-                                      g.groupId,
-                                      g.groupTitle,
-                                    ).catch(() => undefined);
-                                  }}
-                                >
-                                  Confirm remove
-                                </button>
-                                <button
-                                  type="button"
-                                  style={s.ghost}
-                                  onClick={() => setLookupRemoveConfirm(undefined)}
-                                >
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                type="button"
-                                style={s.ghost}
-                                disabled={lookupRemoveBusy !== undefined}
-                                onClick={() => setLookupRemoveConfirm(g.groupId)}
-                              >
-                                Remove
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                                  {lookupRemoveConfirm === g.groupId ? (
+                                    <>
+                                      <button
+                                        type="button"
+                                        style={s.danger}
+                                        disabled={
+                                          lookupRemoveBusy === g.groupId
+                                        }
+                                        onClick={() => {
+                                          removeFromLookupGroup(
+                                            g.groupId,
+                                            g.groupTitle,
+                                          ).catch(() => undefined);
+                                        }}
+                                      >
+                                        Confirm remove
+                                      </button>
+                                      <button
+                                        type="button"
+                                        style={s.ghost}
+                                        onClick={() =>
+                                          setLookupRemoveConfirm(undefined)
+                                        }
+                                      >
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      style={s.ghost}
+                                      disabled={lookupRemoveBusy !== undefined}
+                                      onClick={() =>
+                                        setLookupRemoveConfirm(g.groupId)
+                                      }
+                                    >
+                                      Remove
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
 
-                        {/* The site-entry group is a NORMAL state, so it is a hint, not the red
+                              {/* The site-entry group is a NORMAL state, so it is a hint, not the red
                           "grants nothing" — it was rendering as an error because it has no rows,
                           which reads as something being wrong with the person's access. */}
-                        {/* Owners is tested BEFORE unmapped for the same reason the site-entry group
+                              {/* Owners is tested BEFORE unmapped for the same reason the site-entry group
                           is: it has no mapping rows because its Full Control comes from SharePoint at
                           web scope, so the red "grants nothing" was describing the widest access on
                           the site as no access at all. */}
-                        {g.owners && (
-                          <p style={s.lkSum}>{describeGroupAccess(g)}</p>
-                        )}
-                        {!g.owners && g.siteEntry && (
-                          <p style={s.lkSum}>{describeGroupAccess(g)}</p>
-                        )}
-                        {!g.owners && !g.siteEntry && g.unmapped && (
-                          <p style={s.err}>{describeGroupAccess(g)}</p>
-                        )}
-                        {!g.owners && !g.siteEntry && !g.unmapped && g.persona && (
-                          <p style={s.lkPersona}>{g.persona.label}</p>
-                        )}
-                        {/* ⚠ NEVER `describeGroupAccess` here. With no persona it returns the joined
+                              {g.owners && (
+                                <p style={s.lkSum}>{describeGroupAccess(g)}</p>
+                              )}
+                              {!g.owners && g.siteEntry && (
+                                <p style={s.lkSum}>{describeGroupAccess(g)}</p>
+                              )}
+                              {!g.owners && !g.siteEntry && g.unmapped && (
+                                <p style={s.err}>{describeGroupAccess(g)}</p>
+                              )}
+                              {!g.owners &&
+                                !g.siteEntry &&
+                                !g.unmapped &&
+                                g.persona && (
+                                  <p style={s.lkPersona}>{g.persona.label}</p>
+                                )}
+                              {/* ⚠ NEVER `describeGroupAccess` here. With no persona it returns the joined
                           role labels — exactly what the chips below already say, which is what made
                           these rows look like they were repeating themselves. Say instead why there
                           is no summary: an unmatched role set is a real finding (a group holding
                           ENTRY alongside an approver's roles matches no persona exactly). */}
-                        {!g.siteEntry && !g.unmapped && !g.persona && (
-                          <p style={s.lkSum}>
-                            These roles match no persona exactly — the group was
-                            mapped by hand, or carries an extra role.
-                          </p>
-                        )}
-                        {/* ⚠ `g.persona.summary` (the long role explanation, e.g. "Uploads to their
+                              {!g.siteEntry && !g.unmapped && !g.persona && (
+                                <p style={s.lkSum}>
+                                  These roles match no persona exactly — the
+                                  group was mapped by hand, or carries an extra
+                                  role.
+                                </p>
+                              )}
+                              {/* ⚠ `g.persona.summary` (the long role explanation, e.g. "Uploads to their
                           unit at any confidentiality level...") REMOVED (client's mockup, 2026-09-03)
                           — the short persona LABEL above (`g.persona.label`, "Upload only") and the
                           role chips below already say what this row grants; the paragraph was the
                           same fact a third time. */}
 
-                        {g.roleLabels.length > 0 && (
-                          <p style={s.lkChips}>
-                            {g.roleLabels.map((r) => (
-                              <span key={r} style={s.chip}>
-                                {r}
-                              </span>
-                            ))}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                    </div>
-                    {/* ⚠ "Roles and scope come from the CRS Group Map..." REMOVED (client's mockup,
+                              {g.roleLabels.length > 0 && (
+                                <p style={s.lkChips}>
+                                  {g.roleLabels.map((r) => (
+                                    <span key={r} style={s.chip}>
+                                      {r}
+                                    </span>
+                                  ))}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        {/* ⚠ "Roles and scope come from the CRS Group Map..." REMOVED (client's mockup,
                       2026-09-03). The fact is unchanged — this screen still reads live SharePoint
                       state alongside Group Map rows exactly as before — only the explanatory footer
                       sentence is gone. */}
-                  </>
-                );
-              })()}
-          </div>
-        )}
+                      </>
+                    );
+                  })()}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2605,125 +2631,128 @@ export default function GroupManager({
         </button>
         {groupsListOpen && (
           <>
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            alignItems: "center",
-          }}
-        >
-          <input
-            style={{ ...s.input, flex: "1 1 220px" }}
-            value={filter}
-            placeholder="Filter by name…"
-            onChange={(e) => setFilter(e.target.value)}
-          />
-          {/* Segment comes from the MAPPING ROWS, so it agrees with what reconciliation reads rather
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
+              <input
+                style={{ ...s.input, flex: "1 1 220px" }}
+                value={filter}
+                placeholder="Filter by name…"
+                onChange={(e) => setFilter(e.target.value)}
+              />
+              {/* Segment comes from the MAPPING ROWS, so it agrees with what reconciliation reads rather
               than with the name. Offered only when the Group Map was readable — a filter built from
               a failed read would silently claim every group belongs to no segment. */}
-          {mapRows !== undefined && (
-            <select
-              style={{ ...s.select, flex: "0 1 220px" }}
-              value={segFilter}
-              onChange={(e) => setSegFilter(e.target.value)}
-            >
-              <option value="">Every segment</option>
-              {modes.map((m) => (
-                <option key={m.termSetGuid} value={m.termSetGuid.toLowerCase()}>
-                  {m.label}
-                </option>
-              ))}
-              <option value="__none__">Not mapped to anything</option>
-            </select>
-          )}
-          {/* "What is shown", not "everything" — the same promise the audit log makes, and the only
+              {mapRows !== undefined && (
+                <select
+                  style={{ ...s.select, flex: "0 1 220px" }}
+                  value={segFilter}
+                  onChange={(e) => setSegFilter(e.target.value)}
+                >
+                  <option value="">Every segment</option>
+                  {modes.map((m) => (
+                    <option
+                      key={m.termSetGuid}
+                      value={m.termSetGuid.toLowerCase()}
+                    >
+                      {m.label}
+                    </option>
+                  ))}
+                  <option value="__none__">Not mapped to anything</option>
+                </select>
+              )}
+              {/* "What is shown", not "everything" — the same promise the audit log makes, and the only
               one that stays true next to a filter. */}
-          <button
-            type="button"
-            style={s.ghost}
-            disabled={visible.length === 0}
-            onClick={exportShown}
-          >
-            Export what is shown
-          </button>
-        </div>
-
-        {/* Selection bar. Shown only once something is ticked, so the ordinary "I came here to look
-            at one group" visit is unchanged. `Select all shown` respects BOTH filters, which is the
-            whole point: filter to APPROVER, tick all, delete. */}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            alignItems: "center",
-            marginTop: 8,
-          }}
-        >
-          <button
-            type="button"
-            style={s.ghost}
-            disabled={visible.length === 0 || busy}
-            onClick={() => {
-              const next = { ...selected };
-              const allOn = visible.every((g) => selected[g.id]);
-              visible.forEach((g) => {
-                if (allOn) {
-                  delete next[g.id];
-                } else {
-                  next[g.id] = true;
-                }
-              });
-              setSelected(next);
-            }}
-          >
-            {visible.length > 0 && visible.every((g) => selected[g.id])
-              ? `Clear the ${visible.length} shown`
-              : `Select all ${visible.length} shown`}
-          </button>
-          {/* Page Access is the one report left (2026-09-02) — Site Access and Approval Library
-              Access are retired signposts now, so linking to them here would only lead in a circle.
-              Hidden when the page could not be resolved, rather than a dead link. */}
-          {pageAccessHref && (
-            <a href={pageAccessHref} style={s.ghost}>
-              Page Access →
-            </a>
-          )}
-          {selectedCount > 0 && (
-            <>
-              <span style={{ fontSize: 12, color: "#444" }}>
-                <strong>{selectedCount}</strong> selected
-                {/* A count that ignored the out-of-view ones would delete more than the screen
-                    shows — the one number an admin must not be surprised by. */}
-                {hiddenSelected > 0
-                  ? ` (${hiddenSelected} not currently shown)`
-                  : ""}
-              </span>
               <button
                 type="button"
                 style={s.ghost}
-                disabled={busy}
-                onClick={() => setSelected({})}
+                disabled={visible.length === 0}
+                onClick={exportShown}
               >
-                Clear selection
+                Export what is shown
               </button>
+            </div>
+
+            {/* Selection bar. Shown only once something is ticked, so the ordinary "I came here to look
+            at one group" visit is unchanged. `Select all shown` respects BOTH filters, which is the
+            whole point: filter to APPROVER, tick all, delete. */}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                alignItems: "center",
+                marginTop: 8,
+              }}
+            >
               <button
                 type="button"
-                style={s.danger}
-                disabled={busy}
+                style={s.ghost}
+                disabled={visible.length === 0 || busy}
                 onClick={() => {
-                  setBulkTyped("");
-                  setBulkOpen(true);
+                  const next = { ...selected };
+                  const allOn = visible.every((g) => selected[g.id]);
+                  visible.forEach((g) => {
+                    if (allOn) {
+                      delete next[g.id];
+                    } else {
+                      next[g.id] = true;
+                    }
+                  });
+                  setSelected(next);
                 }}
               >
-                Delete {selectedCount} selected
+                {visible.length > 0 && visible.every((g) => selected[g.id])
+                  ? `Clear the ${visible.length} shown`
+                  : `Select all ${visible.length} shown`}
               </button>
-            </>
-          )}
-        </div>
+              {/* Page Access is the one report left (2026-09-02) — Site Access and Approval Library
+              Access are retired signposts now, so linking to them here would only lead in a circle.
+              Hidden when the page could not be resolved, rather than a dead link. */}
+              {pageAccessHref && (
+                <a href={pageAccessHref} style={s.ghost}>
+                  Page Access →
+                </a>
+              )}
+              {selectedCount > 0 && (
+                <>
+                  <span style={{ fontSize: 12, color: "#444" }}>
+                    <strong>{selectedCount}</strong> selected
+                    {/* A count that ignored the out-of-view ones would delete more than the screen
+                    shows — the one number an admin must not be surprised by. */}
+                    {hiddenSelected > 0
+                      ? ` (${hiddenSelected} not currently shown)`
+                      : ""}
+                  </span>
+                  <button
+                    type="button"
+                    style={s.ghost}
+                    disabled={busy}
+                    onClick={() => setSelected({})}
+                  >
+                    Clear selection
+                  </button>
+                  <button
+                    type="button"
+                    style={s.danger}
+                    disabled={busy}
+                    onClick={() => {
+                      setBulkTyped("");
+                      setBulkOpen(true);
+                    }}
+                  >
+                    Delete {selectedCount} selected
+                  </button>
+                </>
+              )}
+            </div>
 
-        {/* ── System administrators ──────────────────────────────────────────
+            {/* ── System administrators ──────────────────────────────────────────
             Client, 2026-08-27: *"we did not include a group as the System Admin group? they should
             have all the power."* There was never a gap in the MODEL - SharePoint's site Owners group
             has always conferred exactly that, and reconciliation's lockdown pass grants the admin
@@ -2734,288 +2763,318 @@ export default function GroupManager({
             the mappable groups - mapping it onto a unit folder is exactly what the id exclusion
             exists to prevent - and it must never be offered a Delete button. Keeping it in its own
             card makes both true by construction rather than by remembering a flag on every row. */}
-        <div
-          style={{
-            ...s.card,
-            borderColor: "#a4262c",
-            marginTop: 16,
-            border: "1px solid #f1b0b3",
-            background: "#fdf3f4",
-          }}
-        >
-          <h1 style={{ ...s.head, marginTop: 0 }}>System Administrators</h1>
-          {owners === undefined ? (
-            <p style={s.hint}>
-              The site&apos;s owners group could not be read, so administrators
-              cannot be managed here. Add them from Site settings → Site
-              permissions instead.
-            </p>
-          ) : (
-            <>
-              {/* ⚠ COPY REPLACED VERBATIM (client's mockup, 2026-09-03: "Replace all"). The FACTS
+            <div
+              style={{
+                ...s.card,
+                borderColor: "#a4262c",
+                marginTop: 16,
+                border: "1px solid #f1b0b3",
+                background: "#fdf3f4",
+              }}
+            >
+              <h1 style={{ ...s.head, marginTop: 0 }}>System Administrators</h1>
+              {owners === undefined ? (
+                <p style={s.hint}>
+                  The site&apos;s owners group could not be read, so
+                  administrators cannot be managed here. Add them from Site
+                  settings → Site permissions instead.
+                </p>
+              ) : (
+                <>
+                  {/* ⚠ COPY REPLACED VERBATIM (client's mockup, 2026-09-03: "Replace all"). The FACTS
                   are unchanged — {owners.title} still holds full control of every segment, every
                   library including Highly Confidential, and every admin page, unrestricted by any
                   folder permission and never removed by reconciliation — the client's shorter
                   wording just states the same thing without re-deriving the reasoning on screen. */}
-              <p style={s.hint}>
-                <strong>{owners.title}</strong> have full administrator access.
-                Add users here only if they need to manage the entire system.
-              </p>
-              {/* SHOWN ONLY WHEN IT APPLIES. The first site collection administrator can only be set
+                  <p style={s.hint}>
+                    <strong>{owners.title}</strong> have full administrator
+                    access. Add users here only if they need to manage the
+                    entire system.
+                  </p>
+                  {/* SHOWN ONLY WHEN IT APPLIES. The first site collection administrator can only be set
                   by hand, because SharePoint lets only an existing one promote anybody — so an owner
                   who is not one would add people here and watch every promotion fail with an error
                   they could not act on. `undefined` (read failed) shows nothing, for the reason on
                   `viewerIsSca`. */}
-              {viewerIsSca === false && (
-                <p style={{ ...s.hint, color: "#8a4b00" }}>
-                  <strong>You are not a site collection administrator.</strong>{" "}
-                  Anyone you add here will join the group and get the CRS
-                  access, but SharePoint will not let you promote them — only an
-                  existing site collection administrator can do that. Set the
-                  first one by hand at{" "}
-                  <a
-                    style={s.link}
-                    href={`${siteUrl}/_layouts/15/mngsiteadmin.aspx`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Site collection administrators
-                  </a>
-                  . After that this card can do the rest.
-                </p>
-              )}
-              {/* ⚠ COPY REPLACED VERBATIM (client's mockup, 2026-09-03: "Replace all"). Same three
+                  {viewerIsSca === false && (
+                    <p style={{ ...s.hint, color: "#8a4b00" }}>
+                      <strong>
+                        You are not a site collection administrator.
+                      </strong>{" "}
+                      Anyone you add here will join the group and get the GDC
+                      access, but SharePoint will not let you promote them —
+                      only an existing site collection administrator can do
+                      that. Set the first one by hand at{" "}
+                      <a
+                        style={s.link}
+                        href={`${siteUrl}/_layouts/15/mngsiteadmin.aspx`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Site collection administrators
+                      </a>
+                      . After that this card can do the rest.
+                    </p>
+                  )}
+                  {/* ⚠ COPY REPLACED VERBATIM (client's mockup, 2026-09-03: "Replace all"). Same three
                   facts the removed comment explained — a per-user SCA flag no group confers, no
                   report if it changes outside this card, a literal (never resolved) `_layouts` link
                   — stated now in the client's own words rather than this file's usual reasoning. */}
-              <p style={s.hint}>
-                <strong>Warning:</strong> Adding a user also makes them a{" "}
-                <strong>Site Collection Administrator</strong>, giving them
-                access to Site Settings, Term Store, group memberships, and site
-                deletion.
-              </p>
-              <p style={s.hint}>
-                The following cases must be managed manually through{" "}
-                <a
-                  style={s.link}
-                  href={`${siteUrl}/_layouts/15/mngsiteadmin.aspx`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Site Collection Administrators
-                </a>
-                :
-                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
-                  <li>
-                    <strong>Your own account</strong> — removing yourself may
-                    prevent this page from working correctly.
-                  </li>
-                  <li>
-                    <strong>The only remaining administrator</strong> — a site
-                    must always have at least one administrator.
-                  </li>
-                  <li>
-                    <strong>Administrators removed outside this page</strong> —
-                    for example, through SharePoint&apos;s Site Permissions
-                    page. These changes must be removed manually.
-                  </li>
-                </ul>
-              </p>
-              <button
-                type="button"
-                style={s.ghost}
-                onClick={() => setOwnersOpen(!ownersOpen)}
-              >
-                {ownersOpen ? "Hide administrators" : "Manage administrators"}
-              </button>
-              {ownersOpen && (
-                <GroupMembersEditor
-                  context={context}
-                  siteUrl={siteUrl}
-                  group={{ id: owners.id, title: owners.title }}
-                  showToast={showToast}
-                  /* WARN: THE ONLY MOUNT THAT MAY PASS THIS. Client, 2026-08-27 - their System Admin
+                  <p style={s.hint}>
+                    <strong>Warning:</strong> Adding a user also makes them a{" "}
+                    <strong>Site Collection Administrator</strong>, giving them
+                    access to Site Settings, Term Store, group memberships, and
+                    site deletion.
+                  </p>
+                  <p style={s.hint}>
+                    The following cases must be managed manually through{" "}
+                    <a
+                      style={s.link}
+                      href={`${siteUrl}/_layouts/15/mngsiteadmin.aspx`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Site Collection Administrators
+                    </a>
+                    :
+                    <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                      <li>
+                        <strong>Your own account</strong> — removing yourself
+                        may prevent this page from working correctly.
+                      </li>
+                      <li>
+                        <strong>The only remaining administrator</strong> — a
+                        site must always have at least one administrator.
+                      </li>
+                      <li>
+                        <strong>
+                          Administrators removed outside this page
+                        </strong>{" "}
+                        — for example, through SharePoint&apos;s Site
+                        Permissions page. These changes must be removed
+                        manually.
+                      </li>
+                    </ul>
+                  </p>
+                  <button
+                    type="button"
+                    style={s.ghost}
+                    onClick={() => setOwnersOpen(!ownersOpen)}
+                  >
+                    {ownersOpen
+                      ? "Hide administrators"
+                      : "Manage administrators"}
+                  </button>
+                  {ownersOpen && (
+                    <GroupMembersEditor
+                      context={context}
+                      siteUrl={siteUrl}
+                      group={{ id: owners.id, title: owners.title }}
+                      showToast={showToast}
+                      /* WARN: THE ONLY MOUNT THAT MAY PASS THIS. Client, 2026-08-27 - their System Admin
                      means "access to everything", so this group carries SITE COLLECTION ADMINISTRATOR
                      with it. The same component is mounted for every OTHER group in the list below and
                      again on Folder Access; passing it there would promote a unit's uploader to site
                      collection administrator. */
-                  alsoSiteAdmin={true}
-                />
+                      alsoSiteAdmin={true}
+                    />
+                  )}
+                </>
               )}
-            </>
-          )}
-        </div>
+            </div>
 
-        {/* "Check for groups with a stale name" — MOVED here from the CRS Term Abbreviations screen,
+            {/* "Check for groups with a stale name" — MOVED here from the CRS Term Abbreviations screen,
             2026-09-16. See the reasoning at `checkStaleGroupNames`/`runGroupRenames` above. Segment-
             scoped and user-driven, unlike the auto-detected "Group names are not consistent" tool
             just below it: that one scans every group's SUFFIX spelling on load; this one needs a
             picked segment and a fresh read of its codes before it can say anything. */}
-        {canManage === true && (
-          <div style={{ ...s.card, marginTop: 16 }}>
-            <p style={{ ...s.head, marginTop: 0 }}>Check for groups with a stale name</p>
-            <p style={s.hint}>
-              After a segment, department or unit is renamed, its groups do not follow
-              automatically — only the folders do. Pick a segment to check whether any of its
-              groups still carry an old code.
-            </p>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <select
-                style={{ ...s.select, flex: "0 1 260px" }}
-                value={renameCheckSeg}
-                onChange={(e) => setRenameCheckSeg(e.target.value)}
-              >
-                <option value="">Select a segment…</option>
-                {modes.map((m) => (
-                  <option key={m.termSetGuid} value={m.termSetGuid}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                style={s.btn}
-                disabled={!renameCheckSeg || groupCheckBusy}
-                onClick={() => {
-                  checkStaleGroupNames().catch(() => undefined);
-                }}
-              >
-                {groupCheckBusy ? "Checking…" : "Check"}
-              </button>
-            </div>
+            {canManage === true && (
+              <div style={{ ...s.card, marginTop: 16 }}>
+                <p style={{ ...s.head, marginTop: 0 }}>
+                  Check for groups with a stale name
+                </p>
+                <p style={s.hint}>
+                  After a segment, department or unit is renamed, its groups do
+                  not follow automatically — only the folders do. Pick a segment
+                  to check whether any of its groups still carry an old code.
+                </p>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
+                  <select
+                    style={{ ...s.select, flex: "0 1 260px" }}
+                    value={renameCheckSeg}
+                    onChange={(e) => setRenameCheckSeg(e.target.value)}
+                  >
+                    <option value="">Select a segment…</option>
+                    {modes.map((m) => (
+                      <option key={m.termSetGuid} value={m.termSetGuid}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    style={s.btn}
+                    disabled={!renameCheckSeg || groupCheckBusy}
+                    onClick={() => {
+                      checkStaleGroupNames().catch(() => undefined);
+                    }}
+                  >
+                    {groupCheckBusy ? "Checking…" : "Check"}
+                  </button>
+                </div>
 
-            {groupRenamePlan && groupRenamePlan.length > 0 && (
-              <div
-                style={{
-                  marginTop: 12,
-                  padding: "10px 12px",
-                  borderRadius: 6,
-                  background: "#f3f9ff",
-                  border: "1px solid #cfe4fb",
-                  fontSize: 13,
-                }}
-              >
-                {groupRenameProgress ? (
-                  <p style={{ margin: 0 }}>
-                    Renaming {groupRenameProgress.done} of {groupRenameProgress.total}
-                    {groupRenameProgress.failed > 0 ? ` (${groupRenameProgress.failed} failed)` : ""}…
-                  </p>
-                ) : (
-                  <>
-                    <p style={{ fontWeight: 600, margin: "0 0 6px" }}>
-                      {groupRenamePlan.length} group{groupRenamePlan.length === 1 ? "" : "s"} under
-                      &quot;{groupRenameSegLabel}&quot; now{" "}
-                      {groupRenamePlan.length === 1 ? "carries" : "carry"} a stale code
-                    </p>
-                    <p style={{ ...s.hint, marginBottom: 8 }}>
-                      Renaming {groupRenamePlan.length === 1 ? "it" : "them"} changes{" "}
-                      <strong>nothing about access</strong> — a rename keeps the group&apos;s id, so
-                      every mapping, folder permission and page grant stays exactly as it is.
-                    </p>
-                    {groupRenameConfirming ? (
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                          type="button"
-                          style={s.btn}
-                          disabled={busy}
-                          onClick={() => {
-                            runGroupRenames().catch(() => undefined);
-                          }}
-                        >
-                          Confirm — rename {groupRenamePlan.length} group
-                          {groupRenamePlan.length === 1 ? "" : "s"}
-                        </button>
-                        <button
-                          type="button"
-                          style={s.ghost}
-                          onClick={() => setGroupRenameConfirming(false)}
-                        >
-                          Cancel
-                        </button>
-                      </div>
+                {groupRenamePlan && groupRenamePlan.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: 12,
+                      padding: "10px 12px",
+                      borderRadius: 6,
+                      background: "#f3f9ff",
+                      border: "1px solid #cfe4fb",
+                      fontSize: 13,
+                    }}
+                  >
+                    {groupRenameProgress ? (
+                      <p style={{ margin: 0 }}>
+                        Renaming {groupRenameProgress.done} of{" "}
+                        {groupRenameProgress.total}
+                        {groupRenameProgress.failed > 0
+                          ? ` (${groupRenameProgress.failed} failed)`
+                          : ""}
+                        …
+                      </p>
                     ) : (
-                      <button
-                        type="button"
-                        style={s.ghost}
-                        onClick={() => setGroupRenameConfirming(true)}
-                      >
-                        Rename {groupRenamePlan.length} group{groupRenamePlan.length === 1 ? "" : "s"}…
-                      </button>
+                      <>
+                        <p style={{ fontWeight: 600, margin: "0 0 6px" }}>
+                          {groupRenamePlan.length} group
+                          {groupRenamePlan.length === 1 ? "" : "s"} under &quot;
+                          {groupRenameSegLabel}&quot; now{" "}
+                          {groupRenamePlan.length === 1 ? "carries" : "carry"} a
+                          stale code
+                        </p>
+                        <p style={{ ...s.hint, marginBottom: 8 }}>
+                          Renaming{" "}
+                          {groupRenamePlan.length === 1 ? "it" : "them"} changes{" "}
+                          <strong>nothing about access</strong> — a rename keeps
+                          the group&apos;s id, so every mapping, folder
+                          permission and page grant stays exactly as it is.
+                        </p>
+                        {groupRenameConfirming ? (
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              type="button"
+                              style={s.btn}
+                              disabled={busy}
+                              onClick={() => {
+                                runGroupRenames().catch(() => undefined);
+                              }}
+                            >
+                              Confirm — rename {groupRenamePlan.length} group
+                              {groupRenamePlan.length === 1 ? "" : "s"}
+                            </button>
+                            <button
+                              type="button"
+                              style={s.ghost}
+                              onClick={() => setGroupRenameConfirming(false)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            style={s.ghost}
+                            onClick={() => setGroupRenameConfirming(true)}
+                          >
+                            Rename {groupRenamePlan.length} group
+                            {groupRenamePlan.length === 1 ? "" : "s"}…
+                          </button>
+                        )}
+                      </>
                     )}
-                  </>
+                  </div>
                 )}
               </div>
             )}
-          </div>
-        )}
 
-        {/* STANDARDISE NAMES (client, 2026-08-27). 1.0.261.0 changed what NEW names are written and
+            {/* STANDARDISE NAMES (client, 2026-08-27). 1.0.261.0 changed what NEW names are written and
             left existing groups alone, so a provisioned site is MIXED - `_APR_HIGHLY_CONFIDENTIAL`
             beside `_VIEWER_HIGHLY_CONFIDENTIAL`. Shown only when there is something to do, so it
             disappears once the site is consistent rather than sitting there inviting a pointless run. */}
-        {canManage === true &&
-          renameTargets().length > 0 &&
-          renameProgress === undefined && (
-            <div style={{ ...s.card, borderColor: "#8a4b00", marginTop: 16 }}>
-              <p style={{ ...s.head, marginTop: 0 }}>
-                Group names are not consistent
-              </p>
+            {canManage === true &&
+              renameTargets().length > 0 &&
+              renameProgress === undefined && (
+                <div
+                  style={{ ...s.card, borderColor: "#8a4b00", marginTop: 16 }}
+                >
+                  <p style={{ ...s.head, marginTop: 0 }}>
+                    Group names are not consistent
+                  </p>
+                  <p style={s.hint}>
+                    <strong>{renameTargets().length}</strong> group
+                    {renameTargets().length === 1 ? " uses" : "s use"} an older
+                    spelling (<code>_APR_…</code>, <code>_UPL_…</code>,{" "}
+                    <code>_EMPLOYEE</code>). Renaming them to{" "}
+                    <code>_APPROVER</code>, <code>_UPLOADER</code> and{" "}
+                    <code>_VIEWER</code> changes{" "}
+                    <strong>nothing about access</strong>: a rename keeps the
+                    group&apos;s id, so every mapping, folder permission and
+                    page grant stays exactly as it is.
+                  </p>
+                  <button
+                    type="button"
+                    style={s.btn}
+                    disabled={busy}
+                    onClick={() => {
+                      const n = renameTargets().length;
+                      if (
+                        !window.confirm(
+                          `Rename ${n} group${n === 1 ? "" : "s"} to the standard suffixes? ` +
+                            `Nobody gains or loses access — a rename keeps the group id, so mappings and ` +
+                            `folder permissions are untouched. Do not close this tab while it runs.`,
+                        )
+                      )
+                        return;
+                      runStandardiseNames().catch(() => undefined);
+                    }}
+                  >
+                    Rename {renameTargets().length} group
+                    {renameTargets().length === 1 ? "" : "s"}
+                  </button>
+                </div>
+              )}
+            {renameProgress !== undefined && (
               <p style={s.hint}>
-                <strong>{renameTargets().length}</strong> group
-                {renameTargets().length === 1 ? " uses" : "s use"} an older
-                spelling (<code>_APR_…</code>, <code>_UPL_…</code>,{" "}
-                <code>_EMPLOYEE</code>). Renaming them to <code>_APPROVER</code>
-                , <code>_UPLOADER</code> and <code>_VIEWER</code> changes{" "}
-                <strong>nothing about access</strong>: a rename keeps the
-                group&apos;s id, so every mapping, folder permission and page
-                grant stays exactly as it is.
+                Renaming {renameProgress.done} of {renameProgress.total}…
+                {renameProgress.failed > 0
+                  ? ` (${renameProgress.failed} failed)`
+                  : ""}
               </p>
-              <button
-                type="button"
-                style={s.btn}
-                disabled={busy}
-                onClick={() => {
-                  const n = renameTargets().length;
-                  if (
-                    !window.confirm(
-                      `Rename ${n} group${n === 1 ? "" : "s"} to the standard suffixes? ` +
-                        `Nobody gains or loses access — a rename keeps the group id, so mappings and ` +
-                        `folder permissions are untouched. Do not close this tab while it runs.`,
-                    )
-                  )
-                    return;
-                  runStandardiseNames().catch(() => undefined);
-                }}
-              >
-                Rename {renameTargets().length} group
-                {renameTargets().length === 1 ? "" : "s"}
-              </button>
-            </div>
-          )}
-        {renameProgress !== undefined && (
-          <p style={s.hint}>
-            Renaming {renameProgress.done} of {renameProgress.total}…
-            {renameProgress.failed > 0
-              ? ` (${renameProgress.failed} failed)`
-              : ""}
-          </p>
-        )}
+            )}
 
-        {loadError !== undefined && (
-          <p style={s.err}>
-            Could not read this site&apos;s groups — {loadError}
-          </p>
-        )}
-        {mapRows === undefined && !loading && loadError === undefined && (
-          // Unreadable ≠ empty. Without this the badges below would silently claim every group is
-          // unmapped, which reads as data loss.
-          <p style={s.hint}>
-            The {GROUP_MAP_LIST()} list could not be read, so this page cannot
-            show which groups are mapped. Creating and deleting still work.
-          </p>
-        )}
+            {loadError !== undefined && (
+              <p style={s.err}>
+                Could not read this site&apos;s groups — {loadError}
+              </p>
+            )}
+            {mapRows === undefined && !loading && loadError === undefined && (
+              // Unreadable ≠ empty. Without this the badges below would silently claim every group is
+              // unmapped, which reads as data loss.
+              <p style={s.hint}>
+                The {GROUP_MAP_LIST()} list could not be read, so this page
+                cannot show which groups are mapped. Creating and deleting still
+                work.
+              </p>
+            )}
 
-        {/* SCROLLS, once the list is long enough to be a page of its own (defect 4, 2026-08-18):
+            {/* SCROLLS, once the list is long enough to be a page of its own (defect 4, 2026-08-18):
             303 groups pushed everything else off the screen, including the create form above.
 
             Capped only while every group is COLLAPSED. The member editor inside an expanded group
@@ -3023,121 +3082,121 @@ export default function GroupManager({
             results for any group near the bottom — trading a long page for a control that silently
             cannot be used. When one group is open the admin is working inside it, not scanning the
             list, so the cap has nothing to do. */}
-        <div
-          style={{
-            marginTop: 10,
-            // ⚠ The cap is LIFTED while a group is open, and that is not cosmetic: the member
-            // editor's people picker is absolutely positioned, so a scroll container clips its
-            // results for any group near the bottom — trading a long page for a control that
-            // silently cannot be used. Same rule Folder Access follows.
-            maxHeight: openGroup === undefined ? "60vh" : undefined,
-            overflowY: openGroup === undefined ? "auto" : undefined,
-          }}
-        >
-          {loading && <p style={s.hint}>Loading…</p>}
-          {!loading && visible.length === 0 && (
-            <p style={s.hint}>
-              {groups.length === 0
-                ? "No groups on this site yet."
-                : "No group matches that filter."}
-            </p>
-          )}
-          {visible.map((g) => {
-            const rows = rowsFor(g);
-            return (
-              <div key={g.id}>
-                <div style={s.row}>
-                  {/* Ticking is the ONLY thing on this row that does not open or change anything —
+            <div
+              style={{
+                marginTop: 10,
+                // ⚠ The cap is LIFTED while a group is open, and that is not cosmetic: the member
+                // editor's people picker is absolutely positioned, so a scroll container clips its
+                // results for any group near the bottom — trading a long page for a control that
+                // silently cannot be used. Same rule Folder Access follows.
+                maxHeight: openGroup === undefined ? "60vh" : undefined,
+                overflowY: openGroup === undefined ? "auto" : undefined,
+              }}
+            >
+              {loading && <p style={s.hint}>Loading…</p>}
+              {!loading && visible.length === 0 && (
+                <p style={s.hint}>
+                  {groups.length === 0
+                    ? "No groups on this site yet."
+                    : "No group matches that filter."}
+                </p>
+              )}
+              {visible.map((g) => {
+                const rows = rowsFor(g);
+                return (
+                  <div key={g.id}>
+                    <div style={s.row}>
+                      {/* Ticking is the ONLY thing on this row that does not open or change anything —
                       it just marks. The destructive step is behind the bar above, with a count. */}
-                  <input
-                    type="checkbox"
-                    aria-label={`Select ${g.title}`}
-                    checked={selected[g.id] === true}
-                    disabled={busy}
-                    onChange={(e) => {
-                      const next = { ...selected };
-                      if (e.target.checked) {
-                        next[g.id] = true;
-                      } else {
-                        delete next[g.id];
-                      }
-                      setSelected(next);
-                    }}
-                  />
-                  {/* AN EXPANDER AGAIN (2026-08-23). Opening it is the whole membership feature:
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${g.title}`}
+                        checked={selected[g.id] === true}
+                        disabled={busy}
+                        onChange={(e) => {
+                          const next = { ...selected };
+                          if (e.target.checked) {
+                            next[g.id] = true;
+                          } else {
+                            delete next[g.id];
+                          }
+                          setSelected(next);
+                        }}
+                      />
+                      {/* AN EXPANDER AGAIN (2026-08-23). Opening it is the whole membership feature:
                       one group at a time, so 586 groups cost 586 rows and ONE member read. */}
-                  <button
-                    type="button"
-                    style={s.groupName}
-                    aria-expanded={openGroup === g.id}
-                    onClick={() =>
-                      setOpenGroup(openGroup === g.id ? undefined : g.id)
-                    }
-                  >
-                    {openGroup === g.id ? "▾" : "▸"} {g.title}
-                  </button>
-                  {/* PEOPLE, not mappings (client, 2026-08-23: *"instead of showing mappings only,
+                      <button
+                        type="button"
+                        style={s.groupName}
+                        aria-expanded={openGroup === g.id}
+                        onClick={() =>
+                          setOpenGroup(openGroup === g.id ? undefined : g.id)
+                        }
+                      >
+                        {openGroup === g.id ? "▾" : "▸"} {g.title}
+                      </button>
+                      {/* PEOPLE, not mappings (client, 2026-08-23: *"instead of showing mappings only,
                       show how many users are there in each group, client doesnt understand what is
                       mapping"*). A mapping count is an internal fact about the Group Map; the
                       question an admin actually arrives with is who is in the group.
 
                       ⚠ An UNREADABLE member index falls back to the mapping badge rather than
                       showing `0 people`, which would report every group on the site as empty. */}
-                  {(() => {
-                    const m = membersOf(g.id);
-                    /* ⚠ THREE STATES, NOT TWO. `undefined` means the index does not describe this
+                      {(() => {
+                        const m = membersOf(g.id);
+                        /* ⚠ THREE STATES, NOT TWO. `undefined` means the index does not describe this
                        group — either the whole read failed, or it succeeded and did not reach this
                        group. Both are "not known", and rendering either as "No member" is what the
                        client caught on 2026-09-07 with a group that demonstrably had someone in it.
                        Nothing is shown for the unknown case rather than a badge: the mapping badge
                        below already covers a group with no rows, and a third badge saying "not
                        known" on most of a 766-group list would be noise. */
-                    if (m === undefined) return undefined;
-                    // "No member" (client's mockup, 2026-09-03), was "nobody in it yet".
-                    return m.length === 0 ? (
-                      <span style={s.badge}>No member</span>
-                    ) : (
-                      <span style={s.mapped}>
-                        {m.length} {m.length === 1 ? "person" : "people"}
-                      </span>
-                    );
-                  })()}
-                  {/* Kept, but only in the state that MATTERS and in plain words: a group with no
+                        if (m === undefined) return undefined;
+                        // "No member" (client's mockup, 2026-09-03), was "nobody in it yet".
+                        return m.length === 0 ? (
+                          <span style={s.badge}>No member</span>
+                        ) : (
+                          <span style={s.mapped}>
+                            {m.length} {m.length === 1 ? "person" : "people"}
+                          </span>
+                        );
+                      })()}
+                      {/* Kept, but only in the state that MATTERS and in plain words: a group with no
                       rows grants nothing, whoever is in it. The count is dropped from the happy
                       path — it is in the CSV for anyone who needs the number. */}
-                  {rows !== undefined && rows.length === 0 && (
-                    <span style={s.badge}>grants nothing yet</span>
-                  )}
-                  {memberIndex === undefined &&
-                    rows !== undefined &&
-                    rows.length > 0 && (
-                      <span style={s.mapped}>
-                        {rows.length} mapping{rows.length === 1 ? "" : "s"}
-                      </span>
-                    )}
-                  <button
-                    type="button"
-                    style={s.danger}
-                    disabled={busy}
-                    onClick={() => setDeleting(g)}
-                  >
-                    Delete
-                  </button>
-                </div>
+                      {rows !== undefined && rows.length === 0 && (
+                        <span style={s.badge}>grants nothing yet</span>
+                      )}
+                      {memberIndex === undefined &&
+                        rows !== undefined &&
+                        rows.length > 0 && (
+                          <span style={s.mapped}>
+                            {rows.length} mapping{rows.length === 1 ? "" : "s"}
+                          </span>
+                        )}
+                      <button
+                        type="button"
+                        style={s.danger}
+                        disabled={busy}
+                        onClick={() => setDeleting(g)}
+                      >
+                        Delete
+                      </button>
+                    </div>
 
-                {openGroup === g.id && (
-                  <GroupMembersEditor
-                    context={context}
-                    siteUrl={siteUrl}
-                    group={{ id: g.id, title: g.title }}
-                    showToast={showToast}
-                    onChanged={reloadMembers}
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
+                    {openGroup === g.id && (
+                      <GroupMembersEditor
+                        context={context}
+                        siteUrl={siteUrl}
+                        group={{ id: g.id, title: g.title }}
+                        showToast={showToast}
+                        onChanged={reloadMembers}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </>
         )}
       </div>
@@ -3145,7 +3204,10 @@ export default function GroupManager({
       {/* ── Delete confirmation ────────────────────────────────────────── */}
       {/* The backdrop closes on onMouseDown, NOT onClick — see closeOnBackdrop. */}
       {deleting !== undefined && (
-        <div style={s.modalBg} onMouseDown={closeOnBackdrop(() => setDeleting(undefined))}>
+        <div
+          style={s.modalBg}
+          onMouseDown={closeOnBackdrop(() => setDeleting(undefined))}
+        >
           <div style={s.modal} onClick={(e) => e.stopPropagation()}>
             <p style={{ ...s.head, fontSize: 15 }}>
               Delete &quot;{deleting.title}&quot;?
