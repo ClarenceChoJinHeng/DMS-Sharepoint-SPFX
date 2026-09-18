@@ -2744,7 +2744,7 @@ export default function BulkUpload({
         // The LABEL, not the term id — the record is read by a person, and a bare GUID says nothing.
         snapshot.Confidentiality = labels.confLabel;
         snapshot["Bulk import"] = "Yes";
-        const recorded = await writeSubmissionRecord(context.spHttpClient, siteUrl, {
+        const recordedForTagging = await writeSubmissionRecord(context.spHttpClient, siteUrl, {
           submissionRef: canRef ? submissionRef : "",
           batchRef: canRef ? batchRef : "",
           fileId: fileStamp,
@@ -2759,7 +2759,7 @@ export default function BulkUpload({
           source: "BulkUpload",
           tagPayload: JSON.stringify(fileValues),
         });
-        if (!recorded) {
+        if (!recordedForTagging) {
           out.push({
             name: finalName,
             outcome: "tagFailed",
@@ -4314,7 +4314,7 @@ export default function BulkUpload({
                       `, ${resultCounts.tagFailed} uploaded without tags`}
                     .
                     {resultCounts.tagFailed > 0 &&
-                      " Files listed as “uploaded, not tagged” are already in Documents — fix their metadata in the library rather than re-uploading."}
+                      " These files uploaded successfully but could not be recorded for tagging — see the reason shown for each below; an administrator may need to act on it."}
                   </p>
                   {problemRows.map((r, i) => (
                     <div
