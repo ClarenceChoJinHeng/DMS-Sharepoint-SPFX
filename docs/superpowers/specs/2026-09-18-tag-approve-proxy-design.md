@@ -1,9 +1,62 @@
 # Tag/approve by proxy — design
 
 **Date:** 2026-09-18
-**Status:** Approved by client, not built.
-**Companion doc:** `2026-09-18-tag-approve-proxy-reversion.md` — how to undo this if the lag turns
-out to be unacceptable once it's live. Read that one first if this is ever being rolled back.
+**Status:** PIC's half approved by client and in progress. Approver's half is WITHDRAWN — see the
+correction immediately below. Read that before anything else in this document.
+**Companion doc:** `2026-09-18-tag-approve-proxy-reversion.md` — how to undo the PIC half if the lag
+turns out to be unacceptable once it's live. Read that one first if this is ever being rolled back.
+
+## ⚠⚠ CORRECTION, 2026-09-18 (same day) — THE APPROVER HALF IS OFF. `CRS Approve` KEEPS `Edit Items`.
+
+Everything below still describes the ORIGINAL two-sided plan (PIC's tagging write AND Approver's
+decision write, both moved to proxy) and is kept as the historical record of the reasoning, not as
+what is being built. **Only the PIC half is going ahead.**
+
+**Why:** the whole point of moving the Approver's decision write to proxy was to let `Edit Items`
+come off `CRS Approve` at final cutover, the same as `CRS Upload`. That is not possible. `ApproveItems`
+has a hard SharePoint dependency on `EditListItems` — confirmed live, on this tenant's `CRS Approve`
+level, by unticking each independently and watching the other come with it. There is no permission
+level, and no combination of group memberships, that grants a person `ApproveItems` without also
+granting `EditListItems` — SharePoint enforces the two together in the permission-level editor
+itself. So "keep Approve Items (for Draft Item Security's unit-wide pending-file visibility), drop
+Edit Items (to stop hand-editing)" — the entire premise of the Approver half of this design — cannot
+be built as SharePoint's own permission model works.
+
+**An alternative WAS explored — explicit per-item unique permissions, granted by the proxy account
+at upload time, replacing Draft Item Security's native exemption entirely** (break inheritance per
+pending/rejected file; visibility becomes "do you hold Read on this specific item" rather than
+"do you hold `ApproveItems`"). Worked out mathematically viable at modest volume, and NOT viable at
+realistic worst-case volume: ten segments each holding a few thousand simultaneously-open pending
+plus rejected files can consume the bulk of a single approval library's 50,000-unique-permission-
+scope ceiling on rejected files alone, before a single pending file or folder is counted — and
+rejected files are the one population nothing in that scheme naturally shrinks, since nobody is
+forced to clean them up. Parked, not built. Worth reopening only with the client's *actual* expected
+concurrent pending+rejected volume in hand, not a round stress-test number — see the session that
+produced this correction for the full arithmetic if it comes back up.
+
+**The decision, for now:** `CRS Upload` (PIC) loses `Edit Items` — unaffected by any of this, since
+`CRS Upload` never held `ApproveItems` and so never had the coupling problem. `CRS Approve`
+(Approver) **keeps** `Edit Items`, indefinitely — approvers can still hand-edit a file's tags/name
+directly in the library, which is the one piece of the original client complaint this rollout does
+NOT close. `ApprovalDocument.tsx`'s decision write (Approve/Reject) has been **reverted** to its
+original direct `ApprovedBy`-MERGE-then-`approve()` / raw `OData__ModerationStatus` MERGE sequence —
+the `writePendingDecision`/`CRS Pending Decisions` code path built for it is unused by any caller as
+of this correction. `BulkApprovePanel.tsx` was never converted in the first place, so it needed no
+reverting.
+
+**What stays, unaffected:** everything in the Scope section below **except** "Approver's decision
+write" and "Self-approve." PIC's tagging write (`Form.tsx`, `BulkUpload.tsx`, both normal and HC),
+and PIC's staging-replace write, proceed exactly as designed. `CRS Pending Decisions`'s schema and
+`spPendingDecisions.ts` stay in place, unused, per this project's own habit of parking rather than
+deleting unused mechanisms — see the reversion doc's "What to do with the new schema" section, same
+reasoning applies here.
+
+**Self-approve** (`autoApproveOwnUpload`) was never converted to the decision-proxy in the first
+place — it still does the original direct `OData__ModerationStatus` MERGE in `Form.tsx`, currently
+disabled behind `SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION` for an *unrelated* reason (Task 9:
+it must not fire until the async tag write is confirmed applied, since PIC's tagging is proxied
+regardless of what happens on the Approver side). That gate is real and still needed; nothing here
+changes it.
 
 ## Problem
 
@@ -24,11 +77,19 @@ shape, extended to the two writes that make up "tag a file" and "approve/reject 
 
 ## Scope
 
+**⚠ As of the 2026-09-18 correction above, only the first and last bullets are being built.**
+"Approver's decision write" and "Self-approve" are struck through below and kept as the record of
+the original, wider scope — read the correction, not these two bullets, for what is actually true.
+
 - **PIC's tagging write** on upload, in both `Form.tsx` and `BulkUpload.tsx`, both normal and HC.
-- **Approver's decision write** (Approve/Reject) in `ApprovalDocument.tsx` (the Preview page) and
-  `BulkApprovePanel.tsx` (the command-bar sidebar), both normal and HC.
-- **Self-approve** (`autoApproveOwnUpload`) in `Form.tsx` — a Head of Unit's own upload can
-  auto-approve today with no separate approver; that write also moves to proxy.
+- ~~**Approver's decision write** (Approve/Reject) in `ApprovalDocument.tsx` (the Preview page) and
+  `BulkApprovePanel.tsx` (the command-bar sidebar), both normal and HC.~~ WITHDRAWN — `CRS Approve`
+  cannot drop `Edit Items` without also dropping `ApproveItems`, so there is nothing left to proxy
+  this write in order to achieve. `ApprovalDocument.tsx` has been reverted to its direct write.
+- ~~**Self-approve** (`autoApproveOwnUpload`) in `Form.tsx` — a Head of Unit's own upload can
+  auto-approve today with no separate approver; that write also moves to proxy.~~ WITHDRAWN for the
+  same reason — never actually converted in code either; still the original direct MERGE, currently
+  gated off for the unrelated Task 9 reason described in the correction above.
 - **PIC's staging-replace write** (`Form.tsx`'s "yes, replace it" consent on a name clash) — see
   its own section below. Found during review, not in the original scope: it's a third Edit-shaped
   write that the tagging/decision writes don't cover, and it would otherwise 403 the moment
@@ -282,29 +343,38 @@ surface" open question below.
 
 ## Permission-level changes - the highest-risk step in this whole rollout
 
-Today, `UPL`/`UPLHC` map to the `CRS Upload` SharePoint permission level, and `APR`/`APRHC` map to
-`CRS Approve`. Both currently grant `Edit Items` (needed for the direct writes this change
-removes) alongside what they still need to keep (`Add Items` for `CRS Upload`; `Approve Items` for
-`CRS Approve`, since the eligibility probe reads that bit).
+**⚠ CORRECTED, 2026-09-18 — read the box at the top of this document first.** Everything in this
+section originally covered BOTH `CRS Upload` and `CRS Approve`. Only `CRS Upload` is actually being
+changed. `CRS Approve` keeps `Edit Items` — SharePoint will not allow it to be removed without also
+removing `ApproveItems`, which was confirmed live and is the entire reason the Approver half of this
+design was withdrawn. Do not untick `Edit Items` on `CRS Approve` on the strength of the steps below;
+they are corrected to say so, but the original wording elsewhere in this document (Scope, Data flow)
+still describes the withdrawn plan and should not be followed for the Approver side.
 
-**Once the code and both flows are built and proven, `Edit Items` is unticked from both
-`CRS Upload` and `CRS Approve`** in Site Settings -> Permission Levels, on each site. This is a
-manual, site-level SharePoint change - not something the app package can do.
+Today, `UPL`/`UPLHC` map to the `CRS Upload` SharePoint permission level, and `APR`/`APRHC` map to
+`CRS Approve`. `CRS Upload` currently grants `Edit Items` (needed for the direct write this change
+removes) alongside what it still needs to keep (`Add Items`). `CRS Approve` keeps `Edit Items`
+**permanently** — it is not part of this cutover.
+
+**Once the tagging code and flow are built and proven, `Edit Items` is unticked from `CRS Upload`
+only** in Site Settings -> Permission Levels, on each site. This is a manual, site-level SharePoint
+change - not something the app package can do.
 
 **This step must be LAST, and only after everything else is deployed and confirmed working with
-the OLD permissions still in place.** If `Edit Items` is removed before the new code/flows are
-live, every upload and every approval on the site breaks immediately - the client-side write
-attempts still exist in the old code and will simply 403. The correct order is:
+the OLD permissions still in place.** If `Edit Items` is removed before the new code/flow is
+live, every upload on the site breaks immediately - the client-side write attempts still exist in
+the old code and will simply 403. The correct order is:
 
-1. Build and deploy the new `TagPayload`/`CRS Pending Decisions` schema and the two flows.
-2. Build and deploy the code changes (`Form.tsx`, `BulkUpload.tsx`, `ApprovalDocument.tsx`,
-   `BulkApprovePanel.tsx`) to write to the new lists instead of writing directly.
+1. Build and deploy the new `TagPayload` schema and `CRS — Apply pending tags`.
+2. Build and deploy the code changes (`Form.tsx`, `BulkUpload.tsx`) to write to `CRS Submissions`
+   instead of writing directly. `ApprovalDocument.tsx` and `BulkApprovePanel.tsx` are NOT touched -
+   they keep their original direct decision writes, since `CRS Approve` is not changing.
 3. Test end to end **with the old permission levels still in place** - the new mechanism works
    alongside the old rights at this point; nothing is broken by testing here, because the direct
-   write paths are already gone from the code, so the new proxy paths are what's actually being
+   tagging write path is already gone from the code, so the new proxy path is what's actually being
    exercised regardless of what rights the user still holds.
-4. Only once that's confirmed working: remove `Edit Items` from `CRS Upload` and `CRS Approve`, on
-   each site, as the final cutover.
+4. Only once that's confirmed working: remove `Edit Items` from `CRS Upload` on each site, as the
+   final cutover. `CRS Approve` is untouched at every step.
 
 **Migration for already-provisioned groups:** same as every other role change in this project -
 existing groups keep granting whatever the permission level currently allows until the level
@@ -314,37 +384,34 @@ change, so the usual "delete and recreate the group" migration pattern does not 
 
 ## HC parity
 
-Both flows are library-agnostic by construction (resolve by unique ID), so no separate HC clone is
-needed for either. The permission-level change applies identically - `CRS Upload`/`CRS Approve` are
-the same levels used across both the normal and HC pairs.
+The tagging flow is library-agnostic by construction (resolves by unique ID), so no separate HC
+clone is needed for it. The permission-level change applies identically to `CRS Upload`/`CRS
+UploadHC` mappings across both the normal and HC pairs.
 
 ## Bulk Upload
 
 `BulkUpload.tsx` is in scope (it's open to every uploader, not admin-only, per the 2026-08-22
 change) and gets the identical treatment on its tagging write. It has no approval step of its own
-(writes straight to the approved side), so only the tagging half applies to it, not the decision
-half.
+(writes straight to the approved side), so only the tagging half ever applied to it - unaffected by
+today's correction either way.
 
 ## Error handling
 
 - A failed tag write: `TagStatus = Failed`, reason preserved. Never silently dropped.
-- A failed decision write: `Status = Failed` on the decision row, reason preserved.
-- Neither flow can leave a document routed while still untagged - the self-approve sequencing rule
-  above is what prevents it, and it's the only path where that risk exists (an ordinary human
-  approval happens well after tagging has long since completed).
 - **Where does a `Failed` state actually surface to a person?** Not fully specified here - worth
   deciding at implementation time whether this needs a new UI affordance (an admin-visible list of
-  failed tags/decisions) or whether it's sufficient to be visible via the existing screens reading
-  these new fields. Flagging as an open question rather than guessing.
+  failed tags) or whether it's sufficient to be visible via the existing screens reading this new
+  field. Flagging as an open question rather than guessing.
 
 ## Testing
 
 - Normal upload -> confirm tags land within a poll cycle, `TagStatus = Tagged`.
-- HC upload -> same, confirm one flow (no HC clone) handles it correctly.
-- Ordinary approve/reject via the Preview page and via the bulk sidebar -> confirm status flips,
-  Auto-route still routes correctly, unchanged.
-- Self-approve -> confirm it doesn't fire until tagging is confirmed `Tagged`, confirm the whole
-  thing still completes with no user-visible extra step.
+- HC upload -> same, confirm the one flow (no HC clone) handles it correctly.
+- Ordinary approve/reject via the Preview page and via the bulk sidebar -> confirm nothing changed
+  from today's behaviour, since neither screen's decision write is touched by this change any more.
+- Self-approve -> confirm it stays disabled behind `SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION`
+  until Task 9 replaces the flag with a real poll-based gate; not otherwise affected by today's
+  correction.
 - A deliberately malformed tag payload -> confirm `TagStatus = Failed` with a real reason, not a
   swallowed error.
 - Replace a pending draft -> confirm the old file is recycled, the new content lands under the

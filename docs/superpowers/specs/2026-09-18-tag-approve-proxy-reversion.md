@@ -3,17 +3,27 @@
 **Date:** 2026-09-18
 **Companion to:** `2026-09-18-tag-approve-proxy-design.md`
 
+> ⚠⚠ **CORRECTED, SAME DAY — THIS DOC NOW COVERS PIC ONLY.** The design's Approver half (the
+> `ApprovalDocument.tsx`/`BulkApprovePanel.tsx` decision write, `CRS — Apply pending decisions`, and
+> removing `Edit Items` from `CRS Approve`) was withdrawn before it ever went live — see the design
+> doc's own correction box. There is nothing to revert on the Approver side because nothing was ever
+> cut over: `ApprovalDocument.tsx` has already been reverted to its original direct write,
+> `BulkApprovePanel.tsx` was never touched, `CRS — Apply pending decisions` was never built, and
+> `CRS Approve` never had `Edit Items` removed. Everything below that mentions "Approver" or the
+> decision-write flow describes the ORIGINAL, wider plan and no longer applies — follow it for the
+> PIC/tagging half only.
+
 Prepared alongside the forward design, at the client's request, in case the lag introduced by
-proxying tag/approve writes turns out to be unacceptable once it's live. This is **not** a plan to
+proxying the tagging write turns out to be unacceptable once it's live. This is **not** a plan to
 be executed now — it exists so a reversion can happen quickly and safely later, without having to
 reconstruct the reasoning under pressure.
 
 ## What "revert" means here
 
-Give PIC and Approver back their direct `Edit Items` right on the document libraries, and restore
-the client-side code that writes tags and approval decisions directly, instead of via
-`crs@sdguthrie.com`. This undoes the whole 2026-09-18 change; it does **not** touch the separate
-2026-09-17 deletion-by-proxy work, which stays as it is regardless.
+Give PIC back their direct `Edit Items` right on the document libraries, and restore the
+client-side code that writes tags directly, instead of via `crs@sdguthrie.com`. This undoes the
+PIC-side 2026-09-18 change; it does **not** touch the separate 2026-09-17 deletion-by-proxy work,
+which stays as it is regardless. It never had an Approver side to undo — see the correction above.
 
 ## Order matters — do these in sequence, not in parallel
 

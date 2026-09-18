@@ -4,6 +4,40 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
+> ## ⚠⚠ CORRECTION, 2026-09-18 (same day) — PHASE 4 AND HALF OF PHASE 6 ARE WITHDRAWN
+>
+> See `docs/superpowers/specs/2026-09-18-tag-approve-proxy-design.md`'s own correction box for the
+> full reasoning: `ApproveItems` has a hard SharePoint dependency on `EditListItems`, confirmed live
+> on this tenant's `CRS Approve` level, so removing `Edit Items` from `CRS Approve` is not possible
+> without also losing `ApproveItems` — and with it, the Draft Item Security exemption that gives
+> approvers unit-wide pending-file visibility. The client will not accept losing that visibility, so
+> `CRS Approve` keeps `Edit Items` permanently. Only `CRS Upload` (PIC) is being changed.
+>
+> **Withdrawn, do not execute:**
+> - **Task 7** (`ApprovalDocument.tsx` — write a decision row instead of MERGEing status directly).
+>   **Already built and already reverted** — the file is back to its original direct
+>   `ApprovedBy`-MERGE-then-`approve()` / raw MERGE sequence, confirmed clean against `git diff`.
+> - **Task 8** (`BulkApprovePanel.tsx` — the identical change). **Never started.** Leave it alone;
+>   it still does the original direct `OData__ModerationStatus` MERGE.
+> - **Task 11** (Build `CRS — Apply pending decisions`). Do not build this flow. Nothing will ever
+>   write a `Pending` row to `CRS Pending Decisions` for it to poll.
+> - **The `CRS Approve` half of Task 13** (the permission-level cutover). `CRS Approve` is not part
+>   of the cutover at all, at any step — only `CRS Upload`.
+>
+> **Still active, proceed as written:**
+> - **Tasks 1-6, 6b** (schema, the pure module, the SPFx layer, `Form.tsx`/`BulkUpload.tsx` tagging
+>   writes, the staging-replace fix) — all PIC-side, all unaffected by this correction.
+> - **Task 9** (self-approve sequencing) — a different problem (the async gap in PIC's own proxied
+>   tag write), not the Edit/Approve coupling this correction is about. Still needed.
+> - **Task 10** (Build `CRS — Apply pending tags`) — still needed, PIC-side only.
+> - **Task 12** (end-to-end verification) — still needed, scoped down to the tagging path only; drop
+>   any approve/reject-specific verification steps it lists.
+> - **The `CRS Upload` half of Task 13** — still the plan; `CRS Approve` is simply removed from it.
+>
+> `CRS Pending Decisions`'s schema (Tasks 2, 4) is already built and committed. Leave it in place,
+> unused — same "park rather than delete" habit the reversion doc already establishes for this
+> exact scenario.
+
 **Goal:** PIC and Approver lose direct Edit/Approve rights on the document libraries, so they can
 no longer rename or retag files through the native SharePoint library view. Tagging on upload and
 the approve/reject decision are instead written as records to two SharePoint lists PIC/Approver
