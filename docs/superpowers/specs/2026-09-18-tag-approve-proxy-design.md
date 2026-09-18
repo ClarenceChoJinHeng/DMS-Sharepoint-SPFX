@@ -29,6 +29,10 @@ shape, extended to the two writes that make up "tag a file" and "approve/reject 
   `BulkApprovePanel.tsx` (the command-bar sidebar), both normal and HC.
 - **Self-approve** (`autoApproveOwnUpload`) in `Form.tsx` — a Head of Unit's own upload can
   auto-approve today with no separate approver; that write also moves to proxy.
+- **PIC's staging-replace write** (`Form.tsx`'s "yes, replace it" consent on a name clash) — see
+  its own section below. Found during review, not in the original scope: it's a third Edit-shaped
+  write that the tagging/decision writes don't cover, and it would otherwise 403 the moment
+  `Edit Items` comes off `CRS Upload`.
 
 ## Non-goals
 
@@ -183,9 +187,24 @@ window is now measured in up to a minute rather than being instant.
 2. If the checks pass, the browser writes a row to `CRS Pending Decisions` instead of MERGEing
    `OData__ModerationStatus` directly.
 3. `CRS - Apply pending decisions` (new flow, polls ~1 minute) finds `Status = Pending` rows,
-   resolves the file, and performs the MERGE (`OData__ModerationStatus` + `ApprovedBy` or the
-   rejection comment, matching exactly what `ApprovalDocument.tsx`'s current `approve()`/`reject()`
-   calls send) as `crs@sdguthrie.com`.
+   resolves the file, and applies the decision **as two separate writes, not one MERGE** —
+   matching exactly what `ApprovalDocument.tsx`'s current `approve()`/`reject()` calls do today,
+   because SharePoint rejects a single MERGE that combines `OData__ModerationStatus` with any
+   other field (a real bug this project already paid for once, 1.0.348.0: that MERGE 500s on
+   every attempt, silently, because the write actually needed is illegal). For a **Reject**, this
+   is a non-issue — `OData__ModerationStatus` + `OData__ModerationComments` together in one MERGE
+   is fine, since both are moderation fields. For an **Approve**, it must be:
+   - First, a plain MERGE setting `ApprovedBy` (and `ApprovalComment` if there's a typed note) —
+     an ordinary field edit, no moderation status touched, so it doesn't hit the restriction.
+   - Then the moderation status flip — `File.approve()` (a dedicated method, not a field MERGE,
+     so it also doesn't hit the restriction) or the flow-equivalent MERGE of
+     `OData__ModerationStatus` alone. Any edit to a moderated item reverts its status to Pending
+     unless the *same* write re-asserts it, so this step must come after the `ApprovedBy` write,
+     never combined with it.
+
+   Getting this wrong doesn't error loudly — it 500s on the second call, or silently leaves the
+   item back at Pending after a "successful" first write, which is exactly how this bug went
+   unnoticed in `ApprovalDocument.tsx` for a while before it was caught, all as `crs@sdguthrie.com`.
 4. Auto-route reacts to the status change exactly as it does today - untouched.
 5. `Status = Applied` or `Failed` on the decision row.
 
@@ -210,6 +229,56 @@ and that failure is visible the same way any other `Failed` `CRS Submissions` ro
 **Net effect on timing:** self-approve takes roughly two poll cycles rather than one (tag flow,
 then decision flow) - call it up to two minutes rather than one, worst case. The user does nothing
 differently; they see "Pending" for a little longer before it settles to "Approved" on its own.
+
+### Replacing a pending draft (`Form.tsx`'s "yes, replace it" consent)
+
+Found during review of this design, not in the original brief. `Form.tsx` has one write this
+document's original scope missed entirely: the 2026-08-28 "replace a pending draft" feature. On a
+name clash, if the uploader consents, the browser calls `Files/Add(overwrite=true)` directly
+against the *existing* item — including, deliberately, a colleague's draft the uploader can't
+even see (Draft Item Security hides it from them; the overwrite call doesn't need to read it
+first). This is a real content write, separate from the `validateUpdateListItem` tagging call,
+and SharePoint requires `EditListItems` — not just `AddListItems` — to overwrite an *existing*
+item's content this way. Uploading a brand-new file only needs Add; replacing one is, under the
+hood, an edit of that list item. So this call 403s the moment `Edit Items` comes off `CRS Upload`,
+with nothing else in this design covering it.
+
+**It needs no new mechanism.** The 2026-09-17 proxy-deletion work already exists precisely to
+recycle a file by `ItemUniqueId` as `crs@sdguthrie.com`, with no regard for who authored it or who
+requested it — which is exactly the shape this needs, since "replace" today is already a
+unilateral, no-approval action taken by whoever clicked Yes, whether or not the file is theirs.
+Re-express the replace as: delete the clashing draft via the existing proxy path, then let the
+browser perform an ordinary, Add-only upload of the new content under the same name once the old
+item is gone.
+
+1. On consent, the browser writes a self-approved deletion request — same shape as
+   `MySubmissions.tsx`'s `writeApprovedDeletionRequest`, `Status` pre-set to `Approved`, targeting
+   the clashing draft's `ItemUniqueId` — no new list, no new flow. The already-built
+   `CRS - Execute approved deletion` picks it up and recycles the file as `crs@sdguthrie.com`,
+   exactly as it does for every other proxied deletion.
+2. The browser polls (same short-interval pattern as self-approve's `TagStatus` poll above) until
+   the old item stops resolving — `GetFileById(guid'<oldId>')` starts 404ing — confirming the
+   recycle has actually happened.
+3. Only then does the browser call the ordinary `Files/Add` — **no `overwrite` flag, because
+   there is nothing left to overwrite** — uploading the new content under the same name. This is
+   an ordinary new-file upload, needing `AddListItems` only, unaffected by removing `Edit Items`.
+4. Tagging then proceeds exactly as every other upload's tagging does (`TagPayload` row, applied
+   by `CRS - Apply pending tags`).
+
+**On recoverability, since this changes *how* it's achieved, not whether it exists:** the current
+code comment ties this feature's safety to version history being a "hard prerequisite" for
+recovering an overwritten draft. Routing it through the deletion-by-proxy path instead means
+recovery is via the **recycle bin** (93 days, same guarantee the deletion feature already relies
+on) rather than version history — a different mechanism, not a weaker one; nothing about
+recoverability actually regresses.
+
+**On timing:** this adds a full poll cycle to what is today an instant overwrite — worse than the
+"up to a minute" already accepted for tagging/decisions, since it's poll-then-Files/Add rather
+than fire-and-forget, and it happens synchronously inside the upload button's click handler. The
+UI needs some kind of "still working" state while this plays out (a spinner/disabled state on the
+consent dialog's own button, most likely — not a new page-level affordance), which isn't detailed
+further here; worth deciding at implementation time, same as the general "where does Failed
+surface" open question below.
 
 ## Permission-level changes - the highest-risk step in this whole rollout
 
@@ -278,6 +347,14 @@ half.
   thing still completes with no user-visible extra step.
 - A deliberately malformed tag payload -> confirm `TagStatus = Failed` with a real reason, not a
   swallowed error.
+- Replace a pending draft -> confirm the old file is recycled, the new content lands under the
+  same name, tags are applied, and the whole sequence completes with no extra click. Do this once
+  for the uploader's own draft and once for a `hidden` clash (a colleague's draft they can't see)
+  - the two go through the same proxy delete either way, but the second is the one most likely to
+  reveal a mistaken assumption about needing to read the target item first.
+- Confirm a PIC still sees only their own pending file in staging after the cutover (Draft Item
+  Security's author exemption is unrelated to `Edit Items`, so this should be unaffected - but
+  it's cheap to verify given how much rides on it).
 - **The permission-level cutover itself** - the step most likely to go wrong. Test on a throwaway
   site or a quiet window, not live, and confirm every existing screen still works for a PIC/approver
   test account immediately after `Edit Items` is removed.

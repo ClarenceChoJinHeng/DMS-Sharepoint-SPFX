@@ -2901,18 +2901,94 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       }
     };
 
+    /**
+     * Recycle the clashing draft via the 2026-09-17 proxy-deletion mechanism, then wait until it
+     * is actually gone before returning — `Files/Add` with no `overwrite` flag needs the name to
+     * be genuinely free, not merely requested-to-become-free.
+     *
+     * ⚠ WRITES A SELF-APPROVED `CRS Requests` ROW, THE SAME SHAPE `MySubmissions.tsx`'s
+     * `writeApprovedDeletionRequest` ALREADY WRITES — `RequestType: "Deletion"`, `Status:
+     * "Approved"` from the moment it's written, no human decision step, because that is already
+     * the existing behaviour of "yes, replace it" today: nobody approves this, whoever clicked
+     * Yes made the call unilaterally. `CRS — Execute approved deletion` picks up any row matching
+     * `RequestType eq 'Deletion' and Status eq 'Approved'` regardless of who wrote it.
+     *
+     * Returns `true` once `GetFileById` on the old id starts 404ing (confirmed gone), `false` if
+     * the deletion request itself could not be written, or if it never resolves within the poll
+     * budget (most likely because `CRS — Execute approved deletion` is not yet built/running — a
+     * dependency this proxy path shares with every other consumer of that same flow).
+     */
+    const deleteClashingDraftByProxy = async (
+      clashingUniqueId: string,
+      clashingName: string,
+    ): Promise<boolean> => {
+      const me = (context.pageContext.user.email ?? "").toLowerCase();
+      const now = new Date().toISOString();
+      try {
+        const listTitle = await listName(LIST_SUFFIX.requests);
+        const res = await context.spHttpClient.post(
+          `${siteUrl}/_api/web/lists/getbytitle('${listTitle}')/items`,
+          SPHttpClient.configurations.v1,
+          {
+            headers: {
+              Accept: "application/json;odata=nometadata",
+              "Content-Type": "application/json;odata=nometadata",
+              "odata-version": "",
+            },
+            body: JSON.stringify({
+              Title: `Replace on upload — ${clashingName}`.slice(0, 255),
+              RequestType: "Deletion",
+              Status: "Approved",
+              ItemUniqueId: clashingUniqueId,
+              ItemName: clashingName,
+              RequestedBy: me,
+              RequestedAt: now,
+              Reason: "",
+              DecidedBy: me,
+              DecidedAt: now,
+              DecisionNote:
+                "No approval needed — the uploader replaced this draft directly.",
+            }),
+          },
+        );
+        if (!res.ok) return false;
+      } catch {
+        return false;
+      }
+      // Poll budget: ~10 attempts, 3s apart — about 30s. Bounded and short because it blocks the
+      // upload button, unlike the tag/decision flows' own background ~1-minute poll.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+        try {
+          const check = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/GetFileById(guid'${clashingUniqueId}')?$select=Exists`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (check.status === 404) return true;
+        } catch {
+          // Transient — keep polling within the budget rather than giving up on one failed check.
+        }
+      }
+      return false;
+    };
+
     const replaceStaging = replaceStagingIds.has(sf.id);
     const replaceApproved = replaceApprovedIds.has(sf.id);
     /* Read by the `Files/Add` call in the NEXT try block, which is why it is declared out here.
-       TRUE only on a path the uploader has explicitly consented to in the dialog. */
+       TRUE only on a path the uploader has explicitly consented to in the dialog. It no longer
+       feeds `Files/Add`'s own `overwrite` argument (that call always passes `false` now, since
+       `deleteClashingDraftByProxy` above recycles the clashing item first — overwriting an
+       EXISTING item via `Files/Add(overwrite=true)` needs `EditListItems`, which PIC is losing
+       the same as `CRS Upload`'s `Edit Items` for tagging). It still gates whether that recycle
+       runs at all. */
     let overwritePending = false;
     /**
      * The `SubmissionFileId` of the document this upload is about to overwrite.
      *
-     * ⚠ IT MUST BE READ BEFORE THE WRITE, AND THERE IS NO SECOND CHANCE. `Files/Add(overwrite=true)`
-     * replaces the file and this upload then stamps its OWN id over the columns, so the displaced
-     * value ceases to exist the moment the Add succeeds. Read it afterwards and there is nothing
-     * left to read.
+     * ⚠ IT MUST BE READ BEFORE THE WRITE, AND THERE IS NO SECOND CHANCE. Once the clashing item is
+     * recycled by `deleteClashingDraftByProxy`, its own columns — including this one — are gone
+     * along with it. Read it beforehand, or there is nothing left to read.
      *
      * Without it the displaced record stops resolving and My Submissions calls it **deleted** —
      * telling the original uploader their document was destroyed, when somebody in fact filed a
@@ -2920,6 +2996,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      * change to Cancelled status if replaced."*
      */
     let displacedFileId: string | undefined;
+    /**
+     * The clashing item's own SharePoint `UniqueId` — needed to target the proxy-deletion flow
+     * (`GetFileById(guid'...')` is how it, and every other consumer of that flow, identifies a
+     * file). Read alongside `displacedFileId` above; same "before the write, no second chance"
+     * constraint applies.
+     */
+    let displacedItemUniqueId: string | undefined;
 
     try {
       /* ⚠ THIS PROBE CANNOT SEE A COLLEAGUE'S PENDING FILE. Draft Item Security on both approval
@@ -2978,7 +3061,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         try {
           const priorRes: SPHttpClientResponse = await context.spHttpClient.get(
             `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')` +
-              `/ListItemAllFields?$select=SubmissionFileId`,
+              `/ListItemAllFields?$select=SubmissionFileId,UniqueId`,
             SPHttpClient.configurations.v1,
             { headers: { Accept: "application/json;odata=nometadata" } },
           );
@@ -2989,6 +3072,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 ? prior.SubmissionFileId.trim()
                 : "";
             if (raw.length > 0) displacedFileId = raw;
+            const rawUniqueId =
+              typeof prior?.UniqueId === "string" ? prior.UniqueId.trim() : "";
+            if (rawUniqueId.length > 0) displacedItemUniqueId = rawUniqueId;
           }
         } catch {
           /* see above — the upload is not the place to report a bookkeeping read */
@@ -3044,9 +3130,34 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // Network error on the existence check — proceed; the upload will surface the real error.
     }
 
+    /* ⚠ THE RECYCLE HAPPENS HERE, BEFORE THE PHYSICAL UPLOAD — the name must be genuinely free
+       before `Files/Add` is asked to create something there, since that call no longer carries an
+       `overwrite` flag of its own (see `overwritePending`'s own comment above). */
+    if (overwritePending) {
+      if (!displacedItemUniqueId) {
+        return {
+          fileId: sf.id,
+          ok: false,
+          error:
+            "Could not confirm which existing document to replace, so nothing was uploaded. Try again in a moment.",
+        };
+      }
+      const cleared = await deleteClashingDraftByProxy(
+        displacedItemUniqueId,
+        finalName,
+      );
+      if (!cleared) {
+        return {
+          fileId: sf.id,
+          ok: false,
+          error: `"${finalName}" could not be cleared for replacement in time. Nothing was uploaded — try again in a moment, or contact an administrator if this keeps happening.`,
+        };
+      }
+    }
+
     try {
       const uploadRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=${overwritePending})?$select=ServerRelativeUrl`,
+        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
         SPHttpClient.configurations.v1,
         { body: sf.file },
       );

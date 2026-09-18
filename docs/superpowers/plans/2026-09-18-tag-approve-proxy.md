@@ -929,6 +929,230 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
+### Task 6b: `Form.tsx` — proxy the staging-replace overwrite too
+
+**Not in the original plan.** Found during design review (see
+`2026-09-18-tag-approve-proxy-design.md`'s "Replacing a pending draft" section, added the same
+day): `Form.tsx` has a THIRD Edit-shaped write the tagging/decision proxying doesn't cover — the
+2026-08-28 "yes, replace it" consent on a name clash, which calls `Files/Add(overwrite=true)`
+directly against an *existing* item. Overwriting an existing item's content needs `EditListItems`,
+not just `AddListItems` — uploading a brand-new file only needs Add. This 403s the moment
+`Edit Items` comes off `CRS Upload`, and nothing else in this plan proxies it. `BulkUpload.tsx`
+never overwrites (`overwrite` is hardcoded `false` there), so this is `Form.tsx`-only.
+
+**The fix needs no new list or flow.** The 2026-09-17 proxy-deletion work
+(`2026-09-17-proxy-deletion-via-power-automate-design.md`) already recycles a file by
+`ItemUniqueId` as `crs@sdguthrie.com`, with no regard for authorship — exactly the shape this
+needs, since "replace" today is already a unilateral, no-approval action taken by whoever clicked
+Yes, whether or not the file is theirs. Re-express the replace as: delete the clashing draft via
+that existing proxy path, then let the browser perform an ordinary, Add-only upload of the new
+content under the same name once the old item is confirmed gone.
+
+**⚠ THIS DEPENDS ON `CRS — Execute approved deletion` (the Power Automate flow, Task 13 of the
+2026-09-17 plan) ACTUALLY EXISTING AND RUNNING.** As of this task, that flow is still not built —
+same as every other place in this codebase that already depends on it (`Requests.tsx`,
+`MySubmissions.tsx`). Until it exists, pressing "yes, replace it" will write the deletion request
+correctly, then time out waiting for a recycle that never happens (see Step 4's timeout handling
+below) — this is the same, already-accepted interim state the 2026-09-17 work shipped in, not a
+new gap this task introduces.
+
+**Files:**
+- Modify: `src/webparts/form/components/Form.tsx`
+
+- [ ] **Step 1: Read the current clash-consent-through-upload sequence in full**
+
+Read from where `replaceStaging`/`overwritePending` are computed (search for
+`const replaceStaging = replaceStagingIds.has(sf.id);`) through the `Files/Add` POST that reads
+`overwrite=${overwritePending}`. Confirm the exact current shape: `overwritePending` is set true
+only on a path the uploader has explicitly consented to (`decision.overwrite` from
+`decideClash`), and immediately after it's set, an existing block already reads the clashing
+item's `SubmissionFileId` into `displacedFileId` (used later, unrelated to this task, to mark the
+OLD submission record "Cancelled" once the new upload completes — do not touch that mechanism).
+
+- [ ] **Step 2: Also capture the clashing item's own `UniqueId`, alongside `SubmissionFileId`**
+
+The existing read (search for `/ListItemAllFields?$select=SubmissionFileId`) only selects
+`SubmissionFileId`. You need the item's SharePoint `UniqueId` too, to target the deletion-by-proxy
+flow (`GetFileById(guid'<uniqueId>')/recycle()` is how it identifies a file — the same call
+`Requests.tsx`'s `performDeletion`/`resolveDeletionTarget` already use). Extend the `$select` to
+`SubmissionFileId,UniqueId` and capture both:
+
+```typescript
+          const priorRes: SPHttpClientResponse = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')` +
+              `/ListItemAllFields?$select=SubmissionFileId,UniqueId`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (priorRes.ok) {
+            const prior = await priorRes.json();
+            const raw =
+              typeof prior?.SubmissionFileId === "string"
+                ? prior.SubmissionFileId.trim()
+                : "";
+            if (raw.length > 0) displacedFileId = raw;
+            const rawUniqueId =
+              typeof prior?.UniqueId === "string" ? prior.UniqueId.trim() : "";
+            if (rawUniqueId.length > 0) displacedItemUniqueId = rawUniqueId;
+          }
+```
+
+Declare `displacedItemUniqueId` alongside the existing `displacedFileId` declaration (same scope,
+same `let ... : string | undefined`).
+
+- [ ] **Step 3: Write a proxy-delete-and-wait helper**
+
+Add a new function in `Form.tsx`, near the other upload-time helpers in this same function scope
+(it needs `context`, `siteUrl`, `listName` from the enclosing closure, same as the other helpers
+here):
+
+```typescript
+    /**
+     * Recycle the clashing draft via the 2026-09-17 proxy-deletion mechanism, then wait until it
+     * is actually gone before returning — `Files/Add` with no `overwrite` flag needs the name to
+     * be genuinely free, not merely requested-to-become-free.
+     *
+     * ⚠ WRITES A SELF-APPROVED `CRS Requests` ROW, THE SAME SHAPE `MySubmissions.tsx`'s
+     * `writeApprovedDeletionRequest` ALREADY WRITES — `RequestType: "Deletion"`, `Status:
+     * "Approved"` from the moment it's written, no human decision step, because that is already
+     * the existing behaviour of "yes, replace it" today: nobody approves this, whoever clicked
+     * Yes made the call unilaterally. `CRS — Execute approved deletion` picks up any row matching
+     * `RequestType eq 'Deletion' and Status eq 'Approved'` regardless of who wrote it.
+     *
+     * Returns `true` once `GetFileById` on the old id starts 404ing (confirmed gone), `false` if
+     * the deletion request itself could not be written, or if it never resolves within the poll
+     * budget (most likely because `CRS — Execute approved deletion` is not yet built/running —
+     * see this task's own note on that dependency).
+     */
+    const deleteClashingDraftByProxy = async (
+      clashingUniqueId: string,
+    ): Promise<boolean> => {
+      const me = (context.pageContext.user.email ?? "").toLowerCase();
+      const now = new Date().toISOString();
+      try {
+        const listTitle = await listName(LIST_SUFFIX.requests);
+        const res = await context.spHttpClient.post(
+          `${siteUrl}/_api/web/lists/getbytitle('${listTitle}')/items`,
+          SPHttpClient.configurations.v1,
+          {
+            headers: {
+              Accept: "application/json;odata=nometadata",
+              "Content-Type": "application/json;odata=nometadata",
+              "odata-version": "",
+            },
+            body: JSON.stringify({
+              Title: `Replace on upload — ${finalName}`.slice(0, 255),
+              RequestType: "Deletion",
+              Status: "Approved",
+              ItemUniqueId: clashingUniqueId,
+              ItemName: finalName,
+              RequestedBy: me,
+              RequestedAt: now,
+              Reason: "",
+              DecidedBy: me,
+              DecidedAt: now,
+              DecisionNote:
+                "No approval needed — the uploader replaced this draft directly.",
+            }),
+          },
+        );
+        if (!res.ok) return false;
+      } catch {
+        return false;
+      }
+      // Poll budget: ~10 attempts, 3s apart — about 30s. Matches the "roughly a poll cycle"
+      // framing already accepted elsewhere in this feature; this one is bounded and short because
+      // it blocks the upload button, unlike the tag/decision flows' background ~1-minute poll.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 3000));
+        try {
+          const check = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/GetFileById(guid'${clashingUniqueId}')?$select=Exists`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (check.status === 404) return true;
+        } catch {
+          // Transient — keep polling within the budget rather than giving up on one failed check.
+        }
+      }
+      return false;
+    };
+```
+
+- [ ] **Step 4: Wire it in before the upload, and stop passing `overwrite=true` to `Files/Add`**
+
+Where `overwritePending` currently feeds `Files/Add(...,overwrite=${overwritePending})`, insert the
+proxy-delete-and-wait call BEFORE that POST, gated on `overwritePending` being true and
+`displacedItemUniqueId` being available:
+
+```typescript
+    if (overwritePending) {
+      if (!displacedItemUniqueId) {
+        return {
+          fileId: sf.id,
+          ok: false,
+          error:
+            `Could not confirm which existing document to replace, so nothing was uploaded. ` +
+            `Try again in a moment.`,
+        };
+      }
+      const cleared = await deleteClashingDraftByProxy(displacedItemUniqueId);
+      if (!cleared) {
+        return {
+          fileId: sf.id,
+          ok: false,
+          error:
+            `"${finalName}" could not be cleared for replacement in time. Nothing was uploaded — ` +
+            `try again in a moment, or contact an administrator if this keeps happening.`,
+        };
+      }
+    }
+```
+
+Then change the `Files/Add` call itself to always pass `overwrite=false` (there is nothing left to
+overwrite by the time this runs — the old item is confirmed gone, or this code path already
+returned above):
+
+```typescript
+        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
+```
+
+`overwritePending` keeps its existing name and keeps gating the new block above — it no longer
+feeds the `Files/Add` call's `overwrite` argument, which is now always `false`. Do not rename the
+variable; its meaning ("the uploader consented to replace") is still accurate, only what it now
+triggers has changed.
+
+- [ ] **Step 5: Run the full test suite and type-check**
+
+Run: `npx heft test --clean 2>&1 | tail -40` — expect PASS, no dedicated new tests (component
+change, no unit tests for React components in this project, same as Tasks 5/6).
+Run: `npx tsc --noEmit 2>&1 | tail -40` — expect no new errors.
+
+- [ ] **Step 6: eslint**
+
+Run: `npx eslint src/webparts/form/components/Form.tsx 2>&1 | tail -60` — confirm no NEW warnings
+beyond this file's already-documented pre-existing three (unused `file` var, `max-lines`, missing
+return type).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/webparts/form/components/Form.tsx
+git commit -m "feat: proxy the staging-replace overwrite through deletion-by-proxy
+
+Files/Add(overwrite=true) needed EditListItems, which PIC is also
+losing. Re-expressed as: recycle the clashing draft via the existing
+2026-09-17 proxy-deletion flow, wait for it to actually be gone, then
+an ordinary Add-only upload under the same name. Depends on CRS --
+Execute approved deletion actually running, same as every other
+consumer of that flow.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+```
+
+---
+
 ## Phase 4 — Wire the approve/reject write path
 
 ### Task 7: `ApprovalDocument.tsx` — write a decision row instead of MERGEing status directly

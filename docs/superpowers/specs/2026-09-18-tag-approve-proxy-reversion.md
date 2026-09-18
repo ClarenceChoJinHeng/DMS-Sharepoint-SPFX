@@ -27,6 +27,11 @@ made after direct writes resumed. Follow this order:
 rows. Nothing breaks by doing this alone — uploads/approvals made via the (still-current) proxy
 code will simply sit `Pending` and not get applied, same as if SharePoint were down for a moment.
 
+Leave `CRS — Execute approved deletion` running. It's the 2026-09-17 proxy-deletion flow, not
+introduced by this feature, and the staging-replace-draft path added here reuses it rather than
+adding a third flow — turning it off would also stop ordinary deletion requests working, which is
+outside the scope of this reversion.
+
 ### 2. Drain what's already in flight
 
 Before reverting the code, check both lists for rows still `Pending`:
@@ -37,6 +42,13 @@ These represent uploads/approvals that happened in the last cycle before the flo
 off. Turn the flows back **on** briefly, let them clear the backlog, confirm both lists show no
 `Pending` rows, then turn them off again. Skipping this step means whichever files are mid-flight
 at the moment of reversion never get tagged or approved at all — they'd need to be fixed by hand.
+
+Also check `CRS Requests` for a self-approved deletion row still `Approved` but not yet actually
+recycled — the staging-replace-draft path writes one of these and then polls for the recycle to
+land before doing the follow-up upload. If the code is reverted mid-poll, that in-flight replace
+never completes its second half (the fresh `Files/Add`); let `CRS — Execute approved deletion`
+finish recycling first (it's staying on regardless, per the note above), then confirm nobody is
+sitting on a stuck "replacing…" state in the browser before reverting.
 
 ### 3. Revert the code
 
