@@ -2711,75 +2711,65 @@ export default function BulkUpload({
               ])
             : formValues;
 
-        const metaRes: SPHttpClientResponse = await context.spHttpClient.post(
-          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(targetListTitle())}')/items(${item.Id})/validateUpdateListItem`,
-          SPHttpClient.configurations.v1,
-          {
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ formValues: fileValues }),
-          },
-        );
-        if (!metaRes.ok) {
-          /* ⚠ THE BODY IS WHERE SHAREPOINT NAMES THE CAUSE, and dropping it cost an hour on
-             2026-08-22: a 400 here said only "tagging failed", and the real fault was that the file
-             had been written to one library while this call addressed another. The three causes need
-             opposite fixes — 404 is the wrong title, 403 is permissions on that list, 400 is a
-             malformed payload or an unknown field name — so the status, the LIBRARY and the body all
-             have to survive to the screen. Same lesson as gotcha #9, learned here for the third time. */
-          const why = await metaRes.text().catch(() => "");
-          out.push({
-            name: finalName,
-            outcome: "tagFailed",
-            detail: `Uploaded, but tagging failed (HTTP ${metaRes.status}) against "${targetListTitle()}". ${why.slice(0, 200)}`,
-          });
-          onState(i, "tagFailed", uploadedSru);
-          continue;
-        }
-        // validateUpdateListItem returns HTTP 200 even on field errors —
-        // HasException on each result is the real check.
-        const metaJson = await metaRes.json();
-        const fieldError = (metaJson.value ?? []).find(
-          (v: { HasException?: boolean }) => v.HasException,
-        );
-        if (fieldError) {
-          console.error("Field update error:", finalName, fieldError);
-          out.push({
-            name: finalName,
-            outcome: "tagFailed",
-            detail: `Uploaded, but a field failed: ${fieldError.FieldName} — ${fieldError.ErrorMessage}`,
-          });
-          onState(i, "tagFailed", uploadedSru);
-          continue;
-        }
+        /* TAGGING NO LONGER WRITES DIRECTLY (client: PIC/Approver lose `Edit Items` on the document
+           libraries, to stop hand-editing tags/renaming files outside the app — same change as
+           `Form.tsx`, 8df5f33/880ff9f). The old `validateUpdateListItem` POST is GONE — `fileValues`
+           above is built exactly as it always was (the shared metadata plus this file's own
+           `SubmissionFileId` stamp) but is now JSON-encoded and carried as `tagPayload` on the ONE
+           write this makes for tagging: the `CRS Submissions` record itself. `CRS — Apply pending
+           tags` (Power Automate, not yet built) reads that payload and applies it as
+           `crs@sdguthrie.com`.
 
-        /* RECORD THE UPLOAD (2026-08-27). Only when the stamp went on: a row that cannot be joined
-           back to its document would show on My Submissions as a permanent false "Deleted". Never
-           fails the upload — the file is filed and tagged by this point, and `writeSubmissionRecord`
-           cannot throw. Its result is ignored deliberately; it logs its own failure.
+           ⚠ THIS CHANGES THE FAILURE SEMANTICS. Before, a failed `validateUpdateListItem` call meant
+           "uploaded, untagged, right now" — visible immediately in this run's results. Now, a failed
+           `writeSubmissionRecord` call means "will NEVER be tagged" — no row, no flow trigger, no
+           automatic retry. The message below says so, rather than reusing the old "tagging failed"
+           wording, which would understate it.
+
+           ⚠ CALLED UNCONDITIONALLY NOW — the `if (fileStamp.length > 0)` gate that used to sit around
+           this call is gone. `writeSubmissionRecord` already refuses (returning `false`, with no HTTP
+           call at all) when `fileId` is empty, so that outer gate was a second copy of a guard the
+           function already enforces internally — and it made the failure INVISIBLE: an empty
+           `fileStamp` (this library has never been reconciled since `SubmissionFileId` shipped) used
+           to skip the call entirely and fall straight through to `outcome: "uploaded"`, so a file
+           could land permanently untagged with nothing on screen ever saying so. Calling it
+           unconditionally lets that same internal refusal surface as a real, visible `tagFailed`
+           outcome instead of a silent gap.
 
            The snapshot is the run's shared metadata, so a deleted row still shows what was imported.
            `Source` is `BulkUpload`, which is how a historical import is told apart from an uploader's
            own submission when somebody reads this list years from now. */
-        if (fileStamp.length > 0) {
-          const snapshot: Record<string, string> = {};
-          for (const l of allSelections ?? []) snapshot[l.column] = l.label;
-          // The LABEL, not the term id — the record is read by a person, and a bare GUID says nothing.
-          snapshot.Confidentiality = labels.confLabel;
-          snapshot["Bulk import"] = "Yes";
-          await writeSubmissionRecord(context.spHttpClient, siteUrl, {
-            submissionRef: canRef ? submissionRef : "",
-            batchRef: canRef ? batchRef : "",
-            fileId: fileStamp,
-            uniqueId:
-              typeof item.UniqueId === "string" ? item.UniqueId : undefined,
-            fileName: finalName,
-            itemPath: uploadedSru,
-            libraryTitle: targetListTitle(),
-            uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
-            uploadedAt: new Date(),
-            metadata: snapshot,
-            source: "BulkUpload",
+        const snapshot: Record<string, string> = {};
+        for (const l of allSelections ?? []) snapshot[l.column] = l.label;
+        // The LABEL, not the term id — the record is read by a person, and a bare GUID says nothing.
+        snapshot.Confidentiality = labels.confLabel;
+        snapshot["Bulk import"] = "Yes";
+        const recorded = await writeSubmissionRecord(context.spHttpClient, siteUrl, {
+          submissionRef: canRef ? submissionRef : "",
+          batchRef: canRef ? batchRef : "",
+          fileId: fileStamp,
+          uniqueId:
+            typeof item.UniqueId === "string" ? item.UniqueId : undefined,
+          fileName: finalName,
+          itemPath: uploadedSru,
+          libraryTitle: targetListTitle(),
+          uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
+          uploadedAt: new Date(),
+          metadata: snapshot,
+          source: "BulkUpload",
+          tagPayload: JSON.stringify(fileValues),
+        });
+        if (!recorded) {
+          out.push({
+            name: finalName,
+            outcome: "tagFailed",
+            detail:
+              fileStamp.length === 0
+                ? "Uploaded, but this library has not been set up to record files for tagging. An administrator needs to run Folder Reconciliation, then tag this file by hand."
+                : "Uploaded, but could not record it for tagging. An administrator will need to tag this file by hand.",
           });
+          onState(i, "tagFailed", uploadedSru);
+          continue;
         }
 
         out.push({ name: finalName, outcome: "uploaded" });
@@ -3038,10 +3028,27 @@ export default function BulkUpload({
          with the array actually SENT, which on a retry is just the clashing files — so an index into
          it means nothing to `picked`. Identity is right for both cases and removes the fragility the
          old comment above was defending against. A file with no result counts as NOT uploaded and
-         stays, exactly as before. */
+         stays, exactly as before.
+
+         ⚠ `tagFailed` ALSO LEAVES, and this is new since tagging moved behind the proxy (see the
+         `writeSubmissionRecord` block in `runUpload`). The physical `Files/Add` for a `tagFailed`
+         file has ALREADY SUCCEEDED — only the `CRS Submissions` record write failed — so it is not
+         retry-eligible in the sense this set exists to express: pressing Upload again would attempt
+         a fresh `Files/Add` for a file already sitting in the destination library, which then trips
+         the name-clash logic against itself. Before this, `tagFailed` meant a `validateUpdateListItem`
+         failure with other, rarer causes; now it is reached ONLY via a failed record write, which is
+         the GUARANTEED, routine outcome on any library that has not yet been reconciled to carry
+         `SubmissionFileId` — so leaving it out of this set would make retrying that routine case the
+         default experience, not a rare one. The file still needs a human to tag it (see `problemRows`,
+         unaffected by this — it reads `results` state, never `picked`), it just does not belong in the
+         re-upload queue any more. */
       const uploadedFiles = new Set<File>();
       outcome.results.forEach((r, i) => {
-        if (r.outcome === "uploaded" && files[i]) uploadedFiles.add(files[i]);
+        if (
+          (r.outcome === "uploaded" || r.outcome === "tagFailed") &&
+          files[i]
+        )
+          uploadedFiles.add(files[i]);
       });
       setPicked((prev) => prev.filter((p) => !uploadedFiles.has(p.file)));
 
@@ -3485,7 +3492,7 @@ export default function BulkUpload({
           statement of them is gone, so an uploader now meets the cap at the moment they exceed it
           rather than before they start. */}
           <p className="dms-subtitle">
-            All fields marked <strong>*</strong> are required.
+            All fields marked <strong>*</strong> are mandatory.
           </p>
 
           {/* ── Documents Folder Information ─────────────────────────────────── */}
@@ -4087,9 +4094,17 @@ export default function BulkUpload({
                         a server-side delete must not come back here.
 
                         Offered ONLY on a row that was NOT uploaded. `done` is excluded because the row
-                        is the only record that the file went, and `tagFailed` IS offered because that
-                        file stays in the selection and would otherwise be re-sent on the next press.
-                        Held entirely while a run is in flight. */}
+                        is the only record that the file went. `skipped`/`failed` files also stay in
+                        `picked` and would be re-sent on the next press, so this is their only way off
+                        this screen short of reloading it.
+
+                        ⚠ `tagFailed` IS STILL OFFERED, but its rationale changed once tagging moved
+                        behind the proxy (see the `writeSubmissionRecord` block in `runUpload`): the
+                        physical upload for such a file already succeeded, and the automatic
+                        `uploadedFiles` filtering after a run already removes it from `picked` — so
+                        pressing ✕ here is no longer preventing a re-send, only dismissing the row from
+                        this list once its metadata has been dealt with by hand. Held entirely while a
+                        run is in flight. */}
                         {!busy &&
                         (f.state === "skipped" ||
                           f.state === "failed" ||

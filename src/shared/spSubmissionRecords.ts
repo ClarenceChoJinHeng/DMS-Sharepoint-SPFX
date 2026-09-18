@@ -59,30 +59,33 @@ const listBase = (siteUrl: string): string =>
 /**
  * Record one uploaded file. **Never throws.**
  *
- * ⚠ WHETHER A `false` RETURN MAY BE IGNORED IS A PER-CALLER CONTRACT, NOT A UNIVERSAL GUARANTEE —
- * and the two current callers disagree on purpose:
+ * ⚠ BOTH CURRENT CALLERS TREAT A `false` RETURN THE SAME WAY NOW, and that is new. Until the
+ * 2026-09-18 tag/approve-by-proxy change reached `BulkUpload.tsx` too, this row was a courtesy
+ * record there — its own `validateUpdateListItem` call did the real tagging, so a failed write
+ * here cost only the `CRS Submissions` row. Both `Form.tsx` (`8df5f33`) and `BulkUpload.tsx` (this
+ * same change, extended to this screen) have since had their `validateUpdateListItem` call
+ * removed entirely, so this write is now the ONLY tagging mechanism either has: it carries the
+ * `tagPayload` a not-yet-built Power Automate flow reads to apply the document's actual metadata.
+ * A `false` return from either caller now means the document will NEVER be tagged, not merely that
+ * a record is missing.
  *
- *   - `BulkUpload.tsx` still treats this as fire-and-forget. Its own tagging write
- *     (`validateUpdateListItem`) is separate and unaffected by this call, so a failed record here
- *     costs only the `CRS Submissions` row — the document is already uploaded and tagged either way.
- *   - `Form.tsx`, as of `8df5f33` (2026-09-18), treats a `false` return as FATAL to the whole upload
- *     result. For that caller this row is no longer a courtesy record — it carries the `tagPayload`
- *     a not-yet-built Power Automate flow reads to apply the document's actual metadata. A failed
- *     write there means the document will NEVER be tagged, not merely that a record is missing.
- *
- * ⚠ THE UPLOAD ITSELF HAS ALREADY SUCCEEDED BY THE TIME THIS RUNS, for both callers — that part is
- * still unconditionally true. A failure here never means the physical `Files/Add` call failed; it
- * means only that this specific write did not land, with the consequence above depending on caller.
+ * ⚠ NEITHER CALLER ABORTS THE WHOLE RUN OVER ONE FAILED WRITE, though. `Form.tsx` reports this one
+ * file's result as a failure and moves on; `BulkUpload.tsx` marks this one file `tagFailed` and
+ * continues the loop over the rest of the selection. Same underlying fact for both: the physical
+ * upload for THIS file has already succeeded by the time this runs, so a `false` here is never "the
+ * upload failed" — only "this file will never be tagged."
  *
  * ⚠ AND IT IS NEVER SILENT. It returns false and logs the status and the body. A record gap somebody
  * knows about is worth far more than one nobody does — and on this list the only symptom of a missing
- * row is a file that will one day disappear from its own submission (or, for `Form.tsx`, one that was
- * never tagged at all).
+ * row is a file that was never tagged at all.
  *
- * ⚠ THE CALLER MUST NOT CALL THIS WITHOUT A STAMP. A row whose `SubmissionFileId` never made it onto
- * the document can never be joined back to it, so it would sit on My Submissions as a permanent false
- * "Deleted" — worse than no row at all. Refused here as well as at the call site, because this is the
- * invariant the whole feature rests on.
+ * ⚠ NEITHER CALLER GATES ON A NON-EMPTY `fileId` BEFORE CALLING THIS ANY MORE — both call it
+ * unconditionally and rely on the refusal below rather than duplicating it. A row whose
+ * `SubmissionFileId` never made it onto the document can never be joined back to it, so it would sit
+ * on My Submissions as a permanent false "Deleted" — worse than no row at all, and now the same
+ * failure that leaves the document permanently untagged. Keeping the guard HERE, and only here, is
+ * what stops a caller re-deriving (and possibly getting wrong) the one invariant the whole feature
+ * rests on.
  */
 export async function writeSubmissionRecord(
   sp: SPHttpClient,
