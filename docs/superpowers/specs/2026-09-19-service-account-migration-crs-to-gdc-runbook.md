@@ -157,6 +157,16 @@ at all — a folder stuck Pending blocks the uploader inside it), then `Auto-rou
 documents — recoverable via the recycle bin, but confirm with a throwaway test file, not a real
 one), then `CRS — Auto-approve bulk imports in Approval Document`, `HC auto-approve`.
 
+**⚠ FOR THIS TIER, PAUSE UPLOADS SITE-WIDE WHILE EACH ONE IS OFF.** A trigger firing while a flow is
+disabled is not queued and replayed once it's re-enabled — it's simply missed, and for this tier
+that means a document can get stuck (approved but never routed, a folder left Pending with nobody
+able to reach it, a deletion approved but never actually executed). Set `uploadsPaused = yes` on
+`CRS Config` (the same site-wide toggle the folder-structure migration flow already uses for
+exactly this reason) before starting this tier, work through all six flows in this tier while it's
+on, then set it back to `no` once every one of them is confirmed working. Do this outside normal
+working hours if at all possible — the same operational answer this project has already settled on
+for every other change that needs uploads paused.
+
 **4. Notifications, WITH literal fixes:** `NotifyApprovers`, `HCNotifyApprovers`.
 
 **5. Notifications, no literal fix, lower urgency (these fire every 3 days, not on every
@@ -169,34 +179,59 @@ years`, `CRS — HC Archive after seven years`. Safe to leave for last.
 
 ## Per-flow steps
 
+**One flow at a time — turn it off, reconnect it, verify it, turn it back on, then move to the
+next.** Never leave a flow off for longer than it takes to do its own steps, and never turn off
+more than one flow at once (tier 3's site-wide upload pause above is the one deliberate exception,
+and it exists precisely because that tier's flows need to be off for slightly longer while each one
+is worked through).
+
 For every flow:
-1. Open it in Power Automate, sign in as (or already have an existing connection for)
+1. **Turn the flow Off first.** If you are updating the SAME existing flow in place, this avoids a
+   trigger firing mid-edit while the connection is half-swapped. If the way you are reconnecting it
+   produces a SEPARATE new flow instead of updating in place, this is the step that prevents the old
+   and new versions ever both being On at once — see "What NOT to do" below for why that matters.
+2. Open it in Power Automate, sign in as (or already have an existing connection for)
    `gdc@sdguthrie.com`.
-2. Reconnect the SharePoint connection — either via the flow's own Connections panel (if the maker
+3. Reconnect the SharePoint connection — either via the flow's own Connections panel (if the maker
    portal offers a direct swap) or by re-importing the exported package into this same environment
    and choosing to update the existing flow, selecting/creating the `gdc@sdguthrie.com` connection
    for the SharePoint connection reference.
-3. **If this flow also uses Office 365 Outlook** (see the table above): reconnect that connection
+4. **If this flow also uses Office 365 Outlook** (see the table above): reconnect that connection
    too, the same way. Missing this one is easy to miss since the SharePoint side can look fully
    reconnected while the email side is still sending as the old account.
-4. **If this flow is one of the 8 listed above**: make its specific literal-value fix(es) now, by
+5. **If this flow is one of the 8 listed above**: make its specific literal-value fix(es) now, by
    hand, per the exact before/after given.
-5. Save.
-6. **Confirm the connection panel reads "Connected to gdc@sdguthrie.com"** on every action that
+6. Save.
+7. **Confirm the connection panel reads "Connected to gdc@sdguthrie.com"** on every action that
    shows a connection — this project's own established check for every flow it has ever built, and
    it catches a reconnect that silently didn't take.
-7. Turn the flow back On if it was off.
-8. Run one real test through this specific flow's own trigger, and read the run's own output —
+8. Turn the flow back On.
+9. Run one real test through this specific flow's own trigger, and read the run's own output —
    never assume from "no error shown" that the right thing happened. For the 8 flows with literal
    fixes, specifically confirm the NEW behaviour: does a `gdc@sdguthrie.com`-performed deletion now
    get correctly excluded (no duplicate audit row)? Does the archived-file row now carry
    `gdc@sdguthrie.com`? Does the notification list now carry the new address, not the old one?
+10. **If this reconnect produced a separate new flow rather than updating the old one in place**,
+    only now — once the new one is confirmed working — turn the OLD (`crs@sdguthrie.com`-connected)
+    version off for good. Do not delete it yet; leave it disabled for a few days in case something
+    the test run didn't happen to exercise turns up, then remove it once you're confident.
 
 ## What NOT to do
 
 - **Don't batch-reconnect all 23 without testing between them.** If the process has a mistake in it
   (a wrong connector picked, a missed literal), doing all 23 that way means finding out from 23
   simultaneous small failures instead of one, with no way to tell which fix produced which problem.
+- **Don't ever have the old and new version of the same flow both turned On at once.** If reconnecting
+  produces a separate new flow rather than updating the existing one in place, this is a real,
+  previously-hit failure mode in this exact project — CLAUDE.md records "a duplicate flow left
+  active" as one of the concrete things that went wrong during the 2026-09-17 deletion-proxy work.
+  Two live copies of the same flow both watching the same trigger can both fire on one event and race
+  each other — for something like Auto-route, that means two flows both trying to copy/move/delete
+  the same file at once. The "turn old off first, only turn new on once verified, only then retire
+  old" order in the steps above exists specifically to make this impossible.
+- **Don't turn off a tier-3 flow (folder approval, Auto-route, deletion execution, bulk auto-approve)
+  without also pausing uploads first.** A trigger event that happens while the flow is off is missed,
+  not queued — see the note under "3. Core document flow" above.
 - **Don't leave both accounts holding elevated SharePoint rights indefinitely once this is
   done.** Once every flow is confirmed migrated and working, removing `crs@sdguthrie.com` from
   `CRS Owners` (visible on the same System Administrators screen the display name was found on) is
