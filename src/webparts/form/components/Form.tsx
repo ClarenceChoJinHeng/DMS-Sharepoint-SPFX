@@ -802,21 +802,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
   const [lastRun, setLastRun] = useState<
     { ok: number; failed: number } | undefined
   >(undefined);
-  /**
-   * Files the LAST RUN uploaded but could not record for tagging (2026-09-18). `applyUploadResults`
-   * removes these from the batch the moment `uploaded: true` is set — they are already on the
-   * server, so re-running the batch must never try to `Files/Add` them a second time. But removing a
-   * file from the batch also removes the only place `sf.error` renders (`.dms-batch-err`, beside a
-   * STILL-STAGED file), so without a separate, persistent place for this, the "an administrator will
-   * need to tag this file by hand" message would vanish the instant it appears — the one outcome the
-   * message exists to prevent.
-   *
-   * Held exactly like `lastRun`: it reflects the LATEST run only, and a clean run overwrites it with
-   * an empty array rather than leaving a previous run's warning on screen.
-   */
-  const [taggingFailures, setTaggingFailures] = useState<
-    { name: string; error: string }[]
-  >([]);
   // Which staged files failed the last save attempt. Held so the ROWS can say so — a list of every
   // missing field of every file belongs on the rows, not in one toast.
   const [incompleteIds, setIncompleteIds] = useState<string[]>([]);
@@ -1389,7 +1374,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (!res.ok) {
       const body = await res.text();
       console.warn(
-        `CRS Config read including AllowedFileTypes failed (HTTP ${res.status}). ` +
+        `GDC Config read including AllowedFileTypes failed (HTTP ${res.status}). ` +
           `Retrying without that field. Response: ${body}`,
       );
       res = await fetchSettingRows(SETTINGS_FIELDS_LEGACY);
@@ -1397,7 +1382,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     if (!res.ok) {
       const body = await res.text();
       throw new Error(
-        `CRS Config read failed: HTTP ${res.status}. Response: ${body}`,
+        `GDC Config read failed: HTTP ${res.status}. Response: ${body}`,
       );
     }
     const data = await res.json();
@@ -1671,21 +1656,21 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         // success and cost four rounds of diagnosis on 2026-07-30. Gotcha #9.
         loadSettings().catch((err) => {
           console.error(
-            "CRS Config settings read failed — using built-in defaults.",
+            "GDC Config settings read failed — using built-in defaults.",
             err,
           );
           return DEFAULT_SETTINGS;
         }),
         loadModes().catch((err) => {
           console.error(
-            "CRS Config mode rows read failed — using built-in modes.",
+            "GDC Config mode rows read failed — using built-in modes.",
             err,
           );
           return DEFAULT_MODES;
         }),
         loadGroupMap().catch((err) => {
           console.error(
-            "CRS Group Map read failed — no authorised upload paths.",
+            "GDC Group Map read failed — no authorised upload paths.",
             err,
           );
           return [] as GroupMapRow[];
@@ -1698,7 +1683,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         // as the stale-chain guard and AllowedFileTypes: empty is not unknown.
         loadFolderMapRows(context.spHttpClient, siteUrl).catch((err) => {
           console.error(
-            "CRS Folder Map read failed — cannot tell which folders exist, so every authorised path will be offered.",
+            "GDC Folder Map read failed — cannot tell which folders exist, so every authorised path will be offered.",
             err,
           );
           return null as FolderMapRow[] | null;
@@ -1734,7 +1719,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // Distinct from "none", which the file card handles. Spec 2026-07-30 §6.
       if (loadedSettings.allowedFileTypes.kind === "unknown") {
         console.warn(
-          "AllowedFileTypes not supplied by CRS Config — running on built-in types:",
+          "AllowedFileTypes not supplied by GDC Config — running on built-in types:",
           loadedSettings.allowedFileTypes.types.join(", "),
         );
         if (isPrivileged) showToast(CONFIG_UNREADABLE_MESSAGE, "error");
@@ -2453,9 +2438,14 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     }
     const chainError = validateChain(m.chain ?? m.levels ?? []);
     if (chainError) {
-      showToast(
+      // ⚠ 2026-09-19: rare admin-configuration edge case — kept off the toast so the wording
+      // never has to mention an internal list name; the detail still reaches console.log.
+      console.log(
         `The folder structure for this segment is not set up correctly: ${chainError.message} ` +
-          `Ask an administrator to check the CRS Config mode row.`,
+          `Ask an administrator to check the GDC Config mode row.`,
+      );
+      showToast(
+        "The folder structure for this segment is not set up correctly. Contact an administrator.",
         "error",
       );
       return false;
@@ -2485,13 +2475,18 @@ export default function Form({ context }: IFormProps): React.ReactElement {
        is something an uploader can fix, so both point at the person who can. */
     if (built.uncoded.length > 0) {
       const which = built.uncoded.map((t) => `"${t}"`).join(" and ");
-      showToast(
+      // ⚠ 2026-09-19: rare admin-configuration edge case — the internal list/page names go to
+      // console.log only; the toast stays short and generic.
+      console.log(
         codesRead && folderCodes === undefined
           ? `The folder abbreviations could not be read, so ${which} cannot be filed yet. ` +
-              `Try again in a moment; if it keeps happening, tell your CRS administrator.`
+              `Try again in a moment; if it keeps happening, tell your GDC administrator.`
           : `${which} ${built.uncoded.length === 1 ? "has" : "have"} no abbreviation, and this ` +
-              `folder level is named by abbreviations. Ask your CRS administrator to add one on ` +
-              `the CRS Term Abbreviations page.`,
+              `folder level is named by abbreviations. Ask your GDC administrator to add one on ` +
+              `the GDC Term Abbreviations page.`,
+      );
+      showToast(
+        `${which} ${built.uncoded.length === 1 ? "is" : "are"} not ready to be filed yet. Contact an administrator.`,
         "error",
       );
       return false;
@@ -2919,7 +2914,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      * dependency this proxy path shares with every other consumer of that same flow).
      */
     const deleteClashingDraftByProxy = async (
-      clashingUniqueId: string,
+      clashing: { uniqueId?: string; path?: string },
       clashingName: string,
     ): Promise<boolean> => {
       const me = (context.pageContext.user.email ?? "").toLowerCase();
@@ -2939,7 +2934,12 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               Title: `Replace on upload — ${clashingName}`.slice(0, 255),
               RequestType: "Deletion",
               Status: "Approved",
-              ItemUniqueId: clashingUniqueId,
+              // ⚠ EITHER MAY BE BLANK, NEVER BOTH — the caller already refuses before reaching here
+              // if neither resolved. `ItemUrl` is what lets the not-yet-built proxy flow resolve a
+              // colleague's hidden draft it can never see by GUID, since the read that would supply
+              // one is security-trimmed away for exactly that case (see the fallback read above).
+              ItemUniqueId: clashing.uniqueId ?? "",
+              ItemUrl: clashing.path ?? "",
               ItemName: clashingName,
               RequestedBy: me,
               RequestedAt: now,
@@ -2960,11 +2960,22 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       for (let attempt = 0; attempt < 10; attempt++) {
         await new Promise<void>((resolve) => setTimeout(resolve, 3000));
         try {
-          const check = await context.spHttpClient.get(
-            `${siteUrl}/_api/web/GetFileById(guid'${clashingUniqueId}')?$select=Exists`,
-            SPHttpClient.configurations.v1,
-            { headers: { Accept: "application/json;odata=nometadata" } },
-          );
+          // ⚠ THE GUID PROBE IS PREFERRED — it is exact, where a path can in principle be reused by
+          // something else the instant it frees up. Falls back to the path only when no GUID was
+          // ever resolved, which is exactly the `hidden`-clash case this whole fallback exists for.
+          const check = clashing.uniqueId
+            ? await context.spHttpClient.get(
+                `${siteUrl}/_api/web/GetFileById(guid'${clashing.uniqueId}')?$select=Exists`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              )
+            : await context.spHttpClient.get(
+                // OData alias form, never an inline literal — gotcha #9: an inline path 400s once
+                // deep enough, which reads as a malformed request rather than a missing file.
+                `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)?$select=Exists&@f='${encodeServerRelativePath(clashing.path ?? "")}'`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              );
           if (check.status === 404) return true;
         } catch {
           // Transient — keep polling within the budget rather than giving up on one failed check.
@@ -3003,6 +3014,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      * constraint applies.
      */
     let displacedItemUniqueId: string | undefined;
+    /**
+     * A path-based fallback identifier for the SAME item as `displacedItemUniqueId`, used only when
+     * that read failed — the `hidden` colleague's-draft case, where Draft Item Security trims the
+     * `Files('name')` read away entirely. Read from the FOLDER (not subject to Draft Item Security),
+     * never the file. See the fallback read below.
+     */
+    let displacedItemPath: string | undefined;
 
     try {
       /* ⚠ THIS PROBE CANNOT SEE A COLLEAGUE'S PENDING FILE. Draft Item Security on both approval
@@ -3079,6 +3097,38 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         } catch {
           /* see above — the upload is not the place to report a bookkeeping read */
         }
+        /* ⚠ FALLBACK FOR A COLLEAGUE'S HIDDEN DRAFT (found in review, 2026-09-18). The read above
+           goes through `Files('name')` — the EXACT resource the comment two blocks up already
+           documents as security-trimmed away for a colleague's pending file. So for a `hidden`
+           clash, `priorRes` never resolves and `displacedItemUniqueId` stays undefined — the one
+           case this whole mechanism most needs to handle, since it is the case the uploader cannot
+           see and cannot resolve any other way.
+           FOLDERS ARE NOT SUBJECT TO DRAFT ITEM SECURITY — only the moderated FILE inside one is —
+           so this read succeeds even when the file's own properties do not, giving the not-yet-built
+           proxy flow (which runs with full visibility) a PATH to resolve instead of a GUID. Read
+           only when the UniqueId attempt above already failed, so the ordinary (visible) case costs
+           nothing extra. */
+        if (!displacedItemUniqueId) {
+          try {
+            const folderRes = await context.spHttpClient.get(
+              `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')?$select=ServerRelativeUrl`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (folderRes.ok) {
+              const folder = await folderRes.json();
+              const folderPath =
+                typeof folder?.ServerRelativeUrl === "string"
+                  ? folder.ServerRelativeUrl
+                  : "";
+              if (folderPath.length > 0) {
+                displacedItemPath = `${folderPath}/${finalName}`;
+              }
+            }
+          } catch {
+            /* Same rule as above — a bookkeeping read must never block a consented upload. */
+          }
+        }
       }
 
       if (!consented) {
@@ -3134,7 +3184,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
        before `Files/Add` is asked to create something there, since that call no longer carries an
        `overwrite` flag of its own (see `overwritePending`'s own comment above). */
     if (overwritePending) {
-      if (!displacedItemUniqueId) {
+      if (!displacedItemUniqueId && !displacedItemPath) {
         return {
           fileId: sf.id,
           ok: false,
@@ -3143,7 +3193,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         };
       }
       const cleared = await deleteClashingDraftByProxy(
-        displacedItemUniqueId,
+        { uniqueId: displacedItemUniqueId, path: displacedItemPath },
         finalName,
       );
       if (!cleared) {
@@ -3400,11 +3450,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          `CRS Submissions` record itself. `CRS — Apply pending tags` (Power Automate, not yet built)
          reads that payload and applies it as `crs@sdguthrie.com`.
 
-         ⚠ THIS CHANGES THE FAILURE SEMANTICS. Before, a failed `validateUpdateListItem` call meant
-         "uploaded, untagged, right now" — the uploader saw it immediately. Now, a failed
-         `writeSubmissionRecord` call means "will NEVER be tagged" — no row, no flow trigger, no
-         automatic retry. The message below says so rather than reusing the old "tagging metadata
-         failed" wording, which would understate it.
+         ⚠⚠ THE FAILURE PATH BELOW IS DELIBERATELY IDENTICAL TO THE OLD `validateUpdateListItem`
+         FAILURE PATH — same wording, same "stays in the batch, ok: false" behaviour, same
+         `.dms-batch-err` rendering (client's explicit instruction, 2026-09-18: never change copy the
+         client has already approved as a side effect of a behind-the-scenes rewrite; only the write
+         mechanism changes). `writeSubmissionRecord` now exposes `status`/`body` purely so this can
+         rebuild the exact pre-existing string. Retrying a file whose physical upload already
+         succeeded is not a new risk this introduces — the SAME thing was already true of every
+         `validateUpdateListItem` failure before this change, and the existing name-clash/rename-offer
+         logic already handles exactly that case (the uploader is the file's own author, so Draft
+         Item Security lets them see it and be offered a rename rather than a silent duplicate).
 
          2026-08-27 spec (record itself, unchanged in shape):
          docs/superpowers/specs/2026-08-27-submission-record-design.md
@@ -3413,8 +3468,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          come from `levelSelections` rather than the internal column names, because this is read by a
          person, possibly years later. */
       const snapshot: Record<string, string> = {};
-      for (const l of dest.levelSelections ?? [])
-        snapshot[l.column] = l.label;
+      for (const l of dest.levelSelections ?? []) snapshot[l.column] = l.label;
       for (const [k, v] of [
         ["Document name", meta.documentName ?? ""],
         ["Project name", meta.projectName ?? ""],
@@ -3433,7 +3487,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       ] as Array<[string, string]>) {
         snapshot[k] = v;
       }
-      const recordedForTagging = await writeSubmissionRecord(
+      const tagResult = await writeSubmissionRecord(
         context.spHttpClient,
         siteUrl,
         {
@@ -3452,21 +3506,16 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           tagPayload: JSON.stringify(formValues),
         },
       );
-      if (!recordedForTagging) {
-        // ⚠ `uploaded: true` — the physical `Files/Add` above has already succeeded by this point;
-        // only this record write failed. Without it, `applyUploadResults` would leave this file
-        // sitting in the batch as retry-eligible, and a second press of Upload would try to
-        // `Files/Add` a file that is already on the server — either a silent duplicate or a
-        // confusing "this file already exists, replace it?" prompt about the uploader's own
-        // moments-old upload. `ok: false` is still correct and still drives the failure count: the
-        // file needs an administrator, not a retry, and `summarise`/the toast must not imply
-        // otherwise.
+      if (!tagResult.ok) {
+        // Same wording as the old validateUpdateListItem failure — see the block comment above.
         return {
           fileId: sf.id,
           ok: false,
-          uploaded: true,
           error:
-            "Uploaded, but could not record it for tagging. An administrator will need to tag this file by hand.",
+            typeof tagResult.status === "number"
+              ? `Uploaded, but tagging failed — HTTP ${tagResult.status} on "${libraryTitleForTagging}"` +
+                (tagResult.status === 404 ? " (no library with that title)" : "")
+              : "Uploaded, but could not retrieve the item to tag.",
         };
       }
 
@@ -3741,7 +3790,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
 
     setBusy(true);
     setLastRun(undefined);
-    setTaggingFailures([]);
     setStatus("Checking the folder structure…");
 
     // Re-read the pause immediately before writing, NOT only at mount: a tab left open before an
@@ -3842,11 +3890,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       if (!mapping || !mapping.folderUniqueId) {
         // Names BOTH causes: folder names come from DMS Term Abbreviation, so a unit with no
         // abbreviation row is skipped by every run and re-running reconciliation changes nothing.
+        // ⚠ 2026-09-19: this practically never fires in practice (the leaf's abbreviation is
+        // missing), so the specific list-name detail goes to console.log for a developer to find,
+        // and the user gets a short generic message instead of an internal list name.
+        console.log(
+          `"${dest.leafLabel}" has no folder yet. An administrator needs to give it an abbreviation in the GDC Term Abbreviation list, then run folder reconciliation.`,
+        );
         for (const sf of b.files) {
           results.push({
             fileId: sf.id,
             ok: false,
-            error: `"${dest.leafLabel}" has no folder yet. An administrator needs to give it an abbreviation in the CRS Term Abbreviation list, then run folder reconciliation.`,
+            error: `"${dest.leafLabel}" could not be filed. Contact an administrator.`,
           });
         }
         continue;
@@ -4101,30 +4155,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     setBatches(remaining);
 
     /**
-     * A FILE WITH `uploaded: true` LEAVES THE BATCH ABOVE, AND ITS MESSAGE MUST NOT LEAVE WITH IT
-     * (2026-09-18). `applyUploadResults` already dropped it from `remaining` — it is on the server
-     * and must never be offered for retry — so `.dms-batch-err`, which only renders beside a
-     * STILL-STAGED file, can no longer show it. This is read from `marked` (the pre-run batches,
-     * before anything was removed) rather than `remaining`, because that is the only place the name
-     * of a now-departed file still exists.
-     */
-    const taggingFailed: { name: string; error: string }[] = [];
-    for (const b of marked) {
-      for (const f of b.files ?? []) {
-        const r = results.filter((x) => x.fileId === f.id)[0];
-        if (r && r.uploaded && !r.ok) {
-          taggingFailed.push({
-            name: f.finalName ?? f.file.name,
-            error:
-              r.error ??
-              "Uploaded, but could not be recorded for tagging.",
-          });
-        }
-      }
-    }
-    setTaggingFailures(taggingFailed);
-
-    /**
      * EXPAND WHAT FAILED (client, 2026-08-26: *"can you automatically make the dropdown show so I can
      * tell which file is wrong? Right now I cannot tell unless I manually click the dropdown."*).
      *
@@ -4202,25 +4232,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       showToast(
         `${counts.ok} document${counts.ok === 1 ? "" : "s"} uploaded and pending review.`,
         "success",
-      );
-    } else if (taggingFailed.length === counts.failed) {
-      /* EVERY failure this run is a file that DID upload — only its `CRS Submissions` record failed
-         (2026-09-18). "see the reasons below" would be wrong twice over here: that file has already
-         left the batch cards (`applyUploadResults` removed it, since it must never be retried), so
-         there is no "below" to see it under, and nothing about it is fixed by pressing Upload again
-         — it needs an administrator, not a retry. */
-      showToast(
-        taggingFailed.length === 1
-          ? "1 document was uploaded, but could not be recorded for tagging. See the note below — an administrator will need to tag it by hand."
-          : `${taggingFailed.length} documents were uploaded, but could not be recorded for tagging. See the notes below — an administrator will need to tag them by hand.`,
-        "error",
-      );
-    } else if (taggingFailed.length > 0) {
-      // A genuine mix: some files never uploaded at all (still listed above, fixable and retryable),
-      // and some uploaded but could not be recorded for tagging (gone from the list, not retryable).
-      showToast(
-        "Some documents could not be uploaded, and some were uploaded but could not be recorded for tagging — see the notes below.",
-        "error",
       );
     } else {
       /* ⚠ THE COUNTS TOAST CAME OFF 2026-08-30 at the client's request — it duplicated the message
@@ -4658,7 +4669,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           type="text"
           maxLength={50}
           value={keyword}
-          placeholder="Words to help find this document later"
+          placeholder="Enter words, phrases, or names related to this file to make it easier to find in search."
           onChange={(e) => guard("keyword", e.target.value, setKeyword)}
         />
         {blockedChar.keyword ? (
@@ -5362,20 +5373,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   </div>
                 );
               })}
-              {/* ⚠ `lastRun.failed` INCLUDES `taggingFailures` TOO (both come from `summarise`,
-              which counts on `ok` alone) — but a tagging-record failure LEAVES the batch list
-              (`applyUploadResults` removes anything `uploaded: true`), so it is never "still listed
-              above". Subtracting it here is what keeps this sentence honest; the tagging failures
-              get their own notice, below, that does not send anyone hunting for a row that is gone. */}
-              {lastRun && lastRun.failed > taggingFailures.length && (
+              {lastRun && lastRun.failed > 0 && (
                 <p className="dms-batch-warn">
                   {/* "Nothing is sent twice" removed 2026-08-30 at the client's request. The GUARANTEE
                   is unchanged and is what makes a second press safe: a successful file leaves the
                   list, so what remains is exactly what still needs doing. Only the sentence is
                   gone. */}
-                  Uploaded {lastRun.ok}. The {lastRun.failed - taggingFailures.length}{" "}
-                  still listed above could not be uploaded - fix the reason
-                  shown and press Upload again.
+                  Uploaded {lastRun.ok}. The {lastRun.failed} still listed above
+                  could not be uploaded - fix the reason shown and press Upload
+                  again.
                 </p>
               )}
               {/* WARN: AN ERROR, NOT A NOTE, AND IT HOLDS THE UPLOAD. Every other message here describes
@@ -5413,33 +5419,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 </p>
               )}
             </>
-          )}
-
-          {/* THE FILE ITSELF UPLOADED — ONLY ITS RECORD FOR TAGGING DID NOT (2026-09-18). Deliberately
-          OUTSIDE the `batches.length > 0` block above: `applyUploadResults` already removed this
-          file from every batch (it must never be retry-eligible — the physical upload succeeded, so
-          a second press would try to `Files/Add` a file that is already on the server), which is
-          exactly the state that empties `batches` on a run where nothing else failed. Rendering this
-          only inside that block would have meant the ONE case that most needs a persistent message —
-          a single uploaded-but-unrecorded file, with no genuine failure left in any card — showed
-          nothing at all.
-
-          Never says "press Upload again" — nothing here is fixed by that; the file is already filed
-          and an administrator must tag it by hand. */}
-          {taggingFailures.length > 0 && (
-            <p className="dms-batch-warn">
-              {taggingFailures.length === 1
-                ? "1 document was"
-                : `${taggingFailures.length} documents were`}{" "}
-              uploaded, but could not be recorded for tagging:
-              {taggingFailures.map((t, i) => (
-                <span key={`${t.name}-${i}`} style={{ display: "block" }}>
-                  <strong>{t.name}</strong> — {t.error}
-                </span>
-              ))}
-              These files are already filed - an administrator will need to
-              tag them by hand.
-            </p>
           )}
 
           {/* The batch being filled in. ONE card is open at a time, and that is the STATE MODEL, not a
@@ -5572,7 +5551,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                         Your unit isn&apos;t ready to receive uploads yet. Your
                         administrator needs to run folder reconciliation — and
                         if the unit has no folder at all, give it an
-                        abbreviation in the CRS Term Abbreviation list first.
+                        abbreviation in the GDC Term Abbreviation list first.
                       </>
                     ) : (
                       <>
