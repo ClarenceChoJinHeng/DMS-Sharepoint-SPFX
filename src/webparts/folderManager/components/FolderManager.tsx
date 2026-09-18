@@ -3004,7 +3004,7 @@ export default function FolderManager({
     );
     if (!res.ok) {
       const body = await res.text();
-      throw new Error(`CRS Group Map read failed: HTTP ${res.status}. ${body}`);
+      throw new Error(`GDC Group Map read failed: HTTP ${res.status}. ${body}`);
     }
     const data = await res.json();
     return (
@@ -3978,7 +3978,7 @@ export default function FolderManager({
           }
         }
         entries.push({
-          msg: `Submission reference and bulk import columns: present on all CRS libraries ✓`,
+          msg: `Submission reference and bulk import columns: present on all GDC libraries ✓`,
           ok: true,
         });
 
@@ -4143,7 +4143,7 @@ export default function FolderManager({
         );
         if (!scopedRes.ok) {
           entries.push({
-            msg: `Library access: skipped — Scope/Target columns not present on CRS Group Map`,
+            msg: `Library access: skipped — Scope/Target columns not present on GDC Group Map`,
             ok: true,
           });
         } else {
@@ -4414,7 +4414,7 @@ export default function FolderManager({
             const value = (rows[0]?.SettingValue ?? "").trim();
             if (value.length === 0) {
               entries.push({
-                msg: `⚠ HC libraries exist but the hcConfidentialityLevel config row is ${rows.length === 0 ? "MISSING" : "blank"} — the Highly Confidential level is NOT being gated, and every uploader can see it. Add a CRS Config row: Title "hcConfidentialityLevel", ConfigType "setting", SettingValue = the confidentiality term's label (e.g. "Highly Confidential").`,
+                msg: `⚠ HC libraries exist but the hcConfidentialityLevel config row is ${rows.length === 0 ? "MISSING" : "blank"} — the Highly Confidential level is NOT being gated, and every uploader can see it. Add a GDC Config row: Title "hcConfidentialityLevel", ConfigType "setting", SettingValue = the confidentiality term's label (e.g. "Highly Confidential").`,
                 ok: false,
               });
             } else {
@@ -4953,12 +4953,12 @@ export default function FolderManager({
           /* Reported, never approximated. Granting Contribute instead would hand uploaders Delete
              Items on the lists that ARE the record of who asked for and uploaded what. */
           entries.push({
-            msg: `⚠ No "CRS Request" permission level on this site, so request and submission list access was NOT set — create it (copy Contribute, untick Delete Items and Delete Versions) and re-run`,
+            msg: `⚠ No "GDC Request" permission level on this site, so request and submission list access was NOT set — create it (copy Contribute, untick Delete Items and Delete Versions) and re-run`,
             ok: false,
           });
         } else if (qualifying === undefined) {
           entries.push({
-            msg: `⚠ CRS Group Map could not be read — request and submission list access NOT checked, and nothing was revoked`,
+            msg: `⚠ GDC Group Map could not be read — request and submission list access NOT checked, and nothing was revoked`,
             ok: false,
           });
         } else {
@@ -5184,7 +5184,7 @@ export default function FolderManager({
         );
         if (!pgRes.ok) {
           entries.push({
-            msg: `Page access: skipped — Scope/Target columns not present on CRS Group Map`,
+            msg: `Page access: skipped — Scope/Target columns not present on GDC Group Map`,
             ok: true,
           });
         } else {
@@ -5268,8 +5268,7 @@ export default function FolderManager({
               const derivedFiles = items
                 .filter(
                   (p) =>
-                    p.file !== "" &&
-                    derivedRolesForPage(p.file).length > 0,
+                    p.file !== "" && derivedRolesForPage(p.file).length > 0,
                 )
                 .map((p) => p.file);
               const rowFiles = pageRows.map((r) =>
@@ -7663,7 +7662,7 @@ export default function FolderManager({
       showToast(
         failed > 0
           ? `Reconciled with ${failed} error(s) — see log.`
-          : `Reconciled ${targets.length} folder(s) across Staging + Documents — locked + groups assigned from CRS Group Map.`,
+          : `Reconciled ${targets.length} folder(s) across Staging + Documents — locked + groups assigned from GDC Group Map.`,
         failed > 0,
       );
     } catch (e) {
@@ -8296,10 +8295,10 @@ export default function FolderManager({
                     These are built-in segments, not your configuration.
                   </strong>{" "}
                   {modeSource === "empty"
-                    ? "The CRS Config list has no `mode` rows, so there is nothing to reconcile — create a segment first."
+                    ? "The GDC Config list has no `mode` rows, so there is nothing to reconcile — create a segment first."
                     : modeSource === "no-sortorder"
                       ? "The mode rows were read without their SortOrder column, so the order below may not match your configuration."
-                      : "The CRS Config list could not be read, so this is a hardcoded list."}{" "}
+                      : "The GDC Config list could not be read, so this is a hardcoded list."}{" "}
                   One of them — <strong>Upstream Malaysia Head Office</strong> —
                   is a placeholder with a term set that does not exist on this
                   site. <strong>Do not run this</strong> until the segment list
