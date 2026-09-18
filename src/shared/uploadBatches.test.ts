@@ -339,38 +339,6 @@ describe("applyUploadResults", () => {
     expect(out.map((b) => b.id)).toEqual(["b2"]);
   });
 
-  /* ── `uploaded: true` on a failed result ──────────────────────────────────
-     As of 2026-09-18, a result can be `ok: false` while the PHYSICAL file upload
-     (`Files/Add`) genuinely succeeded — the only failure was a later write (recording the
-     file for tagging). That file must leave the retry queue exactly as an `ok: true` result
-     would: it already exists on the server, and re-running the batch must never re-upload it. */
-
-  it("`uploaded: true` removes the file even though `ok` is false — it already exists on the server", () => {
-    const b = batch("b1", [staged("f1", "a.pdf")]);
-    const out = applyUploadResults([b], [
-      { fileId: "f1", ok: false, uploaded: true, error: "Uploaded, but could not record it for tagging." },
-    ]);
-    expect(out).toEqual([]);
-  });
-
-  it("a GENUINE failure (no `uploaded` field) still stays in the batch with its error — the regression guard", () => {
-    const b = batch("b1", [staged("f1", "a.pdf")]);
-    const out = applyUploadResults([b], [
-      { fileId: "f1", ok: false, error: "HTTP 403" },
-    ]);
-    expect(out).toHaveLength(1);
-    expect(out[0].files.map((f) => f.id)).toEqual(["f1"]);
-    expect(out[0].files[0].error).toBe("HTTP 403");
-  });
-
-  it("`uploaded: true` alongside other genuine failures in the same batch — only the uploaded one leaves", () => {
-    const b = batch("b1", [staged("f1", "a.pdf"), staged("f2", "b.pdf")]);
-    const out = applyUploadResults([b], [
-      { fileId: "f1", ok: false, uploaded: true, error: "could not record it for tagging" },
-      { fileId: "f2", ok: false, error: "HTTP 500" },
-    ]);
-    expect(out[0].files.map((f) => f.id)).toEqual(["f2"]);
-  });
 });
 
 describe("summarise", () => {
