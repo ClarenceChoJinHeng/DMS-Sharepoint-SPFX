@@ -13818,3 +13818,136 @@ Documents-library deletion requests entirely** (HOD keeps deciding Share request
 - **Verified**: `tsc --noEmit` clean, full suite **1923/0**, 41 lint warnings (same baseline, zero
   new). `npm run build` completed and the updated banner text confirmed present inside the shipped
   `.sppkg`. **NOT site-tested, and still blocked on the same missing Power Automate flow as above.**
+
+## TAG/APPROVE BY PROXY — PIC LOSES EDIT ITEMS; APPROVER KEEPS IT (2026-09-18/19)
+Spec: `docs/superpowers/specs/2026-09-18-tag-approve-proxy-design.md`. Plan:
+`docs/superpowers/plans/2026-09-18-tag-approve-proxy.md`. Reversion:
+`docs/superpowers/specs/2026-09-18-tag-approve-proxy-reversion.md`. Client: stop PIC/Approver
+hand-editing tags or filenames outside the app by removing their direct `Edit Items` right on the
+document libraries. **Code side DONE (Tasks 1–6, 6b, 9); Power Automate side NOT built.**
+- **⚠⚠ THE ORIGINAL SCOPE INCLUDED APPROVER AND WAS WITHDRAWN THE SAME DAY, LIVE-VERIFIED ON THIS
+  TENANT.** `ApproveItems` has a hard SharePoint dependency on `EditListItems` — confirmed in the
+  permission-level editor: ticking one ticks the other, on any custom level. So removing `Edit
+  Items` from `CRS Approve` would ALSO remove `ApproveItems`, and with it the Draft Item Security
+  exemption that gives approvers unit-wide pending-file visibility (*"only users who can approve
+  items… "*). The client would not accept losing that. **`CRS Approve` keeps `Edit Items`
+  permanently. Only `CRS Upload` (PIC) is being changed.**
+  - **A per-item unique-ACL alternative was explored and explicitly rejected** (break inheritance
+    per pending/rejected file, grant Read to author + unit approver group, Draft Item Security =
+    "any user who can read"): the numbers were walked through at several stress-test volumes and it
+    runs into SharePoint's 50,000-unique-permission-scope-per-LIST ceiling on realistic rejected-file
+    volumes, since nothing currently cleans up rejected files. Parked, not built. Client: *"nvm,
+    lets just tell them its impossible... So PIC now dont have edit items, approver's edit items
+    comes back on, period."*
+  - `ApprovalDocument.tsx` had briefly been converted to write a decision row instead of MERGEing
+    directly, then **cleanly reverted** (`git checkout HEAD --`) once the correction landed — its
+    diff was confirmed self-contained before reverting, so nothing else came back with it.
+    `BulkApprovePanel.tsx` was never touched. `CRS — Apply pending decisions` is **not built** and
+    must never be — nothing will ever write a `Pending` row to `CRS Pending Decisions` for it to
+    poll. That list's schema is left in place, unused, per this project's standing "park rather than
+    delete" habit.
+- **WHAT ACTUALLY SHIPPED, PIC-side only:**
+  - `CRS Submissions` gained `TagPayload` (Note), `TagStatus` (Text), `TagError` (Note) — the exact
+    `{FieldName, FieldValue}[]` write payload `Form.tsx`/`BulkUpload.tsx` used to POST directly to
+    `validateUpdateListItem`, now JSON-encoded and carried on the record instead. **Deliberately
+    separate from `MetadataSnapshot`**, which stays label-only and display-purpose — the write
+    payload's correctness bar ("a flow can replay this") is different from the snapshot's ("good
+    enough for a person to read").
+  - `Form.tsx`/`BulkUpload.tsx` no longer POST to `validateUpdateListItem` at all — the ONE write
+    either makes for tagging is `writeSubmissionRecord`, carrying `tagPayload`. `CRS — Apply pending
+    tags` (Power Automate, **not yet built** — see Task 10) is meant to read it and apply it as
+    `crs@sdguthrie.com`.
+  - `writeSubmissionRecord`'s return type changed from `Promise<boolean>` to
+    `Promise<{ ok, status?, body? }>` — plumbing only, so `Form.tsx`/`BulkUpload.tsx` could
+    reconstruct their own **pre-existing, client-approved failure wording exactly**, rather than a
+    new message describing the new mechanism. Client, explicit: *"dont change the error message...
+    when client gives the copy we don't change, I have been warned... Only change is how the file
+    logic is going to work behind the scene."* `BulkUpload.tsx`'s `if (fileStamp.length > 0)` gate
+    around the call — briefly removed while making the call unconditional — was **restored verbatim**
+    for the same reason: the client's rule applies to gating behaviour, not only to strings.
+  - **Task 6b — the staging-replace overwrite needed proxying too, and this was found during design
+    review, not in the original plan.** `Files/Add(overwrite=true)` on a name clash needs
+    `EditListItems`, which `AddListItems` alone does not cover — the tagging proxy work does not
+    touch this write at all. Re-expressed as: recycle the clashing draft via the existing
+    2026-09-17 deletion-by-proxy mechanism (a self-approved `CRS Requests` row,
+    `RequestType: "Deletion"`/`Status: "Approved"` from the moment it's written, since nobody
+    approves a replace today either), poll until it is confirmed gone, then an ORDINARY
+    `overwrite=false` upload under the same name.
+    - **⚠ THE FIRST VERSION COULD NOT RESOLVE A COLLEAGUE'S HIDDEN DRAFT AT ALL.** The `UniqueId`
+      read goes through `Files('name')` — exactly the resource Draft Item Security trims away for a
+      pending file that is not this uploader's own. `deleteClashingDraftByProxy` now accepts
+      `{ uniqueId?, path? }` and falls back to a path read off the **folder** (not subject to Draft
+      Item Security) when the UniqueId attempt fails, so the not-yet-built proxy flow has something
+      to resolve against either way — using `ItemUrl` on the request row and the OData-alias
+      `GetFileByServerRelativeUrl(@f)` form (gotcha #9) for the existence poll.
+    - **Depends on `CRS — Execute approved deletion` (2026-09-17) actually running** — same
+      dependency every other consumer of that flow already carries. Until it exists, "yes, replace
+      it" writes the deletion request correctly and then times out waiting for a recycle that never
+      happens (10 attempts, 3s apart, ~30s budget).
+  - **Task 9 — self-approve, and the plan's own Step 2 sample was WRONG.** As literally written it
+    called `writePendingDecision` after polling — but self-approve only fires when
+    `probeFolderApproveAccess` confirms the uploader ALSO effectively holds `ApproveItems`, which
+    (per the correction above) requires `EditListItems` — a permission `CRS Approve` never lost. So
+    the ORIGINAL direct `OData__ModerationStatus` MERGE (`ApprovedBy` stamp, then the status flip)
+    was **never actually broken** by `CRS Upload` losing `Edit Items`, and routing it through the
+    withdrawn `CRS Pending Decisions` mechanism would have been a dead end exactly like Task 11.
+    - **Self-approve had been DELIBERATELY DISABLED since the tagging-proxy landed**
+      (`SELF_APPROVE_DISABLED_PENDING_TAG_CONFIRMATION = true`, a named const rather than a bare
+      `false` so the `if` compiles under `allowUnreachableCode: false`) — "tagging succeeded" now
+      means only that the `CRS Submissions` row was written, not that the document's metadata is
+      actually on the item, so self-approving before the not-yet-built flow catches up risks
+      Auto-route routing a document with blank metadata under a fresh `UniqueId`, silently, with no
+      later chance to catch it — the 2026-08-26 SDG incident's exact shape.
+    - **Fixed with `pollForTagStatus`** (module-level in `Form.tsx`, 6 attempts × 15s ≈ 90s,
+      matching the design doc's "up to two poll cycles" estimate with margin) and a new
+      `readSubmissionRecordByFileId` in `spSubmissionRecords.ts` (same five-rung
+      `RECORD_READ_SELECT*` ladder as `readSubmissionRecords`, gotcha #11). The poll sits INSIDE
+      the existing `if (approveAccess === "granted")` branch, gating entry to the **unchanged**
+      MERGE code rather than replacing it. `undefined`/a read failure during polling is never read
+      as "Tagged" — only an explicit `TagStatus` of `Tagged`/`Failed` short-circuits the loop.
+- **⚠ A LARGE BACKLOG OF UNCOMMITTED WORK FROM AN EARLIER PART OF THIS SAME SESSION WAS FOUND AND
+  RESOLVED ALONGSIDE THIS.** Two unrelated threads had been sitting uncommitted across 13+ files for
+  several compactions: the CRS→GDC SharePoint GROUP rename (client, "text only for now, but the
+  group name if they are CRS I must change to GDC"), and Task 6b's own completion. Both were
+  legitimate and were committed, but the GDC rename had been applied inconsistently — some console/
+  toast/JSX text renamed list and page NAMES to "GDC" too, which contradicts the group-only scope
+  `naming.ts`'s own `GROUP_CANDIDATE_PREFIXES` (`["GDC", "CRS", "DMS"]`, separate from
+  `CANDIDATE_PREFIXES` which stays `["CRS", "DMS"]` for list/library titles) was written to enforce.
+  - **A genuine functional bug was found in the same pass**: `FolderManager.tsx`'s
+    `applyPermissionPrefix` had started checking for a permission level literally named
+    `"GDC Upload"` with **no `"CRS Upload"` fallback at all** — every live site's permission levels
+    are still named `CRS Upload`/`CRS Approve`/etc (permission levels were never part of the group
+    rebrand), so this would have silently failed to resolve everywhere, left
+    `ROLE_TO_PERMISSION` at its legacy DMS defaults, and made reconciliation grant nothing. Reverted
+    to check `"CRS Upload"`.
+  - **After review, the client confirmed final treatment per message category**: page-name refs
+    ("GDC Settings", "GDC Term Abbreviations") and generic brand-word usage ("shares granted through
+    GDC") stay GDC; list-name refs that would send an admin looking for a SharePoint list that
+    doesn't exist ("GDC Config list", "GDC Group Map") were, for the two RARE edge cases flagged
+    (`Form.tsx`'s folder-structure/abbreviation toasts, `MySubmissions.tsx`'s unconfigured-
+    `tenantDomains` warning), moved to `console.log` only with a short generic message left on
+    screen — everywhere else, left as GDC on review ("its fine, I was told to").
+  - Also cleaned up: a leftover, abandoned `uploaded?: boolean` flag on `UploadResult`
+    (`uploadBatches.ts`) from an earlier iteration, reverted to the original `SUCCESS REMOVES;
+    FAILURE STAYS` / `r.ok` rule; and an unrelated small feature (upload pause/resume steps added to
+    the retire-a-segment guided flow) that had also been sitting uncommitted.
+- **⚠ STILL TO DO, ALL LIVE-TENANT ACTIONS, NONE OF IT CODE:**
+  - **Task 10 — build `CRS — Apply pending tags`** (Power Automate, signed in as
+    `crs@sdguthrie.com`): trigger on `CRS Submissions` created/modified, condition
+    `TagPayload` present and `TagStatus` blank, `GetFileById` to resolve the library, `POST
+    validateUpdateListItem` with the parsed `formValues`, check the response BODY for
+    `HasException` (gotcha #4 — 200 even on a per-field failure), write back `TagStatus`
+    `Tagged`/`Failed` + `TagError`.
+  - **Task 12 — end-to-end verification, BEFORE the cutover**, with the OLD permission levels still
+    in place (the code no longer writes directly regardless, so this genuinely exercises the proxy
+    path): normal upload, HC upload, self-approve (confirm it now WAITS rather than being
+    permanently disabled), a deliberately malformed tag payload (confirm `TagError` is real and
+    readable, not generic).
+  - **Task 13, `CRS Upload` half only** — untick `Edit Items` on `CRS Upload` (confirm `Add Items`
+    stays ticked), per site. Confirm upload still works, then confirm a hand-edit/rename attempt in
+    the native library view is now refused — **the actual point of the whole feature**, and the one
+    thing this plan explicitly says not to assume from the permission change alone.
+- **Verified (code only)**: `tsc --noEmit` clean throughout, full suite **1951/1951**, 45 lint
+  warnings (documented pre-existing baseline, zero new categories). Every fix verified against the
+  live suite after landing, not assumed. **Nothing here has been tested against a live site** — it
+  cannot be, until Task 10's flow exists.
