@@ -6,10 +6,15 @@
  * A PIC cannot delete or share in `Documents`; they raise a request from My Submissions and a Head of
  * Unit decides it here.
  *
- * THE APPROVAL EXECUTES IN THE APPROVER'S OWN SESSION. When they press Approve, THEIR browser recycles
- * the file or grants the access, because they hold the rights the requester lacks. No service account,
- * no Power Automate, nothing acting on anyone's behalf — so the audit row names the person who
- * actually did it, and an approval can never exceed the approver's own rights. It fails loudly instead.
+ * ⚠ SHARE EXECUTES IN THE APPROVER'S OWN SESSION; DELETION DOES NOT, SINCE 2026-09-17. When they
+ * press Approve on a Share, THEIR browser grants the access, because they hold rights the requester
+ * lacks — no service account, nothing acting on anyone's behalf, so the audit row names the person
+ * who actually did it. A Deletion is different: pressing Approve only RESOLVES the target's current
+ * identity (`resolveDeletionTarget`) and writes `Status: Approved`; the actual `recycle()` is
+ * performed by `CRS — Execute approved deletion` (Power Automate, running as the service account) —
+ * see `2026-09-17-proxy-deletion-via-power-automate-design.md`. This line used to say deletion also
+ * executed here, and that was true until the persona/grant change made it impossible for most
+ * approvers to hold the SharePoint delete right at all.
  *
  * The rules live in `shared/requests.ts`, under test. This file is the screen and the requests.
  */
@@ -38,6 +43,7 @@ import {
 import { primeNames } from "../../../shared/spNaming";
 import { useLiveRefresh } from "../../../shared/liveRefresh";
 import { writeAudit } from "../../../shared/spAuditLog";
+import { readFileETag } from "../../../shared/deletionGuard";
 import { EVENT } from "../../../shared/auditLog";
 import { normalizeRoleValue } from "../../../shared/groupMapModel";
 import { isSystemAdmin } from "../../../shared/spGroups";
@@ -689,6 +695,15 @@ const COLUMNS: Array<{ name: string; type: number }> = [
   { name: "DecidedAt", type: 4 },
   { name: "DecisionNote", type: 3 },
   { name: "RevokedBy", type: 2 },
+  /* ⚠⚠ WRITTEN, NEVER READ OR DISPLAYED BY THIS APP (2026-09-20) — it exists purely for
+     `CRS — Execute approved deletion` to compare against before recycling. See
+     `docs/superpowers/specs/2026-09-20-etag-guarded-proxy-deletion-design.md`: the flow is a
+     polling trigger whose actual recycle can land tens of seconds after approval, and a
+     replace-clash fallback can reuse the SAME `ItemUniqueId` for different content in that window
+     (confirmed live — see `docs/2026-09-20-session-handoff.md` items 23-28). This is the baseline
+     the flow checks before deleting; a mismatch means the identity was reused and the delete must
+     be skipped rather than acting on whatever is there now. */
+  { name: "TargetETag", type: 2 },
 ];
 
 type Load<T> =
@@ -1859,11 +1874,26 @@ export default function Requests({
       // it still executes directly in the approver's own session, unchanged.
       let failure: string | undefined;
       let resolvedItemUniqueId: string | undefined;
+      /* The baseline `CRS — Execute approved deletion` checks before recycling — see
+         `shared/deletionGuard.ts`'s own docstring and
+         `2026-09-20-etag-guarded-proxy-deletion-design.md`. Read ONLY once the target identity is
+         resolved (never `row.itemUniqueId` directly, which may be stale) — this is the moment
+         deletion is actually authorised, and a mismatch at flow time means someone reused this
+         exact identity for different content in between. `undefined` on any failure, deliberately:
+         this is a safety net for the FLOW's read, not a gate on approving the request. */
+      let targetEtag: string | undefined;
       if (approve) {
         if (row.type === "Deletion") {
           const resolved = await resolveDeletionTarget(row);
           if ("failure" in resolved) failure = resolved.failure;
-          else resolvedItemUniqueId = resolved.itemUniqueId;
+          else {
+            resolvedItemUniqueId = resolved.itemUniqueId;
+            targetEtag = await readFileETag(
+              context.spHttpClient,
+              siteUrl,
+              resolved.itemUniqueId,
+            );
+          }
         } else {
           failure = await performShare(row);
         }
@@ -1876,29 +1906,51 @@ export default function Requests({
         failure,
       });
 
-      const upd = await context.spHttpClient.post(
-        `${listUrl()}/items(${row.id})`,
-        SPHttpClient.configurations.v1,
-        {
-          headers: {
-            ...writeHeaders,
-            "X-HTTP-Method": "MERGE",
-            "IF-MATCH": "*",
+      // `string | undefined`, not `string` — `decided.decidedBy`/`decidedAt`/`decisionNote` can be
+      // undefined (a rejection carries no `DecidedAt`-style gaps of its own), and `JSON.stringify`
+      // already drops an `undefined`-valued key, matching the original inline-literal behaviour
+      // this replaces.
+      const mergeBody: Record<string, string | undefined> = {
+        Status: decided.status,
+        DecidedBy: decided.decidedBy,
+        DecidedAt: decided.decidedAt,
+        DecisionNote: decided.decisionNote,
+        // Only present when a Deletion resolved to a DIFFERENT id than the one already on the
+        // row (the pending-stage-then-routed case) — re-pointing it is what lets the proxy flow
+        // find the document by GUID after this write, since it is never told anything else.
+        ...(resolvedItemUniqueId !== undefined
+          ? { ItemUniqueId: resolvedItemUniqueId }
+          : {}),
+        // See `targetEtag`'s own comment above — absent on any read failure or for a Share, which
+        // the flow (and every row written before this existed) already treats as "no guard,
+        // proceed".
+        ...(targetEtag !== undefined ? { TargetETag: targetEtag } : {}),
+      };
+      const sendMerge = (
+        payload: Record<string, string | undefined>,
+      ): Promise<SPHttpClientResponse> =>
+        context.spHttpClient.post(
+          `${listUrl()}/items(${row.id})`,
+          SPHttpClient.configurations.v1,
+          {
+            headers: {
+              ...writeHeaders,
+              "X-HTTP-Method": "MERGE",
+              "IF-MATCH": "*",
+            },
+            body: JSON.stringify(payload),
           },
-          body: JSON.stringify({
-            Status: decided.status,
-            DecidedBy: decided.decidedBy,
-            DecidedAt: decided.decidedAt,
-            DecisionNote: decided.decisionNote,
-            // Only present when a Deletion resolved to a DIFFERENT id than the one already on the
-            // row (the pending-stage-then-routed case) — re-pointing it is what lets the proxy flow
-            // find the document by GUID after this write, since it is never told anything else.
-            ...(resolvedItemUniqueId !== undefined
-              ? { ItemUniqueId: resolvedItemUniqueId }
-              : {}),
-          }),
-        },
-      );
+        );
+      let upd = await sendMerge(mergeBody);
+      // ⚠ `TargetETag` IS THE NEWEST COLUMN ON THIS LIST, so a site that has not yet pressed
+      // "Add missing columns" does not have it — and one unknown field name fails the WHOLE MERGE
+      // (gotcha #11), which would otherwise mean a decision can never be recorded at all until an
+      // admin adds it. 400 only: a 403 is a real permissions failure and retrying would hide it.
+      if (upd.status === 400 && mergeBody.TargetETag !== undefined) {
+        const without = { ...mergeBody };
+        delete without.TargetETag;
+        upd = await sendMerge(without);
+      }
       // The row could not be updated but the ACTION already happened. Said loudly: silently leaving
       // it Pending invites a second approver to do the same thing again.
       const rowWritten = upd.ok;

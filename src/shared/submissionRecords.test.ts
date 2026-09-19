@@ -2,9 +2,11 @@
  * Tests for the submission record.
  * Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md
  *
- * The two rules worth breaking a build over:
+ * The rules worth breaking a build over:
  *  - an unresolved record is DELETED only when the live read was complete (§2, `unknown`);
- *  - the join is the STAMP, never `UniqueId`, because Auto-route replaces the latter.
+ *  - the join is the STAMP first, always — `UniqueId` is only a fallback tried while the stamp is
+ *    still missing (settling), and it never revives the routed-file case Auto-route replaces the
+ *    stamp's `UniqueId` for (2026-09-20; see `indexLiveByUniqueId`).
  */
 
 import { Submission } from "./mySubmissions";
@@ -15,6 +17,7 @@ import {
   normaliseFileId,
   isJoinable,
   indexLiveByFileId,
+  indexLiveByUniqueId,
   rowFromRecord,
   mergedKey,
   RecordState,
@@ -42,6 +45,7 @@ import {
   snapshotFileRows,
   isBulkUploadRow,
   RECORD_SOURCE,
+  RECENT_UPLOAD_GRACE_MS,
 } from "./submissionRecords";
 
 function rec(over: Partial<SubmissionRecord> = {}): SubmissionRecord {
@@ -147,6 +151,25 @@ describe("indexLiveByFileId", () => {
   });
 });
 
+describe("indexLiveByUniqueId (2026-09-20 — the settling-window secondary join)", () => {
+  it("indexes case-insensitively", () => {
+    const idx = indexLiveByUniqueId([live({ uniqueId: "ACCDBEBF-0000-0000-0000-000000000000" })]);
+    expect(idx["accdbebf-0000-0000-0000-000000000000"]).toBeDefined();
+  });
+
+  it("omits rows with no UniqueId", () => {
+    expect(Object.keys(indexLiveByUniqueId([live()]))).toEqual([]);
+  });
+
+  it("keeps the first of two rows sharing a UniqueId", () => {
+    const idx = indexLiveByUniqueId([
+      live({ itemId: 1, uniqueId: "same-guid" }),
+      live({ itemId: 2, uniqueId: "same-guid" }),
+    ]);
+    expect(idx["same-guid"].itemId).toBe(1);
+  });
+});
+
 describe("mergeRecords", () => {
   it("keeps every live row, recorded or not", () => {
     // Files uploaded before this existed must behave exactly as they do now.
@@ -180,16 +203,84 @@ describe("mergeRecords", () => {
     expect(r.rows[0].recordState).toBeUndefined();
   });
 
-  it("never joins on UniqueId", () => {
-    // A live row sharing the record's UniqueId but carrying no stamp must NOT resolve it — that is
-    // the agreed design's key, and relying on it is what marked approved files deleted.
+  it("does NOT use UniqueId to save a record whose file is genuinely gone (the routed/deleted case the original rule protects)", () => {
+    // The scenario the design's warning is actually about: a record's recorded `UniqueId` belonged
+    // to a document that has since been routed (new UniqueId) or deleted outright — the OLD id no
+    // longer appears among CURRENT live rows at all, so the fallback correctly finds nothing and the
+    // record falls through exactly as before. `uploadedAt` is set well past the grace period so this
+    // is unambiguously "deleted", not "still settling".
     const r = mergeRecords(
-      [rec({ fileId: "SFI-1", uniqueId: "same-guid" })],
-      [live({ uniqueId: "same-guid" })],
+      [rec({ fileId: "SFI-1", uniqueId: "old-guid", uploadedAt: new Date("2026-01-01T00:00:00Z") })],
+      [live({ uniqueId: "unrelated-guid" })], // present, but a DIFFERENT document entirely
       true,
     );
     expect(r.live).toBe(0);
     expect(r.deleted).toBe(1);
+  });
+
+  describe("the settling-window fallback via UniqueId (2026-09-20)", () => {
+    // Since the tag-by-proxy migration (2026-09-18), `SubmissionFileId` is written onto the live
+    // document by `CRS — Apply pending tags` on a poll, not at upload time — so for the first few
+    // minutes after every upload the primary join genuinely finds nothing, even though the document
+    // exists exactly where it was uploaded. `UniqueId` is present on that document from the moment of
+    // creation and is what closes the gap. Found live 2026-09-20: without this, a single Bulk Upload
+    // batch showed up TWICE in My Submissions while settling — once as its own untagged live row
+    // (which, having no `SubmissionId` of its own yet, fell into the "grouped by folder and date"
+    // bucket meant for pre-tracking files) and once as a synthetic `settling` placeholder built from
+    // the record.
+
+    it("resolves a settling record to its live row via UniqueId when the stamp has not landed yet", () => {
+      const now = new Date("2026-09-20T00:14:00Z");
+      const r = mergeRecords(
+        [rec({ fileId: "SFI-1", uniqueId: "same-guid", uploadedAt: now })],
+        [live({ uniqueId: "same-guid" })], // no submissionFileId yet — still settling
+        true,
+        now,
+      );
+      expect(r.live).toBe(1);
+      expect(r.settling).toBe(0);
+      expect(r.deleted).toBe(0);
+      // Exactly ONE row for the one physical file — the bug this closes was a second, phantom row.
+      expect(r.rows).toHaveLength(1);
+      // An ordinary live row, not a synthetic gone-row standing in for it.
+      expect(r.rows[0].recordState).toBeUndefined();
+    });
+
+    it("fills in submissionId/batchId from the record so grouping does not fall back to folder+date", () => {
+      const now = new Date("2026-09-20T00:14:00Z");
+      const r = mergeRecords(
+        [rec({ fileId: "SFI-1", uniqueId: "same-guid", uploadedAt: now })],
+        [live({ uniqueId: "same-guid" })],
+        true,
+        now,
+      );
+      expect(r.rows[0].submissionId).toBe("SUB-20260827-K4P2");
+      expect(r.rows[0].batchId).toBe("BAT-20260827-GRWZ");
+    });
+
+    it("never overrides a submissionId the live row already carries", () => {
+      // Once the flow HAS stamped the item, its own SubmissionId already agrees with the record's —
+      // the `??` fallback must be a no-op here, never a source of disagreement between the two.
+      const r = mergeRecords(
+        [rec({ fileId: "SFI-1" })],
+        [live({ submissionFileId: "SFI-1", submissionId: "SUB-ALREADY-THERE" })],
+        true,
+      );
+      expect(r.rows[0].submissionId).toBe("SUB-ALREADY-THERE");
+    });
+
+    it("stops matching by UniqueId the moment the file is routed (the id changes) — the primary join takes back over", () => {
+      // Mirrors the existing "matches a resolved record across libraries" test: once routed, the
+      // live copy has a NEW UniqueId, so the fallback cannot find it — but the primary stamp, which
+      // the flow copies across the route, still does.
+      const r = mergeRecords(
+        [rec({ fileId: "SFI-1", libraryTitle: "Approval Document", uniqueId: "old-guid" })],
+        [live({ library: "Documents", submissionFileId: "SFI-1", uniqueId: "new-guid" })],
+        true,
+      );
+      expect(r.live).toBe(1);
+      expect(r.rows[0].recordState).toBeUndefined();
+    });
   });
 
   it("marks an unresolved record deleted when the read was complete", () => {
@@ -197,6 +288,83 @@ describe("mergeRecords", () => {
     expect(r.deleted).toBe(1);
     expect(r.unknown).toBe(0);
     expect(r.rows).toHaveLength(1);
+    expect(r.rows[0].recordState).toBe("deleted");
+  });
+
+  it("marks a just-uploaded, still-unresolved record SETTLING (not deleted, not unknown) — the tag-apply flow may not have stamped it onto the live item yet", () => {
+    const now = new Date("2026-09-19T12:00:00Z");
+    const r = mergeRecords(
+      [rec({ fileId: "SFI-1", uploadedAt: new Date("2026-09-19T11:58:00Z") })], // 2 min ago
+      [],
+      true,
+      now,
+    );
+    expect(r.deleted).toBe(0);
+    expect(r.unknown).toBe(0);
+    expect(r.settling).toBe(1);
+    expect(r.rows[0].recordState).toBe("settling");
+  });
+
+  it("marks it deleted once the record has been unresolved for longer than the grace period", () => {
+    const now = new Date("2026-09-19T12:00:00Z");
+    const uploadedAt = new Date(now.getTime() - RECENT_UPLOAD_GRACE_MS - 1000);
+    const r = mergeRecords([rec({ fileId: "SFI-1", uploadedAt })], [], true, now);
+    expect(r.deleted).toBe(1);
+    expect(r.settling).toBe(0);
+    expect(r.unknown).toBe(0);
+  });
+
+  it("is exactly at the boundary: still within the grace period reads settling, one second past reads deleted", () => {
+    const now = new Date("2026-09-19T12:00:00Z");
+    const justWithin = new Date(now.getTime() - RECENT_UPLOAD_GRACE_MS + 1000);
+    const justPast = new Date(now.getTime() - RECENT_UPLOAD_GRACE_MS - 1000);
+    const within = mergeRecords([rec({ fileId: "SFI-1", uploadedAt: justWithin })], [], true, now);
+    const past = mergeRecords([rec({ fileId: "SFI-2", uploadedAt: justPast })], [], true, now);
+    expect(within.rows[0].recordState).toBe("settling");
+    expect(past.rows[0].recordState).toBe("deleted");
+  });
+
+  it("never reads settling when the read genuinely FAILED, however recent the record is — a failed read means the true status could be anything", () => {
+    const now = new Date("2026-09-19T12:00:00Z");
+    const uploadedAt = new Date(now.getTime() - 1000); // 1 second ago
+    const r = mergeRecords([rec({ fileId: "SFI-1", uploadedAt })], [], false, now);
+    expect(r.settling).toBe(0);
+    expect(r.deleted).toBe(0);
+    expect(r.unknown).toBe(1);
+    expect(r.rows[0].recordState).toBe("unknown");
+  });
+
+  it("does not let the grace period mask an observed withdrawal/replacement/archive", () => {
+    // The grace period only softens the "deleted" fallback — an OBSERVED event must still win
+    // even on a record uploaded a second ago, or a replace-on-upload race would briefly report
+    // "settling"/"Pending" instead of the correct, already-known "replaced".
+    const now = new Date("2026-09-19T12:00:00Z");
+    const uploadedAt = new Date(now.getTime() - 1000);
+    const r = mergeRecords(
+      [rec({ fileId: "SFI-1", uploadedAt, replacedAt: new Date("2026-09-19T11:59:00Z") })],
+      [],
+      true,
+      now,
+    );
+    expect(r.rows[0].recordState).toBe("cancelled");
+  });
+
+  it("treats a record with no uploadedAt as never within the grace period", () => {
+    const r = mergeRecords(
+      [rec({ fileId: "SFI-1", uploadedAt: undefined })],
+      [],
+      true,
+      new Date("2026-09-19T12:00:00Z"),
+    );
+    expect(r.deleted).toBe(1);
+    expect(r.settling).toBe(0);
+    expect(r.unknown).toBe(0);
+  });
+
+  it("defaults `now` to the real clock when the caller does not supply one", () => {
+    // The one live call site (MySubmissions.tsx) never passes `now` — confirms the default keeps
+    // a genuinely old, fixture-dated record reading deleted without the caller doing anything.
+    const r = mergeRecords([rec({ fileId: "SFI-1" })], [], true);
     expect(r.rows[0].recordState).toBe("deleted");
   });
 
@@ -296,7 +464,7 @@ describe("mergedKey", () => {
 });
 
 describe("recordCounts and liveRowsOnly", () => {
-  it("counts the six states apart", () => {
+  it("counts the seven states apart", () => {
     const rows = [
       live(),
       rowFromRecord(rec({ fileId: "SFI-1" }), "deleted"),
@@ -304,13 +472,14 @@ describe("recordCounts and liveRowsOnly", () => {
       rowFromRecord(rec({ fileId: "SFI-3" }), "cancelled"),
       rowFromRecord(rec({ fileId: "SFI-4" }), "archived"),
       rowFromRecord(rec({ fileId: "SFI-5" }), "withdrawn"),
+      rowFromRecord(rec({ fileId: "SFI-6" }), "settling"),
     ];
     expect(recordCounts(rows)).toEqual({
-      live: 1, deleted: 1, unknown: 1, cancelled: 1, archived: 1, withdrawn: 1,
+      live: 1, deleted: 1, unknown: 1, cancelled: 1, archived: 1, withdrawn: 1, settling: 1,
     });
   });
 
-  it("excludes every gone state from the approval counts", () => {
+  it("excludes every gone state from the approval counts, settling included", () => {
     const rows = [
       live(),
       rowFromRecord(rec({ fileId: "SFI-1" }), "deleted"),
@@ -318,7 +487,10 @@ describe("recordCounts and liveRowsOnly", () => {
       rowFromRecord(rec({ fileId: "SFI-3" }), "cancelled"),
       rowFromRecord(rec({ fileId: "SFI-4" }), "archived"),
       rowFromRecord(rec({ fileId: "SFI-5" }), "withdrawn"),
+      rowFromRecord(rec({ fileId: "SFI-6" }), "settling"),
     ];
+    // `settling` behaves like every other gone state here — it has no real approval outcome yet,
+    // it just SHOWS as if it does. Rendering "Pending" is a display choice made after this filter.
     expect(liveRowsOnly(rows)).toHaveLength(1);
   });
 });
@@ -1146,8 +1318,8 @@ describe("snapshot rows: the folder half and the file half", () => {
  */
 describe("recordStateParts: no state can go unmentioned", () => {
   const counts = (over: Partial<Record<string, number>>): {
-    live: number; deleted: number; cancelled: number; archived: number; withdrawn: number; unknown: number;
-  } => ({ live: 0, deleted: 0, cancelled: 0, archived: 0, withdrawn: 0, unknown: 0, ...over });
+    live: number; deleted: number; cancelled: number; archived: number; withdrawn: number; settling: number; unknown: number;
+  } => ({ live: 0, deleted: 0, cancelled: 0, archived: 0, withdrawn: 0, settling: 0, unknown: 0, ...over });
 
   it("gives every non-live state a word", () => {
     // The guard against a fourth omission: a state added to RecordState fails to compile in
@@ -1156,7 +1328,7 @@ describe("recordStateParts: no state can go unmentioned", () => {
       expect(RECORD_STATE_LABEL[k as keyof typeof RECORD_STATE_LABEL].length).toBeGreaterThan(0);
     }
     expect(Object.keys(RECORD_STATE_LABEL).sort()).toEqual(
-      ["archived", "cancelled", "deleted", "unknown", "withdrawn"],
+      ["archived", "cancelled", "deleted", "settling", "unknown", "withdrawn"],
     );
   });
 
@@ -1186,9 +1358,18 @@ describe("recordStateParts: no state can go unmentioned", () => {
     expect(recordStateParts(counts({ unknown: 1 }))).toEqual(["1 not checked"]);
   });
 
-  it("reads worst news first and doubt last", () => {
-    expect(recordStateParts(counts({ deleted: 1, withdrawn: 2, cancelled: 3, archived: 4, unknown: 5 }))).toEqual([
-      "1 deleted", "2 cancelled", "3 replaced", "4 archived", "5 not checked",
+  it("says `pending` for settling — the same word a live join would show, deliberately", () => {
+    // 2026-09-19, client: "why is it showing not checked? can we not show pending instead?"
+    expect(recordStateParts(counts({ settling: 1 }))).toEqual(["1 pending"]);
+  });
+
+  it("reads worst news first, doubt last, settling last of all", () => {
+    expect(
+      recordStateParts(
+        counts({ deleted: 1, withdrawn: 2, cancelled: 3, archived: 4, unknown: 5, settling: 6 }),
+      ),
+    ).toEqual([
+      "1 deleted", "2 cancelled", "3 replaced", "4 archived", "5 not checked", "6 pending",
     ]);
   });
 });

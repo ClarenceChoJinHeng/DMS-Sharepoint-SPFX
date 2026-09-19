@@ -21,6 +21,7 @@ import {
   markRecordReplaced,
   readSubmissionRecordByFileId,
 } from "../../../shared/spSubmissionRecords";
+import { readFileETag } from "../../../shared/deletionGuard";
 import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFormProps } from "./IFormProps";
@@ -91,7 +92,6 @@ import {
   canSaveBatch,
   collisionsWithin,
   decideClash,
-  duplicateAcrossBatches,
   nextAvailableName,
   nextId,
   sameDestinationDuplicates,
@@ -2124,7 +2124,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     destination: {},
     files: commitEditor(draftFiles).filter(nameSettled),
   });
-  const crossBatchDupes = duplicateAcrossBatches(batches);
 
   /**
    * Sets that would write ONE name into ONE folder - where the second upload destroys the first.
@@ -2947,10 +2946,19 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      * Yes made the call unilaterally. `CRS — Execute approved deletion` picks up any row matching
      * `RequestType eq 'Deletion' and Status eq 'Approved'` regardless of who wrote it.
      *
+     * ⚠ `CRS — Execute approved deletion` IS BUILT (confirmed live 2026-09-19 — an earlier version
+     * of this comment said otherwise and was WRONG; the flow appears in the tenant's flow list). So
+     * a poll that never resolves is no longer explained by "the flow does not exist" — it means one
+     * of: (a) `crs@sdguthrie.com` was never added to `CRS Owners` (runbook §0 prerequisite — the
+     * recycle then 403s), (b) the flow inherited a stale trigger condition from a Save-As and never
+     * fires at all (runbook §1's own warning), or (c) something in the condition/action wiring does
+     * not match what this code writes. Check the `CRS Requests` row this call creates: `Status`
+     * staying `Approved` forever means the flow never fired; `Status` flipping to `Failed` with a
+     * `DecisionNote` naming an HTTP code means it fired and the recycle itself failed.
+     *
      * Returns `true` once `GetFileById` on the old id starts 404ing (confirmed gone), `false` if
      * the deletion request itself could not be written, or if it never resolves within the poll
-     * budget (most likely because `CRS — Execute approved deletion` is not yet built/running — a
-     * dependency this proxy path shares with every other consumer of that same flow).
+     * budget below.
      */
     const deleteClashingDraftByProxy = async (
       clashing: { uniqueId?: string; path?: string },
@@ -2958,44 +2966,80 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     ): Promise<boolean> => {
       const me = (context.pageContext.user.email ?? "").toLowerCase();
       const now = new Date().toISOString();
+      /* The baseline `CRS — Execute approved deletion` checks before recycling — THIS is the exact
+         call site where the race was confirmed live, 2026-09-20 (see
+         `docs/2026-09-20-session-handoff.md` items 23-28: three uploads of one filename sharing one
+         `ItemUniqueId`, because this fallback overwrites the SAME identity in place, and the
+         proxy flow's own recycle landed a second after the newest upload). See
+         `shared/deletionGuard.ts` and `2026-09-20-etag-guarded-proxy-deletion-design.md`.
+         `undefined` on any read failure or for the `hidden` no-GUID case, deliberately — a safety
+         net for the FLOW's read, never a gate on the upload proceeding. */
+      const targetEtag = clashing.uniqueId
+        ? await readFileETag(context.spHttpClient, siteUrl, clashing.uniqueId)
+        : undefined;
       try {
         const listTitle = await listName(LIST_SUFFIX.requests);
-        const res = await context.spHttpClient.post(
-          `${siteUrl}/_api/web/lists/getbytitle('${listTitle}')/items`,
-          SPHttpClient.configurations.v1,
-          {
-            headers: {
-              Accept: "application/json;odata=nometadata",
-              "Content-Type": "application/json;odata=nometadata",
-              "odata-version": "",
-            },
-            body: JSON.stringify({
-              Title: `Replace on upload — ${clashingName}`.slice(0, 255),
-              RequestType: "Deletion",
-              Status: "Approved",
-              // ⚠ EITHER MAY BE BLANK, NEVER BOTH — the caller already refuses before reaching here
-              // if neither resolved. `ItemUrl` is what lets the not-yet-built proxy flow resolve a
-              // colleague's hidden draft it can never see by GUID, since the read that would supply
-              // one is security-trimmed away for exactly that case (see the fallback read above).
-              ItemUniqueId: clashing.uniqueId ?? "",
-              ItemUrl: clashing.path ?? "",
-              ItemName: clashingName,
-              RequestedBy: me,
-              RequestedAt: now,
-              Reason: "",
-              DecidedBy: me,
-              DecidedAt: now,
-              DecisionNote:
-                "No approval needed — the uploader replaced this draft directly.",
-            }),
-          },
-        );
+        const itemsUrl = `${siteUrl}/_api/web/lists/getbytitle('${listTitle}')/items`;
+        const requestHeaders = {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+          "odata-version": "",
+        };
+        const body: Record<string, string> = {
+          Title: `Replace on upload — ${clashingName}`.slice(0, 255),
+          RequestType: "Deletion",
+          Status: "Approved",
+          // ⚠ EITHER MAY BE BLANK, NEVER BOTH — the caller already refuses before reaching here
+          // if neither resolved. `ItemUrl` is written for the `hidden`-clash case (a colleague's
+          // draft this account cannot resolve a GUID for), but the flow as documented in
+          // `2026-09-17-execute-approved-deletion-flow-runbook.md` §3 acts ONLY via
+          // `GetFileById(guid'...')` — it has no path-based fallback of its own. So a `hidden`
+          // clash with a blank `ItemUniqueId` will make the flow's own recycle call malformed
+          // (`GetFileById(guid'')`) and it will land in the Failure branch. Not the cause for an
+          // ordinary self-replace (this account's own file always resolves a real GUID first),
+          // but a real, separate gap for the colleague's-draft case — flag it if that specific
+          // scenario is what is actually being tested.
+          ItemUniqueId: clashing.uniqueId ?? "",
+          ItemUrl: clashing.path ?? "",
+          ItemName: clashingName,
+          RequestedBy: me,
+          RequestedAt: now,
+          Reason: "",
+          DecidedBy: me,
+          DecidedAt: now,
+          DecisionNote:
+            "No approval needed — the uploader replaced this draft directly.",
+        };
+        // See `targetEtag`'s own comment above — absent on any read failure or the `hidden` case.
+        if (targetEtag !== undefined) body.TargetETag = targetEtag;
+        const send = (
+          payload: Record<string, string>,
+        ): Promise<SPHttpClientResponse> =>
+          context.spHttpClient.post(itemsUrl, SPHttpClient.configurations.v1, {
+            headers: requestHeaders,
+            body: JSON.stringify(payload),
+          });
+        let res = await send(body);
+        // ⚠ `TargetETag` IS THE NEWEST COLUMN, so it drops FIRST on a 400 — one unknown field name
+        // fails the WHOLE write (gotcha #11), and this write has no other fallback: if it fails
+        // outright, the caller falls straight to the risky direct overwrite this guard exists to
+        // make safe, which would defeat the point on any site that has not yet added the column.
+        if (res.status === 400 && body.TargetETag !== undefined) {
+          const without = { ...body };
+          delete without.TargetETag;
+          res = await send(without);
+        }
         if (!res.ok) return false;
       } catch {
         return false;
       }
       // Poll budget: ~10 attempts, 3s apart — about 30s. Bounded and short because it blocks the
       // upload button, unlike the tag/decision flows' own background ~1-minute poll.
+      //
+      // ⚠ RESTORED TO THE ORIGINAL 10×3s ON 2026-09-19 — a briefly-shortened 3×2s version assumed
+      // the flow did not exist, which was wrong (it is built; see `deleteClashingDraftByProxy`'s own
+      // comment above). A real flow deserves the full, originally-intended budget rather than being
+      // starved of time to fire before this gives up and falls back.
       for (let attempt = 0; attempt < 10; attempt++) {
         await new Promise<void>((resolve) => setTimeout(resolve, 3000));
         try {
@@ -3027,11 +3071,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     const replaceApproved = replaceApprovedIds.has(sf.id);
     /* Read by the `Files/Add` call in the NEXT try block, which is why it is declared out here.
        TRUE only on a path the uploader has explicitly consented to in the dialog. It no longer
-       feeds `Files/Add`'s own `overwrite` argument (that call always passes `false` now, since
-       `deleteClashingDraftByProxy` above recycles the clashing item first — overwriting an
-       EXISTING item via `Files/Add(overwrite=true)` needs `EditListItems`, which PIC is losing
-       the same as `CRS Upload`'s `Edit Items` for tagging). It still gates whether that recycle
-       runs at all. */
+       feeds `Files/Add`'s own `overwrite` argument directly — `directOverwriteFallback` below
+       decides that now — since `deleteClashingDraftByProxy` above recycles the clashing item
+       first when it can: overwriting an EXISTING item via `Files/Add(overwrite=true)` needs
+       `EditListItems`, which PIC is losing the same as `CRS Upload`'s `Edit Items` for tagging.
+       It still gates whether that recycle is attempted at all. */
     let overwritePending = false;
     /**
      * The `SubmissionFileId` of the document this upload is about to overwrite.
@@ -3143,10 +3187,17 @@ export default function Form({ context }: IFormProps): React.ReactElement {
            case this whole mechanism most needs to handle, since it is the case the uploader cannot
            see and cannot resolve any other way.
            FOLDERS ARE NOT SUBJECT TO DRAFT ITEM SECURITY — only the moderated FILE inside one is —
-           so this read succeeds even when the file's own properties do not, giving the not-yet-built
-           proxy flow (which runs with full visibility) a PATH to resolve instead of a GUID. Read
-           only when the UniqueId attempt above already failed, so the ordinary (visible) case costs
-           nothing extra. */
+           so this read succeeds even when the file's own properties do not, giving whatever resolves
+           this a PATH instead of a GUID for the hidden case.
+           ⚠⚠ THIS PATH IS CURRENTLY WRITTEN AND NEVER CONSUMED — `CRS — Execute approved deletion`,
+           the flow this feeds (`ItemUrl` on the `CRS Requests` row), acts ONLY via
+           `GetFileById(guid'...')` per its own runbook (`2026-09-17-execute-approved-deletion-flow-
+           runbook.md` §3) and has no path-based fallback. So a `hidden` clash — a colleague's draft
+           this account can only resolve by path, never by GUID — will still write `ItemUniqueId: ""`
+           on that row, and the flow's own recycle call becomes malformed and fails. Either give the
+           flow an `ItemUrl` fallback branch, or accept that this specific case is not yet handled.
+           Read only when the UniqueId attempt above already failed, so the ordinary (visible) case
+           costs nothing extra. */
         if (!displacedItemUniqueId) {
           try {
             const folderRes = await context.spHttpClient.get(
@@ -3219,9 +3270,25 @@ export default function Form({ context }: IFormProps): React.ReactElement {
       // Network error on the existence check — proceed; the upload will surface the real error.
     }
 
-    /* ⚠ THE RECYCLE HAPPENS HERE, BEFORE THE PHYSICAL UPLOAD — the name must be genuinely free
-       before `Files/Add` is asked to create something there, since that call no longer carries an
-       `overwrite` flag of its own (see `overwritePending`'s own comment above). */
+    /* ⚠ SAFETY-NET FALLBACK, added 2026-09-19 — `deleteClashingDraftByProxy` below depends on
+       `CRS — Execute approved deletion`, a live flow (confirmed in the tenant's flow list the same
+       day), so this should now normally succeed on its own within the poll budget. This fallback
+       exists for when it does not — a misconfigured trigger condition, `crs@sdguthrie.com` missing
+       from `CRS Owners`, or any other live-flow failure — so a broken proxy step degrades to the
+       pre-proxy behaviour rather than blocking every replace outright. `CRS Upload` still holds
+       `Edit Items` today (Task 13's untick has not been applied), so a direct `overwrite=true`
+       still works exactly as it did before the proxy mechanism was written.
+       DELETE THIS FALLBACK once the proxy flow is verified reliable AND Task 13 has revoked
+       `Edit Items` — at that point direct overwrite will fail loudly (403) on its own, which is the
+       intended end state; keeping this fallback beyond that point would silently mask a broken
+       proxy flow behind a permission PIC no longer has. */
+    let directOverwriteFallback = false;
+
+    /* ⚠ THE RECYCLE HAPPENS HERE, BEFORE THE PHYSICAL UPLOAD — when it succeeds, the name must be
+       genuinely free before `Files/Add` is asked to create something there (hence `overwrite`
+       is `false` on that path). When it cannot be confirmed, `directOverwriteFallback` takes
+       over and `Files/Add` does the overwrite itself, exactly as it did before the proxy path
+       existed (see `overwritePending`'s own comment above). */
     if (overwritePending) {
       if (!displacedItemUniqueId && !displacedItemPath) {
         return {
@@ -3236,17 +3303,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         finalName,
       );
       if (!cleared) {
-        return {
-          fileId: sf.id,
-          ok: false,
-          error: `"${finalName}" could not be cleared for replacement in time. Nothing was uploaded — try again in a moment, or contact an administrator if this keeps happening.`,
-        };
+        directOverwriteFallback = true;
       }
     }
 
     try {
       const uploadRes: SPHttpClientResponse = await context.spHttpClient.post(
-        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`,
+        `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=${directOverwriteFallback ? "true" : "false"})?$select=ServerRelativeUrl`,
         SPHttpClient.configurations.v1,
         { body: sf.file },
       );
@@ -3332,6 +3395,26 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                draft that draft security hides. The dialog needs the distinction: replacing here
                discards someone else's unreviewed work, and they are never asked. */
             clashWhere: "hidden",
+          };
+        }
+        /* ⚠ THE FALLBACK OVERWRITE ITSELF WAS REFUSED (2026-09-20) — expected the moment `CRS Upload`
+           loses `Edit Items` (Task 13 of the 2026-09-18 tag/approve-by-proxy design), and this is
+           the SAFE direction to fail in: SharePoint refuses to overwrite the still-pending draft
+           rather than the client silently reusing its identity while `CRS — Execute approved
+           deletion` might still be about to recycle it — the exact confirmed race from
+           `2026-09-20-etag-guarded-proxy-deletion-design.md`. Checked BEFORE the generic fallback
+           below (never a specific status code — a throttle or network blip on this same attempt
+           deserves the identical "try again" answer, not a raw error). Matched on
+           `directOverwriteFallback` alone, not a status, for the same reason `looksLikeNameClash`
+           above matches on several signals: the one thing that matters is WHY this attempt was
+           made, not exactly how it failed. */
+        if (directOverwriteFallback) {
+          return {
+            fileId: sf.id,
+            ok: false,
+            error:
+              "Still clearing the way for this replacement — the earlier version has not finished " +
+              "being removed yet. Try uploading again in a moment.",
           };
         }
         const hint =
@@ -3486,8 +3569,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          `validateUpdateListItem` POST is GONE — `formValues` above is built exactly as it always
          was (same tier values, same `toTaxValue`-encoded taxonomy fields) but is now JSON-encoded
          and carried as `tagPayload` on the ONE write this function makes for tagging: the
-         `CRS Submissions` record itself. `CRS — Apply pending tags` (Power Automate, not yet built)
-         reads that payload and applies it as `crs@sdguthrie.com`.
+         `CRS Submissions` record itself. `CRS — Apply pending tags` (Power Automate, confirmed live
+         and running as `crs@sdguthrie.com` — verified fast on a 20-file batch, 2026-09-19) reads
+         that payload and applies it.
 
          ⚠⚠ THE FAILURE PATH BELOW IS DELIBERATELY IDENTICAL TO THE OLD `validateUpdateListItem`
          FAILURE PATH — same wording, same "stays in the batch, ok: false" behaviour, same
@@ -5444,16 +5528,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   ))}
                   Rename one of them, or send them to different folders, then
                   press Upload again.
-                </p>
-              )}
-              {/* Suppressed while the error above is showing: one document named in both would be told
-              it is "allowed" and forbidden in the same breath. The note remains correct on its own
-              terms - a file staged into two DIFFERENT folders really is filed in each place. */}
-              {destClashes.length === 0 && crossBatchDupes.length > 0 && (
-                <p className="dms-batch-note">
-                  The same document appears in more than one batch:{" "}
-                  {crossBatchDupes.join(", ")}. That is allowed - it will be
-                  filed in each place.
                 </p>
               )}
               {(stagedNow.overCount || stagedNow.overBytes) && (

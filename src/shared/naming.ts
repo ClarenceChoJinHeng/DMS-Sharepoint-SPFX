@@ -57,14 +57,20 @@ export const LIST_SUFFIX = {
   // One row per uploaded file, so My Submissions can still show a file after it is deleted.
   // Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md
   submissions: "Submissions",
-  // One row per approve/reject decision, applied by `CRS — Apply pending decisions` (Power
-  // Automate, running as crs@sdguthrie.com) rather than by the approver's own click — the
-  // tag/approve-by-proxy model. Spec: docs/superpowers/specs/2026-09-18-tag-approve-proxy-design.md
+  // ⚠⚠ REVERSED — see `docs/superpowers/specs/2026-09-18-tag-approve-proxy-reversion.md`. This
+  // was going to be a row per approve/reject decision, applied by a `CRS — Apply pending
+  // decisions` flow rather than by the approver's own click. `ApproveItems` turned out to have a
+  // hard SharePoint dependency on `EditListItems`, so removing the approver's `Edit Items` would
+  // also have removed their pending-file visibility — the client would not accept that, and the
+  // approver-side proxy was dropped. `CRS Approve` keeps `Edit Items`; only PIC lost it. Kept as a
+  // constant (never wired into `PRIMED_SUFFIXES` below) rather than deleted, per this project's
+  // park-rather-than-delete habit — `spPendingDecisions.ts` still holds the parked implementation.
   pendingDecisions: "Pending Decisions",
 };
 
 /**
- * Every list suffix `primeNames` probes. **Must cover all of `LIST_SUFFIX`** — pinned by test.
+ * Every list suffix `primeNames` probes. **Must cover all of `LIST_SUFFIX` EXCEPT
+ * `UNPRIMED_SUFFIXES` below** — pinned by test.
  *
  * ⚠ `LIST_SUFFIX.requests` WAS MISSING, from the day the requests feature was written until
  * 2026-08-20, and the failure was completely silent. An unprimed suffix never enters the name cache,
@@ -76,7 +82,8 @@ export const LIST_SUFFIX = {
  * Lives HERE rather than in `spNaming` so it can be tested: that module imports `@microsoft/sp-http`,
  * which the test environment cannot resolve.
  *
- * A suffix added here costs one probe per page load. A suffix left out costs a feature, silently.
+ * A suffix added here costs one probe per page load. A suffix left out costs a feature, silently —
+ * UNLESS it is named in `UNPRIMED_SUFFIXES`, which means the omission is deliberate.
  */
 export const PRIMED_SUFFIXES: string[] = [
   LIST_SUFFIX.config,
@@ -87,8 +94,23 @@ export const PRIMED_SUFFIXES: string[] = [
   LIST_SUFFIX.auditLog,
   LIST_SUFFIX.requests,
   LIST_SUFFIX.submissions,
-  LIST_SUFFIX.pendingDecisions,
 ];
+
+/**
+ * Suffixes deliberately EXCLUDED from `PRIMED_SUFFIXES`, and why — found live 2026-09-19 as
+ * repeated console 404s (`getbytitle('CRS Pending Decisions')`, `getbytitle('DMS Pending
+ * Decisions')`) on every page of the app, on every load, for ever: `resolveListTitle` never
+ * caches a FAILED probe (a throttled probe must get to try again), so priming a suffix whose list
+ * will never exist is not a one-time cost, it is an unbounded one paid by every session.
+ *
+ * `pendingDecisions` is the one member today — the list was never created (the design that would
+ * have written to it was reversed before it shipped, see the comment on `LIST_SUFFIX.
+ * pendingDecisions` above), so priming it can only ever fail. Add a suffix here ONLY when nothing
+ * live will ever read or write that list — the moment something does, move it back into
+ * `PRIMED_SUFFIXES` or that feature inherits the exact silent-failure history `requests` already
+ * has above.
+ */
+export const UNPRIMED_SUFFIXES: string[] = [LIST_SUFFIX.pendingDecisions];
 
 /** Returns true if a list with this exact title exists. Supplied by the caller. */
 export type ListProbe = (candidateTitle: string) => Promise<boolean>;

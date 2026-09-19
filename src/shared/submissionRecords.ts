@@ -20,6 +20,16 @@
  * holding the recorded one is deleted. A stamped column survives the copy — which is exactly why
  * `SubmissionId`/`BatchId` had to exist in all four libraries (2026-08-22) — so the record is keyed
  * on our data rather than on SharePoint's identity. See §2 of the spec.
+ *
+ * ⚠ 2026-09-20 — `UniqueId` IS NOW USED TOO, BUT ONLY AS A SECONDARY, NARROWER JOIN, AND THIS DOES
+ * NOT REOPEN THE PARAGRAPH ABOVE. Since 2026-09-18, `SubmissionFileId` is written onto the live
+ * document by `CRS — Apply pending tags` on a poll, not at upload time — so for a few minutes after
+ * every upload the primary join genuinely finds nothing, even though nothing is wrong. `UniqueId`
+ * fills exactly that gap: it is present on the document from the moment of creation, before it has
+ * moved anywhere, so it can join a still-settling record to its live row. It stops being tried the
+ * instant the primary join succeeds, and it naturally stops MATCHING the moment a file is routed
+ * (its `UniqueId` changes), so it can never resurrect the false-"still there" case the paragraph
+ * above rejected. See `indexLiveByUniqueId`.
  */
 
 import { Submission } from "./mySubmissions";
@@ -188,7 +198,27 @@ export interface SubmissionRecord {
  * `cancelled` (that means REPLACED by a newer upload, a different fact) even though its on-screen
  * label happens to be the literal word "Cancelled" — see `RECORD_STATE_LABEL`.
  */
-export type RecordState = "live" | "deleted" | "cancelled" | "archived" | "withdrawn" | "unknown";
+/**
+ * `settling` (2026-09-19, client: *"why is it showing not checked? can we not show pending
+ * instead? would that not make sense"*) — a record whose libraries were all read SUCCESSFULLY but
+ * which is still within its `RECENT_UPLOAD_GRACE_MS` window (see `recentlyUploaded`). It is NOT the
+ * same fact as `unknown`, and keeping them apart is the point: `unknown` means a READ FAILED, so
+ * the true status could genuinely be anything, including something bad. `settling` means every read
+ * SUCCEEDED and simply found nothing yet, on a record too young for that to be surprising — nothing
+ * could have approved, rejected or deleted it in the last few minutes when the approver's own queue
+ * cannot even resolve it yet. So "Pending" is not a guess here, it is the only status the document
+ * could honestly hold — and telling an uploader "not checked" over a plain library lag reads as a
+ * fault when there is none. Like `deleted`, it is DERIVED rather than observed, and resolves itself
+ * on the very next read: either the join succeeds (becomes an ordinary live row) or the grace
+ * period lapses (becomes `deleted`, if it is still unresolved by then). */
+export type RecordState =
+  | "live"
+  | "deleted"
+  | "cancelled"
+  | "archived"
+  | "withdrawn"
+  | "settling"
+  | "unknown";
 
 /**
  * A row as the page renders it: either a live document, or a record of one that is gone.
@@ -245,6 +275,9 @@ export interface MergeResult {
   archived: number;
   /** Records the uploader deleted themselves, direct on staging. Observed, like `cancelled`. */
   withdrawn: number;
+  /** Records still within their upload grace period — every read succeeded, just too soon to
+   * expect a join yet. Shown as "Pending", never "not checked" — see `RecordState`'s own comment. */
+  settling: number;
   /** Records that could not be checked, because a library read failed. */
   unknown: number;
 }
@@ -274,6 +307,34 @@ export function indexLiveByFileId(live: readonly Submission[]): Record<string, S
     // FIRST WINS. A stamp should be unique, but Replace (`nameConflictBehavior: 1`, 2026-08-27) can
     // put one file's columns onto another's, and the approval-library copy briefly coexists with the
     // routed one mid-run. Either way, one live document is enough to answer "not deleted".
+    if (out[k] === undefined) out[k] = s;
+  }
+  return out;
+}
+
+/**
+ * Live rows indexed by their own `UniqueId` — a SECONDARY join, used only while the primary one (the
+ * `SubmissionFileId` stamp) has not landed on the document yet.
+ *
+ * ⚠⚠ THIS DOES NOT CONTRADICT THE WARNING AT THE TOP OF THIS FILE — it answers a narrower question.
+ * That warning is about using `UniqueId` to decide whether a document has been DELETED, which breaks
+ * the moment a file is approved and routed (Auto-route copies it to a NEW `UniqueId` and deletes the
+ * source holding the recorded one). This index is never used for that.
+ *
+ * It exists only to close the window BETWEEN "the record was written" and "`CRS — Apply pending
+ * tags` stamped the live document" (2026-09-18 onward: that flow, not the upload itself, is what now
+ * writes `SubmissionFileId`). During that window the document has not moved — it is still in the
+ * same library it was uploaded to, under the SAME `UniqueId` SharePoint assigned at creation, which
+ * (unlike the custom stamp) is present on every read from the first moment. Once a file is approved
+ * and routed its `UniqueId` changes and this index can no longer find it — the safe, narrow failure
+ * mode: the fix helps during settling and steps aside once routing makes it inapplicable, by which
+ * point the primary join (which DOES survive routing) has normally already taken over.
+ */
+export function indexLiveByUniqueId(live: readonly Submission[]): Record<string, Submission> {
+  const out: Record<string, Submission> = {};
+  for (const s of live ?? []) {
+    const k = normaliseFileId(s.uniqueId);
+    if (k.length === 0) continue;
     if (out[k] === undefined) out[k] = s;
   }
   return out;
@@ -331,6 +392,34 @@ export function mergedKey(row: MergedRow): string {
 }
 
 /**
+ * How long a record is allowed to sit unresolved before it may honestly be called "deleted".
+ *
+ * Set well above `CRS — Apply pending tags`'s own poll interval and the ~90s
+ * `pollForTagStatus` budget self-approve waits on for the same stamp — the two exist for
+ * different reasons (one gates a permission-sensitive auto-approve, this one gates a display
+ * label) but are racing the identical flow, so this window is deliberately the more generous
+ * of the two. Understating "deleted" for a few extra minutes costs nothing; getting it wrong in
+ * the other direction is the failure this whole module exists to prevent.
+ */
+export const RECENT_UPLOAD_GRACE_MS = 5 * 60 * 1000;
+
+/**
+ * True while a record is still within its settling window — i.e. it may not yet have been
+ * stamped onto its live document by `CRS — Apply pending tags`, so an unresolved join says
+ * nothing about whether the document still exists.
+ *
+ * `now.getTime() - uploadedAt.getTime()` deliberately catches BOTH directions: a genuinely
+ * recent upload (small positive difference) and one whose `uploadedAt` reads slightly in the
+ * FUTURE relative to `now` from ordinary clock skew between the browser that wrote it and
+ * whatever machine is merging later (a negative difference, which is still `< GRACE_MS`) — both
+ * mean "just uploaded", and neither should assert a deletion.
+ */
+function recentlyUploaded(r: SubmissionRecord, now: Date): boolean {
+  if (r.uploadedAt === undefined) return false;
+  return now.getTime() - r.uploadedAt.getTime() < RECENT_UPLOAD_GRACE_MS;
+}
+
+/**
  * Merge recorded uploads with whatever is still live.
  *
  * The union, deliberately:
@@ -357,11 +446,15 @@ export function mergeRecords(
   records: readonly SubmissionRecord[],
   live: readonly Submission[],
   liveReadComplete: boolean | ((r: SubmissionRecord) => boolean),
+  now: Date = new Date(),
 ): MergeResult {
   const complete = typeof liveReadComplete === "function"
     ? liveReadComplete
     : (): boolean => liveReadComplete === true;
   const index = indexLiveByFileId(live);
+  // Secondary join — see `indexLiveByUniqueId`'s own comment for why this is safe alongside the
+  // warning at the top of this file about never using `UniqueId` to decide DELETED.
+  const uniqueIndex = indexLiveByUniqueId(live);
 
   /* ── The record wins on WHEN, and carries itself onto the live row ──────────────
      ⚠⚠ `Created` IS A PROPERTY OF THE FILE; `uploadedAt` IS A PROPERTY OF THE SUBMISSION — and this
@@ -385,28 +478,58 @@ export function mergeRecords(
      (`row.recordState ? goneRow : fileCard`), so `"live"` would grey out every recorded row and
      strip its Open file button. Absent means live, and that is the contract. */
   const recordByFileId: { [key: string]: SubmissionRecord } = {};
+  // Same idea, keyed by `ItemUniqueId` instead — the fallback for a record whose live document has
+  // not been stamped with `SubmissionFileId` yet. See `indexLiveByUniqueId`'s comment for the scope.
+  const recordByUniqueId: { [key: string]: SubmissionRecord } = {};
   for (const r of records ?? []) {
     if (!isJoinable(r)) continue;
     const key = normaliseFileId(r.fileId);
     if (recordByFileId[key] === undefined) recordByFileId[key] = r;
+    const uk = normaliseFileId(r.uniqueId);
+    if (uk.length > 0 && recordByUniqueId[uk] === undefined) recordByUniqueId[uk] = r;
   }
   const rows: MergedRow[] = (live ?? []).map((s) => {
-    const rec = recordByFileId[normaliseFileId(s.submissionFileId)];
+    /* ⚠ THE `SubmissionFileId` MATCH IS TRIED FIRST AND ALWAYS WINS. Only when it misses — which,
+       since 2026-09-18, is expected for a few minutes on every fresh Bulk Upload/Form upload while
+       `CRS — Apply pending tags` has not yet run — do we fall back to `UniqueId`. Found live
+       2026-09-20: without this fallback, a batch mid-tagging showed up TWICE in My Submissions —
+       once as its own untagged live row (which, having no `SubmissionId` of its own yet, fell into
+       the "grouped by folder and date" bucket meant for pre-tracking files) and once as a synthetic
+       `settling` placeholder built from the record. Matching via `UniqueId` here lets the real live
+       row absorb the record directly, so only one entry — correctly grouped — ever exists. */
+    const rec = recordByFileId[normaliseFileId(s.submissionFileId)]
+      ?? recordByUniqueId[normaliseFileId(s.uniqueId)];
     if (rec === undefined) return { ...s };
-    return { ...s, record: rec, created: rec.uploadedAt ?? s.created };
+    return {
+      ...s,
+      record: rec,
+      created: rec.uploadedAt ?? s.created,
+      // Fills in the reference `groupSubmissions` keys on when the document's own column has not
+      // been stamped yet — harmless (a no-op via `??`) once it has, since both then agree.
+      submissionId: s.submissionId ?? rec.submissionRef,
+      batchId: s.batchId ?? rec.batchRef,
+    };
   });
   let liveCount = 0;
   let deleted = 0;
   let cancelled = 0;
   let archived = 0;
   let withdrawn = 0;
+  let settling = 0;
   let unknown = 0;
 
   for (const r of records ?? []) {
     // Unjoinable rows are dropped, never shown: they can never resolve, so displaying one asserts a
     // loss that was never established.
     if (!isJoinable(r)) continue;
-    if (index[normaliseFileId(r.fileId)] !== undefined) {
+    // Resolved either way — by the stamp, or (while it is still missing) by `UniqueId`. Checking
+    // both here is what stops the loop below from ALSO pushing a `rowFromRecord` placeholder for a
+    // record the `rows` map above has already attached to its real live row.
+    const resolvedById = index[normaliseFileId(r.fileId)] !== undefined;
+    const resolvedByUniqueId =
+      normaliseFileId(r.uniqueId).length > 0 &&
+      uniqueIndex[normaliseFileId(r.uniqueId)] !== undefined;
+    if (resolvedById || resolvedByUniqueId) {
       liveCount += 1;
       continue;
     }
@@ -444,23 +567,44 @@ export function mergeRecords(
        apply to a file that no longer exists to be replaced, archived (archiving only ever touches an
        APPROVED document, which a withdrawal can never be — the two cannot co-occur at all) or
        re-derived as merely "deleted". Checking it first costs nothing on a record where it is
-       absent, and guarantees a deliberate self-delete is never masked by a stale value elsewhere. */
+       absent, and guarantees a deliberate self-delete is never masked by a stale value elsewhere.
+
+       ⚠⚠ `judgeable` ALONE IS NOT ENOUGH — A FRESH UPLOAD CAN LOOK DELETED FOR A FEW MINUTES BY
+       DESIGN, AND `settling` IS WHAT STOPS THAT READING AS "DELETED" (OR AS THE ALARMING "NOT
+       CHECKED"). Since the 2026-09-18 tag/approve-by-proxy change, the join key
+       (`SubmissionFileId`) is applied to the LIVE document only by `CRS — Apply pending tags`,
+       which fires on a poll — not at the moment `writeSubmissionRecord` creates this row. So for
+       the stretch between "the record exists" and "the flow has stamped the live item", a
+       FULLY-COMPLETED library read genuinely finds no matching live row, even though nothing is
+       actually wrong. `recentlyUploaded` catches exactly that window (anything within
+       `RECENT_UPLOAD_GRACE_MS` of `uploadedAt`) and reports it as `settling` — distinct from
+       `unknown`, which means a READ FAILED and the true status could genuinely be anything.
+       `settling` means every read succeeded and simply found nothing yet, which is the one case
+       where "Pending" is not a guess: nothing could have decided this file in the last few minutes
+       when it cannot even be found yet. Fails the SAME safe direction either way: understating
+       costs a glance at a badge that clears itself; overstating "deleted" tells an uploader their
+       just-submitted document was destroyed. */
     const state: RecordState = r.withdrawnAt !== undefined
       ? "withdrawn"
       : r.replacedAt !== undefined
         ? "cancelled"
         : r.archivedAt !== undefined
           ? "archived"
-          : judgeable ? "deleted" : "unknown";
+          : !judgeable
+            ? "unknown"
+            : recentlyUploaded(r, now)
+              ? "settling"
+              : "deleted";
     if (state === "deleted") deleted += 1;
     else if (state === "cancelled") cancelled += 1;
     else if (state === "archived") archived += 1;
     else if (state === "withdrawn") withdrawn += 1;
+    else if (state === "settling") settling += 1;
     else unknown += 1;
     rows.push(rowFromRecord(r, state));
   }
 
-  return { rows, live: liveCount, deleted, cancelled, archived, withdrawn, unknown };
+  return { rows, live: liveCount, deleted, cancelled, archived, withdrawn, settling, unknown };
 }
 
 /**
@@ -472,11 +616,12 @@ export function mergeRecords(
  */
 export function recordCounts(
   rows: readonly MergedRow[],
-): { live: number; deleted: number; cancelled: number; archived: number; withdrawn: number; unknown: number } {
+): { live: number; deleted: number; cancelled: number; archived: number; withdrawn: number; settling: number; unknown: number } {
   let deleted = 0;
   let cancelled = 0;
   let archived = 0;
   let withdrawn = 0;
+  let settling = 0;
   let unknown = 0;
   let liveCount = 0;
   for (const r of rows ?? []) {
@@ -484,10 +629,11 @@ export function recordCounts(
     else if (r.recordState === "cancelled") cancelled += 1;
     else if (r.recordState === "archived") archived += 1;
     else if (r.recordState === "withdrawn") withdrawn += 1;
+    else if (r.recordState === "settling") settling += 1;
     else if (r.recordState === "unknown") unknown += 1;
     else liveCount += 1;
   }
-  return { live: liveCount, deleted, cancelled, archived, withdrawn, unknown };
+  return { live: liveCount, deleted, cancelled, archived, withdrawn, settling, unknown };
 }
 
 /* ── The status line's record half ─────────────────────────────────────────────
@@ -511,14 +657,19 @@ export const RECORD_STATE_LABEL: Record<Exclude<RecordState, "live">, string> = 
   // is deliberately not the SAME word as the `cancelled` type value two lines above, which means
   // "replaced" on screen. Client's own wording for a PIC's direct staging delete.
   withdrawn: "cancelled",
+  // Deliberately the SAME word a live join would show. See `RecordState`'s own comment: every read
+  // succeeded, the record is simply too young for a join to be expected yet, and nothing could have
+  // decided it in that time — "pending" is the honest answer, not an optimistic guess.
+  settling: "pending",
   // Worded differently on purpose — it means the libraries could not all be read, so those files may
   // be perfectly fine. Never "missing".
   unknown: "not checked",
 };
 
-/** The order they read in — worst news first, doubt last. */
+/** The order they read in — worst news first, doubt last, `settling` last of all because it is not
+ * really doubt at all, just a join that has not caught up yet. */
 const RECORD_STATE_ORDER: Array<Exclude<RecordState, "live">> = [
-  "deleted", "withdrawn", "cancelled", "archived", "unknown",
+  "deleted", "withdrawn", "cancelled", "archived", "unknown", "settling",
 ];
 
 /** One number per state. `MergeResult` satisfies it, so a merge's own totals can be passed straight in. */

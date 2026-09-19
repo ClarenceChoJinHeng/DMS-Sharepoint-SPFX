@@ -144,7 +144,7 @@ import {
  * folder routing are cloned from Form.tsx unchanged.
  * -------------------------------------------------------------------------- */
 
-const MAX_FILES = 10;
+const MAX_FILES = 50;
 
 // The Documents library's real URL segment differs from its display title:
 //   URL segment   = "Shared Documents"  (used to build server-relative paths)
@@ -2301,6 +2301,20 @@ export default function BulkUpload({
       settings.legallyPrivilegedFor,
     );
     const formValues: Array<{ FieldName: string; FieldValue: string }> = [
+      // ⚠⚠ FOUND AND FIXED 2026-09-19 — THIS LINE WAS MISSING ENTIRELY. `levelCols`/`allSelections`
+      // were built above (lines ~2274-2291) and `buildLevelFormValues` was imported, but nothing
+      // ever consumed them — `buildLevelFormValues` sat imported-but-unused (confirmed by its own
+      // lint warning) since whichever commit ported this screen off `validateUpdateListItem` and
+      // onto the `tagPayload` mechanism. The practical effect: `labels.tierFormValues` below covers
+      // only the BELOW-UNIT tiers (Year/Document Type/SubUnit, via `tierPlan()`), which is why those
+      // kept working — Business Segment, Department and Unit (the PERMISSIONED chain) were never in
+      // the payload at all, so every bulk-uploaded document landed with them blank. Confirmed live:
+      // `Modified By` showed the proxy account had touched the item (Year/Document Type/SubmissionId
+      // present), while Business Segment/Department/Unit stayed empty — a partial write, not a
+      // failed one. Mirrors Form.tsx's `...buildLevelFormValues(levelCols, dest.levelSelections)`
+      // exactly, just with this screen's own `allSelections` (BusinessSegment unshifted onto the
+      // permissioned `selections`) in place of Form.tsx's `dest.levelSelections`.
+      ...buildLevelFormValues(levelCols, allSelections),
       // One entry per below-Unit tier, in chain order, resolved by the caller.
       ...labels.tierFormValues,
       {
@@ -2735,21 +2749,25 @@ export default function BulkUpload({
         snapshot.Confidentiality = labels.confLabel;
         snapshot["Bulk import"] = "Yes";
         if (fileStamp.length > 0) {
-          const tagResult = await writeSubmissionRecord(context.spHttpClient, siteUrl, {
-            submissionRef: canRef ? submissionRef : "",
-            batchRef: canRef ? batchRef : "",
-            fileId: fileStamp,
-            uniqueId:
-              typeof item.UniqueId === "string" ? item.UniqueId : undefined,
-            fileName: finalName,
-            itemPath: uploadedSru,
-            libraryTitle: targetListTitle(),
-            uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
-            uploadedAt: new Date(),
-            metadata: snapshot,
-            source: "BulkUpload",
-            tagPayload: JSON.stringify(fileValues),
-          });
+          const tagResult = await writeSubmissionRecord(
+            context.spHttpClient,
+            siteUrl,
+            {
+              submissionRef: canRef ? submissionRef : "",
+              batchRef: canRef ? batchRef : "",
+              fileId: fileStamp,
+              uniqueId:
+                typeof item.UniqueId === "string" ? item.UniqueId : undefined,
+              fileName: finalName,
+              itemPath: uploadedSru,
+              libraryTitle: targetListTitle(),
+              uploadedBy: (context.pageContext.user.email ?? "").toLowerCase(),
+              uploadedAt: new Date(),
+              metadata: snapshot,
+              source: "BulkUpload",
+              tagPayload: JSON.stringify(fileValues),
+            },
+          );
           if (!tagResult.ok) {
             // Same wording as the old validateUpdateListItem failure path.
             out.push({

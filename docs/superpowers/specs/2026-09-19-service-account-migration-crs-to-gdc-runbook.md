@@ -7,6 +7,42 @@ memory next time. Every flow was built by hand in the designer originally, and t
 be done the same way — retype the corrected values, never paste, and verify each flow with a real
 test run before moving to the next.
 
+## ⏭ STATUS AS OF 2026-09-19, LATE NIGHT — IMPORTED, FIXED, TURNED ON. NOT YET TEST-VERIFIED.
+
+- **✅ All 23 flows imported** into the `gdc@sdguthrie.com`-owned Power Automate environment
+  (`SD Guthrie`), each as a brand-new flow (Power Automate's import always showed "Create as new,"
+  never "Update existing" — the old `crs@sdguthrie.com`-owned originals are untouched, off, and
+  invisible from this account's "My flows" view since ownership scopes that list per-account).
+- **✅ Two accidental duplicate imports found and cleaned up** (`NotifyApprovers` and
+  `HCNotifyApprovers` each briefly existed twice) — confirmed resolved, exactly one copy of each of
+  the 23 names remains.
+- **✅ Two connections created**, both confirmed (via each connection's own Details page, "Owner:
+  Guthrie Document Centre") to have authorized correctly as `gdc@sdguthrie.com`:
+  `GDC Proxy - SharePoint` and `GDC Proxy - Outlook`.
+- **✅ All 8 literal-value fixes applied and independently verified** by extracting the re-exported
+  `.zip` for each of the 8 and grepping `definition.json` directly (not just eyeballing the
+  designer) — confirmed **zero** remaining occurrences of `crs@sdguthrie.com` or
+  `Guthrie Central Repository System` across all 8, and the new values present exactly where
+  expected. One real miss was caught and fixed this way: `HCNotifyApprovers`'s `Compose` action
+  (recipient-list join) still had the old literal after the first attempt only fixed the
+  `HasRecipients` condition beside it — both are now consistent.
+  - **Also noted, not a defect:** `NotifyApprovers`'s email sign-off was changed from `"Thank you,
+    SD Guthrie"` to `"Thank you, Guthrie Document Centre"` — a deliberate branding update, confirmed
+    against the original export to rule out anything unexpected. `HCNotifyApprovers` almost
+    certainly has the same old sign-off in its own email body and was NOT updated to match — cosmetic
+    only, your call whether to bother.
+- **✅ All 23 flows turned On.**
+- **⚠⚠ NOT YET DONE: the actual verification/test-run step, per-flow, for any of the 23.** Turning a
+  flow on proves nothing on its own — the "run one real test through this specific flow's own
+  trigger, and read the run's own output" step in "Per-flow steps" below has not been done for any
+  of them yet. This is the next and last remaining step in the whole migration. Recommended order to
+  test in is unchanged from "Recommended order" below — low-stakes audit/reindex flows first, then
+  folder-approval → Auto-route → deletion execution → bulk auto-approve, then the notification
+  flows, then the archive movers last.
+- **Not yet done, lower priority, from "What NOT to do":** removing `crs@sdguthrie.com` from
+  `CRS Owners` once everything above is confirmed working — leave that until the test-run pass is
+  complete.
+
 ## Why this is riskier than it looks
 
 Every one of these flows already has a *connection* — a reference to whichever SharePoint/Outlook

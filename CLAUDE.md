@@ -1,5 +1,46 @@
 # SDG DMS — Claude Code Project Context
 
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-20:
+> `docs/2026-09-20-session-handoff.md`.** ⚠⚠ **THE REPLACE-PATH DELETION RACE IS CONFIRMED, NOT
+> SUSPECTED — it genuinely destroyed a document, and the fix is chosen and half-built.**
+> `deleteClashingDraftByProxy` (Form.tsx) polls ~30s for a clashing draft's recycle, then falls back
+> to `Files/Add(overwrite=true)` on the SAME name if it times out — which SharePoint applies IN
+> PLACE, keeping the SAME `UniqueId`. Traced with `scripts/trace-submission-record.js` (new,
+> verified script): THREE separate uploads of `test1-test1-test1-20092026.xlsx` across ~90 minutes
+> all shared one `ItemUniqueId`, proving the fallback fired repeatedly; the audit log shows
+> `CRS — Execute approved deletion`'s actual recycle landing 31 seconds after approval — past the
+> poll budget — and nothing currently resolves under that GUID or the file's path. Confirmed
+> recoverable from the site recycle bin (93-day retention), so not permanently lost, but the
+> mechanism is real and will recur. **Client chose the structurally correct fix (an ETag guard in
+> the flow) over the cheaper refuse-and-retry option.** CODE SIDE IS BUILT AND VERIFIED — new
+> `src/shared/deletionGuard.ts` (`readFileETag`), a new `CRS Requests.TargetETag` column, and all
+> three deletion-request writers (`Requests.tsx`, `MySubmissions.tsx`, `Form.tsx`) now stamp the
+> target's ETag at the moment deletion is authorised, each with a retry-without-the-column fallback.
+> `tsc --noEmit` clean, full suite 1968/1968, zero new lint warnings. **THE ONLY REMAINING STEP is a
+> Power Automate edit — not code — following
+> `docs/superpowers/specs/2026-09-20-etag-guard-execute-approved-deletion-runbook.md` line by
+> line.** Full design: `docs/superpowers/specs/2026-09-20-etag-guarded-proxy-deletion-design.md`.
+> Also this session: two live-confirmed fixes to the 2026-09-18 tag-by-proxy settling window (a
+> duplicate "grouped by folder and date" entry in My Submissions; a stale batch detail view that
+> "↻ Refresh" couldn't fix); a multi-set, multi-segment, HC+non-HC Form.tsx upload confirmed
+> working; `scripts/check-tagging-status.js` gained a path filter and a required-vs-optional field
+> split; and a new memory, `feedback-collect-all-evidence-before-deciding`, on not presenting a
+> diagnosis as settled while any corroborating link is still inferred rather than checked.
+> **Nothing this session is committed** — the working tree now carries three sessions' worth of
+> unrelated in-flight threads plus this session's ETag-guard work; see the handoff doc's file list
+> before assuming any one file's state.
+
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-19:
+> `docs/2026-09-19-session-handoff.md`.** Client asked mid-session that progress be documented as it
+> happens, specifically so a compaction never loses a fix in flight — read that doc's structure and
+> keep following it. Live state at hand-off: the Bulk Upload tagging bug (missing
+> `buildLevelFormValues` call, Business Segment/Department/Unit landing blank) is FIXED in the
+> working tree and verified (`tsc` clean, 1959/1959 tests) but **not yet confirmed live** — no real
+> bulk upload has been watched all the way through `CRS — Apply pending tags` yet. A SEPARATE,
+> still-open "audit log is not recording" report is parked with a ready-to-run diagnostic script
+> (`scripts/check-audit-recording.js`, not yet executed). **Nothing this session is committed** —
+> the working tree holds several unrelated in-flight threads (see the handoff doc's file list).
+
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-13:
 > `docs/2026-09-13-session-handoff.md`.** The PCAR incident (an old segment's Archive folder
 > silently reused by a new one of the same name) and the three fixes it produced: retiring a
@@ -13931,26 +13972,67 @@ document libraries. **Code side DONE (Tasks 1–6, 6b, 9); Power Automate side N
     (`uploadBatches.ts`) from an earlier iteration, reverted to the original `SUCCESS REMOVES;
     FAILURE STAYS` / `r.ok` rule; and an unrelated small feature (upload pause/resume steps added to
     the retire-a-segment guided flow) that had also been sitting uncommitted.
+- **✅ TASK 10 IS DONE — `CRS — Apply pending tags` EXISTS, CONFIRMED LIVE 2026-09-19 (client's own
+  Power Automate flow-list screenshot).** This section previously said "not yet built" and listed it
+  under "still to do, none of it code" — that was STALE the moment it was written this way; the flow
+  was already sitting in the tenant's flow list (shown as "2 h ago", Automated) when asked. **Exactly
+  the failure this file's own header warns about — read the CURRENT source/tenant state before
+  diagnosing, never trust an assumption carried over from an earlier part of the same session.**
+  ⚠ **Existing in the flow list is NOT the same as confirmed working** — nothing here has verified
+  it actually flips `TagStatus` to `Tagged` on a real document; that is what Task 12 below still
+  checks.
 - **⚠ STILL TO DO, ALL LIVE-TENANT ACTIONS, NONE OF IT CODE:**
-  - **Task 10 — build `CRS — Apply pending tags`** (Power Automate, signed in as
-    `crs@sdguthrie.com`): trigger on `CRS Submissions` created/modified, condition
-    `TagPayload` present and `TagStatus` blank, `GetFileById` to resolve the library, `POST
-    validateUpdateListItem` with the parsed `formValues`, check the response BODY for
-    `HasException` (gotcha #4 — 200 even on a per-field failure), write back `TagStatus`
-    `Tagged`/`Failed` + `TagError`.
   - **Task 12 — end-to-end verification, BEFORE the cutover**, with the OLD permission levels still
     in place (the code no longer writes directly regardless, so this genuinely exercises the proxy
     path): normal upload, HC upload, self-approve (confirm it now WAITS rather than being
     permanently disabled), a deliberately malformed tag payload (confirm `TagError` is real and
-    readable, not generic).
+    readable, not generic). **Also confirm live**, now that the fix above is in: a Bulk Upload run
+    actually ends with Business Segment/Department/Unit populated on the document (not just
+    Year/Document Type), by watching `CRS Submissions.TagStatus` go to `Tagged` and then re-reading
+    the document's own fields — same check `scripts/check-tagging-status.js` already automates.
   - **Task 13, `CRS Upload` half only** — untick `Edit Items` on `CRS Upload` (confirm `Add Items`
     stays ticked), per site. Confirm upload still works, then confirm a hand-edit/rename attempt in
     the native library view is now refused — **the actual point of the whole feature**, and the one
     thing this plan explicitly says not to assume from the permission change alone.
-- **Verified (code only)**: `tsc --noEmit` clean throughout, full suite **1951/1951**, 45 lint
-  warnings (documented pre-existing baseline, zero new categories). Every fix verified against the
-  live suite after landing, not assumed. **Nothing here has been tested against a live site** — it
-  cannot be, until Task 10's flow exists.
+- **Verified (code only)**: `tsc --noEmit` clean throughout, full suite **1959/1959**, 43 lint
+  warnings (documented pre-existing baseline, zero new categories) as of the 2026-09-19
+  `buildLevelFormValues` fix to `BulkUpload.tsx` (see the bulk-upload tagging section below). Every
+  fix verified against the live suite after landing, not assumed. **The flow's own correctness is
+  still not confirmed against a live upload** — existing in the flow list only proves it was created.
+
+## ⚠⚠ BULK UPLOAD NEVER WROTE BUSINESS SEGMENT/DEPARTMENT/UNIT INTO THE TAG PAYLOAD (2026-09-19)
+Client: bulk upload showed "4 pending, no tagging after 5 minutes", with Business
+Segment/Department/Unit blank and Year/Document Type populated. Diagnosed and fixed the same day the
+tag/approve-by-proxy migration (above) landed — the two are related but this is a SEPARATE defect,
+not a consequence of that migration.
+- **THE CAUSE: `BulkUpload.tsx`'s `formValues` array (the payload written into `CRS
+  Submissions.TagPayload`) never called `buildLevelFormValues`.** `levelCols`/`allSelections` were
+  built (the permissioned Business Segment → Department → Unit chain, with Business Segment
+  unshifted onto the picker's own Department/Unit selections — mirroring `Form.tsx`'s
+  `levelSelections.unshift({ column: "BusinessSegment", ... })` exactly) and
+  `buildLevelFormValues` was imported, but **nothing ever consumed either** — confirmed by
+  `buildLevelFormValues` sitting flagged as an unused import before the fix. `labels.tierFormValues`
+  (the below-Unit tiers — Year, Document Type, SubUnit, via `tierPlan()`) was the ONLY thing feeding
+  the array, which is exactly why those kept working while the permissioned chain never did.
+- **FIX: `...buildLevelFormValues(levelCols, allSelections)` added as the first entry in
+  `formValues`**, before `...labels.tierFormValues`. One-line addition; both inputs already existed,
+  built correctly, just unused.
+- **⚠ THIS BUG PREDATES THE 2026-09-18 TAG/APPROVE-BY-PROXY CHANGE — it is not something that
+  migration introduced.** Whether the write used to go straight to `validateUpdateListItem` or (as
+  now) into `TagPayload` for `CRS — Apply pending tags` to apply, the same array was always missing
+  the same three fields. The proxy migration just changed WHERE the (still-incomplete) payload ends
+  up.
+- **⚠ THE FIX ALONE DOES NOT PROVE BULK UPLOAD NOW TAGS CORRECTLY.** It only guarantees the PAYLOAD
+  is now complete — whether it actually lands on the live document depends on `CRS — Apply pending
+  tags` genuinely applying it, which is a live-tenant flow this repo cannot verify. See the "TASK 10
+  IS DONE" note just above: the flow is confirmed to EXIST, not confirmed to be working correctly.
+  **Not yet tested live** — the check is: run a bulk upload, watch `CRS
+  Submissions.TagStatus` for that row reach `Tagged`, then re-read the live document and confirm
+  Business Segment/Department/Unit are genuinely non-blank (`scripts/check-tagging-status.js`
+  automates most of this).
+- **Verified (code only)**: `tsc --noEmit` clean, `npx heft test --clean` → **1959/1959** passing,
+  43 lint warnings (documented pre-existing baseline — `toSpDate` unused and the file's line count —
+  zero new). Full handoff/current-state detail: `docs/2026-09-19-session-handoff.md`.
 
 ## ⏭ SERVICE ACCOUNT MIGRATION: crs@sdguthrie.com → gdc@sdguthrie.com — RUNBOOK WRITTEN, NOT STARTED (2026-09-19)
 Client provisioned a new proxy mailbox (`gdc@sdguthrie.com`, display name **"Guthrie Document

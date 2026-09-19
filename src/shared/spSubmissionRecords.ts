@@ -53,6 +53,18 @@ const GET_HEADERS = {
   Pragma: "no-cache",
 };
 
+/**
+ * A per-call cache-buster, added 2026-09-19 — the same fix already applied to `fetchFieldText` on
+ * the Requests page and the approval guard (2026-08-30/2026-09-02), never carried over to this
+ * file. `Cache-Control`/`Pragma` alone were shown on those to still let a stale response through;
+ * the symptom is exactly "shows the old value until a hard refresh" — reported live here as a
+ * replace's "Replaced" badge taking a noticeable while to appear on My Submissions, which reads
+ * through `readSubmissionRecords` below. A query string is the one part of a request neither the
+ * browser's own cache nor an intermediate proxy can ignore.
+ */
+const bust = (): string =>
+  `_=${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
 const listBase = (siteUrl: string): string =>
   `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.submissions))}')`;
 
@@ -189,7 +201,7 @@ export async function markRecordReplaced(
        row, and if it somehow named two, silently updating whichever came first would leave the other
        reading `deleted` for ever. Cheap to be certain. */
     const find: SPHttpClientResponse = await sp.get(
-      `${listBase(siteUrl)}/items?$select=Id&$filter=SubmissionFileId eq '${encodeURIComponent(id.replace(/'/g, "''"))}'&$top=5`,
+      `${listBase(siteUrl)}/items?$select=Id&$filter=SubmissionFileId eq '${encodeURIComponent(id.replace(/'/g, "''"))}'&$top=5&${bust()}`,
       SPHttpClient.configurations.v1,
       { headers: GET_HEADERS },
     );
@@ -271,7 +283,7 @@ export async function markRecordWithdrawn(
     if (id.length === 0) return false;
 
     const find: SPHttpClientResponse = await sp.get(
-      `${listBase(siteUrl)}/items?$select=Id&$filter=SubmissionFileId eq '${encodeURIComponent(id.replace(/'/g, "''"))}'&$top=5`,
+      `${listBase(siteUrl)}/items?$select=Id&$filter=SubmissionFileId eq '${encodeURIComponent(id.replace(/'/g, "''"))}'&$top=5&${bust()}`,
       SPHttpClient.configurations.v1,
       { headers: GET_HEADERS },
     );
@@ -331,7 +343,7 @@ export async function readSubmissionRecords(
         `${listBase(siteUrl)}/items` +
           `?$select=${select}` +
           `&$filter=AuthorId eq ${userId}` +
-          `&$orderby=Id desc&$top=5000`,
+          `&$orderby=Id desc&$top=5000&${bust()}`,
         SPHttpClient.configurations.v1,
         { headers: GET_HEADERS },
       );
@@ -417,7 +429,7 @@ export async function readSubmissionRecordByFileId(
         `${listBase(siteUrl)}/items` +
           `?$select=${select}` +
           `&$filter=SubmissionFileId eq '${encodeURIComponent(id)}'` +
-          `&$orderby=Id desc&$top=1`,
+          `&$orderby=Id desc&$top=1&${bust()}`,
         SPHttpClient.configurations.v1,
         { headers: GET_HEADERS },
       );

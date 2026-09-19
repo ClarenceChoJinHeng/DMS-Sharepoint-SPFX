@@ -76,6 +76,7 @@ import {
   readSubmissionRecords,
   markRecordWithdrawn,
 } from "../../../shared/spSubmissionRecords";
+import { readFileETag } from "../../../shared/deletionGuard";
 // The metadata panel's rows. It DERIVES the tier rows from the item's own fields rather than naming
 // them, which is what makes Region/Estate·Mill appear on a segment nobody wrote code for.
 import {
@@ -1717,9 +1718,29 @@ export default function MySubmissions({
       ? g.batches.filter((x) => (x.reference || "—") === openBatch)[0]
       : undefined;
     if (!b) return;
-    // The signature is what identifies "this batch, as it stands now" — the files it holds and the
-    // ids they hold. `join` on a stable separator: a mergedKey cannot contain one.
-    const sig = openBatch + "::" + b.files.map(mergedKey).join("|");
+    /* The signature is what identifies "this batch, as it stands now" — the files it holds, the ids
+       they hold, AND (2026-09-20) whether the tag-by-proxy flow has finished writing this file's
+       fields yet. `join` on a stable separator: neither a mergedKey nor a submission/tag status can
+       contain one.
+
+       ⚠⚠ `mergedKey` ALONE WAS NOT ENOUGH, and pressing Refresh could not fix it. A file keeps the
+       SAME library and item id for the whole settling window — only an APPROVAL changes that — so
+       the signature never moved while `CRS — Apply pending tags` filled in Confidentiality/Legally
+       Privileged/etc., and this effect's own guard (`if (batchSigRef.current === sig) return`) kept
+       skipping the refetch even after `onRefresh` had reloaded `rows` with the new values. Found
+       live 2026-09-20: a bulk batch opened moments after upload showed every field blank for ever,
+       and clicking "↻ Refresh" changed nothing — only leaving the page and coming back (a fresh
+       mount, which resets `batchSigRef` to a value nothing can equal) picked up the tagged values.
+
+       `submissionId` and `record?.tagStatus` are what actually change the moment tagging finishes —
+       `TagPayload` is applied as one write, so a file's `submissionId` going from blank to a real
+       reference is a reliable proxy for "every other field in that same payload just landed too". */
+    const sig =
+      openBatch +
+      "::" +
+      b.files
+        .map((f) => `${mergedKey(f)}#${f.submissionId ?? ""}#${f.record?.tagStatus ?? ""}`)
+        .join("|");
     if (batchSigRef.current === sig) return;
     // Set BEFORE the await, so a re-render mid-flight does not start a second identical load.
     batchSigRef.current = sig;
@@ -2610,6 +2631,16 @@ export default function MySubmissions({
     // being written straight to Approved, is never queued to anyone and needs no visibility scope.
     const where = Object.keys(ft).length > 0 ? documentUnit(ft) : undefined;
     const now = new Date().toISOString();
+    /* The baseline `CRS — Execute approved deletion` checks before recycling — this row is
+       self-approved AT creation, so this is the exact moment the deletion is authorised. See
+       `shared/deletionGuard.ts` and `2026-09-20-etag-guarded-proxy-deletion-design.md`. `undefined`
+       on any read failure, deliberately: a safety net for the FLOW's own read, never a gate on
+       raising this request. */
+    const targetEtag = await readFileETag(
+      context.spHttpClient,
+      siteUrl,
+      row.uniqueId,
+    );
     const body: Record<string, string> = {
       Title: `Deletion — ${row.name}`.slice(0, 255),
       RequestType: "Deletion",
@@ -2633,6 +2664,10 @@ export default function MySubmissions({
     if ((row.submissionFileId ?? "").trim().length > 0) {
       body.SubmissionFileId = (row.submissionFileId ?? "").trim();
     }
+    // See `targetEtag`'s own comment above — absent on any read failure.
+    if (targetEtag !== undefined) {
+      body.TargetETag = targetEtag;
+    }
     try {
       const itemsUrl = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')/items`;
       const send = (
@@ -2643,15 +2678,25 @@ export default function MySubmissions({
           body: JSON.stringify(payload),
         });
       let res = await send(body);
+      // ⚠ `TargetETag` IS THE NEWEST COLUMN, so it drops FIRST — one unknown field name fails the
+      // WHOLE write (gotcha #11), and a site that has not yet added it must still be able to
+      // record an ordinary deletion request while it is missing.
+      if (res.status === 400 && body.TargetETag !== undefined) {
+        const without = { ...body };
+        delete without.TargetETag;
+        res = await send(without);
+      }
       if (res.status === 400 && body.SubmissionFileId !== undefined) {
         const without = { ...body };
         delete without.SubmissionFileId;
+        delete without.TargetETag;
         res = await send(without);
       }
       if (res.status === 400 && body.Stage !== undefined) {
         const without = { ...body };
         delete without.Stage;
         delete without.SubmissionFileId;
+        delete without.TargetETag;
         res = await send(without);
       }
       if (res.ok) return undefined;
@@ -4176,7 +4221,9 @@ export default function MySubmissions({
                       <div
                         key={mergedKey(f)}
                         style={
-                          f.recordState
+                          // `settling` is excluded — it is not "gone" and must not look faded like
+                          // one; a genuinely live-looking Pending row is the whole point of it.
+                          f.recordState && f.recordState !== "settling"
                             ? { ...s.fileCard, ...s.goneRow }
                             : s.fileCard
                         }
@@ -4191,7 +4238,10 @@ export default function MySubmissions({
                           )}
                           {/* ⚠ THE GONE STATES COME FIRST, and there is no `Open file`. This is the view
                           the client actually asked for — the file still listed inside its own batch,
-                          with what was submitted — so the row must stay and only the actions go. */}
+                          with what was submitted — so the row must stay and only the actions go.
+                          `settling` is deliberately NOT "gone" — see the main-table badge's own
+                          comment — it renders as an ordinary Pending badge, just still without
+                          `Open file`, since there is no concrete document to open yet. */}
                           {f.recordState === "deleted" ? (
                             <span style={s.goneBadge}>Deleted</span>
                           ) : f.recordState === "cancelled" ? (
@@ -4202,6 +4252,8 @@ export default function MySubmissions({
                             <span style={s.archivedBadge}>Archived</span>
                           ) : f.recordState === "unknown" ? (
                             <span style={s.unsureBadge}>Not checked</span>
+                          ) : f.recordState === "settling" ? (
+                            <span style={badgeFor("Pending")}>Pending</span>
                           ) : (
                             <span style={badgeFor(f.status)}>{f.status}</span>
                           )}
@@ -4706,7 +4758,13 @@ export default function MySubmissions({
                    each other and with a live document, and React would silently drop a row. */
                   <tr
                     key={mergedKey(r)}
-                    style={r.recordState ? s.goneRow : undefined}
+                    // `settling` excluded — see the file-card version of this same rule above; it
+                    // must render like a genuinely live Pending row, not a faded "gone" one.
+                    style={
+                      r.recordState && r.recordState !== "settling"
+                        ? s.goneRow
+                        : undefined
+                    }
                   >
                     <td style={s.td}>
                       {/* ⚠ A GONE FILE IS NOT A BUTTON. There is nothing to open: no preview, no Open
@@ -4739,10 +4797,16 @@ export default function MySubmissions({
                         row for what the approver wrote, whichever way they decided. */}
                     </td>
                     <td style={s.td}>
-                      {/* ⚠ NEVER THE APPROVAL BADGE FOR A GONE FILE. `status` is `Pending` on a record
-                        row only because `Submission` demands a value; showing it would tell an uploader
-                        a destroyed document is awaiting approval. `unknown` is its own answer — the
-                        libraries could not all be read, so this says so rather than claiming either. */}
+                      {/* ⚠ NEVER THE APPROVAL BADGE FOR A GONE FILE — WITH ONE DELIBERATE EXCEPTION.
+                        `status` is `Pending` on a record row only because `Submission` demands a
+                        value; showing it for `deleted`/`unknown`/etc. would tell an uploader a
+                        destroyed or unverifiable document is awaiting approval. `settling` is
+                        different: every library read succeeded, and the record is simply too young
+                        for the join to have caught up — nothing could have decided this file in the
+                        last few minutes when it cannot even be found yet. "Pending" there is not an
+                        approval-status guess, it is the only honest answer (2026-09-19, client: "why
+                        is it showing not checked? can we not show pending instead?"). `unknown`
+                        alone keeps its own separate badge — a genuine read failure. */}
                       {r.recordState === "deleted" ? (
                         <span style={s.goneBadge}>Deleted</span>
                       ) : r.recordState === "cancelled" ? (
@@ -4753,6 +4817,8 @@ export default function MySubmissions({
                         <span style={s.archivedBadge}>Archived</span>
                       ) : r.recordState === "unknown" ? (
                         <span style={s.unsureBadge}>Not checked</span>
+                      ) : r.recordState === "settling" ? (
+                        <span style={badgeFor("Pending")}>Pending</span>
                       ) : (
                         <span style={badgeFor(r.status)}>{r.status}</span>
                       )}

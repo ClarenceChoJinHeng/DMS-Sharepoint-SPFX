@@ -40,6 +40,7 @@ import {
   clearDocumentsLibraryName,
   DOCUMENTS_CANDIDATES,
   DOCUMENTS_URL_SEGMENT,
+  UNPRIMED_SUFFIXES,
 } from "./naming";
 
 /** A probe that says yes only to the titles it is given. Records calls, to prove caching. */
@@ -302,19 +303,38 @@ describe("resolvedPrefix / titleForNewList — creating a list on a renamed site
 });
 
 describe("primeNames covers every list suffix (2026-08-20)", () => {
-  it("probes EVERY suffix in LIST_SUFFIX, so none silently keeps the legacy name", () => {
+  it("probes EVERY suffix in LIST_SUFFIX except the deliberately-unprimed ones, so none silently keeps the legacy name", () => {
     // `LIST_SUFFIX.requests` was absent for the whole life of the requests feature. An unprimed
     // suffix never enters the cache, so cachedListTitle answers "DMS <suffix>" for ever — and on a
     // CRS-renamed site that 404s on a list which exists, with no error to explain it.
     const all = Object.keys(LIST_SUFFIX).map((k) => (LIST_SUFFIX as Record<string, string>)[k]);
-    const missing = all.filter((sfx) => PRIMED_SUFFIXES.indexOf(sfx) === -1);
-    // NAMED. "one suffix is unprimed" is not something anyone can act on.
+    const missing = all.filter(
+      (sfx) => PRIMED_SUFFIXES.indexOf(sfx) === -1 && UNPRIMED_SUFFIXES.indexOf(sfx) === -1,
+    );
+    // NAMED. "one suffix is unprimed, and nobody said why" is not something anyone can act on.
     expect(missing).toEqual([]);
   });
 
   it("probes nothing that is not a real suffix", () => {
     const all = Object.keys(LIST_SUFFIX).map((k) => (LIST_SUFFIX as Record<string, string>)[k]);
     expect(PRIMED_SUFFIXES.filter((sfx) => all.indexOf(sfx) === -1)).toEqual([]);
+  });
+
+  it("never primes and un-primes the same suffix at once", () => {
+    // If a suffix appears in both, `resolveListTitle` still gets called for it (PRIMED_SUFFIXES
+    // wins in `primeNames`'s own loop) — so listing it as "deliberately unprimed" while it is
+    // still being primed would be a comment that lies about what the code does.
+    const overlap = PRIMED_SUFFIXES.filter((sfx) => UNPRIMED_SUFFIXES.indexOf(sfx) !== -1);
+    expect(overlap).toEqual([]);
+  });
+
+  it("`pendingDecisions` is unprimed, named and explained — 2026-09-19", () => {
+    // Found live as an unbounded, repeated console 404 (getbytitle('CRS Pending Decisions'),
+    // getbytitle('DMS Pending Decisions')) on every page load: the approver-side tag/approve-by-
+    // proxy design that would have used this list was reversed before it shipped, so the list was
+    // never created and never will be — priming it can only ever fail, for ever.
+    expect(UNPRIMED_SUFFIXES).toContain(LIST_SUFFIX.pendingDecisions);
+    expect(PRIMED_SUFFIXES).not.toContain(LIST_SUFFIX.pendingDecisions);
   });
 });
 
