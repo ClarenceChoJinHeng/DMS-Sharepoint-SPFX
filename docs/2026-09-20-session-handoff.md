@@ -479,6 +479,49 @@ against this already-deployed state.
     content is still wanted, restore it from the recycle bin (confirmed present, item 27 above)
     independently of this flow edit.
 
+## Update — code committed, flow-side edit in progress live (end of session)
+
+33. **⚠ COMMITTED. The "nothing above is committed" warning at item 171 is now STALE — everything
+    from this session (items 1-32) plus the carried-over 2026-09-19 threads (the `naming.ts`/
+    `spSubmissionRecords.ts` changes, the CRS→GDC runbook edit, `check-audit-recording.js`) is now one
+    commit: `950186e` on `feat/folder-abbreviations`, "feat: ETag guard for proxy deletion +
+    tag-by-proxy settling window fixes". Verified before committing: `tsc --noEmit` clean, full suite
+    0 failures, lint at the documented pre-existing baseline (no new warnings). `git status` is clean.
+    Item 7's "splitting into commits" open item is therefore **resolved as "committed as one unit"**
+    rather than split — the three threads were tightly related enough (all downstream of the same
+    2026-09-18 tag-by-proxy migration) that separating them would have been artificial.
+34. **Flow-side edit (item 31/§0) is IN PROGRESS, live, in Power Automate — not yet finished.** Screen
+    shared mid-edit shows the structure taking shape correctly against the runbook:
+    - `GetCurrentETag` → `Condition1`, matching runbook step 3.
+    - **True branch:** `Recycle the file` → `Update item` → `Create item`, moved inside as one unit —
+      correct per step 3's instruction to relocate the existing chain unchanged.
+    - **False branch:** shows as a single collapsed action — presumably step 4's new `Update item`
+      (`Status: Failed`, the "file changed after approval" `DecisionNote`), **not confirmed expanded/
+      verified yet.**
+    - **⚠ FLAGGED, NOT YET RESOLVED:** the True-branch `Update item`'s Code view (the one between
+      `Recycle the file` and `Create item`) showed a `PatchItem` body with only `dataset`/`table`/`id`
+      in `parameters` — **no visible field values** (no `Status`, no other item field). Could be (a) a
+      pre-existing no-op left over from before this edit began (unrelated to the ETag work, worth a
+      separate look but not urgent), or (b) fields present but not rendered in that particular Code
+      view snippet (check the **Parameters** tab directly to be sure). Either way — **do not add
+      `Status: Failed` to this action**; it only runs after `Recycle_the_file` *succeeded*, so it must
+      never carry failure-branch content.
+    - **⚠⚠ NOT YET VISIBLE/CONFIRMED BUILT: step 5**, the `GetCurrentETag` failure branch
+      (`runAfter: has failed`, its own `Update item` writing `Status: Failed` with the "could not be
+      found, may already have been removed" wording). This must be a **sibling of `Condition1`**, off
+      `GetCurrentETag` directly — not nested inside the condition, since a failed GET never reaches it.
+      Confirm this exists before considering the flow edit done.
+35. **Next session should pick up by:** (a) expanding `Condition1`'s False branch to confirm it holds
+    exactly the runbook's step-4 `Update item` with both fields set correctly; (b) confirming step 5
+    exists as `GetCurrentETag`'s own sibling failure branch; (c) checking the True-branch `Update item`
+    flagged in item 34 — read its Parameters tab, and if it genuinely has no fields, decide whether
+    that's expected/harmless or a leftover from an earlier edit worth asking the client about; (d) once
+    all three are confirmed, walk through the runbook's §7 test plan (ordinary deletion still works,
+    watch the next natural replace-clash for the `Failed`+explanation outcome, confirm Share requests
+    are unaffected) before marking item 0/31 closed.
+    - The recycle-bin recovery of `test1-test1-test1-20092026.xlsx` (item 32) is **still separate and
+      still not done** — unaffected by any of the flow-editing progress above.
+
 ## Standing instruction (established 2026-09-19, reaffirmed this session)
 
 Keep a handoff doc like this one current AS work happens — do not wait for the end of a session.
