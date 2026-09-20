@@ -2340,6 +2340,86 @@ export default function Requests({
     }
   };
 
+  /**
+   * Write a self-approved deletion request for a file opened directly (no My Submissions record,
+   * since a file already sitting in Documents/HC Documents/Archive/HC Archive was not necessarily
+   * uploaded through this app). Mirrors `MySubmissions.tsx`'s `writeApprovedDeletionRequest`
+   * exactly in shape — Stage is always "approved" here, since every file reachable through this
+   * mode already is. `CRS — Execute approved deletion` performs the actual recycle.
+   */
+  const writeDirectDeletionRequest = async (
+    view: Extract<FileView, { state: "ready" }>,
+    uniqueId: string,
+  ): Promise<string | undefined> => {
+    const meEmail = (context.pageContext.user.email ?? "").toLowerCase();
+    const where =
+      Object.keys(view.fieldText).length > 0
+        ? documentUnit(view.fieldText)
+        : undefined;
+    const now = new Date().toISOString();
+    const targetEtag = await readFileETag(
+      context.spHttpClient,
+      siteUrl,
+      uniqueId,
+    );
+    const body: Record<string, string> = {
+      Title: `Deletion — ${view.name}`.slice(0, 255),
+      RequestType: "Deletion",
+      Status: "Approved",
+      Stage: "approved",
+      ItemUniqueId: uniqueId,
+      ItemName: view.name,
+      ItemUrl: view.fileRef,
+      Segment: where?.segment ?? "",
+      Unit: where?.unit ?? "",
+      UnitTermGuid: where?.unitTermGuid ?? "",
+      RequestedBy: meEmail,
+      RequestedAt: now,
+      Reason: "",
+      DecidedBy: meEmail,
+      DecidedAt: now,
+      DecisionNote: "No approval needed — carried out automatically.",
+    };
+    if ((view.fieldText.SubmissionFileId ?? "").trim().length > 0) {
+      body.SubmissionFileId = view.fieldText.SubmissionFileId.trim();
+    }
+    if (targetEtag !== undefined) {
+      body.TargetETag = targetEtag;
+    }
+    try {
+      const send = (
+        payload: Record<string, string>,
+      ): Promise<SPHttpClientResponse> => post(`${listUrl()}/items`, payload);
+      let res = await send(body);
+      // ⚠ Same drop-newest-optional-column-first order as MySubmissions.tsx's writer — one
+      // unknown field name fails the WHOLE write (gotcha #11).
+      if (res.status === 400 && body.TargetETag !== undefined) {
+        const without = { ...body };
+        delete without.TargetETag;
+        res = await send(without);
+      }
+      if (res.status === 400 && body.SubmissionFileId !== undefined) {
+        const without = { ...body };
+        delete without.SubmissionFileId;
+        delete without.TargetETag;
+        res = await send(without);
+      }
+      if (res.status === 400 && body.Stage !== undefined) {
+        const without = { ...body };
+        delete without.Stage;
+        delete without.SubmissionFileId;
+        delete without.TargetETag;
+        res = await send(without);
+      }
+      if (res.ok) return undefined;
+      return res.status === 404
+        ? "The requests list does not exist yet — ask an administrator to open the Requests page, which creates it."
+        : `The deletion could not be recorded (HTTP ${res.status}).`;
+    } catch (e) {
+      return `Could not record the deletion: ${(e as Error).message}`;
+    }
+  };
+
   /* ONE ROUTE IN, ONE LOADER — mirrors the existing rule right above for the request-based mode. */
   useEffect(() => {
     if (directFileId === undefined) return;
@@ -2399,8 +2479,81 @@ export default function Requests({
     string | undefined
   >(undefined);
   const [directShareDone, setDirectShareDone] = useState(false);
-  /* Placeholders until Tasks 7-8 define the real dialogs — an undefined value renders nothing. */
-  const directDeleteDialog: React.ReactNode = undefined;
+  const directDeleteDialog: React.ReactNode = directDeleteConfirm && (
+    <div
+      style={s.modalBg}
+      onMouseDown={closeOnBackdrop(() => {
+        if (!directDeleteBusy) setDirectDeleteConfirm(false);
+      })}
+    >
+      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+        <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>
+          Delete this file?
+        </p>
+        <p
+          style={{
+            fontSize: 12.5,
+            color: "#605e5c",
+            margin: "0 0 8px",
+            lineHeight: 1.5,
+          }}
+        >
+          This deletes it straight away — no approver decides this. It moves
+          to the recycle bin and can be restored within 93 days.
+        </p>
+        {directDeleteError && (
+          <p style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}>
+            {directDeleteError}
+          </p>
+        )}
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button
+            style={s.ghost}
+            disabled={directDeleteBusy}
+            onClick={() => setDirectDeleteConfirm(false)}
+          >
+            Cancel
+          </button>
+          <button
+            style={s.primary}
+            disabled={directDeleteBusy}
+            onClick={() => {
+              if (directFileId === undefined) return;
+              if (
+                directFileView === undefined ||
+                directFileView.state !== "ready"
+              ) {
+                return;
+              }
+              const view = directFileView;
+              const id = directFileId;
+              setDirectDeleteBusy(true);
+              setDirectDeleteError(undefined);
+              writeDirectDeletionRequest(view, id)
+                .then((err) => {
+                  setDirectDeleteBusy(false);
+                  if (err) {
+                    setDirectDeleteError(err);
+                    return;
+                  }
+                  setDirectDeleteConfirm(false);
+                  setNoticeBad(false);
+                  setNotice(
+                    "Deleted. It has moved to the recycle bin and can be restored within 93 days.",
+                  );
+                })
+                .catch((e) => {
+                  setDirectDeleteBusy(false);
+                  setDirectDeleteError((e as Error).message);
+                });
+            }}
+          >
+            {directDeleteBusy ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
   const directShareDialog: React.ReactNode = undefined;
 
   /* ⚠ ONE ROUTE IN, ONE LOADER. A click and an email link both only set `viewId`; this effect does
