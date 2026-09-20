@@ -1421,11 +1421,15 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                     lining up with their columns. */}
                 <span aria-hidden="true" />
                 <div style={s.who}>
-                  {/* WARN: DISPLAY ONLY - THE ACTOR IS STILL STORED, AND THE CSV STILL CARRIES IT.
-                      Archiving and routing are done BY A SCHEDULED FLOW, so whatever name the row
-                      holds is whoever the flow ran as, not a person who decided anything - and
-                      showing it invites exactly that reading (client, 2026-09-06). The row keeps
-                      `ActorName`/`ActorEmail` for an investigation; only this cell is blanked. */}
+                  {/* ⚠ SUPERSEDED 2026-09-20 — SEE BELOW. The blanking this comment used to describe
+                      (client, 2026-09-06: "showing it invites exactly that reading" — implying a
+                      PERSON decided something a scheduled flow actually did) is REVERSED. Now that
+                      Auto-route/HC Auto Route genuinely run as the gdc proxy account (this session's
+                      Editor-stamp fix), showing "Guthrie Document Centre" here is an accurate answer
+                      to "who moved this", not a misleading one — client, same day: "Move to
+                      Documents is not showing anything so we will need to add it back, same for
+                      Archive." Kept as history, not deleted, since the 2026-09-06 reasoning was
+                      sound for what was true THEN and explains why this branch ever existed. */}
                   <div>
                     {/* Client QA item #48.4, 2026-09-13: falls back to a NAME derived from the
                         email's local part rather than the raw address, when `ActorName` was never
@@ -1437,14 +1441,12 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                         SAME proxy account rendering three different ways across adjacent rows
                         ("Guthrie Document Centre", the raw address, and a bare "gdc") because
                         different flow actions store this one fact three different ways; this is
-                        what makes all three read the same from here on. */}
-                    {r.EventType === EVENT.archived ||
-                    r.EventType === EVENT.routed
-                      ? "-"
-                      : (canonicalServiceAccountName(r.ActorEmail ?? "") ??
-                          canonicalServiceAccountName(r.ActorName ?? "") ??
-                          r.ActorName) ||
-                        (r.ActorEmail ? nameFromEmail(r.ActorEmail) : "—")}
+                        what makes all three read the same from here on. Archived/Routed rows go
+                        through the SAME logic now — no more special-cased blank. */}
+                    {(canonicalServiceAccountName(r.ActorEmail ?? "") ??
+                        canonicalServiceAccountName(r.ActorName ?? "") ??
+                        r.ActorName) ||
+                      (r.ActorEmail ? nameFromEmail(r.ActorEmail) : "—")}
                   </div>
                 </div>
               </div>

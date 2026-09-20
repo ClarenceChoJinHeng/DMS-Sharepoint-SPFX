@@ -14274,3 +14274,59 @@ existing folders as well."* Two routes touch this column; only one is code.
   a real library. The test that matters: migrate a segment whose below-Unit tiers genuinely need
   backfilling (so `backfillMetadata` writes something after the move), then confirm the moved file's
   Modified By reads the proxy account's name — checked AFTER both passes, not right after the move.
+
+## ✅ THE ROUTING-ROUTE EDITOR STAMP IS DONE, VERIFIED AGAINST THE REAL EXPORTS — AND ONE OTHER FLOW GAP FOUND (2026-09-20)
+The flow-side half of "Modified By = gdc" (the section above only covers "Move existing folders")
+is now built, walked through action by action against the REAL current exports in
+`PowerAutomateFlowsSDG/*.zip` — see the new reference memory `reference-power-automate-flow-exports`,
+saved specifically because the first draft of these instructions was reconstructed from an old
+runbook rather than the actual current flow, and only checking the real export caught it.
+- **BOTH `Auto-route` and `HC Auto Route` are confirmed correct, verified from Code view.** New
+  `GetProxyUser` action (`POST /_api/web/ensureuser`, `{"logonName":"gdc@sdguthrie.com"}`, both
+  headers `odata=nometadata`), inserted between `Get_source_author` and the existing
+  `Send_an_HTTP_request_to_SharePoint` stamp action, which now reads
+  `Editor: [{'Key':'@{body('GetProxyUser')?['LoginName']}'}]`. `Author` untouched in both; HC Auto
+  Route's `Created` line (already wrapped in `convertFromUtc(..., 'Singapore Standard Time')`) was
+  correctly left alone.
+- **⚠⚠ A GENUINE, LIVE DEFECT FOUND WHILE VERIFYING, UNRELATED TO TODAY'S TASK: `Auto-route`'s
+  `Created` line has NO `convertFromUtc` wrapper; `HC Auto Route`'s does.** CLAUDE.md's own 2026-09-05
+  entry ("THE 8-HOUR `Created` SKEW ON BOTH ROUTING FLOWS IS FIXED") says this was applied to BOTH
+  flows — the real `Auto-route` export shows only the plain
+  `formatDateTime(body('Get_item')?['Created'],'M/d/yyyy h:mm tt')`, no timezone conversion at all.
+  Either the fix was reverted in the normal flow at some point after 2026-09-05, or this export
+  predates it having been re-applied there. Either way: **every document currently routed through the
+  normal `Auto-route` flow is very likely getting a `Created` timestamp stamped 8 hours early**,
+  exactly the original bug. **NOT fixed as part of this session** — flagged to the client, holding for
+  a decision on whether to fix it now or separately. The fix, if confirmed needed, is one line:
+  wrap `Auto-route`'s `Created` `FieldValue` in the identical `convertFromUtc(...,
+  'Singapore Standard Time')` HC Auto Route already has.
+
+## THE ARCHIVE/ROUTED "Who" BLANKING IS REVERSED (2026-09-20)
+Client, looking at the live Audit Log: *"I notice Move to Documents is not showing anything so we
+will need to add it back, same for Archive."* This reverses the 2026-09-06 decision recorded in this
+same file's own history and in `AuditLog.tsx`'s comment at the time — that blanking existed because
+showing a name for a SCHEDULED FLOW's action "invites [the] reading" that a person decided something
+they did not.
+- **THE REASONING THAT MADE THE ORIGINAL BLANKING RIGHT NO LONGER APPLIES.** It was sound when
+  written: at the time, whatever name a routing/archiving row carried was whichever ad-hoc identity
+  the flow happened to run as, which was not a meaningful answer to "who did this." Now that
+  Auto-route/HC Auto Route genuinely run — and, after today's fix, correctly STAMP their own copies
+  — as the gdc proxy account, showing "Guthrie Document Centre" for a `Moved to Documents` or
+  `Archived` row is an accurate, useful answer, not a misleading one.
+- **FIXED in `AuditLog.tsx`**: the `r.EventType === EVENT.archived || r.EventType === EVENT.routed
+  ? "-" : ...` special case is removed. Archived/Routed rows now go through the exact same
+  `canonicalServiceAccountName` → `ActorName` → `nameFromEmail` chain as every other event.
+  **`EVENT.archived`/`EVENT.routed` are no longer referenced anywhere in this file** — confirmed by
+  grep, and `EVENT` itself is still used elsewhere (the export-type filter), so no unused-import
+  warning.
+  - **⚠ THE OLD COMMENT IS KEPT IN PLACE, MARKED SUPERSEDED, RATHER THAN DELETED** — the 2026-09-06
+    reasoning was correct FOR WHAT WAS TRUE THEN, and a future reader hitting this same question
+    (should archive/routing rows show an actor?) should see why the answer was once "no" before
+    seeing why it is now "yes."
+- **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → **1991/1991** passing, lint at the
+  documented pre-existing baseline (the file's only warning, `AuditLogoIcon` unused, is unrelated and
+  pre-existing). **NOT yet deployed or tested live** — and this specific fix DEPENDS on the flow-side
+  Editor stamp above actually being live, or archived/routed rows will show whatever `ActorName` the
+  flow happens to currently write (which, before today's flow edit, was inconsistent — see the
+  earlier "SHOW NAMES NOT EMAILS" section for the exact three-shapes-of-one-fact problem this was
+  already built to paper over).
