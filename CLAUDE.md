@@ -14459,3 +14459,73 @@ each flow's own Code view after the change, not deployed via this repo.
   `Title` instead of a guess.
 - **VERIFIED BY READING BOTH FLOWS' Code view AFTER EDITING**, matching this file's own standing
   rule against trusting a screenshot of the designer alone.
+
+## DIRECT SHARE/DELETE FROM THE FOUR APPROVED-SIDE LIBRARIES — CODE BUILT, NO COLUMN FORMATTING YET (2026-09-20)
+Client: *"can we reuse this page from My submission when open a file in the document library and
+the archive library? … Reason being Approver cannot share since the native sharing is disabled…
+Follow the same logic as well, Approver can share without permission and same goes for system
+admin."* Confirmed in conversation: Documents/HC Documents get full treatment, **Archive/HC Archive
+are read-only** (view details, no Delete/Share). Spec:
+`docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md`. Plan:
+`docs/superpowers/plans/2026-09-20-direct-share-delete-from-libraries.md`. **`tsc`/lint/full suite
+(2002/2002) clean, production build succeeds, and the shipped bundle was grepped for four
+feature-specific strings — all present, confirming the package is not stale.**
+- **A SIBLING MODE ON `Requests.tsx`, NOT A NEW WEB PART** — `?file=<UniqueId>`, next to the
+  existing `?request=<Id>` mode built 2026-09-10. Reusing an already-registered, already-published
+  web part avoids the exact class of risk that left `+ New Folder` and `CRS Requests` itself
+  silently undeployable for weeks (bundled but never registered as a page component).
+- **NO LIBRARY PARAMETER.** `GetFileById(guid'<UniqueId>')` is web-scoped and a `UniqueId` is
+  unique site-wide, so it resolves across all four target libraries with no ambiguity.
+- **`directActionsFor` (new, `shared/directFileActions.ts`, 5 tests) is the one piece of new
+  decision logic**: `probeFileRights`'s per-action `remove`/`share` verdict, with **Archive always
+  overriding to read-only regardless of what the probe answers** — an archived document is
+  read-only to everybody by design, and a system admin's Full Control would otherwise make the
+  probe say "granted" on one.
+- **`Requests.aspx`'s page policy widened back to include `UPL`/`UPLHC`**, reversing part of the
+  2026-08-21 removal — the page now has a genuine second job (a plain uploader's own read-only
+  file view) that removal never anticipated. Widening cannot grant anyone a new place to ACT: the
+  page grant opens the screen, `directActionsFor` decides each button, every action runs in the
+  viewer's own session.
+- **Delete**: same self-approved-`CRS Requests`-row proxy mechanism as every other delete since
+  2026-09-17, ETag-guarded per the 2026-09-20 runbook. **Share**: immediate `SP.Web.ShareObject`,
+  no request row, view-only only (no Edit option, matching the 2026-08-27 decision) — this is what
+  makes "Approver can share without permission" true, since it runs in THEIR session against a
+  folder where they already hold `CRS Share` (Manage Permissions).
+- **⚠ TWO THINGS THE PLAN GOT WRONG, FOUND DURING PRE-EXECUTION REVIEW, NOT DISCOVERED MID-BUILD:**
+  1. `s.primary`/`s.askBtn`/`s.askBar` do not exist in `Requests.tsx`'s style object — the plan's
+     own documented fallback (`s.askBtn`) also didn't exist. Added all three explicitly rather than
+     repurposing an existing key with different semantics, per this codebase's own established fix
+     for "a key that does not exist yields `undefined` and the element renders unstyled with a
+     green build" (a trap that has bitten four other files here).
+  2. The reference implementation this mirrors (`MySubmissions.tsx`'s
+     `writeApprovedDeletionRequest`) has a THIRD optional-column fallback rung (drops `Stage` on a
+     400) that the plan's writer omitted — added it, so a site that has not yet added that column
+     still records the deletion.
+- **⚠ TWO BUGS FOUND DURING EXECUTION, BOTH FROM THE PLAN'S LITERAL INSERTION ORDER, NEITHER FROM
+  THE DESIGN ITSELF:**
+  1. `.finally()` is unavailable on this tsconfig target (same class of limitation as
+     `Promise.allSettled`, gotcha #3) — hit in BOTH the delete and share confirm handlers. Fixed by
+     setting the `busy` flag to `false` on both the `.then` and `.catch` branches instead.
+  2. The debounced recipient-search effect's dependency array (`[directShareOpen,
+     directShareQuery]`) was inserted textually BEFORE those two `useState` declarations existed
+     further down the file (added two tasks later) — `TS2448`/`TS2454`, block-scoped variable used
+     before its declaration. **A dependency array is an expression evaluated on every render, not a
+     deferred closure** — unlike a plain function body (`writeDirectDeletionRequest`,
+     `performDirectShare`), which can safely reference a `const` declared later in the same scope
+     because it is only read at CALL time, well after the whole component has rendered once. Moved
+     the effect to sit after the full state block it reads.
+- **⚠ THE COLUMN FORMATTING JSON IS DELIBERATELY NOT PART OF THIS BUILD — it is a manual, per-
+  library, per-site SharePoint configuration step (not shippable via the `.sppkg`), and it depends
+  on confirming whether `[$UniqueId]` is available as a column-formatting token on this tenant,
+  which can only be checked once this is deployed and a real link can be clicked by hand. If
+  `[$UniqueId]` is not available, the documented fallback is `&lib=<key>` (the existing `LibTarget`
+  keys in `shared/naming.ts`) resolved via `[$ID]` plus the known library title instead.**
+- **Non-goals, per the spec: no "Request…" fallback for a viewer without direct rights** (that flow
+  already exists on My Submissions/the Requests queue), **and no extraction of
+  `performShare`/`writeApprovedDeletionRequest` into a shared module** — a third small per-page
+  copy of the same shape is this project's existing practice, not a new one.
+- **⚠ NOT YET SITE-TESTED.** No UI tests exist anywhere in this codebase (this project's
+  established style); verified by `tsc`, lint, the full suite, a production build, and grepping the
+  shipped bundle for feature-specific strings. The live click-through — including confirming which
+  of the two `[$UniqueId]`/`&lib=` routing options this tenant actually needs before delivering the
+  column-formatting JSON — is the next step.
