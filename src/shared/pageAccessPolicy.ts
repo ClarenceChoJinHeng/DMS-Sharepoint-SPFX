@@ -41,7 +41,7 @@ export const ACTION_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS"];
 // APRHC joined every people-facing rule on 2026-08-24: the HC Head of Unit (`hou_hc`) holds APRHC
 // INSTEAD of APR, so any rule keyed on APR alone would AccessDeny the exact person the HC vertical
 // exists for — the fourth instance of "a page keyed on a role its audience does not literally hold"
-// (upload form → APR, Requests → DEPTVIEW, My Submissions → UPLHC, and this).
+// (upload form → APR, Requests → DEPTVIEW then UPL/UPLHC again, My Submissions → UPLHC, and this).
 
 /**
  * File-name rules, FIRST MATCH WINS, and the order is load-bearing.
@@ -114,11 +114,14 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     // otherwise fall to DEFAULT_POLICY, which is APR + UPL + DELS; explicit and narrow beats
     // right-by-accident.
     //
-    // ⚠ `UPL` WAS HERE UNTIL 2026-08-21 AND ITS REMOVAL IS THE POINT. The 2026-08-15 design gave this
-    // page two audiences — the uploader raising a request and the Head of Unit deciding it — and that
-    // reasoning went stale on 2026-08-20, when the requester's own view moved to My Submissions →
-    // Requests (with Cancel). A PIC opening this page now gets a screen filtered to units where they
-    // hold APR, i.e. none: an empty page on their menu.
+    // ⚠ `UPL`/`UPLHC` WERE REMOVED 2026-08-21 AND ADDED BACK 2026-09-20 — SUPERSEDING THAT REMOVAL,
+    // NOT CONTRADICTING IT BY ACCIDENT. The 2026-08-21 removal was correct for what was true then: a
+    // plain uploader's queue here was always empty, since their own requests had just moved to My
+    // Submissions. This page has since gained a SECOND job — `?file=<UniqueId>` opens a read-only
+    // file view reachable by clicking a Name column in Documents/HC Documents/Archive/HC Archive,
+    // which every uploader can browse — so leaving them off this list means AccessDenied on the
+    // whole page instead of the intended read-only view.
+    // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
     //
     // `DEPTVIEW` joins because a Head of Department holds DEL and SHARE since 1.0.197.0 and can
     // therefore carry out an approved-document deletion or share outright (client, 2026-08-21: *"I
@@ -127,14 +130,14 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     // pending ones are hidden rather than merely disabled.
     //
     // Widening this list cannot grant anyone a new place to act: the page grant opens the SCREEN,
-    // while `canDecide` decides each row, and the approval itself runs in the viewer's own session
-    // and fails loudly if their permissions do not cover it.
+    // while `canDecide`/`directActionsFor` decide each row, and every action runs in the viewer's
+    // own session and fails loudly if their permissions do not cover it.
     // Spec: docs/superpowers/specs/2026-08-21-requests-page-hod-access-design.md
     match: /request/i,
     policy: {
-      roles: ["APR", "APRHC", "DEPTVIEW"],
+      roles: ["APR", "APRHC", "DEPTVIEW", "UPL", "UPLHC"],
       adminOnly: false,
-      reason: "Approver and Head of Department groups are listed — the Head of Unit decides deletion and share requests, and a Head of Department can carry out those on approved documents. Uploaders raise requests on My Submissions, not here.",
+      reason: "Approver and Head of Department groups can decide deletion and share requests here; uploader groups can open a file's read-only detail view when reached by clicking it directly in a library.",
     },
   },
   {

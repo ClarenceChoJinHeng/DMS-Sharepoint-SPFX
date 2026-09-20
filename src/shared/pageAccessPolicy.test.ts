@@ -185,24 +185,34 @@ describe("isRoleEligibleForPage", () => {
 
 describe("the Requests page", () => {
   // Spec: docs/superpowers/specs/2026-08-21-requests-page-hod-access-design.md
-  it("offers approvers and Heads of Department — the two roles that can carry a request out", () => {
-    expect(policyForPage("Requests.aspx").roles).toEqual(["APR", "APRHC", "DEPTVIEW"]);
-    expect(policyForPage("CRS-Requests.aspx").roles).toEqual(["APR", "APRHC", "DEPTVIEW"]);
+  it("offers approvers, Heads of Department, and uploaders", () => {
+    const expected = ["APR", "APRHC", "DEPTVIEW", "UPL", "UPLHC"];
+    expect(policyForPage("Requests.aspx").roles).toEqual(expected);
+    expect(policyForPage("CRS-Requests.aspx").roles).toEqual(expected);
   });
 
-  it("NO LONGER offers uploaders — their view moved to My Submissions on 2026-08-20", () => {
-    // Regression guard for the stale-reasoning bug this rule carried for six days: a PIC granted
-    // this page gets a queue filtered to units where they hold APR, i.e. none. An empty page on
-    // their menu, granted by a comment describing a design that had been superseded.
+  it("OFFERS UPLOADERS AGAIN, 2026-09-20 — reversing the 2026-08-21 removal for a new reason", () => {
+    // The 2026-08-21 removal was right for what was true then: a plain uploader's queue here was
+    // always empty. This page has since gained a second job — the ?file=<UniqueId> read-only view
+    // reachable from a library click, which every uploader can trigger — so they need the page
+    // grant again, for a genuinely different purpose than the one that got them removed.
+    // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
     for (const name of ["Requests.aspx", "CRS-Requests.aspx", "Approval-Requests.aspx"]) {
-      expect(policyForPage(name).roles).not.toContain("UPL");
+      expect(policyForPage(name).roles).toContain("UPL");
+      expect(policyForPage(name).roles).toContain("UPLHC");
     }
   });
 
   it("beats the approver rule, so a name carrying 'approval' still reaches a Head of Department", () => {
     // Ordering, pinned: on the /approv/ rule this page would list approver groups ONLY, and a Head
     // of Department — who holds DEL and SHARE and can act on approved documents — could not open it.
-    expect(policyForPage("Approval-Requests.aspx").roles).toEqual(["APR", "APRHC", "DEPTVIEW"]);
+    expect(policyForPage("Approval-Requests.aspx").roles).toEqual([
+      "APR",
+      "APRHC",
+      "DEPTVIEW",
+      "UPL",
+      "UPLHC",
+    ]);
   });
 
   it("does not disturb the approver's own page — DEPTVIEW must never reach the approval queue", () => {
