@@ -234,6 +234,27 @@ const sortModesForDisplay = (list: UploadMode[]): UploadMode[] => {
   });
 };
 
+/**
+ * Alphabetical by label, with President's Office pinned first — mirrors `Form.tsx`'s function of
+ * the same name verbatim, ported here 2026-09-20 for the identical ask on THIS screen's Department
+ * dropdown (client: "ensure that President office is always the first for bulk upload and follow
+ * alphabetical dropdown"). `sortModesForDisplay` above already covered the Segment picker on this
+ * page since 2026-09-11; this is the sibling that was never ported for the Department/Unit level.
+ *
+ * This is for the folder-level cascade (Department / Unit / future tiers), not the fixed metadata
+ * term sets: Year and Document Type can carry their own deliberate order. Matched on "president" so
+ * `President Office` and `President's Office` both keep the same position. `TermOption` is not
+ * shared between the two upload web parts, so neither is this — keep the two in step by hand.
+ */
+const sortTermOptionsForDisplay = (list: TermOption[]): TermOption[] => {
+  const isPinned = (o: TermOption): boolean => /president/i.test(o.label);
+  return [...list].sort((a, b) => {
+    const pa = isPinned(a) ? 0 : 1;
+    const pb = isPinned(b) ? 0 : 1;
+    return pa !== pb ? pa - pb : a.label.localeCompare(b.label);
+  });
+};
+
 // A fully authorised upload path for a restricted (non-privileged) user.
 type ValidPath = { modeKey: string; chain: TermOption[] };
 
@@ -1297,7 +1318,7 @@ export default function BulkUpload({
     const tops = await loadTermSet(mode.termSetGuid).catch(
       () => [] as TermOption[],
     );
-    setLevelChoices([tops]);
+    setLevelChoices([sortTermOptionsForDisplay(tops)]);
     setLevelValues([]);
   };
 
@@ -1314,7 +1335,7 @@ export default function BulkUpload({
       const kids = await loadTermChildren(mode.termSetGuid, termId).catch(
         () => [] as TermOption[],
       );
-      choices[idx + 1] = kids;
+      choices[idx + 1] = sortTermOptionsForDisplay(kids);
     }
     setLevelChoices(choices);
   };
@@ -1367,7 +1388,7 @@ export default function BulkUpload({
           opts.push(t);
         }
       }
-      choices[i] = opts;
+      choices[i] = sortTermOptionsForDisplay(opts);
       if (opts.length === 1)
         values[i] = opts[0].id; // auto-lock
       else {
