@@ -1,41 +1,63 @@
 # SDG DMS — Claude Code Project Context
 
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-20:
-> `docs/2026-09-20-session-handoff.md`.** ⚠⚠ **THE ETAG GUARD FLOW EDIT IS CONFIRMED CORRECT — AND A
-> SEPARATE, REAL BUG WAS FOUND BEHIND IT: `TargetETag` WAS NEVER ACTUALLY A COLUMN ON THE LIVE `CRS
-> Requests` LIST.** The flow itself (`CRS — Execute approved deletion`) was verified, across four
-> export/fix rounds reading the raw `definition.json` rather than trusting screenshots, to have
-> `Update_item_2`'s `runAfter` reading exactly `{"GetCurrentETag": ["Failed"]}` with `Condition_1`
-> unchanged and correct — so THAT half of the design (see the earlier 2026-09-19 entry below) is
-> genuinely done. The client then re-tested live and got the same "file changed" failure TWICE on a
-> file nobody had touched. Diagnosed from live evidence (a console fetch of the file's real ETag,
-> then a direct SharePoint item-field read) rather than more flow-log guessing: **the `TargetETag`
-> column simply does not exist on the live list**, so every write of it since the design shipped has
-> been silently discarded (gotcha #4/#11 territory — SharePoint doesn't error on writing an unknown
-> field the way it does on selecting one). **FIXED IN CODE**: `Requests.tsx`'s existing missing-column
-> detection (the same pattern that already flags `Stage`/`RevokedBy`/`SubmissionFileId`) now also
-> detects `TargetETag`, extending the read retry-ladder from 3 rungs to 4 and adding it to the "Add
-> missing columns" banner — listed FIRST, since its absence is the one that silently breaks every
-> deletion rather than merely losing a display nicety. **THE ONLY REMAINING STEP: client builds,
-> deploys, opens the Requests page as an admin, presses "Add missing columns," then re-tests the same
-> delete** — it should now genuinely recycle instead of failing on a phantom mismatch.
+> `docs/2026-09-20-session-handoff.md`.** A long, single session. Six commits since the last pointer
+> update (`2830f90` → `d3c9e42`), all on `feat/folder-abbreviations`. **⚠ CLIENT WAS DEPLOYING AS OF
+> THE LAST MESSAGE — the live-test results are the next thing to read for, not yet known at the time
+> this was written.**
 >
-> **Also this session, once the flow work above was closed out: a full client QA comment batch was
-> processed and fixed** (client's own words: "clear the board... before continuing the big task") —
-> full detail in `docs/superpowers/specs/2026-09-18-qa-comment-batch-fixes.md`, consolidated entry
-> near the end of this file dated 2026-09-20. Built and verified: all four native `window.confirm()`
-> popups in the upload form replaced with the app's own dialog style; the Confidential Level dropdown
-> reordered (new `shared/confidentialityOrder.ts`); My Submissions' status legend reordered and its
-> status text capitalised (`RECORD_STATE_LABEL` in `shared/submissionRecords.ts`); "Remark for
-> Approval" → "Remark for Approver"; the Reject dialog's wording changed; the Requests page's
-> decided-Share-request card no longer double-shows an email. A small follow-up added a `<br>` and
-> centred text on the Requests page's "system administrator" banner. Several items in the batch need
-> a live-site check or a Power Automate edit rather than code — see the spec for the full breakdown,
-> including one (comment 13) that is a hard SharePoint platform limitation and cannot be fixed at all.
+> **What is DONE and committed, in the order it happened:**
+> 1. **`TargetETag` missing-column fix + the full QA comment batch** (`2830f90`) — the ETag guard's
+>    flow half was already confirmed correct; the column it depends on had never actually existed on
+>    the live `CRS Requests` list. Fixed in `Requests.tsx`'s missing-column detection. Plus: native
+>    `window.confirm()` popups replaced, Confidential Level dropdown reordered, status text
+>    capitalised, wording changes, a duplicated-email fix on Share request cards.
+> 2. **`Modified By` = the gdc proxy account, for "Move existing folders"** (`85b8f05`) — new
+>    `resolveProxyLoginName`/`stampEditorAsProxy` in `shared/dmsFolderMap.ts`, wired into
+>    `SubtreeMigrator.tsx` as a pass that runs LAST (after `backfillMetadata`, not inline with each
+>    move — that later write would otherwise clobber an inline stamp). **NOT yet site-tested.**
+> 3. **⚠⚠ A display-name fix was first built TOO WIDE, then correctly scoped down** (`f685c16`,
+>    reverting part of `85b8f05`). It landed on `Requests.tsx`/`MySubmissions.tsx` as well as
+>    `AuditLog.tsx`; the client caught it — *"did you change the Request.tsx and MySubmission.tsx as
+>    well? If so revert it"* — confirmed reverted byte-for-byte via `git diff`. `AuditLog.tsx` keeps
+>    the fix. Also confirmed: the system-admin notification copy (item 2 of the QA batch) should be
+>    **BCC**, not CC.
+> 4. **⚠⚠ MAJOR PROCESS LESSON: `PowerAutomateFlowsSDG/*.zip` holds the REAL exported flow
+>    definitions, and the first round of flow-edit instructions was reconstructed from an old runbook
+>    instead of checking them.** Client asked directly and caught it. New cross-session memory saved:
+>    `reference-power-automate-flow-exports`. **Check this directory before advising on ANY flow, from
+>    now on** — a runbook records what was true when it was written, not what is true now.
+> 5. **`Editor` = gdc, flow side, BUILT AND VERIFIED LIVE via Code view, in BOTH `Auto-route` and
+>    `HC Auto Route`** (`b92d51f`) — new `GetProxyUser` (`ensureuser`) action, `Editor`'s `FieldValue`
+>    repointed at it. Two real mistakes caught and fixed live before saving (wrong HTTP method, missing
+>    headers on the new action).
+> 6. **✅ A GENUINE, LIVE BUG FOUND AND FIXED WHILE VERIFYING #5, CONFIRMED BY THE CLIENT AS EXPLAINING
+>    A SYMPTOM THEY HAD ALREADY NOTICED**: `Auto-route`'s `Created` field was missing the
+>    `convertFromUtc` wrapper `HC Auto Route` already has — an 8-hour timestamp skew on every document
+>    routed through the normal flow. Fixed, now byte-identical between both flows.
+> 7. **The Archive/Routed "Who" blanking is REVERSED** (`f685c16`) — a 2026-09-06 decision, undone at
+>    the client's request now that routing genuinely runs as, and correctly attributes to, gdc.
+> 8. **✅ A SECOND REAL BUG FOUND AND FIXED: the Audit Log's Who column trusted `ActorName`
+>    unconditionally** (`d3c9e42`) — two different flows write two different NOT-a-real-name shapes
+>    into `ActorName` itself (a full raw email, and a bare email local-part), which a naive
+>    `ActorName || nameFromEmail(ActorEmail)` never caught. New `resolveActorDisplay` in
+>    `shared/displayName.ts` treats `ActorName` as input to normalise, never as a value to trust
+>    outright. **This means Deletion requested/Share requested/Request approved/Request rejected rows
+>    will ALSO show resolved names once deployed** — confirmed correct by tracing every row in the
+>    client's own live screenshots.
 >
-> **⚠ NOTHING FROM THIS SESSION IS COMMITTED** — the ETag guard code, the `TargetETag` fix, and the
-> whole QA batch are all sitting uncommitted on top of the already-committed `950186e`; see the
-> handoff doc's file list before assuming any one file's state.
+> **What to check once the deploy the client just started has landed:**
+> - Approve one ordinary document (`Auto-route`) and one HC document (`HC Auto Route`) — confirm
+>   Modified By reads the proxy account, and confirm `Created` reads correctly on the normal-flow one
+>   (that's the one with the timezone fix).
+> - Open the Audit Log — confirm every event type (including the four request ones) shows resolved
+>   names, and that `Moved to Documents`/`Archived` rows show an actor instead of a blank dash.
+> - Re-confirm `TargetETag`/"Add missing columns" from item 1 above — nothing since then touches that
+>   mechanism, but it was the original top priority and is worth a final confirmation.
+> - **Still open, untouched by anything this session**: comment 14's `autoApproveOwnUpload` config row
+>   check; whether a live requester showing `crs@sdguthrie.com` is the OLD, not-yet-migrated proxy
+>   account (the 2026-09-19 GDC service-account migration runbook is still NOT STARTED for the 8 flows
+>   that hardcode the identity in their own logic, not just their connection).
 
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-19:
 > `docs/2026-09-19-session-handoff.md`.** Client asked mid-session that progress be documented as it

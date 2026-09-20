@@ -703,17 +703,128 @@ against this already-deployed state.
     applied inline on this ONE banner's `<div>`, not on the shared `s.warn` style object every other
     warning banner in the file also uses). Verified: `tsc --noEmit` clean, full suite 0 failures,
     only the pre-existing `max-lines` warning on the file.
-48. **⚠ NOTHING FROM THIS SESSION IS COMMITTED YET** — everything above (the ETag guard, the
-    `TargetETag` fix, the whole QA batch, and the banner tweaks) is sitting uncommitted on top of the
-    already-committed `950186e`. Should be committed once the client has deployed and confirmed the
-    delete/reason fix and the ETag guard actually work live end to end.
-49. **Next step: client builds and deploys everything above, then works through**: (a) the
-    `TargetETag` column fix (item 43's own next step, still the top priority — nothing else in the
-    QA batch matters if deletions still fail on a phantom mismatch), (b) a general re-test of the QA
-    batch items, (c) the two live-site checks flagged above (comment 14's config row, and confirming
-    whether `crs@sdguthrie.com` showing as a requester on live Delete Requests is the OLD,
-    not-yet-migrated proxy account still active — the service-account migration runbook from
-    2026-09-19 is still "NOT STARTED", so this is expected for now, not a new bug).
+48. ~~**⚠ NOTHING FROM THIS SESSION IS COMMITTED YET**~~ — **STALE, superseded by item 50 below.**
+    Everything through item 47 is now committed across several commits; see item 50 for the full list.
+49. ~~**Next step: client builds and deploys everything above...**~~ — **STALE.** All of it (a)-(c) is
+    now either done or reflected in items 50-56 below; the client had not yet built at the time this
+    was written, and has since done so much more than "re-test the QA batch."
+
+## Update — everything since item 49, across several more commits (later, same day)
+
+Picking up where item 49 left off. The client kept working through the QA batch live and this thread
+grew far beyond "re-test" — several genuinely new fixes came out of it, on top of confirming/building
+the flow-side pieces item 46 only wrote up as a spec.
+
+50. **Everything through item 47 is committed, across FIVE commits, in order:**
+    - `2830f90` — `TargetETag` missing-column detection + the full QA comment batch (item 46/47).
+    - `85b8f05` — display-name fix, FIRST built too wide (applied to `Requests.tsx`/`MySubmissions.tsx`
+      as well as `AuditLog.tsx`), plus the `Modified By` = proxy account work for `SubtreeMigrator.tsx`
+      ("Move existing folders") — new `resolveProxyLoginName`/`stampEditorAsProxy` in
+      `shared/dmsFolderMap.ts`, run as a LAST pass after `backfillMetadata` (not inline with each move)
+      because that later tier-column write would otherwise silently clobber an inline `Editor` stamp.
+    - `bd69f9d` — corrected the flow-edit spec to use the REAL, verified stamp-action JSON (pulled from
+      `docs/superpowers/specs/2026-08-08-auto-route-flow-and-draft-isolation.md` §4.3) instead of a
+      generic description, plus a `GetProxyUser`/`ensureuser` action recommendation instead of a
+      hardcoded claims literal.
+    - `f685c16` — **⚠ CLIENT CAUGHT A SCOPE OVERREACH AND ASKED FOR A REVERT**: "did you change the
+      Request.tsx and MySubmission.tsx as well? If so revert it." The display-name fix from `85b8f05`
+      was reverted on those two files (confirmed byte-identical to before via `git diff`), keeping only
+      `AuditLog.tsx`'s Who-column fix. Also confirmed Item 2 (system admin notification CC) should be
+      **BCC**, not CC.
+    - `b92d51f` — the Auto-route/HC Auto Route flow-side `Editor` stamp was WALKED THROUGH LIVE with
+      the client, action by action, verified against the actual `.zip` exports in
+      `PowerAutomateFlowsSDG/` (see item 51 — this is the single most important process fix of the
+      whole session).
+    - `d3c9e42` — a REAL bug found and fixed: the Audit Log's Who column was trusting `ActorName`
+      unconditionally, and two flows write two different NOT-a-real-name shapes into it (see item 55).
+
+51. **⚠⚠ MAJOR PROCESS CORRECTION, mid-session: `PowerAutomateFlowsSDG/*.zip` holds REAL exported flow
+    definitions, and the first round of flow-edit instructions was reconstructed from an OLD RUNBOOK
+    instead of checking them.** Client asked directly: *"are you basing this auto route from here?
+    [path to the zip]"* — the honest answer was no. Extracted and read the real
+    `Auto-routeapprovedPendingfilestoDocumentsLibrary_20260918100329.zip` (and later the equivalent HC
+    one, plus three more flows for item 55's investigation) and confirmed the instructions were
+    correct BY LUCK for the one action already checked against the runbook — but the general practice
+    of trusting a runbook over the real export was wrong and is now corrected going forward.
+    - **New reference memory saved**: `reference-power-automate-flow-exports` (in the user's
+      cross-session memory, not this repo) — records the directory's existence, the exact extraction
+      command, and the trap that action ORDER in `definition.json` is dict order, NOT execution order
+      (only each action's own `runAfter` is authoritative) — caught this mid-investigation, where two
+      actions shared the display name "Send an HTTP request to SharePoint" doing completely different
+      jobs (one the Author/Editor/Created stamp, one the source-item DELETE).
+52. **The `Editor` stamp is BUILT, VERIFIED LIVE VIA CODE VIEW, IN BOTH `Auto-route` AND
+    `HC Auto Route`.** Walked the client through it screenshot by screenshot:
+    - New `GetProxyUser` action (`POST /_api/web/ensureuser`, body `{"logonName":
+      "gdc@sdguthrie.com"}`, both headers `odata=nometadata`), inserted between `Get_source_author`
+      and the existing Author/Editor/Created stamp action.
+    - The stamp action's `Editor` `FieldValue` changed from the author's claims to
+      `[{'Key':'@{body('GetProxyUser')?['LoginName']}'}]`. `Author` left untouched in both flows.
+    - Caught and corrected TWO real mistakes live, before they were saved: `GetProxyUser`'s Method was
+      initially `GET` (must be `POST` — `ensureuser` is POST-only) and its Headers were initially
+      empty (added the same two `odata=nometadata` headers as the existing action, to avoid a verbose-
+      response surprise breaking the later `LoginName` reference).
+    - **Confirmed harmless, not re-raised**: `runAfter` values showing `"SUCCEEDED"` in all caps —
+      already an established non-issue in this project's own history (checked once before, confirmed
+      case-insensitive matching).
+53. **⚠⚠ A GENUINE, LIVE DEFECT FOUND WHILE VERIFYING THIS, UNRELATED TO THE TASK AT HAND, AND
+    FIXED THE SAME SESSION: `Auto-route`'s `Created` line was missing the `convertFromUtc` wrapper
+    `HC Auto Route`'s already has.** CLAUDE.md's own 2026-09-05 entry says this 8-hour skew fix was
+    applied to BOTH routing flows; the real `Auto-route` export showed only the plain, unconverted
+    `formatDateTime(...)`. **Client confirmed this explained a real symptom they had ALREADY noticed
+    live, independently**: *"OOhhhh so that is why the time zone is wrong when I approved a file and
+    landed on document library."* Fixed and verified via Code view — `Auto-route`'s `Created` line now
+    reads byte-for-byte identical to `HC Auto Route`'s: `@{formatDateTime(convertFromUtc(body('Get_
+    item')?['Created'], 'Singapore Standard Time'), 'M/d/yyyy h:mm tt')}`.
+54. **The Archive/Routed "Who" blanking is REVERSED.** Client, looking at the live Audit Log: *"I
+    notice Move to Documents is not showing anything so we will need to add it back, same for
+    Archive."* That blanking was a DELIBERATE 2026-09-06 client decision (showing a name for a
+    scheduled flow's action "invites [the] reading" that a person decided something they did not) —
+    the reasoning no longer holds now that Auto-route/HC Auto Route genuinely run as, and correctly
+    attribute to, the gdc proxy account. `AuditLog.tsx`'s special case for `EVENT.archived`/
+    `EVENT.routed` is removed; those rows now go through the same actor-resolution logic as every
+    other event. Old comment kept in place, marked SUPERSEDED, not deleted.
+55. **⚠⚠ THE REAL BUG BEHIND "why does Deletion/Share requested still show raw emails" — found by
+    checking the actual flow exports, not by assuming a deploy alone would fix it.** Client asked
+    directly whether those event types needed anything else. Extracted and read
+    `CRS — Audit request activity`, `CRS — Execute approved deletion` and `CRS — Notify request
+    activity`'s real definitions and found: **two different flows write two different NOT-a-real-name
+    shapes directly into the `ActorName` field itself**, not just `ActorEmail`:
+    - `CRS — Audit request activity`'s `Create_item` sets `item/ActorName:
+      "@outputs('ActorEmail')"` — the FULL raw address.
+    - `CRS — Execute approved deletion`'s `Create_item` sets `item/ActorName` from
+      `first(split(..., '@'))` — just the LOCAL PART, dots and all.
+
+    Both are non-blank, so the render logic's old `r.ActorName || nameFromEmail(r.ActorEmail)` never
+    reached the name-guessing fallback for either — it showed the raw or half-processed value
+    verbatim. **This would NOT have been fixed by deploying the earlier display-name work alone.**
+    - **FIXED with a new pure function, `resolveActorDisplay(actorEmail, actorName)`** in
+      `shared/displayName.ts` (6 new tests) — treats `ActorName` as INPUT to normalise via
+      `nameFromEmail`, never as a value to trust outright (after checking known service accounts
+      first). Verified safe for a GENUINE display name too (Auto-route's own `ActorName`, which has
+      no `@`/`.`/`_` to split on, passes through essentially unchanged).
+    - `AuditLog.tsx`'s Who cell is now a single call, `resolveActorDisplay(r.ActorEmail,
+      r.ActorName)`, confirmed by direct code read to run UNCONDITIONALLY for every row — no
+      remaining event-type special-casing that would exclude Deletion requested/Share requested/
+      Request approved/Request rejected.
+    - **Concretely confirmed against every row in the client's own screenshots** (see the CLAUDE.md
+      entry for the full before/after table) — e.g. `armen.sidqi@sdguthrie.com` → "Armen Sidqi",
+      `gdc@sdguthrie.com` → "Guthrie Document Centre" (via the service-account check, regardless of
+      whatever `ActorName` happens to hold).
+56. **⚠ CLIENT IS DEPLOYING NOW.** Nothing further has been built pending that deploy. Once live, the
+    plan (per item 49's original (a)-(c), now updated) is:
+    - Approve one ordinary document through `Auto-route`, one HC document through `HC Auto Route` —
+      confirm Modified By reads the proxy account, and confirm `Created` reads the correct LOCAL time
+      (not 8 hours early) on the normal-flow one specifically, since that's the one just fixed.
+    - Open the Audit Log and confirm Deletion/Share requested/approved/rejected rows all show
+      resolved names, not raw emails, including the previously-inconsistent gdc/crs rows.
+    - Confirm `Moved to Documents`/`Archived` rows now show an actor instead of a blank dash.
+    - Re-check the `TargetETag` column fix from item 43 is still the FIRST thing to confirm if any
+      deletion still behaves oddly — nothing in today's later work touches that mechanism.
+    - Still open, unaffected by anything in this session: comment 14's `autoApproveOwnUpload` config
+      row check, and confirming whether a live requester showing as `crs@sdguthrie.com` is the OLD,
+      not-yet-migrated proxy account (the 2026-09-19 GDC service-account migration runbook is still
+      NOT STARTED for the 8 flows that hardcode the identity in their own logic, not just their
+      connection).
 
 ## Standing instruction (established 2026-09-19, reaffirmed this session)
 
