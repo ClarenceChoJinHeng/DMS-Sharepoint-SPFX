@@ -38,6 +38,8 @@ import {
   ensureFolder,
   loadFolderMapRows,
   moveFileTo,
+  resolveProxyLoginName,
+  stampEditorAsProxy,
 } from "../../../shared/dmsFolderMap";
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 
@@ -1485,6 +1487,13 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
     let failed = 0;
     let removedFolders = 0;
     const emptied: Array<{ lib: LibCtx; path: string; unitPath: string }> = [];
+    let attributionFailed = 0;
+    // Every file this run successfully moved, for the attribution pass at the very end — see the
+    // comment where this is pushed to, for why stamping cannot happen inline with the move.
+    const movedForAttribution: Array<{ lib: LibCtx; path: string }> = [];
+    // Resolved ONCE for the whole run, not per file — see `resolveProxyLoginName`'s own comment.
+    // `undefined` means every stamp attempt below is skipped; the moves themselves are unaffected.
+    const proxyLoginName = await resolveProxyLoginName(context.spHttpClient, siteUrl);
 
     try {
       for (const row of scans) {
@@ -1546,6 +1555,13 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
               }
               movedFiles++;
               say(`${label}: ${file} → ${plan.to.slice(row.unitPath.length + 1)}/${toName}`, true);
+              // Recorded, NOT stamped here. `backfillMetadata` (below) writes its OWN
+              // `validateUpdateListItem` call for tier columns on this same file, and that call does
+              // NOT set `Editor` explicitly — so SharePoint would restamp it back to the ADMIN
+              // running this tool as an ordinary side effect of that later, unrelated write, undoing
+              // an Editor stamp made here. The attribution pass must run LAST, after every other
+              // write this run makes to the file, or a later write can silently clobber it.
+              movedForAttribution.push({ lib: row.lib, path: `${plan.to}/${toName}` });
             }
             // Queue the emptied source for cleanup, after every move is done.
             emptied.push({ lib: row.lib, path: plan.leaf.path, unitPath: row.unitPath });
@@ -1586,6 +1602,29 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
       const tags = await backfillMetadata(seg, scans);
       failed += tags.failed;
 
+      // LAST, deliberately — after every other write this run makes to a moved file, so nothing
+      // written afterwards (the tier-column backfill above) can restamp `Editor` back to the admin
+      // running this tool as a side effect of an unrelated field update.
+      if (proxyLoginName) {
+        for (const m of movedForAttribution) {
+          const stamp = await stampEditorAsProxy(
+            context.spHttpClient,
+            siteUrl,
+            m.lib.title,
+            m.path,
+            proxyLoginName,
+          );
+          if (!stamp.ok) {
+            attributionFailed++;
+            say(
+              `${m.lib.key}: could not set Modified By on ${m.path.split("/").pop()} — ` +
+                (stamp.detail ?? "unknown reason"),
+              false,
+            );
+          }
+        }
+      }
+
       setDone(
         `Moved ${movedFiles} document(s), tidied ${removedFolders} empty folder(s), tagged ` +
           `${tags.stamped} document(s).` +
@@ -1593,6 +1632,17 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
             ? ` ${failed} problem(s) listed above — nothing holding a document was deleted, so ` +
               `running this again is safe and will retry them.`
             : "") +
+          // Attribution is reported separately from `failed` on purpose — every document above IS
+          // correctly moved; only the Modified By label on some of them could not be set. A stuck
+          // attribution stamp is not fixed by pressing this again (the file is no longer part of
+          // any plan the next scan would find), so this is stated as a fact rather than a retry hint.
+          (proxyLoginName === undefined && movedFiles > 0
+            ? ` The proxy account could not be resolved this run, so Modified By was left as-is on ` +
+              `every moved document.`
+            : attributionFailed > 0
+              ? ` Modified By could not be set to the proxy account on ${attributionFailed} ` +
+                `document(s) — listed above; the documents themselves moved correctly.`
+              : "") +
           (await finishPending(seg)),
       );
 
@@ -1618,6 +1668,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
           `Documents moved: ${movedFiles}`,
           `Empty folders tidied: ${removedFolders}`,
           `Documents re-tagged from their path: ${tags.stamped}`,
+          `Modified By set to the proxy account on: ${movedFiles - attributionFailed} of ${movedFiles}`,
           `Problems: ${failed}`,
           "Nothing holding a document is ever deleted, so re-running this is safe.",
           "—",

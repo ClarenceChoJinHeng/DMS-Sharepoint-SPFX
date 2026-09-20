@@ -91,3 +91,16 @@ export function canonicalServiceAccountName(
   const local = trimmed.split("@")[0] ?? "";
   return KNOWN_SERVICE_ACCOUNTS[local];
 }
+
+/**
+ * The CURRENT proxy account's full address — the one Power Automate flows run as, and the one
+ * `shared/dmsFolderMap.ts`'s `stampEditorAsProxy` resolves and writes into `Modified By` on files
+ * this app's own CODE moves (as opposed to a flow moving them, where the flow's OWN connection
+ * identity already IS this account and needs no separate stamp).
+ *
+ * ⚠ ONE LITERAL, HERE ONLY — every caller that needs "which account is the proxy right now" reads
+ * this constant rather than typing the address again, so the day this migrates a second time (as it
+ * already has once, crs → gdc — `docs/superpowers/specs/2026-09-19-service-account-migration-crs-to-
+ * gdc-runbook.md`) there is exactly one line to change rather than a grep across the codebase.
+ */
+export const CURRENT_PROXY_ACCOUNT_EMAIL = "gdc@sdguthrie.com";

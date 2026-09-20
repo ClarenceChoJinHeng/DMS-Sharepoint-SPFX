@@ -14184,46 +14184,35 @@ sent immediately after the ETag-guard work above was confirmed correct.
 - **⚠ NOTHING IN THIS BATCH HAS BEEN DEPLOYED OR TESTED LIVE.** The usual next step (build → deploy →
   client re-tests) applies to every item marked "Built and verified" above.
 
-## "SHOW NAMES NOT EMAILS" WAS BROADER THAN THE AUDIT LOG, AND ONE PROXY-ACCOUNT INCONSISTENCY WAS CODE-FIXABLE (2026-09-20)
+## "SHOW NAMES NOT EMAILS" IS AUDIT-LOG ONLY, AND `Modified By` = gdc NOW REACHES "Move existing folders" TOO (2026-09-20)
 Client returned with fresh live screenshots: comment 16's rejection-email gap, and a screenshot of the
 Audit Log's Who column showing the SAME proxy account three different ways across adjacent rows
 (`Guthrie Document Centre`, the raw `gdc@sdguthrie.com`, and a bare `gdc`). Full detail, including the
-exact template text for the still-unbuilt rejection emails:
-`docs/superpowers/specs/2026-09-18-qa-comment-batch-fixes.md`'s new addendum section.
-- **THE RAW-EMAIL PROBLEM WAS NEVER CONFINED TO THE AUDIT LOG.** `AuditLog.tsx` already had a
-  `nameFromEmail` guess-from-address fallback (added 2026-09-13 for exactly this complaint); the same
-  raw addresses were showing on `Requests.tsx` (Requested by / Decided by / Revoked by / "asked by" /
-  "approved by") and `MySubmissions.tsx` (the Approved By column, the Requests tab's "by …" line, the
-  detail view's decision line) — including one column whose OWN code comment quotes the client asking
-  for exactly this and not getting it: *"to be able to know who approve and can still be track in the
-  system and not just email."*
-- **FIXED: `nameFromEmail` MOVED to a new shared module, `src/shared/displayName.ts`** (pure, tested),
-  and applied at every raw-email display site across all three files. **DISPLAY ONLY, everywhere** —
-  the stored fields (`ActorEmail`, `DecidedBy`, `ApprovedBy`, `RequestedBy`, `RevokedBy`), every
-  search/filter comparison, `writeAudit`'s written text and the CSV export are all untouched; only
-  the on-screen label changed. One person asked twice in two files is exactly how the old local copy
-  and a hypothetical second one would have drifted — this is the one copy now.
-- **⚠ A SECOND, GENUINELY NEW DEFECT FELL OUT OF THE SAME SCREENSHOT: three different flow actions
-  store the proxy account's identity three different ways, and NONE of them is wrong in isolation —
-  a real display name, a raw address stored literally as `ActorName`, and a bare alias stored the
-  same way.** `canonicalServiceAccountName` (same module) recognises `gdc`/`crs` in ANY of those
-  three shapes (bare, full address, mixed case) and returns the correct display name, checked BEFORE
-  `ActorName` in the Audit Log's Who cell and before the email-guess everywhere `displayNameFor` is
-  called. This closes the inconsistency **without touching a single flow**, and — unlike a flow-side
-  fix, which would need finding and correcting every action that writes this — cannot be defeated by
-  a fourth action storing it a fourth way tomorrow, because the fix lives at the one place all four
-  would eventually be read.
-  - **`crs@sdguthrie.com` ("Guthrie Central Repository System") is kept in the map, not deleted** —
-    the RETIRED proxy account from before the 2026-09-19 GDC service-account migration. Historical
-    audit rows written under it must go on reading correctly for as long as this append-only log
-    exists.
-- **⚠ THIS NARROWS BUT DOES NOT CLOSE THE "ATTRIBUTION FIXES" ITEM'S MIDDLE BULLET, still flow-only:**
-  a genuine directory lookup (Office 365 Users' user-profile-by-email, written into `ActorName`
-  before the request-related `Create item` actions in `CRS — Execute approved deletion` and
-  `CRS — Notify request activity`) would still be MORE accurate for a real person than the
-  dot-splitting guess this fix relies on — but it is no longer the blocker it was, since every screen
-  now shows a reasonable name regardless, and the two service accounts always show their real name
-  whatever a flow happens to write.
+exact template text for the still-unbuilt rejection emails, is in
+`docs/superpowers/specs/2026-09-18-qa-comment-batch-fixes.md`'s two addenda.
+- **⚠ THE FIRST PASS OVER-APPLIED THE FIX AND WAS PARTLY REVERTED THE SAME SESSION.** `AuditLog.tsx`
+  already had a `nameFromEmail` guess-from-address fallback (added 2026-09-13 for this complaint);
+  the same raw addresses also showed on `Requests.tsx` and `MySubmissions.tsx` (Requested by /
+  Decided by / Revoked by / Approved By / the Requests tab's "by …" line), and the fix was applied to
+  all three on the reasoning that it was the same complaint. **The client corrected the scope**: "did
+  you change the Request.tsx and MySubmission.tsx as well? If so revert it" — the ask was for the
+  Audit Log's Who column specifically. **Reverted** in both files; `AuditLog.tsx` keeps the fix.
+- **`nameFromEmail` MOVED to a new shared module, `src/shared/displayName.ts`** (pure, tested), rather
+  than staying a private local function — the extraction stands on its own with one consumer, and the
+  module is ready if this is asked for on the other two screens later. **DISPLAY ONLY** — the stored
+  `ActorEmail`, search/filter comparisons, `writeAudit`'s written text and the CSV export are all
+  untouched; only the Who cell's on-screen label changed.
+- **A SECOND, GENUINELY NEW DEFECT FELL OUT OF THE SAME SCREENSHOT, and IS STILL FIXED** (it was
+  Audit-Log specific from the start, so the revert above does not touch it): three different flow
+  actions store the proxy account's identity three different ways — a real display name, a raw
+  address stored literally as `ActorName`, and a bare alias stored the same way. **New
+  `canonicalServiceAccountName`**, same module, recognises `gdc`/`crs` in any of those three shapes
+  (bare, full address, mixed case) and returns the correct display name, checked BEFORE `ActorName`
+  in the Who cell and before the email-guess. Closes the inconsistency **without touching a single
+  flow**, and cannot be defeated by a fourth action storing it a fourth way tomorrow — the fix lives
+  at the one place all four would eventually be read. `crs@sdguthrie.com` ("Guthrie Central
+  Repository System") is kept in the map, not deleted, for the retired proxy's historical rows, which
+  this append-only log will carry for as long as it exists.
 - **COMMENT 16 IS CONFIRMED AS A DELIBERATE, ALREADY-DOCUMENTED GAP, NOT A NEW BUG** — re-read
   against `docs/superpowers/specs/2026-09-09-request-notification-flow-runbook.md` §1/§3: only four
   of the six request-lifecycle emails were ever built, and the two REJECTED templates (8 and 11) were
@@ -14232,6 +14221,49 @@ exact template text for the still-unbuilt rejection emails:
   rather than letting them discover it."* The QA batch spec's addendum now carries the exact two
   templates, verbatim from the design doc, plus the precise two-edit shape to build it (mirroring the
   sibling `Failed`-case fix §9 already describes) — still entirely Power-Automate work, not code.
-- **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → **1991/1991** passing (10 new tests
-  on `shared/displayName.ts`), lint at the documented pre-existing 43-warning baseline, zero new
-  categories on any of the four touched files. **NOT yet deployed or tested live.**
+- **`Item 2`'s CC was CONFIRMED AS BCC** — the system-admin copy of an approver notification should be
+  silent, not visible in the recipient list.
+
+### `Modified By` = the proxy account, for "Move existing folders" — code, built the same session
+Client: *"For the 6 Libraries Modified by columns it should be the gdc name, cater this to Move
+existing folders as well."* Two routes touch this column; only one is code.
+- **The routing route (Auto-route / HC Auto Route) is still flow-only, unchanged from before** — see
+  the QA batch spec's "Attribution fixes" item.
+- **The `SubtreeMigrator.tsx` ("Move existing folders") route IS code, and is now built.** That tool
+  runs entirely in the ADMIN's own SPFx session, so a plain `MoveTo` would otherwise leave
+  `Modified By` reading their name, not gdc's — the code-side half of the same gap Auto-route already
+  has a flow-side answer for.
+- **New in `shared/dmsFolderMap.ts`: `resolveProxyLoginName` + `stampEditorAsProxy`.** The first
+  resolves the current proxy account's claims login once per run via `ensureSiteUser` — resolves,
+  never invites, and this account is already a site member, so this can never trigger a guest invite.
+  The second restamps ONE file's `Editor` via `validateUpdateListItem` with
+  `bNewDocumentUpdate: true`, the same no-new-version mechanism this migrator's own tier-column stamp
+  already uses. New `CURRENT_PROXY_ACCOUNT_EMAIL` constant in `shared/displayName.ts` — the ONE place
+  this address is typed, so the next migration (as already happened once, crs → gdc) is a one-line
+  change rather than a grep.
+- **⚠⚠ ORDERING MATTERS, AND THE FIRST DRAFT GOT IT WRONG BEFORE SHIPPING.** Stamping `Editor`
+  immediately after each `moveFileTo`, inline in the move loop, is wrong: `backfillMetadata` runs a
+  SEPARATE, LATER `validateUpdateListItem` call on the same file for tier-column backfill, and that
+  call does not set `Editor` explicitly — so SharePoint restamps it back to the calling admin as an
+  ordinary side effect of that unrelated write, silently undoing the attribution stamp made moments
+  earlier. **Fixed by running the attribution pass LAST** — every moved file's `{lib, path}` is
+  recorded during the move loop (`movedForAttribution`), and the actual stamp happens in its own pass
+  AFTER `backfillMetadata` completes, so nothing written later in the run can clobber it.
+- **Fails soft throughout.** `resolveProxyLoginName` returning `undefined` skips every stamp for the
+  whole run without touching the moves; a per-file stamp failure is counted separately from `failed`
+  (the move-retry counter) and reported as its own line — a stuck attribution stamp is not fixed by
+  running the migration again (the file is no longer part of any plan the next scan would find), so
+  it is stated as a fact rather than offered as a retry. Both outcomes are named in the run's own
+  summary and its audit row, so "the documents moved, only their label didn't" cannot be misread as
+  "the migration failed."
+- **Deliberately scoped to exactly what was asked** — only the move loop. The standalone tier-only
+  "Check document tags" path (`runTagsOnly`, no move involved) was NOT touched; flag if the client
+  wants Modified By addressed there too.
+- **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → **1991/1991** passing, lint at the
+  documented pre-existing baseline — the same five `no-new-null` warnings on `dmsFolderMap.ts` (only
+  line numbers shifted), `SubtreeMigrator.tsx`'s `max-lines` now reporting 2472 instead of 2434 (same
+  pre-existing category, already over the 2000-line ceiling). **NOT yet site-tested** — this is the
+  single most site-verified migration tool in the project and the ordering fix has never run against
+  a real library. The test that matters: migrate a segment whose below-Unit tiers genuinely need
+  backfilling (so `backfillMetadata` writes something after the move), then confirm the moved file's
+  Modified By reads the proxy account's name — checked AFTER both passes, not right after the move.

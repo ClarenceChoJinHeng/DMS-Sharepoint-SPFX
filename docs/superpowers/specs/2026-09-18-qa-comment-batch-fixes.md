@@ -163,36 +163,93 @@ plus the Who column's inconsistency) and asked: (a) investigate the missing reje
 the "Who" column name each decider (PIC/Approver/system admin), (c) show a NAME rather than an email
 on every column that names a person, and (d) stamp `Modified By` as gdc on approved library items.
 
-**(c) turned out to be partly buildable in code after all** — the raw-email displays were not
-confined to the Audit Log's Who column; `Requests.tsx` (Requested by / Decided by / Revoked by /
-"asked by" / "approved by") and `MySubmissions.tsx` (Approved By, the Requests tab's "by …" line, the
-detail view's decision line) all showed the same raw addresses. **Fixed**: `nameFromEmail` — the
-function `AuditLog.tsx` already had for exactly this — moved to a new shared module,
-`src/shared/displayName.ts` (pure, tested), and applied at every one of those sites. DISPLAY ONLY:
-the stored email fields, search/filter comparisons, `writeAudit` calls and the CSV export are
-untouched everywhere — only the on-screen label changed.
+**⚠ (c) WAS INITIALLY BUILT TOO WIDE AND WAS PARTLY REVERTED THE SAME SESSION.** The first pass
+applied the fix to `Requests.tsx` and `MySubmissions.tsx` as well as the Audit Log, on the reasoning
+that the same raw-email complaint appeared on all three screens. The client corrected this: **the ask
+was for the Audit Log's Who column only** — "did you change the Request.tsx and MySubmission.tsx as
+well? If so revert it." **Reverted** — those two files are back to showing the raw email exactly as
+before. `AuditLog.tsx` keeps the fix, now sourced from a new shared module,
+`src/shared/displayName.ts` (`nameFromEmail`, pure, tested), rather than the private local copy it
+had before — the extraction stands on its own even with a single consumer, and the module stays ready
+if this is asked for more broadly later.
 
-**A second, related defect fell out of the same screenshot**: the proxy account rendered three
-different ways across adjacent Audit Log rows — `Guthrie Document Centre` (correct), the raw
-`gdc@sdguthrie.com` (stored literally as `ActorName` by one flow action), and a bare `gdc` (stored
-the same way by another). **Fixed with `canonicalServiceAccountName`** in the same module — it
-recognises `gdc`/`crs` in any of those shapes (bare alias, full address, mixed case) and returns the
-real display name, checked BEFORE `ActorName` in the Audit Log's Who cell and before the email-guess
-everywhere else. This closes the inconsistency without touching a single flow, and cannot be
-re-broken by a fourth action storing the value a fourth way tomorrow. `crs@sdguthrie.com` is kept in
-the map (not deleted) for the retired proxy's historical rows, which this append-only log will carry
-for as long as it exists.
+**A second, related defect fell out of the same screenshot and IS still fixed, since it was Audit-Log
+specific from the start**: the proxy account rendered three different ways across adjacent Audit Log
+rows — `Guthrie Document Centre` (correct), the raw `gdc@sdguthrie.com` (stored literally as
+`ActorName` by one flow action), and a bare `gdc` (stored the same way by another). **Fixed with
+`canonicalServiceAccountName`**, same module — it recognises `gdc`/`crs` in any of those shapes (bare
+alias, full address, mixed case) and returns the real display name, checked BEFORE `ActorName` in the
+Who cell and before the email-guess. This closes the inconsistency without touching a single flow,
+and cannot be re-broken by a fourth action storing the value a fourth way tomorrow.
+`crs@sdguthrie.com` is kept in the map (not deleted) for the retired proxy's historical rows, which
+this append-only log will carry for as long as it exists.
 
-**This narrows, but does not close, item 4's middle bullet below** — the client no longer needs a
-flow-side directory lookup just to stop the Who column showing a bare address; a real person's email
-now reads as a reasonable guessed name (`goh.kheng.wei@sdguthrie.com` → "Goh Kheng Wei") and the two
-service accounts always read correctly. A genuine directory lookup (Office 365 Users / user-profile
-by email) would still be MORE accurate for a real person than the dot-splitting guess — worth
-keeping as a "nice to have", not the blocker it was before this fix.
+**This narrows, but does not close, item 4's middle bullet below** — the Audit Log no longer needs a
+flow-side directory lookup just to stop the Who column showing a bare address for a real person; their
+email now reads as a reasonable guessed name (`goh.kheng.wei@sdguthrie.com` → "Goh Kheng Wei") and the
+two service accounts always read correctly. A genuine directory lookup (Office 365 Users / user-
+profile by email) would still be MORE accurate than the dot-splitting guess — worth keeping as a "nice
+to have", not the blocker it was before this fix.
 
-**Verified**: `tsc --noEmit` clean, `npx heft test --clean` → 1991/1991 passing (10 new tests on the
-new module), lint at the documented pre-existing 43-warning baseline, no new categories on any of the
-four touched files.
+**Verified**: `tsc --noEmit` clean, `npx heft test --clean` → 1991/1991 passing (10 tests on the new
+module), lint at the documented pre-existing 43-warning baseline, no new categories on the one
+touched screen (`AuditLog.tsx`).
+
+## ✅ CODE-SIDE ADDENDUM 2, 2026-09-20 — `Modified By` = the proxy account, for "Move existing folders"
+
+Client, same session: "For the 6 Libraries Modified by columns it should be the gdc name, cater this
+to Move existing folders as well." Two routes touch this column; only ONE is code.
+
+- **The routing route (Auto-route / HC Auto Route) is still flow-only** — see item 4 below, unchanged.
+- **The "Move existing folders" route (`SubtreeMigrator.tsx`) IS code, and is now built.** That tool
+  runs entirely in the ADMIN's own SPFx session — `context.spHttpClient` posts as whoever is running
+  the migration — so a plain `MoveTo` would otherwise leave `Modified By` reading their name, not
+  gdc's, the same gap Auto-route already has an answer for on the routing side.
+
+**New in `shared/dmsFolderMap.ts`**: `resolveProxyLoginName` (resolves the CURRENT proxy account's
+claims login via `ensureSiteUser` — resolves, never invites, and this account is already a site
+member, so this can never trigger a guest invite) and `stampEditorAsProxy` (restamps ONE file's
+`Editor` field via `validateUpdateListItem` with `bNewDocumentUpdate: true`, the same no-new-version
+mechanism `SubtreeMigrator`'s own tier-column stamp already uses). New constant
+`CURRENT_PROXY_ACCOUNT_EMAIL` in `shared/displayName.ts` — the ONE place this address is typed, so a
+future migration (as already happened once, crs → gdc) is a one-line change rather than a grep.
+
+**⚠⚠ ORDERING MATTERS, AND THE FIRST DRAFT GOT IT WRONG BEFORE SHIPPING.** The obvious placement —
+stamp `Editor` immediately after each successful `moveFileTo`, inline in the move loop — is wrong,
+because `backfillMetadata` runs a SEPARATE, LATER `validateUpdateListItem` call on the same file for
+tier-column backfill, and that call does **not** set `Editor` explicitly. SharePoint would then
+restamp `Editor` back to the calling admin as an ordinary side effect of that unrelated write,
+silently undoing the attribution stamp made moments earlier. **Fixed by moving the attribution pass
+to run LAST** — every moved file's `{lib, path}` is recorded during the move loop
+(`movedForAttribution`), and the actual `Editor` stamp happens in its own pass AFTER
+`backfillMetadata` completes, so nothing written later in the run can clobber it.
+
+- **Fails soft throughout, on purpose.** `resolveProxyLoginName` returning `undefined` (the account
+  could not be resolved this run) skips every stamp for the whole run without touching the moves;
+  a per-file `stampEditorAsProxy` failure is counted separately from `failed` (the move-retry counter)
+  and reported as its own line, because a stuck attribution stamp is not fixed by pressing "Move
+  existing folders" again — the file is no longer part of any plan the next scan would find, so it
+  is stated as a fact rather than offered as a retry.
+- **Both outcomes are named in the run's own summary and its audit row** — `attributionFailed`, and
+  the whole-run "the proxy account could not be resolved" case are both distinct from the ordinary
+  move-failure count, so an admin reading the result cannot mistake "the documents moved, only their
+  Modified By label didn't" for "the migration failed."
+- **Deliberately scoped to exactly what was asked**: only `SubtreeMigrator.tsx`'s move loop. The
+  standalone tier-column-only "Check document tags" path (`runTagsOnly`, reachable with no move at
+  all) was NOT touched — it does not move anything, so it was outside "Move existing folders" as
+  named. Worth flagging if the client also wants Modified By addressed there.
+
+**Verified**: `tsc --noEmit` clean, `npx heft test --clean` → 1991/1991 passing, lint at the
+documented pre-existing baseline — the five `no-new-null` warnings on `dmsFolderMap.ts` are the SAME
+five as before (only their line numbers shifted, from the new code inserted above them), and
+`SubtreeMigrator.tsx`'s `max-lines` warning is the same pre-existing category, now reporting 2472
+lines instead of 2434 (that file was already over the 2000-line ceiling before this change).
+**NOT yet site-tested** — this is the single most site-verified migration tool in the project, and
+the ordering fix above has never been exercised against a real library. The test that matters: run a
+real "Move existing folders" migration on a segment whose below-Unit tiers actually need backfilling
+(so `backfillMetadata` genuinely writes something after the move), then confirm the moved file's
+Modified By reads the proxy account's name — not the admin's — AFTER both passes have run, not just
+right after the move.
 
 ## Needs a Power Automate change, not code (runbook-shaped, none of this built)
 
@@ -267,10 +324,12 @@ apply the same pattern here):
 
 ### Item 2 — System admin should receive everything an approver would receive
 
-Needs a CC/BCC (or a parallel send) added to whichever notification flow(s) currently email only the
-approver, addressed to the system admin identity. Needs deciding: which admin, and by what identity
-(an individual's email, or a role-based distribution). Not `gdc@sdguthrie.com` itself — CC'ing the
-account that IS the sender would be unusual; more likely a named human admin.
+Needs a BCC added to whichever notification flow(s) currently email only the approver, addressed to
+the system admin identity. **Confirmed with the client, 2026-09-20: BCC, not CC** — the admin should
+receive a silent copy, not appear in the visible recipient list an approver (or anyone replying-all)
+would see. Still needs deciding: which admin, and by what identity (an individual's email, or a
+role-based distribution). Not `gdc@sdguthrie.com` itself — copying the account that IS the sender
+would be unusual; more likely a named human admin.
 
 ### Item 3 — System admin should NOT get every deletion email, only the approver's own confirmation
 
@@ -284,15 +343,23 @@ confirmation. Needs the same flow(s) as item 2, with an extra condition specific
 Three separate asks — the middle one is now NARROWED by the code-side addendum above, the other two
 are unchanged and still flow-only:
 
-- **"Every Modified By on Approved files should be gdc@sdguthrie.com"** — Auto-route's/HC Auto
-  Route's own stamp action currently restamps `Editor`/`Modified By` to the individual approver on
-  approval (`triggerOutputs()?['body/Author/…']`, per CLAUDE.md's "THE `Approved` AUDIT ROW IS
-  WRITTEN BY AUTO-ROUTE" and the `ApprovedBy` stamp sections); needs changing that ONE value to the
-  proxy account's claims instead. ⚠ Do **not** touch `Author`/`Created By` on the same action — that
-  is deliberately kept as the ORIGINAL UPLOADER (`dms-uploader-column-is-author` in project memory:
-  "Uploader column must be Author, never Editor"), and changing it would erase who actually filed the
-  document. Needs the same edit in BOTH `Auto-route` and `HC Auto Route` — every HC clone in this
-  project has shipped with exactly one library/field reference nobody swapped.
+- **"Every Modified By on Approved files should be gdc@sdguthrie.com, cater this to Move existing
+  folders as well"** — TWO routes touch this column, and only one is flow-side:
+  - **The routing route (Auto-route / HC Auto Route) — still flow-only, not built.** Their own stamp
+    action currently restamps `Editor`/`Modified By` to the individual approver on approval
+    (`triggerOutputs()?['body/Author/…']`, per CLAUDE.md's "THE `Approved` AUDIT ROW IS WRITTEN BY
+    AUTO-ROUTE" and the `ApprovedBy` stamp sections); needs changing that ONE value to the proxy
+    account's claims instead. ⚠ Do **not** touch `Author`/`Created By` on the same action — that is
+    deliberately kept as the ORIGINAL UPLOADER (`dms-uploader-column-is-author` in project memory:
+    "Uploader column must be Author, never Editor"), and changing it would erase who actually filed
+    the document. Needs the same edit in BOTH `Auto-route` and `HC Auto Route` — every HC clone in
+    this project has shipped with exactly one library/field reference nobody swapped.
+  - **✅ The "Move existing folders" route IS code, and IS BUILT** — see the addendum below.
+    `SubtreeMigrator.tsx` runs entirely in the ADMIN's own SPFx session, so a plain `MoveTo` would
+    otherwise leave `Modified By` reading their name. New `resolveProxyLoginName`/`stampEditorAsProxy`
+    in `shared/dmsFolderMap.ts`, wired into the migration run as its LAST write per file (see the
+    addendum for why ordering matters here — the tier-column backfill pass would otherwise clobber
+    the stamp). **NOT yet site-tested.**
 - ~~**"Every Audit Log Who column should show the name not email"**~~ — **narrowed, see the addendum
   above.** The code-side fix already makes every screen show a reasonable name for any address,
   and always shows the CORRECT canonical name for the two known service accounts, regardless of what

@@ -2,6 +2,8 @@ import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { encodeServerRelativePath } from "./pathEncoding";
 import { cachedListTitle, LIST_SUFFIX } from "./naming";
 import { primeNames } from "./spNaming";
+import { ensureSiteUser } from "./spGroups";
+import { CURRENT_PROXY_ACCOUNT_EMAIL } from "./displayName";
 
 // Re-exported so existing consumers (FolderManager) can keep importing it from here.
 export { encodeServerRelativePath };
@@ -977,6 +979,114 @@ export async function moveFileTo(
     status: res.status,
     detail: detail.slice(0, 300),
   };
+}
+
+/**
+ * Resolves the CURRENT proxy account's claims login name ONCE, so a caller stamping many files in
+ * one run (a whole folder migration) does the `ensureuser` round trip a single time and reuses the
+ * result — `ensureSiteUser` already resolves rather than invites (see its own comment), and this
+ * account is already a site member (`CRS Owners`), so this can never trigger a guest invite.
+ *
+ * Client, 2026-09-20: "for the 6 Libraries Modified by columns it should be the gdc name, cater
+ * this to Move existing folders as well" — Auto-route/HC Auto Route already stamp `Editor` as the
+ * proxy account when THEY move an approved file (that is a Power Automate edit, not this); this is
+ * the equivalent for the one place THIS APP's own code moves a file directly —
+ * `SubtreeMigrator.tsx`'s "Move existing folders" tool, which runs as the ADMIN's own session and
+ * would otherwise leave `Modified By` reading their name, not gdc's.
+ *
+ * ⚠ FAILS SOFT, DELIBERATELY. An attribution stamp must never be allowed to make an otherwise-
+ * successful folder migration read as failed — `undefined` means "could not resolve the proxy
+ * account this run", and every caller treats that as "skip the stamp, the move itself already
+ * succeeded" rather than raising an error the admin has no way to act on.
+ */
+export async function resolveProxyLoginName(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+): Promise<string | undefined> {
+  try {
+    const person = await ensureSiteUser(
+      spHttpClient,
+      siteUrl,
+      CURRENT_PROXY_ACCOUNT_EMAIL,
+    );
+    const login = (person.loginName ?? "").trim();
+    return login.length > 0 ? login : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Restamps ONE file's `Editor` (the SharePoint field behind "Modified By") to the given claims
+ * login name — meant to be called with `resolveProxyLoginName`'s result, right after
+ * `moveFileTo` succeeds on that same file.
+ *
+ * `bNewDocumentUpdate: true` is the SAME mechanism `SubtreeMigrator.tsx`'s own `stampFile` already
+ * uses for tier-column backfill after a move: it stops the write counting as a fresh edit, so no
+ * new version is cut and no check-out is demanded — this is attribution bookkeeping, not a content
+ * change, and must not show up in Version History as one.
+ *
+ * `moveFileTo` returns no item id (a move within one list keeps the SAME id, but nothing in this
+ * project currently reads it back), so this resolves the item id from the file's NEW path first —
+ * one extra GET per file, accepted for the same reason `backfillMetadata`'s own per-library read
+ * is accepted: correctness here matters more than shaving one request off a migration run.
+ *
+ * ⚠ FAILS SOFT, ALWAYS, for the same reason as `resolveProxyLoginName` — the move already
+ * succeeded by the time this runs, and a failed attribution stamp must read as a logged warning,
+ * never as a failed move. The caller decides what to do with `{ ok: false, detail }`.
+ */
+export async function stampEditorAsProxy(
+  spHttpClient: SPHttpClient,
+  siteUrl: string,
+  libraryTitle: string,
+  serverRelativeFileUrl: string,
+  proxyLoginName: string,
+): Promise<{ ok: boolean; detail?: string }> {
+  try {
+    const idRes: SPHttpClientResponse = await spHttpClient.get(
+      `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)/ListItemAllFields?$select=Id` +
+        `&@f='${encodeServerRelativePath(serverRelativeFileUrl)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!idRes.ok) {
+      return { ok: false, detail: `could not resolve the item (HTTP ${idRes.status})` };
+    }
+    const idBody = (await idRes.json()) as { Id?: number };
+    if (typeof idBody.Id !== "number") {
+      return { ok: false, detail: "the item resolved with no Id" };
+    }
+
+    const stampRes: SPHttpClientResponse = await spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libraryTitle)}')` +
+        `/items(${idBody.Id})/validateUpdateListItem`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          formValues: [{ FieldName: "Editor", FieldValue: proxyLoginName }],
+          bNewDocumentUpdate: true,
+        }),
+      },
+    );
+    if (!stampRes.ok) return { ok: false, detail: `HTTP ${stampRes.status}` };
+    // validateUpdateListItem returns 200 even when the field failed — gotcha #4.
+    const results = ((await stampRes.json()).value ?? []) as Array<{
+      FieldName?: string;
+      HasException?: boolean;
+      ErrorMessage?: string;
+    }>;
+    const bad = results.filter((r) => r.HasException);
+    if (bad.length > 0) {
+      return { ok: false, detail: bad.map((b) => b.ErrorMessage ?? "rejected").join("; ") };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, detail: (e as Error).message };
+  }
 }
 
 /** Why a folder was not deleted. `deleted: false` with no reason means it was already gone. */
