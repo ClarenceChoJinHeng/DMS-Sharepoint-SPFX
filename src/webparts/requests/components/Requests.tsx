@@ -878,7 +878,16 @@ export default function Requests({
   const fileLinkRead = useRef(false);
   if (!fileLinkRead.current) {
     fileLinkRead.current = true;
-    const f = (new URLSearchParams(window.location.search).get("file") ?? "").trim();
+    // ⚠ SharePoint's OWN `[$UniqueId]` column-formatting token emits the GUID WRAPPED IN CURLY
+    // BRACES (confirmed live, 2026-09-20 — `?file={E2146F0B-...}`), while `GetFileById(guid'...')`
+    // rejects that shape outright with an HTTP 400 (it wants a bare GUID inside the quotes). Strip
+    // any leading/trailing brace here, at the one place every source of this parameter is read, so
+    // a future email link or a hand-typed URL is covered by the same fix rather than needing its
+    // own workaround.
+    const f = (new URLSearchParams(window.location.search).get("file") ?? "")
+      .trim()
+      .replace(/^\{/, "")
+      .replace(/\}$/, "");
     if (f.length > 0) linkedFile.current = f;
   }
   const [directFileId, setDirectFileId] = useState<string | undefined>(undefined);
