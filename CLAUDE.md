@@ -14288,18 +14288,23 @@ runbook rather than the actual current flow, and only checking the real export c
   `Editor: [{'Key':'@{body('GetProxyUser')?['LoginName']}'}]`. `Author` untouched in both; HC Auto
   Route's `Created` line (already wrapped in `convertFromUtc(..., 'Singapore Standard Time')`) was
   correctly left alone.
-- **⚠⚠ A GENUINE, LIVE DEFECT FOUND WHILE VERIFYING, UNRELATED TO TODAY'S TASK: `Auto-route`'s
-  `Created` line has NO `convertFromUtc` wrapper; `HC Auto Route`'s does.** CLAUDE.md's own 2026-09-05
-  entry ("THE 8-HOUR `Created` SKEW ON BOTH ROUTING FLOWS IS FIXED") says this was applied to BOTH
-  flows — the real `Auto-route` export shows only the plain
+- **✅ A GENUINE, LIVE DEFECT FOUND WHILE VERIFYING, UNRELATED TO TODAY'S TASK, AND FIXED THE SAME
+  SESSION: `Auto-route`'s `Created` line had NO `convertFromUtc` wrapper; `HC Auto Route`'s did.**
+  CLAUDE.md's own 2026-09-05 entry ("THE 8-HOUR `Created` SKEW ON BOTH ROUTING FLOWS IS FIXED") says
+  this was applied to BOTH flows — the real `Auto-route` export showed only the plain
   `formatDateTime(body('Get_item')?['Created'],'M/d/yyyy h:mm tt')`, no timezone conversion at all.
   Either the fix was reverted in the normal flow at some point after 2026-09-05, or this export
-  predates it having been re-applied there. Either way: **every document currently routed through the
-  normal `Auto-route` flow is very likely getting a `Created` timestamp stamped 8 hours early**,
-  exactly the original bug. **NOT fixed as part of this session** — flagged to the client, holding for
-  a decision on whether to fix it now or separately. The fix, if confirmed needed, is one line:
-  wrap `Auto-route`'s `Created` `FieldValue` in the identical `convertFromUtc(...,
-  'Singapore Standard Time')` HC Auto Route already has.
+  predated it having been re-applied there. **Client confirmed this explained a real symptom they had
+  already noticed**: *"OOhhhh so that is why the time zone is wrong when I approved a file and landed
+  on document library."* Every document routed through the normal `Auto-route` flow before this fix
+  was getting a `Created` timestamp stamped 8 hours early — exactly the original bug, recurring.
+  - **FIXED, verified via Code view**: `Created`'s `FieldValue` now reads
+    `@{formatDateTime(convertFromUtc(body('Get_item')?['Created'], 'Singapore Standard Time'),
+    'M/d/yyyy h:mm tt')}` — byte-for-byte identical to `HC Auto Route`'s already-correct line.
+    `Author`/`Editor` untouched by this edit.
+  - **NOT yet confirmed against a real approval** — the client should approve one document through
+    `Auto-route` and check the resulting `Created` date in `Documents` reads the actual local time it
+    was filed, not 8 hours earlier.
 
 ## THE ARCHIVE/ROUTED "Who" BLANKING IS REVERSED (2026-09-20)
 Client, looking at the live Audit Log: *"I notice Move to Documents is not showing anything so we
