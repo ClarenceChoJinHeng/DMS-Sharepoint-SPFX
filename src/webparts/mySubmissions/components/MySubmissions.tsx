@@ -131,6 +131,12 @@ import { EVENT } from "../../../shared/auditLog";
 // mount points. previewTarget lives inside it now.
 import { FileDetailPanel } from "../../../shared/fileDetailPanel";
 import { closeOnBackdrop } from "../../../shared/backdropClose";
+// viewerOnlyMode only (2026-09-21): the redirect decision, and the SAME dynamic page-link
+// resolution the CRS Settings landing page already uses — this client renames every page at
+// import, so the destination pages must be found by pattern, never hardcoded.
+import { classifyViewerForFileRoute } from "../../../shared/viewerFileRoute";
+import { readSitePages } from "../../../shared/backToSettings";
+import { resolveLink, SitePage } from "../../../shared/adminPages";
 
 /* ⚠ THE LITERAL `"Documents"` USED TO LIVE HERE, AND IT IS WHAT BROKE THIS PAGE ON 2026-08-28.
    The client retitled that library to `Restricted & Confidential Document`, every `getbytitle`
@@ -983,6 +989,7 @@ const WRITE_HEADERS = {
 
 export default function MySubmissions({
   context,
+  viewerOnlyMode,
 }: IMySubmissionsProps): React.ReactElement {
   const siteUrl = context.pageContext.web.absoluteUrl;
   // Origin with no /sites/… — a server-relative path already carries the site, so previewTarget
@@ -1080,6 +1087,88 @@ export default function MySubmissions({
    * degrades to the old behaviour rather than to nothing.
    */
   const [docsSegment, setDocsSegment] = useState(DOCUMENTS_URL_SEGMENT);
+  /**
+   * `viewerOnlyMode` only (2026-09-21) — Viewer/C-Level/HOD's own page. SharePoint column
+   * formatting cannot route by viewer role, so the SAME Name-column link a PIC or Approver clicks
+   * lands here too; this decides whether to silently bounce them to their own page before anything
+   * renders. `undefined` while checking (so nothing flashes the "stay" message first), `false` once
+   * settled — for a genuine Viewer/C-Level/HOD, or the check itself failed, which fails OPEN: an
+   * unreadable Group Map must never strand a real viewer with a blank page, and a redirect sent on
+   * a guess risks bouncing someone who should be able to stay.
+   */
+  const [redirecting, setRedirecting] = useState<boolean | undefined>(
+    viewerOnlyMode ? undefined : false,
+  );
+  useEffect(() => {
+    if (!viewerOnlyMode) return;
+    let live = true;
+    (async (): Promise<void> => {
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      try {
+        const myIds: string[] = [];
+        const gr = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/currentuser/groups?$select=Id`,
+          SPHttpClient.configurations.v1,
+          { headers: NO_CACHE },
+        );
+        if (gr.ok) {
+          for (const g of ((await gr.json()).value ?? []) as Array<{
+            Id?: number;
+          }>) {
+            if (typeof g.Id === "number") myIds.push(String(g.Id));
+          }
+        }
+        const mr = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items` +
+            `?$select=GroupId,Role&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: NO_CACHE },
+        );
+        const mapRows = mr.ok
+          ? (((await mr.json()).value ?? []) as Array<{
+              GroupId?: number;
+              Role?: string;
+            }>)
+          : [];
+        const kind = classifyViewerForFileRoute(
+          myIds,
+          mapRows.map((r) => ({ GroupId: String(r.GroupId ?? ""), Role: r.Role })),
+        );
+        if (kind === "other") {
+          if (live) setRedirecting(false);
+          return;
+        }
+        const pages = await readSitePages(context, siteUrl).catch(
+          () => [] as SitePage[],
+        );
+        const link =
+          kind === "approver"
+            ? { key: "filePermission", label: "File Permission", match: /request/i }
+            : {
+                key: "mySubmissions",
+                label: "My Submissions",
+                match: /submission|my.?upload|my.?file/i,
+              };
+        const target = resolveLink(link, pages);
+        const search = window.location.search;
+        if (target.state === "resolved" || target.state === "ambiguous") {
+          if (!live) return;
+          setRedirecting(true);
+          window.location.replace(target.url + search);
+          return;
+        }
+        // Could not resolve the destination page — stay rather than send them nowhere.
+        if (live) setRedirecting(false);
+      } catch {
+        if (live) setRedirecting(false);
+      }
+    })().catch(() => {
+      if (live) setRedirecting(false);
+    });
+    return () => {
+      live = false;
+    };
+  }, [viewerOnlyMode]);
   /** The row being examined. `undefined` = the list. */
   const [open, setOpen] = useState<Submission | undefined>(undefined);
   /** Per-item metadata labels for the open row. `undefined` while in flight. */
@@ -1775,12 +1864,84 @@ export default function MySubmissions({
     };
   }, [siteUrl]);
 
+  /**
+   * Resolve a file that is NOT one of the viewer's own submissions — reached by clicking a Name
+   * column in Documents/HC Documents/Archive/HC Archive directly (2026-09-21), or by anyone on the
+   * viewerOnlyMode page. Mirrors the shape of the existing per-row loaders above (GetFileById ->
+   * ServerRelativeUrl -> the alias form for Name/Length/TimeLastModified/ListItemAllFields/Id),
+   * minus the "is this mine" question this page's OWN rows already answer by construction.
+   *
+   * Returns a plain `Submission` — not a `MergedRow` — because this file was never one of the
+   * viewer's own uploads and so can never be a RECORD of one either. `openRow`/`loadFieldText`/
+   * `probeRightsFor` all take a `Submission`, so nothing downstream needs to know the difference.
+   */
+  const resolveArbitraryFile = async (
+    uniqueId: string,
+  ): Promise<Submission | undefined> => {
+    try {
+      const res = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(uniqueId)}')?$select=ServerRelativeUrl&${bust()}`,
+        SPHttpClient.configurations.v1,
+        { headers: NO_CACHE },
+      );
+      if (!res.ok) return undefined;
+      const path = ((await res.json()) as { ServerRelativeUrl?: string })
+        .ServerRelativeUrl;
+      if (!path) return undefined;
+      /* Parameter alias, never an inline literal - a deep path answers 400 otherwise (gotcha #9). */
+      const alias = `@f='${encodeServerRelativePath(path)}'`;
+      const fr = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)?$select=Name,Length,TimeLastModified,ListItemAllFields/Id&$expand=ListItemAllFields&${alias}&${bust()}`,
+        SPHttpClient.configurations.v1,
+        { headers: NO_CACHE },
+      );
+      if (!fr.ok) return undefined;
+      const f = (await fr.json()) as {
+        Name?: string;
+        Length?: string;
+        TimeLastModified?: string;
+        ListItemAllFields?: { Id?: number };
+      };
+      const allSegs = [
+        docsSegment,
+        cachedHcLibraries()?.documents.urlSegment,
+        cachedArchiveLibraries()?.normal.urlSegment,
+        cachedArchiveLibraries()?.hc?.urlSegment,
+      ].filter((s): s is string => !!s);
+      const library = librarySegmentOf(path, allSegs) ?? docsSegment;
+      const modified = f.TimeLastModified
+        ? new Date(f.TimeLastModified)
+        : undefined;
+      return {
+        itemId: f.ListItemAllFields?.Id ?? 0,
+        library,
+        name: f.Name || "document",
+        fileRef: path,
+        uniqueId,
+        status: "Approved",
+        comment: "",
+        size: f.Length,
+        modified: modified && !isNaN(modified.getTime()) ? modified : undefined,
+      };
+    } catch {
+      return undefined;
+    }
+  };
+
   const linkedFile = useRef<{ id: string; sfi: string } | undefined>(undefined);
   const linkRead = useRef(false);
   if (!linkRead.current) {
     linkRead.current = true;
     const q = new URLSearchParams(window.location.search);
-    const id = (q.get("file") ?? "").trim().toLowerCase();
+    // ⚠ SharePoint's OWN [$UniqueId] column-formatting token emits the GUID wrapped in curly
+    // braces (confirmed live on this project, 2026-09-20 - Requests.tsx hit the identical HTTP 400
+    // from GetFileById(guid'{...}')). Stripped here too now that column formatting is a real source
+    // of this parameter, not only an internal app link, which always passed a bare GUID.
+    const id = (q.get("file") ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/^\{/, "")
+      .replace(/\}$/, "");
     const sfi = (q.get("sfi") ?? "").trim().toLowerCase();
     if (id || sfi) linkedFile.current = { id, sfi };
   }
@@ -1805,12 +1966,44 @@ export default function MySubmissions({
       openRow(live);
       return;
     }
-    goTab("Requests");
-    setRequestNotice(
-      rows.some(matches)
-        ? "That document is no longer in the library, so it cannot be opened. What happened to your request is listed below."
-        : "That document could not be found among your submissions. What happened to your requests is listed below.",
-    );
+    if (rows.some(matches)) {
+      // Matched a RECORD (deleted/archived/replaced) — definitive, so there is nothing to gain by
+      // also trying an arbitrary resolve; the record already says what happened to it.
+      goTab("Requests");
+      setRequestNotice(
+        "That document is no longer in the library, so it cannot be opened. What happened to your request is listed below.",
+      );
+      return;
+    }
+    /* ⚠ NOT ONE OF MY OWN SUBMISSIONS — 2026-09-21. Client: "Ensure only PIC can open My Submission
+       ... PIC - use My submission [for the click-a-file-directly feature too]." A file reached by
+       clicking its Name column in a library may belong to a colleague, not the viewer, so it will
+       never appear among `rows` (filtered AuthorId eq me) at all. Attempted only when the id genuinely
+       matched nothing above — a real record always wins, per the branch just above. */
+    if (link.id === "") {
+      goTab("Requests");
+      setRequestNotice(
+        "That document could not be found among your submissions. What happened to your requests is listed below.",
+      );
+      return;
+    }
+    resolveArbitraryFile(link.id)
+      .then((arbitrary) => {
+        if (arbitrary) {
+          openRow(arbitrary);
+          return;
+        }
+        goTab("Requests");
+        setRequestNotice(
+          "That document could not be found. It may have been deleted, or you may not have access to it.",
+        );
+      })
+      .catch(() => {
+        goTab("Requests");
+        setRequestNotice(
+          "That document could not be read. What happened to your requests is listed below.",
+        );
+      });
   }, [rows]);
 
   /* ── Requests: what the form needs before it can offer anything ──────────── */
@@ -3956,6 +4149,24 @@ export default function MySubmissions({
         />
 
         {requestDialog}
+      </section>
+    );
+  }
+
+  /* ── viewerOnlyMode, no document open (2026-09-21) ──
+     Viewer/C-Level/HOD's own page. A PIC or Approver landing here is mid-redirect (or the redirect
+     failed to resolve a destination, in which case they simply stay, same as anyone else). No
+     personal submissions list exists for this audience — the whole point of this page is that they
+     have nothing of their own to show — so it never falls through to the ordinary list render
+     below. */
+  if (viewerOnlyMode) {
+    return (
+      <section style={s.wrap}>
+        <p style={s.empty}>
+          {redirecting === undefined || redirecting === true
+            ? "Checking your access…"
+            : "Open a document directly from Documents, HC Documents, Archive, or HC Archive to view it here."}
+        </p>
       </section>
     );
   }
