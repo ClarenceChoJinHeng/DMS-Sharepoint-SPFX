@@ -1,10 +1,10 @@
 # SDG DMS — Claude Code Project Context
 
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-21 (redirect removed, a real root cause found,
-> then two more refinements — all in one day):** commits through `8f09eea` plus one more (Request-
-> button suppression + Back navigation, not yet committed as of this writing — see the end of this
-> entry). **Built directly on SDG's LIVE production tenant** (`/sites/CRS`) — nothing here was
-> rehearsed on ClarenceDMSTesting first.
+> then THREE more rounds of refinement — all in one day):** commits through `f092569` plus one more
+> (loading indicator + hiding the "Requests are not set up" line for pure observers, not yet
+> committed as of this writing — see the end of this entry). **Built directly on SDG's LIVE
+> production tenant** (`/sites/CRS`) — nothing here was rehearsed on ClarenceDMSTesting first.
 >
 > **⚠⚠ THE "THREE DESTINATIONS, ONE SHARED MECHANISM" DESIGN THIS SECTION USED TO DESCRIBE IS
 > SUPERSEDED.** Client's verdict, verbatim, after it was deployed and live-tested: *"I think no need
@@ -58,6 +58,32 @@
 >   (derived from `fileRef`, SharePoint's own server-relative path), not merely a state reset. The
 >   ordinary My-Submissions.aspx page's "Back" behaviour (return to the personal list) is untouched.
 >
+> **⚠⚠ THE "You can't access this item" PREVIEW DENIAL IS CONFIRMED STILL HAPPENING** — client's own
+> follow-up: *"Still same issue."* Re-stated plainly since it has now survived two rounds of unrelated
+> fixes: this is a REAL, LIVE, UNRESOLVED problem, not a stale-build artefact. See the entry directly
+> above for the diagnosis (item metadata reads succeed, the file's own content preview is refused by
+> SharePoint itself) — nothing built today addresses it, because nothing in the app's own logic is
+> what is failing. **Next step is on the SharePoint side**: confirm Folder Reconciliation has actually
+> been re-run since the page-access policy was added, and/or retry the same document after a short
+> wait (Office Online's own preview permission cache is known to lag a SharePoint ACL that has already
+> updated). If it is STILL happening after both of those, that is the point to treat it as a genuine,
+> deeper permissions gap worth investigating further — not before.
+>
+> **A THIRD ROUND OF LIVE FEEDBACK, BOTH NOW FIXED:**
+> - **No loading indicator while the page was still fetching** — client: *"it took a while for me to
+>   load into the Document-Viewer page, its best to put an indicator its loading."* Before this, the
+>   GENERIC landing message ("Open a document directly…") showed for however long `load()` took,
+>   then silently swapped to the real document once ready — nothing distinguished "still working"
+>   from "landed with nothing to open". Now shows `"Loading…"` while `rows === undefined`, which can
+>   never race ahead of a genuine `viewerOpenNotice` failure (that state can only ever be set AFTER
+>   `rows` has already settled).
+> - **The "Requests are not set up on this site yet…" line was shown even to a pure observer whose
+>   Request buttons were already hidden** — client: *"remove this [line]."* It was rendered
+>   unconditionally, describing machinery (delete/share requests) a Viewer/C-Level account was never
+>   going to be offered in the first place. Now skipped outright when `pureObserver === true`; the
+>   line is UNCHANGED and still shown for every other role, where it remains a real explanation (a
+>   genuine PIC/Approver/HOD on a site that has not yet had its Requests list created).
+>
 > **⚠ `?file=<UniqueId>` STILL NEEDS THE CURLY-BRACE STRIP** (unrelated, still true): SharePoint's
 > `[$UniqueId]` column-formatting token emits the GUID wrapped in curly braces
 > (`{E2146F0B-...}`), and `GetFileById(guid'...')` rejects that shape with HTTP 400. Stripped in both
@@ -70,17 +96,20 @@
 > - At least one library's Name-column formatting points a click at this page.
 > - **System Admin's open/Delete/Share flow is confirmed working** against `1.0.549.0` (screenshot:
 >   "Deletes or shares it now — no approval needed").
+> - **Request buttons are confirmed hidden for the pure-observer Viewer test account** — the
+>   screenshot that reported "Still same issue" (about the PREVIEW) shows neither "Request deletion"
+>   nor "Request share" anywhere, only the (soon-to-be-removed) explanatory line beneath them.
 >
 > **STILL OUTSTANDING:**
-> - **Deploy the rebuilt `.sppkg` (`1.0.550.0`)** — the Request-button suppression and the Back-
->   navigation fix are both built, `tsc`-clean, test-suite-clean (10 new tests), and confirmed present
->   in the shipped bundle, but **not yet redeployed.** The Viewer AccessDenied and both new fixes were
->   all found/built AFTER `1.0.549.0` was tested, so none of them have been re-tested live yet.
-> - **Re-test the Viewer role again after deploying `1.0.550.0`**: confirm Request deletion/Request
->   share no longer appear for that account, and confirm Back now lands back in the library folder.
->   The "You can't access this item" preview denial is a SEPARATE, still-open question — check
->   Folder Reconciliation status and/or retry after a short wait before assuming further code work is
->   needed.
+> - **Deploy the rebuilt `.sppkg` (`1.0.551.0`)** — the loading indicator and the conditional
+>   "Requests are not set up" line are both built, `tsc`-clean, test-suite-clean, and confirmed
+>   present in the shipped bundle, but **not yet redeployed.** Neither has been tested live yet.
+> - **Re-test the Viewer role again after deploying `1.0.551.0`**: confirm "Loading…" shows briefly
+>   on page entry, and confirm the "Requests are not set up" line is gone for that account.
+> - **The preview AccessDenied is the one item genuinely still open and unexplained** — see the
+>   dedicated entry above. Check Folder Reconciliation and/or retry before assuming more code is
+>   needed; this has now been reported as unchanged across two builds, so it is not a stale-cache
+>   artefact of an old deploy.
 > - **Confirm the column-formatting JSON has been rolled out to ALL FOUR libraries** —
 >   `Documents`, `HC Documents`, `Archive`, `HC Archive` — pointing at
 >   `https://sdguthrie.sharepoint.com/sites/CRS/SitePages/Document-Viewer.aspx?file=' + [$UniqueId]`.

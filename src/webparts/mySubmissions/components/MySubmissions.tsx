@@ -4172,25 +4172,34 @@ export default function MySubmissions({
                 </>
               )}
               {/* SAYS WHY THE BUTTONS ARE ABSENT, OR WHAT THE BUTTON ABOVE DOES. A row with no
-              explanation reads as a page that failed to finish loading. */}
+              explanation reads as a page that failed to finish loading.
+              ⚠ `pureObserver === true` SKIPS ALL OF THIS (2026-09-21 report). Every other branch
+              here talks about a delete/share action — direct or by request — and a pure Viewer/
+              C-Level account was never going to be offered EITHER, so "Your Approver decides
+              these"/"Requests are not set up on this site yet…" both describe machinery that does
+              not apply to them at all. Showing it read as a leftover error message, not an
+              explanation of anything actually on screen — matches the buttons themselves already
+              being hidden for this same account (`showDelete`/`showShare`, above). */}
               <span style={{ fontSize: 12, color: "#605e5c" }}>
-                {showDirectDelete && showDirectShare
-                  ? "Deletes or shares it now — no approval needed."
-                  : showDirectDelete
-                    ? "Deletes it now, to the recycle bin — no approval needed."
-                    : showDirectShare
-                      ? "Shares it now — no approval needed."
-                      : (requestBlock ??
-                        /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
-                   REPLACES the buttons in that state, so "Your Approver decides these" was pointing
-                   at controls that were not on the screen — which reads as a page that failed to
-                   render rather than as a state. It stays where the buttons ARE shown, because
-                   there it explains who acts on them. */
-                        (openRequest?.status === "Pending"
-                          ? undefined
-                          : approved
-                            ? "Your Approver decides these."
-                            : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted."))}
+                {pureObserver === true
+                  ? undefined
+                  : showDirectDelete && showDirectShare
+                    ? "Deletes or shares it now — no approval needed."
+                    : showDirectDelete
+                      ? "Deletes it now, to the recycle bin — no approval needed."
+                      : showDirectShare
+                        ? "Shares it now — no approval needed."
+                        : (requestBlock ??
+                          /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
+                     REPLACES the buttons in that state, so "Your Approver decides these" was pointing
+                     at controls that were not on the screen — which reads as a page that failed to
+                     render rather than as a state. It stays where the buttons ARE shown, because
+                     there it explains who acts on them. */
+                          (openRequest?.status === "Pending"
+                            ? undefined
+                            : approved
+                              ? "Your Approver decides these."
+                              : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted."))}
               </span>
             </div>
           );
@@ -4225,13 +4234,23 @@ export default function MySubmissions({
      whole point of this page is showing one opened document, never a list of "your own" files — so
      it never falls through to the ordinary list render below. A failed open (bad/missing `?file=`
      link, no access to the document, etc.) shows `viewerOpenNotice` here instead of the generic
-     landing line — see `failToOpen` above, which is what used to be silently swallowed. */
+     landing line — see `failToOpen` above, which is what used to be silently swallowed.
+     ⚠ "Loading…" WHILE `rows` IS STILL BEING FETCHED (2026-09-21 report: "it took a while for me to
+     load into the Document-Viewer page, its best to put an indicator its loading"). Before this,
+     the page showed the GENERIC landing message ("Open a document directly…") for however long
+     `load()` took to settle, then silently swapped to the real document once it resolved — nothing
+     distinguished "still working" from "landed with nothing to open". `viewerOpenNotice` can only
+     ever be set AFTER `rows` has settled (see the `linkedFile` effect, which is itself gated on
+     `rows !== undefined`), so checking `rows === undefined` SECOND here can never race ahead of a
+     genuine failure notice — by the time one exists, loading is already known to be over. */
   if (viewerOnlyMode) {
     return (
       <section style={s.wrap}>
         <p style={s.empty}>
           {viewerOpenNotice ??
-            "Open a document directly from Documents, HC Documents, Archive, or HC Archive to view it here."}
+            (rows === undefined
+              ? "Loading…"
+              : "Open a document directly from Documents, HC Documents, Archive, or HC Archive to view it here.")}
         </p>
       </section>
     );
