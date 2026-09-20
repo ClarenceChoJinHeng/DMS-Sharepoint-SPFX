@@ -365,6 +365,28 @@ const s: Record<string, React.CSSProperties> = {
     background: "#fff",
     cursor: "pointer",
   },
+  /* ── Direct file view (2026-09-20) — the confirm-dialog primary action and the trigger bar for
+     Delete/Share on a file opened directly from a library, no request involved. */
+  primary: {
+    padding: "6px 16px",
+    fontSize: 12.5,
+    border: "none",
+    borderRadius: 4,
+    background: "#0f6cbd",
+    color: "#fff",
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  askBar: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
+  askBtn: {
+    padding: "6px 14px",
+    fontSize: 12.5,
+    border: "1px solid #c7c7c7",
+    borderRadius: 4,
+    background: "#fff",
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
   /* ── The decision dialog, to the client's mockup (2026-09-04) ──────────────────────────────────
      ⚠ EVERY KEY BELOW MUST EXIST HERE. `s` is a `Record<string, CSSProperties>`, so a missing one
      yields `undefined` and the element renders with no styling and a green build — which is exactly
@@ -2359,6 +2381,28 @@ export default function Requests({
       ? undefined
       : directActionsFor(directRights, directIsArchived);
 
+  const [directDeleteConfirm, setDirectDeleteConfirm] = useState(false);
+  const [directDeleteBusy, setDirectDeleteBusy] = useState(false);
+  const [directDeleteError, setDirectDeleteError] = useState<
+    string | undefined
+  >(undefined);
+  const [directShareOpen, setDirectShareOpen] = useState(false);
+  const [directShareQuery, setDirectShareQuery] = useState("");
+  const [directShareResults, setDirectShareResults] = useState<PersonPick[]>(
+    [],
+  );
+  const [directShareRecipients, setDirectShareRecipients] = useState<
+    string[]
+  >([]);
+  const [directShareBusy, setDirectShareBusy] = useState(false);
+  const [directShareError, setDirectShareError] = useState<
+    string | undefined
+  >(undefined);
+  const [directShareDone, setDirectShareDone] = useState(false);
+  /* Placeholders until Tasks 7-8 define the real dialogs — an undefined value renders nothing. */
+  const directDeleteDialog: React.ReactNode = undefined;
+  const directShareDialog: React.ReactNode = undefined;
+
   /* ⚠ ONE ROUTE IN, ONE LOADER. A click and an email link both only set `viewId`; this effect does
      the reading. It also re-reads when the viewed request's STATUS changes - an approved deletion
      recycles the file, and the preview must not go on showing it. Declared above the early return. */
@@ -3103,6 +3147,101 @@ export default function Requests({
       )}
     </>
   );
+
+  /* ── The direct file view (no request) ── */
+  if (directFileId !== undefined) {
+    const tenantRoot = siteUrl.replace(/^(https?:\/\/[^/]+).*$/, "$1");
+    const libSegments = libraryTargets().map((t) => t.urlSegment);
+    const hcSegs = {
+      approval: cachedHcLibraries()?.approval.urlSegment,
+      documents: cachedHcLibraries()?.documents.urlSegment,
+    };
+    return (
+      <section style={s.wrap}>
+        <div style={s.backBand}>
+          <button
+            type="button"
+            style={s.backLink}
+            onClick={() => window.history.back()}
+          >
+            ‹ Back
+          </button>
+        </div>
+        {notice && (
+          <div ref={noticeRef} style={noticeBad ? s.warn : s.ok}>
+            {notice}
+          </div>
+        )}
+        {directFileView === undefined || directFileView.state === "loading" ? (
+          <p style={s.quiet}>Reading the document&hellip;</p>
+        ) : directFileView.state === "gone" ? (
+          <div style={s.warn}>{directFileView.message}</div>
+        ) : (
+          <>
+            <div style={s.rowTop}>
+              <span style={s.name}>{directFileView.name}</span>
+              {isHcRow(
+                librarySegmentOf(directFileView.fileRef, libSegments) ?? "",
+                hcSegs,
+              ) && <span style={s.hcTag}>HC</span>}
+            </div>
+            <div style={{ marginTop: 12, marginBottom: 12 }}>
+              {directActions === undefined ? (
+                <p style={s.quiet}>Checking what you can do with this file&hellip;</p>
+              ) : (
+                <div style={s.askBar}>
+                  {directActions.canDelete && (
+                    <button
+                      style={s.askBtn}
+                      onClick={() => setDirectDeleteConfirm(true)}
+                    >
+                      Delete
+                    </button>
+                  )}
+                  {directActions.canShare && (
+                    <button
+                      style={s.askBtn}
+                      onClick={() => {
+                        setDirectShareRecipients([]);
+                        setDirectShareQuery("");
+                        setDirectShareResults([]);
+                        setDirectShareError(undefined);
+                        setDirectShareOpen(true);
+                      }}
+                    >
+                      Share
+                    </button>
+                  )}
+                  {!directActions.canDelete && !directActions.canShare && (
+                    <span style={{ fontSize: 12, color: "#605e5c" }}>
+                      You do not have permission to delete or share this
+                      document directly.
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            <div style={{ marginTop: 20 }}>
+              <FileDetailPanel
+                name={directFileView.name}
+                fileRef={directFileView.fileRef}
+                tenantRoot={tenantRoot}
+                siteUrl={siteUrl}
+                fieldText={directFileView.fieldText}
+                location={trailText(
+                  folderTrail(directFileView.fileRef, libSegments),
+                )}
+                size={directFileView.size}
+                modified={directFileView.modified}
+              />
+            </div>
+          </>
+        )}
+        {directDeleteDialog}
+        {directShareDialog}
+      </section>
+    );
+  }
 
   /* ── The file view ── */
   if (viewId !== undefined) {
