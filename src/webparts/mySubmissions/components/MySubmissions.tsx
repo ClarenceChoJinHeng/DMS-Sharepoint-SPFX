@@ -1105,6 +1105,23 @@ export default function MySubmissions({
     (async (): Promise<void> => {
       await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
       try {
+        // ⚠ A SYSTEM ADMIN STAYS HERE, REGARDLESS OF ANY GROUP MAP ROLE THEY HAPPEN TO HOLD —
+        // 2026-09-21, found live: an admin test account clicking a document link was redirected
+        // to My Submissions because that account was also mapped (from earlier testing elsewhere
+        // in this project) into some unit's `_UPLOADER` group. `classifyViewerForFileRoute` has no
+        // way to tell "genuinely a PIC" from "an admin incidentally mapped as one too" — it only
+        // reads Group Map rows. Checked BEFORE the classify walk, not folded into it, because
+        // `isSystemAdmin` needs a live read (IsSiteAdmin or Owners membership) that the pure
+        // function cannot make. A FAILED check falls through to the ordinary classify rather than
+        // granting the exemption on a guess — same fail-closed direction `isSystemAdmin`'s own
+        // callers use everywhere else in this file.
+        const admin = await isSystemAdmin(context.spHttpClient, siteUrl).catch(
+          () => false,
+        );
+        if (admin) {
+          if (live) setRedirecting(false);
+          return;
+        }
         const myIds: string[] = [];
         const gr = await context.spHttpClient.get(
           `${siteUrl}/_api/web/currentuser/groups?$select=Id`,

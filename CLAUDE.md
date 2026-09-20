@@ -47,7 +47,7 @@
 >    that can browse Documents/HC Documents/Archive/HC Archive, since PIC/Approver are redirected off
 >    it anyway and the actual audience is Viewer/C-Level/HOD.
 >
-> **⚠ TWO LIVE BUGS FOUND AND FIXED THE SAME SESSION, BOTH FROM SCREENSHOTS, NEITHER FROM
+> **⚠ THREE LIVE BUGS FOUND AND FIXED THE SAME SESSION, ALL FROM SCREENSHOTS/LIVE REPORTS, NONE FROM
 > REASONING ALONE:**
 > - **`customRowAction` silently ignored when nested inside a `children[]` element** in the
 >   column-formatting JSON — SharePoint only honours it on the TOP-LEVEL formatting object. Symptom:
@@ -57,27 +57,41 @@
 >   Fixed by stripping `^\{`/`\}$` from the parsed `?file=` value, in BOTH `Requests.tsx` (found
 >   first, `d92d80e`) and `MySubmissions.tsx` (applied proactively once it also became a consumer of
 >   the same query parameter, `c860a2a`).
+> - **THE REDIRECT HAD NO SYSTEM-ADMIN EXEMPTION, AND `classifyViewerForFileRoute` COULD NOT HAVE
+>   ONE.** Found live once the third page (`Document-Viewer.aspx`) was actually created and tested: a
+>   PIC clicking a document link correctly landed on the page/redirected, but a system-admin test
+>   account was WRONGLY redirected to My Submissions — because that account happens to also be mapped
+>   (leftover from earlier testing elsewhere in this project) into some unit's `_UPLOADER` group, and
+>   the classify function has no way to distinguish "genuinely a PIC" from "an admin incidentally
+>   mapped as one too" — it only ever reads Group Map rows. Fixed by checking `isSystemAdmin(...)`
+>   (same helper already used elsewhere in `MySubmissions.tsx` for the direct-share/delete feature)
+>   BEFORE the classify walk in the redirect effect, and short-circuiting to "stay" if true. A FAILED
+>   admin check falls through to the ordinary classify (fail-closed on the exemption, matching this
+>   project's usual direction for "is this person special" checks). **Rebuilt and repackaged as
+>   `1.0.547.0` — NOT YET RE-DEPLOYED.** The client's live test above was against the PRE-fix build.
 >
-> **STILL OUTSTANDING — none of this is done yet:**
-> - **The `.sppkg` has NOT been re-deployed since `c860a2a`.** The client's last LIVE test was
->   against the single-page (pre-re-scope) build. Every file mentioned above is built, `tsc`-clean,
->   test-suite-clean (2013/2013), and spot-checked present in the freshly-built bundle — but nothing
->   past that point has touched SDG's tenant.
-> - **The client must CREATE the third page.** No name is confirmed yet — `Document-Viewer.aspx` /
->   `File-Viewer.aspx` / `CRS-Document-Viewer.aspx` all match the new `/document.?view|file.?view/i`
->   rule; whatever the client actually names it must match that pattern or the rule needs adjusting.
-> - **Add the "My Submissions" web part to the new page a second time** (it is already on the real
->   My Submissions page) and **tick the `viewerOnlyMode` property-pane checkbox** on this second
->   instance only — leave the first instance's checkbox off.
+> **CONFIRMED DONE, LIVE, ON SDG's TENANT (checked from screenshots, not assumed):**
+> - The third page exists: **`Document-Viewer.aspx`**, published, at
+>   `sdguthrie.sharepoint.com/sites/CRS/SitePages/Document-Viewer.aspx` — matches
+>   `/document.?view|file.?view/i`.
+> - The **My Submissions** web part is mounted on it a second time, `viewerOnlyMode` ticked — property
+>   pane confirmed showing the checkbox checked with the right label text.
+> - At least one library's Name-column formatting already points a click at this page (a PIC test
+>   confirmed landing/redirecting correctly against the pre-`isSystemAdmin`-fix build).
+>
+> **STILL OUTSTANDING:**
+> - **Re-deploy the `.sppkg` — it now needs `1.0.547.0`, not the build the PIC/Admin test above ran
+>   against.** Re-test the SAME admin account after this deploy; it should now stay on the page
+>   instead of bouncing to My Submissions.
+> - **Confirm the column-formatting JSON has been rolled out to ALL FOUR libraries** —
+>   `Documents`, `HC Documents`, `Archive`, `HC Archive` — pointing at
+>   `https://sdguthrie.sharepoint.com/sites/CRS/SitePages/Document-Viewer.aspx?file=' + [$UniqueId]`.
+>   Only one library's status is confirmed from testing so far; the other three are unconfirmed.
 > - **Re-run Folder Reconciliation** — the page-policy change (both the `/request/i` narrowing and
 >   the new `/document.?view/i` rule) needs a run to actually apply the corresponding page ACL
->   grants/removals; this has not happened since the policy changed.
-> - **Decide, and then act on, where the column-formatting JSON on `Documents`' Name column should
->   point.** It currently points at `CRS-Request.aspx` (built earlier the same day, before the
->   re-scope) — check with the client whether it should now point at the NEW third page instead,
->   since Viewer/C-Level/HOD are the roles who'd actually be browsing that library directly. Once
->   decided, the SAME JSON (with the URL swapped) still needs rolling out to the other three
->   libraries — `HC Documents`, `Archive`, `HC Archive` — none of which have it yet.
+>   grants/removals; not confirmed done since the policy changed.
+> - **Test with a real Approver account and a real Viewer/C-Level/HOD account** (not just PIC and
+>   Admin) to confirm all three branches of the redirect actually work end to end.
 
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-20:
 > `docs/2026-09-20-session-handoff.md`.** A long, single session. Six commits since the last pointer
