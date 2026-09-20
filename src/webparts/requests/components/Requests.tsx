@@ -2324,6 +2324,41 @@ export default function Requests({
     loadDirectFileView(directFileId).catch(() => undefined);
   }, [directFileId]);
 
+  /**
+   * Once the file resolves, probe what THIS viewer can do to it directly, and classify it as
+   * archived or not — both feed `directActionsFor`. Declared as its own effect, keyed on the
+   * resolved file's own identity, so it re-probes if a different file is opened without a full
+   * page reload.
+   */
+  const [directRights, setDirectRights] = useState<FileRights | undefined>(
+    undefined,
+  );
+  const [directIsArchived, setDirectIsArchived] = useState(false);
+  useEffect(() => {
+    if (directFileId === undefined || directFileView?.state !== "ready") {
+      setDirectRights(undefined);
+      return;
+    }
+    setDirectRights(undefined);
+    const archiveSegs = {
+      normal: cachedArchiveLibraries()?.normal.urlSegment,
+      hc: cachedArchiveLibraries()?.hc?.urlSegment,
+    };
+    const allSegs = libraryTargets().map((t) => t.urlSegment);
+    const seg = librarySegmentOf(directFileView.fileRef, allSegs);
+    setDirectIsArchived(isArchivedRow(seg ?? "", archiveSegs));
+    probeFileRights(context.spHttpClient, siteUrl, directFileId)
+      .then(setDirectRights)
+      .catch(() =>
+        setDirectRights({ remove: "unknown", share: "unknown" }),
+      );
+  }, [directFileId, directFileView?.state]);
+
+  const directActions: DirectActions | undefined =
+    directRights === undefined
+      ? undefined
+      : directActionsFor(directRights, directIsArchived);
+
   /* ⚠ ONE ROUTE IN, ONE LOADER. A click and an email link both only set `viewId`; this effect does
      the reading. It also re-reads when the viewed request's STATUS changes - an approved deletion
      recycles the file, and the preview must not go on showing it. Declared above the early return. */
