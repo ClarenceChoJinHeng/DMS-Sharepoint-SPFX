@@ -2523,22 +2523,39 @@ export default function MySubmissions({
     setDocsSegment(segment);
     const userId = await currentUserId();
     // Sequential, not Promise.all: per-call try/catch is required anyway because
-    // Promise.allSettled is unavailable on this tsconfig target (CLAUDE.md #3), and either
-    // library failing must produce the "could not read" state rather than a half list.
-    const staging = await readLibrary(
-      libraryTitle(),
-      libraryUrlSegment(),
-      true,
-      userId,
-    );
+    // Promise.allSettled is unavailable on this tsconfig target (CLAUDE.md #3).
+    /* ⚠⚠ STAGING IS NOW GUARDED, AND IT WAS THE ACTUAL CAUSE OF THE 2026-09-21 "everyone is stuck
+       the moment they click to go in" REPORT — found live, once `viewerOnlyMode` genuinely put a
+       Viewer/C-Level/HOD account through this same read for the first time. `LIBRARY_ROLES.Staging`
+       grants ONLY UPL/UPLHC/APR/APRHC/DELS/DELSHC — a plain Viewer (MEMBER/GLOBAL/SEGVIEW/DEPTVIEW)
+       holds NONE of those, so this read used to 403 unguarded, `readLibrary` exhausted every
+       fallback `$select` and still threw, and that throw propagated out of `load()` uncaught — the
+       mount effect's `.catch()` then set `rows` to `undefined` PERMANENTLY for the rest of the page
+       load. Since the `?file=` open effect only runs once `rows !== undefined`, NOTHING downstream
+       ever fired for such an account: no open, and — because `failToOpen` also lives inside that
+       same gated effect — no error either. A silent, total dead end, and it explains why System
+       Admin's file opened (Full Control bypasses this ACL) while a genuine Viewer's never did.
+       Same shape as the HC pair below: an inaccessible Staging library is the NORMAL case for
+       anyone without a PIC/Approver role, not a failure this page should take down over. */
+    let staging: Submission[] = [];
+    let normalChainComplete = true;
+    try {
+      staging = await readLibrary(libraryTitle(), libraryUrlSegment(), true, userId);
+    } catch {
+      /* not a PIC/Approver here, or genuinely unreachable — either way, nothing of theirs to show */
+      normalChainComplete = false;
+    }
     // The resolved segment, not the title — otherwise "Shared Documents" stays in every
     // approved file's folder trail.
-    const documents = await readLibrary(
-      documentsTitle(),
-      segment,
-      false,
-      userId,
-    );
+    /* ⚠ DOCUMENTS IS GUARDED TOO, for the same reason — MEMBER/DEPTVIEW/GLOBAL/SEGVIEW/UPL/APR/
+       UPLHC all cover it in the ordinary case, but a newly-provisioned or mis-mapped account with
+       none of those yet must not take the whole page down while it waits for reconciliation. */
+    let documents: Submission[] = [];
+    try {
+      documents = await readLibrary(documentsTitle(), segment, false, userId);
+    } catch {
+      normalChainComplete = false;
+    }
     /* The Highly Confidential pair, when the site has one.
          An HC uploader's files are invisible on this page without it, and "you have not uploaded
          anything yet" to someone who filed a Highly Confidential document last week is the worst
@@ -2601,11 +2618,9 @@ export default function MySubmissions({
          needs the archive HC library's title to correctly classify a SUBMISSION RECORD stamped against
          it, independent of whether this page ever fetches rows FROM that library. */
     const arc = cachedArchiveLibraries();
-    /* Staging and Documents above are read un-guarded (no per-call try/catch): either failing throws
-         out of this function before reaching here, so by the time this line runs both were read in
-         full. Kept as a named flag, not a literal `true`, because `mergeRecords` below still takes it
-         as a predicate alongside `hcChainComplete` and a literal would obscure why the two differ. */
-    const normalChainComplete = true;
+    // `normalChainComplete` is now set above, per library, exactly like `hcChainComplete` — see the
+    // guarded `staging`/`documents` reads for why an unguarded version of this used to be correct
+    // and stopped being correct the moment a non-PIC/Approver role could reach this page.
     const liveRows = [...staging, ...documents, ...hcRows];
 
     /* ── THE SUBMISSION RECORD ────────────────────────────────────────────────

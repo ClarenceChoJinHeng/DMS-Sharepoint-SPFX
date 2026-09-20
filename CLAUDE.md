@@ -1,58 +1,61 @@
 # SDG DMS — Claude Code Project Context
 
-> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-21 (the redirect was REMOVED, same day it
-> shipped):** commits `47a7866`…(latest on `feat/folder-abbreviations`, not yet committed as of this
-> writing — see the end of this entry). **Built directly on SDG's LIVE production tenant**
-> (`/sites/CRS`) — nothing here was rehearsed on ClarenceDMSTesting first.
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-21 (redirect removed, THEN a real root cause
+> found and fixed, all in one day):** commits through `cafccbb` plus one more (Staging/Documents
+> guard, not yet committed as of this writing — see the end of this entry). **Built directly on
+> SDG's LIVE production tenant** (`/sites/CRS`) — nothing here was rehearsed on ClarenceDMSTesting
+> first.
 >
-> **⚠⚠ THE "THREE DESTINATIONS, ONE SHARED MECHANISM" DESIGN BELOW IS SUPERSEDED — READ THIS FIRST.**
-> It shipped, was deployed, and was live-tested the SAME DAY. The client's verdict, verbatim, having
-> watched it: *(Approver) "It redirects user to CRS-Request but its glitchy sometimes it doesnt show
-> and if I refresh it goes back to CRS-Request page, I think no need to redirect might as well just
-> view directly on the Document-Viewer."* / *(Uploader) "...can we also just let them view file
-> directlly on Document-Viewer."* **So the whole redirect mechanism — `classifyViewerForFileRoute`,
-> the `resolveLink`/`readSitePages`/`window.location.replace` navigation, and the `isSystemAdmin`
-> exemption built to patch it hours earlier — is GONE from `MySubmissions.tsx`.** Kept as history
-> below because the reasoning (and the pure, tested `classifyViewerForFileRoute` module) may be
-> wanted again; do not act on anything below describing it as live behaviour.
+> **⚠⚠ THE "THREE DESTINATIONS, ONE SHARED MECHANISM" DESIGN THIS SECTION USED TO DESCRIBE IS
+> SUPERSEDED.** It shipped, was deployed, and was live-tested the same day. Client's verdict,
+> verbatim: *(Approver) "It redirects user to CRS-Request but its glitchy... I think no need to
+> redirect might as well just view directly on the Document-Viewer."* / *(Uploader) "...can we also
+> just let them view file directlly on Document-Viewer."* **The whole redirect mechanism —
+> `classifyViewerForFileRoute`, `resolveLink`/`readSitePages`/`window.location.replace`, and the
+> `isSystemAdmin` exemption built to patch it hours earlier — is GONE from `MySubmissions.tsx`.**
+> Kept as a pure, tested module (`shared/viewerFileRoute.ts`) in case it is wanted again.
 >
-> **THE CURRENT, ACTUAL ARCHITECTURE:** `Document-Viewer.aspx` is now a plain, universal "open one
-> document" surface. It **never redirects anyone, for any role.** Whoever lands there via a
-> `?file=<UniqueId>` link from `Documents`/`HC Documents`/`Archive`/`HC Archive` sees that document —
-> through the SAME shared detail view (`shared/fileDetailPanel.tsx`) every other page already used,
-> with the SAME role-aware Approve/Delete/Share controls — or, if nothing has been opened yet, a
-> short landing message. `My-Submissions.aspx` and `CRS-Request.aspx` are **unchanged** for anyone
-> who navigates to THEM directly via the site nav (PIC's own submission history, Approver's own
-> queue) — only the "click a document" flow stopped bouncing through a Group-Map role lookup.
+> **THE ARCHITECTURE NOW:** `Document-Viewer.aspx` is a plain, universal "open one document"
+> surface. Whoever lands there via `?file=<UniqueId>` from `Documents`/`HC Documents`/`Archive`/
+> `HC Archive` sees that document — through the SAME shared detail view every other page already
+> used — or, if nothing has been opened, a short landing message. `My-Submissions.aspx` and
+> `CRS-Request.aspx` are unchanged for anyone navigating to THEM directly via the site nav.
 >
-> **TWO REAL FIXES LANDED IN THE SAME PASS AS THE REDIRECT REMOVAL:**
-> - **⚠ A SILENT FAILURE, WHICH IS ALMOST CERTAINLY WHAT SYMPTOM 4 ("Viewer... shows me not the
->   file just [the generic] text") ACTUALLY WAS.** The `?file=` resolve effect's three failure
->   branches called `goTab("Requests")` + `setRequestNotice(...)` unconditionally — correct on the
->   ORDINARY My Submissions page, where the Requests tab is visible and renders that notice, but
->   **`viewerOnlyMode`'s render branch returns its fixed placeholder regardless of `tab`/
->   `requestNotice`**, so a genuine resolve failure (403, bad GUID, file genuinely inaccessible) was
->   swallowed with zero trace — indistinguishable on screen from "nothing was ever opened". Fixed
->   with a new `viewerOpenNotice` state + a `failToOpen(message)` helper that routes the SAME message
->   to whichever field is actually rendered for this page instance. **The next Viewer test will show
->   the REAL reason** instead of the generic landing text.
-> - **The "‹ Back to my submissions" button label was wrong for this audience** (a Viewer/C-Level/HOD/
->   Admin has no submissions of their own) — now `viewerOnlyMode ? "‹ Back" : "‹ Back to my
->   submissions"`.
+> **⚠⚠ THE REAL BUG, AND THE FIRST FIX ROUND DID NOT REACH IT — found from the very next report,
+> "Now everyone is stuck in this page the moment they click to go in".** `load()` (the function that
+> populates `rows`, which the `?file=` open effect refuses to run until it settles) read the
+> **Staging (Approval Document)** library **completely unguarded** — no try/catch. `LIBRARY_ROLES.
+> Staging` grants ONLY `UPL/UPLHC/APR/APRHC/DELS/DELSHC` — a genuine Viewer/C-Level/HOD (MEMBER/
+> GLOBAL/SEGVIEW/DEPTVIEW) holds **none** of those, by design; they were never meant to see the
+> approval queue. So that read 403'd, exhausted every fallback `$select`, and still threw; the throw
+> propagated out of `load()` uncaught; the mount effect's `.catch()` set `rows` to `undefined`
+> **permanently** for the rest of the page load; and since the `?file=` open effect gates on
+> `rows !== undefined`, **nothing downstream ever ran again — no open, and no error either**, because
+> the error-surfacing code (`viewerOpenNotice`/`failToOpen`, built in the FIRST fix round) also lives
+> inside that same permanently-gated effect. A silent, total dead end for anyone without Staging
+> access — which, once the redirect was removed, is now most of this page's actual audience.
+> **This is also why System Admin's file opened earlier and a genuine Viewer's did not** — Full
+> Control bypasses the Staging ACL entirely, so Admin's `load()` never hit this at all. (⚠ The
+> earlier "likely a missing Folder Reconciliation grant" theory recorded in this section was WRONG —
+> corrected here. Staging access for Viewer/C-Level/HOD was never supposed to exist; the bug was the
+> app code not degrading gracefully when it does not.)
 >
-> **⚠ THE MOST USEFUL DIAGNOSTIC CLUE ALREADY IN HAND, worth reading before the next test:** per the
-> client's own report, **System Admin's file DID open successfully** (they saw the detail view and a
-> back button) while **Viewer's did not** (straight to the placeholder). System Admin has Full
-> Control, which bypasses every folder ACL; a genuine Viewer persona does not. That asymmetry is the
-> classic signature of a **missing folder-level grant** rather than a code bug — i.e. Folder
-> Reconciliation likely has not been re-run since the `/document.?view|file.?view/i` page-access rule
-> was added, so the Viewer's account may hold page access but not the underlying folder Read. Confirm
-> this is still outstanding before assuming a further code fix is needed.
+> **FIXED**: `staging` and `documents` are now each read inside their own try/catch, exactly matching
+> the pattern the HC library pair already used — a library the viewer cannot read is the NORMAL case
+> for a role that was never meant to hold it, not a reason to take the whole page down.
+> `normalChainComplete` now tracks this properly (previously hardcoded `true`, with a comment
+> asserting the unguarded reads could not fail without throwing — that assertion was the bug).
 >
-> **⚠ `?file=<UniqueId>` STILL NEEDS THE CURLY-BRACE STRIP — genuinely unrelated to the redirect and
-> still true:** SharePoint's `[$UniqueId]` column-formatting token emits the GUID wrapped in curly
-> braces (`{E2146F0B-...}`), and `GetFileById(guid'...')` rejects that shape with HTTP 400. Stripped
-> in both `Requests.tsx` and `MySubmissions.tsx`.
+> **TWO SMALLER FIXES FROM THE FIRST ROUND, STILL CORRECT AND STILL LIVE:**
+> - `viewerOpenNotice` + `failToOpen(message)` — surfaces the real open-failure reason on
+>   `Document-Viewer.aspx` instead of the generic landing text, now that it can actually be reached.
+> - `"‹ Back to my submissions"` → `viewerOnlyMode ? "‹ Back" : "‹ Back to my submissions"` (a
+>   Viewer/C-Level/HOD/Admin has no submissions of their own).
+>
+> **⚠ `?file=<UniqueId>` STILL NEEDS THE CURLY-BRACE STRIP** (unrelated, still true): SharePoint's
+> `[$UniqueId]` column-formatting token emits the GUID wrapped in curly braces
+> (`{E2146F0B-...}`), and `GetFileById(guid'...')` rejects that shape with HTTP 400. Stripped in both
+> `Requests.tsx` and `MySubmissions.tsx`.
 >
 > **CONFIRMED DONE, LIVE, ON SDG's TENANT:**
 > - `Document-Viewer.aspx` exists, published, at
@@ -61,15 +64,13 @@
 > - At least one library's Name-column formatting points a click at this page.
 >
 > **STILL OUTSTANDING:**
-> - **Deploy the rebuilt `.sppkg` (`1.0.548.0`)** — every fix above (redirect removal, the silent-
->   failure fix, the back-button wording) is built, `tsc`-clean, test-suite-clean, and confirmed
->   present in the shipped bundle, but **not yet redeployed to SDG's tenant.**
-> - **Re-test all four roles against `1.0.548.0`**: nobody should be redirected anywhere any more;
->   the open-document flow should work identically for System Admin, Approver, PIC and Viewer. If the
->   Viewer's file still fails to open, `viewerOpenNotice` will now show the REAL reason — read it
->   before guessing further.
-> - **Confirm Folder Reconciliation has been re-run** since the page-access policy changed — the
->   likely cause of the Viewer-specific failure, per the diagnostic clue above.
+> - **Deploy the rebuilt `.sppkg` (`1.0.549.0`)** — the redirect removal, both silent-failure fixes,
+>   the back-button wording, AND the Staging/Documents guard are all built, `tsc`-clean, test-suite-
+>   clean, and confirmed present in the shipped bundle — but **not yet redeployed to SDG's tenant.**
+>   Everything tested so far (all four "stuck" reports) ran against an OLDER build.
+> - **Re-test all four roles against `1.0.549.0`.** This is the first build where the Viewer's file
+>   has a genuine chance of opening — the bug that was actually stopping it is now fixed, not just the
+>   symptom of it being silent.
 > - **Confirm the column-formatting JSON has been rolled out to ALL FOUR libraries** —
 >   `Documents`, `HC Documents`, `Archive`, `HC Archive` — pointing at
 >   `https://sdguthrie.sharepoint.com/sites/CRS/SitePages/Document-Viewer.aspx?file=' + [$UniqueId]`.
