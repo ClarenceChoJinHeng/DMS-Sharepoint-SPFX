@@ -14524,8 +14524,57 @@ feature-specific strings — all present, confirming the package is not stale.**
   already exists on My Submissions/the Requests queue), **and no extraction of
   `performShare`/`writeApprovedDeletionRequest` into a shared module** — a third small per-page
   copy of the same shape is this project's existing practice, not a new one.
-- **⚠ NOT YET SITE-TESTED.** No UI tests exist anywhere in this codebase (this project's
-  established style); verified by `tsc`, lint, the full suite, a production build, and grepping the
-  shipped bundle for feature-specific strings. The live click-through — including confirming which
-  of the two `[$UniqueId]`/`&lib=` routing options this tenant actually needs before delivering the
-  column-formatting JSON — is the next step.
+- **✅ FIRST LIVE TEST, ON SDG, 2026-09-20 — DEPLOYED, RECONCILED, AND ONE REAL BUG FOUND AND
+  FIXED THE SAME DAY.** `[$UniqueId]` IS available as a column-formatting token on this tenant —
+  the `&lib=` fallback is not needed.
+- **⚠⚠ `[$UniqueId]` EMITS THE GUID WRAPPED IN CURLY BRACES** (`?file={E2146F0B-D7A4-4508-A5AA-
+  311261BBF360}`), which `GetFileById(guid'...')` rejects outright with an HTTP 400 — it wants a
+  bare GUID inside the quotes. Every `GetFileById` call elsewhere in this project reads its GUID
+  from a REST JSON response (`$select=UniqueId`), which comes back bare, so nothing had ever hit
+  this before: this was the first time a `UniqueId` reached the code via a URL query parameter
+  sourced from column formatting rather than from a REST read. **Fixed at the one place every
+  source of the `?file=` parameter is read** — stripping a leading/trailing `{`/`}` — rather than
+  in the column-formatting JSON, so a future email link or a hand-typed URL is covered by the same
+  fix. `directFileId` and every downstream `GetFileById` call now always receive a bare GUID.
+- **THE WORKING COLUMN-FORMATTING JSON, confirmed on `Documents`, and the SAME JSON goes on
+  `HC Documents`/`Archive`/`HC Archive` unchanged** (Archive's read-only behaviour is enforced by
+  `directActionsFor`, not by anything in this formatting):
+  ```json
+  {
+    "$schema": "https://developer.microsoft.com/json-schemas/sp/v2/column-formatting.schema.json",
+    "elmType": "div",
+    "customRowAction": { "action": "defaultClick" },
+    "style": { "cursor": "pointer" },
+    "children": [
+      {
+        "elmType": "a",
+        "txtContent": "@currentField",
+        "attributes": {
+          "target": "_self",
+          "href": "=if([$File_x0020_Type] == '', '', '<published Requests page URL>?file=' + [$UniqueId])"
+        },
+        "style": {
+          "color": "#242424",
+          "text-decoration": "none",
+          "display": "=if([$File_x0020_Type] == '', 'none', 'inline')"
+        }
+      },
+      {
+        "elmType": "span",
+        "txtContent": "@currentField",
+        "style": { "display": "=if([$File_x0020_Type] == '', 'inline', 'none')" }
+      }
+    ]
+  }
+  ```
+  - **⚠ `customRowAction` MUST SIT ON THE TOP-LEVEL `elmType: "div"`, never nested inside a
+    `children[]` entry** — nested, SharePoint's formatter simply ignores it, so the folder branch
+    rendered as inert plain text with no click behaviour at all (found live: folders had no pointer
+    cursor and clicking did nothing). At the root, a click on the row falls through to
+    `defaultClick` (opens the folder) whenever the visible content is the plain `<span>`; a genuine
+    `<a href>` click navigates natively and is not intercepted by it.
+  - `[$File_x0020_Type] == ''` is this project's own established way of detecting a folder row in
+    column formatting on this tenant (plain `FSObjType` was not reliable here) — reused rather than
+    re-derived.
+  - SDG's Requests page is `/sites/CRS/SitePages/CRS-Request.aspx` ("Document Deletion &
+    Sharing Approval") — needed since this client renames every page at import.
