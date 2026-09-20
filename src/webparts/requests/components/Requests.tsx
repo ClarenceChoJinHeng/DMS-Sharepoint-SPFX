@@ -2211,6 +2211,119 @@ export default function Requests({
     }
   };
 
+  /**
+   * Resolve a file reached DIRECTLY (no request involved) — `?file=<UniqueId>` from a library's
+   * Name-column click. Mirrors `loadFileView`'s shape exactly, minus the stamp fallback: a file
+   * already sitting in one of the four target libraries has not moved since the click.
+   */
+  const [directFileView, setDirectFileView] = useState<FileView | undefined>(
+    undefined,
+  );
+  const directViewSeq = useRef(0);
+  const loadDirectFileView = async (uniqueId: string): Promise<void> => {
+    const seq = ++directViewSeq.current;
+    const settle = (v: FileView): void => {
+      if (directViewSeq.current === seq) setDirectFileView(v);
+    };
+    setDirectFileView({ state: "loading" });
+    const read = (url: string): Promise<SPHttpClientResponse> =>
+      context.spHttpClient.get(url, SPHttpClient.configurations.v1, {
+        headers: GET,
+      });
+    try {
+      const res = await read(
+        `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(uniqueId)}')?$select=ServerRelativeUrl${bust()}`,
+      );
+      if (!res.ok) {
+        settle({
+          state: "gone",
+          message:
+            res.status === 404
+              ? "This document is no longer in the library - it may already have been deleted."
+              : `The document could not be read (HTTP ${res.status}). Refresh and try again.`,
+        });
+        return;
+      }
+      const path = ((await res.json()) as { ServerRelativeUrl?: string })
+        .ServerRelativeUrl;
+      if (!path) {
+        settle({
+          state: "gone",
+          message: "This document could not be located.",
+        });
+        return;
+      }
+      /* Parameter alias, never an inline literal - a deep path answers 400 otherwise (gotcha #9). */
+      const alias = `@f='${encodeServerRelativePath(path)}'`;
+      const base = `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)`;
+      const fr = await read(
+        `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`,
+      );
+      if (!fr.ok) {
+        settle({
+          state: "gone",
+          message:
+            fr.status === 404
+              ? "This document is no longer in the library - it may already have been deleted."
+              : `The document could not be read (HTTP ${fr.status}). Refresh and try again.`,
+        });
+        return;
+      }
+      const f = (await fr.json()) as {
+        Name?: string;
+        Length?: string;
+        TimeLastModified?: string;
+        ServerRelativeUrl?: string;
+      };
+      let fieldText: Record<string, string> = {};
+      try {
+        const t = await read(
+          `${base}/ListItemAllFields/FieldValuesAsText?${alias}${bust()}`,
+        );
+        if (t.ok) fieldText = (await t.json()) as Record<string, string>;
+      } catch {
+        /* keep {} */
+      }
+      /* Document Date re-read RAW and formatted locally, as My Submissions does. */
+      try {
+        const raw = await read(
+          `${base}/ListItemAllFields?$select=DocumentDate&${alias}${bust()}`,
+        );
+        if (raw.ok) {
+          const iso = ((await raw.json()) as { DocumentDate?: string })
+            .DocumentDate;
+          const d = iso ? new Date(iso) : undefined;
+          if (d && !isNaN(d.getTime()))
+            fieldText.DocumentDate = formatSubmittedOn(d);
+        }
+      } catch {
+        /* keep SharePoint's own string */
+      }
+      const modified = f.TimeLastModified
+        ? new Date(f.TimeLastModified)
+        : undefined;
+      settle({
+        state: "ready",
+        name: f.Name || "document",
+        fileRef: f.ServerRelativeUrl || path,
+        size: f.Length,
+        modified: modified && !isNaN(modified.getTime()) ? modified : undefined,
+        fieldText,
+      });
+    } catch (e) {
+      settle({
+        state: "gone",
+        message: `The document could not be read: ${(e as Error).message}`,
+      });
+    }
+  };
+
+  /* ONE ROUTE IN, ONE LOADER — mirrors the existing rule right above for the request-based mode. */
+  useEffect(() => {
+    if (directFileId === undefined) return;
+    loadDirectFileView(directFileId).catch(() => undefined);
+  }, [directFileId]);
+
   /* ⚠ ONE ROUTE IN, ONE LOADER. A click and an email link both only set `viewId`; this effect does
      the reading. It also re-reads when the viewed request's STATUS changes - an approved deletion
      recycles the file, and the preview must not go on showing it. Declared above the early return. */
