@@ -51,6 +51,15 @@ import { closeOnBackdrop } from "../../../shared/backdropClose";
 import { displayNameFor } from "../../../shared/displayName";
 // The file view is SHARED with My Submissions (client, 2026-09-10) - one component, two mounts.
 import { FileDetailPanel } from "../../../shared/fileDetailPanel";
+// ── The direct file view (2026-09-20) — see the module's own comment for why this is a SIBLING to
+// loadFileView rather than a reuse of it: that one resolves a file BEHIND A REQUEST, with a stamp
+// fallback for a target that may have moved since the request was raised. A file reached by
+// clicking it directly in Documents/HC Documents/Archive/HC Archive has not moved since a request
+// was raised, because no request is involved at all.
+import { probeFileRights, FileRights } from "../../../shared/dmsFolderMap";
+import { documentUnit } from "../../../shared/documentDetails";
+import { directActionsFor, DirectActions } from "../../../shared/directFileActions";
+import { searchTenantPeople, PersonPick } from "../../../shared/spGroups";
 import {
   folderTrail,
   trailText,
@@ -836,6 +845,34 @@ export default function Requests({
     );
     if (isFinite(n) && n > 0) linkedRequest.current = n;
   }
+
+  /* ── The direct file view (2026-09-20, no request involved) ──
+     Reached by clicking a file's Name column in Documents/HC Documents/Archive/HC Archive, via
+     column formatting pointing at `?file=<UniqueId>` — see the design doc for why no library
+     parameter is needed: GetFileById is web-scoped and a UniqueId is unique site-wide.
+     Same read-once-and-strip pattern as `linkedRequest` above, and the same reason: a refresh must
+     not re-trigger opening something that was already read from the address bar once. */
+  const linkedFile = useRef<string | undefined>(undefined);
+  const fileLinkRead = useRef(false);
+  if (!fileLinkRead.current) {
+    fileLinkRead.current = true;
+    const f = (new URLSearchParams(window.location.search).get("file") ?? "").trim();
+    if (f.length > 0) linkedFile.current = f;
+  }
+  const [directFileId, setDirectFileId] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const id = linkedFile.current;
+    if (id === undefined) return;
+    linkedFile.current = undefined;
+    setDirectFileId(id);
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("file");
+      window.history.replaceState(window.history.state, "", u.toString());
+    } catch {
+      /* an address bar we cannot tidy costs nothing */
+    }
+  }, []);
 
   const listUrl = (): string =>
     `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.requests))}')`;
