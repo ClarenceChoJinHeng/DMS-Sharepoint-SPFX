@@ -131,6 +131,7 @@ import { EVENT } from "../../../shared/auditLog";
 // mount points. previewTarget lives inside it now.
 import { FileDetailPanel } from "../../../shared/fileDetailPanel";
 import { closeOnBackdrop } from "../../../shared/backdropClose";
+import { isPureObserverRole } from "../../../shared/pureObserverRole";
 // ⚠ THIS PAGE NO LONGER REDIRECTS ANYONE (2026-09-21, same day it shipped — see viewerOpenNotice's
 // own comment below). It used to import classifyViewerForFileRoute/readSitePages/resolveLink for
 // exactly that; all three are unused here now. classifyViewerForFileRoute stays as a pure, tested
@@ -1120,6 +1121,63 @@ export default function MySubmissions({
   const [viewerOpenNotice, setViewerOpenNotice] = useState<string | undefined>(
     undefined,
   );
+  /**
+   * `viewerOnlyMode` only (2026-09-21) — client: *"remove the Request Share and Request deletion for
+   * Viewer and C Level only."* Neither persona holds any role that could ever justify offering those
+   * buttons (see `shared/pureObserverRole.ts`'s own comment for why this is derived rather than a
+   * hardcoded persona check). Fails OPEN, the same direction as every other "is this person special"
+   * check in this file: `undefined` (not yet checked, or the check failed) never suppresses a real
+   * PIC/Approver/HOD's request button — only a CONFIRMED `true` does.
+   *
+   * ⚠ THIS IS A SEPARATE, SMALLER READ FROM THE REDIRECT MECHANISM REMOVED EARLIER TODAY — reusing
+   * that shape (currentuser/groups + Group Map) for a genuinely different question, not restoring
+   * what was deleted. It costs one Group Map read, same as the redirect used to, but decides button
+   * visibility rather than navigation.
+   */
+  const [pureObserver, setPureObserver] = useState<boolean | undefined>(
+    undefined,
+  );
+  useEffect(() => {
+    if (!viewerOnlyMode) return;
+    let live = true;
+    (async (): Promise<void> => {
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      try {
+        const myIds: string[] = [];
+        const gr = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/currentuser/groups?$select=Id`,
+          SPHttpClient.configurations.v1,
+          { headers: NO_CACHE },
+        );
+        if (gr.ok) {
+          for (const g of ((await gr.json()).value ?? []) as Array<{
+            Id?: number;
+          }>) {
+            if (typeof g.Id === "number") myIds.push(String(g.Id));
+          }
+        } else {
+          return;
+        }
+        const mr = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items` +
+            `?$select=GroupId,Role&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: NO_CACHE },
+        );
+        if (!mr.ok) return;
+        const mapRows = (((await mr.json()).value ?? []) as Array<{
+          GroupId?: number;
+          Role?: string;
+        }>).map((r) => ({ GroupId: String(r.GroupId ?? ""), Role: r.Role }));
+        if (live) setPureObserver(isPureObserverRole(myIds, mapRows));
+      } catch {
+        /* leave undefined — a failed check must never hide a real PIC/Approver/HOD's request button */
+      }
+    })().catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [viewerOnlyMode]);
   /** The row being examined. `undefined` = the list. */
   const [open, setOpen] = useState<Submission | undefined>(undefined);
   /** Per-item metadata labels for the open row. `undefined` while in flight. */
@@ -3792,6 +3850,26 @@ export default function MySubmissions({
           <button
             style={s.backLink}
             onClick={() => {
+              /* ⚠ `viewerOnlyMode` NAVIGATES BACK TO THE LIBRARY THE DOCUMENT WAS OPENED FROM,
+                 rather than clearing local state (2026-09-21 report: "clicking back doesnt redirect
+                 user back to the library"). This page has no list of its own to return to — clearing
+                 `open` just shows the generic landing message, which is not what "Back" means for
+                 someone who arrived here by clicking a document's Name column in Documents/HC
+                 Documents/Archive/HC Archive and now wants to go back to that folder. `fileRef` is
+                 SharePoint's own server-relative path (always starts with `/`), so the containing
+                 folder is everything before the last `/`. A genuine browser navigation, not a React
+                 state change — the whole point is landing back INSIDE the library's own folder view,
+                 which this app does not render. Falls back to the ordinary behaviour if no path can
+                 be derived (should not happen — `resolveArbitraryFile` already refuses to open a
+                 document with no `fileRef`), rather than navigating somewhere broken. */
+              if (viewerOnlyMode) {
+                const path = open.fileRef;
+                const idx = path ? path.lastIndexOf("/") : -1;
+                if (idx > 0) {
+                  window.location.href = `${window.location.origin}${path.slice(0, idx)}`;
+                  return;
+                }
+              }
               openActiveRef.current = false;
               setOpen(undefined);
               setFieldText(undefined);
@@ -4015,9 +4093,17 @@ export default function MySubmissions({
              the reason no "Request…" button appears here; it was never meant to also remove the
              in-app action itself.
              Each action type is mutually exclusive between "request" and "direct" — never both, and
-             never neither — so this can never present two contradictory routes for the same click. */
-          const showDelete = !canDeleteSelf;
-          const showShare = approved && !canShareSelf;
+             never neither — so this can never present two contradictory routes for the same click.
+             ⚠ `pureObserver !== true` ALSO GATES THE REQUEST HALF ONLY (2026-09-21) — a Viewer/
+             C-Level account never holds direct rights either, so `showDirectDelete`/`showDirectShare`
+             already correctly stay false for them without this; without the extra check here,
+             though, they would fall into "cannot act directly, so offer a REQUEST instead" exactly
+             like a genuine PIC on someone else's approved document — the wrong branch, since a pure
+             observer has no legitimate reason to ask for a change at all. `undefined` (not yet
+             checked, or non-viewerOnlyMode where this is never computed) never suppresses — only a
+             CONFIRMED `true` does. */
+          const showDelete = !canDeleteSelf && pureObserver !== true;
+          const showShare = approved && !canShareSelf && pureObserver !== true;
           const showDirectDelete = canDeleteSelf;
           const showDirectShare = approved && canShareSelf;
           return (
