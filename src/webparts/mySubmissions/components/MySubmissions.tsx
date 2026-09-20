@@ -131,12 +131,10 @@ import { EVENT } from "../../../shared/auditLog";
 // mount points. previewTarget lives inside it now.
 import { FileDetailPanel } from "../../../shared/fileDetailPanel";
 import { closeOnBackdrop } from "../../../shared/backdropClose";
-// viewerOnlyMode only (2026-09-21): the redirect decision, and the SAME dynamic page-link
-// resolution the CRS Settings landing page already uses — this client renames every page at
-// import, so the destination pages must be found by pattern, never hardcoded.
-import { classifyViewerForFileRoute } from "../../../shared/viewerFileRoute";
-import { readSitePages } from "../../../shared/backToSettings";
-import { resolveLink, SitePage } from "../../../shared/adminPages";
+// ⚠ THIS PAGE NO LONGER REDIRECTS ANYONE (2026-09-21, same day it shipped — see viewerOpenNotice's
+// own comment below). It used to import classifyViewerForFileRoute/readSitePages/resolveLink for
+// exactly that; all three are unused here now. classifyViewerForFileRoute stays as a pure, tested
+// module (shared/viewerFileRoute.ts) in case a future redesign wants it again.
 
 /* ⚠ THE LITERAL `"Documents"` USED TO LIVE HERE, AND IT IS WHAT BROKE THIS PAGE ON 2026-08-28.
    The client retitled that library to `Restricted & Confidential Document`, every `getbytitle`
@@ -1096,96 +1094,32 @@ export default function MySubmissions({
    * unreadable Group Map must never strand a real viewer with a blank page, and a redirect sent on
    * a guess risks bouncing someone who should be able to stay.
    */
-  const [redirecting, setRedirecting] = useState<boolean | undefined>(
-    viewerOnlyMode ? undefined : false,
+  /**
+   * `viewerOnlyMode` (2026-09-21, REVISED 2026-09-21 — the redirect this comment used to describe
+   * is GONE). Client, on live-testing it: "It redirects user to CRS-Request but its glitchy
+   * sometimes it doesnt show and if I refresh it goes back to CRS-Request page, I think no need to
+   * redirect might as well just view directly on the Document-Viewer" — and the same request for
+   * the uploader's redirect to My Submissions. So this page instance never navigates anyone away
+   * any more, for ANY role. It is a plain shared "open one document" surface: whoever lands here
+   * (via a `?file=` link from Documents/HC Documents/Archive/HC Archive) either sees that document —
+   * through the SAME detail view, with the SAME role-aware Approve/Delete/Share controls, every
+   * other page already uses — or, if nothing has been opened yet, a short landing message.
+   * `My-Submissions.aspx` and `CRS-Request.aspx` are UNCHANGED for anyone who navigates to THEM
+   * directly (via the site nav) — only the "click a document" flow no longer bounces through a
+   * Group-Map role lookup to decide where to send someone.
+   *
+   * The removed mechanism (`classifyViewerForFileRoute` + `resolveLink`/`readSitePages` +
+   * `window.location.replace`, plus the `isSystemAdmin` exemption it needed) is kept as a pure,
+   * tested module (`shared/viewerFileRoute.ts`) in case a future redesign wants it again — only the
+   * CALL SITE here is gone, so the extra `currentuser/groups` + Group Map read on every page load
+   * goes with it too.
+   */
+  /** Set when a `?file=`/`?sfi=` link on THIS page could not be opened — shown instead of the
+   *  generic landing message. Never touched on the ordinary (non-viewerOnlyMode) page, which
+   *  already has its own Requests-tab notice for the same failure. */
+  const [viewerOpenNotice, setViewerOpenNotice] = useState<string | undefined>(
+    undefined,
   );
-  useEffect(() => {
-    if (!viewerOnlyMode) return;
-    let live = true;
-    (async (): Promise<void> => {
-      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
-      try {
-        // ⚠ A SYSTEM ADMIN STAYS HERE, REGARDLESS OF ANY GROUP MAP ROLE THEY HAPPEN TO HOLD —
-        // 2026-09-21, found live: an admin test account clicking a document link was redirected
-        // to My Submissions because that account was also mapped (from earlier testing elsewhere
-        // in this project) into some unit's `_UPLOADER` group. `classifyViewerForFileRoute` has no
-        // way to tell "genuinely a PIC" from "an admin incidentally mapped as one too" — it only
-        // reads Group Map rows. Checked BEFORE the classify walk, not folded into it, because
-        // `isSystemAdmin` needs a live read (IsSiteAdmin or Owners membership) that the pure
-        // function cannot make. A FAILED check falls through to the ordinary classify rather than
-        // granting the exemption on a guess — same fail-closed direction `isSystemAdmin`'s own
-        // callers use everywhere else in this file.
-        const admin = await isSystemAdmin(context.spHttpClient, siteUrl).catch(
-          () => false,
-        );
-        if (admin) {
-          if (live) setRedirecting(false);
-          return;
-        }
-        const myIds: string[] = [];
-        const gr = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/currentuser/groups?$select=Id`,
-          SPHttpClient.configurations.v1,
-          { headers: NO_CACHE },
-        );
-        if (gr.ok) {
-          for (const g of ((await gr.json()).value ?? []) as Array<{
-            Id?: number;
-          }>) {
-            if (typeof g.Id === "number") myIds.push(String(g.Id));
-          }
-        }
-        const mr = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items` +
-            `?$select=GroupId,Role&$top=5000`,
-          SPHttpClient.configurations.v1,
-          { headers: NO_CACHE },
-        );
-        const mapRows = mr.ok
-          ? (((await mr.json()).value ?? []) as Array<{
-              GroupId?: number;
-              Role?: string;
-            }>)
-          : [];
-        const kind = classifyViewerForFileRoute(
-          myIds,
-          mapRows.map((r) => ({ GroupId: String(r.GroupId ?? ""), Role: r.Role })),
-        );
-        if (kind === "other") {
-          if (live) setRedirecting(false);
-          return;
-        }
-        const pages = await readSitePages(context, siteUrl).catch(
-          () => [] as SitePage[],
-        );
-        const link =
-          kind === "approver"
-            ? { key: "filePermission", label: "File Permission", match: /request/i }
-            : {
-                key: "mySubmissions",
-                label: "My Submissions",
-                match: /submission|my.?upload|my.?file/i,
-              };
-        const target = resolveLink(link, pages);
-        const search = window.location.search;
-        if (target.state === "resolved" || target.state === "ambiguous") {
-          if (!live) return;
-          setRedirecting(true);
-          window.location.replace(target.url + search);
-          return;
-        }
-        // Could not resolve the destination page — stay rather than send them nowhere.
-        if (live) setRedirecting(false);
-      } catch {
-        if (live) setRedirecting(false);
-      }
-    })().catch(() => {
-      if (live) setRedirecting(false);
-    });
-    return () => {
-      live = false;
-    };
-  }, [viewerOnlyMode]);
   /** The row being examined. `undefined` = the list. */
   const [open, setOpen] = useState<Submission | undefined>(undefined);
   /** Per-item metadata labels for the open row. `undefined` while in flight. */
@@ -1962,6 +1896,22 @@ export default function MySubmissions({
     const sfi = (q.get("sfi") ?? "").trim().toLowerCase();
     if (id || sfi) linkedFile.current = { id, sfi };
   }
+  /* ⚠ THE VIEWER-ONLY FAILURE PATH WAS SILENT UNTIL 2026-09-21, AND THAT IS WHAT MADE THE VIEWER
+     ROLE'S OPEN LOOK LIKE NOTHING HAPPENED AT ALL. Every branch below used to call `goTab("Requests")`
+     + `setRequestNotice(...)` unconditionally — correct on the ORDINARY page, where the Requests tab
+     is visible and renders that notice, but `viewerOnlyMode`'s own render branch returns its fixed
+     two-state placeholder REGARDLESS of `tab`/`requestNotice`, so a genuine resolve failure (a 403,
+     a bad GUID, the file simply not existing) was swallowed with no trace: the viewer just saw the
+     generic landing message, indistinguishable from "nothing has been opened yet". `failToOpen`
+     routes the SAME message to the field that is actually rendered for this page instance. */
+  const failToOpen = (message: string): void => {
+    if (viewerOnlyMode) {
+      setViewerOpenNotice(message);
+      return;
+    }
+    goTab("Requests");
+    setRequestNotice(message);
+  };
   useEffect(() => {
     const link = linkedFile.current;
     if (link === undefined || rows === undefined) return;
@@ -1986,8 +1936,7 @@ export default function MySubmissions({
     if (rows.some(matches)) {
       // Matched a RECORD (deleted/archived/replaced) — definitive, so there is nothing to gain by
       // also trying an arbitrary resolve; the record already says what happened to it.
-      goTab("Requests");
-      setRequestNotice(
+      failToOpen(
         "That document is no longer in the library, so it cannot be opened. What happened to your request is listed below.",
       );
       return;
@@ -1998,8 +1947,7 @@ export default function MySubmissions({
        never appear among `rows` (filtered AuthorId eq me) at all. Attempted only when the id genuinely
        matched nothing above — a real record always wins, per the branch just above. */
     if (link.id === "") {
-      goTab("Requests");
-      setRequestNotice(
+      failToOpen(
         "That document could not be found among your submissions. What happened to your requests is listed below.",
       );
       return;
@@ -2010,14 +1958,12 @@ export default function MySubmissions({
           openRow(arbitrary);
           return;
         }
-        goTab("Requests");
-        setRequestNotice(
+        failToOpen(
           "That document could not be found. It may have been deleted, or you may not have access to it.",
         );
       })
       .catch(() => {
-        goTab("Requests");
-        setRequestNotice(
+        failToOpen(
           "That document could not be read. What happened to your requests is listed below.",
         );
       });
@@ -3836,7 +3782,9 @@ export default function MySubmissions({
               setFieldText(undefined);
             }}
           >
-            ‹ Back to my submissions
+            {/* "my submissions" is meaningless for the Viewer/C-Level/HOD/Admin audience this page
+                instance also serves (2026-09-21 report) — they have none of their own. */}
+            {viewerOnlyMode ? "‹ Back" : "‹ Back to my submissions"}
           </button>
         </div>
 
@@ -4170,19 +4118,19 @@ export default function MySubmissions({
     );
   }
 
-  /* ── viewerOnlyMode, no document open (2026-09-21) ──
-     Viewer/C-Level/HOD's own page. A PIC or Approver landing here is mid-redirect (or the redirect
-     failed to resolve a destination, in which case they simply stay, same as anyone else). No
-     personal submissions list exists for this audience — the whole point of this page is that they
-     have nothing of their own to show — so it never falls through to the ordinary list render
-     below. */
+  /* ── viewerOnlyMode, no document open (2026-09-21, REVISED same day — no more redirect) ──
+     This page instance no longer sends ANYONE away — see the state declared beside
+     `viewerOpenNotice` above for why. No personal submissions list exists for this audience — the
+     whole point of this page is showing one opened document, never a list of "your own" files — so
+     it never falls through to the ordinary list render below. A failed open (bad/missing `?file=`
+     link, no access to the document, etc.) shows `viewerOpenNotice` here instead of the generic
+     landing line — see `failToOpen` above, which is what used to be silently swallowed. */
   if (viewerOnlyMode) {
     return (
       <section style={s.wrap}>
         <p style={s.empty}>
-          {redirecting === undefined || redirecting === true
-            ? "Checking your access…"
-            : "Open a document directly from Documents, HC Documents, Archive, or HC Archive to view it here."}
+          {viewerOpenNotice ??
+            "Open a document directly from Documents, HC Documents, Archive, or HC Archive to view it here."}
         </p>
       </section>
     );

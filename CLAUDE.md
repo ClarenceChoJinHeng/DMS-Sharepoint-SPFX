@@ -1,97 +1,79 @@
 # SDG DMS — Claude Code Project Context
 
-> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-21 (direct share/delete, re-scoped to three
-> pages):** commits `47a7866`…`c860a2a`, all on `feat/folder-abbreviations`. **Built directly on
-> SDG's LIVE production tenant** (`/sites/CRS`) — the client is short on time and deploys straight
-> there; nothing here was rehearsed on ClarenceDMSTesting first. **NOT re-deployed since the last
-> architecture change (`3d83743`/`2c56080`/`c860a2a`) — the client's last live-tested build was the
-> single-page version, superseded by the three-page split below.**
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-21 (the redirect was REMOVED, same day it
+> shipped):** commits `47a7866`…(latest on `feat/folder-abbreviations`, not yet committed as of this
+> writing — see the end of this entry). **Built directly on SDG's LIVE production tenant**
+> (`/sites/CRS`) — nothing here was rehearsed on ClarenceDMSTesting first.
 >
-> **THE FEATURE, AS IT ENDED UP (client's own final words, verbatim):**
-> *"1. Viewer, C Level, HOD. - A Separate page, no my submsision, no Crs request, a separate page
-> with same design. 2. Approver - Use CRS-Request that is fine 3. PIC - use My subsmission got it?"*
-> — then corrected once: *"Nono HOD can still share, HOD stays in that page to share no
-> redirection"* (HOD's own direct-share right stays on the new page; only HOD's job of DECIDING
-> other people's Share requests was dropped from `CRS-Request.aspx`, not their ability to share).
+> **⚠⚠ THE "THREE DESTINATIONS, ONE SHARED MECHANISM" DESIGN BELOW IS SUPERSEDED — READ THIS FIRST.**
+> It shipped, was deployed, and was live-tested the SAME DAY. The client's verdict, verbatim, having
+> watched it: *(Approver) "It redirects user to CRS-Request but its glitchy sometimes it doesnt show
+> and if I refresh it goes back to CRS-Request page, I think no need to redirect might as well just
+> view directly on the Document-Viewer."* / *(Uploader) "...can we also just let them view file
+> directlly on Document-Viewer."* **So the whole redirect mechanism — `classifyViewerForFileRoute`,
+> the `resolveLink`/`readSitePages`/`window.location.replace` navigation, and the `isSystemAdmin`
+> exemption built to patch it hours earlier — is GONE from `MySubmissions.tsx`.** Kept as history
+> below because the reasoning (and the pure, tested `classifyViewerForFileRoute` module) may be
+> wanted again; do not act on anything below describing it as live behaviour.
 >
-> **THREE DESTINATIONS, one shared mechanism.** SharePoint column formatting can only ever act on
-> the ROW (filename, `[$UniqueId]`) — it cannot see who is clicking, so it can only ever point every
-> viewer at ONE fixed page. Each destination decides who belongs there **on load**, client-side:
-> 1. **`CRS-Request.aspx` (File Permission) — Approver-exclusive again.** `pageAccessPolicy.ts`'s
->    `/request/i` rule reverted from the widened `["UPL","UPLHC","APR","APRHC"]` back to
->    `["APR","APRHC"]` only — its own comment records the one-day supersession and why. The
->    `?file=<UniqueId>` direct-view feature built earlier the same day (Tasks 3–8: resolve, probe
->    rights via `probeFileRights`, Delete/Share buttons, `writeDirectDeletionRequest`,
->    `performDirectShare` with a recipient-chip picker) is **unchanged code** — only its reachable
->    audience narrowed.
-> 2. **My Submissions (PIC's home) — extended to resolve ANY document, not just the viewer's own.**
->    New `resolveArbitraryFile(uniqueId)` in `MySubmissions.tsx`, using the existing
->    `librarySegmentOf`/`cachedHcLibraries()`/`cachedArchiveLibraries()` machinery, feeds the SAME
->    `openRow`/`loadFieldText`/`probeRightsFor`/`fetchFieldText` pipeline every other row already
->    uses — confirmed by investigation (not assumption) that this pipeline works generically off any
->    `Submission`-shaped object. That is what makes "same design as My Submission" free: nothing new
->    to build for the detail view, Delete/Share buttons, or `FileDetailPanel`.
-> 3. **A THIRD, NEW PAGE — Viewer / C-Level / Head of Department.** `MySubmissionsWebPart.ts` gained
->    a property-pane checkbox, `viewerOnlyMode`. Mounted a SECOND time on the new page with that box
->    ticked, the SAME component becomes: (a) role-gated on load — `classifyViewerForFileRoute`
->    (`shared/viewerFileRoute.ts`, pure, 8 tests) reads the viewer's own SharePoint groups against
->    the Group Map, and **checks `APR`/`APRHC` BEFORE `UPL`/`UPLHC`** because a Head of Unit's own
->    persona has carried `UPL` too since 2026-09-17 — checking uploader first would misroute an
->    Approver; (b) silently `window.location.replace`s a PIC to My Submissions and an Approver to
->    File Permission, both resolved via the existing `resolveLink`/`readSitePages` pattern (never
->    hardcoded — this client renames every page at import); (c) shows nothing else — no submissions
->    list, no batch grouping, no request queue — until a `?file=` link opens a document, at which
->    point it is the identical detail view PIC and Approver already have. A new `pageAccessPolicy.ts`
->    rule (`/document.?view|file.?view/i`, inserted BEFORE `/request/i`) grants
->    `["UPL","UPLHC","APR","APRHC","MEMBER","MEMBERHC","GLOBAL","SEGVIEW","DEPTVIEW"]` — every role
->    that can browse Documents/HC Documents/Archive/HC Archive, since PIC/Approver are redirected off
->    it anyway and the actual audience is Viewer/C-Level/HOD.
+> **THE CURRENT, ACTUAL ARCHITECTURE:** `Document-Viewer.aspx` is now a plain, universal "open one
+> document" surface. It **never redirects anyone, for any role.** Whoever lands there via a
+> `?file=<UniqueId>` link from `Documents`/`HC Documents`/`Archive`/`HC Archive` sees that document —
+> through the SAME shared detail view (`shared/fileDetailPanel.tsx`) every other page already used,
+> with the SAME role-aware Approve/Delete/Share controls — or, if nothing has been opened yet, a
+> short landing message. `My-Submissions.aspx` and `CRS-Request.aspx` are **unchanged** for anyone
+> who navigates to THEM directly via the site nav (PIC's own submission history, Approver's own
+> queue) — only the "click a document" flow stopped bouncing through a Group-Map role lookup.
 >
-> **⚠ THREE LIVE BUGS FOUND AND FIXED THE SAME SESSION, ALL FROM SCREENSHOTS/LIVE REPORTS, NONE FROM
-> REASONING ALONE:**
-> - **`customRowAction` silently ignored when nested inside a `children[]` element** in the
->   column-formatting JSON — SharePoint only honours it on the TOP-LEVEL formatting object. Symptom:
->   "It's missing the pointer click." Fixed by hoisting it to the root `elmType`.
-> - **`[$UniqueId]` emits the GUID WRAPPED IN CURLY BRACES** (`{E2146F0B-...}`), and
->   `GetFileById(guid'...')` rejects that shape with HTTP 400 — "The document could not be read."
->   Fixed by stripping `^\{`/`\}$` from the parsed `?file=` value, in BOTH `Requests.tsx` (found
->   first, `d92d80e`) and `MySubmissions.tsx` (applied proactively once it also became a consumer of
->   the same query parameter, `c860a2a`).
-> - **THE REDIRECT HAD NO SYSTEM-ADMIN EXEMPTION, AND `classifyViewerForFileRoute` COULD NOT HAVE
->   ONE.** Found live once the third page (`Document-Viewer.aspx`) was actually created and tested: a
->   PIC clicking a document link correctly landed on the page/redirected, but a system-admin test
->   account was WRONGLY redirected to My Submissions — because that account happens to also be mapped
->   (leftover from earlier testing elsewhere in this project) into some unit's `_UPLOADER` group, and
->   the classify function has no way to distinguish "genuinely a PIC" from "an admin incidentally
->   mapped as one too" — it only ever reads Group Map rows. Fixed by checking `isSystemAdmin(...)`
->   (same helper already used elsewhere in `MySubmissions.tsx` for the direct-share/delete feature)
->   BEFORE the classify walk in the redirect effect, and short-circuiting to "stay" if true. A FAILED
->   admin check falls through to the ordinary classify (fail-closed on the exemption, matching this
->   project's usual direction for "is this person special" checks). **Rebuilt and repackaged as
->   `1.0.547.0` — NOT YET RE-DEPLOYED.** The client's live test above was against the PRE-fix build.
+> **TWO REAL FIXES LANDED IN THE SAME PASS AS THE REDIRECT REMOVAL:**
+> - **⚠ A SILENT FAILURE, WHICH IS ALMOST CERTAINLY WHAT SYMPTOM 4 ("Viewer... shows me not the
+>   file just [the generic] text") ACTUALLY WAS.** The `?file=` resolve effect's three failure
+>   branches called `goTab("Requests")` + `setRequestNotice(...)` unconditionally — correct on the
+>   ORDINARY My Submissions page, where the Requests tab is visible and renders that notice, but
+>   **`viewerOnlyMode`'s render branch returns its fixed placeholder regardless of `tab`/
+>   `requestNotice`**, so a genuine resolve failure (403, bad GUID, file genuinely inaccessible) was
+>   swallowed with zero trace — indistinguishable on screen from "nothing was ever opened". Fixed
+>   with a new `viewerOpenNotice` state + a `failToOpen(message)` helper that routes the SAME message
+>   to whichever field is actually rendered for this page instance. **The next Viewer test will show
+>   the REAL reason** instead of the generic landing text.
+> - **The "‹ Back to my submissions" button label was wrong for this audience** (a Viewer/C-Level/HOD/
+>   Admin has no submissions of their own) — now `viewerOnlyMode ? "‹ Back" : "‹ Back to my
+>   submissions"`.
 >
-> **CONFIRMED DONE, LIVE, ON SDG's TENANT (checked from screenshots, not assumed):**
-> - The third page exists: **`Document-Viewer.aspx`**, published, at
->   `sdguthrie.sharepoint.com/sites/CRS/SitePages/Document-Viewer.aspx` — matches
->   `/document.?view|file.?view/i`.
-> - The **My Submissions** web part is mounted on it a second time, `viewerOnlyMode` ticked — property
->   pane confirmed showing the checkbox checked with the right label text.
-> - At least one library's Name-column formatting already points a click at this page (a PIC test
->   confirmed landing/redirecting correctly against the pre-`isSystemAdmin`-fix build).
+> **⚠ THE MOST USEFUL DIAGNOSTIC CLUE ALREADY IN HAND, worth reading before the next test:** per the
+> client's own report, **System Admin's file DID open successfully** (they saw the detail view and a
+> back button) while **Viewer's did not** (straight to the placeholder). System Admin has Full
+> Control, which bypasses every folder ACL; a genuine Viewer persona does not. That asymmetry is the
+> classic signature of a **missing folder-level grant** rather than a code bug — i.e. Folder
+> Reconciliation likely has not been re-run since the `/document.?view|file.?view/i` page-access rule
+> was added, so the Viewer's account may hold page access but not the underlying folder Read. Confirm
+> this is still outstanding before assuming a further code fix is needed.
+>
+> **⚠ `?file=<UniqueId>` STILL NEEDS THE CURLY-BRACE STRIP — genuinely unrelated to the redirect and
+> still true:** SharePoint's `[$UniqueId]` column-formatting token emits the GUID wrapped in curly
+> braces (`{E2146F0B-...}`), and `GetFileById(guid'...')` rejects that shape with HTTP 400. Stripped
+> in both `Requests.tsx` and `MySubmissions.tsx`.
+>
+> **CONFIRMED DONE, LIVE, ON SDG's TENANT:**
+> - `Document-Viewer.aspx` exists, published, at
+>   `sdguthrie.sharepoint.com/sites/CRS/SitePages/Document-Viewer.aspx`.
+> - The **My Submissions** web part is mounted on it a second time, `viewerOnlyMode` ticked.
+> - At least one library's Name-column formatting points a click at this page.
 >
 > **STILL OUTSTANDING:**
-> - **Re-deploy the `.sppkg` — it now needs `1.0.547.0`, not the build the PIC/Admin test above ran
->   against.** Re-test the SAME admin account after this deploy; it should now stay on the page
->   instead of bouncing to My Submissions.
+> - **Deploy the rebuilt `.sppkg` (`1.0.548.0`)** — every fix above (redirect removal, the silent-
+>   failure fix, the back-button wording) is built, `tsc`-clean, test-suite-clean, and confirmed
+>   present in the shipped bundle, but **not yet redeployed to SDG's tenant.**
+> - **Re-test all four roles against `1.0.548.0`**: nobody should be redirected anywhere any more;
+>   the open-document flow should work identically for System Admin, Approver, PIC and Viewer. If the
+>   Viewer's file still fails to open, `viewerOpenNotice` will now show the REAL reason — read it
+>   before guessing further.
+> - **Confirm Folder Reconciliation has been re-run** since the page-access policy changed — the
+>   likely cause of the Viewer-specific failure, per the diagnostic clue above.
 > - **Confirm the column-formatting JSON has been rolled out to ALL FOUR libraries** —
 >   `Documents`, `HC Documents`, `Archive`, `HC Archive` — pointing at
 >   `https://sdguthrie.sharepoint.com/sites/CRS/SitePages/Document-Viewer.aspx?file=' + [$UniqueId]`.
->   Only one library's status is confirmed from testing so far; the other three are unconfirmed.
-> - **Re-run Folder Reconciliation** — the page-policy change (both the `/request/i` narrowing and
->   the new `/document.?view/i` rule) needs a run to actually apply the corresponding page ACL
->   grants/removals; not confirmed done since the policy changed.
-> - **Test with a real Approver account and a real Viewer/C-Level/HOD account** (not just PIC and
->   Admin) to confirm all three branches of the redirect actually work end to end.
+>   Only one library's status is confirmed from testing so far.
 
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-20:
 > `docs/2026-09-20-session-handoff.md`.** A long, single session. Six commits since the last pointer
