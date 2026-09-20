@@ -33,6 +33,7 @@ import {
 } from "../../../shared/spNaming";
 import { permissionedTierCount } from "../../../shared/approvalDestination";
 import { buildDetailRows, DetailRow } from "../../../shared/documentDetails";
+import { formatSubmittedOn } from "../../../shared/mySubmissions";
 // ⚠ THE CHECKS THEMSELVES LIVE IN shared/approvalGuards.ts, shared with the bulk approve command
 // set. Two implementations of "is it safe to approve this" is how a bulk route ends up weaker
 // than the page it copies. Do not re-inline them here.
@@ -760,7 +761,37 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items(${itemId})/FieldValuesAsText`,
         SPHttpClient.configurations.v1,
       );
-      if (textRes.ok) setFieldText((await textRes.json()) as IFieldText);
+      if (!textRes.ok) return;
+      const text = (await textRes.json()) as IFieldText;
+
+      /* ⚠ DOCUMENT DATE IS RE-READ RAW, NEVER PARSED BACK FROM THE FORMATTED STRING —
+         same reasoning, same fix as MySubmissions.tsx's loadFieldText (which this mirrors
+         verbatim). `FieldValuesAsText` hands back a string SharePoint has ALREADY formatted in
+         the site's locale (`9/20/2026`), and re-parsing that here is exactly the M/D/YYYY trap
+         gotcha #1 records: this site is US-locale, so `8/9/2026` is ambiguous between 9 August
+         and 9 September with nothing on the page able to tell. The raw `Edm.DateTime` is
+         unambiguous ISO, so it is fetched instead and formatted with the same `formatSubmittedOn`
+         every other date on this project uses — client, 2026-09-20: "using the format 20 Sept
+         2026" — so this panel agrees with My Submissions rather than showing the raw `9/20/2026`.
+         Costs one extra request per item swap; never blocks the panel on failure. */
+      try {
+        const rawRes = await context.spHttpClient.get(
+          `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items(${itemId})?$select=DocumentDate`,
+          SPHttpClient.configurations.v1,
+        );
+        if (rawRes.ok) {
+          const iso = ((await rawRes.json()) as { DocumentDate?: string })
+            .DocumentDate;
+          const d = iso ? new Date(iso) : undefined;
+          // Only overwrite on a date we could actually read. A blank column, an unparseable
+          // value or a failed request all leave SharePoint's own string standing — uglier, not
+          // wrong.
+          if (d && !isNaN(d.getTime())) text.DocumentDate = formatSubmittedOn(d);
+        }
+      } catch {
+        /* keep the formatted string — a decoration must never cost the panel its details */
+      }
+      setFieldText(text);
     } catch {
       /* labels are non-critical */
     }

@@ -64,7 +64,7 @@ import {
   ReadableLibrary,
 } from "../../../shared/spNaming";
 // The trail builder My Submissions uses — see the note where `trailOf` used to be.
-import { folderTrail, trailText } from "../../../shared/mySubmissions";
+import { folderTrail, trailText, formatSubmittedOn } from "../../../shared/mySubmissions";
 // The `Keyword` column is created by reconciliation, so a library provisioned earlier may not have
 // it — and a $filter naming an absent column 400s the whole read. Probed, never assumed.
 import {
@@ -1274,7 +1274,33 @@ export default function DocumentSearch({
       `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(apiTitle(h.library))}')` +
         `/items(${h.itemId})/FieldValuesAsText`,
     )
-      .then((r) => setFieldText(r.ok ? (r.body as Record<string, string>) : {}))
+      .then((r) => {
+        const text = (r.ok ? (r.body as Record<string, string>) : {}) as Record<string, string>;
+        if (!r.ok) {
+          setFieldText(text);
+          return;
+        }
+        /* ⚠ DOCUMENT DATE IS RE-READ RAW, NEVER PARSED BACK FROM THE FORMATTED STRING — same fix
+           as ApprovalDocument.tsx's / MySubmissions.tsx's own `loadFieldText`, which this mirrors.
+           `FieldValuesAsText` hands back a string SharePoint has ALREADY formatted in the site's
+           locale (`9/20/2026`), and re-parsing that is the M/D/YYYY trap gotcha #1 records: this
+           site is US-locale, so `8/9/2026` is ambiguous between 9 August and 9 September with
+           nothing on the page able to tell. The raw `Edm.DateTime` is unambiguous ISO, so it is
+           fetched instead and formatted with the same `formatSubmittedOn` every other date on this
+           project uses — client, 2026-09-20: "using the format 20 Sept 2026". Never blocks the
+           panel: a failed or unparseable re-read just leaves SharePoint's own string standing. */
+        jsonGet(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(apiTitle(h.library))}')` +
+            `/items(${h.itemId})?$select=DocumentDate`,
+        )
+          .then((raw) => {
+            const iso = raw.ok ? (raw.body as { DocumentDate?: string }).DocumentDate : undefined;
+            const d = iso ? new Date(iso) : undefined;
+            if (d && !isNaN(d.getTime())) text.DocumentDate = formatSubmittedOn(d);
+            setFieldText(text);
+          })
+          .catch(() => setFieldText(text));
+      })
       .catch(() => setFieldText({}));
   };
 

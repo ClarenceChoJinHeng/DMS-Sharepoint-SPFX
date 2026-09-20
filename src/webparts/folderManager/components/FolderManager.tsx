@@ -8451,15 +8451,16 @@ export default function FolderManager({
                 <div
                   style={{ color: "#3d4b42", fontSize: 12.5, lineHeight: 1.5 }}
                 >
-                  Run folder reconciliation to refresh the database with newly
-                  added items and apply the latest group assignments, roles, and
-                  permissions.
+                  Run Folder Reconciliation to apply the latest folder
+                  structure, group, roles, and permissions.
                   <br />
-                  <strong>Keep this tab open until it finishes.</strong> The run
-                  happens in your browser — refreshing, closing the tab or
-                  navigating away stops it halfway. Nothing is lost and you can
-                  run it again, but do re-run before letting users in: a folder
-                  interrupted halfway stays unlocked until the next run.
+                  <br />
+                  Keep this tab open until the process is complete. Do not
+                  refresh, close, or leave the page.
+                  <br />
+                  <br />
+                  If interrupted, run the reconciliation again before allowing
+                  users to access the folders.
                 </div>
               </div>
             </div>
