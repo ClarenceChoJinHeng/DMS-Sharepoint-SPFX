@@ -56,6 +56,51 @@ export const ACTION_ROLES: GroupMapRole[] = ["UPL", "APR", "DELS"];
  */
 const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
   {
+    // ⚠ THE VIEWER/C-LEVEL/HEAD-OF-DEPARTMENT PAGE (2026-09-21), added at the TOP so nothing later
+    // in this array can accidentally claim it first.
+    //
+    // Client, correcting the same-day plan that put this feature on Requests.aspx for everyone:
+    // "I dont want VIEWER, HOD, C LEVEL, or PIC to touch CRS-Requet.aspx... for safety purposes, I am
+    // afraid they can by pass it." Three destinations resulted: File Permission (Requests.aspx)
+    // stays Approver-exclusive; My Submissions gets PIC (unchanged, plus an "any document" fallback
+    // for a file that is not one of their own); and Viewer/C-Level/HOD land HERE.
+    //
+    // ⚠ `UPL`/`UPLHC`/`APR`/`APRHC` ARE LISTED TOO, and that is not a mistake — SharePoint column
+    // formatting cannot route by VIEWER ROLE, only by the row's own data, so the SAME link a PIC or
+    // Approver clicks in a library also points here. This page's own component checks the viewer's
+    // role on load and silently redirects a PIC to My Submissions and an Approver to File Permission
+    // BEFORE rendering anything — but that redirect logic is React code, which cannot run at all if
+    // the page-access check above it already refused the page. Listing them here only lets the page
+    // LOAD long enough to bounce them; they see no content on it either way.
+    //
+    // HOD is NOT redirected. HOD's own SHARE grant (Manage Permissions on their department's
+    // approved documents) is a real, standing SharePoint right, unrelated to the Share-REQUEST queue
+    // that used to live on Requests.aspx — client, correcting a wrong assumption: "HOD can still
+    // share, HOD stays in that page to share no redirection." That request-DECIDING queue (approving
+    // someone else's raised Share request) is what moved off this page's audience entirely, with no
+    // replacement built yet.
+    // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
+    match: /document.?view|file.?view/i,
+    policy: {
+      roles: [
+        "UPL",
+        "UPLHC",
+        "APR",
+        "APRHC",
+        "MEMBER",
+        "MEMBERHC",
+        "GLOBAL",
+        "SEGVIEW",
+        "DEPTVIEW",
+      ],
+      adminOnly: false,
+      reason:
+        "Every role that can browse Documents/HC Documents/Archive/HC Archive is listed — PIC and " +
+        "Approver are redirected to their own page on load, so this is really for Viewer, C-Level " +
+        "and Head of Department.",
+    },
+  },
+  {
     /* ⚠ NO LONGER ADMIN-ONLY (2026-08-22, client: "Bulk upload is now allowed for all uploaders to be
        used, client doesnt want admin to do the job"). Spec
        `2026-08-22-bulk-upload-for-uploaders-design.md`.
@@ -114,30 +159,29 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
     // otherwise fall to DEFAULT_POLICY, which is APR + UPL + DELS; explicit and narrow beats
     // right-by-accident.
     //
-    // ⚠ `UPL`/`UPLHC` WERE REMOVED 2026-08-21 AND ADDED BACK 2026-09-20 — SUPERSEDING THAT REMOVAL,
-    // NOT CONTRADICTING IT BY ACCIDENT. The 2026-08-21 removal was correct for what was true then: a
-    // plain uploader's queue here was always empty, since their own requests had just moved to My
-    // Submissions. This page has since gained a SECOND job — `?file=<UniqueId>` opens a read-only
-    // file view reachable by clicking a Name column in Documents/HC Documents/Archive/HC Archive,
-    // which every uploader can browse — so leaving them off this list means AccessDenied on the
-    // whole page instead of the intended read-only view.
+    // ⚠⚠ SUPERSEDES A ONE-DAY-OLD CHANGE (2026-09-20 -> 2026-09-21). For less than a day this rule
+    // ALSO listed `DEPTVIEW`/`UPL`/`UPLHC`, because the ?file=<UniqueId> feature was first built to
+    // reach everyone through THIS page. The client corrected it the same day it shipped: "I dont
+    // want VIEWER, HOD, C LEVEL, or PIC to touch CRS-Requet.aspx... for safety purposes, I am afraid
+    // they can by pass it." So this page is now Approver-EXCLUSIVE again — File Permission is the
+    // request-deciding queue AND, for Approver only, the ?file= read-only/direct-action view too.
+    // PIC uses My Submissions for that same feature (with a new "any document, not just mine"
+    // fallback); Viewer/C-Level/HOD land on a brand-new, separate page. See the very first RULES
+    // entry in this file for that page's own reasoning.
     // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
     //
-    // `DEPTVIEW` joins because a Head of Department holds DEL and SHARE since 1.0.197.0 and can
-    // therefore carry out an approved-document deletion or share outright (client, 2026-08-21: *"I
-    // also include HOD is because they literally have Share and Deletion power"*). They see their
-    // department's APPROVED-stage requests only — see `ViewerScope` in shared/requests.ts for why
-    // pending ones are hidden rather than merely disabled.
-    //
-    // Widening this list cannot grant anyone a new place to act: the page grant opens the SCREEN,
-    // while `canDecide`/`directActionsFor` decide each row, and every action runs in the viewer's
-    // own session and fails loudly if their permissions do not cover it.
-    // Spec: docs/superpowers/specs/2026-08-21-requests-page-hod-access-design.md
+    // ⚠ THIS ALSO MEANS HEAD OF DEPARTMENT NO LONGER OPENS THIS PAGE AT ALL — a real, deliberate loss
+    // of their ability to DECIDE another person's raised Share request (the queue), confirmed
+    // explicitly by the client. NOT a loss of HOD's own DIRECT share right (Manage Permissions on
+    // their department's approved documents) — that is unrelated to this page and lives on, via the
+    // new Viewer/C-Level/HOD page instead: "HOD can still share, HOD stays in that page to share no
+    // redirection." Nowhere currently rebuilds the request-deciding queue for HOD; that is explicitly
+    // deferred, not silently dropped.
     match: /request/i,
     policy: {
-      roles: ["APR", "APRHC", "DEPTVIEW", "UPL", "UPLHC"],
+      roles: ["APR", "APRHC"],
       adminOnly: false,
-      reason: "Approver and Head of Department groups can decide deletion and share requests here; uploader groups can open a file's read-only detail view when reached by clicking it directly in a library.",
+      reason: "Only approver groups are listed — this page is the deletion/share request queue, and (for approvers) the read-only detail view reached by clicking a file directly in a library.",
     },
   },
   {

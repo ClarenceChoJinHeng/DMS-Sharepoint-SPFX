@@ -184,35 +184,30 @@ describe("isRoleEligibleForPage", () => {
 });
 
 describe("the Requests page", () => {
-  // Spec: docs/superpowers/specs/2026-08-21-requests-page-hod-access-design.md
-  it("offers approvers, Heads of Department, and uploaders", () => {
-    const expected = ["APR", "APRHC", "DEPTVIEW", "UPL", "UPLHC"];
+  // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
+  //
+  // ⚠ SUPERSEDES A ONE-DAY-OLD SET OF ASSERTIONS. This page briefly listed DEPTVIEW/UPL/UPLHC too
+  // (2026-09-20), then the client corrected it the next day: "I dont want VIEWER, HOD, C LEVEL, or
+  // PIC to touch CRS-Requet.aspx... for safety purposes." It is Approver-exclusive again.
+  it("offers approvers only", () => {
+    const expected = ["APR", "APRHC"];
     expect(policyForPage("Requests.aspx").roles).toEqual(expected);
     expect(policyForPage("CRS-Requests.aspx").roles).toEqual(expected);
   });
 
-  it("OFFERS UPLOADERS AGAIN, 2026-09-20 — reversing the 2026-08-21 removal for a new reason", () => {
-    // The 2026-08-21 removal was right for what was true then: a plain uploader's queue here was
-    // always empty. This page has since gained a second job — the ?file=<UniqueId> read-only view
-    // reachable from a library click, which every uploader can trigger — so they need the page
-    // grant again, for a genuinely different purpose than the one that got them removed.
-    // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
+  it("NO LONGER offers uploaders or Head of Department — moved to their own pages 2026-09-21", () => {
     for (const name of ["Requests.aspx", "CRS-Requests.aspx", "Approval-Requests.aspx"]) {
-      expect(policyForPage(name).roles).toContain("UPL");
-      expect(policyForPage(name).roles).toContain("UPLHC");
+      expect(policyForPage(name).roles).not.toContain("UPL");
+      expect(policyForPage(name).roles).not.toContain("UPLHC");
+      expect(policyForPage(name).roles).not.toContain("DEPTVIEW");
     }
   });
 
-  it("beats the approver rule, so a name carrying 'approval' still reaches a Head of Department", () => {
-    // Ordering, pinned: on the /approv/ rule this page would list approver groups ONLY, and a Head
-    // of Department — who holds DEL and SHARE and can act on approved documents — could not open it.
-    expect(policyForPage("Approval-Requests.aspx").roles).toEqual([
-      "APR",
-      "APRHC",
-      "DEPTVIEW",
-      "UPL",
-      "UPLHC",
-    ]);
+  it("beats the approver rule — ordering still matters even though both now grant the same roles", () => {
+    // A name carrying "approval" must resolve via /request/i, not fall through to /approv/i — pinned
+    // so the two staying IDENTICAL today (both APR/APRHC-only) is not mistaken for the ordering no
+    // longer mattering; if either rule's role list ever diverges again, this is what protects it.
+    expect(policyForPage("Approval-Requests.aspx").roles).toEqual(["APR", "APRHC"]);
   });
 
   it("does not disturb the approver's own page — DEPTVIEW must never reach the approval queue", () => {
@@ -224,6 +219,40 @@ describe("the Requests page", () => {
 
   it("is not an administrator tool — a Head of Unit must be able to be granted it", () => {
     expect(policyForPage("Requests.aspx").adminOnly).toBe(false);
+  });
+});
+
+describe("the Viewer/C-Level/Head of Department page (2026-09-21)", () => {
+  // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
+  it("offers every role that can browse the four approved-side libraries, including PIC and Approver", () => {
+    // PIC and Approver need to LOAD this page long enough to be redirected off it — the component's
+    // own redirect logic cannot run if the page-access check above it already refused entry.
+    const expected = [
+      "UPL",
+      "UPLHC",
+      "APR",
+      "APRHC",
+      "MEMBER",
+      "MEMBERHC",
+      "GLOBAL",
+      "SEGVIEW",
+      "DEPTVIEW",
+    ];
+    expect(policyForPage("CRS-Document-Viewer.aspx").roles).toEqual(expected);
+    expect(policyForPage("Document-Viewer.aspx").roles).toEqual(expected);
+    expect(policyForPage("File-Viewer.aspx").roles).toEqual(expected);
+  });
+
+  it("is not an administrator tool", () => {
+    expect(policyForPage("CRS-Document-Viewer.aspx").adminOnly).toBe(false);
+  });
+
+  it("does not fall through to the admin-tool catch-all", () => {
+    // "Document Viewer" contains none of the admin-catch-all tokens today, but this is pinned
+    // anyway: a future rename toward something like "Document Access" would silently fall through
+    // to the admin-only rule instead, locking out every intended viewer with no error.
+    expect(policyForPage("CRS-Document-Viewer.aspx").adminOnly).toBe(false);
+    expect(policyForPage("CRS-Document-Viewer.aspx").roles.length).toBeGreaterThan(0);
   });
 });
 
