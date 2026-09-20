@@ -48,6 +48,9 @@ import { EVENT } from "../../../shared/auditLog";
 import { normalizeRoleValue } from "../../../shared/groupMapModel";
 import { isSystemAdmin } from "../../../shared/spGroups";
 import { closeOnBackdrop } from "../../../shared/backdropClose";
+// DISPLAY ONLY — a guessed real name from a raw address. `requestedBy`/`decidedBy`/`revokedBy`
+// themselves stay real emails everywhere else (search filtering, `writeAudit`, the flow's own data).
+import { displayNameFor } from "../../../shared/displayName";
 // The file view is SHARED with My Submissions (client, 2026-09-10) - one component, two mounts.
 import { FileDetailPanel } from "../../../shared/fileDetailPanel";
 import {
@@ -1808,7 +1811,9 @@ export default function Requests({
          requester too, so both people involved are visible without changing who actually shared it. */
       emailBody: [
         row.reason,
-        row.requestedBy ? `Requested by ${row.requestedBy}` : "",
+        row.requestedBy
+          ? `Requested by ${displayNameFor(row.requestedBy)}`
+          : "",
       ]
         .filter((s) => (s ?? "").trim().length > 0)
         .join("\n\n"),
@@ -1993,7 +1998,7 @@ export default function Requests({
         itemUniqueId: row.itemUniqueId,
         summary: `${row.type} request ${decided.status.toLowerCase()} — ${row.itemName}`,
         details: [
-          `Requested by ${row.requestedBy} on ${row.requestedAt}`,
+          `Requested by ${displayNameFor(row.requestedBy) ?? row.requestedBy} on ${row.requestedAt}`,
           `Reason: ${row.reason}`,
           row.type === "Share"
             ? `Recipients: ${(row.shareWith ?? []).join(", ")}`
@@ -2461,7 +2466,7 @@ export default function Requests({
             DELETION card — deciding whether to recycle a document is a different question from
             deciding whether to grant access, and who is asking to delete something stays directly
             relevant there. Unit and date are unchanged either way; only the identity is dropped. */}
-        {r.type !== "Share" && <>{r.requestedBy} · </>}
+        {r.type !== "Share" && <>{displayNameFor(r.requestedBy) ?? r.requestedBy} · </>}
         {r.unit} · {longDate(r.requestedAt)}
         {/* NAMED ON THE ROW. The two stages are deleted from different libraries and mean different
             things — an unapproved draft nobody else has seen, versus a document the unit has been
@@ -2508,7 +2513,7 @@ export default function Requests({
       {!actionable && r.decidedBy && (
         <div style={s.meta}>
           {r.status === "Revoked" ? "Approved by " : "Decided by "}
-          <strong>{r.decidedBy}</strong>
+          <strong>{displayNameFor(r.decidedBy) ?? r.decidedBy}</strong>
           {r.decidedAt ? " on " + longDate(r.decidedAt) : ""}
         </div>
       )}
@@ -2518,7 +2523,7 @@ export default function Requests({
           decision note below. */}
       {!actionable && r.status === "Revoked" && r.revokedBy && (
         <div style={s.meta}>
-          Revoked by <strong>{r.revokedBy}</strong>
+          Revoked by <strong>{displayNameFor(r.revokedBy) ?? r.revokedBy}</strong>
         </div>
       )}
       {!actionable && r.decisionNote && (
@@ -3355,13 +3360,16 @@ export default function Requests({
                                     ? " · granted outside GDC"
                                     : r.decidedBy
                                       ? " · approved by " +
-                                        r.decidedBy +
+                                        (displayNameFor(r.decidedBy) ??
+                                          r.decidedBy) +
                                         (r.decidedAt
                                           ? " on " + longDate(r.decidedAt)
                                           : "")
                                       : ""}
                                   {!r.unrecorded && r.requestedBy
-                                    ? " · asked by " + r.requestedBy
+                                    ? " · asked by " +
+                                      (displayNameFor(r.requestedBy) ??
+                                        r.requestedBy)
                                     : ""}
                                   {r.expiresAt
                                     ? " · until " + longDate(r.expiresAt)

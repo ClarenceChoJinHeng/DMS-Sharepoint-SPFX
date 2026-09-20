@@ -14183,3 +14183,55 @@ sent immediately after the ETag-guard work above was confirmed correct.
   banner's layout moved).
 - **⚠ NOTHING IN THIS BATCH HAS BEEN DEPLOYED OR TESTED LIVE.** The usual next step (build → deploy →
   client re-tests) applies to every item marked "Built and verified" above.
+
+## "SHOW NAMES NOT EMAILS" WAS BROADER THAN THE AUDIT LOG, AND ONE PROXY-ACCOUNT INCONSISTENCY WAS CODE-FIXABLE (2026-09-20)
+Client returned with fresh live screenshots: comment 16's rejection-email gap, and a screenshot of the
+Audit Log's Who column showing the SAME proxy account three different ways across adjacent rows
+(`Guthrie Document Centre`, the raw `gdc@sdguthrie.com`, and a bare `gdc`). Full detail, including the
+exact template text for the still-unbuilt rejection emails:
+`docs/superpowers/specs/2026-09-18-qa-comment-batch-fixes.md`'s new addendum section.
+- **THE RAW-EMAIL PROBLEM WAS NEVER CONFINED TO THE AUDIT LOG.** `AuditLog.tsx` already had a
+  `nameFromEmail` guess-from-address fallback (added 2026-09-13 for exactly this complaint); the same
+  raw addresses were showing on `Requests.tsx` (Requested by / Decided by / Revoked by / "asked by" /
+  "approved by") and `MySubmissions.tsx` (the Approved By column, the Requests tab's "by …" line, the
+  detail view's decision line) — including one column whose OWN code comment quotes the client asking
+  for exactly this and not getting it: *"to be able to know who approve and can still be track in the
+  system and not just email."*
+- **FIXED: `nameFromEmail` MOVED to a new shared module, `src/shared/displayName.ts`** (pure, tested),
+  and applied at every raw-email display site across all three files. **DISPLAY ONLY, everywhere** —
+  the stored fields (`ActorEmail`, `DecidedBy`, `ApprovedBy`, `RequestedBy`, `RevokedBy`), every
+  search/filter comparison, `writeAudit`'s written text and the CSV export are all untouched; only
+  the on-screen label changed. One person asked twice in two files is exactly how the old local copy
+  and a hypothetical second one would have drifted — this is the one copy now.
+- **⚠ A SECOND, GENUINELY NEW DEFECT FELL OUT OF THE SAME SCREENSHOT: three different flow actions
+  store the proxy account's identity three different ways, and NONE of them is wrong in isolation —
+  a real display name, a raw address stored literally as `ActorName`, and a bare alias stored the
+  same way.** `canonicalServiceAccountName` (same module) recognises `gdc`/`crs` in ANY of those
+  three shapes (bare, full address, mixed case) and returns the correct display name, checked BEFORE
+  `ActorName` in the Audit Log's Who cell and before the email-guess everywhere `displayNameFor` is
+  called. This closes the inconsistency **without touching a single flow**, and — unlike a flow-side
+  fix, which would need finding and correcting every action that writes this — cannot be defeated by
+  a fourth action storing it a fourth way tomorrow, because the fix lives at the one place all four
+  would eventually be read.
+  - **`crs@sdguthrie.com` ("Guthrie Central Repository System") is kept in the map, not deleted** —
+    the RETIRED proxy account from before the 2026-09-19 GDC service-account migration. Historical
+    audit rows written under it must go on reading correctly for as long as this append-only log
+    exists.
+- **⚠ THIS NARROWS BUT DOES NOT CLOSE THE "ATTRIBUTION FIXES" ITEM'S MIDDLE BULLET, still flow-only:**
+  a genuine directory lookup (Office 365 Users' user-profile-by-email, written into `ActorName`
+  before the request-related `Create item` actions in `CRS — Execute approved deletion` and
+  `CRS — Notify request activity`) would still be MORE accurate for a real person than the
+  dot-splitting guess this fix relies on — but it is no longer the blocker it was, since every screen
+  now shows a reasonable name regardless, and the two service accounts always show their real name
+  whatever a flow happens to write.
+- **COMMENT 16 IS CONFIRMED AS A DELIBERATE, ALREADY-DOCUMENTED GAP, NOT A NEW BUG** — re-read
+  against `docs/superpowers/specs/2026-09-09-request-notification-flow-runbook.md` §1/§3: only four
+  of the six request-lifecycle emails were ever built, and the two REJECTED templates (8 and 11) were
+  explicitly scoped out on 2026-09-09 with `EventKind`'s Compose sending both straight to `'Skip'` —
+  the runbook's own words: *"A rejected requester is told nothing at all... say this to the client
+  rather than letting them discover it."* The QA batch spec's addendum now carries the exact two
+  templates, verbatim from the design doc, plus the precise two-edit shape to build it (mirroring the
+  sibling `Failed`-case fix §9 already describes) — still entirely Power-Automate work, not code.
+- **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → **1991/1991** passing (10 new tests
+  on `shared/displayName.ts`), lint at the documented pre-existing 43-warning baseline, zero new
+  categories on any of the four touched files. **NOT yet deployed or tested live.**

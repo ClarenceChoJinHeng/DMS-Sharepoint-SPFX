@@ -8,6 +8,11 @@ import { DatePicker } from "../../../shared/datePicker";
 import { pagerWindow } from "../../../shared/pagerWindow";
 // The Event column prints a SHORT library name - see `shortLibrary`.
 import { documentsLibraryTitle } from "../../../shared/naming";
+// A guessed real name from an email address, for the "Who" column — see the module's own comment.
+import {
+  nameFromEmail,
+  canonicalServiceAccountName,
+} from "../../../shared/displayName";
 import { SPHttpClient } from "@microsoft/sp-http";
 
 import {
@@ -62,27 +67,12 @@ const PAGE_SIZE = 10;
    page whose button has scrolled out of the window still work exactly as before. */
 const PAGER_WINDOW_SIZE = 7;
 
-/**
- * A readable name derived from an email address, for the "Who" column.
- *
- * `r.ActorName || r.ActorEmail || "—"` already prefers the stored name; this covers the rows where
- * `ActorName` was never written (mostly flow-authored rows) and the fallback would otherwise show a
- * bare address. Client QA item #48.4, 2026-09-13: *"standardise all email address to user name"*.
- *
- * DISPLAY ONLY — the stored `ActorEmail` is untouched, and the CSV export still writes the raw
- * address, not this derived label. Splits on the local part only (before `@`), replaces dots and
- * underscores with spaces, and title-cases each word — `chiew.wei.chien@sdguthrie.com` reads as
- * "Chiew Wei Chien" rather than the bare address.
- */
-function nameFromEmail(email: string): string {
-  const local = email.split("@")[0] ?? "";
-  if (!local) return email;
-  return local
-    .split(/[._]+/)
-    .filter((w) => w.length > 0)
-    .map((w) => w[0].toUpperCase() + w.slice(1))
-    .join(" ");
-}
+/* `nameFromEmail` USED TO BE LOCAL TO THIS FILE, added 2026-09-13 for the "Who" column (client QA
+   item #48.4: "standardise all email address to user name"). MOVED to shared/displayName.ts
+   2026-09-20 once the same complaint reached Requests.tsx and MySubmissions.tsx too — one person
+   asked twice, in two files, is how the two copies drift. `r.ActorName || r.ActorEmail || "—"`
+   below still prefers the stored name; the import only covers the rows where `ActorName` was never
+   written (mostly flow-authored rows) and the fallback would otherwise show a bare address. */
 
 /**
  * The library name as the Event column should PRINT it (client, 2026-09-04: *"For this Restricted &
@@ -1439,11 +1429,21 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                   <div>
                     {/* Client QA item #48.4, 2026-09-13: falls back to a NAME derived from the
                         email's local part rather than the raw address, when `ActorName` was never
-                        written. `r.ActorEmail` itself, and the CSV export, are untouched. */}
+                        written. `r.ActorEmail` itself, and the CSV export, are untouched.
+
+                        2026-09-20: a KNOWN SERVICE ACCOUNT (gdc/crs) is recognised and canonicalised
+                        FIRST, ahead of whatever `ActorName` happens to hold — see
+                        `canonicalServiceAccountName`'s own comment. Client screenshot showed the
+                        SAME proxy account rendering three different ways across adjacent rows
+                        ("Guthrie Document Centre", the raw address, and a bare "gdc") because
+                        different flow actions store this one fact three different ways; this is
+                        what makes all three read the same from here on. */}
                     {r.EventType === EVENT.archived ||
                     r.EventType === EVENT.routed
                       ? "-"
-                      : r.ActorName ||
+                      : (canonicalServiceAccountName(r.ActorEmail ?? "") ??
+                          canonicalServiceAccountName(r.ActorName ?? "") ??
+                          r.ActorName) ||
                         (r.ActorEmail ? nameFromEmail(r.ActorEmail) : "—")}
                   </div>
                 </div>

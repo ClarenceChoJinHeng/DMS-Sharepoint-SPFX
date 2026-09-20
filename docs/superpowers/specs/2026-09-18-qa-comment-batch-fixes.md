@@ -156,19 +156,114 @@ fixable without abandoning the native share mechanism entirely (which this proje
 never did — see CLAUDE.md's 2026-07-23 "share guard retirement" — a web part cannot intercept or
 customise SharePoint's own native Share control).
 
+## ✅ CODE-SIDE ADDENDUM, 2026-09-20 — "show names, not emails" was broader than the Audit Log alone
+
+Client returned to this exact area with fresh screenshots (comment 16's "Reject email not received",
+plus the Who column's inconsistency) and asked: (a) investigate the missing rejection email, (b) make
+the "Who" column name each decider (PIC/Approver/system admin), (c) show a NAME rather than an email
+on every column that names a person, and (d) stamp `Modified By` as gdc on approved library items.
+
+**(c) turned out to be partly buildable in code after all** — the raw-email displays were not
+confined to the Audit Log's Who column; `Requests.tsx` (Requested by / Decided by / Revoked by /
+"asked by" / "approved by") and `MySubmissions.tsx` (Approved By, the Requests tab's "by …" line, the
+detail view's decision line) all showed the same raw addresses. **Fixed**: `nameFromEmail` — the
+function `AuditLog.tsx` already had for exactly this — moved to a new shared module,
+`src/shared/displayName.ts` (pure, tested), and applied at every one of those sites. DISPLAY ONLY:
+the stored email fields, search/filter comparisons, `writeAudit` calls and the CSV export are
+untouched everywhere — only the on-screen label changed.
+
+**A second, related defect fell out of the same screenshot**: the proxy account rendered three
+different ways across adjacent Audit Log rows — `Guthrie Document Centre` (correct), the raw
+`gdc@sdguthrie.com` (stored literally as `ActorName` by one flow action), and a bare `gdc` (stored
+the same way by another). **Fixed with `canonicalServiceAccountName`** in the same module — it
+recognises `gdc`/`crs` in any of those shapes (bare alias, full address, mixed case) and returns the
+real display name, checked BEFORE `ActorName` in the Audit Log's Who cell and before the email-guess
+everywhere else. This closes the inconsistency without touching a single flow, and cannot be
+re-broken by a fourth action storing the value a fourth way tomorrow. `crs@sdguthrie.com` is kept in
+the map (not deleted) for the retired proxy's historical rows, which this append-only log will carry
+for as long as it exists.
+
+**This narrows, but does not close, item 4's middle bullet below** — the client no longer needs a
+flow-side directory lookup just to stop the Who column showing a bare address; a real person's email
+now reads as a reasonable guessed name (`goh.kheng.wei@sdguthrie.com` → "Goh Kheng Wei") and the two
+service accounts always read correctly. A genuine directory lookup (Office 365 Users / user-profile
+by email) would still be MORE accurate for a real person than the dot-splitting guess — worth
+keeping as a "nice to have", not the blocker it was before this fix.
+
+**Verified**: `tsc --noEmit` clean, `npx heft test --clean` → 1991/1991 passing (10 new tests on the
+new module), lint at the documented pre-existing 43-warning baseline, no new categories on any of the
+four touched files.
+
 ## Needs a Power Automate change, not code (runbook-shaped, none of this built)
 
-These four items (comment 16, and the client's own three-item list: system admin visibility on
+These items (comment 16, and the client's own three-item list: system admin visibility on
 notification emails, suppressing admin CC on plain deletions, and stamping/naming attribution) are
 all flow-side. This repository has no access to Power Automate; each needs to be built directly in
 the flow designer, the same way the ETag guard was earlier this session.
 
 ### Comment 16 — No rejection email sent to the requester
 
-"File sharing - rejected by Kheng Wei but Afiq didn't receive the Reject email notification." This
-is `CRS — Notify request activity`'s own condition logic — needs opening in the designer to check
-whether its trigger condition actually covers a `Rejected` outcome for Share requests, or only
-`Approved`. Cannot be diagnosed further without seeing the flow's exported definition.
+"File sharing - rejected by Kheng Wei but Afiq didn't receive the Reject email notification."
+
+⚠ **THIS IS NOT A BUG — IT IS A CONFIRMED, DELIBERATE GAP.** Per
+`docs/superpowers/specs/2026-09-09-request-notification-flow-runbook.md` §1: only FOUR of the six
+request-lifecycle emails were built (`ShareRequest`, `ShareApproved`, `DeleteRequest`,
+`DeleteApproved`). The two REJECTED templates (8 and 11) were explicitly scoped OUT on 2026-09-09
+("lets build the four emails now" — deferred, not cancelled), and `EventKind`'s Compose sends
+**both** `ShareRejected` and `DeleteRejected` straight to `'Skip'` on purpose — the same rule §3 of
+that runbook states outright: *"A rejected requester is told nothing at all... say this to the
+client rather than letting them discover it."* Afiq not receiving anything is the flow doing exactly
+what it was built to do; it was never built to notify a rejection.
+
+**To build it** (§9 of the runbook already has the two-edit shape for the sibling `Failed` case —
+apply the same pattern here):
+1. In `EventKind`'s Compose, change the innermost branch from `'Skip'` to
+   `if(equals(triggerOutputs()?['body/RequestType'],'Share'),'ShareRejected','DeleteRejected')`.
+2. Add two branches to the email switch (or two new Conditions off `NeedsApprover`'s False side,
+   alongside the two Approved emails already there), each addressed to `RequestedBy`, using
+   templates 8 and 11 verbatim from
+   `docs/superpowers/specs/2026-08-28-email-bundling-and-templates-design.md`:
+
+   **Template 8 (Share rejected):**
+   ```
+   Subject: Rejected File Sharing Request: [File Name]
+
+   Dear [PIC Name],
+
+   Your request to share [File Name] to [Recipient Email] has been rejected.
+   Document Name: [File Name]
+   Status: Denied
+   Reason/Comments: [Approver Reason]
+
+   Thank you,
+   [PIC Name]
+   ```
+
+   **Template 11 (Deletion rejected):**
+   ```
+   Subject: Rejected File Deletion Request: [File Name]
+
+   Dear [PIC Name],
+
+   Your request to delete [File Name] has been rejected.
+   The file will remain in its current location.
+   Document Name: [File Name]
+   Status: Denied
+   Reason/Comments: [Approver Reason]
+
+   Thank you,
+   [Approver Name]
+   ```
+   ⚠ Template 11's own sign-off says `[Approver Name]` while addressed to the PIC — flagged in the
+   design doc §11.4 as "almost certainly a slip"; confirm with the client before building it as-is.
+
+   Token sources are unchanged from §11.3 of the runbook: `[File Name]` = `ItemName`,
+   `[PIC Name]` = `first(split(RequestedBy,'@'))`, `[Recipient Email]` = `ShareWith`,
+   `[Approver Reason]` = `DecisionNote`. **No new Compose is needed** — `EventKind`'s existing branch
+   structure already routes anything landing here to the same `RequestedBy`-only path the two
+   Approved emails already use, with no approver lookup required.
+3. `Skip` still catches `Revoked` and `Cancelled` — do not remove the fall-through entirely, only
+   the two `Rejected` leaves.
 
 ### Item 2 — System admin should receive everything an approver would receive
 
@@ -186,19 +281,30 @@ confirmation. Needs the same flow(s) as item 2, with an extra condition specific
 
 ### Item 4 — Attribution fixes
 
-Three separate asks, likely three separate flow edits:
+Three separate asks — the middle one is now NARROWED by the code-side addendum above, the other two
+are unchanged and still flow-only:
 
 - **"Every Modified By on Approved files should be gdc@sdguthrie.com"** — Auto-route's/HC Auto
   Route's own stamp action currently restamps `Editor`/`Modified By` to the individual approver on
-  approval; needs changing to stamp the proxy account instead.
-- **"Every Audit Log Who column should show the name not email — the request is showing email"** —
-  the request-related `Create_item` actions (in `CRS — Execute approved deletion` and
-  `CRS — Notify request activity`) derive `ActorName` by taking the text before `@` in an email
-  address (`first(split(email, '@'))`) rather than a real display name — this needs an added lookup
-  action (e.g. a SharePoint user-profile or site-users lookup by email) before writing `ActorName`.
+  approval (`triggerOutputs()?['body/Author/…']`, per CLAUDE.md's "THE `Approved` AUDIT ROW IS
+  WRITTEN BY AUTO-ROUTE" and the `ApprovedBy` stamp sections); needs changing that ONE value to the
+  proxy account's claims instead. ⚠ Do **not** touch `Author`/`Created By` on the same action — that
+  is deliberately kept as the ORIGINAL UPLOADER (`dms-uploader-column-is-author` in project memory:
+  "Uploader column must be Author, never Editor"), and changing it would erase who actually filed the
+  document. Needs the same edit in BOTH `Auto-route` and `HC Auto Route` — every HC clone in this
+  project has shipped with exactly one library/field reference nobody swapped.
+- ~~**"Every Audit Log Who column should show the name not email"**~~ — **narrowed, see the addendum
+  above.** The code-side fix already makes every screen show a reasonable name for any address,
+  and always shows the CORRECT canonical name for the two known service accounts, regardless of what
+  a flow writes. A directory lookup (Office 365 Users' "Get user profile (V2)" by email, written into
+  `ActorName` before the `Create item` in `CRS — Execute approved deletion` and
+  `CRS — Notify request activity`) would still be a genuine improvement for REAL people — the guessed
+  name is a good approximation of `first.last@domain`, not a directory-verified one — but it is no
+  longer blocking anything.
 - **"For the who section it should show 3 people — uploader, approver, system admin gdc"** — needs
   deciding exactly which audit rows this applies to and what the three-name format should look like,
-  before it can be built. Not started.
+  before it can be built. Not started; unaffected by the code-side addendum, since that only fixes
+  display of a SINGLE stored name per row, not adding a second and third name to one row.
 
 ## Deliberately not investigated in this batch
 

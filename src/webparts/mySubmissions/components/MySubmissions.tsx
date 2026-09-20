@@ -131,6 +131,9 @@ import { EVENT } from "../../../shared/auditLog";
 // mount points. previewTarget lives inside it now.
 import { FileDetailPanel } from "../../../shared/fileDetailPanel";
 import { closeOnBackdrop } from "../../../shared/backdropClose";
+// DISPLAY ONLY — a guessed real name from a raw address. `approvedBy`/`decidedBy` themselves stay
+// real emails everywhere else (the read from CRS Requests/the item column, writeAudit, etc).
+import { displayNameFor } from "../../../shared/displayName";
 
 /* ⚠ THE LITERAL `"Documents"` USED TO LIVE HERE, AND IT IS WHAT BROKE THIS PAGE ON 2026-08-28.
    The client retitled that library to `Restricted & Confidential Document`, every `getbytitle`
@@ -3678,7 +3681,8 @@ export default function MySubmissions({
             <div style={s.approveBox}>
               {open.approvedBy && (
                 <>
-                  <strong>Approved by</strong> {open.approvedBy}
+                  <strong>Approved by</strong>{" "}
+                  {displayNameFor(open.approvedBy) ?? open.approvedBy}
                   {open.approvalComment ? "." : ""}
                 </>
               )}
@@ -3757,7 +3761,7 @@ export default function MySubmissions({
                 {openRequest.status !== "Cancelled" &&
                 openRequest.status !== "Revoked" &&
                 openRequest.decidedBy
-                  ? ` by ${openRequest.decidedBy}`
+                  ? ` by ${displayNameFor(openRequest.decidedBy) ?? openRequest.decidedBy}`
                   : ""}
                 .
                 {/* ⚠ THE NOTE IS WITHHELD ON A REVOKE, and not only for tidiness: after a revoke it
@@ -4636,7 +4640,7 @@ export default function MySubmissions({
                                   marginTop: 2,
                                 }}
                               >
-                                by {rq.decidedBy}
+                                by {displayNameFor(rq.decidedBy) ?? rq.decidedBy}
                               </div>
                             ) : null}
                             {rq.note ? (
@@ -4866,7 +4870,9 @@ export default function MySubmissions({
                       {!r.recordState &&
                       r.status === "Approved" &&
                       r.approvedBy ? (
-                        <span style={s.apprBy}>{r.approvedBy}</span>
+                        <span style={s.apprBy}>
+                          {displayNameFor(r.approvedBy) ?? r.approvedBy}
+                        </span>
                       ) : (
                         <span style={s.dash}>—</span>
                       )}
