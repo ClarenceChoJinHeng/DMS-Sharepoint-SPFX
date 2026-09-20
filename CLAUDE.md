@@ -14395,6 +14395,67 @@ bug in the code's OWN logic, not something a deploy alone would have fixed.**
     flow writing a THIRD not-quite-a-name shape tomorrow would need yet another fix. Fixing it once,
     at the one place every shape is eventually READ, closes all three at once and cannot be defeated
     by a new flow doing this differently.
+    **⚠ PARTIALLY REVISITED THE SAME DAY — see the section immediately below.** The client asked
+    to fix it at the SOURCE too, being already in Power Automate, so `ActorName` now gets a real
+    resolved name at write time in both flows as well. The reasoning above still stands as the
+    argument for keeping `resolveActorDisplay` — it is what protects every OTHER screen and every
+    row a THIRD flow might someday mis-shape — this is an addition on top of it, not a replacement.
 - **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → **1997/1997** passing (6 new tests),
   lint at the documented pre-existing baseline, no new warnings on either touched file.
   **NOT yet deployed or tested live.**
+
+## `ActorName` NOW CARRIES A REAL RESOLVED NAME AT WRITE TIME TOO, IN BOTH REQUEST-DECISION FLOWS (2026-09-20)
+Client, mid-session, already in the Power Automate designer: *"can we fix the email naming to
+username first? I am in the power automate already."* Live flow edit, not code — verified by reading
+each flow's own Code view after the change, not deployed via this repo.
+- **REUSES A PATTERN ALREADY PROVEN IN `Auto-route`'S OWN "Approved" ROW, NOT A NEW MECHANISM.**
+  `Auto-route`'s `Create_item_1` already resolves a real display name via a `_api/web/siteusers`
+  lookup (action `GetActorName`) before falling back to a guess — checked directly in the exported
+  flow definition before proposing anything, rather than reasoning from a runbook. Both fixes below
+  copy that exact shape.
+- **`CRS — Audit request activity`** (covers Deletion requested / Share requested / Request
+  approved / Request rejected / revoked — all five funnel through ONE `Create_item`, confirmed by
+  reading `EventKind`'s own expression). New action `GetActorName`, inserted before `Create_item`
+  inside the `Not_already_logged` → True branch:
+  ```
+  GET _api/web/siteusers?$select=Title&$filter=Email eq '@{outputs('ActorEmail')}'&$top=1
+  Accept: application/json;odata=nometadata
+  ```
+  `Create_item`'s `ActorName` field:
+  ```
+  if(equals(actions('GetActorName')?['status'], 'Succeeded'), coalesce(first(coalesce(body('GetActorName')?['value'], createArray()))?['Title'], outputs('ActorEmail')), outputs('ActorEmail'))
+  ```
+- **`CRS — Execute approved deletion`** (covers the "Deleted" event) — same shape, filtering on
+  `if(empty(triggerBody()?['DecidedBy']), triggerBody()?['RequestedBy'], triggerBody()?['DecidedBy'])`
+  instead of `outputs('ActorEmail')`, since this flow has no such Compose.
+- **⚠⚠ `Create_item`'S `runAfter` MUST LIST BOTH `Succeeded` AND `Failed` FOR `GetActorName`, NOT
+  JUST `Succeeded` — THE DESIGNER DEFAULTS TO SUCCESS-ONLY WHEN A STEP IS INSERTED BEFORE AN
+  EXISTING ONE, AND BOTH FLOWS SHIPPED THAT WAY ON THE FIRST PASS.** With only `Succeeded` wired,
+  a lookup failure (an address that has never opened the site, a throttle) means `Create_item`
+  **never runs at all** — the whole audit row is silently dropped, not just the name, because the
+  `ActorName` expression's own graceful fallback never gets a chance to execute. Fixed via
+  **Configure run after** on `Create_item`, ticking both "is successful" and "has failed" for the
+  `GetActorName` dependency, in both flows. Confirmed afterwards from each flow's Code view:
+  `"runAfter": {"GetActorName": ["Succeeded", "FAILED"]}` — the mixed casing between the two values
+  is a designer serialization quirk, **already established harmless in this exact flow** during the
+  ETag-guard build (`2026-09-20-etag-guard-execute-approved-deletion-runbook.md`): Power Automate's
+  dependency-status matching is case-insensitive, proven by a full live end-to-end test.
+  - **⚠ NOT THE SAME SITUATION AS THAT EARLIER ETAG-GUARD FIX, and worth keeping the distinction
+    written down since it produced a direct "didn't you tell me the opposite?" question.**
+    `Update_item_2` (the ETag mismatch handler, same flow) exists ONLY to run when
+    `GetCurrentETag` genuinely fails — ticking both boxes there would fire it on the success path
+    too, corrupting a state that must stay untouched on an ordinary check. Here `Create_item` is
+    the audit WRITE itself and must happen regardless of whether the decoration lookup found a
+    name — the `ActorName` expression already handles both outcomes gracefully. **The rule: ask
+    whether the downstream action should behave differently depending on the upstream outcome
+    (tick one) or proceed either way because its own logic already covers both (tick both).**
+- **FAILS SOFT, NEVER BLANK.** An address that has never opened this SharePoint site (guest not
+  yet added, typo) simply finds no site-user row and falls back to the raw email — same behaviour
+  `Auto-route`'s reference implementation already has, never a hard failure.
+- **⚠ NOT RETROACTIVE.** `CRS Audit Log` is append-only and nothing backfills it — every row
+  logged before this edit keeps whatever `ActorName` shape it was written with, and is still shown
+  correctly today only because of the CODE-side `resolveActorDisplay` fix above (which guesses a
+  name from the stored value). Going forward, NEW rows from these two flows get the real directory
+  `Title` instead of a guess.
+- **VERIFIED BY READING BOTH FLOWS' Code view AFTER EDITING**, matching this file's own standing
+  rule against trusting a screenshot of the designer alone.
