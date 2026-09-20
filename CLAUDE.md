@@ -14227,8 +14227,15 @@ exact template text for the still-unbuilt rejection emails, is in
 ### `Modified By` = the proxy account, for "Move existing folders" — code, built the same session
 Client: *"For the 6 Libraries Modified by columns it should be the gdc name, cater this to Move
 existing folders as well."* Two routes touch this column; only one is code.
-- **The routing route (Auto-route / HC Auto Route) is still flow-only, unchanged from before** — see
-  the QA batch spec's "Attribution fixes" item.
+- **The routing route (Auto-route / HC Auto Route) is still flow-only, unchanged from before — but
+  the exact edit is now CONFIRMED, not guessed.** The QA batch spec's "Attribution fixes" item now
+  carries the real `Send an HTTP request to SharePoint` stamp action verbatim, pulled from
+  `docs/superpowers/specs/2026-08-08-auto-route-flow-and-draft-isolation.md` §4.3 (verified live
+  2026-08-08). Only `Editor`'s `FieldValue` changes; `Author`/`Created` stay exactly as they are.
+  Needs one new action, `GetProxyUser` (`POST /_api/web/ensureuser`, `{"logonName":
+  "gdc@sdguthrie.com"}`) — the SAME resolve-not-guess mechanism this codebase's own `ensureSiteUser`
+  uses, avoiding a hardcoded claims literal that could silently fail on a tenant-specific provider
+  prefix. Same edit needed in BOTH `Auto-route` and `HC Auto Route`.
 - **The `SubtreeMigrator.tsx` ("Move existing folders") route IS code, and is now built.** That tool
   runs entirely in the ADMIN's own SPFx session, so a plain `MoveTo` would otherwise leave
   `Modified By` reading their name, not gdc's — the code-side half of the same gap Auto-route already

@@ -345,15 +345,51 @@ are unchanged and still flow-only:
 
 - **"Every Modified By on Approved files should be gdc@sdguthrie.com, cater this to Move existing
   folders as well"** — TWO routes touch this column, and only one is flow-side:
-  - **The routing route (Auto-route / HC Auto Route) — still flow-only, not built.** Their own stamp
-    action currently restamps `Editor`/`Modified By` to the individual approver on approval
-    (`triggerOutputs()?['body/Author/…']`, per CLAUDE.md's "THE `Approved` AUDIT ROW IS WRITTEN BY
-    AUTO-ROUTE" and the `ApprovedBy` stamp sections); needs changing that ONE value to the proxy
-    account's claims instead. ⚠ Do **not** touch `Author`/`Created By` on the same action — that is
-    deliberately kept as the ORIGINAL UPLOADER (`dms-uploader-column-is-author` in project memory:
-    "Uploader column must be Author, never Editor"), and changing it would erase who actually filed
-    the document. Needs the same edit in BOTH `Auto-route` and `HC Auto Route` — every HC clone in
-    this project has shipped with exactly one library/field reference nobody swapped.
+  - **The routing route (Auto-route / HC Auto Route) — still flow-only, not built. Exact edit below,
+    the shape is CONFIRMED, not guessed** — from
+    `docs/superpowers/specs/2026-08-08-auto-route-flow-and-draft-isolation.md` §4.3, the action named
+    `Send an HTTP request to SharePoint` that stamps `Author`/`Editor`/`Created`, verified live
+    2026-08-08:
+    ```
+    POST _api/web/lists/getbytitle('Documents')/items(@{outputs('Copy_file')?['body/ItemId']})/validateUpdateListItem
+    ```
+    ```json
+    {
+      "formValues": [
+        { "FieldName": "Author",  "FieldValue": "[{'Key':'@{body('Get_item')?['Author']?['Claims']}'}]" },
+        { "FieldName": "Editor",  "FieldValue": "[{'Key':'@{body('Get_item')?['Author']?['Claims']}'}]" },
+        { "FieldName": "Created", "FieldValue": "@{formatDateTime(body('Get_item')?['Created'],'M/d/yyyy h:mm tt')}" }
+      ],
+      "bNewDocumentUpdate": true
+    }
+    ```
+    **The ONLY line that changes is `Editor`** — from the author's claims to the proxy account's:
+    ```json
+    { "FieldName": "Editor", "FieldValue": "[{'Key':'@{body('GetProxyUser')?['LoginName']}'}]" }
+    ```
+    ⚠ **Do NOT hardcode a claims literal like `i:0#.f|membership|gdc@sdguthrie.com`** — the exact
+    claims-provider prefix can differ by tenant configuration, and a wrong literal fails silently on
+    this specific endpoint (gotcha: `validateUpdateListItem` can report `HasException: false` while
+    changing nothing — §5.1 of the same runbook, "believed impossible for two hours"). Instead add
+    ONE new action before this stamp, `GetProxyUser`:
+    ```
+    POST _api/web/ensureuser
+    Body: { "logonName": "gdc@sdguthrie.com" }
+    ```
+    This is the same call `ensureuser` this codebase's own `ensureSiteUser` already uses to resolve a
+    claim rather than guess one (`src/shared/spGroups.ts`) — it RESOLVES, never invites, and `gdc` is
+    already a site member (`CRS Owners`), so this is guaranteed safe. Its response carries
+    `LoginName` — the exact claims string for THIS tenant — which the corrected `Editor` line above
+    reads back.
+    - **⚠ Do NOT touch `Author` or `Created` on the same action** — deliberately kept as the ORIGINAL
+      UPLOADER (project memory `dms-uploader-column-is-author`: "Uploader column must be Author,
+      never Editor"). Changing `Author` would erase who actually filed the document.
+    - **Needs the identical edit in BOTH `Auto-route` and `HC Auto Route`** — every HC clone in this
+      project has shipped with exactly one library/field reference nobody swapped; do both in the
+      same sitting so neither is the one left behind.
+    - **Verify after building**: approve one ordinary document and one HC document, then check each
+      one's Modified By reads the proxy account's display name, not the approver's — and separately
+      confirm `Created By` still correctly shows the ORIGINAL UPLOADER on both.
   - **✅ The "Move existing folders" route IS code, and IS BUILT** — see the addendum below.
     `SubtreeMigrator.tsx` runs entirely in the ADMIN's own SPFx session, so a plain `MoveTo` would
     otherwise leave `Modified By` reading their name. New `resolveProxyLoginName`/`stampEditorAsProxy`
