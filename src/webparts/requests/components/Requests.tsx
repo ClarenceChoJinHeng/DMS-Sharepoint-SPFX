@@ -758,6 +758,19 @@ export default function Requests({
      dead `ItemUniqueId` to go on. Banner AND message, because the fix is one button away and the
      failure otherwise names the wrong cause ("the document no longer exists"). */
   const [fileIdMissing, setFileIdMissing] = useState(false);
+  /* ⚠⚠ THE MOST SEVERE OF THE FOUR, FOUND LIVE 2026-09-20 — WITHOUT THIS COLUMN, `CRS — Execute
+     approved deletion` FAILS EVERY SINGLE DELETION, ALWAYS, REGARDLESS OF WHETHER THE FILE EVER
+     CHANGED. The flow's guard compares the file's current ETag to `triggerBody()?['TargetETag']`,
+     with a fallback rule that a BLANK `TargetETag` always matches (for rows written before this
+     column existed). But when the COLUMN ITSELF is absent from the list — not blank, genuinely
+     absent — that expression evaluates to a true "nothing" value, and comparing "nothing" to an
+     empty string is NOT the same as comparing two empty strings: the blank-means-match fallback
+     never fires, and the flow always takes its "the file changed" failure branch. Confirmed live:
+     a completely untouched pending file failed the exact same way twice in a row. Reported LOUDLY,
+     not silently degraded, because the write-side fallback (drop `TargetETag` on a 400) makes this
+     failure mode invisible from the write alone — every deletion still LOOKS like it went through
+     until the flow marks it Failed minutes later. */
+  const [targetEtagMissing, setTargetEtagMissing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | undefined>(undefined);
   /* ⚠ IS THE NOTICE A FAILURE? Found live 2026-08-30: EVERY message rendered in the GREEN success
@@ -1034,21 +1047,33 @@ export default function Requests({
        ask politely; a URL nothing has seen before cannot be answered from a store. */
     const tail = `&$top=2000&$orderby=Id desc${bust()}`;
     try {
-      /* THREE RUNGS, newest column first. `Stage` (2026-08-20) and `RevokedBy` (2026-08-30) are both
-         added by this page's own `addMissingColumns`, so a site can lack either or both — and ONE
-         unknown name fails the WHOLE `$select` (gotcha #11), so a single retry is not enough: a site
-         holding `Stage` but not `RevokedBy` would fall all the way through and lose the stage with
-         it. Same ladder as `readLibrary` in My Submissions. */
+      /* FOUR RUNGS, newest column first. `Stage` (2026-08-20), `RevokedBy` (2026-08-30) and
+         `TargetETag` (2026-09-20) are all added by this page's own `addMissingColumns`, so a site
+         can lack any subset of them — and ONE unknown name fails the WHOLE `$select` (gotcha #11),
+         so a single retry is not enough: a site holding `Stage` but not `RevokedBy` would fall all
+         the way through and lose the stage with it. Same ladder as `readLibrary` in My Submissions.
+         `TargetETag` goes FIRST because it is the newest and, per its own state comment, the most
+         severe to miss — a request row is never actually read here for its VALUE, only to detect
+         whether the column exists at all. */
       let noStage = false;
       let noRevokedBy = false;
       let noFileId = false;
+      let noTargetEtag = false;
       let res = await context.spHttpClient.get(
-        `${base},Stage,RevokedBy,SubmissionFileId${tail}`,
+        `${base},Stage,RevokedBy,SubmissionFileId,TargetETag${tail}`,
         SPHttpClient.configurations.v1,
         { headers: GET },
       );
       // 400 only. A 404 is the LIST missing and is answered below; retrying that would report an
       // unprovisioned list as an unreadable one.
+      if (res.status === 400) {
+        noTargetEtag = true;
+        res = await context.spHttpClient.get(
+          `${base},Stage,RevokedBy,SubmissionFileId${tail}`,
+          SPHttpClient.configurations.v1,
+          { headers: GET },
+        );
+      }
       if (res.status === 400) {
         // ⚠ ONE OPTIONAL COLUMN, ONE RUNG — the `RevokedBy` lesson of 2026-08-30. Collapsing the
         // newest two into a single retry would take `Stage` down with them on a site that holds it,
@@ -1094,6 +1119,7 @@ export default function Requests({
       setStageMissing(noStage);
       setRevokedByMissing(noRevokedBy);
       setFileIdMissing(noFileId);
+      setTargetEtagMissing(noTargetEtag);
       setRows({
         state: "ready",
         value: ((data.value ?? []) as Record<string, string>[]).map(
@@ -2430,7 +2456,13 @@ export default function Requests({
         {trailText(folderTrail(r.itemUrl ?? "", cardLibSegments)) || "—"}
       </div>
       <div style={s.meta}>
-        {r.requestedBy} · {r.unit} · {longDate(r.requestedAt)}
+        {/* ⚠ THE REQUESTER'S EMAIL IS GONE FOR A SHARE CARD (client, 2026-09-18, comments 6 & 10:
+            "no need show share by / Remove sharer, only show recipients email"). Kept for a
+            DELETION card — deciding whether to recycle a document is a different question from
+            deciding whether to grant access, and who is asking to delete something stays directly
+            relevant there. Unit and date are unchanged either way; only the identity is dropped. */}
+        {r.type !== "Share" && <>{r.requestedBy} · </>}
+        {r.unit} · {longDate(r.requestedAt)}
         {/* NAMED ON THE ROW. The two stages are deleted from different libraries and mean different
             things — an unapproved draft nobody else has seen, versus a document the unit has been
             filing against. An approver should not have to open the dialog to tell them apart. */}
@@ -2447,7 +2479,11 @@ export default function Requests({
       </div>
       {r.type === "Share" && (
         <div style={s.meta}>
-          {(r.shareWith ?? []).join(", ")} · {r.sharePermission ?? "View"}
+          {/* "Share to: " prefix, per the client's own wording ("Just put Share to:
+              XXX@email.com"), so the ONE remaining email on this card is unambiguously the
+              recipient now that the requester's own email above it is gone. */}
+          Share to: {(r.shareWith ?? []).join(", ")} ·{" "}
+          {r.sharePermission ?? "View"}
           {r.expiresAt ? " · until " + longDate(r.expiresAt) : " · no expiry"}
           {/* Named on the ROW, not only in the dialog: this is the fact that decides the answer, and
               an approver should see it before reaching for a button. */}
@@ -2720,12 +2756,15 @@ export default function Requests({
     );
   })();
 
-  /* Counted, never a chain of `&&` pairs. Three optional columns give seven combinations, and the
-     old two-column form (`stageMissing && revokedByMissing ? "them" : "it"`) reads WRONG for five
-     of them — a fourth column would make it wrong for more. */
-  const missingCount = [stageMissing, revokedByMissing, fileIdMissing].filter(
-    (m) => m,
-  ).length;
+  /* Counted, never a chain of `&&` pairs. Four optional columns give fifteen combinations, and the
+     old two-column form (`stageMissing && revokedByMissing ? "them" : "it"`) reads WRONG for most
+     of them. */
+  const missingCount = [
+    stageMissing,
+    revokedByMissing,
+    fileIdMissing,
+    targetEtagMissing,
+  ].filter((m) => m).length;
 
   /* The decision dialog, as a value - both the list and the file view render it, and two copies of
      the one place a reason is required would drift. */
@@ -2778,9 +2817,11 @@ export default function Requests({
                 for an approver who wants to record one. Rejections still need a reason so the
                 requester knows what to fix. */}
             <p style={{ fontSize: 13, margin: "0 0 4px" }}>
+              {/* Client, 2026-09-18 (comment 17): "Can we change 'reasoning' to other word? such as
+                  'Please provide your reject reason below.'" */}
               {deciding.approve
                 ? "Add a note below if needed."
-                : "Please provide your reasoning below."}
+                : "Please provide your reject reason below."}
             </p>
             {deciding.approve &&
               deciding.row.type === "Share" &&
@@ -2964,19 +3005,38 @@ export default function Requests({
         </div>
       )}
 
-      {/* ONE banner for ALL THREE optional columns, and it must stay that way: this is the only
-          route to `addMissingColumns`, so gating it on `stageMissing` alone would leave `RevokedBy`
-          and `SubmissionFileId` unreachable on every site that already has `Stage` — which is all
-          of them. A fix nobody can press is not a fix. */}
-      {(stageMissing || revokedByMissing || fileIdMissing) && (
+      {/* ONE banner for ALL FOUR optional columns, and it must stay that way: this is the only
+          route to `addMissingColumns`, so gating it on `stageMissing` alone would leave the other
+          three unreachable on every site that already has `Stage` — which is all of them. A fix
+          nobody can press is not a fix. */}
+      {(stageMissing ||
+        revokedByMissing ||
+        fileIdMissing ||
+        targetEtagMissing) && (
         <div style={s.warn}>
           <strong>
             This list is missing {missingCount > 1 ? "columns" : "a column"}.
           </strong>{" "}
           Requests can still be raised, and nothing already recorded is lost.
           <ul style={{ margin: "8px 0 0 18px", padding: 0 }}>
-            {/* ⚠ LISTED FIRST, because it is the only one of the three whose absence makes an
-                approval FAIL rather than merely record something imprecisely. */}
+            {/* ⚠ LISTED FIRST, and it is the most severe of the four — found live 2026-09-20.
+                Without it, EVERY deletion carried out through the proxy flow fails silently every
+                single time, whether or not the file ever changed, because a genuinely ABSENT
+                column reads differently to the flow than a blank one does. The other three make a
+                request record something imprecisely; this one makes deletions not happen at all
+                while looking like they did. */}
+            {targetEtagMissing && (
+              <li>
+                <strong>TargetETag</strong> — every deletion carried out through
+                the automated flow will be reported as failed (&ldquo;the file
+                changed after this deletion was approved&rdquo;), even when
+                nothing changed, because the flow cannot tell &ldquo;no value
+                was recorded&rdquo; apart from &ldquo;the column does not
+                exist at all.&rdquo; Nothing is lost — the file simply stays
+                where it is — but no deletion through this system can
+                actually complete until this column exists.
+              </li>
+            )}
             {fileIdMissing && (
               <li>
                 <strong>SubmissionFileId</strong> — a request for a file that is{" "}
@@ -3092,12 +3152,14 @@ export default function Requests({
           their own rows only. It also states the consequence, because deciding a request here is not
           reversible — an approved deletion recycles the file and an approved share grants access. */}
       {systemAdmin && (
-        <div style={s.warn}>
+        <div style={{ ...s.warn, textAlign: "center" }}>
           You are here as a <strong>system administrator</strong>, so you see
           and can decide <strong>every request on this site</strong> — not only
-          your own units. Normally the unit&rsquo;s{" "}
-          <strong>Head of Unit</strong> decides these; use this when their group
-          is empty or nobody else can. Your name is recorded as the decider.
+          your own units. Normally the{" "}
+          <br />
+          unit&rsquo;s <strong>Head of Unit</strong> decides these; use this
+          when their group is empty or nobody else can. Your name is recorded
+          as the decider.
         </div>
       )}
 

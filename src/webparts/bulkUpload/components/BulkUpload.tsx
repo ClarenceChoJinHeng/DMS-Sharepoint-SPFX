@@ -72,6 +72,7 @@ import {
   isHcLevel,
   selectableLevels,
 } from "../../../shared/hcRouting";
+import { sortByConfidentialityOrder } from "../../../shared/confidentialityOrder";
 import {
   cachedHcLibraries,
   hcAvailable,
@@ -3921,15 +3922,15 @@ export default function BulkUpload({
                         ctx,
                       ).map((l) => l.trim().toLowerCase()),
                     );
-                    return options.confidentiality
-                      .filter((o) =>
+                    return sortByConfidentialityOrder(
+                      options.confidentiality.filter((o) =>
                         keep.has((o.label ?? "").trim().toLowerCase()),
-                      )
-                      .map((o) => (
-                        <option key={o.id} value={o.id} title={o.label}>
-                          {o.label}
-                        </option>
-                      ));
+                      ),
+                    ).map((o) => (
+                      <option key={o.id} value={o.id} title={o.label}>
+                        {o.label}
+                      </option>
+                    ));
                   })()}
                 </select>
               </div>
@@ -4014,7 +4015,7 @@ export default function BulkUpload({
                   // 50, matching the hint below and the upload form's own cap.
                   maxLength={50}
                   disabled={busy}
-                  placeholder="Enter words, phrases, or names related to this file to make it easier to find in search."
+                  placeholder="Words to search this document later"
                   onChange={(e) => {
                     /* The same strip-and-say guard as Remark above — a character vanishing with no
            explanation is how a field comes to feel broken. */

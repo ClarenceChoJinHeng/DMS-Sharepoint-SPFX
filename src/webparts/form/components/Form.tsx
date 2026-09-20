@@ -55,6 +55,7 @@ import {
   selectableLevels,
   swapLibrarySegment,
 } from "../../../shared/hcRouting";
+import { sortByConfidentialityOrder } from "../../../shared/confidentialityOrder";
 import {
   AccessVerdict,
   filterProvisionedPaths,
@@ -192,10 +193,10 @@ const FIELDS = {
   // Free-text note from the uploader, shown to the approver. Distinct from
   // `details`/_ExtendedDescription, which is the built-in document Description.
   // ⚠ THE SHAREPOINT COLUMN IS STILL "Remark" — a dedicated column, per CLAUDE.md's field list.
-  // The VISIBLE LABEL became "Remark for Approval" (client, 2026-09-10); this constant is the
-  // INTERNAL NAME used as `FieldName` in every `validateUpdateListItem` call, and one unknown
-  // field name fails the WHOLE write (gotcha #4) — not just Remark, every column on the item.
-  // Caught before shipping: this had been changed to "Remark for Approval" here too.
+  // The VISIBLE LABEL became "Remark for Approval" (client, 2026-09-10), then "Remark for
+  // Approver" (client, 2026-09-18); this constant is the INTERNAL NAME used as `FieldName` in
+  // every `validateUpdateListItem` call, and one unknown field name fails the WHOLE write
+  // (gotcha #4) — not just Remark, every column on the item. Never rename this to match the label.
   remark: "Remark",
   // Yes/No. Only meaningful when Confidentiality is the level named by the
   // `legallyPrivilegedFor` setting; written as "false" otherwise so a replaced
@@ -854,6 +855,23 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * was not going to happen: the clashing files are refused, stay staged, and nothing is overwritten.
    */
   const [clashRows, setClashRows] = useState<ClashRow[]>([]);
+  /* ⚠⚠ ONE CUSTOM DIALOG, REPLACING FOUR SEPARATE NATIVE `window.confirm()` CALLS (client,
+     2026-09-18, comment 4: a native browser confirm firing on top of the app's own styled UI when
+     removing a staged file). This project has removed every OTHER native confirm it ever shipped —
+     see the 2026-09-02 "THE REPLACE-CLASH POPUPS ARE GONE" and 2026-08-15 sections of CLAUDE.md —
+     and these four (Delete File on an open editor, Remove set, Discard/Clear this batch, Cancel)
+     were the ones that survived that pass. Reusing the SAME `.dms-popup-overlay`/`.dms-popup`
+     markup the clash dialog already uses, rather than four one-off copies that would drift from
+     each other and from the rest of the form's styling. */
+  const [confirmDialog, setConfirmDialog] = useState<
+    | {
+        title: string;
+        body: string;
+        confirmLabel: string;
+        onConfirm: () => void;
+      }
+    | undefined
+  >(undefined);
   const [dragOver, setDragOver] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
@@ -3637,7 +3655,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           error:
             typeof tagResult.status === "number"
               ? `Uploaded, but tagging failed — HTTP ${tagResult.status} on "${libraryTitleForTagging}"` +
-                (tagResult.status === 404 ? " (no library with that title)" : "")
+                (tagResult.status === 404
+                  ? " (no library with that title)"
+                  : "")
               : "Uploaded, but could not retrieve the item to tag.",
         };
       }
@@ -4689,13 +4709,15 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                 ctx,
               );
               const keep = new Set(allowed.map((l) => l.trim().toLowerCase()));
-              return options.confidentiality
-                .filter((o) => keep.has((o.label ?? "").trim().toLowerCase()))
-                .map((o) => (
-                  <option key={o.id} value={o.id} title={o.label}>
-                    {o.label}
-                  </option>
-                ));
+              return sortByConfidentialityOrder(
+                options.confidentiality.filter((o) =>
+                  keep.has((o.label ?? "").trim().toLowerCase()),
+                ),
+              ).map((o) => (
+                <option key={o.id} value={o.id} title={o.label}>
+                  {o.label}
+                </option>
+              ));
             })()}
           </select>
           {showErrors && !confidentiality && (
@@ -4755,12 +4777,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                     Name section"*) — it used to sit below the Date/Confidentiality/Legally Privileged
                     row; the comment that once said "Remark lives in the folder card above" was already
                     stale before this move (Remark has been per-file since 2026-08-23, not batch-scoped).
-                    Also relabelled "Remark for Approval" (client, 2026-09-10) and made an expandable
-                    TEXTAREA rather than a single-line input (client: *"text can be very long"*) — it
-                    still goes through the same `guard`/blockedChar handling as every other free-text
-                    box, and the 250-char cap and column are unchanged. */}
+                    Relabelled "Remark for Approval" (client, 2026-09-10), then "Remark for Approver"
+                    (client, 2026-09-18, comments 1 & 8), and made an expandable TEXTAREA rather than
+                    a single-line input (client: *"text can be very long"*) — it still goes through
+                    the same `guard`/blockedChar handling as every other free-text box, and the
+                    250-char cap and column are unchanged. */}
       <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-        <span>Remark for Approval</span>
+        <span>Remark for Approver</span>
         <textarea
           value={remark}
           maxLength={250}
@@ -4798,7 +4821,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           type="text"
           maxLength={50}
           value={keyword}
-          placeholder="Enter words, phrases, or names related to this file to make it easier to find in search."
+          placeholder="Words to search this document later"
           onChange={(e) => guard("keyword", e.target.value, setKeyword)}
         />
         {blockedChar.keyword ? (
@@ -4836,18 +4859,22 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             (docName || "").trim().length > 0 ||
             (projectName || "").trim().length > 0 ||
             (vendor || "").trim().length > 0;
-          if (
-            typedAnything &&
-            !window.confirm(
-              `Delete ${me.file.name}? It has not been uploaded, and you will have to choose it again.`,
-            )
-          ) {
+          const removeIt = (): void => {
+            const left = draftFiles.filter((x) => x.id !== me.id);
+            setDraftFiles(left);
+            setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
+            if (left.length > 0) applyEditor(left[left.length - 1].meta);
+          };
+          if (typedAnything) {
+            setConfirmDialog({
+              title: "Delete this file?",
+              body: `${me.file.name} has not been uploaded, and you will have to choose it again.`,
+              confirmLabel: "Delete",
+              onConfirm: removeIt,
+            });
             return;
           }
-          const left = draftFiles.filter((x) => x.id !== me.id);
-          setDraftFiles(left);
-          setActiveFileId(left.length > 0 ? left[left.length - 1].id : "");
-          if (left.length > 0) applyEditor(left[left.length - 1].meta);
+          removeIt();
         }}
       >
         <img
@@ -5369,26 +5396,31 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                         disabled={busy}
                         aria-label={`Remove set ${i + 1}`}
                         onClick={() => {
-                          if (
-                            b.files.length > 0 &&
-                            !window.confirm(
-                              `Remove set ${i + 1}? Its ${b.files.length} document` +
-                                `${b.files.length === 1 ? "" : "s"} will have to be chosen again - ` +
+                          const removeIt = (): void => {
+                            const left = batches.filter((x) => x.id !== b.id);
+                            setBatches(left);
+                            // ⚠ THERE IS ALWAYS A FORM. Removing the last saved batch with no card
+                            // open left the page with nothing on it at all — no batches, nowhere to
+                            // type, and an Add button that reads as "add a second one".
+                            if (left.length === 0 && !draftOpen) {
+                              setEditingAt(undefined);
+                              setDraftOpen(true);
+                              resetForm();
+                            }
+                          };
+                          if (b.files.length > 0) {
+                            setConfirmDialog({
+                              title: `Remove set ${i + 1}?`,
+                              body:
+                                `Its ${b.files.length} document` +
+                                `${b.files.length === 1 ? "" : "s"} will have to be chosen again — ` +
                                 `nothing has been uploaded yet.`,
-                            )
-                          ) {
+                              confirmLabel: "Remove",
+                              onConfirm: removeIt,
+                            });
                             return;
                           }
-                          const left = batches.filter((x) => x.id !== b.id);
-                          setBatches(left);
-                          // ⚠ THERE IS ALWAYS A FORM. Removing the last saved batch with no card open
-                          // left the page with nothing on it at all — no batches, nowhere to type, and
-                          // an Add button that reads as "add a second one".
-                          if (left.length === 0 && !draftOpen) {
-                            setEditingAt(undefined);
-                            setDraftOpen(true);
-                            resetForm();
-                          }
+                          removeIt();
                         }}
                       >
                         {/* The client's own bin, supplied as Icon.png on 2026-09-04, replacing the
@@ -5603,23 +5635,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   }
                   onClick={() => {
                     const n = draftFiles.length;
-                    if (
-                      n > 0 &&
-                      !window.confirm(
-                        `${batches.length > 0 ? "Discard" : "Clear"} this batch? Its ${n} document` +
-                          `${n === 1 ? "" : "s"} will have to be chosen again — nothing has been ` +
-                          `uploaded yet.`,
-                      )
-                    ) {
+                    const clearIt = (): void => {
+                      setDraftFiles([]);
+                      setActiveFileId("");
+                      setFile(undefined);
+                      setEditingAt(undefined);
+                      // Close only if there is something else on the page. Otherwise the card stays, empty.
+                      if (batches.length > 0) setDraftOpen(false);
+                      resetForm();
+                    };
+                    if (n > 0) {
+                      setConfirmDialog({
+                        title: `${batches.length > 0 ? "Discard" : "Clear"} this set?`,
+                        body:
+                          `Its ${n} document${n === 1 ? "" : "s"} will have to be chosen again — ` +
+                          `nothing has been uploaded yet.`,
+                        confirmLabel: batches.length > 0 ? "Discard" : "Clear",
+                        onConfirm: clearIt,
+                      });
                       return;
                     }
-                    setDraftFiles([]);
-                    setActiveFileId("");
-                    setFile(undefined);
-                    setEditingAt(undefined);
-                    // Close only if there is something else on the page. Otherwise the card stays, empty.
-                    if (batches.length > 0) setDraftOpen(false);
-                    resetForm();
+                    clearIt();
                   }}
                 >
                   {/* ⚠ THE THIRD BIN, AND THE ONE THAT WAS MISSED (client, 2026-09-06: *"You forgot to
@@ -6236,23 +6272,29 @@ export default function Form({ context }: IFormProps): React.ReactElement {
               type="button"
               className="dms-btn secondary"
               onClick={() => {
-                if (stagedNow.files > 0) {
-                  const n = stagedNow.files;
-                  const sure = window.confirm(
-                    `Discard ${n} document${n === 1 ? "" : "s"}? ${n === 1 ? "It has" : "They have"} not been uploaded, and this cannot be undone.`,
-                  );
-                  if (!sure) return;
-                }
                 // Back to the landing state, not to an empty page: Cancel clears the work, and the
                 // uploader is still on the upload form. Leaving no card at all would make them press
                 // Add another batch to start the FIRST one, which is not what that button means.
-                setEditingAt(undefined);
-                setDraftOpen(true);
-                setBatches([]);
-                setDraftFiles([]);
-                setActiveFileId("");
-                setLastRun(undefined);
-                resetForm();
+                const cancelIt = (): void => {
+                  setEditingAt(undefined);
+                  setDraftOpen(true);
+                  setBatches([]);
+                  setDraftFiles([]);
+                  setActiveFileId("");
+                  setLastRun(undefined);
+                  resetForm();
+                };
+                if (stagedNow.files > 0) {
+                  const n = stagedNow.files;
+                  setConfirmDialog({
+                    title: `Discard ${n} document${n === 1 ? "" : "s"}?`,
+                    body: `${n === 1 ? "It has" : "They have"} not been uploaded, and this cannot be undone.`,
+                    confirmLabel: "Discard",
+                    onConfirm: cancelIt,
+                  });
+                  return;
+                }
+                cancelIt();
               }}
               disabled={busy}
             >
@@ -6330,6 +6372,57 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* ── The one confirm dialog, replacing all four native `window.confirm()` calls ──────────
+          See `confirmDialog`'s own comment above. Same `.dms-popup-overlay`/`.dms-popup` shape the
+          rename-offer dialog below uses, kept intentionally plain (title, one line of body text, two
+          buttons) since none of the four situations it covers need more than that. */}
+      {confirmDialog && (
+        <div className="dms-popup-overlay" role="dialog" aria-modal="true">
+          <div className="dms-popup">
+            <p className="dms-popup-title" style={{ color: "#a4262c" }}>
+              {confirmDialog.title}
+            </p>
+            <p
+              style={{
+                fontSize: 13,
+                color: "#605e5c",
+                margin: "0 0 18px",
+                lineHeight: 1.55,
+              }}
+            >
+              {confirmDialog.body}
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 10,
+                justifyContent: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                className="dms-popup-btn danger"
+                onClick={() => {
+                  const fn = confirmDialog.onConfirm;
+                  setConfirmDialog(undefined);
+                  fn();
+                }}
+              >
+                {confirmDialog.confirmLabel}
+              </button>
+              <button
+                type="button"
+                className="dms-popup-btn cancel"
+                onClick={() => setConfirmDialog(undefined)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

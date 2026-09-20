@@ -8457,7 +8457,7 @@ export default function FolderManager({
                   <br />
                   <strong>Keep this tab open until it finishes.</strong> The run
                   happens in your browser — refreshing, closing the tab or
-                  navigating away stops it partway. Nothing is lost and you can
+                  navigating away stops it halfway. Nothing is lost and you can
                   run it again, but do re-run before letting users in: a folder
                   interrupted at the wrong moment stays unlocked until the next
                   run.

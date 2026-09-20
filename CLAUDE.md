@@ -1,34 +1,41 @@
 # SDG DMS — Claude Code Project Context
 
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-20:
-> `docs/2026-09-20-session-handoff.md`.** ⚠⚠ **THE REPLACE-PATH DELETION RACE IS CONFIRMED, NOT
-> SUSPECTED — it genuinely destroyed a document, and the fix is chosen and half-built.**
-> `deleteClashingDraftByProxy` (Form.tsx) polls ~30s for a clashing draft's recycle, then falls back
-> to `Files/Add(overwrite=true)` on the SAME name if it times out — which SharePoint applies IN
-> PLACE, keeping the SAME `UniqueId`. Traced with `scripts/trace-submission-record.js` (new,
-> verified script): THREE separate uploads of `test1-test1-test1-20092026.xlsx` across ~90 minutes
-> all shared one `ItemUniqueId`, proving the fallback fired repeatedly; the audit log shows
-> `CRS — Execute approved deletion`'s actual recycle landing 31 seconds after approval — past the
-> poll budget — and nothing currently resolves under that GUID or the file's path. Confirmed
-> recoverable from the site recycle bin (93-day retention), so not permanently lost, but the
-> mechanism is real and will recur. **Client chose the structurally correct fix (an ETag guard in
-> the flow) over the cheaper refuse-and-retry option.** CODE SIDE IS BUILT AND VERIFIED — new
-> `src/shared/deletionGuard.ts` (`readFileETag`), a new `CRS Requests.TargetETag` column, and all
-> three deletion-request writers (`Requests.tsx`, `MySubmissions.tsx`, `Form.tsx`) now stamp the
-> target's ETag at the moment deletion is authorised, each with a retry-without-the-column fallback.
-> `tsc --noEmit` clean, full suite 1968/1968, zero new lint warnings. **THE ONLY REMAINING STEP is a
-> Power Automate edit — not code — following
-> `docs/superpowers/specs/2026-09-20-etag-guard-execute-approved-deletion-runbook.md` line by
-> line.** Full design: `docs/superpowers/specs/2026-09-20-etag-guarded-proxy-deletion-design.md`.
-> Also this session: two live-confirmed fixes to the 2026-09-18 tag-by-proxy settling window (a
-> duplicate "grouped by folder and date" entry in My Submissions; a stale batch detail view that
-> "↻ Refresh" couldn't fix); a multi-set, multi-segment, HC+non-HC Form.tsx upload confirmed
-> working; `scripts/check-tagging-status.js` gained a path filter and a required-vs-optional field
-> split; and a new memory, `feedback-collect-all-evidence-before-deciding`, on not presenting a
-> diagnosis as settled while any corroborating link is still inferred rather than checked.
-> **Nothing this session is committed** — the working tree now carries three sessions' worth of
-> unrelated in-flight threads plus this session's ETag-guard work; see the handoff doc's file list
-> before assuming any one file's state.
+> `docs/2026-09-20-session-handoff.md`.** ⚠⚠ **THE ETAG GUARD FLOW EDIT IS CONFIRMED CORRECT — AND A
+> SEPARATE, REAL BUG WAS FOUND BEHIND IT: `TargetETag` WAS NEVER ACTUALLY A COLUMN ON THE LIVE `CRS
+> Requests` LIST.** The flow itself (`CRS — Execute approved deletion`) was verified, across four
+> export/fix rounds reading the raw `definition.json` rather than trusting screenshots, to have
+> `Update_item_2`'s `runAfter` reading exactly `{"GetCurrentETag": ["Failed"]}` with `Condition_1`
+> unchanged and correct — so THAT half of the design (see the earlier 2026-09-19 entry below) is
+> genuinely done. The client then re-tested live and got the same "file changed" failure TWICE on a
+> file nobody had touched. Diagnosed from live evidence (a console fetch of the file's real ETag,
+> then a direct SharePoint item-field read) rather than more flow-log guessing: **the `TargetETag`
+> column simply does not exist on the live list**, so every write of it since the design shipped has
+> been silently discarded (gotcha #4/#11 territory — SharePoint doesn't error on writing an unknown
+> field the way it does on selecting one). **FIXED IN CODE**: `Requests.tsx`'s existing missing-column
+> detection (the same pattern that already flags `Stage`/`RevokedBy`/`SubmissionFileId`) now also
+> detects `TargetETag`, extending the read retry-ladder from 3 rungs to 4 and adding it to the "Add
+> missing columns" banner — listed FIRST, since its absence is the one that silently breaks every
+> deletion rather than merely losing a display nicety. **THE ONLY REMAINING STEP: client builds,
+> deploys, opens the Requests page as an admin, presses "Add missing columns," then re-tests the same
+> delete** — it should now genuinely recycle instead of failing on a phantom mismatch.
+>
+> **Also this session, once the flow work above was closed out: a full client QA comment batch was
+> processed and fixed** (client's own words: "clear the board... before continuing the big task") —
+> full detail in `docs/superpowers/specs/2026-09-18-qa-comment-batch-fixes.md`, consolidated entry
+> near the end of this file dated 2026-09-20. Built and verified: all four native `window.confirm()`
+> popups in the upload form replaced with the app's own dialog style; the Confidential Level dropdown
+> reordered (new `shared/confidentialityOrder.ts`); My Submissions' status legend reordered and its
+> status text capitalised (`RECORD_STATE_LABEL` in `shared/submissionRecords.ts`); "Remark for
+> Approval" → "Remark for Approver"; the Reject dialog's wording changed; the Requests page's
+> decided-Share-request card no longer double-shows an email. A small follow-up added a `<br>` and
+> centred text on the Requests page's "system administrator" banner. Several items in the batch need
+> a live-site check or a Power Automate edit rather than code — see the spec for the full breakdown,
+> including one (comment 13) that is a hard SharePoint platform limitation and cannot be fixed at all.
+>
+> **⚠ NOTHING FROM THIS SESSION IS COMMITTED** — the ETag guard code, the `TargetETag` fix, and the
+> whole QA batch are all sitting uncommitted on top of the already-committed `950186e`; see the
+> handoff doc's file list before assuming any one file's state.
 
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-19:
 > `docs/2026-09-19-session-handoff.md`.** Client asked mid-session that progress be documented as it
@@ -14060,3 +14067,119 @@ touching any flow; not summarised further here beyond the one finding worth flag
   runbook gives an exact before/after for each of the 8 literal fixes, a recommended low-to-high-risk
   order across all 23, and the same "one fix, one deploy, one check" discipline this project has
   used for every prior flow build.
+
+## ⚠⚠ THE ETAG GUARD FLOW EDIT IS CORRECT — AND A MISSING COLUMN WAS SILENTLY EATING EVERY WRITE (2026-09-20)
+Follows directly from the 2026-09-19 ETag-guard build recorded above. The flow edit itself
+(`CRS — Execute approved deletion`'s `Update_item_2` + `Condition_1`) was verified CORRECT across
+four export/fix rounds, walking the client through Power Automate's UI each time (a first attempt
+landed the update SERIALLY between `GetCurrentETag` and `Condition_1` instead of in a parallel
+branch; a second attempt had "Configure run after" ticked on BOTH "Is successful" and "Has failed",
+which would fire the update on every success too, not just a failure) — settled by reading the raw
+exported `definition.json` after each fix rather than trusting a screenshot of the designer, until
+`Update_item_2`'s `runAfter` read exactly `{"GetCurrentETag": ["Failed"]}`, matching the runbook
+(`docs/superpowers/specs/2026-09-20-etag-guard-execute-approved-deletion-runbook.md`) line for line.
+- **⚠⚠ THE CLIENT THEN RE-TESTED LIVE AND HIT THE SAME "file changed" FAILURE TWICE, CONSECUTIVELY,
+  ON A FILE NOBODY HAD TOUCHED.** Diagnosed from LIVE EVIDENCE, not from more flow-run inspection:
+  a console `fetch()` against the file's real, current ETag (`"{0937F4FC-...},2"`), and a direct
+  `$select` read of the `CRS Requests` list item's own fields. **THE `TargetETag` COLUMN DOES NOT
+  EXIST ON THE LIVE LIST.** Every writer that has stamped it since the design shipped
+  (`Requests.tsx`, `MySubmissions.tsx`, `Form.tsx`, per the 2026-09-19 build) has been silently
+  discarding that write — SharePoint does not error on POSTing an unknown field the way it does on
+  SELECTING one (gotcha #4 vs #11, in a new combination: the WRITE side of that asymmetry), so every
+  request row has an empty `TargetETag` and `Condition_1`'s `OR(currentETag == TargetETag,
+  TargetETag == "")` has been taking the "was always blank, so allow" branch — which reads as
+  "deletion always fails on a mismatch" because in this project's own testing the SharePoint UI's own
+  ETag comparison inside `recycle()` was ALSO catching a genuinely different scenario the same way,
+  making the two failure modes look identical from the outside until the column was actually read.
+- **FIXED**: `Requests.tsx` already had a proven pattern for exactly this shape of failure — the
+  missing-column banner and retry-ladder built for `Stage`/`RevokedBy`/`SubmissionFileId`. Extended
+  it: a new `targetEtagMissing` state, the read's retry ladder grew from 3 rungs to 4 (dropping
+  `TargetETag` FIRST on a 400, before the other three optional columns — its absence is the one that
+  silently breaks the SAFETY MECHANISM itself, not merely a display nicety), and a new `<li>` in the
+  "Add missing columns" banner listed ahead of the other three for the same reason.
+- **⚠ THE GENERAL LESSON, worth stating plainly: a Power Automate condition reading `TargetETag ==
+  ""` cannot distinguish "this column is blank because nobody has set it yet" from "this column does
+  not exist and never will."** Both produce an empty string at read time. The flow's own logic was
+  never wrong; the data behind it never existed. **Verify a referenced column actually exists on the
+  LIVE list before debugging the condition that reads it** — the same standing rule this project
+  applies to every other cross-boundary field (gotcha #11), just paid for again on the write side.
+- **NEXT STEP, unchanged from the pointer at the top of this file: client builds, deploys, opens
+  Requests as an admin, presses "Add missing columns," re-tests.** `tsc --noEmit` clean, full suite
+  0 failures, only pre-existing lint warnings — no new categories.
+
+## A CLIENT QA COMMENT BATCH — 13+ ITEMS PROCESSED IN ONE PASS (2026-09-20)
+Full detail, including everything explicitly NOT fixed and why: `docs/superpowers/specs/
+2026-09-18-qa-comment-batch-fixes.md`. Client's own framing: a large batch of numbered screenshots
+sent to "clear the board" of accumulated minor issues before starting the next big piece of work,
+sent immediately after the ETag-guard work above was confirmed correct.
+- **Built and verified** (`tsc --noEmit` clean, `npx heft test --clean` → 0 failures, lint at the
+  documented pre-existing baseline, zero new warning categories):
+  - **All four native `window.confirm()` popups in the upload form replaced** with the app's own
+    styled dialog (`.dms-popup-overlay`/`.dms-popup`, the same markup the existing clash dialog
+    already used) — Delete File on the open editor, Remove set N, Discard/Clear this set, and the
+    top-level Cancel button. One shared `confirmDialog` state + one render block, not four copies.
+    This project has a long-standing, explicitly documented aversion to native browser dialogs (see
+    the 2026-09-02 "replace-clash popups are gone" section); these four had simply survived that pass.
+  - **Confidential Level dropdown reordered** — was alphabetical (Confidential, Highly Confidential,
+    Restricted) off the term store; client wants Highly Confidential, Confidential, Restricted. New
+    pure module `shared/confidentialityOrder.ts` (`sortByConfidentialityOrder`/`confidentialityRank`,
+    tested), applied to both the upload form and Bulk Upload. **Deliberately kept OUT of
+    `hcRouting.ts`** — that module's entire reason for existing is being a SAFETY module where every
+    rule has a wrong-looking-right version; mixing in a purely cosmetic sort would blur that line.
+    Unrecognised labels sort past the three known ones, stable, never silently reordered by guesswork.
+  - **My Submissions' status legend reordered** to the client's own numbering (Pending, Approved,
+    Rejected, Cancelled, Replaced, Deleted, Archived, Share Requested, Delete Requested) — a pure
+    `<li>` reorder, no change to which items are hidden on the Permission tab.
+  - **"Remark for Approval" → "Remark for Approver"**, in both places it exists: the upload form's
+    own field and the approver's detail panel on `ApprovalDocument.tsx` (which reads back the SAME
+    remark for the person it addresses). The underlying SharePoint column stays internally named
+    `Remark` — untouched, per gotcha #4 (one unknown field name fails the whole write). **Not
+    changed**: `MySubmissions.tsx`'s shared `documentDetails.ts` module still shows plain "Remark"
+    (not in scope for this comment, which only pointed at the upload form's own field), nor Bulk
+    Upload's own Remark field.
+  - **Status text capitalised throughout My Submissions** — `RECORD_STATE_LABEL` in
+    `shared/submissionRecords.ts` (deleted/replaced/archived/cancelled/pending/not checked) and a
+    separate stray `.toLowerCase()` call on the Approved/Pending/Rejected tally were BOTH lowercase
+    and are now Title Case. Type-level union values are untouched, display only.
+  - **Reject dialog wording changed** — "Please provide your reasoning below." → "Please provide
+    your reject reason below.", reject branch only; the approve branch's copy is unchanged.
+  - **Requests page's decided-Share-request card no longer double-shows an email** — was showing
+    both the requester's email (top meta line) and the recipient's email (share line); the top line
+    now omits the requester for `r.type === "Share"` ONLY (kept for Deletion cards, where who's
+    asking to delete something remains directly relevant), and the recipient line is now prefixed
+    "Share to: " so the one remaining email is unambiguous. ⚠ **Trade-off flagged, not silently
+    accepted**: dropping the requester's identity from a Share card removes context an approver might
+    reasonably want before granting access — built exactly as asked, worth revisiting if reported.
+- **Confirmed already correct, no change made**: the Keyword field's placeholder text already
+  matches identically between Bulk Upload and the upload form (the client's screenshot was from an
+  older, already-superseded build); a reported duplicated "system administrator" banner has only ONE
+  occurrence in source (confirmed by grep across the whole file) — near-certainly a stale browser tab
+  (this project has hit that exact false-alarm shape repeatedly), and the banner was separately
+  touched afterward for an unrelated small tweak (below) with nothing else found wrong with it.
+- **Needs a live-site check, not a code change** (an approver's own upload was routed for approval
+  instead of auto-approving): the whole self-approve mechanism (`shared/selfApprove.ts` +
+  `probeFolderApproveAccess` + `pollForTagStatus`) reads correctly end to end in source. Most likely
+  cause, cheapest first: the `autoApproveOwnUpload` row on the live `CRS Config` list is not actually
+  set to exactly `"yes"` (fails CLOSED by design — a wrong "on" would auto-publish an unreviewed
+  document, the more expensive failure this codebase always avoids).
+- **Cannot be fixed in this codebase at all**: SharePoint's own native share-invite email always
+  names whoever clicked Approve, never the original requester — `performShare` calls
+  `SP.Web.ShareObject` in the DECIDER's own browser session (the approver), because that is who is
+  actually granting access at that moment, and there is no parameter to make SharePoint's own email
+  say a different person's name. Consistent with this project's 2026-07-23 decision to never attempt
+  intercepting or customising SharePoint's native Share control.
+- **Needs a Power Automate change, not code, and NONE of it is built** (a missing rejection email to
+  the requester; CC'ing a system admin on every approver notification; suppressing that same CC for
+  plain deletions specifically; and three separate attribution asks — stamping `Modified By` as the
+  proxy account on approved documents, showing real names instead of raw emails in the Audit Log's
+  Who column, and showing three names — uploader/approver/admin — on certain audit rows). Every one
+  of these needs opening the relevant flow directly in the designer; the spec names which flow is the
+  likely target for each and what to check first, but none of it can be diagnosed further, let alone
+  built, from this repository.
+- **Follow-up, same session**: two small tweaks to the "system administrator" banner on the Requests
+  page (`Requests.tsx`) — a `<br>` inserted right after "Normally the", and the whole paragraph
+  centred via an inline `textAlign: "center"` override on this ONE banner's own `<div>` (not applied
+  to the shared `s.warn` style object every other warning banner in the file also uses, so no other
+  banner's layout moved).
+- **⚠ NOTHING IN THIS BATCH HAS BEEN DEPLOYED OR TESTED LIVE.** The usual next step (build → deploy →
+  client re-tests) applies to every item marked "Built and verified" above.

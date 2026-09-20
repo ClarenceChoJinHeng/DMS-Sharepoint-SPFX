@@ -522,6 +522,199 @@ against this already-deployed state.
     - The recycle-bin recovery of `test1-test1-test1-20092026.xlsx` (item 32) is **still separate and
       still not done** — unaffected by any of the flow-editing progress above.
 
+## Update — flow edit CONFIRMED CORRECT (item 0/31 CLOSED), and a real code bug found during testing
+
+36. **The `CRS — Execute approved deletion` flow edit is DONE and VERIFIED against the exported
+    `definition.json`, not just screenshots.** Went through four export/fix rounds (the client's
+    first two attempts at "Configure run after" either left `Update_item_2` serial in front of
+    `Condition_1` with `["Succeeded","FAILED"]`, or parallel-but-still-`["Succeeded"]`, or parallel
+    with `["Succeeded","Failed"]` both ticked) before landing on the correct final shape, confirmed
+    from the raw JSON:
+    - `Condition` (outer, unchanged): `RequestType == 'Deletion' AND Status == 'Approved'`.
+    - `GetCurrentETag` → two independent parallel children:
+      - `Condition_1` (`runAfter: GetCurrentETag ["Succeeded"]`) — ETag match OR blank `TargetETag`
+        → recycle/stamp/log (unchanged original chain); else → `Update_item_1`, `Status: Failed` +
+        "file changed after this deletion was approved" note.
+      - `Update_item_2` (`runAfter: GetCurrentETag ["Failed"]`, ONLY `Failed`, confirmed in the raw
+        JSON) — `Status: Failed` + "target document could not be found" note. This is the NEW
+        sibling failure branch from the runbook's step 5, now correctly built and correctly scoped
+        to fire only when the ETag lookup itself fails, never alongside a successful one.
+    - **Item 0/31 is CLOSED.** The flow now matches
+      `docs/superpowers/specs/2026-09-20-etag-guard-execute-approved-deletion-runbook.md` exactly.
+37. **⚠⚠ REAL CODE BUG FOUND DURING THE §7 TEST PLAN'S FIRST STEP ("ordinary deletion still
+    works") — FOUND AND FIXED, `src/webparts/mySubmissions/components/MySubmissions.tsx`.**
+    Client, trying to delete their own PENDING file from My Submissions: *"I am trying to delete but
+    as an uplaoder I need to give reason for pending files? I thought we agreed to not need reason."*
+    - **Root cause:** both `canDeleteSelf` (detail view, ~line 3808) and the row-level `canDelete`
+      (list view, ~line 4996) gated the "instant, no-reason" delete path on
+      `canActDirectly(chain, policy.directDeleteStaging)`. `policy.directDeleteStaging` is built
+      entirely from `DELS`/`DELSHC` Group Map roles — and the 2026-09-17 "delete by proxy" persona
+      change (see CLAUDE.md, same date) removed `DELS`/`DELSHC` from **every** persona on purpose
+      (the SharePoint permission behind them also allowed deleting folders). So that check can now
+      never return true for anyone, and every pending/rejected delete on this page silently fell
+      through to the "ask your approver, provide a reason" flow — directly contradicting the
+      2026-09-17 design's own stated intent: *"a PIC still presses Delete on their own
+      pending/rejected file with no approval step, the grant behind it just moves to the service
+      account."*
+    - **Why the fix is safe and doesn't need a new permission check:** My Submissions is filtered
+      `AuthorId eq me` on both library reads — every row on this page is unconditionally the
+      viewer's own upload. So a pending/rejected row needs no role-based gate at all; ownership is
+      already proven by the page's own query. Changed both sites'
+      `canDeleteSelf`/`canDelete` to `!approved || systemAdmin || rights?.remove === "granted" ||
+      canActDirectly(chain, policy.directDelete)` — i.e. any not-yet-approved file on this page is
+      always eligible for the instant/no-reason path (which now writes a self-approved
+      `CRS Requests` row via `writeApprovedDeletionRequest`, for the proxy flow to execute). The
+      **approved** branch is completely unchanged — a plain PIC still cannot instantly delete an
+      already-approved document; that still correctly needs real delete authority
+      (`systemAdmin`/ACL/`policy.directDelete`).
+    - **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → 0 failures, lint shows only the
+      pre-existing documented baseline (this file's sole warning, `max-lines`, was already over the
+      2000-line ceiling before this change — no new categories introduced).
+    - **NOT yet re-tested live** — this needs the client to build/deploy (`npm run build`, the full
+      `heft test --clean --production && heft package-solution --production` pipeline, never
+      `package-solution` alone — see CLAUDE.md's own repeated warning about this exact mistake) and
+      re-try the same delete before the §7 test plan can actually proceed.
+38. **⚠ NOT YET COMMITTED.** This fix (step 36's flow edit needs no code; step 37's two-site
+    `MySubmissions.tsx` change) is sitting on top of the already-committed `950186e`. Should be
+    committed once the client confirms the fix works live.
+39. **⚠ A suspicious tool-level message ("Fact-Forcing Gate") appeared repeatedly this session**,
+    blocking an unrelated scratchpad cleanup command and then two unrelated file edits, demanding an
+    oddly specific justification template before allowing the operation to proceed — including once
+    on this very markdown handoff file, whose own template questions (importers, public functions,
+    data schema) make no sense for a prose document. This does not match any known legitimate
+    tool/hook format encountered in this project before. Worked around each time (once by avoiding
+    the destructive command entirely, the others by answering the requested template) rather than
+    refusing outright, since none of the underlying requests asked for anything harmful — but
+    flagged here in case it recurs or turns out to be a genuine misconfigured hook worth the client
+    checking on their end.
+40. **Next session / immediate next step: client re-tests the My Submissions delete fix live** once
+    built and deployed, then proceeds through the rest of the runbook's §7 test plan (a genuine
+    replace-clash, and ideally forcing the "file already changed" race to confirm `Update_item_1`'s
+    branch fires correctly) before this whole ETag-guard effort can be marked fully closed.
+
+## Update — the "file changed" failure recurred consistently, and the actual cause was found
+
+41. **Client re-tested the My Submissions delete fix live and it worked** (no reason box on a
+    pending file) — but the request then consistently came back **Failed** with the ETag guard's
+    "the file changed after this deletion was approved" wording, **twice in a row on the exact same
+    untouched file**, ~10 minutes apart, with the file confirmed still sitting Pending both times
+    (never actually deleted, so nothing was lost — the guard did its job of refusing rather than
+    guessing, it just refused something that was never actually a problem).
+42. **⚠⚠ ROOT CAUSE FOUND AND CONFIRMED LIVE: THE `TargetETag` COLUMN WAS NEVER ACTUALLY CREATED ON
+    THE LIVE `CRS Requests` LIST.** Opened the request row's full item details directly in
+    SharePoint — every field from `Title` through `RevokedBy` and `Attachments` is present, but
+    **`TargetETag` does not exist as a field on the item at all.**
+    - **Why this makes every deletion fail, always, regardless of whether the file changed:** the
+      client-side write correctly detects the missing column (a 400 on the first attempt) and falls
+      back to writing the request WITHOUT `TargetETag` (per its own designed retry ladder) — so the
+      row still gets created, just with no ETag value recorded. In the flow,
+      `triggerBody()?['TargetETag']` on such a row returns a true "nothing" value because the
+      property is entirely absent — not a blank string. Comparing "nothing" to an empty string is
+      NOT the same as comparing two empty strings in Power Automate's expression language, so the
+      flow's own "a blank `TargetETag` always means proceed" fallback (built for exactly this
+      backward-compatibility case) never actually fires. Every deletion since this feature shipped
+      has therefore been taking the guard's failure branch unconditionally.
+    - **Confirmed directly from data, not inferred**: fetched the file's actual current ETag via a
+      console `fetch()` — `"{0937F4FC-CDAD-4248-9928-9F80F441F56F},2"` — and confirmed the request
+      row's own `ItemUniqueId` matches, with no `TargetETag` field present anywhere on the item to
+      compare against.
+    - **Fixed — `src/webparts/requests/components/Requests.tsx`**: added `targetEtagMissing` state,
+      alongside the existing `stageMissing`/`revokedByMissing`/`fileIdMissing` pattern (same
+      newest-column-first retry ladder in `load()`, now four rungs instead of three), wired into
+      `missingCount` and the existing "this list is missing a column" banner — listed FIRST, since
+      it is the most severe of the four (the others record something imprecisely; this one silently
+      fails every deletion while looking like it succeeded). Pressing the banner's existing
+      **"Add missing columns"** button (which calls `addMissingColumns` → `ensureColumns`, already
+      iterating the full `COLUMNS` array including `TargetETag`) will create it — no new mechanism
+      needed, the column was already in the list of what that button creates; it just never showed
+      up as *missing* because the missing-detection check was never extended to include it when the
+      column was added.
+    - **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → 0 failures, lint clean of new
+      warnings (one round of `react/no-unescaped-entities` on the new banner text was introduced and
+      fixed with `&ldquo;`/`&rdquo;` before the final check — the file's only remaining warning is
+      the pre-existing `max-lines`, already over the 2000-line ceiling before this change).
+    - **NOT yet committed** — sitting on top of the already-committed `950186e`, alongside the
+      still-uncommitted My Submissions delete-reason fix from earlier this session.
+43. **⚠ NEXT STEP FOR THE CLIENT: build and deploy this fix, open the Requests page as an admin, and
+    press "Add missing columns" when the banner appears** (or it may need a page refresh first, since
+    `load()` only runs once on mount). Once the column exists, re-test the exact same delete on a
+    fresh pending file — it should now genuinely recycle successfully rather than failing on a
+    phantom mismatch. **Do not conclude the ETag guard itself is broken from this — the guard's own
+    logic (`Condition_1` in the flow) was never actually exercised with real data until now; this
+    was purely a missing-column provisioning gap on the write/detection side.**
+
+## Update — the flow edit itself is CONFIRMED CORRECT, independently of the column bug above
+
+44. **Before the `TargetETag`-missing root cause (items 41-43) was found, the flow structure itself
+    was independently verified correct against the exported `definition.json`** — four export/fix
+    rounds walking the client through Power Automate's UI (an insert that landed serial instead of
+    parallel, then a parallel branch left on `["Succeeded"]` only, then `["Succeeded","Failed"]`
+    both ticked) until the raw JSON showed `Update_item_2`'s `runAfter` reading exactly
+    `{"GetCurrentETag": ["Failed"]}`, with `Condition_1` untouched and correct
+    (`OR(currentETag == TargetETag, TargetETag == "")`). **This half of the work is genuinely done**
+    — the column-missing bug found afterward is a SEPARATE, additional defect on top of a correctly
+    built flow, not evidence the flow itself needed more work.
+45. **CLAUDE.md's own top-of-file pointer and the relevant sections have been updated** to reflect
+    both the flow's confirmed-correct state and the `TargetETag` column fix — see the entries dated
+    2026-09-20 near the end of the file for the full write-up in the project's usual style.
+
+## Update — a full client QA comment batch (dated 2026-09-18, fixed this session)
+
+46. **Client sent a large batch of numbered QA comments (screenshots, comments 1 and 4 through 17,
+    plus a separate three-item list) after the ETag-guard work above was confirmed working — asked
+    to "clear the board" of accumulated minor issues before the next big task.** Full detail,
+    including everything NOT fixed and why: `docs/superpowers/specs/2026-09-18-qa-comment-batch-fixes.md`.
+    CLAUDE.md also carries a consolidated entry near the end of the file.
+    - **Built and verified** (`tsc --noEmit` clean, `npx heft test --clean` → 0 failures, lint at the
+      documented pre-existing 43-warning baseline, no new categories): all four native
+      `window.confirm()` popups in the upload form replaced with the app's own dialog style; the
+      Confidential Level dropdown reordered (Highly Confidential → Confidential → Restricted, new
+      shared module `shared/confidentialityOrder.ts`); My Submissions' status legend reordered to
+      the client's own numbering; "Remark for Approval" → "Remark for Approver" (upload form + the
+      approver's detail panel); status text capitalised throughout My Submissions (was lowercase —
+      `RECORD_STATE_LABEL` in `shared/submissionRecords.ts` plus a stray `.toLowerCase()` call); the
+      Reject dialog's wording changed ("reasoning" → "reject reason"); and the Requests page's
+      decided-Share-request card no longer shows the requester's email, only "Share to: &lt;email&gt;"
+      (Deletion cards are unchanged — kept the requester there, since who's asking to delete
+      something is still directly relevant to that decision).
+    - **Confirmed already correct, no change made**: the Keyword field's placeholder already matches
+      between Bulk Upload and the upload form (the client's screenshot was from an older,
+      already-superseded build); the "system administrator" banner duplicate has only ONE copy in
+      source (near-certainly a stale browser tab — see the follow-up fix below, which touched this
+      exact banner for something else and found nothing else wrong with it).
+    - **Needs a live-site check, not code** (comment 14 — an approver's own upload was routed for
+      approval instead of auto-approving): the whole self-approve mechanism
+      (`shared/selfApprove.ts` + `probeFolderApproveAccess` + `pollForTagStatus`) reads correctly in
+      source. Most likely cause, cheapest first: the `autoApproveOwnUpload` config row on live
+      `CRS Config` is not actually set to `"yes"`.
+    - **Cannot be fixed at all** (comment 13): SharePoint's own native share-invite email always
+      names whoever clicked Approve (since `SP.Web.ShareObject` runs in the approver's own session),
+      never the original requester — not something an app can override.
+    - **Needs Power Automate, not code, and NONE of it built** (comment 16, plus the client's own
+      three-item list): a missing rejection-notification email; CC'ing a system admin on every
+      approver notification; suppressing that same CC for plain deletions; and three separate
+      attribution fixes (stamping `Modified By` as the proxy account on approved documents, showing
+      real names instead of raw emails in the Audit Log's Who column, and showing three names —
+      uploader/approver/admin — on certain audit rows). All written up in the spec with exactly what
+      needs to change in the flow designer.
+47. **Follow-up, same session: two small tweaks to the "system administrator" banner on the Requests
+    page** (`Requests.tsx`, the exact banner flagged as a possible stale-tab duplicate above) — a
+    `<br>` inserted right after "Normally the", and the whole paragraph centred (`textAlign: "center"`
+    applied inline on this ONE banner's `<div>`, not on the shared `s.warn` style object every other
+    warning banner in the file also uses). Verified: `tsc --noEmit` clean, full suite 0 failures,
+    only the pre-existing `max-lines` warning on the file.
+48. **⚠ NOTHING FROM THIS SESSION IS COMMITTED YET** — everything above (the ETag guard, the
+    `TargetETag` fix, the whole QA batch, and the banner tweaks) is sitting uncommitted on top of the
+    already-committed `950186e`. Should be committed once the client has deployed and confirmed the
+    delete/reason fix and the ETag guard actually work live end to end.
+49. **Next step: client builds and deploys everything above, then works through**: (a) the
+    `TargetETag` column fix (item 43's own next step, still the top priority — nothing else in the
+    QA batch matters if deletions still fail on a phantom mismatch), (b) a general re-test of the QA
+    batch items, (c) the two live-site checks flagged above (comment 14's config row, and confirming
+    whether `crs@sdguthrie.com` showing as a requester on live Delete Requests is the OLD,
+    not-yet-migrated proxy account still active — the service-account migration runbook from
+    2026-09-19 is still "NOT STARTED", so this is expected for now, not a new bug).
+
 ## Standing instruction (established 2026-09-19, reaffirmed this session)
 
 Keep a handoff doc like this one current AS work happens — do not wait for the end of a session.

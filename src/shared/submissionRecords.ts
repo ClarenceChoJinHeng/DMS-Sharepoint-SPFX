@@ -648,22 +648,27 @@ export function recordCounts(
  * ERROR here until it is given a word. That is the same guard `RequestStatus` uses for its pill
  * colours, and it is worth more than a comment asking the next person to remember.
  */
+/* ⚠ CAPITALISED, 2026-09-18 (client, comment 15: "Status to start with Big letter") — was fully
+   lowercase, inconsistent with every OTHER status word on this page (Pending/Approved/Rejected are
+   Title Case throughout). Purely a display change: the TYPE values (`deleted`, `cancelled`,
+   `archived`, `withdrawn`, `settling`, `unknown`) are untouched, so nothing that compares against
+   them elsewhere is affected — only what `recordStateParts` prints. */
 export const RECORD_STATE_LABEL: Record<Exclude<RecordState, "live">, string> = {
-  deleted: "deleted",
-  // Not "cancelled": the file was superseded by a newer upload, and "cancelled" reads as withdrawn.
-  cancelled: "replaced",
-  archived: "archived",
-  // THE ONE state that literally says "cancelled" — see the `RecordState` doc comment for why this
+  deleted: "Deleted",
+  // Not "Cancelled": the file was superseded by a newer upload, and "Cancelled" reads as withdrawn.
+  cancelled: "Replaced",
+  archived: "Archived",
+  // THE ONE state that literally says "Cancelled" — see the `RecordState` doc comment for why this
   // is deliberately not the SAME word as the `cancelled` type value two lines above, which means
-  // "replaced" on screen. Client's own wording for a PIC's direct staging delete.
-  withdrawn: "cancelled",
+  // "Replaced" on screen. Client's own wording for a PIC's direct staging delete.
+  withdrawn: "Cancelled",
   // Deliberately the SAME word a live join would show. See `RecordState`'s own comment: every read
   // succeeded, the record is simply too young for a join to be expected yet, and nothing could have
-  // decided it in that time — "pending" is the honest answer, not an optimistic guess.
-  settling: "pending",
+  // decided it in that time — "Pending" is the honest answer, not an optimistic guess.
+  settling: "Pending",
   // Worded differently on purpose — it means the libraries could not all be read, so those files may
-  // be perfectly fine. Never "missing".
-  unknown: "not checked",
+  // be perfectly fine. Never "Missing".
+  unknown: "Not checked",
 };
 
 /** The order they read in — worst news first, doubt last, `settling` last of all because it is not
@@ -676,7 +681,7 @@ const RECORD_STATE_ORDER: Array<Exclude<RecordState, "live">> = [
 export type RecordStateCounts = Record<RecordState, number>;
 
 /**
- * The non-approval half of a submission's status line, e.g. `["2 replaced", "1 archived"]`.
+ * The non-approval half of a submission's status line, e.g. `["2 Replaced", "1 Archived"]`.
  *
  * Zero counts are dropped, so a submission with nothing gone says nothing — the approval counts
  * beside it carry the line. Both are empty only when the submission holds no files at all.

@@ -1888,8 +1888,15 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
      FIXED row apart from a TIER row (Segment, Department, Unit, or whatever THIS segment calls its
      own tiers) without hardcoding tier names, which differ per segment. */
   const CURRENT_FIXED_LABELS = new Set([
-    "Document Type", "Year", "Document Date", "Confidentiality",
-    "Legally Privileged", "Project Name", "Vendor / Customer", "Remark", "Keyword",
+    "Document Type",
+    "Year",
+    "Document Date",
+    "Confidentiality",
+    "Legally Privileged",
+    "Project Name",
+    "Vendor / Customer",
+    "Remark",
+    "Keyword",
   ]);
   const orderedDetailRows = (rows: DetailRow[]): DetailRow[] => {
     // Client's exact requested order and relabelling (2026-09-17), on THIS page only — the shared
@@ -1908,7 +1915,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       { from: "Confidentiality", label: "Confidential Level" },
       { from: "Legally Privileged", label: "Legally Privileged" },
       { from: "Keyword", label: "Keyword" },
-      { from: "Remark", label: "Remark for Approval" },
+      { from: "Remark", label: "Remark for Approver" },
     ];
     const fixed: DetailRow[] = wanted.map((w) =>
       w.from === undefined
@@ -2372,7 +2379,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
                           margin: "4px 0 0",
                         }}
                       >
-                        Reasoning is required
+                        Please provide your reject reason.
                       </p>
                     )}
                   <div style={s.charCount}>{comments.length}/500</div>

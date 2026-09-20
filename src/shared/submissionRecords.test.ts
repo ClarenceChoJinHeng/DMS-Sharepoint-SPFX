@@ -1341,26 +1341,26 @@ describe("recordStateParts: no state can go unmentioned", () => {
     expect(recordStateParts(counts({ live: 3 }))).toEqual([]);
   });
 
-  it("says `replaced`, not `cancelled` — the file was superseded, not withdrawn", () => {
-    expect(recordStateParts(counts({ cancelled: 1 }))).toEqual(["1 replaced"]);
+  it("says `Replaced`, not `Cancelled` — the file was superseded, not withdrawn", () => {
+    expect(recordStateParts(counts({ cancelled: 1 }))).toEqual(["1 Replaced"]);
   });
 
   // The THIRD "Cancelled" in this codebase (2026-09-11): a PIC deleted their own pending/rejected
   // file directly, on staging. Its `RecordState` value is `withdrawn`, deliberately NOT `cancelled`
-  // — that value already means "replaced" — but its LABEL is literally "cancelled", the client's
+  // — that value already means "Replaced" — but its LABEL is literally "Cancelled", the client's
   // own word for this exact action, and the one place the bare word is used for a record state.
-  it("says `cancelled` for withdrawn — a PIC's own direct staging delete, not a replace", () => {
-    expect(recordStateParts(counts({ withdrawn: 1 }))).toEqual(["1 cancelled"]);
+  it("says `Cancelled` for withdrawn — a PIC's own direct staging delete, not a replace", () => {
+    expect(recordStateParts(counts({ withdrawn: 1 }))).toEqual(["1 Cancelled"]);
   });
 
-  it("says `not checked` for unknown, never anything implying the file is gone", () => {
+  it("says `Not checked` for unknown, never anything implying the file is gone", () => {
     // It means a library read failed; those files may be perfectly fine.
-    expect(recordStateParts(counts({ unknown: 1 }))).toEqual(["1 not checked"]);
+    expect(recordStateParts(counts({ unknown: 1 }))).toEqual(["1 Not checked"]);
   });
 
-  it("says `pending` for settling — the same word a live join would show, deliberately", () => {
+  it("says `Pending` for settling — the same word a live join would show, deliberately", () => {
     // 2026-09-19, client: "why is it showing not checked? can we not show pending instead?"
-    expect(recordStateParts(counts({ settling: 1 }))).toEqual(["1 pending"]);
+    expect(recordStateParts(counts({ settling: 1 }))).toEqual(["1 Pending"]);
   });
 
   it("reads worst news first, doubt last, settling last of all", () => {
@@ -1369,7 +1369,7 @@ describe("recordStateParts: no state can go unmentioned", () => {
         counts({ deleted: 1, withdrawn: 2, cancelled: 3, archived: 4, unknown: 5, settling: 6 }),
       ),
     ).toEqual([
-      "1 deleted", "2 cancelled", "3 replaced", "4 archived", "5 not checked", "6 pending",
+      "1 Deleted", "2 Cancelled", "3 Replaced", "4 Archived", "5 Not checked", "6 Pending",
     ]);
   });
 });

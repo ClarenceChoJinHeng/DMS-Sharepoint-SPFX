@@ -3803,15 +3803,30 @@ export default function MySubmissions({
              The Group Map route is KEPT rather than replaced: it is what a Head of Department's
              department-tier fan-out rests on, it needs no extra request, and it answers instantly at
              render where the probe has to arrive. Either saying yes is enough; neither is a veto, so
-             a probe that has not landed or could not be read changes nothing. */
+             a probe that has not landed or could not be read changes nothing.
+
+             ⚠⚠ THE STAGING (not-approved) HALF NO LONGER GOES THROUGH `canActDirectly` AT ALL
+             (2026-09-20). The 2026-09-17 "delete by proxy" persona change removed `DELS`/`DELSHC` from
+             every persona, on purpose, so `policy.directDeleteStaging` is now permanently empty and
+             that route can never say yes again. Left as it was, EVERY pending/rejected delete on this
+             page fell back to "your approver must decide" — reported live: *"as an uploader I need to
+             give reason for pending files? I thought we agreed to not need reason."*
+             This page is filtered `AuthorId eq me` (see the note lower down this component), so a
+             pending/rejected row here is ALWAYS the viewer's own draft — there is no "someone else's
+             file" case to protect against. The 2026-09-17 design's own words are explicit that this
+             stays instant and reason-free: "a PIC still presses Delete on their own pending/rejected
+             file with no approval step, the grant behind it just moves to the service account." So the
+             staging half is simply `!approved` now — ownership is the only thing that ever needed
+             proving, and the page itself already proves it. `writeApprovedDeletionRequest` (the
+             self-approved proxy write) is what actually still gates the SharePoint side of this. The
+             APPROVED half is UNCHANGED and still needs real delete authority — a plain PIC still
+             cannot instantly delete an already-approved document. */
           const rights = subjectRights[mergedKey(open)];
           const canDeleteSelf =
+            !approved ||
             systemAdmin ||
             rights?.remove === "granted" ||
-            canActDirectly(
-              chain,
-              approved ? policy.directDelete : policy.directDeleteStaging,
-            );
+            canActDirectly(chain, policy.directDelete);
           const canShareSelf =
             approved &&
             (systemAdmin ||
@@ -4033,9 +4048,12 @@ export default function MySubmissions({
             const c = statusCounts(liveRowsOnly(files));
             // Only the non-zero states. "0 rejected" on every row is noise, and the one number that
             // matters is buried among the ones that do not.
+            // ⚠ CAPITALISED, 2026-09-18 (client, comment 15: "Status to start with Big letter") —
+            // was `.toLowerCase()`'d, the only place on this line that disagreed with
+            // `recordStateParts` below it, which has had the same fix applied for consistency.
             const parts = (["Approved", "Pending", "Rejected"] as const)
               .filter((k) => c[k] > 0)
-              .map((k) => `${c[k]} ${k.toLowerCase()}`);
+              .map((k) => `${c[k]} ${k}`);
             /* ⚠ AND THE GONE ONES, COUNTED SEPARATELY AND SHOWN LAST (client, 2026-08-27: *"what would
              be great is if you put the status as deleted"*).
              Excluding them from the approval tally was right; leaving them out of the line ENTIRELY
@@ -4994,15 +5012,18 @@ export default function MySubmissions({
                                         )
                                       : [];
                                   const approved = r.status === "Approved";
+                                  /* ⚠⚠ SAME FIX AS THE DETAIL VIEW's `canDeleteSelf`, SAME DAY
+                                     (2026-09-20) — see that comment for the full reasoning.
+                                     `policy.directDeleteStaging` is permanently empty since the
+                                     2026-09-17 persona change removed DELS/DELSHC from everyone, and
+                                     this page is always the viewer's own upload (`AuthorId eq me`), so
+                                     a pending/rejected row needs no role check at all — only the
+                                     approved case still needs real delete authority. */
                                   const canDelete =
+                                    !approved ||
                                     systemAdmin ||
                                     rights?.remove === "granted" ||
-                                    canActDirectly(
-                                      chain,
-                                      approved
-                                        ? policy.directDelete
-                                        : policy.directDeleteStaging,
-                                    );
+                                    canActDirectly(chain, policy.directDelete);
                                   if (canDelete) {
                                     setWithdrawError(undefined);
                                     setWithdrawRow(r);
@@ -5083,7 +5104,11 @@ export default function MySubmissions({
           notes below"). That tab lists REQUESTS, not documents — none of Pending/Rejected/Approved/
           Deleted/Cancelled/Replaced/Archived is a state a request itself can be in, so on that one
           tab they explained nothing on screen. The last two items describe a REQUEST'S own kind
-          (share vs deletion) and stay visible everywhere, Permission included. */}
+          (share vs deletion) and stay visible everywhere, Permission included.
+
+          ⚠ ORDER, 2026-09-18 (client's own numbering on their QA sheet): Pending → Approved →
+          Rejected → Cancelled → Replaced → Deleted → Archived → Share Requested → Delete Requested.
+          Purely a reorder — nothing about which seven are hidden on the Permission tab changed. */}
       <ul style={s.note}>
         {tab !== "Requests" && (
           <>
@@ -5092,16 +5117,12 @@ export default function MySubmissions({
               approver.
             </li>
             <li>
-              <strong>Rejected:</strong> The file has been rejected by the
-              approver and action required from uploader.
-            </li>
-            <li>
               <strong>Approved:</strong> Approved file is moved to the main
               Restricted & Confidential or High Confidential Document library.
             </li>
             <li>
-              <strong>Deleted:</strong> File has been removed from the
-              Restricted & Confidential or High Confidential Document library.
+              <strong>Rejected:</strong> The file has been rejected by the
+              approver and action required from uploader.
             </li>
             <li>
               <strong>Cancelled:</strong> The file has been withdrawn before
@@ -5110,6 +5131,10 @@ export default function MySubmissions({
             <li>
               <strong>Replaced:</strong> Approved / Pending file is replaced
               with a newly uploaded file.
+            </li>
+            <li>
+              <strong>Deleted:</strong> File has been removed from the
+              Restricted & Confidential or High Confidential Document library.
             </li>
             <li>
               <strong>Archived:</strong> File is automatically archived after 7
