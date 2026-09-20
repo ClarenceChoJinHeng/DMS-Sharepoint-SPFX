@@ -2420,6 +2420,56 @@ export default function Requests({
     }
   };
 
+  /**
+   * Share a file directly and immediately — no request row at all, matching My Submissions'
+   * existing "direct share" path. View-only permission only, no expiry (nothing enforces one on
+   * this path today). Runs in the ACTING USER'S own session via SP.Web.ShareObject, so SharePoint
+   * itself attributes the invite to them — this is what makes "Approver can share without
+   * permission" true: they hold `CRS Share` (Manage Permissions) on the folder already.
+   */
+  const performDirectShare = async (
+    fileRef: string,
+    itemName: string,
+    recipients: string[],
+  ): Promise<string | undefined> => {
+    if (recipients.length === 0) return "Add at least one recipient first.";
+    const people = recipients.map((e) => ({ Key: e }));
+    const res = await post(`${siteUrl}/_api/SP.Web.ShareObject`, {
+      url: `${window.location.origin}${fileRef}`,
+      peoplePickerInput: JSON.stringify(people),
+      roleValue: "role:1073741826", // View — the only option offered on the direct path
+      groupId: 0,
+      propagateAcl: false,
+      sendEmail: true,
+      includeAnonymousLinkInEmail: false,
+      emailSubject: `A document has been shared with you: ${itemName}`,
+      emailBody: "",
+      useSimplifiedRoles: true,
+    });
+    if (!res.ok) {
+      if (res.status === 403)
+        return "You do not have permission to share that document.";
+      return `The document could not be shared (HTTP ${res.status}).`;
+    }
+    try {
+      const body = await res.json();
+      const results = (body?.value ?? []) as Array<{
+        Status?: boolean;
+        Message?: string;
+        User?: string;
+      }>;
+      const failed = results.filter((r) => r && r.Status === false);
+      if (failed.length > 0) {
+        return failed
+          .map((f) => `${f.User ?? "recipient"}: ${f.Message ?? "refused"}`)
+          .join("; ");
+      }
+    } catch {
+      /* an unreadable body after a 200 counts as success — the grant is what matters */
+    }
+    return undefined;
+  };
+
   /* ONE ROUTE IN, ONE LOADER — mirrors the existing rule right above for the request-based mode. */
   useEffect(() => {
     if (directFileId === undefined) return;
@@ -2479,6 +2529,32 @@ export default function Requests({
     string | undefined
   >(undefined);
   const [directShareDone, setDirectShareDone] = useState(false);
+
+  /* Debounced tenant people search for the direct-share recipient box. Declared here, after every
+     state it reads, so its dependency array does not reference a binding not yet initialised. */
+  useEffect(() => {
+    if (!directShareOpen) return;
+    const q = directShareQuery.trim();
+    if (q.length < 3) {
+      setDirectShareResults([]);
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(() => {
+      searchTenantPeople(context.spHttpClient, siteUrl, q)
+        .then((people) => {
+          if (!cancelled) setDirectShareResults(people.filter((p) => p.email));
+        })
+        .catch(() => {
+          if (!cancelled) setDirectShareResults([]);
+        });
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [directShareOpen, directShareQuery]);
+
   const directDeleteDialog: React.ReactNode = directDeleteConfirm && (
     <div
       style={s.modalBg}
@@ -2554,7 +2630,196 @@ export default function Requests({
       </div>
     </div>
   );
-  const directShareDialog: React.ReactNode = undefined;
+  const directShareDialog: React.ReactNode = directShareOpen && (
+    <div
+      style={s.modalBg}
+      onMouseDown={closeOnBackdrop(() => {
+        if (!directShareBusy) setDirectShareOpen(false);
+      })}
+    >
+      <div style={s.modal} onClick={(e) => e.stopPropagation()}>
+        {directShareDone ? (
+          <>
+            <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>
+              Shared
+            </p>
+            <p style={{ fontSize: 12.5, color: "#605e5c", margin: "0 0 12px" }}>
+              The recipient can now view this document.
+            </p>
+            <button
+              style={s.primary}
+              onClick={() => {
+                setDirectShareOpen(false);
+                setDirectShareDone(false);
+              }}
+            >
+              Close
+            </button>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 16, fontWeight: 600, margin: "0 0 6px" }}>
+              Share this file?
+            </p>
+            <p
+              style={{
+                fontSize: 12.5,
+                color: "#605e5c",
+                margin: "0 0 12px",
+                lineHeight: 1.5,
+              }}
+            >
+              Shares it now — view-only, no approval needed.
+            </p>
+            {directShareRecipients.length > 0 && (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                  marginBottom: 8,
+                }}
+              >
+                {directShareRecipients.map((email) => (
+                  <span
+                    key={email}
+                    style={{
+                      ...s.chip,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4,
+                    }}
+                  >
+                    {email}
+                    {isExternal(email, tenantDomains) && (
+                      <strong style={{ color: "#8a4b00" }}>· outside</strong>
+                    )}
+                    <button
+                      type="button"
+                      style={{
+                        background: "none",
+                        border: "none",
+                        cursor: "pointer",
+                        padding: 0,
+                        fontSize: 12,
+                      }}
+                      onClick={() =>
+                        setDirectShareRecipients((r) =>
+                          r.filter((e) => e !== email),
+                        )
+                      }
+                    >
+                      ✕
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <input
+              type="text"
+              value={directShareQuery}
+              onChange={(e) => setDirectShareQuery(e.target.value)}
+              placeholder="Search by name or email"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "6px 8px",
+                marginBottom: 4,
+              }}
+            />
+            {directShareResults.length > 0 && (
+              <div
+                style={{
+                  border: "1px solid #edebe9",
+                  borderRadius: 4,
+                  marginBottom: 8,
+                  maxHeight: 160,
+                  overflowY: "auto",
+                }}
+              >
+                {directShareResults.map((p) => (
+                  <button
+                    key={p.loginName}
+                    type="button"
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "6px 8px",
+                      border: "none",
+                      background: "none",
+                      cursor: "pointer",
+                      fontSize: 12.5,
+                    }}
+                    onClick={() => {
+                      if (
+                        p.email &&
+                        directShareRecipients.indexOf(p.email) === -1
+                      ) {
+                        setDirectShareRecipients((r) => [...r, p.email]);
+                      }
+                      setDirectShareQuery("");
+                      setDirectShareResults([]);
+                    }}
+                  >
+                    {p.displayName} — {p.email}
+                  </button>
+                ))}
+              </div>
+            )}
+            {directShareError && (
+              <p style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}>
+                {directShareError}
+              </p>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button
+                style={s.ghost}
+                disabled={directShareBusy}
+                onClick={() => setDirectShareOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                style={s.primary}
+                disabled={directShareBusy || directShareRecipients.length === 0}
+                onClick={() => {
+                  if (
+                    directFileView === undefined ||
+                    directFileView.state !== "ready"
+                  ) {
+                    return;
+                  }
+                  const view = directFileView;
+                  setDirectShareBusy(true);
+                  setDirectShareError(undefined);
+                  performDirectShare(
+                    view.fileRef,
+                    view.name,
+                    directShareRecipients,
+                  )
+                    .then((err) => {
+                      setDirectShareBusy(false);
+                      if (err) {
+                        setDirectShareError(err);
+                        return;
+                      }
+                      setDirectShareDone(true);
+                    })
+                    .catch((e) => {
+                      setDirectShareBusy(false);
+                      setDirectShareError((e as Error).message);
+                    });
+                }}
+              >
+                {directShareBusy ? "Sharing…" : "Share"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
 
   /* ⚠ ONE ROUTE IN, ONE LOADER. A click and an email link both only set `viewId`; this effect does
      the reading. It also re-reads when the viewed request's STATUS changes - an approved deletion
