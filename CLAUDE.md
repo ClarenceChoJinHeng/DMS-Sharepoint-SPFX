@@ -1,5 +1,84 @@
 # SDG DMS — Claude Code Project Context
 
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-21 (direct share/delete, re-scoped to three
+> pages):** commits `47a7866`…`c860a2a`, all on `feat/folder-abbreviations`. **Built directly on
+> SDG's LIVE production tenant** (`/sites/CRS`) — the client is short on time and deploys straight
+> there; nothing here was rehearsed on ClarenceDMSTesting first. **NOT re-deployed since the last
+> architecture change (`3d83743`/`2c56080`/`c860a2a`) — the client's last live-tested build was the
+> single-page version, superseded by the three-page split below.**
+>
+> **THE FEATURE, AS IT ENDED UP (client's own final words, verbatim):**
+> *"1. Viewer, C Level, HOD. - A Separate page, no my submsision, no Crs request, a separate page
+> with same design. 2. Approver - Use CRS-Request that is fine 3. PIC - use My subsmission got it?"*
+> — then corrected once: *"Nono HOD can still share, HOD stays in that page to share no
+> redirection"* (HOD's own direct-share right stays on the new page; only HOD's job of DECIDING
+> other people's Share requests was dropped from `CRS-Request.aspx`, not their ability to share).
+>
+> **THREE DESTINATIONS, one shared mechanism.** SharePoint column formatting can only ever act on
+> the ROW (filename, `[$UniqueId]`) — it cannot see who is clicking, so it can only ever point every
+> viewer at ONE fixed page. Each destination decides who belongs there **on load**, client-side:
+> 1. **`CRS-Request.aspx` (File Permission) — Approver-exclusive again.** `pageAccessPolicy.ts`'s
+>    `/request/i` rule reverted from the widened `["UPL","UPLHC","APR","APRHC"]` back to
+>    `["APR","APRHC"]` only — its own comment records the one-day supersession and why. The
+>    `?file=<UniqueId>` direct-view feature built earlier the same day (Tasks 3–8: resolve, probe
+>    rights via `probeFileRights`, Delete/Share buttons, `writeDirectDeletionRequest`,
+>    `performDirectShare` with a recipient-chip picker) is **unchanged code** — only its reachable
+>    audience narrowed.
+> 2. **My Submissions (PIC's home) — extended to resolve ANY document, not just the viewer's own.**
+>    New `resolveArbitraryFile(uniqueId)` in `MySubmissions.tsx`, using the existing
+>    `librarySegmentOf`/`cachedHcLibraries()`/`cachedArchiveLibraries()` machinery, feeds the SAME
+>    `openRow`/`loadFieldText`/`probeRightsFor`/`fetchFieldText` pipeline every other row already
+>    uses — confirmed by investigation (not assumption) that this pipeline works generically off any
+>    `Submission`-shaped object. That is what makes "same design as My Submission" free: nothing new
+>    to build for the detail view, Delete/Share buttons, or `FileDetailPanel`.
+> 3. **A THIRD, NEW PAGE — Viewer / C-Level / Head of Department.** `MySubmissionsWebPart.ts` gained
+>    a property-pane checkbox, `viewerOnlyMode`. Mounted a SECOND time on the new page with that box
+>    ticked, the SAME component becomes: (a) role-gated on load — `classifyViewerForFileRoute`
+>    (`shared/viewerFileRoute.ts`, pure, 8 tests) reads the viewer's own SharePoint groups against
+>    the Group Map, and **checks `APR`/`APRHC` BEFORE `UPL`/`UPLHC`** because a Head of Unit's own
+>    persona has carried `UPL` too since 2026-09-17 — checking uploader first would misroute an
+>    Approver; (b) silently `window.location.replace`s a PIC to My Submissions and an Approver to
+>    File Permission, both resolved via the existing `resolveLink`/`readSitePages` pattern (never
+>    hardcoded — this client renames every page at import); (c) shows nothing else — no submissions
+>    list, no batch grouping, no request queue — until a `?file=` link opens a document, at which
+>    point it is the identical detail view PIC and Approver already have. A new `pageAccessPolicy.ts`
+>    rule (`/document.?view|file.?view/i`, inserted BEFORE `/request/i`) grants
+>    `["UPL","UPLHC","APR","APRHC","MEMBER","MEMBERHC","GLOBAL","SEGVIEW","DEPTVIEW"]` — every role
+>    that can browse Documents/HC Documents/Archive/HC Archive, since PIC/Approver are redirected off
+>    it anyway and the actual audience is Viewer/C-Level/HOD.
+>
+> **⚠ TWO LIVE BUGS FOUND AND FIXED THE SAME SESSION, BOTH FROM SCREENSHOTS, NEITHER FROM
+> REASONING ALONE:**
+> - **`customRowAction` silently ignored when nested inside a `children[]` element** in the
+>   column-formatting JSON — SharePoint only honours it on the TOP-LEVEL formatting object. Symptom:
+>   "It's missing the pointer click." Fixed by hoisting it to the root `elmType`.
+> - **`[$UniqueId]` emits the GUID WRAPPED IN CURLY BRACES** (`{E2146F0B-...}`), and
+>   `GetFileById(guid'...')` rejects that shape with HTTP 400 — "The document could not be read."
+>   Fixed by stripping `^\{`/`\}$` from the parsed `?file=` value, in BOTH `Requests.tsx` (found
+>   first, `d92d80e`) and `MySubmissions.tsx` (applied proactively once it also became a consumer of
+>   the same query parameter, `c860a2a`).
+>
+> **STILL OUTSTANDING — none of this is done yet:**
+> - **The `.sppkg` has NOT been re-deployed since `c860a2a`.** The client's last LIVE test was
+>   against the single-page (pre-re-scope) build. Every file mentioned above is built, `tsc`-clean,
+>   test-suite-clean (2013/2013), and spot-checked present in the freshly-built bundle — but nothing
+>   past that point has touched SDG's tenant.
+> - **The client must CREATE the third page.** No name is confirmed yet — `Document-Viewer.aspx` /
+>   `File-Viewer.aspx` / `CRS-Document-Viewer.aspx` all match the new `/document.?view|file.?view/i`
+>   rule; whatever the client actually names it must match that pattern or the rule needs adjusting.
+> - **Add the "My Submissions" web part to the new page a second time** (it is already on the real
+>   My Submissions page) and **tick the `viewerOnlyMode` property-pane checkbox** on this second
+>   instance only — leave the first instance's checkbox off.
+> - **Re-run Folder Reconciliation** — the page-policy change (both the `/request/i` narrowing and
+>   the new `/document.?view/i` rule) needs a run to actually apply the corresponding page ACL
+>   grants/removals; this has not happened since the policy changed.
+> - **Decide, and then act on, where the column-formatting JSON on `Documents`' Name column should
+>   point.** It currently points at `CRS-Request.aspx` (built earlier the same day, before the
+>   re-scope) — check with the client whether it should now point at the NEW third page instead,
+>   since Viewer/C-Level/HOD are the roles who'd actually be browsing that library directly. Once
+>   decided, the SAME JSON (with the URL swapped) still needs rolling out to the other three
+>   libraries — `HC Documents`, `Archive`, `HC Archive` — none of which have it yet.
+
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-20:
 > `docs/2026-09-20-session-handoff.md`.** A long, single session. Six commits since the last pointer
 > update (`2830f90` → `d3c9e42`), all on `feat/folder-abbreviations`. **⚠ CLIENT WAS DEPLOYING AS OF
