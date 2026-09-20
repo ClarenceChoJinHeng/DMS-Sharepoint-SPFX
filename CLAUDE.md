@@ -14335,3 +14335,44 @@ they did not.
   flow happens to currently write (which, before today's flow edit, was inconsistent — see the
   earlier "SHOW NAMES NOT EMAILS" section for the exact three-shapes-of-one-fact problem this was
   already built to paper over).
+
+## ⚠⚠ `ActorName` IS NOT RELIABLY A REAL NAME — TWO FLOWS WRITE TWO DIFFERENT NOT-A-NAME SHAPES (2026-09-20)
+Client asked directly whether the "Deletion requested"/"Share requested"/"Request approved" rows
+also needed a fix, pointing at live screenshots showing raw emails (`armen.sidqi@sdguthrie.com`,
+`clarence@trinergydigital.com`, etc.). **Checked against the real flow exports and found a genuine
+bug in the code's OWN logic, not something a deploy alone would have fixed.**
+- **THE BUG: the Who cell trusted ANY non-blank `ActorName` as already a real display name.** Two
+  flows write two different shapes that are non-blank and NOT real names:
+  - `CRS — Audit request activity`'s `Create_item` sets
+    `item/ActorName: "@outputs('ActorEmail')"` — the **FULL raw address**, e.g.
+    `clarence@trinergydigital.com`.
+  - `CRS — Execute approved deletion`'s `Create_item` sets `item/ActorName` from
+    `first(split(..., '@'))` — just the **local part**, dots and all, e.g. `goh.kheng.wei`.
+
+  So the old `r.ActorName || nameFromEmail(r.ActorEmail)` never reached `nameFromEmail` for either
+  shape, because `r.ActorName` was already truthy — it showed the raw or half-processed value
+  verbatim. **This is not a display gap a build/deploy alone would ever have closed** — the render
+  logic itself needed to stop trusting `ActorName` unconditionally.
+- **FIXED with `resolveActorDisplay(actorEmail, actorName)`**, new in `shared/displayName.ts` (pure,
+  6 new tests). Order: a KNOWN service account (checked on either field) wins outright; otherwise
+  `ActorName` (falling back to `ActorEmail` if blank) is run through `nameFromEmail`
+  **unconditionally** — no longer treated as "already good, trust it."
+  - **⚠ THIS IS SAFE FOR A GENUINE DISPLAY NAME TOO, and that is the whole reason it can be
+    unconditional.** Auto-route's own `ActorName` (`triggerOutputs()?['body/Author/DisplayName']`,
+    a real SharePoint People-field DisplayName like "Clarence Cho") has no `@`, `.` or `_` to split
+    on — `nameFromEmail` treats it as one "word", title-cases its first letter (already capital), and
+    passes it through essentially unchanged. Pinned by test. The function correctly cleans up BOTH
+    broken shapes above because `nameFromEmail` itself already splits on `@` first, so a full address
+    OR a bare local part both land in the same place.
+  - `AuditLog.tsx`'s Who cell is now one call: `resolveActorDisplay(r.ActorEmail, r.ActorName)`,
+    replacing the inline `canonicalServiceAccountName(...) ?? ... ?? r.ActorName || nameFromEmail(...)`
+    expression. `nameFromEmail`/`canonicalServiceAccountName` are no longer imported into this file
+    directly — only `resolveActorDisplay` is, since it is now the ONE entry point for this decision.
+  - **⚠ NO FLOW CHANGE NEEDED, DELIBERATELY.** Fixing this on the flow side would mean finding and
+    correcting the `ActorName` expression in (at least) these two flows individually, and a THIRD
+    flow writing a THIRD not-quite-a-name shape tomorrow would need yet another fix. Fixing it once,
+    at the one place every shape is eventually READ, closes all three at once and cannot be defeated
+    by a new flow doing this differently.
+- **Verified**: `tsc --noEmit` clean, `npx heft test --clean` → **1997/1997** passing (6 new tests),
+  lint at the documented pre-existing baseline, no new warnings on either touched file.
+  **NOT yet deployed or tested live.**

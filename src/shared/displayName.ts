@@ -93,6 +93,43 @@ export function canonicalServiceAccountName(
 }
 
 /**
+ * The label an Audit Log "Who" cell should show, given the row's stored `ActorEmail`/`ActorName`.
+ *
+ * Built 2026-09-20 after checking the ACTUAL flow definitions (`PowerAutomateFlowsSDG/*.zip`), not
+ * assuming from a runbook. Two different flows write two different "already partly processed, but
+ * still not a real name" shapes into `ActorName`, and BOTH defeated the naive `r.ActorName ||
+ * nameFromEmail(r.ActorEmail)` this file used to build the Who cell with:
+ *
+ *   - `CRS — Audit request activity` writes the FULL raw address into `ActorName`
+ *     (`item/ActorName: "@outputs('ActorEmail')"`) — e.g. `clarence@trinergydigital.com`.
+ *   - `CRS — Execute approved deletion` writes just the LOCAL PART, dots and all
+ *     (`first(split(..., '@'))`) — e.g. `goh.kheng.wei`.
+ *
+ * Neither is blank and neither is a real display name, so the old logic treated both as "already
+ * good, show verbatim" and never reached the name-guessing fallback at all. This function instead
+ * treats `ActorName` as INPUT worth normalising rather than a value to trust outright: a KNOWN
+ * service account (either field) wins first; otherwise `ActorName` (falling back to `ActorEmail` if
+ * blank) is run through `nameFromEmail` unconditionally. This is a safe no-op for a genuinely good
+ * display name — Auto-route's own `ActorName` (`triggerOutputs()?['body/Author/DisplayName']`, a
+ * real SharePoint People field's DisplayName like "Clarence Cho") has no `@`, `.` or `_` to split
+ * on, so it passes through essentially unchanged — and it correctly cleans up either broken shape
+ * above, because `nameFromEmail` itself already splits on `@` first.
+ */
+export function resolveActorDisplay(
+  actorEmail: string | undefined,
+  actorName: string | undefined,
+): string {
+  const known =
+    canonicalServiceAccountName(actorEmail ?? "") ??
+    canonicalServiceAccountName(actorName ?? "");
+  if (known) return known;
+
+  const source =
+    actorName && actorName.trim().length > 0 ? actorName : actorEmail;
+  return source ? nameFromEmail(source) : "—";
+}
+
+/**
  * The CURRENT proxy account's full address — the one Power Automate flows run as, and the one
  * `shared/dmsFolderMap.ts`'s `stampEditorAsProxy` resolves and writes into `Modified By` on files
  * this app's own CODE moves (as opposed to a flow moving them, where the flow's OWN connection

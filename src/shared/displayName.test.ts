@@ -2,6 +2,7 @@ import {
   canonicalServiceAccountName,
   displayNameFor,
   nameFromEmail,
+  resolveActorDisplay,
 } from "./displayName";
 
 describe("nameFromEmail", () => {
@@ -99,5 +100,51 @@ describe("canonicalServiceAccountName", () => {
 
   it("returns undefined for an empty string", () => {
     expect(canonicalServiceAccountName("")).toBeUndefined();
+  });
+});
+
+describe("resolveActorDisplay", () => {
+  it("cleans up a FULL raw email stored as ActorName — CRS — Audit request activity's shape", () => {
+    expect(
+      resolveActorDisplay(
+        "clarence@trinergydigital.com",
+        "clarence@trinergydigital.com",
+      ),
+    ).toBe("Clarence");
+  });
+
+  it("cleans up a bare LOCAL PART stored as ActorName — Execute approved deletion's shape", () => {
+    expect(
+      resolveActorDisplay("goh.kheng.wei@sdguthrie.com", "goh.kheng.wei"),
+    ).toBe("Goh Kheng Wei");
+  });
+
+  it("leaves a genuine display name essentially unchanged — Auto-route's shape", () => {
+    expect(
+      resolveActorDisplay("clarence@trinergydigital.com", "Clarence Cho"),
+    ).toBe("Clarence Cho");
+  });
+
+  it("recognises a known service account over guessing, on EITHER field", () => {
+    expect(resolveActorDisplay("gdc@sdguthrie.com", "gdc@sdguthrie.com")).toBe(
+      "Guthrie Document Centre",
+    );
+    expect(resolveActorDisplay(undefined, "gdc")).toBe(
+      "Guthrie Document Centre",
+    );
+  });
+
+  it("falls back to ActorEmail when ActorName is blank", () => {
+    expect(resolveActorDisplay("goh.kheng.wei@sdguthrie.com", undefined)).toBe(
+      "Goh Kheng Wei",
+    );
+    expect(resolveActorDisplay("goh.kheng.wei@sdguthrie.com", "")).toBe(
+      "Goh Kheng Wei",
+    );
+  });
+
+  it("returns an em dash when neither field has anything", () => {
+    expect(resolveActorDisplay(undefined, undefined)).toBe("—");
+    expect(resolveActorDisplay("", "")).toBe("—");
   });
 });

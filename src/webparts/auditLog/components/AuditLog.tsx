@@ -9,10 +9,7 @@ import { pagerWindow } from "../../../shared/pagerWindow";
 // The Event column prints a SHORT library name - see `shortLibrary`.
 import { documentsLibraryTitle } from "../../../shared/naming";
 // A guessed real name from an email address, for the "Who" column — see the module's own comment.
-import {
-  nameFromEmail,
-  canonicalServiceAccountName,
-} from "../../../shared/displayName";
+import { resolveActorDisplay } from "../../../shared/displayName";
 import { SPHttpClient } from "@microsoft/sp-http";
 
 import {
@@ -69,10 +66,12 @@ const PAGER_WINDOW_SIZE = 7;
 
 /* `nameFromEmail` USED TO BE LOCAL TO THIS FILE, added 2026-09-13 for the "Who" column (client QA
    item #48.4: "standardise all email address to user name"). MOVED to shared/displayName.ts
-   2026-09-20 once the same complaint reached Requests.tsx and MySubmissions.tsx too — one person
-   asked twice, in two files, is how the two copies drift. `r.ActorName || r.ActorEmail || "—"`
-   below still prefers the stored name; the import only covers the rows where `ActorName` was never
-   written (mostly flow-authored rows) and the fallback would otherwise show a bare address. */
+   2026-09-20 — briefly also applied to Requests.tsx/MySubmissions.tsx for the same complaint, then
+   REVERTED there at the client's request the same day ("did you change Request.tsx and
+   MySubmission.tsx as well? If so revert it") — this file is the module's only current consumer.
+   The Who cell itself is `resolveActorDisplay(r.ActorEmail, r.ActorName)` — see that function's own
+   comment for why a naive `r.ActorName || nameFromEmail(r.ActorEmail)` was not enough: two different
+   flows write two different NOT-a-real-name shapes into `ActorName` itself. */
 
 /**
  * The library name as the Event column should PRINT it (client, 2026-09-04: *"For this Restricted &
@@ -1436,17 +1435,18 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                         written. `r.ActorEmail` itself, and the CSV export, are untouched.
 
                         2026-09-20: a KNOWN SERVICE ACCOUNT (gdc/crs) is recognised and canonicalised
-                        FIRST, ahead of whatever `ActorName` happens to hold — see
-                        `canonicalServiceAccountName`'s own comment. Client screenshot showed the
-                        SAME proxy account rendering three different ways across adjacent rows
-                        ("Guthrie Document Centre", the raw address, and a bare "gdc") because
-                        different flow actions store this one fact three different ways; this is
-                        what makes all three read the same from here on. Archived/Routed rows go
-                        through the SAME logic now — no more special-cased blank. */}
-                    {(canonicalServiceAccountName(r.ActorEmail ?? "") ??
-                        canonicalServiceAccountName(r.ActorName ?? "") ??
-                        r.ActorName) ||
-                      (r.ActorEmail ? nameFromEmail(r.ActorEmail) : "—")}
+                        FIRST. Archived/Routed rows go through the SAME logic now — no more
+                        special-cased blank.
+
+                        ⚠⚠ `resolveActorDisplay` REPLACES a naive `ActorName || nameFromEmail(...)`
+                        after checking the REAL flow definitions found `ActorName` is NOT reliably a
+                        genuine display name: `CRS — Audit request activity` writes the FULL raw
+                        email into it, `CRS — Execute approved deletion` writes just the LOCAL PART
+                        (dots and all) — both non-blank, both defeat a naive "if present, trust it"
+                        check. `resolveActorDisplay` treats `ActorName` as input to normalise, not a
+                        value to trust outright — see its own comment for why this is safe for a
+                        GENUINE display name too (Auto-route's own `ActorName`). */}
+                    {resolveActorDisplay(r.ActorEmail, r.ActorName)}
                   </div>
                 </div>
               </div>
