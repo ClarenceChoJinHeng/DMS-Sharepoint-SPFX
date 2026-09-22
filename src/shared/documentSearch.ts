@@ -284,6 +284,31 @@ export function kqlPathScope(
  *
  * Returns blank when the scope is empty or nothing was asked for — the caller must treat blank as
  * "do not run", not as "match everything".
+ *
+ * ⚠⚠ DOCUMENT TYPE / YEAR / CONFIDENTIALITY / SEGMENT ARE DELIBERATELY NOT SENT AS EXACT `prop:"v"`
+ * CLAUSES HERE ANY MORE (2026-09-21, client: picking ANY one Advanced Filter, on its own, returned
+ * "No Result Found" — regardless of which value was picked, even one taken verbatim off a document
+ * the free-text search had just found). Confirmed live: the crawled `<Field>OWSTEXT` managed
+ * property behind each of these is EMPTY on every document on this tenant — `DepartmentOWSTEXT`
+ * returned `TotalRows 0` against a set with real matches (2026-09-03), and `KeywordOWSTEXT` read
+ * `null` on every row while the bare-term full-text match still worked (2026-09-05). A `prop:"v"`
+ * clause against a property nobody has a value in is not "no constraint" — it is a HARD, PERMANENT
+ * ZERO the instant it is added, which is exactly the bug: free text alone worked, and adding any one
+ * of the four Advanced Filters killed the result set outright.
+ *
+ * `managedProperty`'s own doc comment already named this as "the one assumption that has to be
+ * verified on a live site" and it did not hold. The fix is NOT another guess at managed-property
+ * syntax (a 2026-09-02/03 attempt already traded one failure mode for another that way) — these four
+ * are narrowed CLIENT-SIDE instead, over a REST read of the exact items this query found. See
+ * `searchMetadataMatches` and its caller in `DocumentSearch.tsx`'s `runSearch`, which mirrors the
+ * REST/`buildListFilter` side's own `metadataFilterMatches` pattern — just covering Segment too,
+ * because REST can push `Business_x0020_Segment eq '...'` down to SharePoint itself (plain text,
+ * proven working) while Search cannot push down any of the four.
+ *
+ * ⚠ THE TIER CLAUSES BELOW ARE THE SAME MECHANISM AND ARE THEREFORE EQUALLY UNRELIABLE — left as
+ * they are only because nothing in the current UI can set `c.tiers` (removed 2026-08-30), so they
+ * are dead code today. If tier filtering is ever reintroduced here, give it the same client-side
+ * treatment rather than trusting `managedProperty()` for it.
  */
 export function buildKql(c: SearchCriteria, scope: string): string {
   if (clean(scope).length === 0) return "";
@@ -296,19 +321,6 @@ export function buildKql(c: SearchCriteria, scope: string): string {
 
   for (const word of searchWords(c.text)) {
     const clause = kqlWordClause(word);
-    if (clause.length > 0) parts.push(clause);
-  }
-
-  const exact = [
-    kqlEquals(managedProperty("Document_x0020_Type"), c.documentType),
-    kqlEquals(managedProperty("Year"), c.year),
-    kqlEquals(
-      managedProperty("Confidentiality_x0020_Level"),
-      c.confidentiality,
-    ),
-    kqlEquals(managedProperty("Business_x0020_Segment"), c.segment),
-  ];
-  for (const clause of exact) {
     if (clause.length > 0) parts.push(clause);
   }
 
@@ -430,6 +442,51 @@ export function metadataFilterMatches(
     same(c.documentType, row.documentType) &&
     same(c.year, row.year) &&
     same(c.confidentiality, row.confidentiality)
+  );
+}
+
+/**
+ * Does the KQL/Search path have anything it needs to narrow client-side at all?
+ *
+ * Broader than `hasMetadataFilter` by exactly one field, Segment, and DELIBERATELY so.
+ * `Business_x0020_Segment` is plain text and REST can push `eq` down to SharePoint itself (proven
+ * working — `buildListFilter` does exactly that), so the approval libraries never reach
+ * `metadataFilterMatches` needing to re-check it. Search cannot push down ANY of the four — see the
+ * warning on `buildKql` — so its own narrowing pass (`searchMetadataMatches`) has to cover Segment
+ * too, and this is the flag that arms it.
+ */
+export function hasSearchNarrowFilter(c: SearchCriteria): boolean {
+  return hasMetadataFilter(c) || clean(c.segment).length > 0;
+}
+
+/**
+ * Does one document Search found satisfy Document Type, Year, Confidentiality AND Segment?
+ *
+ * The Search-side counterpart to `metadataFilterMatches` above, extended to cover Segment for the
+ * reason `hasSearchNarrowFilter` explains — Search cannot push any of the four down, where REST can
+ * push Segment down on its own. Same comparison rule (trimmed, case-insensitive; a blank row value
+ * never satisfies a set filter) so the two halves of this page can never disagree about what
+ * "matches" means for the three fields they share.
+ */
+export function searchMetadataMatches(
+  c: Pick<SearchCriteria, "documentType" | "year" | "confidentiality" | "segment">,
+  row: {
+    documentType: string;
+    year: string;
+    confidentiality: string;
+    segment: string;
+  },
+): boolean {
+  const same = (want: string, got: string): boolean => {
+    const w = clean(want);
+    if (w.length === 0) return true;
+    return clean(got).toLowerCase() === w.toLowerCase();
+  };
+  return (
+    same(c.documentType, row.documentType) &&
+    same(c.year, row.year) &&
+    same(c.confidentiality, row.confidentiality) &&
+    same(c.segment, row.segment)
   );
 }
 

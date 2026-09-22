@@ -400,23 +400,43 @@ type ProvTarget = {
 //
 // HC is absent by design: Highly Confidential is Phase 2 (see groupMapModel).
 const ROLE_TO_PERMISSION: Record<string, string> = {
-  // ⚠⚠ MEMBER/GLOBAL/SEGVIEW CHANGED FROM "Read" TO "Restricted View" (2026-09-14, client: "change
-  // read to restricted view for all the groups for a more narrower read only to prevent user from
-  // download" — scoped, on their confirmation, to "only the pure viewer roles"). Built-in level,
-  // present on every SharePoint site with no creation or prefix step — unlike the custom "CRS …"
-  // levels, it needs no line in `applyPermissionPrefix` below, the same reason "Read" itself needs
-  // none. If a tenant's own copy of this level is ever named differently, reconciliation already
-  // fails LOUD and NAMED (`no "Restricted View" role definition on site`) rather than silently
-  // granting nothing — the same safety net every other level here relies on.
+  // ⚠⚠ REVERTED 2026-09-22 — MEMBER/GLOBAL/SEGVIEW/DEPTVIEW BACK TO "Read", FROM "Restricted View".
+  // The 2026-09-14/15 change (see the struck history immediately below) narrowed these four roles to
+  // "Restricted View" specifically to block downloads. It also broke document PREVIEW for every one
+  // of them: "Restricted View" routes ALL viewing through Office Online's server-side renderer with
+  // no "Open Items" permission, and this project's preview code (`shared/filePreview.ts`) only sends
+  // Office docs (docx/xlsx/pptx/csv) through that route — PDF, image and plain-text previews fetch
+  // the raw file URL directly, which "Restricted View" refuses outright as "You can't access this
+  // item". Client, 2026-09-22, asked to fix that report ("we really got to fix the no access to this
+  // item for viewer viewing files") and, once the mechanism was explained, chose the guaranteed fix
+  // over the unverified one (routing PDF/image/text through WOPI too, which was offered and not
+  // taken — worth revisiting later as an ADDITION on top of "Read", not a replacement for it).
   //
-  // MEMBERHC remains DELIBERATELY UNTOUCHED — still plain "Read", further down this table. It was
-  // never asked about; only DEPTVIEW has been widened in since.
+  // ⚠ THIS GIVES UP THE NO-DOWNLOAD PROTECTION THE 2026-09-14/15 CHANGE EXISTED FOR. Say this
+  // plainly if asked why Viewer/C-Level/HOD can download again: it is the direct trade for preview
+  // working, not an oversight.
   //
-  // See `PURE_VIEWER_ROLES` below: `READ_ONLY_LIBS` (Archive/ArchiveHC) hardcodes plain "Read" for
-  // every OTHER role regardless of what it holds elsewhere, and that rule stays. DEPTVIEW does not
-  // need adding there — it is not in `LIBRARY_ROLES.Archive`/`.ArchiveHC` at all (only GLOBAL/SEGVIEW
-  // reach the archive today), so it never reaches those two libraries regardless of this table.
-  MEMBER: "Restricted View",
+  // ⚠ A STALE "Restricted View" BINDING CAN BE LEFT ON A FOLDER AFTER THIS RUNS — reconciliation
+  // only ever ADDS a folder-scope grant, so an already-provisioned folder keeps its old "Restricted
+  // View" role assignment alongside the new "Read" one once reconciliation re-runs. Harmless for
+  // access (SharePoint unions role assignments, and Read is the broader of the two, so having both
+  // denies nothing) but visible as a redundant binding — same class of leftover the short-lived
+  // 2026-09-15/16 "stale Read repair tool" existed to clean up, in the opposite direction. Not
+  // rebuilt here; `removeSingleRoleBinding` further down still has the shape for it if this needs
+  // tidying later.
+  //
+  // ⚠⚠ HISTORY, KEPT RATHER THAN DELETED — the original 2026-09-14 comment, so the earlier reasoning
+  // is not lost if this is ever revisited: "MEMBER/GLOBAL/SEGVIEW CHANGED FROM 'Read' TO 'Restricted
+  // View' (2026-09-14, client: 'change read to restricted view for all the groups for a more
+  // narrower read only to prevent user from download' — scoped, on their confirmation, to 'only the
+  // pure viewer roles'). Built-in level, present on every SharePoint site with no creation or prefix
+  // step — unlike the custom 'CRS …' levels, it needs no line in `applyPermissionPrefix` below, the
+  // same reason 'Read' itself needs none. If a tenant's own copy of this level is ever named
+  // differently, reconciliation already fails LOUD and NAMED ('no "Restricted View" role definition
+  // on site') rather than silently granting nothing — the same safety net every other level here
+  // relies on." `MEMBERHC` was DELIBERATELY left out of that change and stays plain "Read" below,
+  // unaffected by any of this.
+  MEMBER: "Read",
   // Re-pointed at the site's actual prefix by applyPermissionPrefix() below. The DMS values are
   // the legacy default, used until the role definitions have been read.
   UPL: "DMS Upload",
@@ -433,7 +453,7 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // Documents-only (see LIBRARY_ROLES); a viewer on Staging would be reading other
   // people's pending drafts, which is the isolation rule the whole model rests on.
   //
-  GLOBAL: "Restricted View",
+  GLOBAL: "Read", // Reverted with MEMBER, 2026-09-22 — see that entry's comment.
   // SEGVIEW — un-retired 2026-08-07 for the client's second C-Level shape, "view its own
   // business segment only". Same level as GLOBAL and the same fan-DOWN; the difference is
   // only how far it travels. A GLOBAL row is termless and reaches every segment; a SEGVIEW
@@ -442,7 +462,7 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // Documents-only, like GLOBAL, and for the same reason — see LIBRARY_ROLES. This is the
   // one role where a mistake is both quiet and wide: a SEGVIEW row wrongly accepted on
   // Staging hands one person every unapproved draft in an entire business segment.
-  SEGVIEW: "Restricted View",
+  SEGVIEW: "Read", // Reverted with MEMBER, 2026-09-22 — see that entry's comment.
   // SHARE, 2026-08-15 — the right to grant someone else access, needed by whoever APPROVES a share
   // request, because an approver can only approve what they can perform.
   //
@@ -481,7 +501,7 @@ const ROLE_TO_PERMISSION: Record<string, string> = {
   // "stale Read" repair tool (built 2026-09-15, removed 2026-09-16 after use) existed to clean up —
   // if that class of leftover needs clearing again, `removeSingleRoleBinding` further down still
   // has the shape for it.
-  DEPTVIEW: "Restricted View",
+  DEPTVIEW: "Read", // Reverted with MEMBER, 2026-09-22 — see that entry's comment.
   // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
   // library at all — Limited Access on the parent chain lets a direct folder URL through but
   // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without

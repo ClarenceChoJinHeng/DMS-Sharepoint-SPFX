@@ -53,13 +53,10 @@
   // Only check submissions whose recorded path CONTAINS one of these (case-insensitive). Leave
   // empty to check everything, as before. Narrows a big list down to one test's own files — the HC
   // and non-HC copies of the SAME folder both still match, since only the LIBRARY segment differs
-  // ("ApprovalDocument" vs "HCApprovalDocument"), never the tail of the path. Example, matching
-  // today's two test sets regardless of confidentiality:
-  //   const PATH_FILTER = ["GUTHRIE/2025/Legal Opinion", "EUB/BMW/vv/2024/Licenses"];
-  const PATH_FILTER = [
-    "GUTHRIE/2025/Legal Opinion",
-    "EUB/BMW/vv/2024/Licenses",
-  ];
+  // ("ApprovalDocument" vs "HCApprovalDocument"), never the tail of the path.
+  // 2026-09-21: the front-to-back upload/approve test ground, NBPOLHO > CDS > UPSUPPORT > 2024 > Ara
+  // > Approval Papers.
+  const PATH_FILTER = ["UPSUPPORT/2025/Approval Papers"];
 
   /* ── Resolve the site ──────────────────────────────────────────────────── */
   const resolveWeb = () => {
@@ -321,7 +318,8 @@
       const name = entry.FieldName;
       if (!name) continue;
       const val = plain[name];
-      const isBlank = val === undefined || val === null || String(val).trim() === "";
+      const isBlank =
+        val === undefined || val === null || String(val).trim() === "";
       if (!isBlank) continue;
       if (OPTIONAL_FIELDS.indexOf(name) > -1) blankOptionalFields.push(name);
       else blankFields.push(name);
@@ -333,7 +331,11 @@
         library: found.title,
       });
     } else if (blankOptionalFields.length > 0) {
-      blankOptionalOnly.push({ r, fields: blankOptionalFields, library: found.title });
+      blankOptionalOnly.push({
+        r,
+        fields: blankOptionalFields,
+        library: found.title,
+      });
     }
   }
 

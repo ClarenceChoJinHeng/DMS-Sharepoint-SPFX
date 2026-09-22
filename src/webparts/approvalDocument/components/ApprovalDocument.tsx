@@ -395,8 +395,8 @@ const s = {
     fontWeight: 600,
     fontFamily: "inherit",
     cursor: "pointer",
-    minWidth: 200,
-    maxWidth: 200,
+    minWidth: 245,
+    maxWidth: 245,
   } as React.CSSProperties,
   // Secondary popup button — only used when a primary is present, so the two are distinguishable.
   // No marginTop any more: the buttons live in a flex row (popupBtnRow) whose `gap` spaces them on
@@ -786,7 +786,8 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
           // Only overwrite on a date we could actually read. A blank column, an unparseable
           // value or a failed request all leave SharePoint's own string standing — uglier, not
           // wrong.
-          if (d && !isNaN(d.getTime())) text.DocumentDate = formatSubmittedOn(d);
+          if (d && !isNaN(d.getTime()))
+            text.DocumentDate = formatSubmittedOn(d);
         }
       } catch {
         /* keep the formatted string — a decoration must never cost the panel its details */
@@ -886,6 +887,25 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         }
       }
       if (!res.ok) {
+        /* ⚠ A COLD LOAD OF A STALE `?itemId=` LINK IS NOT THE SAME FAILURE AS `!item` BELOW.
+           `!item` only fires once an item has already loaded and then vanished mid-session (e.g.
+           approving the last item in the queue) — this branch is reached on a FRESH page load, and
+           until 2026-09-22 it leaked the raw SharePoint exception verbatim: `HTTP 404:
+           {"error":{"code":"-2130575338, System.ArgumentException","message":"Item does not exist.
+           It may have been deleted by another user."}}`. That is exactly what Auto-route's copy
+           (approve) then delete (of the SOURCE item) produces once the link's `itemId` is routed
+           away — "another user" is the service account running the flow.
+           Only a 404 gets the friendly wording: a 403 or 500 is a genuinely different problem (no
+           access, a throttle) and must not be told to the approver as "already decided," which
+           would send them looking in the wrong place. */
+        if (res.status === 404) {
+          setFetchError(
+            "This document could not be found. It has most likely already been approved " +
+              "or deleted.",
+          );
+          setLoading(false);
+          return;
+        }
         const body = await res.text().catch(() => "");
         throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
       }
@@ -1918,6 +1938,8 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
   /* THE FIXED-FIELD LABELS `documentDetails.ts` PRODUCES TODAY — a closed, known set, used to tell a
      FIXED row apart from a TIER row (Segment, Department, Unit, or whatever THIS segment calls its
      own tiers) without hardcoding tier names, which differ per segment. */
+  // "Remark" removed 2026-09-21 (client) — documentDetails.ts no longer produces it at all, so it
+  // is gone from this set too rather than left matching a label that can never appear again.
   const CURRENT_FIXED_LABELS = new Set([
     "Document Type",
     "Year",
@@ -1926,7 +1948,6 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     "Legally Privileged",
     "Project Name",
     "Vendor / Customer",
-    "Remark",
     "Keyword",
   ]);
   const orderedDetailRows = (rows: DetailRow[]): DetailRow[] => {
@@ -1946,7 +1967,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
       { from: "Confidentiality", label: "Confidential Level" },
       { from: "Legally Privileged", label: "Legally Privileged" },
       { from: "Keyword", label: "Keyword" },
-      { from: "Remark", label: "Remark for Approver" },
+      // "Remark for Approver" removed 2026-09-21 (client: "remove the Remark for Approver from the
+      // upload form and every other places") — nothing writes it any more, so it has no value to
+      // show, and the row is gone rather than shown permanently blank.
     ];
     const fixed: DetailRow[] = wanted.map((w) =>
       w.from === undefined

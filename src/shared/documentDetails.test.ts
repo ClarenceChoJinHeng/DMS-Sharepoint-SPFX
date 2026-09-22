@@ -223,10 +223,11 @@ describe("buildDetailRows", () => {
 
   it("includes every fixed field, in the library's own order, whether or not it has a value", () => {
     const labels = buildDetailRows({ fieldText: UPOPSMY }).map((r) => r.label);
+    // "Remark" removed 2026-09-21 (client) — FILE_FIXED_FIELDS no longer includes it.
     expect(labels).toEqual([
       "Segment", "Region", "Estate Mill",
       "Document Type", "Year", "Document Date", "Confidentiality",
-      "Legally Privileged", "Project Name", "Vendor / Customer", "Remark", "Keyword",
+      "Legally Privileged", "Project Name", "Vendor / Customer", "Keyword",
     ]);
   });
 
@@ -436,6 +437,9 @@ describe("batch and file field split", () => {
   });
 
   it("buildFileRows carries every per-file field, dashed if blank, and no destination field", () => {
+    // "Remark" is fed into the fixture on purpose — FILE_FIXED_FIELDS no longer lists it (removed
+    // 2026-09-21), so this also proves an UNLISTED field in fieldText is correctly dropped, not
+    // just that a listed-but-blank one is dashed.
     const rows = buildFileRows({
       fieldText: { Year: "2024", Remark: "please review", ProjectName: "Alpha" },
       trailing: [{ label: "File size", value: "1.4 MB" }],
@@ -443,12 +447,12 @@ describe("batch and file field split", () => {
     const labels = rows.map((r) => r.label);
     expect(labels).toEqual([
       "Document Date", "Confidentiality", "Legally Privileged",
-      "Project Name", "Vendor / Customer", "Remark", "Keyword",
+      "Project Name", "Vendor / Customer", "Keyword",
       "File size",
     ]);
     expect(labels).not.toContain("Year"); // a BATCH field — always excluded here, blank or not
+    expect(labels).not.toContain("Remark"); // no longer a fixed field at all
     expect(rows.find((r) => r.label === "Project Name")?.value).toBe("Alpha");
-    expect(rows.find((r) => r.label === "Remark")?.value).toBe("please review");
     expect(rows.find((r) => r.label === "Document Date")?.value).toBe("—");
   });
 

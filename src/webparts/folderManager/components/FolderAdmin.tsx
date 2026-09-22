@@ -2010,7 +2010,7 @@ export default function FolderAdmin({
               </select>
               <p style={s.hint}>
                 {runBusy
-                  ? "You cannot change segment while this step is running — the run would carry on against the segment it started with."
+                  ? "You cannot change the segment while this process is running. The process will continue using the segment selected when it started."
                   : segSwitchDirty
                     ? "Save or discard what you are editing first — switching segment now would lose it."
                     : "Change this to work on a different segment. The steps you have already passed are re-checked for whichever one you pick."}
@@ -2144,25 +2144,14 @@ export default function FolderAdmin({
                   !migratePending && (
                     <div style={s.hint}>
                       {blocked}
-                      {last &&
-                        " Once it has run, press Finish. You can also leave with Back to Folder Management."}
+                      {last && ""}
                     </div>
                   )}
                 {/* Its own reason, again: "a run is in progress" would be wrong — nothing is running,
                     the admin simply has not pressed the button yet. */}
                 {/* An unexplained greyed Back is the dead-button defect again; it also names the
                     two ways out, because "you cannot go back" without them reads as a trap. */}
-                {flowComplete && !runBusy && (
-                  <div style={s.hint}>
-                    Uploads are back on, so this run is finished — going back is
-                    closed off, because the earlier steps move folders and the
-                    site is accepting documents again. Press{" "}
-                    <strong>Finish</strong>, or leave with{" "}
-                    <strong>Back to Folder Management</strong>. To change the
-                    structure again, start the flow afresh and turn uploads off
-                    first.
-                  </div>
-                )}
+                {flowComplete && !runBusy && <div style={s.hint}></div>}
                 {migratePending && !runBusy && (
                   <div style={s.hint}>
                     There are folders still to rebuild. Run them first — moving
@@ -2209,10 +2198,9 @@ export default function FolderAdmin({
                     reconciliation was going would read as the wrong screen. */}
                 {runBusy && (
                   <div style={s.hint}>
-                    A run is in progress on this step. Moving away would stop it
-                    part-way, so navigation is held until it finishes. Anything
-                    already written stays written, and re-running picks up what
-                    is missing.
+                    Please stay on this page until it finishes. Leaving the page
+                    will stop the process. Any changes already completed will
+                    remain, and you can run it again to complete the rest.
                   </div>
                 )}
               </>

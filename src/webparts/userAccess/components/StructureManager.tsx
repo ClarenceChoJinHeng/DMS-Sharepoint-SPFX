@@ -297,10 +297,25 @@ function setCheckStyle(c: SetCheck): React.CSSProperties {
  * for the reason on `SetCheck`. `checking` blocks for the few hundred ms it lasts, so a
  * fast click cannot outrun the verdict.
  */
+/**
+ * The fixed level name for a per-unit ("Sub unit") tier — client, 2026-09-22: the admin used to type
+ * a free-text "Folder level name" here regardless of which radio was chosen, and it read as though
+ * this box was where you name an INDIVIDUAL subunit ("Volvo", "Honda") rather than the whole TIER
+ * (which is always just "Sub Unit" — the individual values still come from the term store, under
+ * each unit). Removing the box removes the chance to type the wrong kind of name into it.
+ */
+const SUB_UNIT_LEVEL_LABEL = "Sub Unit";
+
+/** What `addTier`/`canAddTier` actually use as the level's name — typed, for "New Folder Layer";
+ * always `SUB_UNIT_LEVEL_LABEL` for "Sub unit", since that field no longer exists for that mode. */
+function effectiveAddLabel(adding: DraftTier): string {
+  return (adding.fromUnit ? SUB_UNIT_LEVEL_LABEL : adding.label).trim();
+}
+
 function canAddTier(
   adding: DraftTier, check: SetCheck, unitCheck: UnitCheck, perUnitTaken: boolean,
 ): boolean {
-  const label = adding.label.trim();
+  const label = effectiveAddLabel(adding);
   if (!label || !columnNameFor(label)) return false;
   // One sub unit per unit — a second per-unit tier is refused rather than offered a slot.
   if (adding.fromUnit && perUnitTaken) return false;
@@ -476,6 +491,12 @@ export default function StructureManager({
      and a missed clear is a button that works once. */
   const [recheck, setRecheck] = useState(0);
   const [unitCheck, setUnitCheck] = useState<UnitCheck>({ state: "idle" });
+  /* Same shape as `recheck` above, for the SUB UNIT term walk specifically (client, 2026-09-22: "add
+     a refresh button so I can refresh this section instead of the page" — they had just added a
+     term in the Term Store and the "does not have any sub units yet" message had no way to re-ask
+     without closing and reopening the Add form). A counter, not a boolean, for the same reason:
+     a second press while a check is already settled must still re-run it. */
+  const [unitRecheck, setUnitRecheck] = useState(0);
   /* The "why this name is permanent" panel. Opened on hover AND on click: hover does not
      exist on a touch screen, and this is the one explanation on the form that has to be
      reachable without a mouse. Declared with the other hooks, above every early return. */
@@ -1060,8 +1081,10 @@ export default function StructureManager({
        closed - so it covers open/closed on its own and no second dep is needed for it.
        `draft` is deliberately ABSENT: the permissioned prefix renders locked on this screen, so the
        depth this walk descends to cannot change while the form is open, and depending on the draft
-       would re-walk ~71 reads on every tier edit. */
-  }, [editing, adding?.fromUnit]);
+       would re-walk ~71 reads on every tier edit.
+       `unitRecheck` is a pure TRIGGER, exactly like `recheck` beside the term-set effect above -
+       bumping it re-runs this effect with no other input changed. */
+  }, [editing, adding?.fromUnit, unitRecheck]);
 
 
   /** Move a below-Unit level. Bounded to the below-Unit region — the prefix cannot move. */
@@ -1115,7 +1138,7 @@ export default function StructureManager({
 
   const addTier = async (): Promise<void> => {
     if (!adding) return;
-    const label = adding.label.trim();
+    const label = effectiveAddLabel(adding);
     const col = columnNameFor(label);
     if (!label || !col) return;
     setAddError(undefined);
@@ -1666,19 +1689,39 @@ export default function StructureManager({
                 switched on and migrated (`Minasmas Archive 2`, GHO's and Buah's `Shared Folder`,
                 TO's `SDG`). It is the migration path, not an option — delete it once they are done
                 and the rule becomes absolute with nothing left to get wrong. */}
+            {/* ⚠ SPLIT ON `adding.fromUnit` (client, 2026-09-22), NOT ON `perUnitTaken` ANY MORE.
+                This box used to show the free-text "Folder level name" field regardless of which
+                radio was picked, and the client reported real confusion from it: it reads as though
+                THIS is where you name an individual sub unit ("Volvo", "Honda"), when it is really
+                naming the whole TIER — which for Sub unit is always just "Sub Unit", the individual
+                values coming from the term store under each unit. So Sub unit mode gets NO input at
+                all now — the name is fixed (`SUB_UNIT_LEVEL_LABEL`, used by `addTier`/`canAddTier`
+                via `effectiveAddLabel`) — and only "New Folder Layer" still asks for one, since that
+                kind genuinely can be called anything. */}
+            {adding.fromUnit ? (
+              <p style={{ ...s.hint, marginTop: 14 }}>
+                {/* ⚠ REPLACED THE EXPLANATORY SENTENCE WITH A CONCRETE EXAMPLE PATH (client,
+                    2026-09-22) — the sentence form still read as something to configure; a real
+                    path shows it instead. Built from what THIS segment actually has, never a
+                    hardcoded example — the segment's real top folder, its real permissioned tier
+                    names, in order. */}
+                Folder structure:{" "}
+                <code>
+                  {seg.stagingFolder || "SEGMENT"}
+                  {splitChain(draft).permissioned.map((t, i) => (
+                    <React.Fragment key={i}> / [{t.label || "…"}]</React.Fragment>
+                  ))}
+                  {" / [Sub Unit] / [Year] / [Document Type]"}
+                </code>
+              </p>
+            ) : (
+              <>
             <label style={{ ...s.label, marginTop: 14 }}>Folder naming</label>
             <p style={{ ...s.hint, marginTop: 0 }}>
               Folders on this level are named by each term&rsquo;s <strong>abbreviation</strong>
               {" "}rather than its full label, which keeps paths short. Every term on it needs an
               abbreviation before anyone can file into it.
             </p>
-
-            {/* ⚠ HIDDEN WHEN A SUB UNIT LEVEL ALREADY EXISTS (client, 2026-09-09). Naming a level
-                that cannot be added is work thrown away — typed, then a greyed Add, then the reason.
-                ⚠ GATED ON THE COMBINATION, NEVER `perUnitTaken` ALONE: switching to Shared folder
-                term is the way out, so the field must come straight back when they do. */}
-            {!(adding.fromUnit && perUnitTaken) && (
-              <>
             <span style={s.labelRow}>
               <label style={{ ...s.label, marginTop: 0 }} htmlFor="sm-label">Folder level name</label>
               {/* ⚠ THE NEUTRAL INFO AFFORDANCE, NOT A RED WARNING — matching the upload form's own
@@ -1835,10 +1878,28 @@ export default function StructureManager({
                 .
               </p>
             )}
+            {/* ⚠ THE REFRESH BUTTON EXISTS BECAUSE THE CHECK IS DONE IN ANOTHER TAB (client,
+                2026-09-22): the walk runs once when this form opens, and adding a sub unit term
+                happens on the Term Store page this screen links to — a separate tab, so nothing
+                here observes it. Without a way to re-ask, the admin's only route back to a fresh
+                answer was closing and reopening the Add form. Mirrors the Term set ID's own
+                "↻ Re-check" exactly: `unitRecheck` is a pure trigger the check effect depends on,
+                bumped here, never read for its value. */}
             {adding.fromUnit && !perUnitTaken && unitCheck.state !== "idle" && (
-              <p style={unitCheck.state === "none" ? { ...s.msg, ...s.warn } : s.hint}>
-                {unitCheckNote(unitCheck, unitLabel(draft), seg.label, siteUrl)}
-              </p>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <p style={{ ...(unitCheck.state === "none" ? { ...s.msg, ...s.warn } : s.hint), flex: 1 }}>
+                  {unitCheckNote(unitCheck, unitLabel(draft), seg.label, siteUrl)}
+                </p>
+                <button
+                  type="button"
+                  style={unitCheck.state === "checking" ? s.recheckOff : s.recheckBtn}
+                  disabled={unitCheck.state === "checking"}
+                  title="Check the Term Store again — use it after adding or editing sub unit terms there"
+                  onClick={() => setUnitRecheck((n) => n + 1)}
+                >
+                  {unitCheck.state === "checking" ? "…" : "↻ Refresh"}
+                </button>
+              </div>
             )}
 
             {/* ⚠ THE LABEL FOR ONE SLOT, DERIVED ONCE AND USED BY BOTH BRANCHES BELOW. Two copies

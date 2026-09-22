@@ -514,7 +514,12 @@ function DownloadIcon(): React.ReactElement {
 }
 
 /**
- * `13/Aug/2026 09:41` — the agreed display format, with the time the feed needs.
+ * `20 Sep 2026 09:41` — the agreed display format, no slashes, with the time the feed needs.
+ *
+ * ⚠ Changed 2026-09-22 from the slash-separated `13/Aug/2026 09:41` on the client's own request
+ * ("no slashes pls"). Scoped to THIS function only — `formatWhen` has exactly one caller, the
+ * Audit Log's own "When" column, and is unrelated to the sitewide `DD/MMM/YYYY` format
+ * (`formatSubmittedOn`/`shared/dateCalendar.ts`) used everywhere else. Do not "fix" this back.
  *
  * Parsing here is safe because `odata=nometadata` returns a DateTime field as ISO. This is NOT the
  * trap in gotcha #1: that one is re-parsing a value SharePoint has already formatted for display.
@@ -538,7 +543,7 @@ function formatWhen(iso: string): string {
     "Dec",
   ];
   const p = (n: number): string => (n < 10 ? `0${n}` : String(n));
-  return `${p(d.getDate())}/${months[d.getMonth()]}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /* ⚠ `startOfDaysAgo` and `RANGES` were removed on 2026-08-30 with the "Last 7 days" period select.

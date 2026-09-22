@@ -187,7 +187,8 @@ const RECONCILE: FlowStep = {
   // folder for it, with no error anywhere. Only bites once the count is known — see isLocked.
   lock: {
     fact: "abbreviationsComplete",
-    reason: "Some terms still have no folder code. Reconciliation skips those and creates no folder for them.",
+    reason:
+      "Some terms still have no folder code. Reconciliation skips those and creates no folder for them.",
   },
 };
 
@@ -201,7 +202,12 @@ const RECONCILE: FlowStep = {
  * silently stops applying to it.
  */
 function abbreviationsStep(label: string, hint: string): FlowStep {
-  return { id: "abbreviations", label, hint, screen: { kind: "tab", tab: "abbreviations" } };
+  return {
+    id: "abbreviations",
+    label,
+    hint,
+    screen: { kind: "tab", tab: "abbreviations" },
+  };
 }
 
 const ABBREVIATIONS: FlowStep = {
@@ -220,21 +226,28 @@ const ABBREVIATIONS: FlowStep = {
 };
 
 /*
- * ⚠ THE `groups` STEP IS GONE FROM EVERY FLOW (client, 2026-09-06: *"Remove Group Management from
- * ALL Folder Management … Let client assign members under USER ACCESS MANAGEMENT > GROUP
- * MANAGEMENT"*). It stood between the abbreviations and reconciliation in `newSegment` and
- * `addUnit`.
+ * ⚠ THE `groups` STEP WAS REMOVED FROM EVERY FLOW ON 2026-09-06 (client: *"Remove Group Management
+ * from ALL Folder Management … Let client assign members under USER ACCESS MANAGEMENT > GROUP
+ * MANAGEMENT"*) AND RESTORED TO `newSegment`/`addUnit` ON 2026-09-22, ON THE CLIENT'S OWN FOLLOW-UP
+ * ASK — the earlier removal note is kept below as the reason it left, since the rest of it (bulk
+ * provisioning still does the actual work, membership never gates anything) is still exactly true.
+ * `rename`/`structure`/`runRecon`/`retire` do not touch a segment's groups at all and were never
+ * asked for this back — the step exists ONLY where a segment or a department/unit is first created.
  *
- * DELETED rather than parked. An unused const is a lint warning here, and this project's own rule
- * from `inviteToGroup` applies: something kept alive doing exactly the thing that was withdrawn is
- * only ever a matter of time before it is wired back up. Re-adding it is eight lines — a `label`, a
- * `hint`, and `screen: { kind: "component", id: "groups" }` — and the component id is still in the
- * `screen` union above, so the mount point survives.
- *
- * ⚠ NOTHING ABOUT PROVISIONING CHANGED. Bulk provisioning still creates every group and writes its
- * mappings, and reconciliation still grants from those rows, so a segment built through this flow is
- * complete without the step. What moved is WHO adds the people, and where.
+ * ⚠ NOTHING ABOUT PROVISIONING CHANGED, EITHER TIME. Bulk provisioning still creates every group and
+ * writes its mappings, and reconciliation still grants from those rows — this step was never load-
+ * bearing for correctness, only for where an admin is standing when the groups get made.
  */
+const GROUPS: FlowStep = {
+  id: "groups",
+  label: "Group Management",
+  hint:
+    "Create the groups, then put the people in them. Creating a group also writes its folder " +
+    "mappings, so there is nothing to map by hand afterwards. Adding people is OPTIONAL — an empty " +
+    "group keeps its permissions and works the day somebody is added, so come back whenever you know " +
+    "who belongs where. If the groups already exist and you know nobody yet, there is nothing to do here.",
+  screen: { kind: "component", id: "groups" },
+};
 
 /*
  * ⚠ THE `folderAccess` STEP IS GONE (2026-08-23). It existed to ADD PEOPLE, which the Group
@@ -253,7 +266,8 @@ export const FLOWS: Flow[] = [
   {
     id: "newSegment",
     label: "Add a new segment",
-    blurb: "A whole new business segment or project, with its own term set and tiers.",
+    blurb:
+      "A whole new business segment or project, with its own term set and tiers.",
     tone: "normal",
     needsSegment: false,
     /**
@@ -288,9 +302,11 @@ export const FLOWS: Flow[] = [
         // Only from here on: before the segment row exists there is no tree to code.
         lock: {
           fact: "segmentExists",
-          reason: "Create the segment first — until it exists there is no term tree to give codes to.",
+          reason:
+            "Create the segment first — until it exists there is no term tree to give codes to.",
         },
       },
+      GROUPS,
       RECONCILE,
     ],
   },
@@ -315,13 +331,15 @@ export const FLOWS: Flow[] = [
         "Create Term Abbreviation",
         "Add the term in the term store, then give it a short folder code below.",
       ),
+      GROUPS,
       RECONCILE,
     ],
   },
   {
     id: "structure",
     label: "Change the folder structure",
-    blurb: "Add, reorder or remove a level below Unit, and move the existing folders to match.",
+    blurb:
+      "Add, reorder or remove a level below Unit, and move the existing folders to match.",
     tone: "normal",
     needsSegment: true,
     steps: [
@@ -380,9 +398,7 @@ export const FLOWS: Flow[] = [
            when a fresh scan finds no drift left. Until it runs, uploads are still filing into the
            old shape - which is why "saved as pending" on the previous step is true and why walking
            past this one leaves the segment half-changed. */
-        hint:
-          "Apply the new folder structure to existing documents. This is what makes the pending " +
-          "change live — until it runs, uploads keep using the old structure.",
+        hint: "Move existing documents to the new folder structure. Until this is complete, new uploads will continue using the old structure.",
         screen: { kind: "tab", tab: "migrate" },
         /* ⚠⚠ THE LOCK THAT USED TO BE HERE WAS BUILT ON A PREMISE THAT IS FALSE (removed 2026-09-09).
            It refused the step whenever `pendingLevels` was false, on the reasoning that a migration is
@@ -433,7 +449,8 @@ export const FLOWS: Flow[] = [
   {
     id: "rename",
     label: "Rename or re-code a folder",
-    blurb: "Change a folder's name by renaming its term, or by changing its short code.",
+    blurb:
+      "Change a folder's name by renaming its term, or by changing its short code.",
     tone: "normal",
     needsSegment: true,
     // Kept for `scopeFactsToFlow`, exactly as on `addUnit` — see the note there.
@@ -532,7 +549,8 @@ export const FLOWS: Flow[] = [
     // is not restored by any number of runs: the mapping rows survive, point at nothing, and are
     // silently ignored. The repair is Bulk provisioning first, THEN reconciliation. Sending an
     // admin here for a deleted group is a dead end that reports success.
-    blurb: "Re-apply the existing folder structure and permissions to bring them back in line with the configured setup. Use this after re-creating a group, when folder permissions have been changed manually in SharePoint, or when you are unsure if a segment is configured correctly. This does not change your existing setup. If a group has been deleted, re-create it first using Bulk Provisioning in Group Management. Reconciliation can only re-apply access to existing groups; it cannot restore deleted groups.",
+    blurb:
+      "Re-apply the existing folder structure and permissions to bring them back in line with the configured setup. Use this after re-creating a group, when folder permissions have been changed manually in SharePoint, or when you are unsure if a segment is configured correctly. This does not change your existing setup. If a group has been deleted, re-create it first using Bulk Provisioning in Group Management. Reconciliation can only re-apply access to existing groups; it cannot restore deleted groups.",
     tone: "normal",
     // The reconciliation screen has its own segment tick-list, so a picker in front of it would ask
     // twice — the same mistake already fixed for the Folder levels step.
@@ -542,7 +560,8 @@ export const FLOWS: Flow[] = [
   {
     id: "retire",
     label: "Retire a segment",
-    blurb: "Remove the segment from the available options so users can no longer use it for new work. Any documents already stored in the segment will remain available and will not be deleted — nothing here moves them anywhere else.",
+    blurb:
+      "Remove the segment from the available options so users can no longer use it for new work. Any documents already stored in the segment will remain available and will not be deleted — nothing here moves them anywhere else.",
     tone: "destructive",
     /* ⚠⚠ IT ASKS FOR NO SEGMENT (client, 2026-09-09: *"no need dropdown, just display the entire
        thing"*), AND THIS IS THE RULE THE PAUSE STEP WALKED INTO TWICE.
@@ -619,7 +638,9 @@ export function isLocked(step: FlowStep, facts: FlowFacts): boolean {
     case "abbreviationsComplete":
       // A count of undefined means the tree has not been walked — the picker's state. Never a lock, and
       // never read as zero either.
-      return typeof f.abbreviationsMissing === "number" && f.abbreviationsMissing > 0;
+      return (
+        typeof f.abbreviationsMissing === "number" && f.abbreviationsMissing > 0
+      );
     default:
       return false;
   }
@@ -688,9 +709,8 @@ const NEXT_GATED_STEPS: Record<string, string> = {
      run that reports success every time. Nothing else in this flow has that property, which is why
      this is a gate and the rest are advice. */
   pauseUploads:
-    "Uploads are still switched on. Turn them off above before continuing — a document uploaded during " +
-    "the migration lands in the old folder shape, and one that arrives after its folder has been " +
-    "scanned is never moved, which leaves the change stuck pending however many times you run it.",
+    "Turn off uploads above before continuing." +
+    "Files uploaded during the update may not be moved correctly, and the update may not complete.",
   /* ⚠ ENFORCED AT THE CLIENT'S REQUEST (2026-09-08), AND NOT BECAUSE THE STEP IS TECHNICALLY
      REQUIRED — they were explicit: *"I actually told them its needed even though it isn't but its
      good to run it anyways"*. Reconciliation reads no `Levels` and manages no below-Unit folder, so
@@ -699,8 +719,8 @@ const NEXT_GATED_STEPS: Record<string, string> = {
 
      Gated on a run having FINISHED, never on one having SUCCEEDED — see `reconcileRan`. */
   reconcile:
-    "Folder Reconciliation has not been run yet. Press Run on the panel above — it re-checks this " +
-    "segment's folders, columns and group access, and it is safe to run as many times as you like.",
+    "Run Folder Reconciliation to apply the latest folder, column, and group access changes. Once complete, click Finish." +
+    "To make further changes, start a new process and disable uploads first.",
   /* Gated through the ordinary `stepState` fallthrough, which already reads this fact in the mirror
      direction: `todo` while uploads are still paused, and `unknown` — which never gates — when the
      config row could not be read. So an unreadable setting cannot hold the closing step. */
@@ -859,8 +879,12 @@ const SEGMENT_SCOPED_FACTS: ReadonlyArray<keyof FlowFacts> = [
  * over the whole tree, so a newly added term with no code makes it non-zero and the step correctly
  * reads `todo`. It is the one fact here that is already subject-aware.
  */
-export function scopeFactsToFlow(flow: Flow | undefined, facts: FlowFacts): FlowFacts {
-  const subjectScoped = flow?.asksSubject === "add" || flow?.asksSubject === "rename";
+export function scopeFactsToFlow(
+  flow: Flow | undefined,
+  facts: FlowFacts,
+): FlowFacts {
+  const subjectScoped =
+    flow?.asksSubject === "add" || flow?.asksSubject === "rename";
   if (!subjectScoped) return facts ?? {};
   const out: FlowFacts = { ...(facts ?? {}) };
   for (const k of SEGMENT_SCOPED_FACTS) delete out[k];
@@ -874,7 +898,11 @@ export function stepState(step: FlowStep, facts: FlowFacts): StepState {
   switch (step?.id) {
     case "createSegment":
     case "delete":
-      return f.segmentExists === undefined ? "unknown" : f.segmentExists ? "done" : "todo";
+      return f.segmentExists === undefined
+        ? "unknown"
+        : f.segmentExists
+          ? "done"
+          : "todo";
     case "termSet":
       // Implied by the segment existing: SegmentCreator refuses without a resolvable set of the right
       // depth, so a segment row is proof the term set was there.
@@ -882,24 +910,44 @@ export function stepState(step: FlowStep, facts: FlowFacts): StepState {
     case "addTerm":
     case "renameTerm":
       // Checkable ONLY because the flow asked what the subject was.
-      return f.subjectFound === undefined ? "unknown" : f.subjectFound ? "done" : "todo";
+      return f.subjectFound === undefined
+        ? "unknown"
+        : f.subjectFound
+          ? "done"
+          : "todo";
     case "abbreviations":
       if (typeof f.abbreviationsMissing !== "number") return "unknown";
       return f.abbreviationsMissing === 0 ? "done" : "todo";
     case "groups":
       // Advisory: the naming convention is a suggestion, so a hand-named group reads as absent.
-      return f.groupsExist === undefined ? "unknown" : f.groupsExist ? "done" : "todo";
+      return f.groupsExist === undefined
+        ? "unknown"
+        : f.groupsExist
+          ? "done"
+          : "todo";
     case "reconcile":
-      return f.foldersExist === undefined ? "unknown" : f.foldersExist ? "done" : "todo";
+      return f.foldersExist === undefined
+        ? "unknown"
+        : f.foldersExist
+          ? "done"
+          : "todo";
     case "levels":
       return f.pendingLevels === true ? "done" : "unknown";
     case "pauseUploads":
       // Done when uploads ARE paused — that is what this step exists to achieve.
-      return f.uploadsPaused === undefined ? "unknown" : f.uploadsPaused ? "done" : "todo";
+      return f.uploadsPaused === undefined
+        ? "unknown"
+        : f.uploadsPaused
+          ? "done"
+          : "todo";
     case "resumeUploads":
       // The MIRROR: done when uploads are back ON. The closing step is the one that gets forgotten,
       // and a rail that ticks it while the site is still paused would confirm the wrong thing.
-      return f.uploadsPaused === undefined ? "unknown" : f.uploadsPaused ? "todo" : "done";
+      return f.uploadsPaused === undefined
+        ? "unknown"
+        : f.uploadsPaused
+          ? "todo"
+          : "done";
     case "migrate":
     case "pauseFlows":
       /* Nothing to read. A migration run leaves no marker, and Power Automate is unreachable.
@@ -930,7 +978,8 @@ export function firstIncompleteStep(flow: Flow, facts: FlowFacts): number {
 
 /** Steps still outstanding, for the picker's summary line. */
 export function remainingCount(flow: Flow, facts: FlowFacts): number {
-  return (flow?.steps ?? []).filter((s) => stepState(s, facts) !== "done").length;
+  return (flow?.steps ?? []).filter((s) => stepState(s, facts) !== "done")
+    .length;
 }
 
 /**
@@ -951,7 +1000,10 @@ export function normaliseLabel(s: string): string {
 }
 
 /** Does any of these labels match what was typed? */
-export function labelMatches(labels: readonly string[], wanted: string): boolean {
+export function labelMatches(
+  labels: readonly string[],
+  wanted: string,
+): boolean {
   const want = normaliseLabel(wanted);
   if (want.length === 0) return false;
   return (labels ?? []).filter((l) => normaliseLabel(l) === want).length > 0;
@@ -963,13 +1015,21 @@ export function labelMatches(labels: readonly string[], wanted: string): boolean
  * Deliberately crude — containment either way. The goal is to catch a typo or a half-typed entry, not to
  * be a spell checker; a near-miss list that looks clever invites trusting it.
  */
-export function nearMatches(labels: readonly string[], wanted: string, limit = 3): string[] {
+export function nearMatches(
+  labels: readonly string[],
+  wanted: string,
+  limit = 3,
+): string[] {
   const want = normaliseLabel(wanted);
   if (want.length < 2) return [];
   return (labels ?? [])
     .filter((l) => {
       const n = normaliseLabel(l);
-      return n !== want && n.length > 0 && (n.indexOf(want) !== -1 || want.indexOf(n) !== -1);
+      return (
+        n !== want &&
+        n.length > 0 &&
+        (n.indexOf(want) !== -1 || want.indexOf(n) !== -1)
+      );
     })
     .slice(0, limit);
 }
@@ -993,12 +1053,14 @@ export function stepUsesSegment(step: FlowStep): boolean {
   // Instructions for work done elsewhere: the term store, Power Automate.
   if (step.screen.kind === "outside") return false;
   // The upload pause is SITE-WIDE by design — there is no per-segment pause to choose.
-  if (step.screen.kind === "component" && step.screen.id === "pauseUploads") return false;
+  if (step.screen.kind === "component" && step.screen.id === "pauseUploads")
+    return false;
   // The Folder levels screen LISTS every segment with its own Edit button, so a picker in front of
   // it asks for a choice the screen then asks for again — and the client saw both at once
   // (2026-08-19: *"I choose Group Head Office and it shows two"*). Picking here changed nothing
   // about what that screen displayed, which reads as the choice having been ignored.
-  if (step.screen.kind === "tab" && step.screen.tab === "structure") return false;
+  if (step.screen.kind === "tab" && step.screen.tab === "structure")
+    return false;
   return true;
 }
 
@@ -1009,7 +1071,10 @@ export function stepUsesSegment(step: FlowStep): boolean {
  * because the rule lived inline in the component, where nothing could test it — and the first
  * version of it shipped with a gap nobody could have caught by reading the JSX.
  */
-export function firstBlockedStepIndex(steps: FlowStep[], facts: FlowFacts): number {
+export function firstBlockedStepIndex(
+  steps: FlowStep[],
+  facts: FlowFacts,
+): number {
   const list = steps ?? [];
   for (let i = 0; i < list.length; i++) {
     if (blocksNext(list[i], facts).length > 0) return i;

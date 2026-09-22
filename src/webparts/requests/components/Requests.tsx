@@ -58,7 +58,10 @@ import { FileDetailPanel } from "../../../shared/fileDetailPanel";
 // was raised, because no request is involved at all.
 import { probeFileRights, FileRights } from "../../../shared/dmsFolderMap";
 import { documentUnit } from "../../../shared/documentDetails";
-import { directActionsFor, DirectActions } from "../../../shared/directFileActions";
+import {
+  directActionsFor,
+  DirectActions,
+} from "../../../shared/directFileActions";
 import { searchTenantPeople, PersonPick } from "../../../shared/spGroups";
 import {
   folderTrail,
@@ -890,7 +893,9 @@ export default function Requests({
       .replace(/\}$/, "");
     if (f.length > 0) linkedFile.current = f;
   }
-  const [directFileId, setDirectFileId] = useState<string | undefined>(undefined);
+  const [directFileId, setDirectFileId] = useState<string | undefined>(
+    undefined,
+  );
   useEffect(() => {
     const id = linkedFile.current;
     if (id === undefined) return;
@@ -1868,13 +1873,20 @@ export default function Requests({
       roleValue,
       groupId: 0,
       propagateAcl: false,
-      sendEmail: true,
+      /* ⚠ 2026-09-21: `sendEmail` is now FALSE, deliberately. SharePoint's own invite email always
+         attributes "X invited you to view a file" to whoever's session calls ShareObject — the
+         APPROVER, never the requester — and there is no parameter to change that; it is tied to the
+         caller's identity by design. The 2026-08-21 mitigation below (naming the requester inside the
+         email body) was a workaround for that limit, not a fix for it — the header itself still named
+         the wrong person, and the client asked for the header to be correct. Access is still granted
+         here exactly as before; the notification is `CRS — Notify request activity`'s `ShareApproved`
+         case, which must email `ShareWith` (the recipient) with the correctly-resolved requester name
+         via its existing `GetActorName` lookup — see the CLAUDE.md entry dated 2026-09-21 for the
+         exact shape. Do not flip this back to `true` without also removing that flow-side email, or
+         the recipient gets two notices, one of them still wrongly attributed. */
+      sendEmail: false,
       includeAnonymousLinkInEmail: false,
       emailSubject: `A document has been shared with you: ${row.itemName}`,
-      /* The invite itself is correctly attributed to the APPROVER by SharePoint (this call runs in
-         their own session) — verified 2026-08-21. That surprised a requester reading the email, since
-         they raised the request and never see themselves named anywhere in it. This line names the
-         requester too, so both people involved are visible without changing who actually shared it. */
       emailBody: [
         row.reason,
         row.requestedBy ? `Requested by ${row.requestedBy}` : "",
@@ -2510,9 +2522,7 @@ export default function Requests({
     setDirectIsArchived(isArchivedRow(seg ?? "", archiveSegs));
     probeFileRights(context.spHttpClient, siteUrl, directFileId)
       .then(setDirectRights)
-      .catch(() =>
-        setDirectRights({ remove: "unknown", share: "unknown" }),
-      );
+      .catch(() => setDirectRights({ remove: "unknown", share: "unknown" }));
   }, [directFileId, directFileView?.state]);
 
   const directActions: DirectActions | undefined =
@@ -2530,13 +2540,13 @@ export default function Requests({
   const [directShareResults, setDirectShareResults] = useState<PersonPick[]>(
     [],
   );
-  const [directShareRecipients, setDirectShareRecipients] = useState<
-    string[]
-  >([]);
+  const [directShareRecipients, setDirectShareRecipients] = useState<string[]>(
+    [],
+  );
   const [directShareBusy, setDirectShareBusy] = useState(false);
-  const [directShareError, setDirectShareError] = useState<
-    string | undefined
-  >(undefined);
+  const [directShareError, setDirectShareError] = useState<string | undefined>(
+    undefined,
+  );
   const [directShareDone, setDirectShareDone] = useState(false);
 
   /* Debounced tenant people search for the direct-share recipient box. Declared here, after every
@@ -2552,7 +2562,15 @@ export default function Requests({
     const t = setTimeout(() => {
       searchTenantPeople(context.spHttpClient, siteUrl, q)
         .then((people) => {
-          if (!cancelled) setDirectShareResults(people.filter((p) => p.email));
+          // Never offer the signed-in viewer as their own share recipient — they already have
+          // whatever access this button exists to grant, so it would only ever be a pointless
+          // (though harmless) share, not a real recipient.
+          if (!cancelled)
+            setDirectShareResults(
+              people.filter(
+                (p) => p.email && (p.email ?? "").trim().toLowerCase() !== me,
+              ),
+            );
         })
         .catch(() => {
           if (!cancelled) setDirectShareResults([]);
@@ -2583,8 +2601,8 @@ export default function Requests({
             lineHeight: 1.5,
           }}
         >
-          This deletes it straight away — no approver decides this. It moves
-          to the recycle bin and can be restored within 93 days.
+          This deletes it straight away — no approver decides this. It moves to
+          the recycle bin and can be restored within 93 days.
         </p>
         {directDeleteError && (
           <p style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}>
@@ -2777,7 +2795,9 @@ export default function Requests({
               </div>
             )}
             {directShareError && (
-              <p style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}>
+              <p
+                style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}
+              >
                 {directShareError}
               </p>
             )}
@@ -3177,7 +3197,8 @@ export default function Requests({
           decision note below. */}
       {!actionable && r.status === "Revoked" && r.revokedBy && (
         <div style={s.meta}>
-          Revoked by <strong>{displayNameFor(r.revokedBy) ?? r.revokedBy}</strong>
+          Revoked by{" "}
+          <strong>{displayNameFor(r.revokedBy) ?? r.revokedBy}</strong>
         </div>
       )}
       {!actionable && r.decisionNote && (
@@ -3614,7 +3635,9 @@ export default function Requests({
             </div>
             <div style={{ marginTop: 12, marginBottom: 12 }}>
               {directActions === undefined ? (
-                <p style={s.quiet}>Checking what you can do with this file&hellip;</p>
+                <p style={s.quiet}>
+                  Checking what you can do with this file&hellip;
+                </p>
               ) : (
                 <div style={s.askBar}>
                   {directActions.canDelete && (
@@ -3785,10 +3808,10 @@ export default function Requests({
                 the automated flow will be reported as failed (&ldquo;the file
                 changed after this deletion was approved&rdquo;), even when
                 nothing changed, because the flow cannot tell &ldquo;no value
-                was recorded&rdquo; apart from &ldquo;the column does not
-                exist at all.&rdquo; Nothing is lost — the file simply stays
-                where it is — but no deletion through this system can
-                actually complete until this column exists.
+                was recorded&rdquo; apart from &ldquo;the column does not exist
+                at all.&rdquo; Nothing is lost — the file simply stays where it
+                is — but no deletion through this system can actually complete
+                until this column exists.
               </li>
             )}
             {fileIdMissing && (
@@ -3909,11 +3932,9 @@ export default function Requests({
         <div style={{ ...s.warn, textAlign: "center" }}>
           You are here as a <strong>system administrator</strong>, so you see
           and can decide <strong>every request on this site</strong> — not only
-          your own units. Normally the{" "}
-          <br />
-          unit&rsquo;s <strong>Head of Unit</strong> decides these; use this
-          when their group is empty or nobody else can. Your name is recorded
-          as the decider.
+          your own units. Normally the <br />
+          <strong>Head of Units</strong> decide these; use this when their group
+          is empty or nobody else can. Your name is recorded as the decider.
         </div>
       )}
 

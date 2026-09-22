@@ -56,6 +56,7 @@ import {
   NewSegmentDraft,
   nextSortOrder,
   normalizeGuid,
+  placeholderStagingFolderFor,
   validateNewSegment,
   requiredFieldErrors,
 } from "../../../shared/newSegment";
@@ -240,6 +241,18 @@ export default function SegmentCreator({
   const [family, setFamily] = useState<"BusinessSegment" | "Project">("BusinessSegment");
   const [termSetGuid, setTermSetGuid] = useState("");
   const [stagingFolder, setStagingFolder] = useState("");
+  /* ⚠ NO LONGER TYPED — derived live from `label` (client, 2026-09-22: the manual "Top folder name"
+     box felt redundant once the Abbreviations screen gained its own top-folder RECODE box, which
+     already lets this be corrected right after creation, on an always-empty freshly created
+     segment). `placeholderStagingFolderFor` guarantees no collision with an EXISTING segment's
+     stored code on its own (numeric suffix), so `validateNewSegment`'s clash check and the
+     archive-code-reuse guard in `create()` below still have a real, working value to check — this
+     is a WORKING placeholder, not a blank, and the admin finalises the real short code on the very
+     next step of the flow. Re-derives whenever the name or the segment list changes; there is no
+     input left for an admin to have diverged from it. */
+  useEffect(() => {
+    setStagingFolder(placeholderStagingFolderFor(label, existing));
+  }, [label, existing]);
   // EMPTY, not ["Department", "Unit"] (client, 2026-08-15: "it is always showing department and Unit
   // this will confuse the client").
   //
@@ -731,7 +744,8 @@ export default function SegmentCreator({
         checklist: true,
         warn: verdict.warn,
         text:
-          `"${d.label.trim()}" is configured — key ${key}, top folder ${folder}.` +
+          `"${d.label.trim()}" is configured — key ${key}, top folder ${folder} (a placeholder; ` +
+          `rename it on the GDC Term Abbreviations step next).` +
           (created.length > 0
             ? ` Created ${created.length} column(s): ${created.join(", ")}. They are not shown in` +
               ` any library view yet, which is deliberate so your existing views keep the layout` +
@@ -1202,10 +1216,20 @@ export default function SegmentCreator({
 
   if (!loaded) return <p style={{ fontSize: 13, color: "#605e5c" }}>Loading&hellip;</p>;
 
+  /* ⚠ THE LITERAL WORD "DELETE", NOT THE SEGMENT'S OWN LABEL (client, 2026-09-22) — reverses the
+     original design, which asked for the label so an admin proved they were looking at the segment
+     they thought they were. The client's own reasoning: a long or easily-mistyped label invites
+     copy-pasting it straight from the heading above, which defeats a confirmation gate exactly as
+     surely as no gate at all. "DELETE" is short, memorable, and cannot be copy-pasted from
+     anywhere on this screen — the admin has to mean it. Same inline pattern Group Management's own
+     bulk-delete confirmation already uses (`GroupManager.tsx`'s `bulkTyped`), not a new shared
+     helper: one three-character literal comparison does not need a function. `confirmationMatches`
+     stays imported — the RECODE dialog beside this one is untouched and still asks for the
+     segment's own label, since that action was never in scope for this change. */
   const typedOk =
     delCounts !== undefined &&
     deleting !== undefined &&
-    (!needsTypedConfirmation(delCounts, delFolders) || confirmationMatches(delTyped, deleting.label));
+    (!needsTypedConfirmation(delCounts, delFolders) || delTyped.trim().toUpperCase() === "DELETE");
 
   /* Recode's own readiness: the count must have succeeded (empty OR holding documents — since
      2026-09-16 a documented segment is a VALID, different path, not a refusal), the sanitized new
@@ -1418,12 +1442,13 @@ export default function SegmentCreator({
                 {needsTypedConfirmation(delCounts, delFolders) && (
                   <>
                     <label style={s.label}>
-                      Type <strong>{deleting.label}</strong> to confirm
+                      Type <strong>DELETE</strong> to confirm
                     </label>
                     <input
                       style={s.input}
                       value={delTyped}
                       disabled={busy}
+                      placeholder="DELETE"
                       onChange={(e) => setDelTyped(e.target.value)}
                     />
                   </>
@@ -1744,17 +1769,20 @@ export default function SegmentCreator({
           </div>
         )}
 
+        {/* ⚠ NO LONGER A BOX TO TYPE INTO (client, 2026-09-22) — see the `useEffect` beside
+            `stagingFolder`'s own declaration for why. `fieldError.folder` stays possible in theory
+            (a blank/punctuation-only segment name derives no placeholder at all) but that case is
+            already explained by the segment-name field's own required-field error above, so nothing
+            extra is shown here for it — there would be no box left to point at. */}
         <label style={s.label}>Top folder name</label>
-        <input
-          style={fieldError.folder ? { ...s.input, ...s.inputBad } : s.input}
-          value={stagingFolder}
-          onChange={(e) => setStagingFolder(e.target.value)}
-          placeholder="UPOPS"
-        />
-        {fieldError.folder ? <div style={s.fieldErr}>{fieldError.folder}</div> : undefined}
+        <div style={{ ...s.input, background: "#faf9f8", color: "#484644", display: "flex", alignItems: "center" }}>
+          {stagingFolder || "—"}
+        </div>
         <div style={s.hint}>
-          The one folder every document in this segment sits under, in both libraries. Short and
-          upper-case by convention. It cannot be shared with another segment.
+          The one folder every document in this segment sits under, in both libraries — derived from
+          the segment name above, so this box is a working placeholder rather than something you
+          type. Finalise the real short code on the next step, <strong>GDC Term Abbreviations</strong>,
+          which already lets you rename a segment&rsquo;s top folder for as long as it stays empty.
         </div>
       </div>
 

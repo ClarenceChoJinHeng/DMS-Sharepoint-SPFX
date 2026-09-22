@@ -81,6 +81,44 @@ export function modeKeyFor(label: string): string {
 }
 
 /**
+ * A PLACEHOLDER top folder name, derived from the segment's own label rather than typed.
+ *
+ * Client, 2026-09-22: the "Top folder name" box on Create felt redundant once
+ * `AbbreviationManager.tsx` gained a live top-folder RECODE box (2026-09-11/16) that already lets an
+ * admin change it after creation, for any empty segment — which a freshly created one always is. So
+ * Create no longer asks for it; this fills a WORKING value in so `validateNewSegment`'s clash checks
+ * and the archive-code-reuse guard still have something real to check, and the admin finalises the
+ * real short code on the very next step of the flow (the Abbreviations screen).
+ *
+ * ⚠ NEVER GUESS A COLLISION AWAY SILENTLY. If the plain derivation already collides with an existing
+ * segment's stored top folder, a numeric suffix is appended and re-checked — because with the input
+ * box gone, there is no field on THIS screen left for the admin to adjust if `fieldConflicts` refused
+ * it outright. The loop is bounded; genuinely running out only happens with dozens of segments
+ * sharing one near-identical name, at which point the derived value is left as the LAST attempt
+ * (still unique in the extremely unlikely event it collided with every earlier suffix too), and the
+ * ordinary create-time refusal is what would ultimately explain the situation rather than this
+ * function throwing.
+ *
+ * Deliberately NOT a real abbreviation (no attempt to compress "Project Cars" to "PCARS") — that
+ * judgement call belongs to the admin, on the very next screen, not to a guess made here.
+ *
+ * ⚠ ARRAYS/OBJECT LOOKUP, NEVER A SPREAD `Set` — `[...set]` is TS2802 at this tsconfig target (the
+ * same ES-level limitation as `Promise.allSettled`, per this codebase's own established rule). Plain
+ * `.has()` on a `Set` built from `new Set(array)` is fine; only spreading one is the trap.
+ */
+export function placeholderStagingFolderFor(label: string, existing: ExistingSegment[]): string {
+  const base = sanitizeFolderSegment(label).replace(/\s+/g, "").toUpperCase();
+  if (!base) return "";
+  const taken = new Set((existing ?? []).map((e) => (e.stagingFolder ?? "").trim().toUpperCase()));
+  if (!taken.has(base)) return base;
+  for (let n = 2; n <= 50; n++) {
+    const candidate = `${base}${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `${base}${Date.now().toString(36).toUpperCase()}`;
+}
+
+/**
  * The next SortOrder. Its only job is ordering a dropdown, so it is derived rather than asked.
  *
  * Guards against a non-numeric or absent cell: a hand-authored row with SortOrder blank reads as

@@ -30,9 +30,11 @@ import {
   failedLibraries,
   hasCriteria,
   hasMetadataFilter,
+  hasSearchNarrowFilter,
   isHcLibrary,
   METADATA_FILTER_FIELDS,
   metadataFilterMatches,
+  searchMetadataMatches,
   kqlPathScope,
   mergeHits,
   recencyCutoff,
@@ -76,6 +78,10 @@ import { isSystemAdmin } from "../../../shared/spGroups";
 // One palette for every attention banner — the client asked for the Retire-a-segment colour.
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 import { withThrottleRetry } from "../../../shared/throttleRetry";
+// For the Segment dropdown's viewer-scoped narrowing only — see `visibleSegmentGuids`. The Group
+// Map's `Role` is often the long form ("APPROVER"), and a raw string compare would miss GLOBAL
+// grants stored that way, the same reason MySubmissions.tsx/Requests.tsx already normalize it.
+import { normalizeRoleValue } from "../../../shared/groupMapModel";
 
 /* ─────────────────────────────── Term set ids ─────────────────────────────── */
 
@@ -143,29 +149,13 @@ function textOf(v: unknown): string {
   return "";
 }
 
-/** `DD/MMM/YYYY` — the agreed client format. Display only; sort and filter use the stored value. */
-const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-function formatDate(iso: string): string {
-  const raw = (iso ?? "").trim();
-  if (raw.length === 0) return "";
-  const d = new Date(raw);
-  if (isNaN(d.getTime())) return raw;
-  const day = `0${d.getDate()}`.slice(-2);
-  return `${day}/${MONTHS[d.getMonth()]}/${d.getFullYear()}`;
-}
+/* ⚠ `MONTHS`/`formatDate()` — the private DD/MMM/YYYY re-implementation this file used to build
+   dates from by hand — REMOVED 2026-09-21 (client: "I want 21 Sep 2026 no slash"). Both call sites
+   (the file-detail panel's "Last updated" row, and the search-result row's `author · date · size`
+   line) now use the shared `formatSubmittedOn` instead, matching `DocumentDate` a few lines below,
+   so this page can never again show two different date formats. Nothing else in this file read
+   either binding.
+*/
 
 /* ⚠ `trailOf` IS GONE (2026-09-05). Its own comment claimed it removed "library segment and file
    name" and it removed only the file name — so a result's Location read
@@ -543,6 +533,19 @@ export default function DocumentSearch({
 
   const [criteria, setCriteria] = useState<SearchCriteria>(emptyCriteria());
   const [segments, setSegments] = useState<Segment[]>([]);
+  /* ⚠ DISPLAY ONLY — filters which OPTIONS the Segment dropdown offers, never what a query can
+     return (client, 2026-09-21: "I am under other groups but the filter dropdown is showing other
+     group where I dont have access"). `undefined` means "show every segment", which is both the
+     starting state and the permanent fallback on any doubt — a viewer whose access could not be
+     determined must never see FEWER options than before this existed, since the header of this file
+     is explicit that duplicating access logic here must never risk the dangerous direction. That
+     risk does not apply to a dropdown the way it would to a RESULT: SharePoint's own ACL trims what
+     a selected segment can actually return regardless of what this list contains, so the worst this
+     can ever do wrong is hide an option someone could otherwise have picked — never show a document
+     they could not already open by browsing. See `visibleSegmentGuids` in the mount effect. */
+  const [visibleSegmentGuids, setVisibleSegmentGuids] = useState<
+    string[] | undefined
+  >(undefined);
   const [fixedOptions, setFixedOptions] = useState<
     Record<string, TermOption[]>
   >({});
@@ -770,6 +773,51 @@ export default function DocumentSearch({
           });
         }
         if (!cancelled) setSegments(list);
+
+        /* WHICH SEGMENTS CAN THIS VIEWER ACTUALLY SEE? Best-effort only — every failure path here
+           leaves `visibleSegmentGuids` at its `undefined` default, i.e. "show every segment", per
+           the state's own comment. `GLOBAL` (C-Level, all segments — the row carries no `Segment`
+           of its own, per groupMapModel.ts) sees everything; everyone else is narrowed to the
+           segments their OWN groups carry a Group Map row for, regardless of which role. */
+        try {
+          const gr = await jsonGet(
+            `${siteUrl}/_api/web/currentuser/groups?$select=Id`,
+          );
+          const myGroupIds: number[] = [];
+          if (gr.ok) {
+            for (const g of (gr.body.value as RawRow[]) ?? []) {
+              const id = Number(textOf(g.Id));
+              if (id > 0) myGroupIds.push(id);
+            }
+          }
+          if (myGroupIds.length > 0) {
+            const gm = await jsonGet(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items` +
+                `?$select=GroupId,Role,Segment&$top=5000`,
+            );
+            if (gm.ok) {
+              let global = false;
+              const guids: string[] = [];
+              for (const row of (gm.body.value as RawRow[]) ?? []) {
+                const gid = Number(textOf(row.GroupId));
+                if (myGroupIds.indexOf(gid) === -1) continue;
+                if (normalizeRoleValue(textOf(row.Role)) === "GLOBAL") {
+                  global = true;
+                  break;
+                }
+                const seg = textOf(row.Segment);
+                if (seg.length > 0 && guids.indexOf(seg) === -1)
+                  guids.push(seg);
+              }
+              // `global` or an empty derived set both leave every segment offered — a genuine
+              // narrowing only ever happens on a confirmed, non-empty, non-GLOBAL result.
+              if (!cancelled && !global && guids.length > 0)
+                setVisibleSegmentGuids(guids);
+            }
+          }
+        } catch {
+          /* leaves every segment offered */
+        }
       }
 
       /* The three fixed dropdowns. Ids come from DMS Config where present — they are per site since
@@ -1015,7 +1063,91 @@ export default function DocumentSearch({
         size: map.Size ?? "",
       });
     }
-    return [{ library: "Documents", outcome: "ok", hits }];
+
+    /* ⚠ DOCUMENT TYPE / YEAR / CONFIDENTIALITY / SEGMENT CANNOT BE ANSWERED BY THE QUERY ITSELF
+       (2026-09-21) — see the warning on `buildKql`. `buildKql` no longer even tries to constrain on
+       them, so `hits` here is unfiltered on all four; narrowed below instead, over a REST read of
+       the EXACT items this KQL query found — the same client-side pattern `runListRead` already
+       uses for the approval libraries (`metadataFilterMatches`), just covering Segment too, because
+       REST can push Segment down server-side while Search cannot push down any of the four. */
+    if (!hasSearchNarrowFilter(c)) {
+      return [{ library: "Documents", outcome: "ok", hits }];
+    }
+
+    // Grouped by the library each hit actually resolved to (via `libraryOfPath` above) — a plain
+    // object, not a Map/Set, since this project's tsconfig target cannot spread one (TS2802, the
+    // same limitation that keeps Promise.allSettled unavailable).
+    const byLib: Partial<Record<SearchLibrary, SearchHit[]>> = {};
+    for (const h of hits) {
+      const list = byLib[h.library];
+      if (list) list.push(h);
+      else byLib[h.library] = [h];
+    }
+
+    const out: LibraryResult[] = [];
+    // At most this many `Id eq N` clauses in one request — a library's share of one 200-row KQL page
+    // is never more than a handful of these batches, and this keeps the built `$filter` well short
+    // of any URL-length concern.
+    const ID_BATCH = 40;
+    for (const libKey of Object.keys(byLib)) {
+      const lib = libKey as SearchLibrary;
+      const libHits = byLib[lib] ?? [];
+      const ids = libHits.map((h) => h.itemId).filter((id) => id > 0);
+      const meta: Record<
+        number,
+        {
+          documentType: string;
+          year: string;
+          confidentiality: string;
+          segment: string;
+        }
+      > = {};
+      let narrowed = true;
+      for (let i = 0; i < ids.length && narrowed; i += ID_BATCH) {
+        const chunk = ids.slice(i, i + ID_BATCH);
+        const filter = chunk.map((id) => `Id eq ${id}`).join(" or ");
+        const resp = await jsonGet(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(apiTitle(lib))}')/items` +
+            `?$select=Id,${METADATA_FILTER_FIELDS.documentType},${METADATA_FILTER_FIELDS.year},` +
+            `${METADATA_FILTER_FIELDS.confidentiality},Business_x0020_Segment` +
+            `&$filter=${encodeURIComponent(filter)}&$top=${chunk.length}`,
+        );
+        if (!resp.ok) {
+          // A failed follow-up read must never be read as "no matches" — that would silently drop
+          // every one of this library's hits over a transient error. Keep them all, unnarrowed, and
+          // say so, exactly as the REST/`runListRead` side already does for its own three fields.
+          narrowed = false;
+          break;
+        }
+        for (const row of (resp.body.value as RawRow[]) ?? []) {
+          const id = Number(textOf(row.Id)) || 0;
+          if (id === 0) continue;
+          meta[id] = {
+            documentType: textOf(row[METADATA_FILTER_FIELDS.documentType]),
+            year: textOf(row[METADATA_FILTER_FIELDS.year]),
+            confidentiality: textOf(
+              row[METADATA_FILTER_FIELDS.confidentiality],
+            ),
+            segment: textOf(row.Business_x0020_Segment),
+          };
+        }
+      }
+
+      if (!narrowed) {
+        out.push({ library: lib, outcome: "ok", hits: libHits, unnarrowed: true });
+        continue;
+      }
+
+      // A hit whose id never came back from the follow-up read (deleted between the crawl and now,
+      // or otherwise unresolved) cannot be CONFIRMED to match — dropped rather than kept, the same
+      // "a bug here can only ever return FEWER rows" direction this whole module is built around.
+      const kept = libHits.filter((h) => {
+        const m = meta[h.itemId];
+        return m !== undefined && searchMetadataMatches(c, m);
+      });
+      out.push({ library: lib, outcome: "ok", hits: kept });
+    }
+    return out;
   };
 
   /** One live list read — the recency top-up on the approved side. The approval libraries are no
@@ -1306,6 +1438,14 @@ export default function DocumentSearch({
 
   /* ── Render ────────────────────────────────────────────────────────────── */
 
+  // The Segment dropdown's own options — see `visibleSegmentGuids`'s comment for why this can only
+  // ever narrow, never mis-widen: `undefined` (not yet determined, or GLOBAL, or nothing confirmed)
+  // is every segment, exactly as before this existed.
+  const visibleSegments =
+    visibleSegmentGuids === undefined
+      ? segments
+      : segments.filter((s) => visibleSegmentGuids.indexOf(s.termSetGuid) > -1);
+
   const allHits = sortByModified(mergeHits(...results.map((r) => r.hits)));
   const state = searchState(searched, results);
   const failed = failedLibraries(results);
@@ -1328,7 +1468,15 @@ export default function DocumentSearch({
       ],
       trailing: [
         { label: "Uploaded by", value: open.author },
-        { label: "Last updated", value: formatDate(open.modified) },
+        {
+          label: "Last updated",
+          /* ⚠ NOT the private `formatDate()` above (2026-09-21, client) — that is a private
+             DD/MMM/YYYY re-implementation, the same drift this project already fixed once in
+             Form.tsx's `stagedAtLabel`. `formatSubmittedOn` is the ONE shared "21 Sep 2026" format
+             (shared/mySubmissions.ts, settled 2026-08-30) every other date on this page — including
+             `DocumentDate` a few lines above — already uses; `open.modified` is ISO, same shape. */
+          value: formatSubmittedOn(open.modified ? new Date(open.modified) : undefined),
+        },
         { label: "File size", value: formatBytes(open.size) },
       ],
     });
@@ -1604,7 +1752,7 @@ export default function DocumentSearch({
                     onChange={(e) => chooseSegment(e.target.value)}
                   >
                     <option value="">Any</option>
-                    {segments.map((seg) => (
+                    {visibleSegments.map((seg) => (
                       <option key={seg.key} value={seg.label}>
                         {seg.label}
                       </option>
@@ -1747,8 +1895,15 @@ export default function DocumentSearch({
                   {trailText(folderTrail(h.path, trailSegments))}
                 </div>
                 <div style={s.meta}>
-                  {[h.author, formatDate(h.modified), formatBytes(h.size)]
-                    .filter((x) => x.length > 0)
+                  {/* ⚠ `formatSubmittedOn`, not `formatDate()` (2026-09-21) — same fix as the
+                      detail panel's "Last updated" row above: this list row sits on the same
+                      page and must not disagree with it about the date format. */}
+                  {[
+                    h.author,
+                    formatSubmittedOn(h.modified ? new Date(h.modified) : undefined),
+                    formatBytes(h.size),
+                  ]
+                    .filter((x) => x.length > 0 && x !== "—")
                     .join(" · ")}
                 </div>
               </div>

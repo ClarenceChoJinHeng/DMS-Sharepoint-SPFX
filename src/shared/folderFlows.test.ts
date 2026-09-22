@@ -105,10 +105,14 @@ describe("the flows", () => {
     expect(small).toEqual(big.slice(2));
   });
 
-  it("keeps Add a department or unit at two steps", () => {
-    // Pinned because the client asked for exactly two (2026-09-06), and because a third would
-    // silently re-introduce the instruction screen the redesign removed.
-    expect(flow("addUnit").steps.map((s) => s.id)).toEqual(["abbreviations", "reconcile"]);
+  it("has abbreviations, groups, then reconcile — `groups` restored 2026-09-22", () => {
+    // Was pinned at exactly two (2026-09-06: no third step, so nothing silently re-introduces the
+    // instruction screen that redesign removed). The client asked the `groups` step itself back on
+    // 2026-09-22, for `newSegment`/`addUnit` only — this is now three, deliberately, and the third
+    // is `groups`, never the removed instruction screen (still absent, per the "tail" test above).
+    expect(flow("addUnit").steps.map((s) => s.id)).toEqual([
+      "abbreviations", "groups", "reconcile",
+    ]);
   });
 
   /* ⚠ RENAME GAINED A THIRD STEP ON 2026-09-09, AND IT CLOSED A LIVE HAZARD. Its blurb promises
@@ -126,7 +130,7 @@ describe("the flows", () => {
   it("gates Retire's pause step exactly like the other flows", () => {
     expect(
       blocksNext(step("retire", "pauseUploads"), { uploadsPaused: false }),
-    ).toContain("Uploads are still switched on");
+    ).toContain("Turn off uploads above before continuing");
     expect(blocksNext(step("retire", "pauseUploads"), { uploadsPaused: true })).toBe("");
   });
 
@@ -161,7 +165,7 @@ describe("the flows", () => {
   it("gates the Rename flow's pause step exactly like structure's", () => {
     expect(
       blocksNext(step("rename", "pauseUploads"), { uploadsPaused: false }),
-    ).toContain("Uploads are still switched on");
+    ).toContain("Turn off uploads above before continuing");
     expect(blocksNext(step("rename", "pauseUploads"), { uploadsPaused: true })).toBe("");
   });
 
@@ -669,7 +673,7 @@ describe("blocksNext", () => {
   describe("reconciliation not run", () => {
     it("holds the step until a run has finished", () => {
       const st = step("structure", "reconcile");
-      expect(blocksNext(st, { reconcileRan: false })).toContain("has not been run yet");
+      expect(blocksNext(st, { reconcileRan: false })).toContain("Run Folder Reconciliation");
       expect(blocksNext(st, { reconcileRan: true })).toBe("");
     });
 
@@ -764,7 +768,7 @@ describe("blocksNext", () => {
      `uploadsPaused` read `no` throughout, and the flow let the admin walk past step 1 regardless. */
   it("holds Next while uploads are still on, and lets go the moment they are paused", () => {
     const st = step("structure", "pauseUploads");
-    expect(blocksNext(st, { uploadsPaused: false })).toContain("still switched on");
+    expect(blocksNext(st, { uploadsPaused: false })).toContain("Turn off uploads above");
     expect(blocksNext(st, { uploadsPaused: true })).toBe("");
   });
 

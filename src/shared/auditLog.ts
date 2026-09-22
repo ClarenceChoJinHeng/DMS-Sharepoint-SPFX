@@ -93,7 +93,7 @@ export const EVENT_LABEL: Record<string, string> = {
      sentence, and the row's `Details` and `What` both name the file. */
   [EVENT.replaced]: "Replaced",
   [EVENT.shareRevoked]: "Share access revoked",
-  [EVENT.uploadRefused]: "Upload refused",
+  [EVENT.uploadRefused]: "Upload rejected",
   [EVENT.accessGranted]: "Access granted",
   [EVENT.accessRevoked]: "Access revoked",
   [EVENT.reconciliationRun]: "Reconciliation run",
@@ -285,7 +285,7 @@ export function summarize(e: AuditEvent): string {
   const label = EVENT_LABEL[e.event] ?? clean(e.event);
   const name = clean(e.itemName);
   const base = name.length > 0 ? `${label} — ${name}` : label;
-  // "Upload refused" already says it was refused; repeating it reads as a different, worse event.
+  // "Upload rejected" already says it was refused; repeating it reads as a different, worse event.
   const restate = e.outcome === "Refused" && e.event !== EVENT.uploadRefused;
   return cap(restate ? `${base} (refused)` : base, TITLE_MAX);
 }

@@ -7,8 +7,10 @@ import {
   failedLibraries,
   hasCriteria,
   hasMetadataFilter,
+  hasSearchNarrowFilter,
   isHcLibrary,
   metadataFilterMatches,
+  searchMetadataMatches,
   kqlDate,
   kqlPathScope,
   kqlPhrase,
@@ -220,18 +222,39 @@ describe("buildKql", () => {
     expect(q).toContain("(return* OR");
   });
 
-  it("adds exact clauses for the fixed metadata", () => {
+  /* ⚠ REVERSES what this test asserted until 2026-09-21 — it used to pin the EXACT clauses this
+     test now proves are ABSENT. Found live: picking any one Advanced Filter on its own returned "No
+     Result Found", because the crawled managed property behind each of these four is empty on every
+     document on this tenant, so a `prop:"v"` clause was a hard, permanent zero rather than "no
+     constraint". See the warning on `buildKql` itself. Narrowing moved client-side instead — see the
+     `searchMetadataMatches` describe block below — and the query must never carry these clauses
+     again, or the client-side narrowing is filtering a result set the query has already zeroed. */
+  it("NEVER adds an exact clause for Document Type, Year, Confidentiality or Segment", () => {
     const q = buildKql(
       criteria({
+        text: "tax",
         documentType: "Tax Return",
         year: "2024",
         confidentiality: "Restricted",
+        segment: "Group Head Office",
       }),
       scope,
     );
-    expect(q).toContain('Document_x0020_TypeOWSTEXT:"Tax Return"');
-    expect(q).toContain('YearOWSTEXT:"2024"');
-    expect(q).toContain('Confidentiality_x0020_LevelOWSTEXT:"Restricted"');
+    expect(q).not.toContain("Document_x0020_TypeOWSTEXT");
+    expect(q).not.toContain("YearOWSTEXT");
+    expect(q).not.toContain("Confidentiality_x0020_LevelOWSTEXT");
+    expect(q).not.toContain("Business_x0020_SegmentOWSTEXT");
+  });
+
+  it("still runs on Document Type/Year/Confidentiality/Segment ALONE, with no text typed", () => {
+    // `hasCriteria` must still see these as "something was asked for" even though none of them
+    // reaches the query any more — the narrowing happens after the query runs, over its hits.
+    const q = buildKql(
+      criteria({ documentType: "Tax Return", year: "2024" }),
+      scope,
+    );
+    expect(q.length).toBeGreaterThan(0);
+    expect(q).toContain("IsDocument:true");
   });
 
   it("adds a clause per tier, using the tier's own column name", () => {
@@ -647,6 +670,107 @@ describe("metadataFilterMatches / hasMetadataFilter", () => {
       hasMetadataFilter({
         ...emptyCriteria(),
         confidentiality: "Confidential",
+      }),
+    ).toBe(true);
+  });
+});
+
+/* Search's own narrowing (2026-09-21) — the counterpart to the describe block above, but covering
+   Segment too, since Search cannot push ANY of the four down (REST can push Segment down on its
+   own). See the warning on `buildKql` for why this exists at all. */
+describe("searchMetadataMatches / hasSearchNarrowFilter", () => {
+  type Labels = {
+    documentType: string;
+    year: string;
+    confidentiality: string;
+    segment: string;
+  };
+  const row = (over: Partial<Labels>): Labels => ({
+    documentType: "",
+    year: "",
+    confidentiality: "",
+    segment: "",
+    ...over,
+  });
+
+  it("passes a row that matches every set filter, Segment included", () => {
+    expect(
+      searchMetadataMatches(
+        {
+          documentType: "Tax Return",
+          year: "2024",
+          confidentiality: "Confidential",
+          segment: "Group Head Office",
+        },
+        row({
+          documentType: "Tax Return",
+          year: "2024",
+          confidentiality: "Confidential",
+          segment: "Group Head Office",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a row that matches everything EXCEPT segment", () => {
+    // The one field this function checks that metadataFilterMatches does not.
+    expect(
+      searchMetadataMatches(
+        {
+          documentType: "Tax Return",
+          year: "2024",
+          confidentiality: "Confidential",
+          segment: "Group Head Office",
+        },
+        row({
+          documentType: "Tax Return",
+          year: "2024",
+          confidentiality: "Confidential",
+          segment: "Minamas Head Office",
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("compares segment trimmed and case-insensitively, like the other three", () => {
+    expect(
+      searchMetadataMatches(
+        { documentType: "", year: "", confidentiality: "", segment: "group head office" },
+        row({ segment: "  Group Head Office  " }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores a filter that is not set", () => {
+    expect(
+      searchMetadataMatches(
+        { documentType: "", year: "2024", confidentiality: "", segment: "" },
+        row({ documentType: "anything", year: "2024", segment: "anything" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails a set segment filter on a row with no segment recorded", () => {
+    expect(
+      searchMetadataMatches(
+        { documentType: "", year: "", confidentiality: "", segment: "Group Head Office" },
+        row({}),
+      ),
+    ).toBe(false);
+  });
+
+  it("hasSearchNarrowFilter is hasMetadataFilter PLUS segment", () => {
+    expect(hasSearchNarrowFilter(emptyCriteria())).toBe(false);
+    expect(hasSearchNarrowFilter({ ...emptyCriteria(), year: "2024" })).toBe(
+      true,
+    );
+    // The one case that must diverge from hasMetadataFilter — that one deliberately answers false
+    // here, because REST can filter Segment server-side and never needs this flag. Search cannot,
+    // so its own check must answer true.
+    expect(
+      hasSearchNarrowFilter({
+        ...emptyCriteria(),
+        segment: "Group Head Office",
       }),
     ).toBe(true);
   });

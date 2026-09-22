@@ -2643,7 +2643,19 @@ export default function GroupManager({
                 style={{ ...s.input, flex: "1 1 220px" }}
                 value={filter}
                 placeholder="Filter by name…"
-                onChange={(e) => setFilter(e.target.value)}
+                /* ⚠ CLEARS THE SELECTION (client, 2026-09-22) — REVERSES the earlier "selection
+                   survives a filter change" design (2026-08-25), which existed so a cross-filter
+                   selection could be built up before one bulk delete. The client's own point: with
+                   "Select all shown" one click away under whichever filter you land on, there is no
+                   real workflow that needed the old behaviour, and switching to a DIFFERENT group
+                   while the selection count kept climbing read as the page not noticing you had
+                   moved on. Applied to BOTH filters (name text and segment dropdown, below) for the
+                   same reason — leaving one to still persist while the other clears would be its own
+                   new inconsistency. */
+                onChange={(e) => {
+                  setFilter(e.target.value);
+                  setSelected({});
+                }}
               />
               {/* Segment comes from the MAPPING ROWS, so it agrees with what reconciliation reads rather
               than with the name. Offered only when the Group Map was readable — a filter built from
@@ -2652,7 +2664,10 @@ export default function GroupManager({
                 <select
                   style={{ ...s.select, flex: "0 1 220px" }}
                   value={segFilter}
-                  onChange={(e) => setSegFilter(e.target.value)}
+                  onChange={(e) => {
+                    setSegFilter(e.target.value);
+                    setSelected({});
+                  }}
                 >
                   <option value="">Every segment</option>
                   {modes.map((m) => (

@@ -145,9 +145,12 @@ export const CARDS: AdminCard[] = [
        the "CRS" or the "GDC" naming (client, 2026-09-17: confirmed live rebrand). `self.label` was
        updated to match — it carries no resolution risk since `match` never depended on it. */
     title: "File Type Management",
-    // Widened 2026-09-13 (QA item #23) — this page now also carries the Bulk Upload access
-    // toggle, a second setting on the same `CrsConfigurationWebPart` sibling-component page.
-    blurb: "Control which file types can be uploaded, and who may open Bulk Upload.",
+    // ⚠ REVERTED 2026-09-22 (client: "Bulk Upload button is no longer available since it is not
+    // working. Please update the statement above.") — the Bulk Upload access toggle mentioned here
+    // (widened 2026-09-13, QA item #23) is still on the page, but the client reports it as not
+    // currently working, so the blurb no longer promises it. Not a code fix — the toggle itself is
+    // untouched; only this description reverted to match what is reliably true right now.
+    blurb: "Control which file types can be uploaded.",
     icon: "config",
     column: 2,
     links: [],

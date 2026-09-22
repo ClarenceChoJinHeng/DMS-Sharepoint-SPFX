@@ -22,6 +22,7 @@ import {
   readSubmissionRecordByFileId,
 } from "../../../shared/spSubmissionRecords";
 import { readFileETag } from "../../../shared/deletionGuard";
+import { formatSubmittedAt } from "../../../shared/mySubmissions";
 import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
 import { IFormProps } from "./IFormProps";
@@ -293,31 +294,22 @@ const buildUploadName = (originalName: string, typed: string): string => {
 // validateUpdateListItem validates dates against the SITE's regional settings.
 // This tenant is US locale (M/D/YYYY) — ISO YYYY-MM-DD is rejected.
 /**
- * When a batch was staged, for the collapsed card - `23/Aug/2026 11:30`.
+ * When a batch was staged, for the collapsed card — `21 Sep 2026 14:30`.
  *
- * DD/MMM/YYYY is the agreed client display format (gotcha #1), NOT the mockup's `14/06/2026`: a
- * numeric day/month is read the other way round by half the audience, and this string exists to be
- * glanced at. Display only - nothing parses it back.
+ * ⚠ CHANGED 2026-09-21 (client): was a PRIVATE re-implementation producing `21/Sep/2026 14:30` — a
+ * second, drifting copy of the date format `formatSubmittedOn` (shared/mySubmissions.ts) already
+ * settled on 2026-08-30 (spaced, no slashes, no leading zero). Now calls `formatSubmittedAt`, the
+ * shared "date + time" wrapper around that same function, so this line and every other date on the
+ * site can never disagree about the format again. `STAGE_MONTHS`, the array this used to build the
+ * string from by hand, went with it — nothing else in this file read it.
  */
-const STAGE_MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
 const stagedAtLabel = (ms: number | undefined): string => {
+  // ⚠ BLANK, NOT "—", WHEN THERE IS NO TIMESTAMP — preserved from the original: `formatSubmittedAt`
+  // itself would render an em dash for `undefined`, but the ORIGINAL local function returned "" so
+  // the line disappeared entirely rather than reading "Created on —". Kept, since the client's ask
+  // was about the FORMAT of a real date, not about changing what a missing one looks like.
   if (!ms) return "";
-  const d = new Date(ms);
-  const p = (n: number): string => (n < 10 ? "0" + n : String(n));
-  return `${p(d.getDate())}/${STAGE_MONTHS[d.getMonth()]}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  return formatSubmittedAt(new Date(ms));
 };
 
 const toSpDate = (iso: string): string => {
@@ -2231,7 +2223,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         actorEmail: context.pageContext.user.email,
         library: libraryTitle(),
         itemName: picked.name,
-        summary: `Upload refused — ${picked.name}`,
+        summary: `Upload rejected — ${picked.name}`,
         details: [
           `Extension offered: ${getExtension(picked.name) || "(none)"}`,
           `Allowed at the time: ${types.length > 0 ? types.join(", ") : "(none — every upload is blocked)"}`,
@@ -4453,8 +4445,29 @@ export default function Form({ context }: IFormProps): React.ReactElement {
    * that `selectFile` loads and saves, so duplicating them per row would mean five sets of inputs
    * bound to the same values, all changing together.
    */
+  /* ⚠ LIVE PREVIEW OF THE COMPOSED FILENAME, ADDED 2026-09-22 (client: "the new file name reference
+     where user type it will change accordingly"). Reuses `composeUploadBase`/`buildUploadName`
+     exactly as `finalNameFor` does at upload time — the SAME rule, so this can never show a name
+     that upload then disagrees with. `""` (nothing typed anywhere yet) falls back to the client's
+     own placeholder text rather than an empty box, so the field explains its own format before
+     anyone has typed a character. */
+  const nameRefPreview = (): string => {
+    const base = composeUploadBase(
+      omitProjectName() ? "" : projectName,
+      vendor,
+      docName,
+      documentDate,
+    );
+    if (!base) return "XXXX-XXXX-XXXXX";
+    return buildUploadName(file?.name ?? "", base);
+  };
+
   const metaEditor = (
     <>
+      <div className="dms-name-ref">
+        <span>New File Name Ref.</span>
+        <strong>{nameRefPreview()}</strong>
+      </div>
       <div className="dms-grid" style={{ marginTop: 16 }}>
         {/* Free-text Project Name — distinct from the Group-led Projects
                     "Group Project Name" folder level in the card below.
@@ -4770,33 +4783,19 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         )}
       </div>
 
-      {/* Remark MOVED 2026-09-11 to the bottom of the Document File Name section, above — see the
-          comment there. */}
-
-      {/* ⚠ MOVED HERE 2026-09-11 (client: *"Move Remark field to at the bottom of Document File
-                    Name section"*) — it used to sit below the Date/Confidentiality/Legally Privileged
-                    row; the comment that once said "Remark lives in the folder card above" was already
-                    stale before this move (Remark has been per-file since 2026-08-23, not batch-scoped).
-                    Relabelled "Remark for Approval" (client, 2026-09-10), then "Remark for Approver"
-                    (client, 2026-09-18, comments 1 & 8), and made an expandable TEXTAREA rather than
-                    a single-line input (client: *"text can be very long"*) — it still goes through
-                    the same `guard`/blockedChar handling as every other free-text box, and the
-                    250-char cap and column are unchanged. */}
-      <label className="dms-field" style={{ gridColumn: "1 / -1" }}>
-        <span>Remark for Approver</span>
-        <textarea
-          value={remark}
-          maxLength={250}
-          rows={3}
-          style={{ resize: "vertical", minHeight: 60, maxHeight: 200 }}
-          onChange={(e) => guard("remark", e.target.value, setRemark)}
-        />
-        {blockedChar.remark ? (
-          <small className="dms-err">{blockedChar.remark}</small>
-        ) : (
-          <small>Max. 250 characters</small>
-        )}
-      </label>
+      {/* ⚠ "Remark for Approver" REMOVED FROM THE UPLOAD FORM ENTIRELY (client, 2026-09-21) — it
+          used to sit here as an expandable textarea (moved to this position 2026-09-11, relabelled
+          "Remark for Approval" then "Remark for Approver" across 2026-09-10/2026-09-18). The INPUT
+          is gone; `remark`/`setRemark`/`guard("remark", …)` below are DELIBERATELY left wired into
+          the batch save/edit/write plumbing rather than ripped out — with no input left to change
+          it, `remark` can only ever be the empty string it defaults to, so every write of it is a
+          harmless no-op. Fully removing that plumbing (the `FIELDS.remark`/`settings.columns.remark`
+          DMS Config override, the batch draft restore/edit round-trip, the `["Remark", meta.remark]`
+          write-payload entry) would be a much larger change than "take the field off the form" and
+          risks the Remark SharePoint column itself, which is NOT part of this — a column is never
+          deleted here, and this only removes what an uploader sees and can type into. The matching
+          READ-ONLY row is removed from `shared/documentDetails.ts` in the same change, which is what
+          every detail panel (Approval, My Submissions, Requests) reads from. */}
 
       {/* ── Keyword (client, 2026-09-04) ────────────────────────────────────────────────
                   *"Add a new field call Keyword add it in upload form and bulk upload - free text
@@ -4975,6 +4974,13 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         .dms-field textarea:focus { outline: 2px solid #0f6c3f; outline-offset: -1px; }
         .dms-link { background: none; border: none; color: #0f6c3f; cursor: pointer; font-weight: 600; padding: 0; font-size: 13px; }
         .dms-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; font-size: 13px; }
+        /* The live composed-filename preview above Project Name — same green accent as
+           .dms-dept-badge, so it reads as "informational", never as an editable input. */
+        .dms-name-ref { display: flex; flex-direction: column; gap: 2px; background: #e8f5ee;
+          border: 1px solid #b3d9c4; border-radius: 8px; padding: 8px 12px; margin-bottom: 16px; }
+        .dms-name-ref span { font-size: 12px; font-weight: 600; color: #0f6c3f; }
+        .dms-name-ref strong { font-family: "Courier New", monospace; font-size: 13px;
+          font-weight: 700; color: #1b1b1b; overflow-wrap: break-word; }
         .dms-field > span { font-weight: 600; color: black; font-size: 14px; }
         .dms-field .req { color: #d13438; font-style: normal; }
         .dms-field select, .dms-field input[type="text"], .dms-field input[type="date"] { padding: 8px 10px; border: 1px solid black; border-radius: 10px; font: inherit; width: 100%; box-sizing: border-box; height: 38px; background: #fff; }
@@ -5497,7 +5503,8 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                       </span>
                       {/* "docs", not "files": the design's word, and the one the count actually means. */}
                       <span style={{ color: "rgba(50, 49, 48, 1)" }}>
-                        {b.files.length} doc{b.files.length === 1 ? "" : "s"}
+                        {b.files.length} Document
+                        {b.files.length === 1 ? "" : "s"}
                       </span>
                     </div>
 
@@ -5539,10 +5546,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   {/* "Nothing is sent twice" removed 2026-08-30 at the client's request. The GUARANTEE
                   is unchanged and is what makes a second press safe: a successful file leaves the
                   list, so what remains is exactly what still needs doing. Only the sentence is
-                  gone. */}
-                  Uploaded {lastRun.ok}. The {lastRun.failed} still listed above
-                  could not be uploaded - fix the reason shown and press Upload
-                  again.
+                  gone. Wording itself replaced 2026-09-21, client's own exact template. */}
+                  {lastRun.ok} files uploaded. {lastRun.failed} file could not
+                  be uploaded. Please check the reason above and try again.
                 </p>
               )}
               {/* WARN: AN ERROR, NOT A NOTE, AND IT HOLDS THE UPLOAD. Every other message here describes

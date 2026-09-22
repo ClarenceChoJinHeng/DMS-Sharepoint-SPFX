@@ -72,7 +72,7 @@ describe("summarize", () => {
 
   it("does NOT restate refusal for UploadRefused, whose label already says it", () => {
     expect(summarize(ev({ event: EVENT.uploadRefused, outcome: "Refused", itemName: "virus.exe" })))
-      .toBe("Upload refused — virus.exe");
+      .toBe("Upload rejected — virus.exe");
   });
 
   it("keeps an unknown event type readable rather than dropping it", () => {

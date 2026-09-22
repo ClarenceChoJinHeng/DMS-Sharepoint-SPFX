@@ -934,6 +934,25 @@ interface RequestPolicy {
   directDelete: string[];
   directDeleteStaging: string[];
   directShare: string[];
+  /**
+   * Term GUIDs where THIS VIEWER holds `APR`/`APRHC` — i.e. they are the one who would DECIDE a
+   * deletion request raised against a document in this unit, via Approval & Request.
+   *
+   * NOT the same thing as `approverUnits` above, which is deliberately SITE-WIDE (every unit with
+   * an approver, for routing) — matching that here would suppress "Request deletion" for everyone,
+   * PIC included, since every unit has an approver by definition. This is scoped to `myGroupIds`
+   * exactly like `directDelete` beside it, so it only ever answers about THIS viewer's own units.
+   *
+   * Client, 2026-09-21, on Document-Viewer: remove an Approver's ability to "Request deletion" of a
+   * Documents-library file. Since 2026-09-17 an approver no longer holds `DEL`/`DELHC` (deletion
+   * moved to the proxy flow), so `canDeleteSelf` now answers false for them too, and the button
+   * label they used to never see (`#3`, 2026-08-30: "no request where the viewer can already act")
+   * fell straight through to "Request deletion" — a self-loop, since they are also the one who
+   * decides it. This is what tells the two cases apart: `directDelete` empty AND this non-empty
+   * means "cannot act directly, but only because execution moved to proxy — not because someone
+   * else decides this."
+   */
+  decidesDeletion: string[];
   /** False only when the list answered 404. A different failure leaves this true and fails at the write. */
   listExists: boolean;
 }
@@ -975,6 +994,10 @@ const BLANK_POLICY: RequestPolicy = {
   directDelete: [],
   directDeleteStaging: [],
   directShare: [],
+  /* ⚠ EMPTY MEANS "OFFER THE REQUEST" HERE TOO, same reasoning as the three above — a failed read
+     must never hide the button. Understating "you are the decider" costs a redundant request that
+     the approver's own screen then shows them; overstating it would hide their only route to ask. */
+  decidesDeletion: [],
 };
 
 /* JSON light with NO `__metadata`, and BOTH header halves saying nometadata — plus `odata-version: ""`
@@ -1165,10 +1188,12 @@ export default function MySubmissions({
           { headers: NO_CACHE },
         );
         if (!mr.ok) return;
-        const mapRows = (((await mr.json()).value ?? []) as Array<{
-          GroupId?: number;
-          Role?: string;
-        }>).map((r) => ({ GroupId: String(r.GroupId ?? ""), Role: r.Role }));
+        const mapRows = (
+          ((await mr.json()).value ?? []) as Array<{
+            GroupId?: number;
+            Role?: string;
+          }>
+        ).map((r) => ({ GroupId: String(r.GroupId ?? ""), Role: r.Role }));
         if (live) setPureObserver(isPureObserverRole(myIds, mapRows));
       } catch {
         /* leave undefined — a failed check must never hide a real PIC/Approver/HOD's request button */
@@ -1180,6 +1205,22 @@ export default function MySubmissions({
   }, [viewerOnlyMode]);
   /** The row being examined. `undefined` = the list. */
   const [open, setOpen] = useState<Submission | undefined>(undefined);
+  /**
+   * Is `open` genuinely one of the viewer's OWN submissions? (2026-09-21)
+   *
+   * ⚠ THIS IS THE "REPLACE THIS GUARANTEE WITH A REAL ONE" the request-button comment further down
+   * demands, for the "click-a-file-directly" gap `resolveArbitraryFile` opened the same day. Every
+   * OTHER route into `openRow` (the row list, a batch file, a matched own record) draws from `rows`,
+   * which is filtered `AuthorId eq me` — so ownership there is structural, with nothing to check.
+   * `resolveArbitraryFile` is reached ONLY when nothing in `rows` matched the clicked id, which means
+   * either it genuinely is not the viewer's own upload (a PIC's whole-unit read of Documents/HC
+   * Documents surfaces a colleague's file just as easily as their own), or `rows` itself could not be
+   * fully read — and treating an unresolved case as "not mine" is the safe direction here: it costs
+   * one self-service button, never lets someone raise a request about a document that is not theirs.
+   *
+   * Defaults `true` so every existing call to `openRow` (three of the four) needs no change at all.
+   */
+  const [openIsOwn, setOpenIsOwn] = useState(true);
   /** Per-item metadata labels for the open row. `undefined` while in flight. */
   const [fieldText, setFieldText] = useState<
     Record<string, string> | undefined
@@ -1766,7 +1807,7 @@ export default function MySubmissions({
     setBatchText(map);
   };
 
-  const openRow = (row: Submission): void => {
+  const openRow = (row: Submission, own = true): void => {
     /* ⚠⚠ THE ACTUAL BUG, found after two guards that fixed a DIFFERENT ordering of the same race
        (2026-09-15, reported three times on the same build before this was traced correctly). Those
        two only stop a row-Delete check from APPLYING once it resolves AFTER navigation has already
@@ -1780,6 +1821,7 @@ export default function MySubmissions({
     setWithdrawError(undefined);
     openActiveRef.current = true;
     setOpen(row);
+    setOpenIsOwn(own);
     setAsking(undefined);
     setSent(undefined);
     setProblems([]);
@@ -1837,7 +1879,10 @@ export default function MySubmissions({
       openBatch +
       "::" +
       b.files
-        .map((f) => `${mergedKey(f)}#${f.submissionId ?? ""}#${f.record?.tagStatus ?? ""}`)
+        .map(
+          (f) =>
+            `${mergedKey(f)}#${f.submissionId ?? ""}#${f.record?.tagStatus ?? ""}`,
+        )
         .join("|");
     if (batchSigRef.current === sig) return;
     // Set BEFORE the await, so a re-render mid-flight does not start a second identical load.
@@ -2013,7 +2058,7 @@ export default function MySubmissions({
     resolveArbitraryFile(link.id)
       .then((arbitrary) => {
         if (arbitrary) {
-          openRow(arbitrary);
+          openRow(arbitrary, false);
           return;
         }
         failToOpen(
@@ -2147,6 +2192,10 @@ export default function MySubmissions({
           if (role === "DELS" || role === "DELSHC")
             add(next.directDeleteStaging);
           if (role === "SHARE" || role === "SHAREHC") add(next.directShare);
+          // APR / APRHC, scoped to THIS VIEWER'S OWN groups (unlike `approverUnits` above, which is
+          // deliberately site-wide) — this viewer decides a deletion request here, so offering them
+          // "Request deletion" would be asking themselves.
+          if (role === "APR" || role === "APRHC") add(next.decidesDeletion);
         }
       }
     } catch {
@@ -2598,7 +2647,12 @@ export default function MySubmissions({
     let staging: Submission[] = [];
     let normalChainComplete = true;
     try {
-      staging = await readLibrary(libraryTitle(), libraryUrlSegment(), true, userId);
+      staging = await readLibrary(
+        libraryTitle(),
+        libraryUrlSegment(),
+        true,
+        userId,
+      );
     } catch {
       /* not a PIC/Approver here, or genuinely unreachable — either way, nothing of theirs to show */
       normalChainComplete = false;
@@ -3279,8 +3333,21 @@ export default function MySubmissions({
         .then((hits) => {
           if (!live) return;
           // Only entries carrying an address: SP.Web.ShareObject shares with an EMAIL, so a result
-          // without one cannot be acted on and offering it would be a dead row.
-          setPeopleHits(hits.filter((h) => (h.email ?? "").indexOf("@") > -1));
+          // without one cannot be acted on and offering it would be a dead row. Also never offer
+          // the requester their own address — sharing a document with yourself is meaningless,
+          // since you already have whatever access this request would grant. `me` is not in scope
+          // here (every other `const me` in this file is local to a different callback), so this
+          // reads the email directly, matching this file's own existing pattern elsewhere.
+          const myEmail = (context.pageContext.user.email ?? "")
+            .trim()
+            .toLowerCase();
+          setPeopleHits(
+            hits.filter(
+              (h) =>
+                (h.email ?? "").indexOf("@") > -1 &&
+                (h.email ?? "").trim().toLowerCase() !== myEmail,
+            ),
+          );
           setPeopleBusy(false);
         })
         .catch(() => {
@@ -3607,15 +3674,15 @@ export default function MySubmissions({
                     {policy.allowExternal ? (
                       <>
                         Some of these are outside your organisation (
-                        {policy.tenantDomains.join(", ")}). Your approver will be
-                        told.
+                        {policy.tenantDomains.join(", ")}). Your approver will
+                        be told.
                       </>
                     ) : (
                       <>
                         Some of these are outside your organisation (
-                        {policy.tenantDomains.join(", ")}), and sharing outside it
-                        is switched off on this site — the request cannot be sent
-                        until you remove them.
+                        {policy.tenantDomains.join(", ")}), and sharing outside
+                        it is switched off on this site — the request cannot be
+                        sent until you remove them.
                       </>
                     )}
                   </div>
@@ -4083,6 +4150,17 @@ export default function MySubmissions({
             (systemAdmin ||
               rights?.share === "granted" ||
               canActDirectly(chain, policy.directShare));
+          /* ⚠ SUPPRESSES "Request deletion" FOR THE PERSON WHO WOULD DECIDE IT (client, 2026-09-21,
+             on Document-Viewer showing "Request deletion" to an Approver). `canDeleteSelf` above
+             already answers false for an approver on an approved document — since 2026-09-17 they no
+             longer hold `DEL`/`DELHC` directly, execution moved to the proxy flow — so without this
+             they fell into the SAME branch as a genuine PIC asking someone else, and ended up asking
+             THEMSELVES. `systemAdmin` is deliberately excluded: an admin is not "the approver" for
+             any particular unit and this must not silence their request option. */
+          const decidesThisDeletion =
+            approved &&
+            !systemAdmin &&
+            canActDirectly(chain, policy.decidesDeletion);
           /* ⚠ THE BUTTON STAYS ON THIS PAGE FOR BOTH APPROVED AND STAGING FILES NOW (client,
              2026-09-15: "the Delete and Share button stays exactly where it is in the My Submission
              page for easy access instead of going into the library, its only that system admin or
@@ -4101,9 +4179,39 @@ export default function MySubmissions({
              like a genuine PIC on someone else's approved document — the wrong branch, since a pure
              observer has no legitimate reason to ask for a change at all. `undefined` (not yet
              checked, or non-viewerOnlyMode where this is never computed) never suppresses — only a
-             CONFIRMED `true` does. */
-          const showDelete = !canDeleteSelf && pureObserver !== true;
-          const showShare = approved && !canShareSelf && pureObserver !== true;
+             CONFIRMED `true` does.
+             ⚠ `!decidesThisDeletion` GATES THE SAME WAY, SAME REASON, DIFFERENT AUDIENCE (2026-09-21)
+             — see that flag's own comment above. Only a CONFIRMED `true` suppresses; an unread Group
+             Map (`policy.decidesDeletion` still empty because the read failed) leaves this `false`
+             and the button offered, same fail-open direction as everything else this button rests on.
+             ⚠ `openIsOwn` GATES THE REQUEST HALF THE SAME WAY, FOR PIC (client, 2026-09-21: "do the
+             same for PIC"). Restores the guarantee this page's own comment two screens up demands —
+             a request has always been raised against the viewer's OWN file, structurally, because
+             `rows` is filtered `AuthorId eq me`. `resolveArbitraryFile`'s "click-a-file-directly"
+             fallback breaks that structure on purpose (a PIC's whole-unit read of Documents/HC
+             Documents surfaces a colleague's file too), so without this a PIC opening a colleague's
+             document this way could raise a deletion or share request about it — exactly what the
+             row-list Delete button was moved back off the library command bar in 2026-08-20 to
+             prevent. Never gates `decidesThisDeletion`/direct rights: those come from a real
+             ACL/Group-Map answer for THIS document and hold regardless of who filed it. */
+          /* ⚠ `!viewerOnlyMode` GATES OUT THE LAST ROUTE A PIC STILL HAD TO "Request deletion" ON
+             Document-Viewer (client, 2026-09-21, same day as the approver self-loop fix above): their
+             OWN already-approved document, where `canDeleteSelf` is false (only an approver/admin can
+             delete an approved file directly) but `openIsOwn` is true — every other gate above already
+             excludes pureObserver and the approver-decides-it case, leaving this as the one remaining
+             audience. Document-Viewer is now request-free for every role; direct actions
+             (`showDirectDelete`/`showDirectShare`) are UNCHANGED — a PIC can still delete their own
+             pending/rejected file directly there, same as everywhere else. Never touches the ordinary
+             My Submissions page, where requesting deletion of one's own approved document is still the
+             normal, intended route. */
+          const showDelete =
+            !canDeleteSelf &&
+            pureObserver !== true &&
+            !decidesThisDeletion &&
+            openIsOwn &&
+            !viewerOnlyMode;
+          const showShare =
+            approved && !canShareSelf && pureObserver !== true && openIsOwn;
           const showDirectDelete = canDeleteSelf;
           const showDirectShare = approved && canShareSelf;
           return (
@@ -4184,22 +4292,45 @@ export default function MySubmissions({
                 {pureObserver === true
                   ? undefined
                   : showDirectDelete && showDirectShare
-                    ? "Deletes or shares it now — no approval needed."
+                    ? ""
                     : showDirectDelete
                       ? "Deletes it now, to the recycle bin — no approval needed."
                       : showDirectShare
-                        ? "Shares it now — no approval needed."
-                        : (requestBlock ??
-                          /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
+                        ? /* ⚠ decidesThisDeletion CAN BE TRUE HERE (2026-09-21) — the approver still
+                             shares directly (SHARE was untouched by the 2026-09-17 change), but no
+                             longer sees a delete option of ANY kind on this row. Without naming why,
+                             that reads as a page that quietly dropped a button.
+                             ⚠ "Shares it now — no approval needed." ITSELF IS GONE (client,
+                             2026-09-22: remove it) — matching the both-buttons-shown case just
+                             above, which already renders nothing here. Only the deciding-deletion
+                             sentence survives, since that one still says something the row's own
+                             buttons do not — same wording as the identical sibling case below. */
+                          decidesThisDeletion
+                          ? "You decide deletion requests for this unit in Approval & Request, so none is offered here."
+                          : ""
+                        : decidesThisDeletion
+                          ? /* Neither a direct action nor a request is on screen at all — this is the
+                               approver themselves, for an approved document, with no share right on
+                               this particular chain either (e.g. a segment-tier grant that fanned to
+                               this unit for delete but not share). Same wording as the share case,
+                               standing alone. */
+                            "You decide deletion requests for this unit in Approval & Request, so none is offered here."
+                          : !openIsOwn
+                            ? /* Reached via the "click-a-file-directly" fallback, on a document that
+                                 is not the viewer's own upload, with no direct or deciding right on
+                                 it either — see `openIsOwn`'s own comment above `open`. */
+                              "This is not one of your own uploads, so no request can be raised for it here."
+                            : (requestBlock ??
+                              /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
                      REPLACES the buttons in that state, so "Your Approver decides these" was pointing
                      at controls that were not on the screen — which reads as a page that failed to
                      render rather than as a state. It stays where the buttons ARE shown, because
                      there it explains who acts on them. */
-                          (openRequest?.status === "Pending"
-                            ? undefined
-                            : approved
-                              ? "Your Approver decides these."
-                              : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted."))}
+                              (openRequest?.status === "Pending"
+                                ? undefined
+                                : approved
+                                  ? "Your Approver decides these."
+                                  : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted."))}
               </span>
             </div>
           );
@@ -5320,9 +5451,37 @@ export default function MySubmissions({
                                     systemAdmin ||
                                     rights?.remove === "granted" ||
                                     canActDirectly(chain, policy.directDelete);
+                                  /* ⚠⚠ SAME FIX AS THE DETAIL VIEW's `decidesThisDeletion`, SAME
+                                     REASONING, DIFFERENT SURFACE (2026-09-21 — the client pointed at
+                                     THIS row-level "Delete" button specifically, asking why it
+                                     sometimes opens a reason-for-deletion dialog and sometimes goes
+                                     straight through: the two outcomes are `rights?.remove ===
+                                     "granted"` still being TRUE for a unit whose approver group has
+                                     not yet been re-created since 2026-09-17 — see the tenant-wide
+                                     `CRS Delete` audit this same session — versus a remediated unit,
+                                     where the live probe now correctly says "denied" and the click
+                                     fell into the SAME self-loop the detail view had: an approver
+                                     asking themselves, via a reason field, to delete a document only
+                                     they would ever decide on.
+                                     `canDelete` is false and unaffected by this — a genuinely
+                                     un-mapped PIC still needs the exact same fail-open behaviour it
+                                     always had. This only intercepts the ELSE branch, and only when
+                                     the click resolved to "this viewer is the decider", so nothing
+                                     about who CAN delete directly changes here. */
+                                  const decidesThisDeletion =
+                                    approved &&
+                                    !systemAdmin &&
+                                    canActDirectly(
+                                      chain,
+                                      policy.decidesDeletion,
+                                    );
                                   if (canDelete) {
                                     setWithdrawError(undefined);
                                     setWithdrawRow(r);
+                                  } else if (decidesThisDeletion) {
+                                    setRequestNotice(
+                                      "You decide deletion requests for this unit in Approval & Request, so none is offered here.",
+                                    );
                                   } else {
                                     setAsking("Deletion");
                                   }

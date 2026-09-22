@@ -12,6 +12,7 @@ import {
   NewSegmentDraft,
   nextSortOrder,
   normalizeGuid,
+  placeholderStagingFolderFor,
   requiredFieldErrors,
   validateNewSegment,
 } from "./newSegment";
@@ -99,6 +100,37 @@ describe("nextSortOrder", () => {
       { key: "c", label: "C", stagingFolder: "C", sortOrder: 2 },
     ];
     expect(nextSortOrder(rows)).toBe(3);
+  });
+});
+
+describe("placeholderStagingFolderFor", () => {
+  it("strips spaces and uppercases the label", () => {
+    expect(placeholderStagingFolderFor("Project Cars", [])).toBe("PROJECTCARS");
+  });
+
+  it("returns empty for a label with nothing usable, same as columnNameFor", () => {
+    expect(placeholderStagingFolderFor("///", [])).toBe("");
+  });
+
+  it("appends a numeric suffix when the plain derivation is already taken", () => {
+    const taken: ExistingSegment[] = [
+      { key: "mode_x", label: "X", stagingFolder: "PROJECTCARS" },
+    ];
+    expect(placeholderStagingFolderFor("Project Cars", taken)).toBe("PROJECTCARS2");
+  });
+
+  it("keeps climbing the suffix until it finds a free one", () => {
+    const taken: ExistingSegment[] = [
+      { key: "a", label: "A", stagingFolder: "PC" },
+      { key: "b", label: "B", stagingFolder: "PC2" },
+      { key: "c", label: "C", stagingFolder: "PC3" },
+    ];
+    expect(placeholderStagingFolderFor("PC", taken)).toBe("PC4");
+  });
+
+  it("compares case-insensitively, matching every other collision check in this module", () => {
+    const taken: ExistingSegment[] = [{ key: "a", label: "A", stagingFolder: "pcars" }];
+    expect(placeholderStagingFolderFor("PCARS", taken)).toBe("PCARS2");
   });
 });
 

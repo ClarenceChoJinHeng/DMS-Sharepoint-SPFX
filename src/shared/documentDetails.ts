@@ -202,7 +202,15 @@ export const FILE_FIXED_FIELDS: Array<{ label: string; field: string }> = [
   { label: "Legally Privileged", field: "LegallyPrivileged" },
   { label: "Project Name", field: "ProjectName" },
   { label: "Vendor / Customer", field: "Vendor_x002f_CustomerName" },
-  { label: "Remark", field: "Remark" },
+  /* "Remark" REMOVED 2026-09-21 (client: "remove the Remark for Approver from the upload form and
+     every other places") — it was `{ label: "Remark", field: "Remark" }` here, which is what every
+     detail panel (Approval, My Submissions, Requests, Document Search) read to show it. The upload
+     form's own input is gone too (Form.tsx), and the underlying `Remark` SharePoint column is left
+     untouched — this only stops it being shown or collected, nothing is deleted at the list level.
+     ⚠ THE COLUMN STAYS OUT OF `FILE_FIXED_FIELDS` DELIBERATELY, not just relabelled or hidden by a
+     flag: `buildDetailRows`' whole "every fixed field always shows, dash if blank" rule (2026-09-11)
+     exists for exactly the ten fields still listed here — a field nobody can fill in any more has no
+     reason to keep occupying one of those ten permanent rows. */
   /* ⚠ ADDED 2026-09-10, AND ITS ABSENCE WAS INVISIBLE FOR THE WORST REASON: a blank value is
      DROPPED from this panel, so a missing FIELD and an empty one render identically. `Keyword`
      shipped as a column and a form input, was written on every upload, and was then shown on no

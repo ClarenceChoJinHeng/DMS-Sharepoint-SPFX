@@ -62,8 +62,8 @@ describe("isoToday", () => {
 });
 
 describe("displayIso", () => {
-  it("formats as DD/MMM/YYYY", () => {
-    expect(displayIso("2026-09-13")).toBe("13/Sep/2026");
+  it("formats as DD MMM YYYY, no slashes", () => {
+    expect(displayIso("2026-09-13")).toBe("13 Sep 2026");
   });
 
   it("falls back to the raw value for something unparseable, never inventing a date", () => {

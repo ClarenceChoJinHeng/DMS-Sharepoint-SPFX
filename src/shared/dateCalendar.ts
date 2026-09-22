@@ -71,12 +71,17 @@ export function monthLabel(year: number, month: number): string {
   return `${MONTH_NAMES[month - 1]} ${year}`;
 }
 
-/** `DD/MMM/YYYY` — this project's agreed display format (CLAUDE.md gotcha #1). Falls back to the raw
- * value for anything `parseIso` refuses, same "never invent a date" rule. */
+/** `DD MMM YYYY`, no slashes — the Audit Log's date filter, the ONLY consumer of `displayIso`
+ * (client, 2026-09-22, pointing at that screen specifically: "can you help to remove the SLASH").
+ * ⚠ NOT the sitewide `DD/MMM/YYYY` format (CLAUDE.md gotcha #1) — that is a SEPARATE function
+ * (`formatSubmittedOn` and friends), used across My Submissions/ApprovalDocument/etc., and is
+ * untouched by this. `displayIso` has exactly one importer (`datePicker.tsx`), confirmed by grep
+ * before this change, so this cannot silently reach anywhere else. Falls back to the raw value for
+ * anything `parseIso` refuses, same "never invent a date" rule. */
 export function displayIso(value: string): string {
   const p = parseIso(value);
   if (!p) return value;
-  return `${pad2(p.day)}/${MONTH_ABBR[p.month - 1]}/${p.year}`;
+  return `${pad2(p.day)} ${MONTH_ABBR[p.month - 1]} ${p.year}`;
 }
 
 /** Steps a (year, month) pair by `delta` months, wrapping the year in either direction. */
