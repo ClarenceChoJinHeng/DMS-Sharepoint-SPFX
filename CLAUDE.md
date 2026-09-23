@@ -1,5 +1,610 @@
 # SDG DMS — Claude Code Project Context
 
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-23 — TWO REAL BUGS FOUND IN THE LIVE
+> `CRS — Notify request activity` FLOW, DIAGNOSED FROM THE CLIENT'S OWN FRESH EXPORT
+> (`CRS—Notifyrequestactivity_20260922180512.zip`) — NEITHER IS FIXED YET, BOTH ARE POWER AUTOMATE
+> EDITS, NOT CODE.** Client reported three symptoms in one message: the share/delete request "Open
+> the document" link 404s; an approver's direct share to another internal address delivers nothing;
+> Document-Viewer sharing "doesn't seem to be working". The first two are now root-caused with
+> certainty from the exported flow JSON; the third is very likely the pre-existing, already-documented
+> native-invite deliverability gap (see `2026-09-09-request-notification-flow-runbook.md` line 26-29:
+> *"Microsoft's own invite still goes to the person being shared with, and still lands in spam for
+> some recipients — that is the pre-existing deliverability issue, not this flow"*), not a code or
+> flow defect — both `performDirectShare` (`Requests.tsx`) and `submitDirectShare`
+> (`MySubmissions.tsx`) were read in full and both correctly surface an on-screen error whenever
+> `SP.Web.ShareObject` reports a per-recipient failure (gotcha #4 — HTTP 200 does not mean it
+> worked, the per-recipient result is in the body, and both call sites already check it). If the
+> approver saw NO error message when sharing `crs@sdguthrie.com` → `gdc@sdguthrie.com`, the API call
+> itself succeeded and the gap is downstream — check gdc's Junk/Clutter folder before assuming
+> anything is broken in this codebase.
+>
+> **BUG 1 — VISIBLE, LITERAL WHITESPACE INSIDE A HARDCODED HREF, IN BOTH APPROVER-FACING REQUEST
+> EMAILS.** Confirmed byte-for-byte from the export (`pretty.json` lines 184 and 234 of the extracted
+> definition): the **`ShareRequest`** case's `Send_an_email_(V2)` and the **`DeleteRequest`** case's
+> `Send_an_email_(V2)_2` (both under `NeedsApprover` → `HasRecipients` → `Switch_1`, the emails sent
+> to the unit's approver group when a request is first raised) each hardcode the link instead of
+> reusing the already-correct `outputs('RequestsPageLink')` Compose, and the hardcoded literal has
+> spaces pasted into the middle of the page name:
+> - `DeleteRequest` email: `href="https://sdguthrie.sharepoint.com/sites/CRS/SitePages/CRS-    Request.aspx?request=@{triggerBody()?['ID']}"` — **four spaces** between `CRS-` and `Request.aspx`.
+> - `ShareRequest` email: same shape, **seven spaces**.
+>
+> A browser turns those embedded spaces into `%20`, so the link resolves to a page that has never
+> existed (`CRS-%20%20%20%20Request.aspx`) — **this is the 404 the client is seeing on both the share
+> and the deletion request emails**, exactly as reported ("the request for share and deletion file
+> link is not working, it shows 404"). `RequestsPageLink` itself (the Compose action) is spelled
+> correctly (`.../SitePages/CRS-Request.aspx`, confirmed line 628) and is what every OTHER link in
+> this flow correctly reuses — these two are the only ones that re-typed it by hand instead of
+> referencing the Compose, which is exactly how the typo happened and survived unnoticed.
+> - **THE FIX:** open each of the two email actions, delete the hardcoded `<a href="...">` literal,
+>   and rebuild it as `<a href="@{outputs('RequestsPageLink')}?request=@{triggerBody()?['ID']}">Open
+>   the document</a>` (paste the expression parts through the `fx` editor, not as plain text — this
+>   project's own standing rule for every PA flow edit). This also closes off the class of bug for
+>   good: a future page rename only ever has to change `RequestsPageLink` once.
+>
+> **BUG 2 — THE SHARE RECIPIENT'S OWN EMAIL LINKS TO AN APP PAGE SHE HAS NO ROLE ON, PRODUCING
+> SharePoint's NATIVE ACCESSDENIED (NOT A 404).** This is the SECOND, NEWER email inside the
+> `ShareApproved` case — `Send_an_email_(V2)_3`, addressed to `triggerOutputs()?['body/ShareWith']`
+> (the actual recipient, e.g. Nurshahira in the client's test — added 2026-09-21 per the earlier
+> CLAUDE.md entry, confirmed present and correctly addressed in this export, line 382-404). Its body
+> matches the client's screenshot ("Template B") exactly: *"Dear recipient, ... has shared a document
+> with you... File Link: Open the document... Guthrie Document Centre"*. Its link, spelled correctly
+> this time, still points at:
+> ```
+> https://sdguthrie.sharepoint.com/sites/CRS/SitePages/CRS-Request.aspx?request=@{triggerOutputs()?['body/ID']}
+> ```
+> — the SAME `?request=<ID>` Requests-page view the APPROVER's own email correctly uses. **That view
+> is gated by SharePoint's page-level ACL AND by `isVisibleTo` in code** (system admin / an approver
+> in scope / the requester themselves) — and a share **recipient** is structurally NONE of those
+> three. Someone with no DMS persona at all (no `UPL`/`APR`/`APRHC`/owners membership) has no Read
+> grant on that SharePoint PAGE whatsoever, so she is refused by SharePoint's own `AccessDenied.aspx`
+> before the app's React code ever runs — precisely the screenshot: *"You
+> (nurshahira.nabi@sdguthrie.com) don't have permission to access this item."* Her ONLY real access
+> to anything is the direct, file-level Read grant `SP.Web.ShareObject` already gave her — the exact
+> thing the (working) native invite email (Template A) already links straight to.
+> - **THE FIX:** change `Send_an_email_(V2)_3`'s href to the raw file URL instead of the Requests
+>   page — `@{outputs('SiteOrigin')}@{triggerOutputs()?['body/ItemUrl']}` — which needs no DMS page
+>   role of any kind, only the file-level grant she already has. **Do not reuse `outputs('FileLink')`
+>   here** — that Compose deliberately routes an Approved-status row to `My-Submissions.aspx`, which
+>   is for the REQUESTER (who has a My Submissions page role because they're a mapped PIC/approver),
+>   never the recipient, and would fail for her the same way. This one email is the ONLY place in the
+>   flow that should ever use the raw `ItemUrl` link — the requester-facing and approver-facing
+>   emails must keep going through the app pages exactly as they do now, per the runbook's own
+>   explicit, considered rejection of a raw-file-link for the requester (§11.2: *"SharePoint serves a
+>   file URL raw — a PDF in a bare browser tab, an Office file downloaded"* — acceptable friction only
+>   for the recipient, who has no better alternative).
+>
+> **✅ BOTH FIXES ARE APPLIED, VERIFIED BY READING THE ACTUAL SAVED CODE VIEW — NOT YET RE-TESTED
+> LIVE.** The client pasted the code view of all three affected actions
+> (`Send_an_email_(V2)` / ShareRequest, `Send_an_email_(V2)_2` / DeleteRequest,
+> `Send_an_email_(V2)_3` / ShareApproved→ShareWith) directly from the saved flow, and all three now
+> read exactly as specified: the two approver emails use
+> `href="@{outputs('RequestsPageLink')}?request=@{triggerBody()?['ID']}"`, and the recipient email
+> uses `href="@{outputs('SiteOrigin')}@{triggerOutputs()?['body/ItemUrl']}"`. **⏭ Still needed: a real
+> live test** — raise a pending deletion/share request and confirm the approver's link opens
+> `CRS-Request.aspx?request=<ID>` with no 404, then approve a share and confirm the recipient's link
+> opens the file directly with no AccessDenied, even for an account with no DMS persona role.
+> Confirming from a pasted code-view snippet proves the edit landed; it does not prove the click
+> works end to end. The extracted/pretty-printed export used for the original diagnosis is at
+> `scratchpad/notify-extract2/pretty.json` (session-scoped, not part of the repo) if it needs
+> re-reading later.
+>
+> **⏭ THE SAME SESSION ALSO CLOSED TWO SMALLER ITEMS, filed further down under their own 2026-09-23
+> dated headers rather than here** (search `FOUND 2026-09-23, CAUSE CORRECTED MID-DIAGNOSIS` and the
+> two `⏭ ANSWERED` entries right after it): a live-tested, now-closed finding that native
+> SharePoint approvals leave `ApprovedBy`/`ApprovalComment` blank (platform limit, not fixable —
+> process is the only answer, and My Submissions' own tracking of status/location was confirmed
+> unaffected either way); a feasibility answer on whether Power Automate could help there (no, same
+> blank signal — one unverified `/versions`-history lead flagged, not built); and a feasibility
+> answer on why a direct-share invite CCs the file's uploader (SharePoint's own native behavior, no
+> code involved).
+>
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-22/23 — a real, tenant-wide data bug found and
+> fixed (approvers could never self-approve deletion), a design reversal that followed directly from
+> it (instant delete for approvers, same as admin), a cosmetic timing fix that took TWO attempts to
+> get right, and three smaller audit-log fixes. NOTHING IN THIS WHOLE SESSION HAS BEEN DEPLOYED YET —
+> every item below is built, tested, and waiting on a build+deploy.** Full detail in the four blocks
+> immediately below this one (search for their own headers); this is the index.
+>
+> **1. ✅ ROOT CAUSE FOUND AND FIXED: `MySubmissions.tsx` compared a TEXT column (`GroupId`) against
+> a `number[]` via strict-equality `indexOf` — which can never match, for any account, on the whole
+> site.** This silently zeroed `directDelete`/`directDeleteStaging`/`directShare`/`decidesDeletion`
+> for EVERY viewer, meaning a genuinely mapped approver (Group Map row present, membership confirmed)
+> could never get anything but the full two-person "must approve" modal. Found live via
+> `scripts/check-approver-direct-rights.js` run as `crs@sdguthrie.com`. Fixed to match the
+> already-correct pattern in `Requests.tsx` (`string[]`, `String(...)` on both sides).
+>
+> **2. ✅ DESIGN REVERSAL, SAME DAY, FROM LIVE FEEDBACK: an approver who decides deletion for a unit
+> now gets the SAME instant "Delete this file? ... moves to the recycle bin" popup as system admin —
+> not a text-only redirect to "Approval & Request".** The 2026-09-21 `decidesThisDeletion` mechanism
+> (suppress the request button, show a banner instead) turned out to be solving the self-loop problem
+> the wrong way: `writeApprovedDeletionRequest` (what the popup actually calls) never checks the
+> document's ACL at all — it self-approves a `CRS Requests` row and lets the proxy flow execute it, so
+> there was never a reason to limit it to admin. `policy.decidesDeletion` is now folded directly into
+> `canDeleteSelf`/`canDelete` in both the detail view and the row-level table handler.
+>
+> **3. ✅ COSMETIC FIX, TOOK TWO ATTEMPTS: the file's status tag now updates INSTANTLY on delete and
+> STAYS updated, instead of lagging behind the async proxy flow (or worse, reverting itself).** The
+> first version only patched `rows` once, right before an immediate `load()` call that does a
+> genuinely FRESH read — since the real `recycle()` hasn't run yet at that point, that reload would
+> have silently undone the patch within the same click. Fixed with a durable `pendingSelfDeleteRef`
+> that `load()` itself re-applies every time it runs, until the real data independently confirms the
+> file is gone.
+>
+> **4. ✅ FOUR SMALLER AUDIT-LOG FIXES, from Crystal's own worked examples plus one follow-up
+> question:** (a) a new `RequestCancelled` event type is registered in code so the Action filter can
+> offer it — **but no row will ever be written until `CRS — Audit request activity`'s `EventKind`
+> Compose is edited** (see the ⚠⚠ FOUND LIVE block below — the earlier claim here that it maps to
+> `'Skip'` was WRONG, corrected 2026-09-23 after reading the actual export); (b) the "Who" column's
+> one-day "always show GDC, no exceptions" experiment (2026-09-22) was ITSELF reversed the next day —
+> `resolveActorDisplay` (never deleted, only briefly unused) is back, showing the real actor per row
+> (uploader, a genuine reviewer, a requester) and GDC only for automated execution steps; (c) "Move
+> existing folders" (the structure-migration tool) now attributes its audit row to GDC rather than
+> whichever admin ran it, matching the existing file-attribution rule; (d) a **second, DIFFERENT
+> "Cancelled"** — the client asked whether `RequestCancelled` covered a PIC withdrawing their own
+> pending/rejected draft directly (the "Cancelled" badge on My Submissions, `RecordState.withdrawn`)
+> and it does not — that is a document-level self-approved deletion, not a two-person request being
+> pulled back. A bare `EVENT.cancelled = "Cancelled"` is now registered too, mirroring the existing
+> Approved/Rejected pair (bare word = document-level, "Request …" = request-level). **Also code-only**
+> — the flow edit needed is below, in the same block as (a).
+>
+> **✅ FOUND LIVE 2026-09-23, THEN FIXED AND SITE-VERIFIED THE SAME DAY — `CRS — Audit request
+> activity` was mislogging a cancelled request as "Request rejected", NOT skipping it as an earlier
+> version of this note wrongly claimed.** Read from the real export
+> (`CRS—Auditrequestactivity_20260922172358.zip`, client sent it directly): the `EventKind` Compose
+> had no branch at all for `Status = 'Cancelled'` — it fell straight through the final `else` to
+> `'RequestRejected'`, so every withdrawn request was recorded as if an approver rejected it.
+> **THREE fixes applied, in order, each verified against a re-exported flow before moving to the
+> next — and the full chain confirmed live on the Audit Log AND My Submissions:**
+> 1. `EventKind` (Compose) — two new branches, checked before the final `Approved → RequestApproved`
+>    fallback: `Status = 'Cancelled'` → `'RequestCancelled'` (the genuine two-person case), and
+>    `Status = 'Approved' AND RequestType = 'Deletion' AND Stage = 'pending' AND
+>    toLower(RequestedBy) = toLower(DecidedBy)` → `'Cancelled'` (item d's document-level case — a PIC
+>    self-approving a delete of their own still-pending draft). **Verified byte-for-byte identical to
+>    the given expression in the client's re-export.**
+> 2. `ActorEmail` (Compose) — `DecidedBy` is never set on a genuinely cancelled request (the cancel
+>    action only MERGEs `Status: "Cancelled"`), so a new `Status = 'Cancelled'` branch reads
+>    `RequestedBy` instead. **Verified byte-for-byte identical in the same re-export.**
+> 3. `Create_item`'s `item/Title` — a THIRD bug surfaced only once (1) shipped: Title derived its
+>    wording independently from raw `Status`, so the new document-level `Cancelled` case correctly
+>    showed Event="Cancelled" while "What" still read "...request **approved**...", confirmed live via
+>    client screenshot. Fixed by deriving the verb word from `outputs('EventKind')` instead — which
+>    also fixed a PRE-EXISTING, unrelated instance of the same mismatch on `ShareRevoked` (a revoked
+>    share's Title said "...approved..." too, since revoking never changes `Status`). **Confirmed live
+>    the same session**: `test2-test2-test2-20092026.xlsx` now reads Event "Cancelled" / What
+>    "Deletion request **cancelled** — ..." / Who "Clarence Cho" (correctly resolved, not blank/raw
+>    email) — all three consistent.
+> 4. **✅ THE GENUINE TWO-PERSON `RequestCancelled` CASE IS ALSO CONFIRMED, same session.** Raised a
+>    Deletion request and a Share request against two already-APPROVED documents (never self-approved
+>    — a request against an approved document always needs a real second person), then cancelled both
+>    via My Submissions before anyone decided them. Audit Log: `Event = "Request cancelled"` on both
+>    (not "Request rejected"), `What = "Deletion request cancelled — sad-sa-dasd-22092026.pdf"` /
+>    `"Share request cancelled — a-asd-asdad-22092026.pdf"`, `Who = "Guthrie Central Repository
+>    System"` — **correct**, confirmed with the client: they tested signed in AS `crs@sdguthrie.com`
+>    itself, so `RequestedBy` genuinely was that address, `ActorEmail`'s fix correctly picked it up
+>    (proving the `DecidedBy`-blank branch works), and the code's known-service-account rule
+>    (`resolveActorDisplay`) correctly showed its real name rather than the raw address. **ALL THREE
+>    FIXES NOW VERIFIED ACROSS BOTH SCENARIOS — nothing left untested on this item.**
+> - **⚠ NOTE, not a bug: My Submissions' own Permission tab correctly keeps showing "Approved" / "No
+>   approval needed — carried out automatically" for the SAME request the Audit Log labels "Cancelled"
+>   in the document-level (item d) case.** Both are right — different questions (does the row's
+>   literal `Status` need a decision? vs. what's the most meaningful classification for a log entry?)
+>   — confirmed this reads as consistent, not contradictory, when explained to the client live.
+>
+> **⏭ STILL OPEN, EXPLICITLY NOT DONE:**
+> - Whether Auto-route's OWN "Moved to Documents" audit row already shows GDC as its actor, or still
+>   shows the uploader — genuinely unverifiable from this repo; needs the live flow export re-read.
+> - Whether a SELF-approved upload's "Approve" event should show GDC (per one reading of Crystal's
+>   diagram) rather than the approver's own name, which is what it shows today — flagged, not built,
+>   since it was inferred rather than explicitly asked for.
+> - **⚠ THE CODE SIDE OF THIS SESSION — items 1, 2, 3, and the `EVENT.cancelled` registration in item
+>   4(d) — IS STILL NOT BUILT/DEPLOYED.** `tsc`/full suite (2040/2040)/lint (44 warnings, documented
+>   baseline, zero new) are all clean locally; nothing has been packaged or pushed to a live site.
+>   **THE FLOW SIDE IS THE ONE EXCEPTION**: the three `CRS — Audit request activity` edits above
+>   (`EventKind`, `ActorEmail`, `Title`) are Power Automate, live in the SDG tenant NOW, and confirmed
+>   working end to end via direct testing — that part is genuinely done, not merely built.
+
+> ⏭ **FOUND 2026-09-23, CAUSE CORRECTED MID-DIAGNOSIS — ON SDG, `ApprovedBy`/`ApprovalComment` READ
+> BLANK BECAUSE THE CLIENT APPROVED THROUGH SHAREPOINT'S OWN NATIVE Approve/Reject COMMAND, NOT
+> THROUGH THE APP.** Client approved three GHO test files as `clarence@trinergydigital.com` and
+> reported: My Submissions' Approved-tab "Approved By"/"Comment" columns both read `—`; the "your
+> document has been approved" email literally said *"Approved By: not recorded"*; and the Audit
+> Log's Who for those rows read "Guthrie Document Centre" instead of his name.
+> - **⚠⚠ THE FIRST DIAGNOSIS (missing `ApprovedBy`/`ApprovalComment` columns, needing a
+>   reconciliation run) WAS WRONG and was corrected by the client, who mentioned only afterward that
+>   he'd used the NATIVE approve button.** That changes the mechanism entirely: the native
+>   Approve/Reject command (from the classic `Approve/reject Items` view, or an item's own `⋯` menu)
+>   flips `OData__ModerationStatus` directly via SharePoint's own built-in mechanism and runs NONE of
+>   `ApprovalDocument.tsx`'s code — so the `ApprovedBy`/`ApprovalComment` MERGE (line ~1340,
+>   `libraryHasColumns` gate) never even runs, regardless of whether the columns exist or
+>   reconciliation has been run. **This is a pre-existing, already-documented limitation** — see
+>   *"THE NATIVE APPROVE COMMAND BYPASSES BOTH GUARDS — CLOSED AT THE COPY, 2026-08-25"* further down
+>   this file: a web part cannot intercept a SharePoint-native control, only offer its own route
+>   beside it, and the accepted mitigation has always been PROCESS — approve through
+>   `ApprovalDocument.aspx` or the Bulk Approve panel, never the native button.
+> - **The "Guthrie Document Centre" Who is still fully explained, just by the corrected cause:**
+>   with `ApprovedBy` never written (native command never wrote it, whether or not the column
+>   exists), the audit flow's actor lookup falls back to `Editor`, which is already the proxy account
+>   by the time approval happens — `CRS — Apply pending tags` already ran as gdc during tagging and
+>   left `Editor` = gdc on the item before it was ever approved.
+> - **⚠ NOT the same mechanism as the "Who column always reads Guthrie Document Centre" display
+>   fix (2026-09-22, below this pointer).** That one is display-only in `AuditLog.tsx` and would show
+>   gdc for every row regardless. This is upstream of it — nothing, not even the raw `ActorEmail` on
+>   the audit row, ever had the real approver in it, because nothing wrote it to the item at all.
+> - **THE FIX IS PROCESS, NOT CODE, AND NOT RECONCILIATION: approve through `ApprovalDocument.aspx`
+>   (or the Bulk Approve panel), never SharePoint's own Approve/Reject button or the `⋯` menu.**
+>   Whether `ApprovedBy`/`ApprovalComment` actually exist on SDG's libraries is STILL genuinely
+>   unverified and worth confirming separately (a reconciliation run would settle it), but it is not
+>   what explains this specific test — the native command bypasses the write either way.
+> - **✅ CLOSED, SAME DAY — RE-TESTED AND CONFIRMED, AND THE CLIENT'S ORIGINAL WORRY TURNED OUT TO
+>   BE A DIFFERENT QUESTION THAN THE ONE ANSWERED FIRST.** `test5-test5-test5-19092026.xlsx`
+>   (approved through `ApprovalDocument.aspx`) correctly shows `gdc@sdguthrie.com` / "test" in
+>   Approved By / Comment. Two more files approved NATIVELY afterward (`test3-test3-test3`,
+>   `test1-test1-test1`) both show up correctly under the Approved tab — right status, right count,
+>   right location, Delete/Share both offered — with Approved By/Comment reading `—`, exactly as
+>   expected. **The client's "how do I ensure the native one can track in My Submissions" was really
+>   asking whether native approvals show up AT ALL** — they do, unconditionally, because that half of
+>   My Submissions reads the document's live moderation status and location, not anything the
+>   approval action itself writes. Only Approved By/Comment are genuinely tied to which route
+>   approved it, and that half was never fixable from the native button (see the "NATIVE APPROVE
+>   COMMAND BYPASSES BOTH GUARDS" entry below). Nothing further to do here.
+>
+> ⏭ **ANSWERED, NOT BUILT: "can Power Automate catch the native approve and write `ApprovedBy`
+> instead?"** No — a flow triggered on the same "item created or modified" event `Auto-route` already
+> uses sees the identical payload the app code sees, and there is no "who approved this" field
+> anywhere in it; `Editor` is proven NOT restamped by a native approve (2026-09-01), so a flow reading
+> it hits the same blank. **One genuinely unverified lead, not ruled out**: the item's own
+> `/versions` history might attribute the specific version bump to the real actor independently of
+> the live `Editor` field — worth a quick read-only script before concluding it is a dead end too,
+> but nobody has checked. **One technically-different-but-unattractive route**: the Microsoft 365
+> unified audit log genuinely does record the real approver, and — unlike the web part, which is
+> blocked by the site-collection app-catalog Graph-permission wall (see the Audit Log design section
+> further down) — a Power Automate flow is a separate principal and isn't blocked the same way. Not
+> recommended: it needs tenant-level admin consent to a premium connector, and audit events land with
+> real delay (minutes to hours), which would make `ApprovedBy` stop being the instant, same-second
+> field it is today for every OTHER approval route. Not attempted.
+>
+> ⏭ **ANSWERED, NOT A BUG: "why does a direct-share invite CC the file's uploader instead of just
+> going to the one recipient?"** Confirmed by grep across `performDirectShare` (`Requests.tsx`) and
+> `submitDirectShare` (`MySubmissions.tsx`) — **neither payload sent to `SP.Web.ShareObject` has a
+> CC parameter of any kind.** This is SharePoint's OWN native behavior: when the person sharing isn't
+> the document's own author/owner (exactly the case here — an approver sharing a file someone else
+> uploaded), `SP.Web.ShareObject`'s built-in invite email automatically copies the file's owner as a
+> courtesy notification, with no parameter in the endpoint to suppress it. Same standing limit as
+> everywhere else this file talks about the native share mechanism (2026-07-23): a web part can choose
+> whether to call it, never customize what it does once called.
+>
+> ✅ **RESOLVED 2026-09-22 (SAME DAY, LATER): THE "APPROVER STILL NEEDS APPROVAL TO DELETE/SHARE"
+> INVESTIGATION BELOW IS CLOSED — ROOT CAUSE FOUND, FIXED, NOT YET DEPLOYED OR SITE-TESTED.** The
+> "LATER ROUND" pointer directly below this one calls it *"LEFT UNRESOLVED mid-investigation"* —
+> that is now stale. Read this block first; it supersedes that section's unresolved status but the
+> section itself is kept for the diagnostic trail (the diagnostic script it built is what found this).
+>
+> **⚠⚠ ROOT CAUSE: `MySubmissions.tsx`'s `loadPolicy` COMPARED `GroupId` (a TEXT column) AGAINST A
+> `number[]` VIA STRICT-EQUALITY `indexOf` — WHICH CAN NEVER MATCH, FOR ANY ACCOUNT, ON ANY ROW.**
+> `GroupId` on `CRS Group Map` is a TEXT column at rest (confirmed via `FolderManager.tsx` —
+> 4 call sites, all `GroupId?: string` — and `bulkGroups.ts`'s `.trim()` usage), so the REST response
+> returns it as a string (`"1242"`). `myGroupIds` was built as `number[]` from `currentuser/groups`
+> (which genuinely returns `Id` as a number), and the gate at what was line 2185 did
+> `myGroupIds.indexOf(r.GroupId ?? -1) === -1` — a raw `Array.prototype.indexOf`, which uses strict
+> equality (`"1242" !== 1242`, always false, never a match).
+>   - **THE BLAST RADIUS: `directDelete`, `directDeleteStaging`, `directShare` AND `decidesDeletion`
+>     WERE STRUCTURALLY, PERMANENTLY EMPTY FOR EVERY VIEWER ON THE ENTIRE SITE** — this is the exact
+>     gate that populates all four (`groupMapModel` role rows filtered to the viewer's own groups
+>     before adding to any of those four arrays). So `canDeleteSelf`'s Group Map route, `canShareSelf`'s
+>     Group Map route, and `decidesThisDeletion` could NEVER evaluate true via the Group Map, for
+>     anyone — only the live ACL probe (`rights?.remove`/`rights?.share`) or `systemAdmin` could ever
+>     produce a direct action or the inline "you decide this" notice. A genuinely mapped approver with
+>     no matching ACL grant (the normal post-2026-09-17 state, since DEL/DELS/DELHC/DELSHC were removed
+>     from every persona that day) had NO route left except the full two-person request modal —
+>     regardless of how correct their Group Map row was.
+>   - **CONFIRMED LIVE, NOT INFERRED.** `scripts/check-approver-direct-rights.js`, run as
+>     `crs@sdguthrie.com` (a genuine member of `NBPOLHO_CDS_UPSUPPORT_APPROVER`, confirmed via Group
+>     Management Quick Search) against `Error-Page_has_broken_image.xlsx`
+>     (`NBPOLHO/CDS/UPSUPPORT/2024/Agreement`, Approved): *"1723 row(s) total, 0 for this viewer's
+>     groups"* — despite `crs@` sitting in 3 real site groups including the approver group in
+>     question. `GroupMap(APR/APRHC)=false`. The live app reproduced exactly this: clicking Delete
+>     opened the full *"Your approver must approve this request"* modal with a Reason box, on their
+>     own uploaded, approved, own-unit document.
+>   - **THE DIAGNOSTIC SCRIPT ITSELF HAD THE IDENTICAL BUG THE FIRST TIME IT WAS RUN** (against
+>     `gdc@sdguthrie.com`, the admin account — result was uninformative because admin bypasses the
+>     Group Map route entirely) — its own `myIds`/`GroupId` comparison had the same `number` vs
+>     `string` mismatch, caught and understood only once `Requests.tsx` was checked and found to
+>     already do this correctly (`myIds: string[]`, built via `String(g.Id ?? "")`, compared via
+>     `myIds.indexOf(String(r.GroupId ?? ""))`) — the exact pattern that pointed at the real app bug.
+> **THE FIX (applied, not yet deployed): `MySubmissions.tsx`'s `myGroupIds` is now `string[]`, built
+> via `String(g.Id)`; the `GroupId?: number` type annotation on the Group Map row type is now
+> `string`; the gate is now `myGroupIds.indexOf(String(r.GroupId ?? "")) === -1`** — byte-for-byte
+> matching the already-correct pattern in `Requests.tsx`. The row-level table Delete/Share buttons
+> need no separate fix — they read the SAME `policy` state `loadPolicy` populates, so this one fix
+> covers both the detail view and the table row surfaces.
+>   - **Verified**: `tsc --noEmit` clean, `eslint` on the file shows only its documented pre-existing
+>     `max-lines` warning (2000-line ceiling, file is 5631 lines) — no new warnings. No test file
+>     exists for this component (this project has no UI tests), so there is nothing to update there.
+>   - **⚠ NOT YET DEPLOYED OR SITE-TESTED.** Next step: build, deploy, and have `crs@sdguthrie.com`
+>     re-test Delete on the same document. Expected: since the ACL probe for THIS account already
+>     showed `Delete: denied` / `Share: granted` (live folder ACL, independent of this bug — Share
+>     was already granted directly, likely a pre-2026-09-17 leftover), Share should now show as a
+>     direct "Share" button (if it did not already), and Delete should now show the inline **"You
+>     decide deletion requests for this unit in Approval & Request, so none is offered here"**
+>     message instead of the full modal — matching the 2026-09-21 design's intended behaviour for an
+>     approver on their own already-approved document. Re-running the diagnostic script afterward
+>     should show `GroupMap(APR/APRHC)=true` and a populated `DECIDES deletion for` list.
+>   - **⚠ WORTH RE-CHECKING SEPARATELY: whether `Requests.tsx` (the approval QUEUE, decided by an
+>     approver for someone ELSE's request) or any other file has a similar type-mismatch bug with a
+>     different SharePoint column.** This one was found by chance, comparing a working file
+>     (`Requests.tsx`) against a broken one (`MySubmissions.tsx`) that happened to read the identical
+>     list the identical way. Not systematically swept for other instances of this shape.
+>
+> **✅ SAME DAY, SECOND FIX: LIVE-TESTED AFTER THE ABOVE, AND THE "REDIRECT TO Approval & Request"
+> DESIGN ITSELF WAS REVERSED — client, on clicking Delete for the approver case: "I click on it, it
+> immediately shows the banner but there is no popup. i was expecting this popoup that is currently
+> being shown for system admin."** The 2026-09-21 `decidesThisDeletion` mechanism (suppress "Request
+> deletion", show a text-only redirect to Approval & Request instead) turned out to be the WRONG fix
+> for the self-loop it was built to prevent — confirmed live, and now folded away.
+>   - **WHY THE REDIRECT WAS UNNECESSARY, established by reading `writeApprovedDeletionRequest`
+>     (what the system admin's popup actually calls, via `performWithdraw`): it never checks the
+>     document's SharePoint ACL at all.** It writes a SELF-APPROVED `CRS Requests` row
+>     (`RequestedBy === DecidedBy`, `Status: "Approved"` from the moment it's written), which the
+>     2026-09-17 proxy flow (`CRS — Execute approved deletion`) then executes as `gdc@sdguthrie.com`.
+>     There was never a permission reason this was limited to `systemAdmin` — anyone who DECIDES
+>     deletion for a unit (`APR`/`APRHC`) is exactly as entitled to self-approve it instantly, with
+>     nobody else to ask, and no self-loop risk (it never raises a request that has to be decided
+>     LATER by the same person — it decides itself, at write time).
+>   - **THE FIX: `canActDirectly(chain, policy.decidesDeletion)` folded directly into `canDeleteSelf`
+>     (detail view, ~4169) AND `canDelete` (row-level table handler, ~5460)**, alongside the existing
+>     `systemAdmin`/ACL-grant/`directDelete` checks. Same instant "Delete this file? ... moves to the
+>     recycle bin and can be restored within 93 days" popup an admin gets, now offered to the approver
+>     too — no redirect, no text-only banner, no separate page.
+>   - **`decidesThisDeletion` IS NOW STRUCTURALLY UNREACHABLE IN ITS FORMER ROLE, DELIBERATELY KEPT
+>     RATHER THAN REMOVED.** `decidesThisDeletion === true` requires the identical
+>     `canActDirectly(chain, policy.decidesDeletion)` term `canDeleteSelf`/`canDelete` now also check,
+>     so it can never be `true` while they are `false` — every branch that used to read it (the inline
+>     "You decide deletion requests..." notice, the extra `!decidesThisDeletion` guard on
+>     `showDelete`) is dead code now. Comments at both declarations say so explicitly. **A full
+>     removal pass (the variable, the inline-notice text, every downstream reference across the
+>     detail view AND the row-level handler) was NOT done in this change** — flagged as a deliberate
+>     follow-up, not an oversight.
+>   - **Verified**: `tsc --noEmit` clean, `eslint` on the file shows only its documented pre-existing
+>     `max-lines` warning (file now 5658 lines) — no new warnings.
+>   - **✅ SITE-TESTED, WORKS.** Client confirmed: the popup now shows for the approver, and the
+>     Permission tab correctly shows the deletion request as `Approved` with *"No approval needed —
+>     carried out automatically."* immediately.
+>
+> **✅ SAME DAY, THIRD FIX (cosmetic): the file row itself was slow to reflect the deletion** —
+> client: *"I delete as an approver the popup is working now but its jsut the tag reflecting kinda
+> slow... is there anyway we can fix this via cosmetic."* `writeApprovedDeletionRequest` only WRITES
+> the self-approved request row — the actual `recycle()` happens later, when `CRS — Execute approved
+> deletion` next picks it up on its own trigger poll. `performWithdraw`'s `load()` call re-reads the
+> live libraries immediately afterward, but the document is very likely still there at that moment,
+> so the row kept showing its old status ("Approved") for however long that poll takes.
+>   - **FIXED with an OPTIMISTIC local patch of `rows`**, added right before the existing `load()`
+>     call in `performWithdraw`: matches the row by `uniqueId` and sets `recordState` to `"deleted"`
+>     (approved case) or `"withdrawn"` (staging case, matching what `markRecordWithdrawn` already
+>     stamps there) — the SAME `RecordState` mechanism already used for "gone" rows elsewhere on this
+>     page (grey badge, no preview, no Open file). **Safe with no full `SubmissionRecord` snapshot**:
+>     every `record?.xxx` field this page reads is optional-chained, so the row renders correctly
+>     without the archived/replaced/withdrawn detail lines a genuine reload's record would carry —
+>     those simply fill in once the real `load()` (unchanged, still runs) catches up.
+>   - **COVERS BOTH SURFACES WITH ONE FIX** — the row-level table Delete button opens the SAME
+>     `withdrawDialog` and calls the SAME `performWithdraw`, so no separate patch was needed there.
+>   - **⚠⚠ THAT FIRST VERSION WAS INCOMPLETE AND WOULD HAVE UNDONE ITSELF WITHIN THE SAME CLICK —
+>     caught before deploy, by the user directly asking "so it updates the tag cosmetically then
+>     after it catches up it is truly updated right?", which prompted re-checking rather than
+>     assuming yes.** `load()` does a genuinely FRESH read of the live libraries every time it runs,
+>     and `performWithdraw` calls `await load()` immediately after the optimistic `setRows` patch —
+>     so at that exact moment the document is very likely still there (the proxy hasn't run), and the
+>     fresh merge would silently overwrite the "Deleted" tag right back to "Approved", inside the very
+>     same function call.
+>   - **FIXED WITH A SECOND, DURABLE PART: `pendingSelfDeleteRef` (a `useRef`, declared beside
+>     `openActiveRef`).** `performWithdraw` records the prediction into it (keyed by `uniqueId`) at
+>     the same moment it patches `rows` directly; `load()` itself now re-applies that prediction,
+>     EVERY time it runs — not just the one call right after the click — onto any row the fresh merge
+>     still reports as genuinely live (`recordState === undefined`). Once the real merge independently
+>     reports the row as gone, the prediction is dropped from the ref rather than kept forever. Two
+>     parts working together: the direct `setRows` patch gives INSTANT feedback before `load()`'s
+>     network round trip even starts; the ref is what stops `load()` — this one and any later one —
+>     from reverting it before the proxy has genuinely caught up.
+>   - **Verified**: `tsc --noEmit` clean (one `TS2464` computed-property-key error found and fixed —
+>     `row.uniqueId` is `string | undefined` on `Submission`, narrowed with an `if` before use as an
+>     object key), `eslint` on the file shows only its documented pre-existing `max-lines` warning
+>     (file now 5732 lines) — no new warnings.
+>   - **⚠ NOT YET DEPLOYED OR SITE-TESTED.**
+>
+> **✅ SAME DAY (2026-09-23), THREE MORE FIXES FROM ONE CLIENT MESSAGE:**
+>
+> **1. `EVENT.requestCancelled` ("RequestCancelled") REGISTERED in `auditLog.ts`** — client: "Can you
+> add the cancel Action for audit log?" **Code-only, and the Action dropdown will show it, but NO ROW
+> WILL EVER BE WRITTEN UNTIL A FLOW EDIT LANDS** — same "the row is written either way, filter comes
+> first" pattern `Replaced`/`ShareRevoked` were added under. `CRS — Audit request activity`'s
+> `EventKind` Compose currently maps `Status eq 'Cancelled'` straight to `'Skip'`, meaning a requester
+> withdrawing their own raised deletion/share request writes NOTHING to the audit log today.
+> **⏭ THE FLOW EDIT NEEDED, NOT DONE:** change that one branch of `EventKind`'s Compose from `'Skip'`
+> to `'RequestCancelled'` (a new literal, matching the pattern the `ShareRejected`/`DeleteRejected`
+> branches already use) — `Not_already_logged`'s existing `outputs('EventKind') is not equal to Skip`
+> check needs NO change, since `'RequestCancelled' !== 'Skip'` already passes it. No new email action
+> needed — this is audit-visibility only, not a notification.
+>
+> **2. THE 2026-09-22 "ALWAYS GDC" WHO-COLUMN CHANGE WAS ITSELF REVERSED THE NEXT DAY** — client:
+> "I was wrong, this is the feedback from crystal giving an example ... revert it back to the previous
+> one." Crystal's own worked examples (paraphrased): Crystal uploads → shows Crystal; Reene, a
+> DIFFERENT person, reviews and approves it → shows Reene; the automatic move to the document library
+> once approved → shows GDC; Crystal requests a share/delete → shows Crystal; Reene approves that
+> request → shows Reene; the actual execution (the share, the delete) → shows GDC; and — the one
+> genuinely new nuance — when REENE uploads and it self-approves (no separate human decider), the
+> "Approve" event itself shows GDC too, since nobody actually reviewed anything. **The pattern: a
+> deliberate human decision shows the real person; an automated execution step shows the system.**
+> This is exactly what `resolveActorDisplay` (built 2026-09-20, never deleted — the 2026-09-22 change
+> only stopped CALLING it) already does — `AuditLog.tsx`'s Who cell is back to
+> `resolveActorDisplay(r.ActorEmail, r.ActorName)`. The one-day "always GDC" detour is kept in the
+> file's own comments as a struck-through record, not silently erased, so nobody rediscovers the same
+> idea and reintroduces it.
+>   - **⚠ THIS DOES NOT, BY ITSELF, GUARANTEE THE "Approve File → GDC" NUANCE FOR A SELF-APPROVED
+>     UPLOAD.** `resolveActorDisplay` shows whatever `ApprovedBy` the flow/code actually stamped —
+>     `Form.tsx`'s client-side self-approve MERGE stamps `ApprovedBy` with the UPLOADER's own email
+>     (they ARE the approver in that case), not GDC. So today an approver self-approving their own
+>     upload would show THEIR OWN name on the Approved row, not GDC, per Crystal's third example.
+>     **NOT INVESTIGATED OR CHANGED THIS SESSION** — flagged as a possible follow-up if the client
+>     raises it specifically; the two changes actually requested (revert the blanket override; fix the
+>     migration tool's attribution) are done, and this third nuance was inferred from the diagram
+>     rather than asked for directly.
+>
+> **3. `SubtreeMigrator.tsx`'s "Move existing folders" `MigrationRun` AUDIT ROW NOW ATTRIBUTES TO
+> GDC, NOT THE ADMIN WHO RAN IT** — client: "especially when client Move existing folder in the
+> update folder structure step, ensure audit log is recorded as GDC and not the person who select the
+> file to move." `actorName`/`actorEmail` changed from `context.pageContext.user.displayName`/
+> `.email` to the fixed `CURRENT_PROXY_ACCOUNT_NAME`/`CURRENT_PROXY_ACCOUNT_EMAIL` constants.
+> **Consistent with an EXISTING 2026-09-20 decision, not a new principle** — `stampEditorAsProxy`
+> (same file, a few lines above this write) already restamps every MOVED FILE's own `Editor` column
+> to this same GDC identity, specifically so Modified By reads consistently regardless of which admin
+> happened to run the tool; this audit row now follows the same rule. **⚠ Technically the migration
+> DOES run in the admin's own browser session** (unlike Auto-route, which runs server-side as its own
+> connection) — the file moves genuinely execute under the admin's own SharePoint credentials — but
+> the client's own established preference (from the file-attribution fix) is to treat "the system did
+> this" as the more useful record than naming whichever admin clicked Rebuild.
+>
+> **⏭ STILL OPEN, NOT VERIFIABLE FROM THIS REPO: whether Auto-route's own "Routed"/"Moved to
+> Documents" `Create_item` audit action (the routing flow's OWN write, separate from the migration
+> tool above) already shows GDC as its actor, or still shows the original uploader/approver.** Client
+> asked to "ensure move existing documents is recorded as GDC" as a general statement, which could
+> mean either the migration tool (fixed, item 3) or the ROUTING flow's own audit row, or both. The
+> 2026-09-20 fix that landed was specifically about the FILE's own `Editor` column
+> (`GetProxyUser`/`Editor: [{'Key': ...}]`), not necessarily about this SEPARATE audit-log
+> `Create_item` action's `ActorName`/`ActorEmail` fields — those may still read from
+> `Get_source_author` or similar, showing the uploader rather than GDC. **Needs the actual live flow
+> export re-read to confirm** — cannot be checked from this repository alone. If it turns out wrong,
+> the fix is a one-field change in that `Create_item` action (set `ActorName`/`ActorEmail` to the
+> literal `Guthrie Document Centre` / `gdc@sdguthrie.com`, or reference `GetProxyUser`'s resolved
+> identity if that action already runs earlier in the same flow).
+>
+>   - **Verified (code only)**: `tsc --noEmit` clean, full suite **2039/2039**, 44 lint warnings —
+>     the documented pre-existing baseline, zero new categories. **NOT yet deployed or site-tested,
+>     and item 1 additionally needs the Power Automate flow edit above before it can show any rows.**
+
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-22, LATER ROUND — a genuine C-Level/Document-
+> Viewer bug found and fixed, a small Confidentiality-order fix shipped, the per-file reminder
+> cadence runbook reviewed (not built), and a real "approver still needs approval to delete/share"
+> regression traced deep but LEFT UNRESOLVED mid-investigation — read the last section before
+> touching `MySubmissions.tsx`'s delete/share logic, it is NOT safe to guess at from the symptom
+> alone.**
+>
+> **✅ FIXED AND VERIFIED: C-LEVEL/VIEWER/HOD COULD NEVER BE GRANTED `Document-Viewer.aspx`,
+> DESPITE THE PAGE BEING BUILT SPECIFICALLY FOR THEM (2026-09-21).** Client: *"C-level do not have
+> access to Document Viewer, can you grant them access?"* — not a live-permissions ask, a real code
+> bug. `pageAccessPolicy.ts`'s Document-Viewer rule correctly LISTS `GLOBAL`/`SEGVIEW`/`MEMBER`/
+> `MEMBERHC`/`DEPTVIEW` in its own `policy.roles` — but `derivedRolesForPage()` (what reconciliation
+> actually grants from) and `isRoleEligibleForPage()` (what the Page Access admin screen offers) BOTH
+> applied the `VIEW_ONLY_ROLES` blanket exclusion unconditionally, on EVERY page, with no way for one
+> rule to opt out. So reconciliation could run a hundred times and never grant this page to a
+> C-Level/Viewer/HOD group — the exact symptom reported. That blanket filter's own reasoning ("none
+> has business on an upload form, an approval screen or an admin tool") predates this page and was
+> simply never revisited when it shipped.
+>   - **FIX: new `allowViewOnlyRoles?: boolean` on `PagePolicy`**, set `true` ONLY on the
+>     Document-Viewer rule; both functions now check it before applying the exclusion. Every other
+>     page's behaviour is byte-for-byte unchanged (pinned by a new test that walks Upload-Form,
+>     ApprovalDocument, Bulk-Upload, CollabHome, My-Submissions, Folder-Administration and Requests
+>     and asserts the exclusion still holds on all of them).
+>   - **`PageAccess.tsx`'s own `allGroups` filter had the identical unconditional exclusion** — fixed
+>     the same way (`pageAllowsViewOnly`, checked against the currently-selected page's own policy) —
+>     otherwise even after reconciliation correctly granted a C-Level group, the admin viewer screen
+>     would still show "nobody has access" over a real grant.
+>   - **Verified**: `tsc --noEmit` clean, `eslint` clean on all three touched files, full suite
+>     **2038/2038** (3 new tests, zero regressions). **NOT yet deployed or reconciled on the live
+>     site** — needs a build, deploy, and a Folder Reconciliation re-run before C-Level actually gets
+>     the page (reconciliation only ADDS grants; the code fix alone changes nothing live).
+>
+> **✅ SHIPPED: CRS Search's "Confidentiality" advanced filter dropdown reordered to match the upload
+> form** (client: *"the arrangement for Confidentiality, pls follow the upload fomr"*). Was
+> alphabetical off the term store (Any, Confidential, Highly Confidential, Restricted); now uses the
+> SAME `sortByConfidentialityOrder` module the upload forms already use (Highly Confidential,
+> Confidential, Restricted) — one line added to `DocumentSearch.tsx`, no new logic. `tsc`/`eslint`
+> clean. **Not yet deployed.**
+>
+> **⏭ REVIEWED, NOT BUILT: `docs/superpowers/specs/2026-09-22-per-file-reminder-cadence-runbook.md`.**
+> Read through fully — the design (drift-free `NextReminderAt` anchor expression, `runAfter` on both
+> Succeeded+Failed, the shorten-the-window test technique) is sound and consistent with how this
+> project has built every prior flow. Three things flagged BEFORE building, none of them blockers:
+>   1. **List-view-threshold risk** — the new `GetStale` filter is a compound OR across a brand-new,
+>      unindexed `NextReminderAt` column; index it right after creating it, don't wait to hit the
+>      5,000-item threshold live.
+>   2. **`eq null` on the new column is the one genuinely untested assumption** — build the whole
+>      filter as one typed string (not via the fx picker), verify via Code View after saving.
+>   3. **24 runs/day per flow (48/day once cloned to HC)** — worth a quick check against the tenant's
+>      actual Power Automate plan/quota before flipping it live, given this project has hit a silently
+>      exhausted quota before (the folder-approval flow's hourly recurrence).
+> Paused here — the user interrupted with the approver-delete regression below before building
+> started. Pick up at §7's build order (create `NextReminderAt` on `Approval for Document` first,
+> build+test the normal flow alone, THEN clone to HC) whenever this resumes.
+>
+> **⚠⚠ UNRESOLVED, MID-INVESTIGATION: "as an approver, crs@sdguthrie.com still gets the full
+> two-person request modal for Delete AND Share, instead of acting directly" — traced deep, a fix
+> was ALMOST applied and then DELIBERATELY HELD BACK because it would have reversed a dated,
+> apparently-intentional 2026-09-21 design decision without confirming that was wanted. DO NOT
+> "fix" this by restoring an instant Delete button without re-reading this section first.**
+>
+> **What is SOLIDLY ESTABLISHED, from reading the code directly (not guessed):**
+>   - `DEL`/`DELHC`/`DELS`/`DELSHC` were removed from EVERY persona (`hou`, `hou_hc`, AND `hod`) on
+>     2026-09-17, by design — nobody holds a real SharePoint delete grant on an approved document
+>     anymore; execution moved entirely to the proxy flow. This is expected, not a bug.
+>   - `SHARE`/`SHAREHC` were explicitly LEFT UNTOUCHED by that same change — `hou` still holds
+>     `SHARE` directly, so a genuine approver's Share button SHOULD still work instantly on My
+>     Submissions, unaffected by any of this.
+>   - A **2026-09-21** fix (`decidesThisDeletion` in `MySubmissions.tsx`, both the detail view ~4160
+>     and a row-level duplicate ~5471) was built specifically for "an approver sees 'Request deletion'
+>     and would be asking themselves" — but its answer, for Delete only, is to show a SMALL INLINE
+>     MESSAGE ("You decide deletion requests for this unit in Approval & Request, so none is offered
+>     here") rather than an instant button, sending them to decide it on the Approval & Request page
+>     instead (where a 2026-09-20 feature lets an approver delete/share instantly from the library
+>     view). **This directly narrows the client's own 2026-09-15 words** — *"the Delete and Share
+>     button stays exactly where it is in the My Submission page for easy access... system admin or
+>     approver do not need to self approve themselves"* — which promised an INSTANT button staying on
+>     THIS page, not a redirect. Whether that narrowing was a deliberate later decision or an
+>     unintentional side effect of fixing the self-loop was never confirmed with the client at the
+>     time, and is now the FIRST open question below.
+>   - **The client's screenshots show neither of the above two documented outcomes.** They show the
+>     FULL two-person request modal (Reason box, "Your approver must approve this request.", Submit) —
+>     for BOTH Delete and Share — on an NBPOLHO document, where Group Management confirms
+>     `crs@sdguthrie.com` genuinely holds `Approver` (and `Share approved documents`) for
+>     `NBPOLHO_CDS_UPSUPPORT`. Given SHARE was never touched by the 2026-09-17 change, the Share
+>     modal appearing is ESPECIALLY unexplained by anything found so far — the underlying grant
+>     should be completely intact.
+>   - ⚠ A separate GHO screenshot (Share, on `a-asd-asdad-22092026.pdf`) is almost certainly a RED
+>     HERRING, not evidence of the same bug: Group Management shows `crs@sdguthrie.com` is only
+>     `Uploader` for `GHO_COSEC_GUTHRIE` (no Approver, no Share role there at all) — a plain uploader
+>     correctly getting the full request modal on THAT unit is expected behaviour, not a bug. Don't
+>     let it get folded into the NBPOLHO diagnosis.
+>   - `gdc@sdguthrie.com` was independently confirmed (via the diagnostic script, live) to be a
+>     genuine system administrator — `IsSiteAdmin: true` AND a member of `Guthrie Document Centre
+>     Owners`. **⏭ NEVER CONFIRMED whether THAT account also hits the request modal in the live app
+>     UI** — the user only pasted the diagnostic's raw-data confirmation, not a report of it failing
+>     in the app. If it DOES also fail for a confirmed admin, that points to a completely different
+>     class of bug (a timing race in the async `isSystemAdmin()` effect not having resolved before a
+>     fast click) rather than anything about the Group Map/persona logic below. Ask before assuming
+>     either way.
+>
+> **`scripts/check-approver-direct-rights.js` WAS REWRITTEN TWICE THIS SESSION (v1 → v3) and is
+> ready to hand back for the next step.** v1 only checked the Group Map's `DEL`/`DELHC`/`SHARE` route
+> and `IsSiteAdmin` alone. v3 checks all four routes that actually matter: system admin (via
+> `IsSiteAdmin` OR Owners-group membership — v1's gap), the live ACL probe
+> (`EffectiveBasePermissions`, same bit arithmetic as `probeFileRights`), the Group Map's `DEL`/
+> `SHARE` roles (now expected to always read empty, and the script says so), AND — the new,
+> genuinely relevant one — the `decidesDeletion` route (`APR`/`APRHC`, scoped to the viewer's own
+> groups), which is what the row-level Delete handler ACTUALLY branches on. **Verified offline
+> against 14 synthetic scenarios** (including one reproducing the client's exact reported shape:
+> holds APR but not DEL, document approved — expects `delOk=NO` but `decidesDeletionOk=YES`, and the
+> script explicitly flags that mismatch as "the app should have shown the inline notice, not the
+> modal" when it occurs). READ ONLY, nothing written.
+>
+> **⏭ THE VERY NEXT STEP, if this is picked up again:** ask the client to run the script as
+> `crs@sdguthrie.com` with `FILE_NAME` set to `"Notice-Redirected_page_has_no_incoming_internal_
+> links-links.xlsx"` (the exact document from their Delete screenshot) — never received before this
+> session ended. That answers, definitively, whether the document's own tier metadata actually
+> overlaps with what Group Management shows for that account, which is the one thing that could not
+> be established from a screenshot. **Separately, and before writing any code**, get an explicit
+> answer from the client on the design question above: do they want Delete to redirect to Approval &
+> Request (the current 2026-09-21 design) or to work instantly on My Submissions itself (their
+> original 2026-09-15 ask)? The two want completely different fixes, and guessing wrong means
+> reversing a decision that may have been made deliberately.
+
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-22 — THE TENANT-WIDE STALE-DELETE-ROLE RISK
 > (flagged at the very end of the TENTH ROUND pointer below, "STALE APPROVER GROUPS STILL GRANT
 > CRS Delete") IS FULLY REMEDIATED, LIVE, ON SDG'S REAL TENANT. Confirmed clean: 859 groups
@@ -9559,6 +10164,36 @@ MembersWithEmail → PickEmails → Recipients → HasRecipients → Apply to ea
 - On SDG, **sign in as the SERVICE ACCOUNT before the first action** — the connection is baked in for
   life.
 
+## ⏭ AGREED AND NOT BUILT: PER-FILE 3-DAY REMINDER CADENCE, ANCHORED TO UPLOAD TIME (2026-09-22)
+Client (relayed by Clarence): *"I think they are expecting those files to be sent in a 3 days cycle
+but during night time on the day it was uploaded."* Confirmed as a real redesign, not a
+misconfiguration: read the ACTUAL LIVE export (`PowerAutomateFlowsSDG/CRS—RemindingApprovertoApprove
+_20260918082053.zip`, the SDG-deployed name of this flow — do not confuse with the original build
+name `CRS — Approval reminder` in the 2026-08-31 section above), and confirmed it has **no per-file
+memory whatsoever**: `GetStale` just asks "is this still Pending and older than 3 days", which any
+undecided document keeps answering YES to forever, so the fixed daily 9 AM `Recurrence` trigger is
+the ONLY thing that ever decided when an email went out. It has never had any relationship to a
+file's own upload time — the "9am both days" the client noticed is simply that trigger firing on
+schedule, working exactly as originally built.
+- **Full runbook: `docs/superpowers/specs/2026-09-22-per-file-reminder-cadence-runbook.md`.**
+  Read it before opening either flow.
+- **THE SHAPE, in short: a new stamped column (`NextReminderAt`, Date and Time) on both approval
+  libraries, `Recurrence` moved from `Day` to `Hour`, `GetStale`'s filter widened to an OR of "never
+  reminded and 3+ days old" / "reminded before and its stored next-due time has arrived", and one
+  new `Update item` action that advances the file's own `NextReminderAt` by another 3 days each time
+  it fires** — always re-derived from the stored anchor, never from `utcNow()`, so it cannot drift.
+- **⚠ THIS DESIGN DELIBERATELY DOES NOT HARDCODE A "NIGHT" WINDOW.** Anchoring every reminder to the
+  file's own `Created` timestamp means it naturally lands at whatever hour the file was uploaded —
+  which is why the screenshot's evening uploads read as "night time" reminders once this ships, with
+  no separate time-of-day condition needed. If the client instead wants a HARD night-only send
+  window regardless of upload hour, that is a different, smaller addition — flagged as an open
+  question in the runbook §6, not built.
+- **NOTHING HERE TOUCHES THE APPROVER LOOKUP, THE EMAIL BODY, OR THE LINKS** — `GetApproverGroup`,
+  `HasApprover`, `GetMembers`, `MembersWithEmail`, `HasRecipients`, `Send an email (V2)` are all
+  UNCHANGED. Only the trigger, the staleness filter, and one new action after it.
+- **Build ONE flow first, verify live, then clone onto `CRS — HC approval reminder`** — same
+  ordering discipline as every other flow build in this project. Not started.
+
 ## ✅ REPLACE NOW VERSIONS INSTEAD OF DELETE-AND-RECREATE — BUILT AND VERIFIED ON BOTH FLOWS (2026-09-02)
 Follows the runbook `docs/superpowers/specs/2026-08-31-versioned-replace-runbook.md` (§0 explains why
 this was needed — read that first). **BOTH `Auto-route` and `HC Auto Route` are done and verified live**,
@@ -16205,3 +16840,848 @@ proxy-deletion redesign). After unticking it, submitting, and a full sign-out/si
   Management's own Quick Search already uses), and flags every group whose stored roles include
   `DEL`/`DELS`/`DELHC`/`DELSHC` where its current persona shouldn't carry one — before working through
   the remediation one group at a time. **Not yet built.**
+
+## ✅ A REPLACE-ON-UPLOAD DELETION NO LONGER LOGS "Request approved" OR "Deleted" — APPLIED AND VERIFIED LIVE (2026-09-22)
+Client, on seeing the full "Deletion requested → Request approved → Deleted → Replaced" trail for an
+ordinary same-name replace at upload: *"Can we remove it from the audit log for replacement? client
+doesnt want to see it for a file replacement."* **Power Automate only — no code change needed and
+none was made.** Both target flows are unmodified as of this writing; the design below is what to
+apply, verified against the (stale but structurally sound) 2026-09-18 exports before writing it.
+- **NO NEW MARKER IS NEEDED.** `deleteClashingDraftByProxy` (`Form.tsx` ~2973, the ONLY writer that
+  proxies a replace-on-upload deletion) already stamps `Title: "Replace on upload — <name>"` on the
+  `CRS Requests` row it writes. Every OTHER deletion-request writer in the codebase uses a DIFFERENT
+  prefix — `writeApprovedDeletionRequest` (`MySubmissions.tsx`, the direct-delete button) and
+  `submitRequest` (`MySubmissions.tsx`, the genuine two-person ask-and-approve flow) both write
+  `"Deletion — <name>"`; `Requests.tsx`'s direct-delete (2026-09-20) writes the same. So
+  `startsWith(Title, 'Replace on upload')` is already an exclusive, code-guaranteed marker for
+  exactly the one case the client wants quieted — checked by grepping every `Title:` write across
+  `Form.tsx`/`MySubmissions.tsx`/`Requests.tsx` before relying on it.
+- **`CRS — Audit request activity` — the "Request approved"/"Deletion requested" writer.** Since the
+  row is created with `Status: "Approved"` already set (nobody decides it), the trigger only fires
+  ONCE, and `EventKind`'s Compose resolves straight to `'RequestApproved'` — there is no separate
+  "Deletion requested" firing for this case, contrary to how it reads in the client's screenshot.
+  1. Add ONE more `if` to the front of `EventKind`'s expression:
+     `if(startsWith(coalesce(triggerOutputs()?['body/Title'], ''), 'Replace on upload'), 'Skip', <the
+     existing expression, unchanged>)`.
+  2. `Not_already_logged` (the `If` gating `Create_item`) gets a SECOND row added to its `And`:
+     Left `outputs('EventKind')`, operator **is not equal to**, Right the typed literal `Skip` — same
+     shape as the working self-approval fix already applied to the sibling `CRS — Notify request
+     activity` flow on 2026-09-21 (operator does the comparison; never paste a boolean expression
+     into one side of a row).
+- **`CRS — Execute approved deletion` — the "Deleted" writer.** `Recycle_the_file` MUST run
+  unconditionally regardless of Title — the file still has to actually go. Only the audit-log
+  `Create_item` (the action with `item/EventType: "Deleted"`) needs gating; `Update_item` no longer
+  exists to worry about (removed 2026-09-21's self-retrigger fix).
+  1. Insert a new `Condition` action in `Create_item`'s exact current position — right after
+     whatever it currently depends on (`Recycle_the_file`: Succeeded, and `GetActorName`: Succeeded +
+     Failed, per the 2026-09-20/21 build).
+  2. Expression: Left `startsWith(coalesce(triggerBody()?['Title'], ''), 'Replace on upload')`,
+     operator **is equal to**, Right typed `true`.
+  3. **Move `Create_item` into the FALSE branch** (i.e. it fires only when the row is NOT a
+     replace-on-upload row) — leave the True branch empty. Carry `Create_item`'s existing
+     "Configure run after" settings onto the new Condition itself.
+  4. **Verify via Code view before trusting the save** — this project's own history is full of a
+     row-based Condition landing in the wrong shape or a moved action silently reverting its
+     dependency; read the exported/raw definition back and confirm `Create_item` sits inside
+     `Condition.<newname>.actions.else.actions`, not `.actions`.
+- **WHAT STAYS VISIBLE, UNCHANGED, BY DESIGN:** "Uploaded" (written by the approval-activity audit
+  flows watching the Staging libraries directly — never touches `CRS Requests`) and "Replaced"
+  (written by `CRS — Audit replacements`, watching `CRS Submissions.ReplacedAt` — also never touches
+  `CRS Requests`). Neither flow above is touched, so those two rows are exactly what the client will
+  still see for a replace: the file went in, and the old one was replaced. Nothing else in
+  `CRS Audit Log` reads differently — this is scoped to the ONE `Title` prefix, so a genuine, two-
+  person Delete/Share request, and a direct-delete button press, both keep logging exactly as they do
+  today.
+- **✅ BOTH EDITS ARE LIVE ON SDG, VERIFIED VIA CODE VIEW BEFORE TRUSTING EITHER, AND CONFIRMED WITH A
+  REAL LIVE TEST.**
+  - `CRS — Audit request activity`'s `EventKind` was pasted back and read line-for-line: the new
+    `if(startsWith(...Title..., 'Replace on upload'), 'Skip', <original tree, byte-for-byte>)` wraps
+    the original expression correctly, and `Not_already_logged`'s `And` gained the second row
+    (`outputs('EventKind')` is not equal to `Skip`) exactly as designed. `GetActorName` already sat
+    *inside* `Not_already_logged`'s True branch alongside `Create_item`, so gating the whole `If`
+    silently skips the actor lookup too — no extra wiring needed there.
+  - `CRS — Execute approved deletion` got a NEW `Condition 4`
+    (`startsWith(coalesce(triggerBody()?['Title'], ''), 'Replace on upload')` equals `true`), inserted
+    between `GetActorName` and the "Deleted" `Create_item`, with `Create_item` moved into the **False**
+    branch (True left empty) and its `runAfter` on `GetActorName` (`["Succeeded"]`) carried over
+    unchanged. `Recycle_the_file` and `GetActorName` both sit BEFORE this Condition and are completely
+    untouched — the actual delete and the actor-name lookup still run unconditionally every time.
+  - **LIVE TEST, 22 Sep 2026 15:17–15:19**: uploaded `test-test-test-22092026.xlsx` (15:17, left
+    pending), uploaded a same-named replacement (15:19), chose Replace. `CRS Audit Log`'s "File
+    Activity Log" thread shows exactly three rows — **Uploaded (15:17) → Replaced (15:18) → Uploaded
+    (15:19)** — with **no** "Request approved" and **no** "Deleted" anywhere in it. Confirms both
+    fixes fire correctly and nothing else in the sequence broke.
+  - **⚠ A DIFFERENT, UNRELATED SCENARIO WAS TESTED FIRST AND WAS A FALSE READ ON THE FIX.** Replacing
+    an ALREADY-APPROVED, already-routed document (Auto-route's own 2026-09-02 versioned-replace
+    mechanism, entirely inside the routing flow, never touching `CRS Requests`) also shows
+    `Uploaded → Approved → Moved to <library> → Replaced` with no delete-request rows — but that was
+    ALWAYS true, unrelated to this fix, and proves nothing about it. Only a replace against a file
+    still `Pending` (not yet approved) exercises `deleteClashingDraftByProxy` and therefore this fix —
+    check the file is genuinely still pending before treating a clean-looking trail as confirmation.
+  - **Untouched paths are unverified by direct live test but structurally guaranteed**: for any row
+    whose `Title` does not start with `"Replace on upload"`, both edits fall through to the exact
+    original, byte-for-byte-unchanged logic (`EventKind`'s wrap; `Create_item`'s own field mappings
+    were moved, never edited) — a genuine two-person request, a direct-delete button press, and a
+    share/revoke should all still log exactly as before. Worth a quick spot-check next time either is
+    exercised, but not blocking on it.
+
+## ✅ THE AUDIT LOG'S "Who" COLUMN ALWAYS READS "Guthrie Document Centre" NOW, NO EXCEPTIONS (2026-09-22)
+Client: *"for audit log client wants all the Action's Who column to record gdc's account name
+instead."* Asked to confirm scope, since the on-screen Who column and the raw stored actor were two
+genuinely different things this codebase had just spent real effort getting right (2026-09-20's
+`resolveActorDisplay` build): **"Every single row, no exceptions"** — including Uploaded, a raised
+request, a policy/config change, anything a real person genuinely did directly in their own session,
+not only the rows a Power Automate flow executed on the proxy account's connection. **CODE ONLY, no
+Power Automate change, no data change — display only.**
+- **`resolveActorDisplay` IS KEPT, NOT DELETED, AND NO LONGER CALLED BY THIS SCREEN.** It is genuinely
+  well-built (recognises a known service account first, falls back to a guessed human name, has its
+  own tests) — deleting it would throw away real, tested work over a display preference that could
+  reasonably be reversed later. `AuditLog.tsx` simply stopped calling it; the function and its test
+  file (`shared/displayName.test.ts`) are untouched and still pass.
+- **THE FIX IS ONE NEW CONSTANT, NOT A ROLE/PERMISSION-STYLE CHANGE.** `CURRENT_PROXY_ACCOUNT_NAME =
+  "Guthrie Document Centre"` in `shared/displayName.ts`, right beside the existing
+  `CURRENT_PROXY_ACCOUNT_EMAIL` — same "one literal, here only" reasoning: the day this account
+  migrates again (as it already has once, `crs` → `gdc`), there is one line to change, not a grep.
+  **Deliberately NOT derived from `canonicalServiceAccountName("gdc")`** — that lookup exists to
+  RECOGNISE a service account among many stored shapes, a different job from stating what the current
+  one is called.
+- **THE WHO CELL NO LONGER READS `r.ActorEmail`/`r.ActorName` AT ALL** — it renders the fixed constant
+  unconditionally, for every row, regardless of event type.
+- **⚠⚠ `ActorEmail`/`ActorName` ARE STILL WRITTEN, STORED AND FILTERED ON EXACTLY AS BEFORE — THIS IS
+  DISPLAY ONLY, on the SCREEN alone.** The underlying list columns, every flow that writes them, every
+  search/filter comparison, and `toAuditCsv`'s two CSV columns ("Actor", "Actor email") are ALL
+  untouched and still export the REAL stored value. **Flagged to the client, not assumed**: the
+  on-screen viewer will now always say "Guthrie Document Centre" while a downloaded CSV of the exact
+  same rows will still show the real requester/decider/uploader underneath. If the client wants that
+  extended to the export too, `toAuditCsv` (`AuditLog.tsx` ~570) is the one place to change it — not
+  done here, because destroying the only remaining record of real actor identity in something people
+  download and keep is a much higher-consequence, harder-to-undo choice than a display label, and
+  wasn't explicitly asked for.
+- **Verified**: `tsc --noEmit` clean, `eslint` on both changed files shows only the ONE pre-existing,
+  already-documented warning (`AuditLog.tsx:470`, `AuditLogoIcon` unused — unrelated, predates this
+  change), full suite via `npx heft test --clean` **2035/2035 passing, 0 failed**, 44 lint warnings
+  total across the whole project — the documented pre-existing baseline, zero new categories.
+  **NOT yet deployed or site-tested.**
+
+## ⚠ STRIPPING gdc@sdguthrie.com's OWNER RIGHTS BROKE TAGGING, NOTIFY AND AUTO-ROUTE ALL AT ONCE (2026-09-23)
+Client, testing gdc-the-account as an ordinary uploader (having just demoted it out of `CRS Owners`
+into a plain uploader persona for that test): a fresh upload sat with every metadata column blank
+(Business Segment/Department/Unit/Document Type/Year/Confidentiality all `—`), `crs@sdguthrie.com`
+received no approver notification, `CRS — Apply pending tags`'s run history showed a mix of Failed
+runs, and Auto-route showed one Failed run too. **Diagnosed from ONE fact, not three separate bugs.**
+- **`gdc@sdguthrie.com` IS THE SERVICE ACCOUNT EVERY PROXY FLOW ON THIS SITE RUNS AS** — `CRS — Apply
+  pending tags`'s own "Primary owner" field literally reads "Guthrie Document Centre". Per this
+  project's own 2026-09-19/22 sections (SERVICE ACCOUNT MIGRATION, DELETE IS PERFORMED BY PROXY), this
+  is documented as the identity `CRS — Apply pending tags`, `Auto-route`/`HC Auto Route`,
+  `CRS — Execute approved deletion` and the audit flows all execute under — and every one of them needs
+  that account to keep its elevated rights (Edit Items on the approval libraries, Full Control via
+  `CRS Owners`) SEPARATELY from whatever persona/uploader group it happens to be mapped into for
+  testing. Stripping "his power" removed the very rights the FLOWS depend on, not just gdc's own
+  personal upload permissions.
+- **ALL THREE REPORTED SYMPTOMS ARE ONE CAUSE, NOT THREE:** tagging failed because the flow could no
+  longer write fields → `NotifyApprovers`' documented `HasUnit` gate (2026-08-25 section) then silently
+  refused to email anyone, since `UnitTid` was never set → Auto-route's own write-dependent actions
+  failed the same way. **No code change was needed or made** — this was a live-tenant permissions
+  action for the client to take (restore gdc's `CRS Owners` membership, confirmed via a screenshot of
+  the System Administrators panel showing gdc already listed there once restored) and a follow-up
+  sign-out/sign-in to clear the stale session.
+- **`scripts/check-tagging-status.js`'s hardcoded `PATH_FILTER` was cleared** (was narrowed to an old
+  test path, `"UPSUPPORT/2025/Approval Papers"`, which would have hidden this exact new failing upload
+  from the diagnostic) — now checks every submission, since the failing path today is unrelated to the
+  path the filter was last scoped to.
+
+## GROUP MANAGEMENT HIDES THE SERVICE ACCOUNT FROM THE ADMINISTRATORS LIST (2026-09-23)
+Client, immediately after restoring gdc's rights, on seeing it listed as a removable System
+Administrator: *"I think to be safe, dont show specifically gdc in the Group Management
+Adminstrators, I want to make sure they dont accidentally delete."* **Built, verified, NOT yet
+deployed.**
+- **`onRemove` IN `GroupMembersEditor.tsx` HAS NO CODE-LEVEL PROTECTION AGAINST REMOVING THE PROXY
+  ACCOUNT FROM `CRS Owners`, AND NEVER HAS.** Read closely while building this: `removeGroupMember` is
+  called UNCONDITIONALLY at the top of `onRemove` — the existing self/last-admin guards only protect
+  the SEPARATE site-collection-administrator FLAG (`setSiteAdmin`), never the underlying group
+  membership. So a click on gdc's Remove button, however accidental, would have genuinely stripped it
+  from Owners exactly as had apparently just happened — this feature closes the door that was actually
+  used.
+- **`visibleMembers` FILTERS OUT `CURRENT_PROXY_ACCOUNT_EMAIL` (`shared/displayName.ts`), GATED ON
+  `alsoSiteAdmin` — the SAME flag that already limits every SCA-coupling behaviour in this component to
+  the Owners/System Administrators mount.** Never applied to an ordinary group's member list, where
+  gdc may legitimately be mapped as a plain uploader (exactly what today's own incident used it for) —
+  hiding it there would be the wrong kind of protection, since an admin managing that group needs to
+  see everyone actually in it.
+- **NOT A SILENT OMISSION.** `hiddenServiceAccount` drives a visible note explaining the account is
+  still an administrator, why it is not listed here, and where it can genuinely be changed (a resolved
+  link to `_layouts/15/mngsiteadmin.aspx`, matching the pattern the rest of this component already
+  uses for the self/last-admin cases) — this codebase's standing aversion to a screen that quietly
+  shows fewer people than actually hold a right.
+- **Verified**: `tsc --noEmit` clean, `eslint` clean on the file (zero warnings, not merely
+  baseline-matching), full suite **2040/2040 passing, 0 failed**, 44 lint warnings project-wide — the
+  documented baseline, zero new. **NOT yet deployed or site-tested.**
+
+## BULK UPLOAD'S NAME-CLASH DIALOG NOW MATCHES THE UPLOAD FORM EXACTLY, AND A PENDING DRAFT CAN BE REPLACED TOO (2026-09-23)
+Client, on Bulk Upload's old three-button clash popup (rename / "Replace the filed document" via a
+native `window.confirm()` / cancel): *"apparently client wants to be able to replace the file on
+pending and approve, so we got to fix this... change it to follow Normal upload form... it will follow
+the same flow as the normal document upload."* **Built, verified, NOT yet deployed.**
+- **THIS REVERSES THE 2026-08-27 RULE THAT A PENDING (STAGING) CLASH IN BULK UPLOAD COULD NEVER BE
+  REPLACED BY ANYONE** — that rule predates the 2026-09-17/18 proxy-deletion and tag-by-proxy redesign
+  and was reasonable under the old direct-write model; the client's own instruction today overrides it
+  explicitly, matching what the upload form already does.
+- **`deleteClashingDraftByProxy` — THE MECHANISM THAT REPLACES A PENDING DRAFT (self-approved `CRS
+  Requests` row + `CRS — Execute approved deletion`, ETag-guarded, since PIC/HoU no longer hold `Edit
+  Items` to overwrite directly) — IS NOW A SHARED MODULE, `shared/clashProxyDeletion.ts`, EXTRACTED
+  VERBATIM FROM `Form.tsx`.** Same reasoning this project already applied to `decideClash`
+  (`uploadBatches.ts`): "a hand-written second copy is how the stricter of the two drifts, and the
+  copy that drifts is the one nobody exercises" — this function decides whether a document is
+  genuinely destroyed, which is exactly the kind of rule neither screen should reimplement from
+  memory. **`Form.tsx`'s own behaviour is BYTE-FOR-BYTE UNCHANGED** — confirmed by reading the actual
+  diff: the closure body moved verbatim, only its parameters changed from closed-over `context`/`siteUrl`
+  to explicit arguments, and the one call site gained three arguments to match. No logic in the upload
+  form was altered by this refactor.
+- **Bulk Upload's `runUpload` gained a `replaceStagingFiles?: Set<File>` parameter**, mirroring
+  `replaceApprovedFiles`. `overwritePending` is now driven by CONSENT ALONE, never by whether the
+  earlier folder-listing pre-check could actually SEE the clashing draft — a colleague's hidden
+  pending file is invisible to every pre-check by Draft Item Security design, so gating on visibility
+  would make consent permanently unusable for the exact case it exists for (same fix this file already
+  documents for `Form.tsx` itself, 2026-09-06: *"clarencechojinheng an uploader and chocheetuck an
+  uploader under the same unit, yes they can override each other files during upload."*). Resolves the
+  clashing item's identity two ways — visible read (`Files('name')/ListItemAllFields`, also yields
+  `SubmissionFileId` for the displaced-record stamp) then a folder-path fallback for the hidden case
+  (folders are not subject to Draft Item Security) — then calls the shared proxy deletion, falling back
+  to a direct `overwrite=true` write if the proxy deletion cannot be confirmed within its poll budget.
+- **THE APPROVED-SIDE CHECK NOW ALSO SKIPS WHEN `replaceStaging` IS ALREADY TRUE** (`&& !replaceStaging`
+  added to its gate) — matching `decideClash`'s own rule that staging consent alone unlocks the "both"
+  case, never the approved consent independently. Without this, a file consented for staging
+  replacement could still be blocked a second time by also looking taken on the approved side.
+- **ON A SUCCESSFUL REPLACE, `markRecordReplaced` (already shared, `spSubmissionRecords.ts`) is called**
+  so the displaced submission record reads "Replaced" rather than the misleading "Deleted" — same call,
+  same point in the sequence (after tagging succeeds), as `Form.tsx` already does.
+- **THE DIALOG ITSELF WAS REBUILT FROM THE THREE-BUTTON LAYOUT (rename / native-confirm replace /
+  cancel) TO THE UPLOAD FORM'S CURRENT Yes/No DESIGN, WORD FOR WORD.** `bulkClashes`/`bulkClashNotes`
+  (the earlier split, which existed only to gate the now-removed rename button) are unified into one
+  `bulkClashes` list — same reasoning the upload form already used to unify its own equivalent split on
+  2026-09-04. Popup width dropped from its `520px` override to the shared default `420px`, matching the
+  form's own 2026-09-11 sizing decision. Yes partitions the clashing files into `replaceApproved` and
+  `replaceStaging` sets by `approvedSide` and calls `handleUpload` with both — no rename offered any
+  more, matching the form exactly (an uploader who does not want to replace presses No and renames the
+  file by hand before re-adding it).
+- **⚠ A BULK-SPECIFIC SAFETY SENTENCE WAS ADDED THEN REMOVED THE SAME SESSION, ON THE CLIENT'S OWN
+  INSTRUCTION.** Built to flag that an approved-side replace in Bulk Upload is auto-approved with no
+  human review (unlike the form's own approved-side replace, which goes through an ordinary approval) —
+  client: *"I will be removing this now... No need somehting extra."* The dialog's body copy is now
+  IDENTICAL to the upload form's, with no Bulk-specific addition. The underlying behaviour (bulk imports
+  do still auto-approve, unchanged) is not stated anywhere in this dialog any more — worth remembering
+  if this is ever revisited.
+- **Verified throughout**: `tsc --noEmit` clean, `eslint` clean on all touched files beyond the
+  documented pre-existing baseline (`BulkUpload.tsx`'s `toSpDate` unused and `max-lines`, both
+  pre-existing; `Form.tsx`'s `max-lines`, pre-existing, line number only shifted by the closure removal),
+  full suite **2040/2040 passing, 0 failed**, 44 lint warnings project-wide — zero new categories. A full
+  production build (`npm run build`) succeeded and the shipped `.sppkg` was unzipped and grepped
+  directly: both `bulk-upload-web-part` and `form-web-part` bundles carry the shared module's
+  `"Replace on upload"` request title and the new dialog's exact wording; every string from the old
+  three-button/`window.confirm()` version (`"Upload with the new name"`, `"Replace the filed document"`,
+  `"replaced AUTOMATICALLY"`) returns **zero** matches in the shipped bundle. **NOT yet deployed to the
+  live site.**
+
+## THREE MORE ITEMS FROM THE SAME BULK-UPLOAD PASS (2026-09-23)
+
+### `live` NEVER CLEARED ON "No" — THE PICKER WAS GONE FOR GOOD AFTER DECLINING A CLASH
+Client: *"when someone uploads a file in bulk upload and it hits a file existing dialog and when I
+click cancel I cannot add more files and I have to cancel the entire thing... ensure I can add more
+files and upload again after cancelling to proceed the replacement."* **Built, NOT yet site-tested.**
+- **⚠⚠ `live` IS SET ONCE PER RUN AND, BEFORE THIS, WAS ONLY EVER CLEARED BY `resetForm` (the FULL
+  WIPE) OR BY `dropFromRun` ONCE EVERY SINGLE ROW HAD BEEN DROPPED ONE AT A TIME.** The file area's
+  own render is `live ? progress : picked.length === 0 ? dropzone : selection-bar-with-"Add more"` —
+  and pressing **No** on the 2026-09-23 Yes/No clash dialog did `setBulkClashes([])` and NOTHING
+  ELSE, leaving `live` (the frozen progress list from the run that just finished) set for ever. The
+  clashing files correctly stayed in `picked` (only UPLOADED files are ever removed from it), but
+  with `live` still truthy the render could never reach the branch that has a dropzone or an
+  "Add more" button — there was no route back to them without wiping the whole selection via
+  `resetForm`, which is exactly the "cancel the entire thing" the client described.
+- **FIXED WITH ONE LINE: `setLive(null);` alongside the existing `setBulkClashes([])` in the No
+  handler.** `picked` is left untouched on purpose — the clashing files stay selected so the
+  uploader can either press Upload again as-is (back to this same dialog) or remove them via the
+  selection bar's own ✕ and add a renamed copy. `results` (the "N uploaded, N skipped" summary panel)
+  also stays, since it is still an accurate description of the run that just happened — the next
+  `addFiles`/`removeFile` or the next run is what retires it, per the existing `clearRunLog` rule.
+- **⚠ `Yes` NEEDED NO CHANGE.** Every call into the function containing `runUpload` (`setLive(files
+  .map(...))` near its top) already resets `live` fresh for whichever files are being retried, so
+  accepting a replace already transitioned correctly — only declining left no way out.
+
+### AUDIT LOG "NOT TRACKING" BULK UPLOAD — DIAGNOSTIC ENHANCED, NOT A CODE FIX
+Client: *"Audit log is not tracking upload for bulk upload for some reason."*
+- **⚠ NEITHER `BulkUpload.tsx` NOR `Form.tsx` EVER WRITES A CLIENT-SIDE "Uploaded" AUDIT ROW —
+  CONFIRMED BY READING BOTH FILES.** `Form.tsx`'s only `writeAudit` call is `EVENT.uploadRefused`
+  (a disallowed file TYPE, never a successful upload); `BulkUpload.tsx` has no `writeAudit` call at
+  all. Every genuine "Uploaded" row comes exclusively from the Power Automate flow
+  `Audit — approval activity`, polling the approval libraries' create/modify events — identically
+  for both upload paths, since by the time a file has landed in the library there is no code
+  difference between the two screens that wrote it there.
+- **THE LEADING, ALREADY-DOCUMENTED THEORY: A RACE, SPECIFIC TO BULK IMPORTS.** Per this file's own
+  2026-09-01 section ("THE 'Approved' AUDIT ROW IS WRITTEN BY AUTO-ROUTE, NOT THE AUDIT FLOW"),
+  `Audit — approval activity` now owns **`Uploaded`/`Rejected` ONLY** — `Approved` is written
+  separately, by Auto-route itself. A bulk-imported file can be auto-approved by
+  `CRS — Auto-approve bulk imports` within seconds of creation; if that flow's own poll runs before
+  `Audit — approval activity`'s poll reaches the same item, the latter sees the item ALREADY
+  Approved and (per its own `EventKind` logic) resolves to `Skip` — so the "Uploaded" row for that
+  specific bulk import is silently never written, while "Approved"/"Routed" both are. An ordinary
+  Form upload never races this way, since nothing auto-approves it in the same window.
+- **CANNOT BE CONFIRMED OR FIXED FROM THIS REPOSITORY** — it is Power Automate run-history/timing,
+  not TypeScript. Rather than writing a NEW, overlapping diagnostic (checked first, per this
+  project's own standing discipline: `scripts/check-audit-recording.js` already exists and already
+  does almost exactly this), it was EXTENDED instead: the library read now also selects `BulkImport`
+  (the marker Bulk Upload alone stamps), and any file MISSING its "Uploaded" row now ALSO checks
+  whether an "Approved"/"Routed" row exists for the same `UniqueId` — if the file was a bulk import
+  and either does, the report flags it `RACE-SHAPED`, naming the theory above directly. Every missing
+  row is now also labelled `[BULK UPLOAD]` or `[form upload]`, with a bulk-vs-form split in the
+  summary, so the client's report ("it's bulk specifically") is either confirmed or ruled out by real
+  data rather than by guessing. **Not yet run against the live tenant.**
+
+### "Approved By" NOW SHOWS THE PROXY ACCOUNT FOR AUTO-APPROVED BULK IMPORTS
+Client: *"for files that is auto approve right, can you put Approved By as GDC in My submission?"*
+**Built, NOT yet site-tested.**
+- **⚠ `ApprovedBy` IS BLANK ON A BULK-IMPORTED APPROVED FILE, ON PURPOSE, PER THIS FILE'S OWN
+  2026-09-10 SECTION** ("BLANK, AND CORRECTLY SO, for: ...bulk imports (the auto-approve flow writes
+  no approver)"). `CRS — Auto-approve bulk imports` flips `OData__ModerationStatus` directly with no
+  `ApprovedBy` write at all — nobody decided the file, the system did. **Contrast a SELF-approved
+  upload** (`autoApproveOwnUpload`, `Form.tsx`): that path DOES stamp `ApprovedBy` with the real
+  uploader's own email, because a real person's own probe genuinely granted it — that case already
+  shows a real name and must never be routed through this fallback.
+- **`isBulkUploadRow(r)` — ALREADY BUILT, ALREADY IMPORTED, JUST NEVER READ FOR THIS — IS THE ONLY
+  GATE.** It is POSITIVE-matched on the record's `Source` column (`"BulkUpload"`, never an
+  exclusion), so a row with no record at all (predates the record feature, or its write was refused)
+  stays a plain dash rather than being guessed at. Both the table cell AND the file-detail green box
+  now fall back to `CURRENT_PROXY_ACCOUNT_NAME` ("Guthrie Document Centre",
+  `shared/displayName.ts`) when `approvedBy` is blank and `isBulkUploadRow(r)` is true; a real
+  `approvedBy` value always wins outright.
+  - **⚠ THE DETAIL-VIEW BOX HAD ITS OWN RENDER GATE, AND IT WOULD HAVE STAYED BLANK EVEN AFTER THE
+    TABLE FIX.** It only rendered at all when `open.approvedBy || open.approvalComment` — a
+    bulk-imported approved file with no comment either would still show NOTHING there, while the
+    table row beside it said "Guthrie Document Centre". Widened to also render when
+    `isBulkUploadRow(open)`, so the two can never disagree.
+- **Verified**: `tsc --noEmit` clean (exit 0) after all three edits; `eslint` on both touched files
+  shows only their documented pre-existing warnings (`BulkUpload.tsx`'s `toSpDate` unused and
+  `max-lines`; `MySubmissions.tsx`'s `max-lines`) — no new categories. **NOT yet deployed or
+  site-tested.**
+
+## ARCHIVE C-LEVEL ACCESS — DIAGNOSED FROM CODE, NOT A CONFIRMED BUG, DIAGNOSTIC SCRIPT ADDED (2026-09-23)
+Client: *"can you check why c level can edit archive folders, shouldn't they only read."*
+- **⚠ THE CODE, AS WRITTEN TODAY, CANNOT COMPUTE ANYTHING WIDER THAN "Read" FOR C-LEVEL ON ARCHIVE —
+  TRACED THROUGH ALL THREE MECHANISMS THAT DECIDE IT.** `LIBRARY_ROLES.Archive`/`.ArchiveHC =
+  ["GLOBAL", "SEGVIEW"]` (nothing else has ever been granted anything on these two libraries, per
+  their own 2026-08-22 origin comment). `permissionForRole()`'s `READ_ONLY_LIBS` branch routes
+  GLOBAL/SEGVIEW through `ROLE_TO_PERMISSION`, which currently reads `GLOBAL: "Read"` /
+  `SEGVIEW: "Read"` — the 2026-09-22 revert from a brief "Restricted View" experiment, but **at no
+  point in this project's entire history** has either role's `ROLE_TO_PERMISSION` value been
+  anything WIDER than Read (only "Read" or "Restricted View", never Edit/Contribute/a custom CRS
+  level). `applyPermissionPrefix` never touches GLOBAL/SEGVIEW — they're built-in levels, not
+  re-pointed per site. So a fresh Folder Reconciliation run cannot produce this.
+- **THREE LIVE-DATA EXPLANATIONS, RANKED, none of them fixable by editing this repo:**
+  1. **A stale grant predating the 2026-08-22 read-only rule, or predating the 2026-09-02/03
+     "prune archive access to C-Level only" sweep** (built, run once on both sites, then REMOVED
+     per client request — see the 2026-09-02/03 section earlier in this file). Folder-scope
+     reconciliation only ever ADDS a missing grant; `groupsToRemove`'s full-ACL assertion is
+     deliberately PAGE-scope only, so a wider binding a C-Level group already held is never
+     downgraded or stripped by a later run.
+  2. **An inheritance gap.** This file's own 2026-09-02/03 section records, from a real live run,
+     that the sweep found grants "all on the SEGMENT ROOT — nothing below it needed touching — that
+     whole subtree inherits from the segment root rather than breaking its own inheritance per
+     department/unit, unlike Documents/HC Documents." A folder BELOW a segment root that has since
+     had its inheritance broken by hand (in SharePoint directly) now carries its own ACL nothing
+     here manages.
+  3. **The tested account is ALSO a `CRS Owners` member or Site Collection Administrator.** Full
+     Control bypasses every folder-scope grant entirely — this would look identical to "C-Level can
+     edit" if the same account happens to hold both.
+- **NEW READ-ONLY SCRIPT: `scripts/check-archive-clevel-access.js`.** Checked first for a
+  duplicate (`Glob scripts/*archive*` — only column/stamp scripts exist; the closest relatives,
+  `check-stale-delete-roles.js`/`repair-stale-delete-roles.js`, explicitly say they do **not**
+  touch Archive/ArchiveHC). Reads `CRS Group Map` to find every group holding `GLOBAL`/`SEGVIEW`,
+  resolves live group titles (never the stored `GroupName`, which a rename leaves stale), resolves
+  the Archive/ArchiveHC libraries via the exact candidate lists in `shared/naming.ts`
+  (`ARCHIVE_CANDIDATES`/`ARCHIVE_HC_CANDIDATES`), then reads:
+  - the LIBRARY ROOT's own `roleassignments` — via the LIST resource
+    (`lists(guid'...')/roleassignments`), not the folder resource, since a library root does not
+    expose `ListItemAllFields/roleassignments` the way an ordinary subfolder does (the same gotcha
+    already documented for the 2026-09-02/03 prune tool);
+  - every SEGMENT folder's `roleassignments` (the documented break point); and
+  - one level down (department folders) under each segment, flagging any that unexpectedly report
+    `HasUniqueRoleAssignments: true` — since nothing below the segment root should have broken its
+    own inheritance.
+  Reports three things: any GLOBAL/SEGVIEW group holding anything OTHER than exactly "Read" (the
+  literal question asked); any OTHER group (not C-Level, not Owners) holding ANY grant at all, since
+  per `LIBRARY_ROLES` nothing else should ever be there; and any unexpected inheritance break below
+  a segment root. `RoleTypeKind` 1/7 (Guest/Limited Access) and the `"Full Control"` binding are
+  excluded throughout, matching this project's standing convention for every other permission
+  script — a Limited Access entry is not a real grant anyone chose.
+  - **⚠ NOT YET RUN AGAINST THE LIVE TENANT.** Syntax-checked with `node --check` only (it is a
+    browser-console script and cannot execute outside one). The client should run it in DevTools on
+    the CRS site, signed in as an administrator, and read the report — particularly the first
+    section, which directly answers the question asked.
+- **Verified**: `node --check scripts/check-archive-clevel-access.js` passes. No application code
+  was changed by this investigation — it is read-only, both the script and the analysis.
+
+### ⚠⚠ RUN LIVE THE SAME DAY — THE FIRST VERSION HAD A FALSE-POSITIVE BUG, FIXED; NO REAL ESCALATION FOUND
+Client ran the script above. Live result: **15 "wrongLevelFindings" and 2 "strayGroupFindings" —
+and every single one of them was a FALSE ALARM from the script's own classification logic, not a
+real finding on the site.**
+- **⚠⚠ THE BUG: `classifyAssignments`'s `onlyRead` check demanded EXACTLY ONE binding named
+  "Read".** Every one of the 15 flagged bindings actually read `Read, Restricted View` — TWO
+  bindings, which failed that strict check and got reported as "MORE than Read." **`Restricted
+  View` is NARROWER than Read, not wider** — it is the built-in SharePoint level that routes
+  viewing through Office Online's own renderer with no download/Open Items right (see
+  `ROLE_TO_PERMISSION`'s own comment in `FolderManager.tsx`). This project's own documented history
+  explains the pair exactly: MEMBER/GLOBAL/SEGVIEW briefly used "Restricted View" (2026-09-14/15)
+  before being reverted back to "Read" (2026-09-22), and folder-scope reconciliation only ever ADDS
+  a grant and never removes one — so the OLD "Restricted View" binding is still sitting on every
+  already-provisioned archive folder alongside the NEW "Read" one. SharePoint UNIONS role
+  assignments, so the effective right is Read either way; having both denies nothing and grants
+  nothing extra. **The script mistook a well-documented harmless leftover for an escalation.**
+- **FIXED: `HARMLESS_LEVELS = ["Read", "Restricted View"]`, and a C-Level group is now only flagged
+  if it holds a binding OUTSIDE that set.** Re-applied to the SAME live data, all 15 findings drop
+  out — zero real escalations among the GLOBAL/SEGVIEW groups checked.
+- **THE 2 "OTHER groups" FINDINGS (`PCARS_C_LEVEL`, id 1373, on both Archive and ArchiveHC) HOLD
+  ONLY "Read" — also not an escalation**, just a CLASSIFICATION question: a group literally named
+  `_C_LEVEL` that this script's Group Map read did not resolve to a `GLOBAL`/`SEGVIEW` role. Worth
+  a quick separate look at that group's actual `CRS Group Map` row (is its `Role` value spelled in
+  a way `normalizeRoleValue` doesn't recognise, or does it genuinely have no GLOBAL/SEGVIEW row at
+  all despite the name) — but it is NOT the "editing" symptom, since the grant itself is Read-only.
+- **`unexpectedInheritanceBreaks` = 0**, both libraries — no department folder anywhere has broken
+  its own inheritance below the segment root. The documented "everything below the segment root
+  inherits" invariant held on this live check.
+- **⚠⚠ CONCLUSION: THE RAW ARCHIVE FOLDER ACLs SHOW NO EVIDENCE OF C-LEVEL EDIT-CAPABLE ACCESS.**
+  Every real binding found across both libraries, every segment, the library roots, and every
+  department folder checked is `Read` and/or the harmless stale `Restricted View` leftover — never
+  Edit, Contribute, Design, a custom CRS level, or Full Control. **So whatever "editing" the client
+  observed is not coming from the SharePoint folder ACL this script (or reconciliation) controls.**
+  The three explanations from the original diagnosis narrow to the two that don't require a folder
+  ACL to be wrong: (a) the tested account is ALSO a `CRS Owners` member or Site Collection
+  Administrator (Full Control bypasses every folder grant, C-Level role notwithstanding), or (b)
+  what was actually observed was something in the APP's own UI (e.g., a button offered on a screen
+  this script does not check) rather than a direct SharePoint edit. **NEEDS a concrete repro from
+  the client to narrow further: which account, which specific archive document/folder, and what
+  action was actually taken (renamed a file? edited a column in a Quick Edit grid? saw an "Edit"
+  option succeed? pressed a button in the app?)** — that detail is what would point at (a) vs (b).
+- **Script fixed and left in place, not removed**, since the classification logic it now uses
+  correctly (and the "OTHER groups" / inheritance checks) remain useful for a future re-run — e.g.,
+  after a new segment is onboarded, or if a genuinely wider binding is ever introduced.
+- **✅ RESOLVED, SAME DAY — THERE WAS NEVER A PERMISSIONS BUG. THE CORRECTED SCRIPT'S CLEAN RESULT
+  WAS RIGHT.** Client, testing as `crs@sdguthrie.com` under `GHO_C_LEVEL`: *"I am wrong, I saw item
+  properties and I thought I can edit but it shows read only."* Screenshot: SharePoint's own "Item
+  properties" panel on the `GHO` folder, with `Name`, `Document Type`, `Year` and `Confidentiality
+  Level` all explicitly labelled `(Read only)` — the `Name` field simply renders inside a bordered
+  box that LOOKS like an editable text input even though it is not, which is a genuine, easy-to-hit
+  visual ambiguity in SharePoint's own UI (nothing this project's code renders or controls).
+  - **The account-choice lead (testing as the old `crs@sdguthrie.com` service account, historically
+    added to `CRS Owners` for the proxy-deletion flow) was never confirmed either way** — it did not
+    need to be, since the observed "edit" turned out not to be an edit at all. Still worth checking
+    independently at some point whether `crs@sdguthrie.com` retains Owners/SCA membership it no
+    longer needs, now that `gdc@sdguthrie.com` is the active service account — but it is unrelated
+    to this report and not urgent.
+  - **NO CODE CHANGE OF ANY KIND CAME OUT OF THIS INVESTIGATION.** The only lasting artefact is the
+    corrected `scripts/check-archive-clevel-access.js`, which is a genuine improvement (it no longer
+    false-flags the documented Restricted-View leftover) and remains useful for a future check, even
+    though this particular report turned out to be a UI misread rather than the thing it was built
+    to find.
+
+## THE AUDIT LOG'S "Who" COLUMN IS BACK TO PER-ROW RESOLUTION — THE 2026-09-22 "ALWAYS GDC" CHANGE IS REVERSED (2026-09-23)
+Client, having asked for "always GDC" the day before: *"I was wrong, this is the feedback from
+crystal giving an example ... revert it back to the previous one."* Crystal's own worked examples
+(paraphrased): Upload → shows the uploader; a DIFFERENT person reviews and approves it → shows
+that reviewer; a raised deletion/share request → shows the requester; the automatic MOVE once
+approved → shows GDC; and — the one genuinely new nuance — when the reviewer and the uploader are
+the SAME person (a self-approved upload, `autoApproveOwnUpload`) → the "Approve" event shows GDC
+too, since nobody actually reviewed anything.
+- **THE PATTERN: A DELIBERATE HUMAN DECISION SHOWS THE REAL PERSON; AN AUTOMATED EXECUTION STEP
+  SHOWS THE SYSTEM.** This is exactly what `resolveActorDisplay` (built 2026-09-20, never deleted —
+  the 2026-09-22 change only stopped CALLING it) already does: a known service account (checked on
+  either `ActorEmail` or `ActorName`) wins outright, otherwise the row's own actor is guessed into a
+  real name via `nameFromEmail`. `AuditLog.tsx`'s Who cell is back to
+  `resolveActorDisplay(r.ActorEmail, r.ActorName)`, replacing the flat
+  `CURRENT_PROXY_ACCOUNT_NAME` render. The one-day "always GDC" detour is kept in the file's own
+  comments as a struck-through record, not silently erased, so nobody rediscovers the same idea and
+  reintroduces it without reading why it was walked back.
+- **`ActorEmail`/`ActorName` WERE NEVER TOUCHED BY EITHER CHANGE** — this has always been a
+  DISPLAY-ONLY decision, and `toAuditCsv`'s export has exported the real stored value throughout,
+  regardless of what the Who cell showed on screen.
+- **⚠ THIS DOES NOT, BY ITSELF, GUARANTEE THE "Approve → GDC" NUANCE FOR A SELF-APPROVED UPLOAD.**
+  `resolveActorDisplay` shows whatever `ApprovedBy` the code/flow actually stamped. Since the
+  2026-09-17/18 proxy-deletion and tag/approve-by-proxy migrations, `CRS — Apply pending tags` runs
+  as GDC and restamps `Editor` = GDC on every item **during tagging, before it is ever approved** —
+  so on Auto-route's "Approved" audit row, `ActorEmail` falls back to `Editor` (= GDC) **whenever
+  `ApprovedBy` itself is blank on the item**, which is the correct outcome for a genuine
+  self-approve, and an equally plausible outcome if a document was approved BY the GDC account
+  itself while testing (Full Control, `CRS Owners`), or if `ApprovedBy` failed to write for some
+  other reason. **So a row still reading "Guthrie Document Centre" after this deploys is not
+  automatically a bug** — check what `ApprovedBy` actually holds on that item before assuming the
+  fix didn't take.
+- **⚠ `Requests.tsx`/`MySubmissions.tsx` DO NOT USE `resolveActorDisplay`, DELIBERATELY.** It was
+  briefly applied there too during the SAME investigation (on the reasoning that raw emails on
+  those two pages were the "same complaint") and REVERTED at the client's explicit correction the
+  same day (*"did you change the Request.tsx and MySubmission.tsx as well? If so revert it"*) —
+  `AuditLog.tsx` was the module's only intended consumer. `MySubmissions.tsx`'s unrelated,
+  still-live use of `CURRENT_PROXY_ACCOUNT_NAME` (the "Approved By" GDC fallback for auto-approved
+  bulk imports, same session, documented above) is a SEPARATE, deliberate feature and was not part
+  of this revert.
+- **Verified**: `tsc --noEmit` clean, `eslint` on all four touched files shows only their
+  documented pre-existing baseline warnings (`AuditLog.tsx`'s unused `AuditLogoIcon`;
+  `Requests.tsx`/`MySubmissions.tsx`'s `max-lines`) — no new categories. **NOT yet deployed or
+  site-tested** — the client's screenshot that prompted this entry was taken against the
+  pre-revert build; confirm on a fresh deploy.
+
+## ✅ A REPLACED DOCUMENT NOW AUTO-CANCELS ITS OWN STALE DELETE/SHARE REQUEST, INSTEAD OF EXECUTING AGAINST THE WRONG CONTENT (2026-09-23)
+Client, `crs@sdguthrie.com` as an approver: *"I ... goes into file permission to find the file that
+is needed to be approve for deletion but it shows This document is no longer in the library ...
+same goes for the link send via email ... I believe it is because the file is replaced."* Then, the
+much sharper half: *"If an approve[d] file[] stays on document library and someone ask[s] for
+deletion and the deletion stays pending. Someone uploads another file and replace[s] the approved
+file, the file request is still showing the pending and I can click to view the file and I approve
+the deletion and yea I actualy deleted the file. ... can we ensure that the file permission deletion
+request is cancelled for the previous one and same for goes for share."*
+- **⚠⚠ TWO SEPARATE FAILURE MODES, BOTH FROM THE SAME ROOT CAUSE, AND ONLY ONE OF THEM IS SAFE.**
+  A REPLACE preserves the document's `ItemUniqueId` in EXACTLY ONE of its two mechanisms:
+  - **Approved-side replace** (Auto-route's `Update file`, versioned in place since 2026-09-02):
+    the SAME item identity survives — so a Pending request raised against the OLD content still
+    resolves cleanly, and approving it **silently executes against the REPLACEMENT'S content
+    instead**. This is the dangerous one, and it is exactly what the client watched happen.
+  - **Staging-side replace** (a still-PENDING draft, recycled outright by the 2026-09-18
+    proxy-deletion mechanism to make room for the new upload): the OLD id dies, so the SAME request
+    correctly answers *"That document no longer exists"* — technically honest, but left dangling as
+    `Pending` forever, with nothing explaining WHY it can never be decided. This is what produced
+    the client's `New-SDG-Logo-23092026.jpg` screenshot.
+- **FIXED IN `Requests.tsx`'s `decide()`, ONE GUARD COVERING BOTH CASES, NO POWER AUTOMATE CHANGE
+  NEEDED.** `row.submissionFileId` is the stamp taken of THIS EXACT document when the request was
+  raised (2026-09-10's "a request survives its document being routed" mechanism). A `CRS
+  Submissions` record only ever gets `ReplacedAt` set ONCE, the moment something else takes its
+  name — so if `readSubmissionRecordByFileId(sp, siteUrl, row.submissionFileId)` comes back with
+  `replacedAt !== undefined`, the document this request names has definitely been superseded, full
+  stop. **No live-file probe, no timestamp comparison needed** — the stamp alone answers it, and
+  answers it correctly for BOTH mechanisms above, since a replace ALWAYS calls `markRecordReplaced`
+  on the displaced record regardless of which one fired (staging-clash in `Form.tsx`/`BulkUpload.tsx`,
+  or Auto-route's own `StampReplacedRecord` action).
+  - **Runs on EVERY decision attempt, approve OR reject** — inserted right after the existing
+    "is this row still Pending" re-read guard, before either `resolveDeletionTarget`/`performShare`
+    ever runs. Rejecting a stale request is as meaningless as approving one; both now short-circuit
+    to the SAME outcome: the request is MERGEd `Status: "Cancelled"` with a `DecisionNote` naming
+    who replaced it (`ReplacedBy`, when known) and inviting a fresh request against the current
+    file if still needed. Nothing is approved, nothing is rejected, nothing is deleted or shared.
+  - **⚠ FAILS OPEN, matching every other guard in this file.** No `submissionFileId` on the row (a
+    request older than 2026-09-10), or a failed/inconclusive read, does NOTHING — the decision
+    proceeds exactly as it did before this existed. Understating is the safe direction here: the
+    existing `ItemUniqueId`-then-stamp resolution and the `TargetETag` mismatch guard (2026-09-20)
+    are still what stand behind this as the last lines of defence if the replace-check itself can't
+    answer.
+  - **The client-side `writeAudit` call mirrors the exact shape `MySubmissions.tsx`'s own
+    requester-initiated Cancel button already uses** (`EVENT.deletionRequested`/`shareRequested`,
+    outcome `"Failed"`, summary stating what happened) — consistent labelling for the same terminal
+    state, whether a human withdrew it or the system did because the target moved on. The
+    authoritative `RequestCancelled` audit row still comes from `CRS — Audit request activity`,
+    which watches every `CRS Requests` write regardless of who made it.
+- **⚠ THE ALREADY-DANGLING `New-SDG-Logo-23092026.jpg` REQUEST IS NOT REPAIRED BY THIS.** It has no
+  live document to check against any more (the old draft was already recycled), so nothing new can
+  resolve it automatically — it needs a one-time manual Cancel/cleanup. Going forward, any request
+  caught in this exact shape auto-cancels itself the next time anyone tries to decide it.
+- **⚠ THE GENERIC "no longer exists" MESSAGE ON `resolveDeletionTarget`/`liveFilePath` IS UNCHANGED**
+  — it still fires for the genuine "actually deleted elsewhere, no replacement record at all" case,
+  which this fix does not and should not touch.
+- **Verified**: `tsc --noEmit` clean, `eslint` on the file shows only its documented pre-existing
+  `max-lines` warning, full suite **2040/2040 passing, 0 failed** across 60 suites, 44 lint warnings
+  project-wide — the documented baseline, zero new categories. `npm run build` completed
+  (520 KB `.sppkg`, the production shape) and the shipped `requests-web-part` bundle was unzipped
+  and grepped directly for the new cancellation wording — present. **NOT yet deployed or
+  site-tested** — the test that matters: raise a deletion or share request against a document,
+  replace that document (either while still pending, or after it has been approved and routed),
+  then try to decide the original request and confirm it auto-cancels with the explanatory note
+  instead of executing or dead-ending.
+
+## ⏭ "crs@sdguthrie.com CANNOT SEE A REQUEST THAT A SYSTEM ADMIN CAN" — LIKELY EXPECTED, NOT CONFIRMED, DIAGNOSTIC SCRIPT ADDED (2026-09-23)
+Client, comparing two live screenshots: crs@sdguthrie.com's own Share Requests accordion showed
+`1 pending`, while gdc@sdguthrie.com's (a confirmed `CRS Owners` member) showed `5 pending` with
+more test files listed.
+- **⚠ ONE HALF OF THE DISCREPANCY IS ALREADY EXPLAINED AND IS NOT A BUG.** The header's
+  `Requests {queue.length}` (2026-08-27's `queueFor` → `canDecide`) counts only PENDING requests
+  this viewer can actually DECIDE — it deliberately EXCLUDES a request the viewer raised
+  themselves, since `canDecide` has no "own request" exception. Each accordion's `N pending` badge
+  (`ofType`, feeding `typeSection`) counts everything VISIBLE to the viewer of that type, which DOES
+  include their own raised requests via `isVisibleTo`. So `queue.length` reading lower than the sum
+  of the accordion badges is EXPECTED whenever a viewer has raised requests they cannot approve —
+  it is not evidence anything is wrong on its own.
+- **⚠ THE REMAINING QUESTION — WHY CAN CRS NOT SEE `test5-test5-test5`/`test3-test3-test3` (visible
+  to gdc, a system admin who sees everything by design since 2026-08-27) — CANNOT BE ANSWERED FROM
+  CODE ALONE.** `isVisibleTo`/`inScope`/`matchesUnit` in `shared/requests.ts` were re-read: the
+  logic is a straightforward, correctly-scoped `UnitTermGuid` match against the viewer's own
+  APR/APRHC (and, for approved-stage Share only, DEPTVIEW) rows, with no bug found on inspection —
+  exactly the conclusion the earlier 2026-09-21 "SEGMENT-SCOPE LEAK" investigation already reached
+  for the same mechanism. Whether `crs@sdguthrie.com` genuinely holds APR/APRHC for those two
+  specific units, or whether it is only visible to "Test NBPOL Doc" because it happens to be the
+  REQUESTER of that one, is a live-data question this repository cannot answer — the same open
+  point that investigation left as "two data checks still open."
+- **NEW READ-ONLY SCRIPT: `scripts/check-request-visibility.js`.** Checked first for a duplicate
+  (`Glob scripts/*request*` — none; `check-approver-direct-rights.js` answers a different question,
+  direct-delete/share ACL rights on My Submissions, not request-row visibility on the Requests
+  page). Run as the account in question: resolves its groups, reads `CRS Group Map` to build its
+  APR/APRHC and DEPTVIEW unit sets exactly as `Requests.tsx` does, reads every `CRS Requests` row,
+  and prints a per-row verdict (`VISIBLE`/`hidden`, `DECIDABLE` where relevant) with the REASON —
+  own request, unit match, HoD match, or system admin — plus a final summary explicitly reconciling
+  the header count against the accordion counts so the two numbers stop looking inconsistent.
+  - **⚠ VERIFIED OFFLINE BEFORE HANDING OVER**, per this project's standing rule for these scripts —
+    a synthetic fixture (`fetch` stubbed) covering all four outcomes: a self-raised request (visible,
+    not decidable), an in-scope request (visible and decidable), an out-of-scope request (hidden,
+    named in the "cannot see" list with its required unit), and the summary tally. All four verdicts
+    and the summary numbers matched expectations exactly on the first run.
+  - **NOT YET RUN AGAINST THE LIVE TENANT.** Ask the client to run it as `crs@sdguthrie.com`, with
+    `WATCH_ITEM_NAMES` set to the exact file names in question — the printed "unit" values compare
+    directly against what Group Management's own Quick Search shows for that account, which is the
+    faster route to the same answer if the client prefers not to paste a console script's output.
+- **`node --check` clean.** No application code was changed by this investigation — read-only,
+  matching the earlier archive-access and segment-scope investigations' own discipline.
+- **✅ RESOLVED, SAME DAY — NOT A BUG. Client, self-diagnosed: "test5 is deleted already, I was
+  requesting to share for a stale file in My Submission, i forgot to refresh."** The document
+  `test5-test5-test5-19092026.xlsx` had genuinely already been deleted by the time crs raised the
+  Share request against it — My Submissions was a stale, unrefreshed tab still showing the file as
+  live, and the request was raised for a document that no longer existed. So crs "not seeing it" was
+  never a scope/visibility question at all: it correctly holds no `UnitTermGuid` to match against
+  because there is nothing real behind it. **Same false-alarm shape this project has hit repeatedly**
+  (the dead web part, the stale reconciliation policy read, the pre-`reserved` clash dialog, the
+  Bulk Upload clash dialog) — a stale browser tab producing state that looks like a live bug. No
+  code change came out of this. `scripts/check-request-visibility.js` is kept, not removed — it
+  remains a genuine, verified tool for the next time a viewer's request visibility is actually in
+  question, same reasoning as every other diagnostic script kept after its triggering report
+  resolved as something else.
+
+## FIVE SMALL FIXES, PLUS A LIVE-CONFIRMED SHARE-EMAIL LIMITATION AND A PENDING REVERSAL (2026-09-23)
+Five independent client fixes in one pass, all built/verified this session, followed by a live test
+of the `sendEmail: true` share-invite change (from earlier the same day) that surfaced a real,
+already-documented platform limitation the client wants reconsidered next session.
+
+**1. My Submissions' Approved/Rejected tabs now sort by DECISION recency, not upload recency.**
+Client: *"ensure the latest approve file stays at the top."* `rows` (and every tab built from it) was
+sorted once by `created` (upload date) — right for Pending, wrong for Approved/Rejected, where an
+OLDER upload decided today must outrank a NEWER upload decided last week. New
+`sortByDecisionRecency` in `shared/mySubmissions.ts` sorts by `modified` (SharePoint's own Last
+Modified — the best available proxy, since there is no `DecidedAt` column anywhere in this schema),
+falling back to `created`, unknown sorts last — same shape as the existing `sortNewestFirst`. Applied
+ONLY to the Approved/Rejected tabs in `MySubmissions.tsx`; Pending/Submissions/All/Archive untouched.
+Tested: `tsc` clean, suite **2044/2044**.
+
+**2. AuditLog: "Moved to Document" → "Moved to Documents".** Traced to `AuditLog.tsx`'s own
+`shortLibrary()` — a DELIBERATE 2026-09-04 client request ("For this Restricted & Confidential
+Document, change to Document only") that shortens the real (long) library title to a plain word for
+the Event column, so two-line wrapping didn't push every row taller. The client's own earlier pick
+was the singular "Document"; this changes it to "Documents", matching the same row's own `What` text
+("Moved to Documents: <filename>"). One-word literal change, `documentsLibraryTitle()`-matched (never
+hardcoded), HC library untouched (`"Moved to Highly Confidential Document"` stays deliberately full,
+load-bearing so an HC routing cannot read as an ordinary one). Tested: `tsc`/lint clean, only the
+pre-existing `AuditLogoIcon` unused warning.
+
+**3. Document-Viewer.aspx refresh-goes-blank — fixed.** Client: *"Check the Document-viewer, everytime
+after I refresh it immediately shows blank."* Root cause: `MySubmissions.tsx`'s deep-link handler
+(`?file=`/`?sfi=`) stripped those query params from the address bar via `history.replaceState`
+immediately after the first open, on the reasoning "the ref already stops a second open" — true for
+preventing a double-open WITHIN one page mount, but a genuine browser refresh discards every
+`useRef` (including the one that actually prevents the double-open) and re-parses the URL from
+scratch. With the params scrubbed, the next load found nothing to reopen and fell to the generic
+"Open a document directly..." landing message — on `Document-Viewer.aspx` specifically, since that
+page has no other tabs to fall back to. Fixed by removing the URL-scrub entirely; the in-memory ref
+guard is untouched and needs no help from the URL. Tested: `tsc` clean.
+
+**4. "Delete Request"/"Share Request" heading added to the single-request preview page.** Client:
+*"client complain when clicking the email and redirect to the this page they can't tell if its
+delete or not."* `Requests.tsx`'s `?request=<Id>` file-view mode (built 2026-09-10, reached from the
+request-notification emails) never showed `r.type` anywhere — status pill, filename, HC/Archive
+tags, trail, meta, reason, buttons, but nothing saying which KIND of request it was. Added a static
+heading directly above the request card, reusing the same 🗑/📤 icons as the accordion section
+headers ("Delete Requests"/"Share Requests"), driven by `viewing.type`. New `fileViewTypeHead` style,
+visually matching `accHead` but a plain `<div>` (no toggle, nothing to expand). Tested: `tsc`/lint
+clean.
+
+**5. `crs`/`gdc` now show under ONE current name in the Audit Log — "Guthrie Document Centre" for
+both.** Client, after live evidence: *"see crs is approving but the move to documents is showing crs
+instead of gdc."* Until now `KNOWN_SERVICE_ACCOUNTS` (`shared/displayName.ts`) gave `crs` its OWN
+retired display name, "Guthrie Central Repository System", on the reasoning that a historical row
+should read exactly as written. That stopped being right the moment it became clear `crs@sdguthrie.com`
+is STILL in active use as a live test/approver account, not a purely retired identity — so seeing its
+OLD name on a fresh, TODAY-dated row read as wrong, not historically accurate. Both `crs` and `gdc`
+now map to the SAME string, "Guthrie Document Centre" — `crs` is kept as a recognised KEY (so it is
+still never run through the human-name guesser) but no longer gets a distinct label. Two pinned tests
+in `displayName.test.ts` updated to match. Tested: `tsc` clean, suite **2044/2044**.
+- **⚠ THIS SUPERSEDES THE EARLIER "already self-resolved, nothing to fix" CONCLUSION reached mid-session
+  while investigating why one bulk-imported file's "Moved to Documents" row showed the old crs name** —
+  that investigation (unzipping and diffing the `Auto-route`/`CRS — Auto-approve bulk imports` flow
+  exports, confirming both use the identical `82951d0a-...` "GDC Proxy - SharePoint" connection) was a
+  real dead end, not wasted: it correctly ruled out a stale/misnamed CONNECTION as the cause. The actual
+  fix needed was always a DISPLAY decision (crs and gdc are one identity from the client's point of
+  view), not a connection-identity bug — which is exactly what item 5 above changes.
+
+**⏭ PENDING, EXPLICITLY DEFERRED TO NEXT SESSION — "restore back the email template later."**
+Earlier the same session, `Requests.tsx`'s `performShare` had `sendEmail` flipped from `false` back
+to `true` (native SharePoint share invite for two-person REQUEST-approval shares — Direct Share
+already used `sendEmail: true` and was untouched), on the client's own explicit choice after being
+shown the CC-to-owner consequence and accepting it: *"Keep native, its ok that its CC"* / *"we are
+not going to use this one, just native email template with CC."* The matching flow-side half was
+also done: `CRS — Notify request activity`'s `ShareApproved` case's `Send an email (V2) 3` (the "Dear
+recipient..." email addressed to `ShareWith`) was deleted, confirmed by reading the fresh export —
+`ShareApproved` now contains only `GetActorName` + `Send_an_email_(V2)_1` (the confirmation email
+back to the REQUESTER, unaffected).
+- **Live-tested the SAME day, and it works** — crs received the native invite ("Guthrie Document
+  Centre invited you to view a file... Testing if CRS is going to receive an Email..."), confirming
+  the earlier "nothing arrived" report was a deploy-timing issue, not a real defect.
+- **⚠⚠ BUT THE LIVE TEST ALSO CONFIRMED THE SECOND, ALREADY-FLAGGED CONSEQUENCE, AND SEEING IT LIVE
+  CHANGED THE CLIENT'S MIND.** The invite named **"Guthrie Document Centre"**, not Clarence Cho (the
+  actual requester) — because `SP.Web.ShareObject`'s native invite always attributes "X invited you"
+  to whoever's SESSION calls it (the DECIDER, here a system admin approving on gdc's behalf), never
+  the original requester. This is not a new bug — it is the exact second consequence I flagged before
+  the `sendEmail: true` change was made (*"the recipient's email will say the approver's name invited
+  them, not the person who actually asked for the share"*), now seen live rather than described.
+- **THE CLIENT'S DECISION, VERBATIM: "Ok I think we got ot restore back the email template later."**
+  Read as: revert `performShare`'s `sendEmail` back to `false`, and restore a custom flow-side email
+  (either literally re-adding the deleted "Dear recipient" `Send an email (V2) 3` action, or building
+  the better version discussed earlier — `SP.Utilities.Utility.SendEmail`, correctly crediting the
+  real requester with no CC, which was ALSO on the table and declined once already this same
+  session). **NOT decided which of the two, and NOT done — explicitly deferred to a future session.**
+  Whoever picks this up should re-offer both options rather than assuming a plain revert is wanted,
+  since the client explicitly chose against the custom-email route earlier today before seeing this
+  consequence live.
+- **⚠ UNTIL THIS IS REVISITED, THE LIVE STATE IS**: `sendEmail: true` in `performShare` (deployed),
+  the flow's `ShareApproved` recipient-facing email deleted (deployed) — so a request-approval share
+  right now sends ONLY the native invite (attributed to the decider, CC'd to the file's owner) to the
+  recipient, and the confirmation email to the requester. This is a live, working, but
+  client-flagged-as-imperfect state, not a broken one — nothing needs an emergency fix, but it should
+  not be mistaken for "done."
+
+## ⏭ "Moved to Documents" STILL SHOWS THE APPROVER, NOT GDC — LIVE-CONFIRMED, FLOW-SIDE FIX NOT DONE (2026-09-23)
+Client, on a fresh live screenshot: *"the Moved to Documents in audit log is still showing the person
+who Approves the file instead of GDC."* This is the exact item this file already flagged as
+**"STILL OPEN, NOT VERIFIABLE FROM THIS REPO"** two sections up (*"Whether Auto-route's OWN 'Moved to
+Documents' audit row already shows GDC as its actor, or still shows the uploader/approver — needs the
+live flow export re-read"*) — now answered by live evidence: **it does not.** Both the "Approved" row
+and the "Moved to Documents" row for `test14-test14-test14-19092026.xlsx` show the SAME actor,
+"Guthrie Central Repository System" (crs, the approver) — not GDC.
+- **⚠ THIS IS A FLOW-SIDE ISSUE, NOT A CODE ISSUE — `AuditLog.tsx`'s `resolveActorDisplay` is working
+  exactly as designed.** It correctly renders whatever `ActorEmail`/`ActorName` the ROW ITSELF carries
+  (`canonicalServiceAccountName` first, `nameFromEmail` fallback). If the row's stored actor is
+  genuinely crs's address, no display-layer fix can turn that into GDC without lying about who the row
+  says did it — the fix has to change what Auto-route WRITES onto this specific row.
+- **THE CAUSE, following this file's own documented mechanism**: per the flow's original design
+  (recorded near the top of this file, "AUTO-ROUTE... ActorName/ActorEmail dynamically pulled from the
+  SOURCE item's live Editor/ApprovedBy fields at trigger time"), the "Moved to Documents" `Create_item`
+  action reads the SOURCE item's `Editor` (with an `ApprovedBy` preference) at trigger time. Approving
+  a document requires `Edit Items` (`CRS Approve` keeps it permanently, per the 2026-09-18
+  tag/approve-by-proxy design), and SharePoint restamps `Editor` on any edit — so by the time Auto-route
+  fires, the source item's `Editor` is whoever just approved it (crs), not GDC. The 2026-09-20
+  `GetProxyUser`/Editor-stamp fix only sets `Editor` = GDC on the **destination** copy, written AFTER
+  the copy — it never touches what this row's `ActorName`/`ActorEmail` fields were already computed
+  from at trigger time.
+- **THIS CONTRADICTS THE 2026-09-20 "ARCHIVE/ROUTED WHO BLANKING IS REVERSED" DECISION'S PREMISE.**
+  That change assumed Auto-route "genuinely run[s]... as the gdc proxy account" for its OWN write, so
+  showing a resolved name for a Routed row would be accurate. Live evidence says the routed row's
+  stored actor is still the APPROVER, not the account performing the copy — the premise doesn't hold
+  for this specific action, only for the Editor stamp on the destination file itself.
+- **THE FIX, PER THIS FILE'S OWN STANDING RULE ("a deliberate human decision shows the real person; an
+  automated execution step shows the system") — NEEDED ON THE `Create_item` ACTION THAT WRITES "Moved
+  to Documents" (Routed) IN BOTH `Auto-route` AND `HC Auto Route`:** stop reading `Editor`/`ApprovedBy`
+  for THIS row's `ActorName`/`ActorEmail`, and hardcode them to the proxy identity instead — either the
+  literals `"Guthrie Document Centre"` / `"gdc@sdguthrie.com"`, or (better, one source of truth) the
+  `GetProxyUser` action's own resolved `LoginName`/output, since that action already runs earlier in
+  the same flow for the Editor-stamp fix. **The sibling "Approved" row (`Create_item_1`) must NOT be
+  touched** — showing the real approver there is correct and matches Crystal's own worked example.
+- **✅ FIXED AND VERIFIED LIVE ON THE NORMAL `Auto-route` FLOW, SAME DAY.** `Create_item`'s
+  `item/ActorName`/`item/ActorEmail` (which read `triggerOutputs()?['body/Editor/DisplayName']`/
+  `.../Editor/Email']` — confirmed by reading the actual Code view, matching the diagnosis exactly)
+  replaced with the plain literals `"Guthrie Document Centre"` / `"gdc@sdguthrie.com"`. Every other
+  field on that action (`Title`, `EventTime`, `EventType`, `Outcome`, `Source`, `LibraryName`,
+  `ItemUniqueId`, `ItemName`, `ItemPath`, `Details`) is untouched. Confirmed on a real approval
+  (`test15-test15-test15-19092026.xlsx`, 18:59): **"Moved to Documents" → Guthrie Document Centre**,
+  **"Approved" → Guthrie Central Repository System** (the real approver, unaffected) — the exact split
+  the design calls for. Older rows logged before the edit (`test14`, 18:41) correctly still show the
+  pre-fix state, since nothing here is retroactive.
+- **✅ THE IDENTICAL FIX WAS ALSO APPLIED TO `HC Auto Route`'s OWN `Create_item`** (the "Moved to
+  Highly Confidential Document" row), same day, per the client's own confirmation — same two-line
+  change, same values, same reasoning. Both routing flows now attribute the automated move to GDC and
+  leave the "Approved" row naming the real approver.
+
+## ✅ THE CUSTOM SHARE-INVITE EMAIL IS RESTORED AND VERIFIED LIVE — RESOLVES THE 2026-09-23 "restore back the email template later" DEFERRAL (2026-09-24)
+Picked up the deferral recorded above. Client confirmed **Option A — restore the deleted flow
+action** over building a fresh `SP.Utilities.Utility.SendEmail` version, since the original
+`Send_an_email_(V2)_3` action (deleted 2026-09-23 when `sendEmail` was flipped to `true`) had
+already been live-verified working on 2026-09-21 and needed no redesign, only rebuilding.
+- **CODE SIDE: `Requests.tsx`'s `performShare` reverted `sendEmail` back to `false`**, ending the
+  native SharePoint invite for REQUEST-approval shares (its CC-to-owner and wrong-attribution
+  problems, both already documented). `performDirectShare`/My Submissions' `submitDirectShare` are
+  UNCHANGED — `sendEmail: true` there is correct, since those have no separate requester to
+  misattribute.
+- **⚠⚠ THE VERSION NUMBER IN `config/package-solution.json` HAD NOT BEEN BUMPED SINCE THE MORNING'S
+  UNRELATED FIX, AND THAT ALONE COST MOST OF A ROUND OF CONFUSION.** The `sendEmail: false` code
+  change was built and deployed, but under the SAME version string (`1.0.552.0`) as an EARLIER,
+  UNRELATED build from earlier the same session — so the native invite kept firing on the live site
+  even after a genuine `npm run build` + upload, because nothing forced SharePoint to recognize a
+  real update had occurred. **Bumped to `1.0.553.0`; confirmed via the Site Contents app tile that
+  the NEW version is what's actually installed, which is what finally let the native-invite half be
+  confirmed fixed.** Restates this file's own standing rule: bump the version on every fix that
+  touches already-shipped code, even a same-session one — skipping it here cost real debugging time.
+- **⚠⚠ THE FLOW-SIDE ACTION TOOK FOUR ATTEMPTS TO GET RIGHT, AND THE REAL ROOT CAUSE WAS NOT WHAT
+  THE ERROR MESSAGE SUGGESTED.** New action `GetRecipientName` (a `siteusers?$filter=Email eq
+  '<ShareWith>'` lookup, mirroring the existing `GetActorName`) was added to `ShareApproved`, and the
+  rebuilt `Send_an_email_(V2)_3` kept failing with
+  *"The template language function 'createArray' expects a comma separated list of parameters. The
+  function was invoked with no parameters."* — repeatedly, across three structurally different
+  attempts at guarding the expression (a plain `coalesce(first(coalesce(body('GetRecipientName')?
+  ['value'], createArray()))?['Title'], …)`, then wrapped in `if(equals(actions('GetRecipientName')?
+  ['status'], 'Succeeded'), …)`, then a `length(coalesce(…, createArray())) > 0` guard before ever
+  calling `first()`). **All three failed identically, which was itself the tell** — a genuine syntax
+  defect fails deterministically every time; three DIFFERENT guard strategies producing the SAME
+  error meant the bug was not in the guard logic at all.
+  - **⚠⚠ THE ACTUAL CAUSE, confirmed by reading `GetRecipientName`'s raw output body directly: its
+    HTTP call was missing the `Accept: application/json;odata=nometadata` header, so SharePoint
+    answered in the legacy VERBOSE shape — `{"d":{"results":[{...,"Title":"…"}]}}` — not the
+    `{"value":[…]}` shape every `?['value']` reference in this flow assumes.** `GetActorName`
+    (built earlier, in an established working pattern) has the header set correctly and returns
+    `{"value":[…]}`, which is why it kept succeeding right beside the failing action the whole time —
+    the two lookups were never actually equivalent, despite identical-looking expressions reading
+    them.
+  - **FIXED AT THE EXPRESSION, NOT THE HEADER** — lower-risk at 2:30 AM than editing a connector
+    action's header field (which had ALREADY produced one genuine validation error earlier the same
+    night, on the retry-policy fields). `body('GetRecipientName')?['value']` → `body('GetRecipientName')
+    ?['d']?['results']`, everywhere `GetRecipientName` is read in the body. `GetActorName`'s reference
+    is untouched.
+  - **⚠ THE LESSON FOR ANY FUTURE `siteusers` LOOKUP BUILT FRESH IN THIS FLOW FAMILY: verify the
+    response shape via "Show raw outputs" BEFORE trusting `?['value']`, rather than assuming a new
+    action mirrors an old one's headers.** A missing Accept header on this class of action does not
+    fail loudly or obviously — it produces a MISLEADING downstream error (here, blaming `createArray`
+    several function-calls away from the actual cause) rather than a clean "value is null."
+- **✅ VERIFIED LIVE, END TO END**: `test-test-test-23092026.xlsx` shared from MHO to
+  `crs@sdguthrie.com` — email reads *"Dear Guthrie Central Repository System, Clarence Cho has shared
+  a document with you. Document Name: test-test-test-23092026.xlsx / Reason: test / File Link: Open
+  the document / Thank you, Guthrie Document Centre"* — correct recipient name, correct requester
+  name, no native SharePoint invite. The file link opens directly in Office Online's View Mode
+  (confirmed via the client's own screenshot — `Doc.aspx?...&action=default&mobileredirect=true`,
+  "You're viewing live updates in View Mode") rather than downloading, so the `?web=1` fallback
+  discussed for this was not needed in practice — no further change made there.
+- **✅ THE HC CLONE (`HC Auto Route`'s equivalent recipient email) WAS NOT TOUCHED THIS SESSION** —
+  only the normal `CRS — Notify request activity`'s `ShareApproved` case was rebuilt. If the HC
+  vertical's share-approval email was ALSO deleted alongside the normal one on 2026-09-23, it still
+  needs the identical treatment (new `GetRecipientName`-equivalent action, `?['d']?['results']`
+  reading, `Send_an_email_(V2)_3`-equivalent rebuilt) — not confirmed either way, worth checking next
+  session before assuming it mirrors the fixed state.
+
+## ✅ NATIVE Approve/Reject IS HIDDEN, AND THE BULK-APPROVE DOUBLE-CLICK IS FIXED — BOTH LIVE-VERIFIED (2026-09-24)
+Client's own screenshot of the row `⋯` overflow menu on `Approval for Document`: `Integrate` /
+**`Approve or reject`** / `Properties` / `Version history` / `Alert me` / `Manage my alerts` /
+`Check out` — no native `Approve/Reject` entry anywhere. *"Awesome the native is gone and the bulk
+approve is trigger once, thanks."*
+- **`HideAppBarApplicationCustomizer.ts`'s `_hideApproveRejectCommand()`** hides the native command
+  via `[data-automationid="approveReject"]` (the "Integrate" flyout entry) plus a text-match fallback
+  on `.ms-ContextualMenu-itemText` for `"approve/reject"`/`"approve/reject items"` — **deliberately
+  NOT** matching the string `"approve or reject"`, which is this project's OWN Bulk Approve command
+  (see below) and must stay reachable. The `CRS_LIBRARIES` candidate list was also widened in the
+  same change to cover every live-renamed library title (`"approval for document"` etc.), since the
+  stale list had been silently disabling the WHOLE customizer — `+ New Folder`, upload-menu hiding,
+  and this — on the site's actual library title.
+- **`BulkApproveCommandSet.ts`'s "click twice to trigger" bug** was the async permission probe
+  resolving in a `.then()` AFTER `onListViewUpdated` had already returned — `raiseOnChange()` fired
+  correctly but nothing had actually flipped `cmd.visible` to match, so the button stayed hidden
+  until a second, genuinely new selection change re-ran the check synchronously against the
+  now-cached verdict. Fixed by also writing `cmd.visible` inside the `.then()`, at the moment the
+  probe resolves, so one selection is enough.
+- **Confirmed live in the same screenshot**: the row's `⋯` menu shows the app's own `Approve or
+  reject` command (not the hidden native one), and per the client's own words it now triggers on the
+  first selection.
+- Both changes are still uncommitted on `feat/folder-abbreviations` as of this writing.

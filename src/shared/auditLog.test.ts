@@ -254,6 +254,25 @@ describe("event types the flows write", () => {
     expect(ALL_EVENT_TYPES.indexOf("ShareRevoked")).toBeGreaterThan(-1);
   });
 
+  /* Added 2026-09-23, client: "Can you add the cancel Action for audit log?" — registered ahead of
+     the flow actually writing it (`EventKind`'s Compose still maps a Cancelled request to 'Skip' as
+     of this commit), same order `Replaced`/`ShareRevoked` were added in: the filter option exists
+     first, so it is ready the moment the flow edit lands. */
+  it("offers RequestCancelled as a filter, ready for the flow to write it", () => {
+    expect(ALL_EVENT_TYPES.indexOf("RequestCancelled")).toBeGreaterThan(-1);
+    expect(EVENT_LABEL.RequestCancelled).toBe("Request cancelled");
+  });
+
+  /* Added 2026-09-23, same message, follow-up: "add a cancel action in audit log for that file
+     cancel" — the "Cancelled" badge a My Submissions file shows when a PIC withdraws their own
+     pending/rejected draft directly (RecordState.withdrawn), NOT the same thing as
+     `RequestCancelled` above. Mirrors Approved/Rejected: bare word = document-level event, "Request
+     …" = request-level event. See `EVENT.cancelled`'s own comment for the exact flow condition. */
+  it("offers Cancelled as a filter, distinct from RequestCancelled, ready for the flow to write it", () => {
+    expect(ALL_EVENT_TYPES.indexOf("Cancelled")).toBeGreaterThan(-1);
+    expect(EVENT_LABEL.Cancelled).toBe("Cancelled");
+  });
+
   /* ⚠ SHORTENED TO "Replaced" ON THE CLIENT'S INSTRUCTION (2026-09-04). This test previously pinned
      the longer "Replaced by a newer upload", whose point was that the row records what happened TO
      this document rather than what it did — a distinction the bare word does lose. Their call; the

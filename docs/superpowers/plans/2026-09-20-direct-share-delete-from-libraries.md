@@ -23,6 +23,7 @@ new pure module.
 ### Task 1: `directActionsFor` — the rights-tier + archive-override rule
 
 **Files:**
+
 - Create: `src/shared/directFileActions.ts`
 - Test: `src/shared/directFileActions.test.ts`
 
@@ -36,7 +37,10 @@ project's existing testing style covers (pure modules, no UI tests anywhere in t
 import { directActionsFor } from "./directFileActions";
 import { FileRights } from "./dmsFolderMap";
 
-const rights = (remove: FileRights["remove"], share: FileRights["share"]): FileRights => ({
+const rights = (
+  remove: FileRights["remove"],
+  share: FileRights["share"],
+): FileRights => ({
   remove,
   share,
 });
@@ -147,6 +151,7 @@ git commit -m "feat: add directActionsFor — rights-tier + archive-override rul
 ### Task 2: Widen the Requests page's role policy to include `UPL`/`UPLHC`
 
 **Files:**
+
 - Modify: `src/shared/pageAccessPolicy.ts`
 - Modify: `src/shared/pageAccessPolicy.test.ts`
 
@@ -231,11 +236,13 @@ Read `src/shared/pageAccessPolicy.ts` around the `/request/i` rule (it currently
 - [ ] **Step 3: Update the near-top comment tracking this pattern**
 
 Find (near the top of the file, above the `RULES` array):
+
 ```typescript
 // (upload form → APR, Requests → DEPTVIEW, My Submissions → UPLHC, and this).
 ```
 
 Replace with:
+
 ```typescript
 // (upload form → APR, Requests → DEPTVIEW then UPL/UPLHC again, My Submissions → UPLHC, and this).
 ```
@@ -248,15 +255,27 @@ In `src/shared/pageAccessPolicy.test.ts`, find this block:
 describe("the Requests page", () => {
   // Spec: docs/superpowers/specs/2026-08-21-requests-page-hod-access-design.md
   it("offers approvers and Heads of Department — the two roles that can carry a request out", () => {
-    expect(policyForPage("Requests.aspx").roles).toEqual(["APR", "APRHC", "DEPTVIEW"]);
-    expect(policyForPage("CRS-Requests.aspx").roles).toEqual(["APR", "APRHC", "DEPTVIEW"]);
+    expect(policyForPage("Requests.aspx").roles).toEqual([
+      "APR",
+      "APRHC",
+      "DEPTVIEW",
+    ]);
+    expect(policyForPage("CRS-Requests.aspx").roles).toEqual([
+      "APR",
+      "APRHC",
+      "DEPTVIEW",
+    ]);
   });
 
   it("NO LONGER offers uploaders — their view moved to My Submissions on 2026-08-20", () => {
     // Regression guard for the stale-reasoning bug this rule carried for six days: a PIC granted
     // this page gets a queue filtered to units where they hold APR, i.e. none. An empty page on
     // their menu, granted by a comment describing a design that had been superseded.
-    for (const name of ["Requests.aspx", "CRS-Requests.aspx", "Approval-Requests.aspx"]) {
+    for (const name of [
+      "Requests.aspx",
+      "CRS-Requests.aspx",
+      "Approval-Requests.aspx",
+    ]) {
       expect(policyForPage(name).roles).not.toContain("UPL");
     }
   });
@@ -264,13 +283,20 @@ describe("the Requests page", () => {
   it("beats the approver rule, so a name carrying 'approval' still reaches a Head of Department", () => {
     // Ordering, pinned: on the /approv/ rule this page would list approver groups ONLY, and a Head
     // of Department — who holds DEL and SHARE and can act on approved documents — could not open it.
-    expect(policyForPage("Approval-Requests.aspx").roles).toEqual(["APR", "APRHC", "DEPTVIEW"]);
+    expect(policyForPage("Approval-Requests.aspx").roles).toEqual([
+      "APR",
+      "APRHC",
+      "DEPTVIEW",
+    ]);
   });
 
   it("does not disturb the approver's own page — DEPTVIEW must never reach the approval queue", () => {
     // The asymmetry is deliberate. A Head of Department is view-and-act-on-approved-documents;
     // letting them into the queue would let them publish into a unit they do not run.
-    expect(policyForPage("ApprovalDocument.aspx").roles).toEqual(["APR", "APRHC"]);
+    expect(policyForPage("ApprovalDocument.aspx").roles).toEqual([
+      "APR",
+      "APRHC",
+    ]);
   });
 
   it("is not an administrator tool — a Head of Unit must be able to be granted it", () => {
@@ -296,7 +322,11 @@ describe("the Requests page", () => {
     // reachable from a library click, which every uploader can trigger — so they need the page
     // grant again, for a genuinely different purpose than the one that got them removed.
     // Spec: docs/superpowers/specs/2026-09-20-direct-share-delete-from-libraries-design.md
-    for (const name of ["Requests.aspx", "CRS-Requests.aspx", "Approval-Requests.aspx"]) {
+    for (const name of [
+      "Requests.aspx",
+      "CRS-Requests.aspx",
+      "Approval-Requests.aspx",
+    ]) {
       expect(policyForPage(name).roles).toContain("UPL");
       expect(policyForPage(name).roles).toContain("UPLHC");
     }
@@ -317,7 +347,10 @@ describe("the Requests page", () => {
   it("does not disturb the approver's own page — DEPTVIEW must never reach the approval queue", () => {
     // The asymmetry is deliberate. A Head of Department is view-and-act-on-approved-documents;
     // letting them into the queue would let them publish into a unit they do not run.
-    expect(policyForPage("ApprovalDocument.aspx").roles).toEqual(["APR", "APRHC"]);
+    expect(policyForPage("ApprovalDocument.aspx").roles).toEqual([
+      "APR",
+      "APRHC",
+    ]);
   });
 
   it("is not an administrator tool — a Head of Unit must be able to be granted it", () => {
@@ -353,6 +386,7 @@ git commit -m "fix: widen Requests page policy to include UPL/UPLHC for the new 
 ### Task 3: URL param plumbing — detect `?file=<UniqueId>` on `Requests.tsx`
 
 **Files:**
+
 - Modify: `src/webparts/requests/components/Requests.tsx`
 
 This step only adds the ref/state scaffolding that reads and strips the URL parameter, mirroring
@@ -384,7 +418,10 @@ import { FileDetailPanel } from "../../../shared/fileDetailPanel";
 // was raised, because no request is involved at all.
 import { probeFileRights, FileRights } from "../../../shared/dmsFolderMap";
 import { documentUnit } from "../../../shared/documentDetails";
-import { directActionsFor, DirectActions } from "../../../shared/directFileActions";
+import {
+  directActionsFor,
+  DirectActions,
+} from "../../../shared/directFileActions";
 import { searchTenantPeople, PersonPick } from "../../../shared/spGroups";
 ```
 
@@ -393,67 +430,69 @@ import { searchTenantPeople, PersonPick } from "../../../shared/spGroups";
 Find this block (right after `linkRead`'s `if` block):
 
 ```typescript
-  const [viewId, setViewId] = useState<number | undefined>(undefined);
-  const [fileView, setFileView] = useState<FileView | undefined>(undefined);
-  /* A superseded read must not win - two can be in flight when the viewed row's status changes. */
-  const viewSeq = useRef(0);
-  /* Read ONCE from the address bar, and stripped, so a refresh does not re-open a closed view. */
-  const linkedRequest = useRef<number | undefined>(undefined);
-  const linkRead = useRef(false);
-  if (!linkRead.current) {
-    linkRead.current = true;
-    const n = Number(
-      new URLSearchParams(window.location.search).get("request") ?? "",
-    );
-    if (isFinite(n) && n > 0) linkedRequest.current = n;
-  }
+const [viewId, setViewId] = useState<number | undefined>(undefined);
+const [fileView, setFileView] = useState<FileView | undefined>(undefined);
+/* A superseded read must not win - two can be in flight when the viewed row's status changes. */
+const viewSeq = useRef(0);
+/* Read ONCE from the address bar, and stripped, so a refresh does not re-open a closed view. */
+const linkedRequest = useRef<number | undefined>(undefined);
+const linkRead = useRef(false);
+if (!linkRead.current) {
+  linkRead.current = true;
+  const n = Number(
+    new URLSearchParams(window.location.search).get("request") ?? "",
+  );
+  if (isFinite(n) && n > 0) linkedRequest.current = n;
+}
 ```
 
 Replace with:
 
 ```typescript
-  const [viewId, setViewId] = useState<number | undefined>(undefined);
-  const [fileView, setFileView] = useState<FileView | undefined>(undefined);
-  /* A superseded read must not win - two can be in flight when the viewed row's status changes. */
-  const viewSeq = useRef(0);
-  /* Read ONCE from the address bar, and stripped, so a refresh does not re-open a closed view. */
-  const linkedRequest = useRef<number | undefined>(undefined);
-  const linkRead = useRef(false);
-  if (!linkRead.current) {
-    linkRead.current = true;
-    const n = Number(
-      new URLSearchParams(window.location.search).get("request") ?? "",
-    );
-    if (isFinite(n) && n > 0) linkedRequest.current = n;
-  }
+const [viewId, setViewId] = useState<number | undefined>(undefined);
+const [fileView, setFileView] = useState<FileView | undefined>(undefined);
+/* A superseded read must not win - two can be in flight when the viewed row's status changes. */
+const viewSeq = useRef(0);
+/* Read ONCE from the address bar, and stripped, so a refresh does not re-open a closed view. */
+const linkedRequest = useRef<number | undefined>(undefined);
+const linkRead = useRef(false);
+if (!linkRead.current) {
+  linkRead.current = true;
+  const n = Number(
+    new URLSearchParams(window.location.search).get("request") ?? "",
+  );
+  if (isFinite(n) && n > 0) linkedRequest.current = n;
+}
 
-  /* ── The direct file view (2026-09-20, no request involved) ──
+/* ── The direct file view (2026-09-20, no request involved) ──
      Reached by clicking a file's Name column in Documents/HC Documents/Archive/HC Archive, via
      column formatting pointing at `?file=<UniqueId>` — see the design doc for why no library
      parameter is needed: GetFileById is web-scoped and a UniqueId is unique site-wide.
      Same read-once-and-strip pattern as `linkedRequest` above, and the same reason: a refresh must
      not re-trigger opening something that was already read from the address bar once. */
-  const linkedFile = useRef<string | undefined>(undefined);
-  const fileLinkRead = useRef(false);
-  if (!fileLinkRead.current) {
-    fileLinkRead.current = true;
-    const f = (new URLSearchParams(window.location.search).get("file") ?? "").trim();
-    if (f.length > 0) linkedFile.current = f;
+const linkedFile = useRef<string | undefined>(undefined);
+const fileLinkRead = useRef(false);
+if (!fileLinkRead.current) {
+  fileLinkRead.current = true;
+  const f = (
+    new URLSearchParams(window.location.search).get("file") ?? ""
+  ).trim();
+  if (f.length > 0) linkedFile.current = f;
+}
+const [directFileId, setDirectFileId] = useState<string | undefined>(undefined);
+useEffect(() => {
+  const id = linkedFile.current;
+  if (id === undefined) return;
+  linkedFile.current = undefined;
+  setDirectFileId(id);
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.delete("file");
+    window.history.replaceState(window.history.state, "", u.toString());
+  } catch {
+    /* an address bar we cannot tidy costs nothing */
   }
-  const [directFileId, setDirectFileId] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    const id = linkedFile.current;
-    if (id === undefined) return;
-    linkedFile.current = undefined;
-    setDirectFileId(id);
-    try {
-      const u = new URL(window.location.href);
-      u.searchParams.delete("file");
-      window.history.replaceState(window.history.state, "", u.toString());
-    } catch {
-      /* an address bar we cannot tidy costs nothing */
-    }
-  }, []);
+}, []);
 ```
 
 - [ ] **Step 3: Typecheck**
@@ -480,6 +519,7 @@ git commit -m "feat: read ?file=<UniqueId> from the address bar on the Requests 
 ### Task 4: The file resolution loader
 
 **Files:**
+
 - Modify: `src/webparts/requests/components/Requests.tsx`
 
 - [ ] **Step 1: Add the loader function**
@@ -499,119 +539,118 @@ Find the end of the existing `loadFileView` function (it ends with):
 Immediately after that closing `};`, add:
 
 ```typescript
-
-  /**
-   * Resolve a file reached DIRECTLY (no request involved) — `?file=<UniqueId>` from a library's
-   * Name-column click. Mirrors `loadFileView`'s shape exactly, minus the stamp fallback: a file
-   * already sitting in one of the four target libraries has not moved since the click.
-   */
-  const [directFileView, setDirectFileView] = useState<FileView | undefined>(
-    undefined,
-  );
-  const directViewSeq = useRef(0);
-  const loadDirectFileView = async (uniqueId: string): Promise<void> => {
-    const seq = ++directViewSeq.current;
-    const settle = (v: FileView): void => {
-      if (directViewSeq.current === seq) setDirectFileView(v);
-    };
-    setDirectFileView({ state: "loading" });
-    const read = (url: string): Promise<SPHttpClientResponse> =>
-      context.spHttpClient.get(url, SPHttpClient.configurations.v1, {
-        headers: GET,
-      });
-    try {
-      const res = await read(
-        `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(uniqueId)}')?$select=ServerRelativeUrl${bust()}`,
-      );
-      if (!res.ok) {
-        settle({
-          state: "gone",
-          message:
-            res.status === 404
-              ? "This document is no longer in the library - it may already have been deleted."
-              : `The document could not be read (HTTP ${res.status}). Refresh and try again.`,
-        });
-        return;
-      }
-      const path = ((await res.json()) as { ServerRelativeUrl?: string })
-        .ServerRelativeUrl;
-      if (!path) {
-        settle({
-          state: "gone",
-          message: "This document could not be located.",
-        });
-        return;
-      }
-      /* Parameter alias, never an inline literal - a deep path answers 400 otherwise (gotcha #9). */
-      const alias = `@f='${encodeServerRelativePath(path)}'`;
-      const base = `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)`;
-      const fr = await read(
-        `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`,
-      );
-      if (!fr.ok) {
-        settle({
-          state: "gone",
-          message:
-            fr.status === 404
-              ? "This document is no longer in the library - it may already have been deleted."
-              : `The document could not be read (HTTP ${fr.status}). Refresh and try again.`,
-        });
-        return;
-      }
-      const f = (await fr.json()) as {
-        Name?: string;
-        Length?: string;
-        TimeLastModified?: string;
-        ServerRelativeUrl?: string;
-      };
-      let fieldText: Record<string, string> = {};
-      try {
-        const t = await read(
-          `${base}/ListItemAllFields/FieldValuesAsText?${alias}${bust()}`,
-        );
-        if (t.ok) fieldText = (await t.json()) as Record<string, string>;
-      } catch {
-        /* keep {} */
-      }
-      /* Document Date re-read RAW and formatted locally, as My Submissions does. */
-      try {
-        const raw = await read(
-          `${base}/ListItemAllFields?$select=DocumentDate&${alias}${bust()}`,
-        );
-        if (raw.ok) {
-          const iso = ((await raw.json()) as { DocumentDate?: string })
-            .DocumentDate;
-          const d = iso ? new Date(iso) : undefined;
-          if (d && !isNaN(d.getTime()))
-            fieldText.DocumentDate = formatSubmittedOn(d);
-        }
-      } catch {
-        /* keep SharePoint's own string */
-      }
-      const modified = f.TimeLastModified
-        ? new Date(f.TimeLastModified)
-        : undefined;
-      settle({
-        state: "ready",
-        name: f.Name || "document",
-        fileRef: f.ServerRelativeUrl || path,
-        size: f.Length,
-        modified: modified && !isNaN(modified.getTime()) ? modified : undefined,
-        fieldText,
-      });
-    } catch (e) {
+/**
+ * Resolve a file reached DIRECTLY (no request involved) — `?file=<UniqueId>` from a library's
+ * Name-column click. Mirrors `loadFileView`'s shape exactly, minus the stamp fallback: a file
+ * already sitting in one of the four target libraries has not moved since the click.
+ */
+const [directFileView, setDirectFileView] = useState<FileView | undefined>(
+  undefined,
+);
+const directViewSeq = useRef(0);
+const loadDirectFileView = async (uniqueId: string): Promise<void> => {
+  const seq = ++directViewSeq.current;
+  const settle = (v: FileView): void => {
+    if (directViewSeq.current === seq) setDirectFileView(v);
+  };
+  setDirectFileView({ state: "loading" });
+  const read = (url: string): Promise<SPHttpClientResponse> =>
+    context.spHttpClient.get(url, SPHttpClient.configurations.v1, {
+      headers: GET,
+    });
+  try {
+    const res = await read(
+      `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(uniqueId)}')?$select=ServerRelativeUrl${bust()}`,
+    );
+    if (!res.ok) {
       settle({
         state: "gone",
-        message: `The document could not be read: ${(e as Error).message}`,
+        message:
+          res.status === 404
+            ? "This document is no longer in the library - it may already have been deleted."
+            : `The document could not be read (HTTP ${res.status}). Refresh and try again.`,
       });
+      return;
     }
-  };
+    const path = ((await res.json()) as { ServerRelativeUrl?: string })
+      .ServerRelativeUrl;
+    if (!path) {
+      settle({
+        state: "gone",
+        message: "This document could not be located.",
+      });
+      return;
+    }
+    /* Parameter alias, never an inline literal - a deep path answers 400 otherwise (gotcha #9). */
+    const alias = `@f='${encodeServerRelativePath(path)}'`;
+    const base = `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)`;
+    const fr = await read(
+      `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`,
+    );
+    if (!fr.ok) {
+      settle({
+        state: "gone",
+        message:
+          fr.status === 404
+            ? "This document is no longer in the library - it may already have been deleted."
+            : `The document could not be read (HTTP ${fr.status}). Refresh and try again.`,
+      });
+      return;
+    }
+    const f = (await fr.json()) as {
+      Name?: string;
+      Length?: string;
+      TimeLastModified?: string;
+      ServerRelativeUrl?: string;
+    };
+    let fieldText: Record<string, string> = {};
+    try {
+      const t = await read(
+        `${base}/ListItemAllFields/FieldValuesAsText?${alias}${bust()}`,
+      );
+      if (t.ok) fieldText = (await t.json()) as Record<string, string>;
+    } catch {
+      /* keep {} */
+    }
+    /* Document Date re-read RAW and formatted locally, as My Submissions does. */
+    try {
+      const raw = await read(
+        `${base}/ListItemAllFields?$select=DocumentDate&${alias}${bust()}`,
+      );
+      if (raw.ok) {
+        const iso = ((await raw.json()) as { DocumentDate?: string })
+          .DocumentDate;
+        const d = iso ? new Date(iso) : undefined;
+        if (d && !isNaN(d.getTime()))
+          fieldText.DocumentDate = formatSubmittedOn(d);
+      }
+    } catch {
+      /* keep SharePoint's own string */
+    }
+    const modified = f.TimeLastModified
+      ? new Date(f.TimeLastModified)
+      : undefined;
+    settle({
+      state: "ready",
+      name: f.Name || "document",
+      fileRef: f.ServerRelativeUrl || path,
+      size: f.Length,
+      modified: modified && !isNaN(modified.getTime()) ? modified : undefined,
+      fieldText,
+    });
+  } catch (e) {
+    settle({
+      state: "gone",
+      message: `The document could not be read: ${(e as Error).message}`,
+    });
+  }
+};
 
-  /* ONE ROUTE IN, ONE LOADER — mirrors the existing rule right above for the request-based mode. */
-  useEffect(() => {
-    if (directFileId === undefined) return;
-    loadDirectFileView(directFileId).catch(() => undefined);
-  }, [directFileId]);
+/* ONE ROUTE IN, ONE LOADER — mirrors the existing rule right above for the request-based mode. */
+useEffect(() => {
+  if (directFileId === undefined) return;
+  loadDirectFileView(directFileId).catch(() => undefined);
+}, [directFileId]);
 ```
 
 - [ ] **Step 2: Typecheck**
@@ -632,6 +671,7 @@ git commit -m "feat: resolve a file directly by UniqueId, no request involved"
 ### Task 5: Rights probing — three tiers, Archive always read-only
 
 **Files:**
+
 - Modify: `src/webparts/requests/components/Requests.tsx`
 
 - [ ] **Step 1: Add the rights-probing effect**
@@ -640,41 +680,38 @@ Immediately after the `useEffect` you added at the end of Task 4 (the one that c
 `loadDirectFileView`), add:
 
 ```typescript
-
-  /**
-   * Once the file resolves, probe what THIS viewer can do to it directly, and classify it as
-   * archived or not — both feed `directActionsFor`. Declared as its own effect, keyed on the
-   * resolved file's own identity, so it re-probes if a different file is opened without a full
-   * page reload.
-   */
-  const [directRights, setDirectRights] = useState<FileRights | undefined>(
-    undefined,
-  );
-  const [directIsArchived, setDirectIsArchived] = useState(false);
-  useEffect(() => {
-    if (directFileId === undefined || directFileView?.state !== "ready") {
-      setDirectRights(undefined);
-      return;
-    }
+/**
+ * Once the file resolves, probe what THIS viewer can do to it directly, and classify it as
+ * archived or not — both feed `directActionsFor`. Declared as its own effect, keyed on the
+ * resolved file's own identity, so it re-probes if a different file is opened without a full
+ * page reload.
+ */
+const [directRights, setDirectRights] = useState<FileRights | undefined>(
+  undefined,
+);
+const [directIsArchived, setDirectIsArchived] = useState(false);
+useEffect(() => {
+  if (directFileId === undefined || directFileView?.state !== "ready") {
     setDirectRights(undefined);
-    const archiveSegs = {
-      normal: cachedArchiveLibraries()?.normal.urlSegment,
-      hc: cachedArchiveLibraries()?.hc?.urlSegment,
-    };
-    const allSegs = libraryTargets().map((t) => t.urlSegment);
-    const seg = librarySegmentOf(directFileView.fileRef, allSegs);
-    setDirectIsArchived(isArchivedRow(seg ?? "", archiveSegs));
-    probeFileRights(context.spHttpClient, siteUrl, directFileId)
-      .then(setDirectRights)
-      .catch(() =>
-        setDirectRights({ remove: "unknown", share: "unknown" }),
-      );
-  }, [directFileId, directFileView?.state]);
+    return;
+  }
+  setDirectRights(undefined);
+  const archiveSegs = {
+    normal: cachedArchiveLibraries()?.normal.urlSegment,
+    hc: cachedArchiveLibraries()?.hc?.urlSegment,
+  };
+  const allSegs = libraryTargets().map((t) => t.urlSegment);
+  const seg = librarySegmentOf(directFileView.fileRef, allSegs);
+  setDirectIsArchived(isArchivedRow(seg ?? "", archiveSegs));
+  probeFileRights(context.spHttpClient, siteUrl, directFileId)
+    .then(setDirectRights)
+    .catch(() => setDirectRights({ remove: "unknown", share: "unknown" }));
+}, [directFileId, directFileView?.state]);
 
-  const directActions: DirectActions | undefined =
-    directRights === undefined
-      ? undefined
-      : directActionsFor(directRights, directIsArchived);
+const directActions: DirectActions | undefined =
+  directRights === undefined
+    ? undefined
+    : directActionsFor(directRights, directIsArchived);
 ```
 
 - [ ] **Step 2: Typecheck**
@@ -694,6 +731,7 @@ git commit -m "feat: probe direct file rights, with Archive always overriding to
 ### Task 6: The render branch — read-only view, "Checking…" state, Back
 
 **Files:**
+
 - Modify: `src/webparts/requests/components/Requests.tsx`
 
 - [ ] **Step 1: Add the render branch**
@@ -811,27 +849,25 @@ These need to exist before the render branch runs. Add them right next to `direc
 `directIsArchived` from Task 5 (immediately after the `directActions` derivation you added there):
 
 ```typescript
-  const [directDeleteConfirm, setDirectDeleteConfirm] = useState(false);
-  const [directDeleteBusy, setDirectDeleteBusy] = useState(false);
-  const [directDeleteError, setDirectDeleteError] = useState<
-    string | undefined
-  >(undefined);
-  const [directShareOpen, setDirectShareOpen] = useState(false);
-  const [directShareQuery, setDirectShareQuery] = useState("");
-  const [directShareResults, setDirectShareResults] = useState<PersonPick[]>(
-    [],
-  );
-  const [directShareRecipients, setDirectShareRecipients] = useState<
-    string[]
-  >([]);
-  const [directShareBusy, setDirectShareBusy] = useState(false);
-  const [directShareError, setDirectShareError] = useState<
-    string | undefined
-  >(undefined);
-  const [directShareDone, setDirectShareDone] = useState(false);
-  /* Placeholders until Tasks 7-8 define the real dialogs — an undefined value renders nothing. */
-  const directDeleteDialog: React.ReactNode = undefined;
-  const directShareDialog: React.ReactNode = undefined;
+const [directDeleteConfirm, setDirectDeleteConfirm] = useState(false);
+const [directDeleteBusy, setDirectDeleteBusy] = useState(false);
+const [directDeleteError, setDirectDeleteError] = useState<string | undefined>(
+  undefined,
+);
+const [directShareOpen, setDirectShareOpen] = useState(false);
+const [directShareQuery, setDirectShareQuery] = useState("");
+const [directShareResults, setDirectShareResults] = useState<PersonPick[]>([]);
+const [directShareRecipients, setDirectShareRecipients] = useState<string[]>(
+  [],
+);
+const [directShareBusy, setDirectShareBusy] = useState(false);
+const [directShareError, setDirectShareError] = useState<string | undefined>(
+  undefined,
+);
+const [directShareDone, setDirectShareDone] = useState(false);
+/* Placeholders until Tasks 7-8 define the real dialogs — an undefined value renders nothing. */
+const directDeleteDialog: React.ReactNode = undefined;
+const directShareDialog: React.ReactNode = undefined;
 ```
 
 - [ ] **Step 3: Typecheck**
@@ -851,6 +887,7 @@ git commit -m "feat: render the direct file view — read-only, with a Checking 
 ### Task 7: Direct delete — writer + confirm dialog
 
 **Files:**
+
 - Modify: `src/webparts/requests/components/Requests.tsx`
 
 - [ ] **Step 1: Add the writer function**
@@ -859,79 +896,78 @@ Add this immediately after `loadDirectFileView` (from Task 4), before the "ONE R
 LOADER" `useEffect`:
 
 ```typescript
-
-  /**
-   * Write a self-approved deletion request for a file opened directly (no My Submissions record,
-   * since a file already sitting in Documents/HC Documents/Archive/HC Archive was not necessarily
-   * uploaded through this app). Mirrors `MySubmissions.tsx`'s `writeApprovedDeletionRequest`
-   * exactly in shape — Stage is always "approved" here, since every file reachable through this
-   * mode already is. `CRS — Execute approved deletion` performs the actual recycle.
-   */
-  const writeDirectDeletionRequest = async (
-    view: Extract<FileView, { state: "ready" }>,
-    uniqueId: string,
-  ): Promise<string | undefined> => {
-    const meEmail = (context.pageContext.user.email ?? "").toLowerCase();
-    const where =
-      Object.keys(view.fieldText).length > 0
-        ? documentUnit(view.fieldText)
-        : undefined;
-    const now = new Date().toISOString();
-    const targetEtag = await readFileETag(
-      context.spHttpClient,
-      siteUrl,
-      uniqueId,
-    );
-    const body: Record<string, string> = {
-      Title: `Deletion — ${view.name}`.slice(0, 255),
-      RequestType: "Deletion",
-      Status: "Approved",
-      Stage: "approved",
-      ItemUniqueId: uniqueId,
-      ItemName: view.name,
-      ItemUrl: view.fileRef,
-      Segment: where?.segment ?? "",
-      Unit: where?.unit ?? "",
-      UnitTermGuid: where?.unitTermGuid ?? "",
-      RequestedBy: meEmail,
-      RequestedAt: now,
-      Reason: "",
-      DecidedBy: meEmail,
-      DecidedAt: now,
-      DecisionNote: "No approval needed — carried out automatically.",
-    };
-    if ((view.fieldText.SubmissionFileId ?? "").trim().length > 0) {
-      body.SubmissionFileId = view.fieldText.SubmissionFileId.trim();
-    }
-    if (targetEtag !== undefined) {
-      body.TargetETag = targetEtag;
-    }
-    try {
-      const send = (
-        payload: Record<string, string>,
-      ): Promise<SPHttpClientResponse> => post(`${listUrl()}/items`, payload);
-      let res = await send(body);
-      // ⚠ Same drop-newest-optional-column-first order as MySubmissions.tsx's writer — one
-      // unknown field name fails the WHOLE write (gotcha #11).
-      if (res.status === 400 && body.TargetETag !== undefined) {
-        const without = { ...body };
-        delete without.TargetETag;
-        res = await send(without);
-      }
-      if (res.status === 400 && body.SubmissionFileId !== undefined) {
-        const without = { ...body };
-        delete without.SubmissionFileId;
-        delete without.TargetETag;
-        res = await send(without);
-      }
-      if (res.ok) return undefined;
-      return res.status === 404
-        ? "The requests list does not exist yet — ask an administrator to open the Requests page, which creates it."
-        : `The deletion could not be recorded (HTTP ${res.status}).`;
-    } catch (e) {
-      return `Could not record the deletion: ${(e as Error).message}`;
-    }
+/**
+ * Write a self-approved deletion request for a file opened directly (no My Submissions record,
+ * since a file already sitting in Documents/HC Documents/Archive/HC Archive was not necessarily
+ * uploaded through this app). Mirrors `MySubmissions.tsx`'s `writeApprovedDeletionRequest`
+ * exactly in shape — Stage is always "approved" here, since every file reachable through this
+ * mode already is. `CRS — Execute approved deletion` performs the actual recycle.
+ */
+const writeDirectDeletionRequest = async (
+  view: Extract<FileView, { state: "ready" }>,
+  uniqueId: string,
+): Promise<string | undefined> => {
+  const meEmail = (context.pageContext.user.email ?? "").toLowerCase();
+  const where =
+    Object.keys(view.fieldText).length > 0
+      ? documentUnit(view.fieldText)
+      : undefined;
+  const now = new Date().toISOString();
+  const targetEtag = await readFileETag(
+    context.spHttpClient,
+    siteUrl,
+    uniqueId,
+  );
+  const body: Record<string, string> = {
+    Title: `Deletion — ${view.name}`.slice(0, 255),
+    RequestType: "Deletion",
+    Status: "Approved",
+    Stage: "approved",
+    ItemUniqueId: uniqueId,
+    ItemName: view.name,
+    ItemUrl: view.fileRef,
+    Segment: where?.segment ?? "",
+    Unit: where?.unit ?? "",
+    UnitTermGuid: where?.unitTermGuid ?? "",
+    RequestedBy: meEmail,
+    RequestedAt: now,
+    Reason: "",
+    DecidedBy: meEmail,
+    DecidedAt: now,
+    DecisionNote: "No approval needed — carried out automatically.",
   };
+  if ((view.fieldText.SubmissionFileId ?? "").trim().length > 0) {
+    body.SubmissionFileId = view.fieldText.SubmissionFileId.trim();
+  }
+  if (targetEtag !== undefined) {
+    body.TargetETag = targetEtag;
+  }
+  try {
+    const send = (
+      payload: Record<string, string>,
+    ): Promise<SPHttpClientResponse> => post(`${listUrl()}/items`, payload);
+    let res = await send(body);
+    // ⚠ Same drop-newest-optional-column-first order as MySubmissions.tsx's writer — one
+    // unknown field name fails the WHOLE write (gotcha #11).
+    if (res.status === 400 && body.TargetETag !== undefined) {
+      const without = { ...body };
+      delete without.TargetETag;
+      res = await send(without);
+    }
+    if (res.status === 400 && body.SubmissionFileId !== undefined) {
+      const without = { ...body };
+      delete without.SubmissionFileId;
+      delete without.TargetETag;
+      res = await send(without);
+    }
+    if (res.ok) return undefined;
+    return res.status === 404
+      ? "The requests list does not exist yet — ask an administrator to open the Requests page, which creates it."
+      : `The deletion could not be recorded (HTTP ${res.status}).`;
+  } catch (e) {
+    return `Could not record the deletion: ${(e as Error).message}`;
+  }
+};
 ```
 
 - [ ] **Step 2: Replace the placeholder `directDeleteDialog` from Task 6**
@@ -939,9 +975,9 @@ LOADER" `useEffect`:
 Find (added in Task 6, Step 2):
 
 ```typescript
-  /* Placeholders until Tasks 7-8 define the real dialogs — an undefined value renders nothing. */
-  const directDeleteDialog: React.ReactNode = undefined;
-  const directShareDialog: React.ReactNode = undefined;
+/* Placeholders until Tasks 7-8 define the real dialogs — an undefined value renders nothing. */
+const directDeleteDialog: React.ReactNode = undefined;
+const directShareDialog: React.ReactNode = undefined;
 ```
 
 Replace with (keeping `directShareDialog` as a placeholder for one more task):
@@ -966,8 +1002,7 @@ Replace with (keeping `directShareDialog` as a placeholder for one more task):
             lineHeight: 1.5,
           }}
         >
-          This deletes it straight away — no approver decides this. It moves
-          to the recycle bin and can be restored within 93 days.
+          This deletes it straight away — no approver decides this.
         </p>
         {directDeleteError && (
           <p style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}>
@@ -1042,6 +1077,7 @@ git commit -m "feat: direct delete — self-approved CRS Requests row, ETag-guar
 ### Task 8: Direct share — writer + recipient dialog
 
 **Files:**
+
 - Modify: `src/webparts/requests/components/Requests.tsx`
 
 - [ ] **Step 1: Add the writer function**
@@ -1049,56 +1085,55 @@ git commit -m "feat: direct delete — self-approved CRS Requests row, ETag-guar
 Add this immediately after `writeDirectDeletionRequest` (from Task 7):
 
 ```typescript
-
-  /**
-   * Share a file directly and immediately — no request row at all, matching My Submissions'
-   * existing "direct share" path. View-only permission only, no expiry (nothing enforces one on
-   * this path today). Runs in the ACTING USER'S own session via SP.Web.ShareObject, so SharePoint
-   * itself attributes the invite to them — this is what makes "Approver can share without
-   * permission" true: they hold `CRS Share` (Manage Permissions) on the folder already.
-   */
-  const performDirectShare = async (
-    fileRef: string,
-    itemName: string,
-    recipients: string[],
-  ): Promise<string | undefined> => {
-    if (recipients.length === 0) return "Add at least one recipient first.";
-    const people = recipients.map((e) => ({ Key: e }));
-    const res = await post(`${siteUrl}/_api/SP.Web.ShareObject`, {
-      url: `${window.location.origin}${fileRef}`,
-      peoplePickerInput: JSON.stringify(people),
-      roleValue: "role:1073741826", // View — the only option offered on the direct path
-      groupId: 0,
-      propagateAcl: false,
-      sendEmail: true,
-      includeAnonymousLinkInEmail: false,
-      emailSubject: `A document has been shared with you: ${itemName}`,
-      emailBody: "",
-      useSimplifiedRoles: true,
-    });
-    if (!res.ok) {
-      if (res.status === 403)
-        return "You do not have permission to share that document.";
-      return `The document could not be shared (HTTP ${res.status}).`;
+/**
+ * Share a file directly and immediately — no request row at all, matching My Submissions'
+ * existing "direct share" path. View-only permission only, no expiry (nothing enforces one on
+ * this path today). Runs in the ACTING USER'S own session via SP.Web.ShareObject, so SharePoint
+ * itself attributes the invite to them — this is what makes "Approver can share without
+ * permission" true: they hold `CRS Share` (Manage Permissions) on the folder already.
+ */
+const performDirectShare = async (
+  fileRef: string,
+  itemName: string,
+  recipients: string[],
+): Promise<string | undefined> => {
+  if (recipients.length === 0) return "Add at least one recipient first.";
+  const people = recipients.map((e) => ({ Key: e }));
+  const res = await post(`${siteUrl}/_api/SP.Web.ShareObject`, {
+    url: `${window.location.origin}${fileRef}`,
+    peoplePickerInput: JSON.stringify(people),
+    roleValue: "role:1073741826", // View — the only option offered on the direct path
+    groupId: 0,
+    propagateAcl: false,
+    sendEmail: true,
+    includeAnonymousLinkInEmail: false,
+    emailSubject: `A document has been shared with you: ${itemName}`,
+    emailBody: "",
+    useSimplifiedRoles: true,
+  });
+  if (!res.ok) {
+    if (res.status === 403)
+      return "You do not have permission to share that document.";
+    return `The document could not be shared (HTTP ${res.status}).`;
+  }
+  try {
+    const body = await res.json();
+    const results = (body?.value ?? []) as Array<{
+      Status?: boolean;
+      Message?: string;
+      User?: string;
+    }>;
+    const failed = results.filter((r) => r && r.Status === false);
+    if (failed.length > 0) {
+      return failed
+        .map((f) => `${f.User ?? "recipient"}: ${f.Message ?? "refused"}`)
+        .join("; ");
     }
-    try {
-      const body = await res.json();
-      const results = (body?.value ?? []) as Array<{
-        Status?: boolean;
-        Message?: string;
-        User?: string;
-      }>;
-      const failed = results.filter((r) => r && r.Status === false);
-      if (failed.length > 0) {
-        return failed
-          .map((f) => `${f.User ?? "recipient"}: ${f.Message ?? "refused"}`)
-          .join("; ");
-      }
-    } catch {
-      /* an unreadable body after a 200 counts as success — the grant is what matters */
-    }
-    return undefined;
-  };
+  } catch {
+    /* an unreadable body after a 200 counts as success — the grant is what matters */
+  }
+  return undefined;
+};
 ```
 
 - [ ] **Step 2: Add the recipient search effect**
@@ -1106,30 +1141,29 @@ Add this immediately after `writeDirectDeletionRequest` (from Task 7):
 Add this right after the writer function you just added:
 
 ```typescript
-
-  /* Debounced tenant people search for the direct-share recipient box. */
-  useEffect(() => {
-    if (!directShareOpen) return;
-    const q = directShareQuery.trim();
-    if (q.length < 3) {
-      setDirectShareResults([]);
-      return;
-    }
-    let cancelled = false;
-    const t = setTimeout(() => {
-      searchTenantPeople(context.spHttpClient, siteUrl, q)
-        .then((people) => {
-          if (!cancelled) setDirectShareResults(people.filter((p) => p.email));
-        })
-        .catch(() => {
-          if (!cancelled) setDirectShareResults([]);
-        });
-    }, 300);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [directShareOpen, directShareQuery]);
+/* Debounced tenant people search for the direct-share recipient box. */
+useEffect(() => {
+  if (!directShareOpen) return;
+  const q = directShareQuery.trim();
+  if (q.length < 3) {
+    setDirectShareResults([]);
+    return;
+  }
+  let cancelled = false;
+  const t = setTimeout(() => {
+    searchTenantPeople(context.spHttpClient, siteUrl, q)
+      .then((people) => {
+        if (!cancelled) setDirectShareResults(people.filter((p) => p.email));
+      })
+      .catch(() => {
+        if (!cancelled) setDirectShareResults([]);
+      });
+  }, 300);
+  return () => {
+    cancelled = true;
+    clearTimeout(t);
+  };
+}, [directShareOpen, directShareQuery]);
 ```
 
 - [ ] **Step 3: Replace the `directShareDialog` placeholder**
@@ -1137,7 +1171,7 @@ Add this right after the writer function you just added:
 Find (still a placeholder from Task 7, Step 2):
 
 ```typescript
-  const directShareDialog: React.ReactNode = undefined;
+const directShareDialog: React.ReactNode = undefined;
 ```
 
 Replace with:

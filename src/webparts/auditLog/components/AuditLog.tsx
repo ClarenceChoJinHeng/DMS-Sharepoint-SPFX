@@ -8,7 +8,9 @@ import { DatePicker } from "../../../shared/datePicker";
 import { pagerWindow } from "../../../shared/pagerWindow";
 // The Event column prints a SHORT library name - see `shortLibrary`.
 import { documentsLibraryTitle } from "../../../shared/naming";
-// A guessed real name from an email address, for the "Who" column — see the module's own comment.
+// Resolves each row's REAL actor — a known service account first, else a guessed human name from
+// whatever ActorName/ActorEmail the row carries. See the module's own comment, below, for why this
+// is back in use after a brief detour to a fixed label.
 import { resolveActorDisplay } from "../../../shared/displayName";
 import { SPHttpClient } from "@microsoft/sp-http";
 
@@ -68,14 +70,30 @@ const PAGER_WINDOW_SIZE = 7;
    item #48.4: "standardise all email address to user name"). MOVED to shared/displayName.ts
    2026-09-20 — briefly also applied to Requests.tsx/MySubmissions.tsx for the same complaint, then
    REVERTED there at the client's request the same day ("did you change Request.tsx and
-   MySubmission.tsx as well? If so revert it") — this file is the module's only current consumer.
-   The Who cell itself is `resolveActorDisplay(r.ActorEmail, r.ActorName)` — see that function's own
-   comment for why a naive `r.ActorName || nameFromEmail(r.ActorEmail)` was not enough: two different
-   flows write two different NOT-a-real-name shapes into `ActorName` itself. */
+   MySubmission.tsx as well? If so revert it") — this file was the module's only current consumer.
+
+   ⚠⚠ THE 2026-09-22 "ALWAYS GDC" CHANGE BELOW WAS ITSELF REVERSED THE VERY NEXT DAY (2026-09-23) —
+   client: "I was wrong, this is the feedback from crystal giving an example ... revert it back to
+   the previous one." Crystal's own worked examples (Upload → the uploader; Approve, when a
+   DIFFERENT person reviews and decides → that person; a raised Request → the requester; Approve, on
+   an AUTO-approved self-upload → the proxy; the actual move/share/delete EXECUTION step → the proxy)
+   confirm the per-row resolution this file had BEFORE 2026-09-22 was the right one all along — a
+   deliberate human action shows the real person, an automated execution step shows the system.
+   `resolveActorDisplay` (built 2026-09-20, never deleted, only briefly unused) is back in the Who
+   cell. The one-day "always GDC" experiment is kept below as a struck-through record, not removed,
+   since the next person reading this file deserves to see it was tried and explicitly walked back
+   rather than rediscovering the same idea and reintroducing it.
+
+   ⚠ `ActorEmail`/`ActorName` WERE NEVER TOUCHED BY EITHER CHANGE — this has always been a
+   DISPLAY-ONLY decision, same rule this whole file's naming logic has always followed. The CSV
+   export (`toAuditCsv`, below) exports the REAL stored `ActorName`/`ActorEmail` regardless of what
+   the Who cell shows, and always has. */
 
 /**
  * The library name as the Event column should PRINT it (client, 2026-09-04: *"For this Restricted &
- * Confidential Document, change to Document only."*).
+ * Confidential Document, change to Document only."*; corrected 2026-09-23: *"the Move to Document
+ * can we put s Documents"* — plural, matching every other reference to this library elsewhere on the
+ * page, including this same row's own `What` text, "Moved to Documents: <filename>").
  *
  * "Moved to Restricted & Confidential Document" wrapped onto two lines in a 150px column and pushed
  * every row taller. The stored `LibraryName` is UNTOUCHED — the row, the CSV and every filter still
@@ -88,14 +106,14 @@ const PAGER_WINDOW_SIZE = 7;
  *
  * ⚠ THE HC LIBRARY IS DELIBERATELY LEFT ALONE. "Moved to Highly Confidential Document" is short
  * enough AND load-bearing: it is the one word in that column telling a reader the document went to
- * the restricted vertical, and collapsing it to "Document" would make an HC routing
+ * the restricted vertical, and collapsing it to "Documents" would make an HC routing
  * indistinguishable from an ordinary one.
  */
 function shortLibrary(libraryName?: string): string | undefined {
   const raw = (libraryName ?? "").trim();
   if (raw.length === 0) return libraryName;
   return raw.toLowerCase() === documentsLibraryTitle().trim().toLowerCase()
-    ? "Document"
+    ? "Documents"
     : raw;
 }
 
@@ -1187,7 +1205,6 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               <input
                 style={s.input}
                 value={text}
-                placeholder="Tax return"
                 onChange={(e) => setText(e.target.value)}
               />
             </div>
@@ -1425,34 +1442,14 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                     lining up with their columns. */}
                 <span aria-hidden="true" />
                 <div style={s.who}>
-                  {/* ⚠ SUPERSEDED 2026-09-20 — SEE BELOW. The blanking this comment used to describe
-                      (client, 2026-09-06: "showing it invites exactly that reading" — implying a
-                      PERSON decided something a scheduled flow actually did) is REVERSED. Now that
-                      Auto-route/HC Auto Route genuinely run as the gdc proxy account (this session's
-                      Editor-stamp fix), showing "Guthrie Document Centre" here is an accurate answer
-                      to "who moved this", not a misleading one — client, same day: "Move to
-                      Documents is not showing anything so we will need to add it back, same for
-                      Archive." Kept as history, not deleted, since the 2026-09-06 reasoning was
-                      sound for what was true THEN and explains why this branch ever existed. */}
-                  <div>
-                    {/* Client QA item #48.4, 2026-09-13: falls back to a NAME derived from the
-                        email's local part rather than the raw address, when `ActorName` was never
-                        written. `r.ActorEmail` itself, and the CSV export, are untouched.
-
-                        2026-09-20: a KNOWN SERVICE ACCOUNT (gdc/crs) is recognised and canonicalised
-                        FIRST. Archived/Routed rows go through the SAME logic now — no more
-                        special-cased blank.
-
-                        ⚠⚠ `resolveActorDisplay` REPLACES a naive `ActorName || nameFromEmail(...)`
-                        after checking the REAL flow definitions found `ActorName` is NOT reliably a
-                        genuine display name: `CRS — Audit request activity` writes the FULL raw
-                        email into it, `CRS — Execute approved deletion` writes just the LOCAL PART
-                        (dots and all) — both non-blank, both defeat a naive "if present, trust it"
-                        check. `resolveActorDisplay` treats `ActorName` as input to normalise, not a
-                        value to trust outright — see its own comment for why this is safe for a
-                        GENUINE display name too (Auto-route's own `ActorName`). */}
-                    {resolveActorDisplay(r.ActorEmail, r.ActorName)}
-                  </div>
+                  {/* ⚠ RESTORED 2026-09-23 — see this file's own top-of-file comment for the full
+                      back-and-forth. `resolveActorDisplay` recognises a known service account first
+                      (so Routed/Archived/Deleted/proxy-executed rows correctly show
+                      "Guthrie Document Centre") and otherwise resolves the row's own
+                      ActorEmail/ActorName into a real human name — so an Uploaded row shows the
+                      uploader, a genuinely reviewed Approved row shows the reviewer, and a raised
+                      Request shows the requester, exactly as Crystal's own examples expect. */}
+                  <div>{resolveActorDisplay(r.ActorEmail, r.ActorName)}</div>
                 </div>
               </div>
             );

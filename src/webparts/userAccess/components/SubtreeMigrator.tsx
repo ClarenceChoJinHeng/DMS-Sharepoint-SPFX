@@ -42,6 +42,10 @@ import {
   stampEditorAsProxy,
 } from "../../../shared/dmsFolderMap";
 import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+import {
+  CURRENT_PROXY_ACCOUNT_EMAIL,
+  CURRENT_PROXY_ACCOUNT_NAME,
+} from "../../../shared/displayName";
 
 /**
  * Subtree Migration — bring documents already filed into the shape the structure now describes.
@@ -1654,8 +1658,17 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
         outcome: failed > 0 ? "Failed" : "Success",
         source: "SubtreeMigrator",
         at: new Date(),
-        actorName: context.pageContext.user.displayName,
-        actorEmail: context.pageContext.user.email,
+        /* ⚠⚠ THE PROXY ACCOUNT, NOT `context.pageContext.user` (2026-09-23, client: "ensure audit
+           log is recorded as GDC and not the person who select the file to move"). This tool runs
+           in the admin's OWN browser session — the migration genuinely executes under their
+           credentials, unlike Auto-route, which runs server-side as the connection it was built
+           with — but this project already treats "the system moved it" as the attribution that
+           matters here: `stampEditorAsProxy` a few lines up already restamps every MOVED FILE's own
+           `Editor` column to this same identity (2026-09-20), specifically so Modified By reads
+           consistently regardless of which admin happened to run the tool. This audit row now
+           follows the same rule, rather than naming whichever admin clicked Rebuild. */
+        actorName: CURRENT_PROXY_ACCOUNT_NAME,
+        actorEmail: CURRENT_PROXY_ACCOUNT_EMAIL,
         segment: seg.label,
         // Names what it ACTUALLY walked. A record saying two libraries on a four-library run reads
         // as a decision rather than an oversight.

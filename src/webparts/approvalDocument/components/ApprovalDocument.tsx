@@ -2453,8 +2453,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
                     >
                       {clashCheck.clash === true
                         ? `A document called "${item.FileLeafRef}" is already filed in ${approvedLibTitle()} ` +
-                          `for this folder. Approving REPLACES it — the document it replaces moves to the ` +
-                          `site recycle bin, restorable for 93 days.`
+                          `for this folder. Approving REPLACES it.`
                         : `The existing-document check could not be completed: ${clashCheck.reason}. ` +
                           `Approving may replace a document already filed in ${approvedLibTitle()}, or may ` +
                           `not — that could not be established.`}

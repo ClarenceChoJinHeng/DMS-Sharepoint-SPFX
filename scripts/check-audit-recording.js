@@ -6,8 +6,9 @@
  * Run it in the browser console, ON THE CRS SITE, signed in as an ADMINISTRATOR (it reads the
  * whole `CRS Audit Log` list, which is Owners/service-account write-only but readable by an admin).
  *
- * WHY THIS EXISTS: reported live, 2026-09-19 — "audit log is not recording" while testing Bulk
- * Upload. `Uploaded`/`Approved`/`Rejected`/`Routed`/`Replaced` rows are written EXCLUSIVELY by
+ * WHY THIS EXISTS: reported live, 2026-09-19, again 2026-09-23 ("Audit log is not tracking
+ * upload for bulk upload for some reason") — while testing Bulk Upload both times.
+ * `Uploaded`/`Approved`/`Rejected`/`Routed`/`Replaced` rows are written EXCLUSIVELY by
  * Power Automate flows watching the approval libraries (`Audit — approval activity` + its HC
  * clone) and by `Auto-route`/`HC Auto Route` — never by client code, because that list restricts
  * writes to Owners and the service account by design (tamper resistance). So a genuinely missing
@@ -172,7 +173,11 @@
 
     const items = await tryGet(
       `${web}/_api/web/lists/getbytitle('${encodeURIComponent(lib.Title)}')/items` +
-        `?$select=Id,FileLeafRef,FSObjType,Created,GUID` +
+        // `BulkImport` added 2026-09-23 — the marker Bulk Upload alone stamps (see
+        // "BULK UPLOAD IS AN UPLOADER TOOL, THROUGH THE APPROVAL LIBRARY" in CLAUDE.md). Reading
+        // it here is what lets a "missing" file below be labelled BULK vs FORM, which is the
+        // actual question ("why is it bulk specifically") rather than just "is anything missing".
+        `?$select=Id,FileLeafRef,FSObjType,Created,GUID,BulkImport` +
         `&$filter=FSObjType eq 0 and Created ge datetime'${sinceIso}'` +
         `&$orderby=Created desc&$top=200`,
     );
@@ -187,6 +192,15 @@
     // GUID (the list item's own GUID field) is NOT the file's UniqueId — resolve each file's real
     // UniqueId via the File resource, same as the app itself does everywhere (gotcha: item ids and
     // GUIDs are per-list/per-item; the audit rows are keyed on the FILE's UniqueId, not this GUID).
+    const auditHit = async (uniqueId, eventType) => {
+      const res = await tryGet(
+        `${web}/_api/web/lists/getbytitle('${encodeURIComponent(auditList.Title)}')/items` +
+          `?$select=Id&$filter=ItemUniqueId eq '${uniqueId}' and EventType eq '${eventType}'&$top=1`,
+      );
+      if (!res || res.__error) return undefined; // could not ask — never read this as "absent"
+      return res.value && res.value.length > 0;
+    };
+
     let matched = 0;
     const missing = [];
     for (const f of files) {
@@ -199,26 +213,53 @@
         missing.push({ ...f, reason: "could not resolve the file's UniqueId" });
         continue;
       }
-      const hit = await tryGet(
-        `${web}/_api/web/lists/getbytitle('${encodeURIComponent(auditList.Title)}')/items` +
-          `?$select=Id,EventTime&$filter=ItemUniqueId eq '${uniqueId}' and EventType eq 'Uploaded'&$top=1`,
-      );
-      if (hit && !hit.__error && hit.value && hit.value.length > 0) {
+      const hasUploaded = await auditHit(uniqueId, "Uploaded");
+      if (hasUploaded === true) {
         matched += 1;
-      } else {
-        missing.push({ ...f, uniqueId, reason: "no matching 'Uploaded' audit row" });
+        continue;
       }
+      /* ⚠ FOR A BULK-IMPORTED FILE ONLY, ALSO CHECK "Approved"/"Routed" — this is the theory named
+         at the top of this file: `CRS — Auto-approve bulk imports` can flip the item to Approved
+         within seconds of creation, and `Audit — approval activity` polls, so its own run may see
+         the item already Approved and (since 2026-09-01) that flow owns "Uploaded" and "Rejected"
+         ONLY — never "Approved", which Auto-route writes separately. If Approved/Routed exist and
+         Uploaded does not, that is exactly the race, and it explains "bulk uploads specifically". */
+      let raceNote = "";
+      if (f.BulkImport === true) {
+        const [hasApproved, hasRouted] = await Promise.all([
+          auditHit(uniqueId, "Approved"),
+          auditHit(uniqueId, "Routed"),
+        ]);
+        if (hasApproved || hasRouted) {
+          raceNote =
+            ` — RACE-SHAPED: "${hasApproved ? "Approved" : "Routed"}" exists, "Uploaded" does not. ` +
+            `Matches the bulk-import race described at the top of this file.`;
+        }
+      }
+      missing.push({
+        ...f,
+        uniqueId,
+        reason: raceNote
+          ? `no matching 'Uploaded' audit row${raceNote}`
+          : "no matching 'Uploaded' audit row",
+      });
     }
     console.log(`  ${matched} of ${files.length} have a matching "Uploaded" audit row.`);
     if (missing.length > 0) {
       console.log(`  %cMISSING (${missing.length}):`, "color:#a4262c;font-weight:bold");
       for (const m of missing) {
         console.log(
-          `    #${m.Id}  ${m.FileLeafRef}  created ${m.Created}` +
+          `    #${m.Id}  ${m.FileLeafRef}  ${m.BulkImport === true ? "[BULK UPLOAD]" : "[form upload]"}` +
+            `  created ${m.Created}` +
             (m.uniqueId ? `  (UniqueId ${m.uniqueId})` : "") +
             `  — ${m.reason}`,
         );
       }
+      const missingBulk = missing.filter((m) => m.BulkImport === true).length;
+      const missingForm = missing.length - missingBulk;
+      console.log(
+        `  Of the ${missing.length} missing: ${missingBulk} were Bulk Upload files, ${missingForm} were form uploads.`,
+      );
     }
   }
 

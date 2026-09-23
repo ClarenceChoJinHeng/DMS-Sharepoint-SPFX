@@ -54,9 +54,9 @@
   // empty to check everything, as before. Narrows a big list down to one test's own files — the HC
   // and non-HC copies of the SAME folder both still match, since only the LIBRARY segment differs
   // ("ApprovalDocument" vs "HCApprovalDocument"), never the tail of the path.
-  // 2026-09-21: the front-to-back upload/approve test ground, NBPOLHO > CDS > UPSUPPORT > 2024 > Ara
-  // > Approval Papers.
-  const PATH_FILTER = ["UPSUPPORT/2025/Approval Papers"];
+  // 2026-09-23: cleared — checking everything, since the failing upload today is a different path
+  // (GHO > COSEC > GUTHRIE) than the old test ground below. Re-narrow later if this list grows.
+  const PATH_FILTER = [];
 
   /* ── Resolve the site ──────────────────────────────────────────────────── */
   const resolveWeb = () => {

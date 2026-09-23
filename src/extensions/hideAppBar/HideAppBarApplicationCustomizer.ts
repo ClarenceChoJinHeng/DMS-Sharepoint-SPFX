@@ -16,22 +16,42 @@ export default class HideAppBarApplicationCustomizer extends BaseApplicationCust
   }
 
   /**
-   * Every library this system files into, under both the created and the retitled name.
+   * Every library this system files into, under every created AND retitled name.
    *
-   * Mirrors LIBRARY_CANDIDATES / HC_*_CANDIDATES in shared/naming.ts. Compared here as literals
-   * rather than imported because an application customizer loads on EVERY page of the site, and
-   * pulling in naming.ts would drag its resolution cache into every page load to answer a question
-   * a string comparison answers.
+   * Mirrors LIBRARY_CANDIDATES / HC_APPROVAL_CANDIDATES / DOCUMENTS_CANDIDATES /
+   * HC_DOCUMENTS_CANDIDATES in shared/naming.ts. Compared here as literals rather than imported
+   * because an application customizer loads on EVERY page of the site, and pulling in naming.ts
+   * would drag its resolution cache into every page load to answer a question a string comparison
+   * answers.
+   *
+   * ⚠⚠ THIS LIST WENT STALE AND SILENTLY DISABLED THE WHOLE CUSTOMIZER ON "Approval for Document"
+   * (found live 2026-09-23) — it had only "approval document" (no "for"), which is a DIFFERENT
+   * string from the actual live-renamed title. `_isCrsLibrary()` answered false, so NOTHING here
+   * ran on that page: not the `+ New Folder` injection, not the upload-menu hiding, not the
+   * Approve/Reject hiding. The client renames these libraries as a matter of routine (naming.ts's
+   * own comment: twice in one afternoon on 2026-08-27, again the next day) — this hand-copied
+   * mirror WILL drift again the next time that happens, and it will fail exactly this silently.
+   * Re-sync it against naming.ts's four candidate arrays whenever CLAUDE.md records a new rename.
    */
   private static readonly CRS_LIBRARIES = [
+    "approval for document",
     "approval document",
     "approvaldocument",
     "staging",
-    "documents",
+    "approval for highly confidential document",
     "hc approval document",
+    "hc approval documents",
     "hcapprovaldocument",
+    "highly confidential approval document",
+    "documents",
+    "restricted & confidential document",
+    "restricted and confidential document",
+    "shared documents",
     "hc documents",
+    "hc document",
     "hcdocuments",
+    "highly confidential document",
+    "highly confidential documents",
   ];
 
   /**
@@ -59,6 +79,12 @@ export default class HideAppBarApplicationCustomizer extends BaseApplicationCust
     // that is what gives a document its metadata, its folder routing and its approval trail. A file
     // dragged straight into a library has none of them, and looks completely normal in the view.
     this._hideUploadMenuItems();
+    // The native command bypasses this project's own approval guards entirely — it flips
+    // OData__ModerationStatus directly and never runs ApprovalDocument.tsx's destination-folder or
+    // name-clash checks (see CLAUDE.md, "THE NATIVE APPROVE COMMAND BYPASSES BOTH GUARDS"). A web
+    // part cannot intercept a native SharePoint control, only hide the invitation to use it — the
+    // real safety is still the copy-with-a-new-name behaviour on Auto-route's own Copy file step.
+    this._hideApproveRejectCommand();
   }
 
   private _injectNewFolderButton(): void {
@@ -150,6 +176,53 @@ export default class HideAppBarApplicationCustomizer extends BaseApplicationCust
         if (li) (li as HTMLElement).style.display = "none";
       }
     });
+  }
+
+  /**
+   * Hides the native Approve/Reject command everywhere SharePoint renders it.
+   *
+   * PRIMARY match: `[data-automationid="approveReject"]` — confirmed live via DevTools 2026-09-23,
+   * on the "Integrate" flyout menu entry (this command bar renders it nested there, not as its own
+   * top-level button). This is the reliable route.
+   *
+   * FALLBACK match: the visible label text, but only on `.ms-ContextualMenu-itemText` — the LEAF
+   * span holding just the clean label — never the containing button/link/menuitem. The first
+   * version of this matched the whole menu item's `textContent`, which also picks up the icon's own
+   * glyph: Fluent UI icons render their character as an actual Unicode code point inside the `<i>`
+   * element, so the button's full text was never an exact match for the plain string
+   * "approve/reject" — it silently matched nothing. This fallback exists only for a render context
+   * that might lack the automationid, such as the view switcher's own "Approve/reject Items" view
+   * entry, which was never confirmed live.
+   */
+  private _hideApproveRejectCommand(): void {
+    document
+      .querySelectorAll<HTMLElement>('[data-automationid="approveReject"]')
+      .forEach((el) => this._hideMenuItem(el));
+
+    /* ⚠⚠ "Approve or reject" IS NOT THIS COMMAND — DO NOT ADD IT BACK. It was added here briefly
+       on 2026-09-23 from a live screenshot, and the client caught it within minutes: that exact
+       wording is THIS PROJECT'S OWN Bulk Approve command (the `bulkApprove` ListViewCommandSet, see
+       CLAUDE.md "BULK APPROVE FROM THE LIBRARY COMMAND BAR"), which runs through the app's own
+       approval guards and must stay reachable. Hiding it here would silently disable a feature this
+       project built on purpose while looking, from this file alone, like it was hiding the native
+       one. Whether the NATIVE command also has its own separate entry in that same row-level "..."
+       overflow menu — and under what exact wording — has NOT been confirmed; only the "Integrate"
+       flyout's "Approve/Reject" has been verified live so far. Confirm before adding a third string
+       here, rather than guessing one back in. */
+    const textsToHide = ["approve/reject", "approve/reject items"];
+    document
+      .querySelectorAll<HTMLElement>(".ms-ContextualMenu-itemText")
+      .forEach((el) => {
+        const text = (el.textContent ?? "").trim().toLowerCase();
+        if (textsToHide.some((t) => text === t)) this._hideMenuItem(el);
+      });
+  }
+
+  /** Hides the enclosing `<li>` when present (a clean row removal), else the element itself. */
+  private _hideMenuItem(el: HTMLElement): void {
+    const li = el.closest("li");
+    if (li) (li as HTMLElement).style.display = "none";
+    else el.style.display = "none";
   }
 
   protected onDispose(): void {

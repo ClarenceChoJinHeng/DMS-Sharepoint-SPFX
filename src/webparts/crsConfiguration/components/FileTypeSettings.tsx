@@ -849,10 +849,7 @@ export default function FileTypeSettings({
                 is now titled File Type Management, so a card heading repeating it was one label too
                 many on a page that does exactly one thing. */}
             <div style={s.hint}>
-              Enable or disable file extensions. Applies to{" "}
-              <strong>new uploads</strong> — anyone with the upload form open
-              will need to refresh. Disabling a type never affects files already
-              uploaded.
+              Files already uploaded won't not be affected.
             </div>
 
             <div style={s.head}>

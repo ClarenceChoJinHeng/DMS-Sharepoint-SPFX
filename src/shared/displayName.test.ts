@@ -64,10 +64,10 @@ describe("displayNameFor", () => {
     );
   });
 
-  it("canonicalises the retired proxy account too, for historical rows", () => {
-    expect(displayNameFor("crs@sdguthrie.com")).toBe(
-      "Guthrie Central Repository System",
-    );
+  it("canonicalises the retired proxy account under the CURRENT name, not its own old one", () => {
+    // Changed 2026-09-23, client: "crs is approving but the move to documents is showing crs
+    // instead of gdc" — crs and gdc are one identity across time, from the client's point of view.
+    expect(displayNameFor("crs@sdguthrie.com")).toBe("Guthrie Document Centre");
   });
 });
 
@@ -86,9 +86,9 @@ describe("canonicalServiceAccountName", () => {
     );
   });
 
-  it("recognises the retired crs proxy account", () => {
+  it("recognises the retired crs proxy account, under the CURRENT name", () => {
     expect(canonicalServiceAccountName("crs@sdguthrie.com")).toBe(
-      "Guthrie Central Repository System",
+      "Guthrie Document Centre",
     );
   });
 

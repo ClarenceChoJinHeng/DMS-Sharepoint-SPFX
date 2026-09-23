@@ -1,24 +1,29 @@
 /*
- * Why does an APPROVER still get the reason-required request dialog?
- * ------------------------------------------------------------------
+ * Why does an APPROVER (or a system admin) still get the reason-required request dialog?
+ * ----------------------------------------------------------------------------------------
  * READ ONLY. Every request is a GET. Nothing is written, deleted or granted.
  *
  * Run it in the browser console, ON THE CRS SITE, SIGNED IN AS THE ACCOUNT THAT IS SEEING THE
- * PROBLEM (the approver — not an administrator; an administrator bypasses the whole check and will
- * always look fine).
+ * PROBLEM.
  *
- * It answers the one question the code cannot answer from here: when My Submissions decides whether
- * to offer "Delete" (act now) or "Request deletion" (ask an approver), it matches the DOCUMENT'S OWN
- * tier term GUIDs against the tier GUIDs on THIS VIEWER'S Group Map rows. Either side can be the
- * reason the match fails, and they fail in completely different places:
+ * ⚠⚠ v2 (2026-09-22) — v1 checked ONLY the Group Map route and `IsSiteAdmin`. It missed TWO of the
+ * app's three eligibility routes, so a clean "NO" from v1 could not actually explain why the app
+ * offered a request — the account could still be an admin via the site's OWNERS GROUP (which
+ * `IsSiteAdmin` alone does not catch), or the live folder ACL could grant delete/share directly even
+ * where the Group Map says nothing. `MySubmissions.tsx`'s own rule is explicit: "EITHER saying yes is
+ * enough; NEITHER is a veto" — so all three routes must be checked before concluding anything is
+ * actually wrong. This version checks all three, in the SAME order and with the SAME bit arithmetic
+ * the app itself uses (`isSystemAdmin` in spGroups.ts, `probeFileRights` in dmsFolderMap.ts).
  *
- *   - no groups read             -> the viewer's own membership could not be listed
- *   - no Group Map rows          -> the list could not be read, or holds no row for their groups
- *   - rows but no DEL / SHARE    -> their groups are mapped, but not with the roles that grant it
- *   - roles but no GUID overlap  -> both sides are populated and simply name different terms
- *   - document has no tier GUIDs -> the file was filed without its `<Base>Tid` values
+ * Three independent routes to "yes", checked in the app's own order:
+ *   1. System admin — `IsSiteAdmin` OR membership of the site's own Owners group.
+ *   2. The live folder ACL, asked directly (`EffectiveBasePermissions` on the file itself) — this is
+ *      the route that "cannot be wrong the way the Group Map can", per the app's own comment.
+ *   3. The Group Map — the viewer's own groups matched against the document's tier GUIDs.
  *
- * The verdict at the bottom names which one it is.
+ * If ALL THREE say no, the request dialog is the CORRECT, intended behaviour for this account on
+ * this document — not a bug. The verdict at the bottom says which of the three (if any) actually
+ * grants it, and if none do, names exactly what would need to change.
  */
 (async () => {
   /* ── Configure ─────────────────────────────────────────────────────────── */
@@ -112,12 +117,42 @@
   if (me) {
     console.log(`  ${me.Title} · ${me.Email || "(no email)"}`);
     console.log(`  IsSiteAdmin: ${me.IsSiteAdmin}`);
-    if (me.IsSiteAdmin) {
+  }
+  /* ⚠ `isSystemAdmin` (spGroups.ts) checks TWO things, not one — `IsSiteAdmin` alone is only half of
+     it. The app's other half is membership of the site's own OWNERS group, which is what Group
+     Management actually puts an "administrator" into (client, 2026-08-27: "we did not include a
+     group as the System Admin group? they should have all the power" — the answer was that Owners
+     always WAS that group). v1 of this script missed this entirely, which is exactly the gap that
+     made a real admin account look like it had no rights at all. */
+  let ownersId;
+  let inOwners = false;
+  if (me && typeof me.Id === "number") {
+    const ownersGroup = await tryGet(
+      `${web}/_api/web/AssociatedOwnerGroup?$select=Id,Title`,
+    );
+    if (ownersGroup) {
+      ownersId = ownersGroup.Id;
+      const ownRes = await tryGet(
+        `${web}/_api/web/AssociatedOwnerGroup/Users?$filter=Id eq ${me.Id}&$select=Id`,
+      );
+      inOwners = !!(ownRes && (ownRes.value || []).length > 0);
       console.log(
-        "  NOTE: a site collection administrator BYPASSES this whole check in the app, so the " +
-          "Delete button would work for them regardless of everything below. Re-run as the approver.",
+        `  In the Owners group ("${ownersGroup.Title}")?  ${inOwners ? "YES" : "no"}`,
       );
     }
+  }
+  const isSystemAdmin = !!(me && me.IsSiteAdmin) || inOwners;
+  if (isSystemAdmin) {
+    console.log(
+      "  NOTE: this account IS a system administrator (site admin or Owners-group member).",
+    );
+    console.log(
+      "  The app should offer the DIRECT Delete/Share buttons regardless of everything below.",
+    );
+    console.log(
+      "  If it is still asking for a reason, the problem is in the PAGE, not the data — say so and",
+    );
+    console.log("  include this whole output.");
   }
   const groupsRes = await tryGet(
     `${web}/_api/web/currentuser/groups?$select=Id,Title&$top=500`,
@@ -160,9 +195,23 @@
   const mine = all.filter((r) => myIds.indexOf(r.GroupId) !== -1);
   console.log(`  ${all.length} row(s) total, ${mine.length} for this viewer's groups.`);
 
+  /* ⚠⚠ v3 — DEL/DELHC/DELS/DELSHC WERE REMOVED FROM EVERY PERSONA ON 2026-09-17 (the delete-by-proxy
+     redesign: "they can delete folders which is dangerous"). Confirmed by reading `groupMapModel.ts`
+     directly — `hou`, `hou_hc` AND `hod` all lost these roles the same day. So `directDelete`/
+     `directDeleteStaging` below are now STRUCTURALLY EMPTY FOR EVERY PERSONA ON THE SITE — that is
+     expected, not a bug, and is NOT what decides whether a genuine approver gets treated correctly.
+
+     The route that actually matters now is `decidesDeletion` (APR/APRHC, scoped to the viewer's own
+     groups) — `MySubmissions.tsx`'s row-level Delete handler uses this EXACT match to decide between
+     three outcomes: instant self-delete (`canDelete`, still checks the now-dead DEL route plus the
+     ACL probe plus systemAdmin), a small inline notice ("You decide deletion requests for this unit
+     in Approval & Request, so none is offered here" — for someone who IS the approver), or the full
+     "Request deletion" modal (for someone who is neither). A genuine approver landing in the THIRD
+     bucket instead of the second is the exact symptom being chased here. */
   const directDelete = [];
   const directDeleteStaging = [];
   const directShare = [];
+  const decidesDeletion = [];
   const add = (list, guid) => {
     if (guid && list.indexOf(guid) === -1) list.push(guid);
   };
@@ -176,15 +225,19 @@
     if (code === "DEL" || code === "DELHC") add(directDelete, guid);
     if (code === "DELS" || code === "DELSHC") add(directDeleteStaging, guid);
     if (code === "SHARE" || code === "SHAREHC") add(directShare, guid);
+    if (code === "APR" || code === "APRHC") add(decidesDeletion, guid);
   }
   console.log(
-    `\n  Delete APPROVED documents, at tier(s): ${directDelete.length ? directDelete.join(", ") : "(none)"}`,
+    `\n  Delete APPROVED documents, at tier(s): ${directDelete.length ? directDelete.join(", ") : "(none — expected, see note above)"}`,
   );
   console.log(
-    `  Delete PENDING files,      at tier(s): ${directDeleteStaging.length ? directDeleteStaging.join(", ") : "(none)"}`,
+    `  Delete PENDING files,      at tier(s): ${directDeleteStaging.length ? directDeleteStaging.join(", ") : "(none — expected, see note above)"}`,
   );
   console.log(
     `  Share APPROVED documents,  at tier(s): ${directShare.length ? directShare.join(", ") : "(none)"}`,
+  );
+  console.log(
+    `  DECIDES deletion for (APR/APRHC), at tier(s): ${decidesDeletion.length ? decidesDeletion.join(", ") : "(none)"}`,
   );
 
   /* ── 3. The document's own tier GUIDs ─────────────────────────────────────── */
@@ -209,10 +262,12 @@
   for (const title of libCandidates) {
     const hit = await tryGet(
       `${web}/_api/web/lists/getbytitle('${encodeURIComponent(title)}')/items` +
-        `?$select=Id,FileLeafRef&$filter=FileLeafRef eq '${FILE_NAME.replace(/'/g, "''")}'&$top=5`,
+        `?$select=Id,FileLeafRef,File/UniqueId&$expand=File` +
+        `&$filter=FileLeafRef eq '${FILE_NAME.replace(/'/g, "''")}'&$top=5`,
     );
     if (hit && hit.value && hit.value.length > 0) {
-      found = { title, id: hit.value[0].Id };
+      const row = hit.value[0];
+      found = { title, id: row.Id, uniqueId: (row.File && row.File.UniqueId) || "" };
       console.log(`  Found in "${title}", item ${found.id}.`);
       break;
     }
@@ -221,6 +276,36 @@
     console.log("  ✗ Not found in any approved-side library under that exact name.");
     console.log("    Check the spelling, or that it really is Approved rather than still pending.");
     return;
+  }
+
+  /* ── 3b. The live folder ACL, asked directly — this is the route `MySubmissions.tsx` trusts most,
+     because it "cannot be wrong the way the Group Map can": it answers about THIS viewer on THIS
+     exact item, with no reconstruction from mapping rows in between. Same endpoint, same two bits,
+     same arithmetic as `probeFileRights` in dmsFolderMap.ts — never `&`, because Full Control returns
+     `Low = "4294967295"`, which JS bitwise coercion reads as a signed 32-bit int and gets wrong. */
+  let aclRemove = "unknown";
+  let aclShare = "unknown";
+  if (found.uniqueId) {
+    const perm = await tryGet(
+      `${web}/_api/web/GetFileById(guid'${encodeURIComponent(found.uniqueId)}')` +
+        `/ListItemAllFields/EffectiveBasePermissions`,
+    );
+    if (perm && perm.Low !== undefined) {
+      const low = Number(perm.Low);
+      const hasBit = (bitIndex) =>
+        isFinite(low) && low >= 0 && Math.floor(low / Math.pow(2, bitIndex)) % 2 === 1;
+      aclRemove = hasBit(3) ? "granted" : "denied"; // deleteListItems = kind 4, bit index 3
+      aclShare = hasBit(25) ? "granted" : "denied"; // managePermissions = kind 26, bit index 25
+    }
+  }
+  console.log(`\n  Live folder ACL on this exact file (EffectiveBasePermissions):`);
+  console.log(`    Delete this file directly?  ${aclRemove}`);
+  console.log(`    Share  this file directly?  ${aclShare}`);
+  if (aclRemove === "unknown") {
+    console.log(
+      "    (unreadable, or the item's UniqueId could not be resolved — this route is inconclusive," +
+        " not a NO)",
+    );
   }
 
   const ft = await tryGet(
@@ -256,20 +341,73 @@
     return;
   }
 
-  /* ── 4. Verdict ───────────────────────────────────────────────────────────── */
+  /* ── 4. Verdict — ALL THREE ROUTES COMBINED, exactly as `canDeleteSelf`/`canShareSelf` compute
+     it: `systemAdmin || rights?.remove === "granted" || canActDirectly(chain, policy.directDelete)`.
+     A clean "NO" here requires all three to independently say no — one YES anywhere is enough. */
   console.log("\n=== 4. Verdict ===");
   const overlaps = (held) =>
     chain.some((c) => held.some((h) => norm(h) === norm(c)));
-  const delOk = overlaps(directDelete);
-  const shareOk = overlaps(directShare);
+  const groupMapDelOk = overlaps(directDelete);
+  const groupMapShareOk = overlaps(directShare);
+  const delOk = isSystemAdmin || aclRemove === "granted" || groupMapDelOk;
+  const shareOk = isSystemAdmin || aclShare === "granted" || groupMapShareOk;
   console.log(`  Delete this approved document directly?  ${delOk ? "YES" : "NO"}`);
+  console.log(`    admin=${isSystemAdmin}  ACL=${aclRemove}  GroupMap(DEL)=${groupMapDelOk}`);
   console.log(`  Share  this approved document directly?  ${shareOk ? "YES" : "NO"}`);
+  console.log(`    admin=${isSystemAdmin}  ACL=${aclShare}  GroupMap(SHARE)=${groupMapShareOk}`);
 
-  /* ⚠ THE TWO WAYS OF ANSWERING "NO" NEED DIFFERENT FIXES, and saying only "no overlap" names the
-     wrong one half the time — caught by the synthetic run before this was ever used on a site.
-     EMPTY means the viewer is not mapped with the role at all (fix the Group Map / group
-     membership); POPULATED-BUT-DIFFERENT means they are mapped, just at another term (compare the
-     GUIDs). */
+  /* ⚠⚠ THE THIRD, SEPARATE QUESTION — and the one that actually decides what the ROW-level Delete
+     button in the My Submissions TABLE shows, per `MySubmissions.tsx`'s own three-way branch:
+       canDelete (above)         -> instant self-delete
+       else decidesDeletionOk    -> small inline notice: "You decide deletion requests for this
+                                     unit in Approval & Request, so none is offered here."
+       else                      -> the FULL "Request deletion" modal, asking someone else
+     If `delOk` is NO but this is YES, the app should have shown the inline notice, not the modal —
+     that combination is the exact symptom this script was extended to catch. */
+  const decidesDeletionOk = overlaps(decidesDeletion);
+  console.log(
+    `\n  Does this viewer DECIDE deletion requests for this unit (APR/APRHC)?  ${decidesDeletionOk ? "YES" : "NO"}`,
+  );
+  console.log(`    GroupMap(APR/APRHC)=${decidesDeletionOk}`);
+  if (!delOk && decidesDeletionOk) {
+    console.log(
+      "\n  ⚠⚠ delOk=NO but decidesDeletionOk=YES: the app should have shown the SMALL INLINE NOTICE",
+    );
+    console.log(
+      '  ("You decide deletion requests for this unit in Approval & Request, so none is offered',
+    );
+    console.log(
+      '  here.") — NOT the full "Request deletion" modal with a Reason box. If the modal appeared',
+    );
+    console.log(
+      "  instead, the mismatch is in the PAGE (most likely a stale/not-yet-loaded `policy` at the",
+    );
+    console.log(
+      "  moment of the click, or the tier chain above disagreeing with what Group Management shows),",
+    );
+    console.log("  not a missing permission. Say so and include this whole output.");
+  }
+
+  if (delOk && shareOk) {
+    console.log(
+      "\n  At least one route says YES for both. The app SHOULD be offering the direct buttons —",
+    );
+    console.log(
+      "  if it is still showing the request dialog, the problem is in the PAGE (a timing/caching",
+    );
+    console.log(
+      "  issue, or the probe simply had not landed yet when the button was clicked), not the data.",
+    );
+    console.log("  Say so and include this whole output.");
+    return;
+  }
+
+  /* Only reached when the ACL and admin routes BOTH said no for the relevant action — the Group Map
+     detail below explains the one route that is genuinely about DATA, not about the page. THE TWO
+     WAYS OF ANSWERING "NO" HERE NEED DIFFERENT FIXES, and saying only "no overlap" names the wrong
+     one half the time. EMPTY means the viewer is not mapped with the role at all (fix the Group Map
+     / group membership); POPULATED-BUT-DIFFERENT means they are mapped, just at another term
+     (compare the GUIDs). */
   const explain = (label, held, ok) => {
     if (ok) return;
     if (held.length === 0) {
@@ -286,12 +424,6 @@
         ` terms: the group is mapped at one tier and the file sits under another.`,
     );
   };
-  explain("Delete", directDelete, delOk);
-  explain("Share", directShare, shareOk);
-
-  if (delOk && shareOk) {
-    console.log("\n  Both sides DO overlap, so the app should be offering the direct buttons here.");
-    console.log("  If it is not, the problem is in the page rather than the data — say so and");
-    console.log("  include this whole output.");
-  }
+  explain("Delete", directDelete, groupMapDelOk);
+  explain("Share", directShare, groupMapShareOk);
 })();

@@ -221,6 +221,30 @@ export function sortNewestFirst<T extends Submission>(rows: readonly T[]): T[] {
   });
 }
 
+/**
+ * Most-recently-DECIDED first — for the Approved and Rejected tabs specifically.
+ *
+ * `rows` (and therefore every tab built from it) is sorted by `created`, i.e. upload order — right
+ * for Pending, where nothing has happened to a file yet, and wrong for Approved/Rejected, where the
+ * question is "what did my approver decide most recently", not "what did I upload most recently".
+ * An older upload decided today must outrank a newer upload decided last week (client, 2026-09-23:
+ * *"ensure the latest approve file stays at the top"*).
+ *
+ * There is no `DecidedAt`/`ApprovedAt` column anywhere in this schema, so `modified` — SharePoint's
+ * own Last Modified — is the best available proxy: for a routed (Approved) row it is stamped by
+ * Auto-route's own copy/metadata-write sequence, which happens at routing time; for a Rejected row
+ * (never routed, still in the approval library) it is stamped by the reject action itself. Falls
+ * back to `created`, then sorts unknown LAST — same "an unknown date is not evidence of recency"
+ * rule as `sortNewestFirst`, so a row with neither date never displaces one that is actually known.
+ */
+export function sortByDecisionRecency<T extends Submission>(rows: readonly T[]): T[] {
+  return (rows ?? []).slice().sort((a, b) => {
+    const at = (a.modified ?? a.created)?.getTime() ?? Number.NEGATIVE_INFINITY;
+    const bt = (b.modified ?? b.created)?.getTime() ?? Number.NEGATIVE_INFINITY;
+    return bt - at;
+  });
+}
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /**

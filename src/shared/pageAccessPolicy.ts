@@ -24,6 +24,28 @@ export interface PagePolicy {
   reason: string;
   /** True when the page is for administrators only — the empty-roles case, named. */
   adminOnly: boolean;
+  /**
+   * ⚠⚠ FOUND 2026-09-22, WHILE THE CLIENT WAS TESTING C-LEVEL ACCESS TO Document-Viewer.aspx: THE
+   * BLANKET VIEW_ONLY_ROLES FILTER IN `isRoleEligibleForPage`/`derivedRolesForPage` SILENTLY
+   * STRIPPED GLOBAL/SEGVIEW/MEMBER BACK OUT OF THIS PAGE'S OWN `roles` LIST, EVEN THOUGH THE
+   * 2026-09-21 RULE ABOVE EXPLICITLY LISTS THEM AS THE PAGE'S WHOLE REASON FOR EXISTING.
+   *
+   * `policyForPage("Document-Viewer.aspx").roles` correctly included GLOBAL/SEGVIEW/MEMBER/
+   * MEMBERHC/DEPTVIEW (pinned by test since the page was built) — but nothing downstream of that
+   * ever honoured it: `derivedRolesForPage` (what reconciliation actually grants from) and
+   * `isRoleEligibleForPage` (what the Page Access admin screen offers as eligible) both applied
+   * the VIEW_ONLY_ROLES exclusion UNCONDITIONALLY, on every page, with no way for a single rule
+   * to opt out. So reconciliation could run any number of times and never grant a C-Level or plain
+   * Viewer group this page — the exact symptom reported.
+   *
+   * The VIEW_ONLY_ROLES filter's own reasoning ("None has business on an upload form, an approval
+   * screen or an admin tool") is correct for every OTHER page and was written before this one
+   * existed. This flag is the one, explicit opt-out — set ONLY on the Document-Viewer rule below —
+   * rather than removing the filter, which would re-open the upload/approval pages this guard
+   * exists to keep those roles off. Absent (`undefined`) on every other policy, so every other
+   * page's behaviour is byte-for-byte unchanged.
+   */
+  allowViewOnlyRoles?: boolean;
 }
 
 /**
@@ -94,6 +116,11 @@ const RULES: Array<{ match: RegExp; policy: PagePolicy }> = [
         "DEPTVIEW",
       ],
       adminOnly: false,
+      // ⚠⚠ WITHOUT THIS, GLOBAL/SEGVIEW/MEMBER ABOVE WERE DEAD LETTERS — see the field's own
+      // comment on `PagePolicy`. This is the ONE rule in the file that needs it, because it is the
+      // ONE page built specifically to serve the roles the blanket filter exists to keep off
+      // every other page.
+      allowViewOnlyRoles: true,
       reason:
         "Every role that can browse Documents/HC Documents/Archive/HC Archive is listed — PIC and " +
         "Approver are redirected to their own page on load, so this is really for Viewer, C-Level " +
@@ -276,10 +303,15 @@ export function policyForPage(fileName: string): PagePolicy {
   return DEFAULT_POLICY;
 }
 
-/** Is this role offerable on this page? Always false for a view-only role. */
+/**
+ * Is this role offerable on this page? False for a view-only role — UNLESS the matched policy
+ * explicitly opts in via `allowViewOnlyRoles` (currently only the Document-Viewer rule). See that
+ * field's own comment for why the blanket exclusion could not stay unconditional.
+ */
 export function isRoleEligibleForPage(fileName: string, role: GroupMapRole): boolean {
-  if (VIEW_ONLY_ROLES.indexOf(role) !== -1) return false;
-  return policyForPage(fileName).roles.indexOf(role) !== -1;
+  const p = policyForPage(fileName);
+  if (VIEW_ONLY_ROLES.indexOf(role) !== -1 && !p.allowViewOnlyRoles) return false;
+  return p.roles.indexOf(role) !== -1;
 }
 
 /**
@@ -316,11 +348,15 @@ export function pageMatchedRule(fileName: string): boolean {
  * fight every run, for ever.
  *
  * View-only roles are filtered out for the same reason they are never OFFERED one: a reader who
- * opened the upload form could not upload anyway, holding no Staging permission.
+ * opened the upload form could not upload anyway, holding no Staging permission. Exactly one rule
+ * (Document-Viewer, `allowViewOnlyRoles: true`) is exempt — see that field's own comment: it is
+ * the one page whose entire purpose is serving Viewer/C-Level/Head of Department, so filtering
+ * them back out of its own `roles` list here silently undid what the rule above declared.
  */
 export function derivedRolesForPage(fileName: string): GroupMapRole[] {
   if (!pageMatchedRule(fileName)) return [];
   const p = policyForPage(fileName);
   if (p.adminOnly) return [];
+  if (p.allowViewOnlyRoles) return p.roles;
   return p.roles.filter((r) => VIEW_ONLY_ROLES.indexOf(r) === -1);
 }

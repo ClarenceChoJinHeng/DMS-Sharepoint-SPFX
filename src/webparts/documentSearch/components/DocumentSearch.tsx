@@ -67,6 +67,10 @@ import {
 } from "../../../shared/spNaming";
 // The trail builder My Submissions uses — see the note where `trailOf` used to be.
 import { folderTrail, trailText, formatSubmittedOn } from "../../../shared/mySubmissions";
+// Same ordering the upload forms already apply to this exact dropdown (2026-09-18, client:
+// "Highly Confidential, Confidential & Restricted") — one definition, reused here rather than
+// left to the term store's alphabetical order this screen was still showing.
+import { sortByConfidentialityOrder } from "../../../shared/confidentialityOrder";
 // The `Keyword` column is created by reconciliation, so a library provisioned earlier may not have
 // it — and a $filter naming an absent column 400s the whole read. Probed, never assumed.
 import {
@@ -1138,9 +1142,44 @@ export default function DocumentSearch({
         continue;
       }
 
-      // A hit whose id never came back from the follow-up read (deleted between the crawl and now,
-      // or otherwise unresolved) cannot be CONFIRMED to match — dropped rather than kept, the same
-      // "a bug here can only ever return FEWER rows" direction this whole module is built around.
+      /* ⚠ A hit whose id never came back from the batch `Id eq` read used to be dropped outright —
+         and that was proven wrong live 2026-09-23: a document confirmed via its own detail panel
+         (resolved by UniqueId) to carry real Document Type/Year/Confidentiality/Segment values still
+         disappeared from every filtered search, while it showed up fine with no filter at all. The
+         crawled search index's `ListItemID` can go stale — the document was replaced/re-uploaded
+         since the last crawl, or landed under a different id than the index remembers — and `Id eq
+         <stale id>` then matches nothing in the CURRENT live list, even though the document plainly
+         exists. Silently dropping it there is exactly the false negative this comment used to accept
+         as the safe direction; it is not safe when the id itself is the thing that is wrong.
+
+         So a hit missing from the batch response gets ONE more chance: resolved directly by its
+         `UniqueId` — the same stable, per-library-independent identifier `openRow`'s own per-item
+         read already uses successfully for this exact document — via `GetFileById`, which is
+         WEB-scoped and therefore cannot be thrown off by a wrong `apiTitle(lib)` guess either. Only
+         if THAT also fails to resolve is the hit finally dropped as genuinely unconfirmable. */
+      const missing = libHits.filter(
+        (h) => meta[h.itemId] === undefined && h.uniqueId.length > 0,
+      );
+      for (const h of missing) {
+        const resp = await jsonGet(
+          `${siteUrl}/_api/web/GetFileById(guid'${encodeURIComponent(h.uniqueId)}')` +
+            `/ListItemAllFields?$select=${METADATA_FILTER_FIELDS.documentType},` +
+            `${METADATA_FILTER_FIELDS.year},${METADATA_FILTER_FIELDS.confidentiality},` +
+            `Business_x0020_Segment`,
+        );
+        if (!resp.ok) continue;
+        const row = resp.body as RawRow;
+        meta[h.itemId] = {
+          documentType: textOf(row[METADATA_FILTER_FIELDS.documentType]),
+          year: textOf(row[METADATA_FILTER_FIELDS.year]),
+          confidentiality: textOf(row[METADATA_FILTER_FIELDS.confidentiality]),
+          segment: textOf(row.Business_x0020_Segment),
+        };
+      }
+
+      // A hit that STILL has no metadata after the UniqueId fallback cannot be CONFIRMED to match —
+      // dropped rather than kept, the same "a bug here can only ever return FEWER rows" direction
+      // this whole module is built around.
       const kept = libHits.filter((h) => {
         const m = meta[h.itemId];
         return m !== undefined && searchMetadataMatches(c, m);
@@ -1733,7 +1772,7 @@ export default function DocumentSearch({
                     }
                   >
                     <option value="">Any</option>
-                    {(fixedOptions.confidentiality ?? []).map((o) => (
+                    {sortByConfidentialityOrder(fixedOptions.confidentiality ?? []).map((o) => (
                       <option key={o.id} value={o.label}>
                         {o.label}
                       </option>

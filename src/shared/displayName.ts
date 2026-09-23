@@ -46,21 +46,31 @@ export function displayNameFor(email: string | undefined): string | undefined {
 }
 
 /**
- * The two proxy/service accounts this project's Power Automate flows run as, keyed by the LOCAL
- * PART only (lower-cased) so a bare mailbox alias and a full address both resolve — see
- * `canonicalServiceAccountName`'s own comment for why both shapes turn up in stored data.
+ * The two proxy/service account IDENTITIES this project's Power Automate flows run as (or have run
+ * as), keyed by the LOCAL PART only (lower-cased) so a bare mailbox alias and a full address both
+ * resolve — see `canonicalServiceAccountName`'s own comment for why both shapes turn up in stored
+ * data. Both keys map to the SAME display string.
  *
- * `gdc` is the CURRENT proxy (`gdc@sdguthrie.com`, "Guthrie Document Centre" — the migration from
- * `crs@sdguthrie.com` is written up in
+ * `gdc` (`gdc@sdguthrie.com`) is the CURRENT proxy; `crs` (`crs@sdguthrie.com`) is the RETIRED one —
+ * the migration is written up in
  * `docs/superpowers/specs/2026-09-19-service-account-migration-crs-to-gdc-runbook.md`, and is not
- * finished across every flow at the time this was written). `crs` is the RETIRED one
- * (`crs@sdguthrie.com`, "Guthrie Central Repository System") — kept here, not deleted, because
- * historical audit rows written before the migration still carry it and must go on reading
- * correctly for as long as this log exists (this list is append-only and never deleted).
+ * finished across every flow at the time this was written, so `crs` is still live in some rows.
+ *
+ * ⚠ BOTH SHOW "Guthrie Document Centre" — DELIBERATE, CHANGED 2026-09-23. Until then `crs` showed
+ * its OWN old name, "Guthrie Central Repository System", on the reasoning that a historical row
+ * should read exactly as it was written. The client corrected that directly, having watched
+ * `crs@sdguthrie.com` genuinely APPROVE a document (crs is still in active use as a live test
+ * account, not purely a retired service identity) and then seeing "Moved to Documents" show the OLD
+ * name instead of the current one: *"crs is approving but the move to documents is showing crs
+ * instead of gdc"*. From the client's own point of view crs and gdc are ONE identity across time,
+ * and every row attributed to either should read under today's name — never a name retired months
+ * or years ago. `crs` is kept as a recognised KEY, not deleted: the row still needs to be recognised
+ * as a service account at all (so it is never run through the human-name guesser,
+ * `nameFromEmail`), it just no longer gets its own distinct label.
  */
 const KNOWN_SERVICE_ACCOUNTS: Readonly<Record<string, string>> = {
   gdc: "Guthrie Document Centre",
-  crs: "Guthrie Central Repository System",
+  crs: "Guthrie Document Centre",
 };
 
 /**
@@ -141,3 +151,13 @@ export function resolveActorDisplay(
  * gdc-runbook.md`) there is exactly one line to change rather than a grep across the codebase.
  */
 export const CURRENT_PROXY_ACCOUNT_EMAIL = "gdc@sdguthrie.com";
+
+/**
+ * The CURRENT proxy account's display name — same "one literal" reasoning as
+ * `CURRENT_PROXY_ACCOUNT_EMAIL` above, and deliberately NOT derived from
+ * `canonicalServiceAccountName("gdc")`: that lookup exists to RECOGNISE a service account among
+ * many possible stored shapes, which is a different job from stating what the current one is
+ * called. Used by the Audit Log's "Who" column (2026-09-22, client: every row should show this,
+ * with no exceptions — see `AuditLog.tsx`'s own comment above the Who cell for the decision).
+ */
+export const CURRENT_PROXY_ACCOUNT_NAME = "Guthrie Document Centre";

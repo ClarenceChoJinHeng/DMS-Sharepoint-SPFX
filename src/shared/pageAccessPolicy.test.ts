@@ -1,6 +1,7 @@
 import {
   policyForPage,
   isRoleEligibleForPage,
+  derivedRolesForPage,
   VIEW_ONLY_ROLES,
   ACTION_ROLES,
 } from "./pageAccessPolicy";
@@ -253,6 +254,54 @@ describe("the Viewer/C-Level/Head of Department page (2026-09-21)", () => {
     // to the admin-only rule instead, locking out every intended viewer with no error.
     expect(policyForPage("CRS-Document-Viewer.aspx").adminOnly).toBe(false);
     expect(policyForPage("CRS-Document-Viewer.aspx").roles.length).toBeGreaterThan(0);
+  });
+
+  // ⚠⚠ FOUND 2026-09-22: `policy.roles` listing GLOBAL/SEGVIEW/MEMBER above was not enough on its
+  // own — `isRoleEligibleForPage`/`derivedRolesForPage` both applied the blanket VIEW_ONLY_ROLES
+  // exclusion regardless of what a page's own policy said, so reconciliation never actually
+  // granted a C-Level or plain Viewer group this page. Fixed with `PagePolicy.allowViewOnlyRoles`,
+  // set only on this rule. These three tests pin the fix at the two functions that matter —
+  // `policy.roles` containing the role was already covered above and was never the problem.
+  it("actually OFFERS view-only roles as eligible — the bug this page was built to close", () => {
+    for (const role of ["GLOBAL", "SEGVIEW", "MEMBER", "MEMBERHC"] as GroupMapRole[]) {
+      expect(isRoleEligibleForPage("Document-Viewer.aspx", role)).toBe(true);
+      expect(isRoleEligibleForPage("CRS-Document-Viewer.aspx", role)).toBe(true);
+      expect(isRoleEligibleForPage("File-Viewer.aspx", role)).toBe(true);
+    }
+  });
+
+  it("actually DERIVES a grant for view-only roles — what reconciliation reads to provision the page", () => {
+    const derived = derivedRolesForPage("Document-Viewer.aspx");
+    for (const role of ["GLOBAL", "SEGVIEW", "MEMBER", "MEMBERHC", "DEPTVIEW"]) {
+      expect(derived).toContain(role);
+    }
+    // And it still carries the roles that were never in question, so the fix did not narrow it.
+    for (const role of ["UPL", "UPLHC", "APR", "APRHC"]) {
+      expect(derived).toContain(role);
+    }
+  });
+
+  it("leaves every OTHER page's exclusion exactly as it was — the exemption must not leak", () => {
+    // Same pages the original "excludes MEMBER, GLOBAL and SEGVIEW everywhere" case covers, plus
+    // the two request-shaped pages that must stay Approver-only. If the fix had been a global
+    // toggle instead of a per-policy flag, one or more of these would now wrongly say true.
+    const stillExcluded = [
+      "Upload-Form.aspx",
+      "ApprovalDocument.aspx",
+      "Bulk-Upload.aspx",
+      "CollabHome.aspx",
+      "My-Submissions.aspx",
+      "Folder-Administration.aspx",
+      "Requests.aspx",
+    ];
+    for (const page of stillExcluded) {
+      for (const role of VIEW_ONLY_ROLES) {
+        expect(isRoleEligibleForPage(page, role)).toBe(false);
+      }
+      expect(derivedRolesForPage(page)).not.toEqual(
+        expect.arrayContaining(VIEW_ONLY_ROLES),
+      );
+    }
   });
 });
 

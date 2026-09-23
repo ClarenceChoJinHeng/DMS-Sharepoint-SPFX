@@ -8,6 +8,7 @@ import {
   formatSubmittedAt,
   pickField,
   sortNewestFirst,
+  sortByDecisionRecency,
   statusToDecision,
   submissionKey,
   textOf,
@@ -254,6 +255,44 @@ describe("sortNewestFirst", () => {
       sub({ itemId: 2, created: new Date(2026, 7, 14) }),
     ];
     sortNewestFirst(rows);
+    expect(rows.map((r) => r.itemId)).toEqual([1, 2]);
+  });
+});
+
+describe("sortByDecisionRecency", () => {
+  it("puts the most recently DECIDED file at the top, even when it was uploaded earlier", () => {
+    // Client, 2026-09-23: "ensure the latest approve file stays at the top" — an older upload
+    // decided today must outrank a newer upload decided last week.
+    const rows = [
+      sub({ itemId: 1, created: new Date(2026, 0, 1), modified: new Date(2026, 0, 10) }), // uploaded and decided long ago
+      sub({ itemId: 2, created: new Date(2026, 8, 20), modified: new Date(2026, 8, 21) }), // uploaded recently, decided last week
+      sub({ itemId: 3, created: new Date(2026, 0, 15), modified: new Date(2026, 8, 23) }), // uploaded long ago, decided TODAY
+    ];
+    expect(sortByDecisionRecency(rows).map((r) => r.itemId)).toEqual([3, 2, 1]);
+  });
+
+  it("falls back to `created` when `modified` is missing", () => {
+    const rows = [
+      sub({ itemId: 1, created: new Date(2026, 0, 1) }),
+      sub({ itemId: 2, created: new Date(2026, 7, 14) }),
+    ];
+    expect(sortByDecisionRecency(rows).map((r) => r.itemId)).toEqual([2, 1]);
+  });
+
+  it("sorts a row with neither date LAST, never first", () => {
+    const rows = [
+      sub({ itemId: 1 }),
+      sub({ itemId: 2, modified: new Date(2026, 0, 1) }),
+    ];
+    expect(sortByDecisionRecency(rows).map((r) => r.itemId)).toEqual([2, 1]);
+  });
+
+  it("does not mutate the input", () => {
+    const rows = [
+      sub({ itemId: 1, modified: new Date(2026, 0, 1) }),
+      sub({ itemId: 2, modified: new Date(2026, 7, 14) }),
+    ];
+    sortByDecisionRecency(rows);
     expect(rows.map((r) => r.itemId)).toEqual([1, 2]);
   });
 });

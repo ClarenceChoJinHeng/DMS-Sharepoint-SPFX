@@ -38,6 +38,10 @@ import {
 import { personDisplay } from "../../../shared/userAccess";
 import { EVENT } from "../../../shared/auditLog";
 import { writeAudit } from "../../../shared/spAuditLog";
+import {
+  CURRENT_PROXY_ACCOUNT_EMAIL,
+  CURRENT_PROXY_ACCOUNT_NAME,
+} from "../../../shared/displayName";
 
 type Props = {
   context: WebPartContext;
@@ -133,6 +137,7 @@ const s: Record<string, React.CSSProperties> = {
   inputBad: { borderColor: "#a4262c", background: "#fdf3f4" },
   hint: { fontSize: 11, color: "#666", marginTop: 6, lineHeight: 1.45 },
   err: { fontSize: 11.5, color: "#a4262c", marginTop: 6, lineHeight: 1.45 },
+  link: { color: "#0f6c3f", fontWeight: 600, textDecoration: "underline" },
 };
 
 export default function GroupMembersEditor({
@@ -522,6 +527,28 @@ export default function GroupMembersEditor({
     }
   };
 
+  /* ⚠ THE SERVICE ACCOUNT IS HIDDEN FROM THIS LIST, ON THE OWNERS MOUNT ONLY. Client, 2026-09-23,
+     having just watched gdc@sdguthrie.com get stripped of the rights every proxy flow (tagging,
+     Auto-route, deletion) depends on: *"dont show specifically gdc in the Group Management
+     Adminstrators, I want to make sure they dont accidentally delete."*
+
+     `onRemove` above calls `removeGroupMember` UNCONDITIONALLY — the self/last-admin guards only
+     protect the SEPARATE site-collection-administrator flag, never the underlying Owners group
+     membership itself. So today there is genuinely nothing in code stopping a click here from
+     stripping the proxy account exactly as just happened; this is the fix for that.
+
+     GATED ON `alsoSiteAdmin`, the SAME flag that limits this whole SCA-coupling behaviour to the
+     Owners mount — never on an ordinary group's member list, where gdc may legitimately be a member
+     (he was mapped as a plain uploader the same day this shipped) and hiding him there would be a
+     different, wrong kind of protection: an admin managing that group needs to see everyone in it. */
+  const visibleMembers = (members ?? []).filter(
+    (m) =>
+      !alsoSiteAdmin ||
+      m.email.toLowerCase() !== CURRENT_PROXY_ACCOUNT_EMAIL.toLowerCase(),
+  );
+  const hiddenServiceAccount =
+    alsoSiteAdmin === true && visibleMembers.length < (members ?? []).length;
+
   return (
     <div style={s.wrap}>
       {members === undefined && !failed && (
@@ -542,10 +569,30 @@ export default function GroupMembersEditor({
           is the property that mattered; what is lost is that an admin must infer it from a blank panel
           instead of being told. If duplicate adds ever start appearing, this is where the warning was,
           and it is one block to restore. */}
-      {members !== undefined && members.length === 0 && (
+      {members !== undefined && visibleMembers.length === 0 && (
         <p style={s.hint}>
-          Nobody is in this group yet. Its folder permissions exist and apply
-          the moment someone is added.
+          {hiddenServiceAccount
+            ? "The service account is the only administrator here — see the note below."
+            : "Nobody is in this group yet. Its folder permissions exist and apply the moment someone is added."}
+        </p>
+      )}
+      {hiddenServiceAccount && (
+        <p style={s.hint}>
+          <strong>{CURRENT_PROXY_ACCOUNT_NAME}</strong> ({CURRENT_PROXY_ACCOUNT_EMAIL})
+          is also a system administrator, but is not listed here on purpose —
+          every automated flow on this site (tagging, approval, deletion,
+          routing) runs as this account, so it is kept off this list to rule
+          out an accidental removal. It should only ever be changed by hand
+          at{" "}
+          <a
+            style={s.link}
+            href={`${siteUrl}/_layouts/15/mngsiteadmin.aspx`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Site Collection Administrators
+          </a>
+          .
         </p>
       )}
       {/* SCROLLS (client, 2026-09-16: *"the list is too long"*) — the System Administrators mount
@@ -555,7 +602,7 @@ export default function GroupMembersEditor({
           descendants — so this cannot clip that dropdown the way capping a wider region would.
           Same rule Group Management's own group list and Folder Access already follow. */}
       <div style={{ maxHeight: 260, overflowY: "auto" }}>
-        {(members ?? []).map((m) => (
+        {visibleMembers.map((m) => (
           <div key={m.id} style={s.row}>
             <span style={s.name}>{personDisplay(m.title, m.email)}</span>
             {confirmRemove === m.id ? (

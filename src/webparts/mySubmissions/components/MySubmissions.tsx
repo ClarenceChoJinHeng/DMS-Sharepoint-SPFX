@@ -48,6 +48,7 @@ import {
   formatSubmittedAt,
   pickField,
   sortNewestFirst,
+  sortByDecisionRecency,
   statusToDecision,
   submissionKey,
   textOf,
@@ -77,6 +78,7 @@ import {
   markRecordWithdrawn,
 } from "../../../shared/spSubmissionRecords";
 import { readFileETag } from "../../../shared/deletionGuard";
+import { CURRENT_PROXY_ACCOUNT_NAME } from "../../../shared/displayName";
 // The metadata panel's rows. It DERIVES the tier rows from the item's own fields rather than naming
 // them, which is what makes Region/Estate·Mill appear on a segment nobody wrote code for.
 import {
@@ -1318,6 +1320,22 @@ export default function MySubmissions({
      it, the DETAIL VIEW'S OWN Delete button is right there and needs no fetch at all — `canDeleteSelf`
      is computed from `fieldText`, already loaded the moment the document opened. */
   const openActiveRef = useRef(false);
+  /* ⚠⚠ WITHOUT THIS, THE COSMETIC FIX IN `performWithdraw` UNDOES ITSELF WITHIN THE SAME CLICK
+     (2026-09-22). `writeApprovedDeletionRequest` only SELF-APPROVES a deletion — the real
+     `recycle()` runs later, async, whenever `CRS — Execute approved deletion` next polls. `load()`
+     does a genuinely FRESH read of the live libraries every time it runs (see `liveRows` inside it),
+     and `performWithdraw` calls `await load()` immediately after marking the row optimistically
+     "deleted" — so at that exact moment the document is very likely STILL there, and the fresh
+     merge would silently overwrite the optimistic tag right back to "Approved", in the same
+     function call that just set it.
+     Keyed by `uniqueId`, holding the state the row SHOULD read once the proxy catches up. `load()`
+     re-applies this, every time it runs (not just the one right after the click), until the real
+     merge independently reports the row as gone — at which point it is dropped, so this can never
+     keep predicting after reality has already confirmed it. A `useRef`, not `useState`: it drives no
+     render of its own, `load()`'s own `setRows` is what does that. */
+  const pendingSelfDeleteRef = useRef<Record<string, "deleted" | "withdrawn">>(
+    {},
+  );
   /* Visible feedback for the row-Delete check — client, 2026-09-15: "I can't seem to trigger the
      popup". The fetch is not instant, and with nothing on screen saying so a click reads as having
      done nothing, which is what invited clicking elsewhere while it was still in flight. Cleared
@@ -2019,14 +2037,18 @@ export default function MySubmissions({
     const link = linkedFile.current;
     if (link === undefined || rows === undefined) return;
     linkedFile.current = undefined;
-    try {
-      const u = new URL(window.location.href);
-      u.searchParams.delete("file");
-      u.searchParams.delete("sfi");
-      window.history.replaceState(window.history.state, "", u.toString());
-    } catch {
-      /* an address bar we cannot tidy costs nothing; the ref already stops a second open */
-    }
+    /* ⚠ THE URL IS NO LONGER SCRUBBED HERE — REMOVED 2026-09-23, DELIBERATELY (client:
+       "Check the Document-viewer, everytime after I refresh it immediately shows blank"). This used
+       to strip `?file=`/`?sfi=` via `history.replaceState` the moment the link was read, on the
+       reasoning that "the ref already stops a second open" — true, but that comment was about
+       double-OPENING within one page mount, not about surviving a genuine browser refresh. A real
+       refresh discards every `useRef` (including `linkedFile`/`linkRead`) and re-parses the URL from
+       scratch — so scrubbing the query string meant the NEXT load found nothing to reopen and fell
+       straight to the generic "Open a document directly..." landing message, on
+       `Document-Viewer.aspx` specifically (this is its only entry point; the ordinary My Submissions
+       page has its own tabs to fall back to). Leaving `?file=`/`?sfi=` in the address bar costs
+       nothing: `linkedFile.current = undefined` two lines above is what actually prevents this
+       effect's body running twice in one mount, and it does that with no help from the URL at all. */
     const matches = (r: MergedRow): boolean =>
       (link.id !== "" && (r.uniqueId ?? "").toLowerCase() === link.id) ||
       (link.sfi !== "" &&
@@ -2132,7 +2154,19 @@ export default function MySubmissions({
     /* WHICH SITE GROUPS IS THIS PERSON IN? Needed only to work out what they can already do
        themselves — an empty or failed answer leaves every request button offered, which is the safe
        direction (see `BLANK_POLICY`). */
-    const myGroupIds: number[] = [];
+    /* ⚠⚠ STRING, NOT number[] — `GroupId` on CRS Group Map is a TEXT column (confirmed via
+       FolderManager.tsx/bulkGroups.ts/Requests.tsx, which all type it `string`), while
+       `currentuser/groups` genuinely returns `Id` as a number. This used to be `number[]` compared
+       against `r.GroupId` via a raw `indexOf` a few lines down — a strict-equality type mismatch
+       that can NEVER match ("1242" !== 1242), for any account, on any row. That silently zeroed
+       out `directDelete`/`directDeleteStaging`/`directShare`/`decidesDeletion` for EVERY viewer on
+       the whole site, which is why a genuinely mapped approver (Group Map row present, membership
+       confirmed via Quick Search) still fell into the full "Request deletion" modal instead of
+       either an instant action or the inline "you decide this" notice — found live 2026-09-22 via
+       `scripts/check-approver-direct-rights.js` on `crs@sdguthrie.com` against
+       NBPOLHO_CDS_UPSUPPORT_APPROVER. Mirrors the already-correct pattern in `Requests.tsx`
+       (`myIds: string[]`, built the same way). */
+    const myGroupIds: string[] = [];
     try {
       const gr: SPHttpClientResponse = await context.spHttpClient.get(
         `${siteUrl}/_api/web/currentuser/groups?$select=Id`,
@@ -2143,7 +2177,7 @@ export default function MySubmissions({
         for (const g of ((await gr.json()).value ?? []) as Array<{
           Id?: number;
         }>) {
-          if (typeof g.Id === "number") myGroupIds.push(g.Id);
+          if (typeof g.Id === "number") myGroupIds.push(String(g.Id));
         }
       }
     } catch {
@@ -2159,7 +2193,7 @@ export default function MySubmissions({
       );
       if (res.ok) {
         const rows = ((await res.json()).value ?? []) as Array<{
-          GroupId?: number;
+          GroupId?: string;
           Role?: string;
           UnitTermGuid?: string;
         }>;
@@ -2182,7 +2216,7 @@ export default function MySubmissions({
           /* ⚠ THE REST IS ABOUT THIS VIEWER ONLY, hence the GroupId test. Read the rows of groups
              they are NOT in and a PIC would lose their request buttons because somebody ELSE holds
              delete on their unit — which is precisely the person they are supposed to be asking. */
-          if (myGroupIds.indexOf(r.GroupId ?? -1) === -1) continue;
+          if (myGroupIds.indexOf(String(r.GroupId ?? "")) === -1) continue;
           const add = (list: string[]): void => {
             if (list.indexOf(guid) === -1) list.push(guid);
           };
@@ -2803,6 +2837,25 @@ export default function MySubmissions({
       /* Never fatal. The record is an addition; the list of live files is the page. */
     }
     setRecordNote(note);
+    /* Re-apply any self-deletion this viewer just queued, that the FRESH read above has not caught
+       up with yet — see `pendingSelfDeleteRef`'s own comment. Only overrides a row still reading
+       genuinely live (`recordState === undefined`); a row the real merge ALREADY reports as gone
+       is left exactly as the real data says, and dropped from the pending set — reality has caught
+       up, so there is nothing left to predict. */
+    const pendingDeletes = pendingSelfDeleteRef.current;
+    if (Object.keys(pendingDeletes).length > 0) {
+      const stillPending: Record<string, "deleted" | "withdrawn"> = {};
+      merged = merged.map((r) => {
+        const want = r.uniqueId ? pendingDeletes[r.uniqueId] : undefined;
+        if (want === undefined) return r;
+        if (r.recordState === undefined) {
+          stillPending[r.uniqueId as string] = want;
+          return { ...r, recordState: want };
+        }
+        return r;
+      });
+      pendingSelfDeleteRef.current = stillPending;
+    }
     setRows(sortNewestFirst(merged));
     setLoadError(undefined);
     // Last, and never awaited into the same try: this decides whether the request buttons can be
@@ -3037,6 +3090,45 @@ export default function MySubmissions({
       setWithdrawRow(undefined);
       openActiveRef.current = false;
       setOpen(undefined);
+      /* ⚠⚠ OPTIMISTIC, COSMETIC ONLY (2026-09-22, client: "the tag reflecting kinda slow ... is
+         there anyway we can fix this via cosmetic"). `writeApprovedDeletionRequest` above only
+         SELF-APPROVES the deletion — it writes a `CRS Requests` row and returns; the actual
+         `recycle()` happens later, when `CRS — Execute approved deletion` picks it up on its own
+         trigger poll, so the document is very likely still there right now.
+         TWO PARTS, and BOTH are needed — an earlier version of this had only the first and it
+         silently undid itself: `load()` a few lines down does a genuinely FRESH read of the live
+         libraries every time, so on its own it would immediately overwrite this patch right back to
+         "Approved" within the same click, since the proxy has not run yet.
+         1. `setRows` HERE gives INSTANT visual feedback, before `load()`'s network round trip even
+            starts.
+         2. `pendingSelfDeleteRef` (see its own comment) makes `load()` ITSELF re-apply the same
+            prediction, every time it runs — not just this one call — until the real merge
+            independently confirms the document is gone. That is what stops the immediate `await
+            load()` below (and any later one) from reverting this.
+         `recordState` is read with simple equality everywhere it is consumed (the badge/gone checks
+         a few hundred lines down) and every `record?.xxx` access is optional-chained, so a row
+         missing the full `SubmissionRecord` snapshot still renders correctly — grey badge, no
+         preview, no Open file, just without the archived/replaced/withdrawn detail lines a genuine
+         record row can show. `deleted` for an approved document (its eventual true state once the
+         proxy runs); `withdrawn` for a staging one, mirroring what `markRecordWithdrawn` above
+         already stamps for that case. Matched on `uniqueId`, which `writeApprovedDeletionRequest`
+         already refused to run without. */
+      // `writeApprovedDeletionRequest` above already refused to run without `row.uniqueId`, so this
+      // guard is only here to narrow the type for the computed key — never actually false at this
+      // point, since a failed write already returned before reaching this line.
+      if (row.uniqueId) {
+        pendingSelfDeleteRef.current = {
+          ...pendingSelfDeleteRef.current,
+          [row.uniqueId]: approved ? "deleted" : "withdrawn",
+        };
+      }
+      setRows((prev) =>
+        prev?.map((r) =>
+          r.uniqueId === row.uniqueId
+            ? { ...r, recordState: approved ? "deleted" : "withdrawn" }
+            : r,
+        ),
+      );
       await load();
     } finally {
       setWithdrawing(false);
@@ -3220,12 +3312,21 @@ export default function MySubmissions({
      row carries `status: "Pending"` only because the type demands a value. Handled here beside the
      `All` exception rather than as a fourth string comparison inside a function about approval
      outcomes. */
+  /* ⚠ APPROVED/REJECTED ARE RE-SORTED BY DECISION RECENCY, NOT UPLOAD RECENCY (client, 2026-09-23:
+     "ensure the latest approve file stays at the top"). `rows` itself stays sorted by `created` —
+     that ordering is still right for Pending/Submissions/All/Archive, where nothing has happened yet
+     or the question genuinely is "what did I send most recently" — so this re-sorts only the two
+     tabs where an OLDER upload can legitimately be decided AFTER a newer one, which `created` order
+     would otherwise get backwards. See `sortByDecisionRecency`'s own comment for why `modified` is
+     the proxy used. */
   const shown =
     tab === "All"
       ? filterByTab(rows ?? [], tab)
       : tab === "Archive"
         ? archivedRowsOnly(rows ?? [])
-        : filterByTab(liveRowsOnly(rows ?? []), tab);
+        : tab === "Approved" || tab === "Rejected"
+          ? sortByDecisionRecency(filterByTab(liveRowsOnly(rows ?? []), tab))
+          : filterByTab(liveRowsOnly(rows ?? []), tab);
   /* The tabs that FILTER the flat file list. `Submissions` and `Requests` render their own views and
      their own empty states, so the shared ones below must not fire for them. */
   const isStatusTab = tab !== "Requests" && tab !== "Submissions";
@@ -3831,8 +3932,7 @@ export default function MySubmissions({
             lineHeight: 1.5,
           }}
         >
-          This deletes it straight away — no approver decides this. It moves to
-          the recycle bin and can be restored within 93 days.
+          This deletes it straight away.
         </p>
         {withdrawError && (
           <p
@@ -3990,19 +4090,30 @@ export default function MySubmissions({
           </div>
         )}
         {/* Who approved it, and what they wrote (2026-09-10) — the same two values as the list's
-            new columns, in full rather than clamped. Shown only when there is something to say. */}
+            new columns, in full rather than clamped. Shown only when there is something to say.
+
+            ⚠ SAME GDC FALLBACK AS THE TABLE CELL, ADDED 2026-09-23 SO THE TWO NEVER DISAGREE — a
+            bulk-imported file previously showed "GDC" one click above in the list and nothing here
+            at all, since with no comment either the whole box failed its own render gate. */}
         {open.status === "Approved" &&
-          (open.approvedBy || open.approvalComment) && (
+          (open.approvedBy || open.approvalComment || isBulkUploadRow(open)) && (
             <div style={s.approveBox}>
-              {open.approvedBy && (
+              {open.approvedBy ? (
                 <>
                   <strong>Approved by</strong> {open.approvedBy}
                   {open.approvalComment ? "." : ""}
                 </>
+              ) : (
+                isBulkUploadRow(open) && (
+                  <>
+                    <strong>Approved by</strong> {CURRENT_PROXY_ACCOUNT_NAME}
+                    {open.approvalComment ? "." : ""}
+                  </>
+                )
               )}
               {open.approvalComment && (
                 <>
-                  {open.approvedBy ? " " : ""}
+                  {open.approvedBy || isBulkUploadRow(open) ? " " : ""}
                   <strong>Comment:</strong> {open.approvalComment}
                 </>
               )}
@@ -4140,23 +4251,42 @@ export default function MySubmissions({
              APPROVED half is UNCHANGED and still needs real delete authority — a plain PIC still
              cannot instantly delete an already-approved document. */
           const rights = subjectRights[mergedKey(open)];
+          /* ⚠⚠ `policy.decidesDeletion` FOLDED IN HERE (2026-09-22, client: "I was expecting this
+             popup that is currently being shown for system admin"). `writeApprovedDeletionRequest`
+             (what this button actually calls, via `performWithdraw`) never checks the document's
+             SharePoint ACL — it writes a SELF-APPROVED `CRS Requests` row (`RequestedBy ===
+             DecidedBy`) that the proxy flow then executes. There is no permission reason this was
+             ever limited to `systemAdmin`: anyone who DECIDES deletion for this unit (`APR`/`APRHC`)
+             is exactly as entitled to self-approve it instantly, with nobody else to ask.
+             Previously `decidesThisDeletion` (below) suppressed the "Request deletion" button and
+             showed a text-only redirect to Approval & Request instead — reported live as confusing,
+             since the account got NO popup at all where an admin got a real one. With this clause,
+             `decidesThisDeletion === true` now ALWAYS implies `canDeleteSelf === true` (both read the
+             same `canActDirectly(chain, policy.decidesDeletion)`), so its suppression branches below
+             are structurally unreachable — kept for now with updated comments rather than removed, to
+             avoid a larger cleanup pass in this same change. */
           const canDeleteSelf =
             !approved ||
             systemAdmin ||
             rights?.remove === "granted" ||
-            canActDirectly(chain, policy.directDelete);
+            canActDirectly(chain, policy.directDelete) ||
+            canActDirectly(chain, policy.decidesDeletion);
           const canShareSelf =
             approved &&
             (systemAdmin ||
               rights?.share === "granted" ||
               canActDirectly(chain, policy.directShare));
-          /* ⚠ SUPPRESSES "Request deletion" FOR THE PERSON WHO WOULD DECIDE IT (client, 2026-09-21,
-             on Document-Viewer showing "Request deletion" to an Approver). `canDeleteSelf` above
-             already answers false for an approver on an approved document — since 2026-09-17 they no
-             longer hold `DEL`/`DELHC` directly, execution moved to the proxy flow — so without this
-             they fell into the SAME branch as a genuine PIC asking someone else, and ended up asking
-             THEMSELVES. `systemAdmin` is deliberately excluded: an admin is not "the approver" for
-             any particular unit and this must not silence their request option. */
+          /* ⚠⚠ STRUCTURALLY UNREACHABLE AS OF 2026-09-22 — kept, not removed, see `canDeleteSelf`'s
+             own comment above for why. Originally (2026-09-21) this suppressed "Request deletion" for
+             the person who would decide it and showed a text-only redirect to Approval & Request
+             instead, avoiding a self-loop where an approver asked THEMSELVES. `canDeleteSelf` now
+             folds in the identical `canActDirectly(chain, policy.decidesDeletion)` term, so whenever
+             this is `true`, `canDeleteSelf` is already `true` too — the branches below that read this
+             variable (the inline notice, the extra `showDelete` guard) can no longer fire. Left in
+             place rather than deleted: removing it, the inline-notice text, and every downstream
+             `decidesThisDeletion` reference is a larger, separate cleanup pass this change did not
+             attempt. `systemAdmin` stays excluded from the definition for the same reason as before —
+             an admin is not "the approver" for any particular unit. */
           const decidesThisDeletion =
             approved &&
             !systemAdmin &&
@@ -5288,12 +5418,32 @@ export default function MySubmissions({
                     {/* ── Approved By / Comment (2026-09-10) ───────────────────────────────
                       Client: *"to be able to know who approve and can still be track in the system
                       and not just email"*. A gone row (deleted, replaced, archived, not checked) has
-                      no live item to read, so it shows a dash rather than a stale or guessed value. */}
+                      no live item to read, so it shows a dash rather than a stale or guessed value.
+
+                      ⚠ A BULK-IMPORTED FILE'S `ApprovedBy` IS BLANK ON PURPOSE, AND THAT IS NOW
+                      SHOWN AS THE PROXY ACCOUNT (client, 2026-09-23: *"for files that is auto
+                      approve right, can you put Approved By as GDC in My submission?"*). Bulk
+                      Upload stamps `BulkImport: true`, and the separate auto-approve flow flips
+                      `OData__ModerationStatus` directly with NO `ApprovedBy` write at all — nobody
+                      decided this file, the system did. Contrast a SELF-approved upload
+                      (`autoApproveOwnUpload`, `Form.tsx`): that path DOES stamp `ApprovedBy` with
+                      the uploader's own email, because a real person's own probe genuinely granted
+                      it — so that row already shows a real name here and must never be routed
+                      through this fallback. `isBulkUploadRow` is therefore the ONLY gate: it is
+                      positive-matched on the record's `Source` column (never an exclusion), so a
+                      row with no record at all (predates the record feature, or its write was
+                      refused) stays a plain dash rather than being guessed at. */}
                     <td style={s.td}>
-                      {!r.recordState &&
-                      r.status === "Approved" &&
-                      r.approvedBy ? (
-                        <span style={s.apprBy}>{r.approvedBy}</span>
+                      {!r.recordState && r.status === "Approved" ? (
+                        r.approvedBy ? (
+                          <span style={s.apprBy}>{r.approvedBy}</span>
+                        ) : isBulkUploadRow(r) ? (
+                          <span style={s.apprBy}>
+                            {CURRENT_PROXY_ACCOUNT_NAME}
+                          </span>
+                        ) : (
+                          <span style={s.dash}>—</span>
+                        )
                       ) : (
                         <span style={s.dash}>—</span>
                       )}
@@ -5446,11 +5596,25 @@ export default function MySubmissions({
                                      this page is always the viewer's own upload (`AuthorId eq me`), so
                                      a pending/rejected row needs no role check at all — only the
                                      approved case still needs real delete authority. */
+                                  /* ⚠⚠ SAME FIX AS THE DETAIL VIEW's `canDeleteSelf`, SAME DAY
+                                     (2026-09-22) — see that comment for the full reasoning.
+                                     `policy.decidesDeletion` folded in: the write behind this button
+                                     never checks the document's ACL, so anyone who decides deletion
+                                     for this unit is as entitled to the instant popup as
+                                     `systemAdmin`, with no self-loop risk (it self-approves, it does
+                                     not raise a request to be decided later). */
                                   const canDelete =
                                     !approved ||
                                     systemAdmin ||
                                     rights?.remove === "granted" ||
-                                    canActDirectly(chain, policy.directDelete);
+                                    canActDirectly(
+                                      chain,
+                                      policy.directDelete,
+                                    ) ||
+                                    canActDirectly(
+                                      chain,
+                                      policy.decidesDeletion,
+                                    );
                                   /* ⚠⚠ SAME FIX AS THE DETAIL VIEW's `decidesThisDeletion`, SAME
                                      REASONING, DIFFERENT SURFACE (2026-09-21 — the client pointed at
                                      THIS row-level "Delete" button specifically, asking why it

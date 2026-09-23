@@ -91,7 +91,14 @@ import {
 } from "../../../shared/optionalColumns";
 // Records the upload so My Submissions can still show the file after it is deleted (2026-08-27).
 // Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md
-import { writeSubmissionRecord } from "../../../shared/spSubmissionRecords";
+import {
+  writeSubmissionRecord,
+  markRecordReplaced,
+} from "../../../shared/spSubmissionRecords";
+// Shared with the upload form deliberately, for the same reason `decideClash`/`nextAvailableName` are
+// shared — see the module's own comment. Both screens must not disagree about whether a document was
+// genuinely destroyed.
+import { deleteClashingDraftByProxy } from "../../../shared/clashProxyDeletion";
 import { offersLegalPrivilege } from "../../../shared/legalPrivilege";
 import { newReference } from "../../../shared/submissionGroups";
 import { primeNames } from "../../../shared/spNaming";
@@ -791,36 +798,43 @@ export default function BulkUpload({
     toastTimerRef.current = setTimeout(() => setToast(null), 5000);
   };
 
-  /* The per-file "Replace Existing File" prompt was REMOVED on 2026-08-27, along with the
-     `overwrite=true` it enabled — see the clash branch in `runUpload`. It blocked a 50-file import on
-     a modal per clash, and the answer it invited destroyed a pending document. Nothing replaces it
-     per file; clashes are collected and decided ONCE below. */
+  /* The per-file "Replace Existing File" prompt (native `window.confirm`, one per clash) was
+     REMOVED on 2026-08-27, along with the `overwrite=true` it enabled — see the clash branch in
+     `runUpload`. It blocked a 50-file import on a modal per clash, and the answer it invited
+     destroyed a pending document. Clashes are collected and decided ONCE below instead.
+
+     ⚠ REBUILT 2026-09-23 TO MATCH `Form.tsx`'s CURRENT Yes/No DIALOG EXACTLY (client: "This current
+     popup is from bulk upload, change it to follow Normal upload form... it will follow the same
+     flow as the normal document upload"). Two things changed together:
+       1. A STAGING (pending-draft) clash can now be REPLACED too, via the same proxy-deletion
+          mechanism the upload form uses (`shared/clashProxyDeletion.ts`) — PIC/HoU no longer hold
+          `Edit Items` to overwrite directly, so this goes through a self-approved `CRS Requests`
+          row and `CRS — Execute approved deletion`, exactly like the upload form.
+       2. The rename-then-upload button and the separate `window.confirm()` for the approved-side
+          replace are BOTH gone, replaced by one Yes/No dialog. The `- Copy` suggestion machinery
+          still runs (see `reserved` below) — it is what stops two clashing files in one run being
+          offered the same free name — it simply has no button here any more. Pressing No leaves the
+          file staged (it stays out of `picked`, so it is not re-sent) for the uploader to rename by
+          hand and re-add, same as the upload form's uploader now has to. */
 
   // Success dialog, matching the Form's. Separate from `toast` because this one is
   // modal and has to survive until the user chooses where to go next.
   const [doneOpen, setDoneOpen] = useState<boolean>(false);
 
   /**
-   * Files skipped for a name clash that have a free name to offer, awaiting one decision.
+   * EVERY file that failed on a name clash, whether or not a free one could be offered — a dialog
+   * that lists some of the failures reads as having missed one (client, 2026-08-27: *"the popup
+   * doesn't show two files like a normal upload form, it shows only one for bulk upload"*). Replaces
+   * the earlier `bulkClashes`/`bulkClashNotes` split, which existed only to gate the now-removed
+   * rename button — the upload form unified the same two lists for the identical reason on
+   * 2026-09-04 once its own rename button went.
    *
    * Keyed on the `File` OBJECT, not an index or a name: successful files leave the selection, which
    * shifts every index, and this screen keeps original filenames so two identical ones would collapse
    * together. Same reasoning as `runUpload`'s `renameOverrides`.
    */
   const [bulkClashes, setBulkClashes] = useState<
-    { file: File; from: string; to: string; approvedSide: boolean }[]
-  >([]);
-  /** Set while a replace run is in flight, so the retry does not re-offer the same files. */
-
-  /**
-   * Clashes with NO free name to offer. They still have to appear in the dialog.
-   *
-   * WARN: A DIALOG THAT LISTS SOME OF THE FAILURES LOOKS COMPLETE, which is why this is a separate
-   * list rather than an omission — client, 2026-08-27, on seeing one of two refusals in the popup.
-   * Same split, and the same reason, as the upload form's own `clashNotes`.
-   */
-  const [bulkClashNotes, setBulkClashNotes] = useState<
-    { name: string; detail: string }[]
+    { file: File; from: string; approvedSide: boolean }[]
   >([]);
 
   const activeMode = (): UploadMode | undefined =>
@@ -2099,13 +2113,25 @@ export default function BulkUpload({
      * Files whose APPROVED-SIDE clash the uploader chose to proceed past.
      *
      * Client's revised brief, 2026-08-27: a document already FILED may be replaced by sending a new
-     * copy through approval; a PENDING draft may never be overwritten by anyone.
+     * copy through approval.
      *
      * WARN: SETS NO `overwrite` FLAG. The name is free in the approval library, so this is an ordinary
      * upload - it only stops the approved-side check refusing. The approval-library check is never
      * skipped.
      */
     replaceApprovedFiles?: Set<File>,
+    /**
+     * Files whose STAGING (pending-draft) clash the uploader chose to REPLACE.
+     *
+     * ⚠ REVERSES THE 2026-08-27 RULE — client, 2026-09-23: "apparently client wants to be able to
+     * replace the file on pending and approve". A pending draft is no longer untouchable; it is
+     * replaced the SAME way the upload form does it — by proxy, via `deleteClashingDraftByProxy` —
+     * because this uploader does not hold `Edit Items` to overwrite it directly. This is the ONE
+     * consent that sets `overwrite=true` on the eventual `Files/Add`, and only after the proxy
+     * deletion has confirmed the old draft is genuinely gone (or, failing that, as a direct fallback —
+     * see `directOverwriteFallback` in the loop below, mirroring the upload form exactly).
+     */
+    replaceStagingFiles?: Set<File>,
   ): Promise<{ runError?: string; results: FileResult[] }> => {
     const leaf = selections[selections.length - 1];
     if (!leaf || !leaf.id) {
@@ -2437,6 +2463,9 @@ export default function BulkUpload({
        overwritten either way (`overwrite=false`), but the second file would be refused a second time,
        turning one round trip into two. */
     const reserved: string[] = [];
+    // Used by `deleteClashingDraftByProxy`'s own request bodies (RequestedBy/DecidedBy) — read once,
+    // not per file, since the signed-in account is the same for the whole run.
+    const me = (context.pageContext.user.email ?? "").toLowerCase();
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
@@ -2447,79 +2476,94 @@ export default function BulkUpload({
       const finalName = renameOverrides?.get(file) ?? file.name;
       // Read once, above the approved-side check that consumes it.
       const replaceApproved = replaceApprovedFiles?.has(file) === true;
+      const replaceStaging = replaceStagingFiles?.has(file) === true;
       onPct(i, 0);
       onState(i, "uploading");
       setStatus(`Uploading ${i + 1} of ${files.length} — ${finalName}`);
 
+      /* ⚠ MIRRORS `Form.tsx`'s `uploadStagedFile`: `overwritePending` is driven by CONSENT ALONE,
+         never by whether the earlier listing could actually SEE the clashing draft — a colleague's
+         hidden pending file is invisible to every pre-check by design (Draft Item Security), so
+         gating on visibility would make consent permanently unusable for the exact case it exists
+         for. `directOverwriteFallback` is the same last-resort `Files/Add(overwrite=true)` fallback
+         the upload form falls back to when the proxy deletion cannot be confirmed within its poll
+         budget — expected to itself be refused once PIC/HoU lose `Edit Items` entirely (Task 13),
+         which is the SAFE direction to fail in. */
+      const overwritePending = replaceStaging;
+      let directOverwriteFallback = false;
+      let displacedFileId: string | undefined;
+
       // Duplicate probe in the approval library.
-      /* ⚠ NO OVERWRITE, AND NO PER-FILE PROMPT (2026-08-27). This branch used to ask "Are you sure you
-         want to override this file?" and, on Yes, upload with `overwrite=true` — the ONLY path in the
-         whole system that could destroy a pending document. Two things were wrong with it:
+      /* ⚠ SKIPPED ENTIRELY WHEN `replaceStaging` IS ALREADY GIVEN — there is nothing left for this
+         listing to decide. Consent means "replace whatever is there", and the delete-then-upload
+         block below (`if (overwritePending)`) resolves the clashing item's own identity directly
+         rather than re-deriving it from a folder listing that, for a colleague's HIDDEN draft, would
+         not show it anyway (Draft Item Security). Mirrors `Form.tsx`, where `overwritePending` no
+         longer consults its own pre-check's `inStaging` once `decideClash` runs (2026-09-06 fix).
 
-           1. It DESTROYED. A pending file has been approved by nobody, which was the original
-              argument for allowing it, but it is still somebody's upload and there is no undo.
-           2. It ASKED PER FILE, blocking a 50-file import on a modal. An admin importing historical
-              documents is exactly the person who clicks Yes through the fifth prompt without reading
-              it, and every Yes was a document gone.
-
-         Now it SKIPS and offers a free name, decided ONCE at the end of the run — the same model as
-         the upload form, so the two screens behave alike. The listing gives the names a suggestion
-         needs, in the same single request the old `Exists` probe cost. */
-      try {
-        const listRes: SPHttpClientResponse = await context.spHttpClient.get(
-          `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files?$select=Name&$top=5000`,
-          SPHttpClient.configurations.v1,
-          { headers: { Accept: "application/json;odata=nometadata" } },
-        );
-        if (listRes.ok) {
-          const rows = ((await listRes.json()).value ?? []) as Array<{
-            Name?: string;
-          }>;
-          const here = rows
-            .map((r) => r.Name ?? "")
-            .filter((n) => n.length > 0);
-          if (here.some((n) => n.toLowerCase() === finalName.toLowerCase())) {
-            /* WARN: THE SUGGESTION MUST CLEAR BOTH LIBRARIES, and this branch was only clearing one.
-               The file lands in the approval library NOW and is routed to the approved side LATER by
-               auto-approve plus Auto-route, so a name free only here just moves the collision to
-               `Copy file` - which renames it with SharePoint's own convention and tells nobody. The
-               approved-side branch above has said this since 1.0.274.0; its sibling had not. */
-            const taken = here
-              .concat(
-                approvedSideLeaf
-                  ? (await approvedSideClashInfo(approvedSideLeaf, finalName))
-                      .taken
-                  : [],
-              )
-              .concat(reserved);
-            const free = nextAvailableName(finalName, taken);
-            if (free && free.toLowerCase() !== finalName.toLowerCase())
-              reserved.push(free);
-            out.push({
-              name: finalName,
-              outcome: "skipped",
-              detail: "A document with this name is already in this folder.",
-              nameClash: true,
-              suggestedName:
-                free && free.toLowerCase() !== finalName.toLowerCase()
-                  ? free
-                  : undefined,
-            });
-            onState(i, "skipped");
-            continue;
+         On the FIRST pass (no consent yet), this still runs exactly as it always has: it SKIPS and
+         offers a free name, decided ONCE at the end of the run. */
+      if (!replaceStaging) {
+        try {
+          const listRes: SPHttpClientResponse = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files?$select=Name&$top=5000`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (listRes.ok) {
+            const rows = ((await listRes.json()).value ?? []) as Array<{
+              Name?: string;
+            }>;
+            const here = rows
+              .map((r) => r.Name ?? "")
+              .filter((n) => n.length > 0);
+            if (here.some((n) => n.toLowerCase() === finalName.toLowerCase())) {
+              /* WARN: THE SUGGESTION MUST CLEAR BOTH LIBRARIES, and this branch was only clearing
+                 one. The file lands in the approval library NOW and is routed to the approved side
+                 LATER by auto-approve plus Auto-route, so a name free only here just moves the
+                 collision to `Copy file` - which renames it with SharePoint's own convention and
+                 tells nobody. The approved-side branch above has said this since 1.0.274.0; its
+                 sibling had not. */
+              const taken = here
+                .concat(
+                  approvedSideLeaf
+                    ? (await approvedSideClashInfo(approvedSideLeaf, finalName))
+                        .taken
+                    : [],
+                )
+                .concat(reserved);
+              const free = nextAvailableName(finalName, taken);
+              if (free && free.toLowerCase() !== finalName.toLowerCase())
+                reserved.push(free);
+              out.push({
+                name: finalName,
+                outcome: "skipped",
+                detail: "A document with this name is already in this folder.",
+                nameClash: true,
+                suggestedName:
+                  free && free.toLowerCase() !== finalName.toLowerCase()
+                    ? free
+                    : undefined,
+              });
+              onState(i, "skipped");
+              continue;
+            }
           }
+        } catch {
+          // Unreadable folder — proceed. `overwrite=false` on the write is the real guarantee, and an
+          // unanswerable check must not become a new way to be blocked.
         }
-      } catch {
-        // Unreadable folder — proceed. `overwrite=false` on the write is the real guarantee, and an
-        // unanswerable check must not become a new way to be blocked.
       }
 
-      /* WARN: THE STAGING CLASH IS EVALUATED FIRST, AND THE ORDER IS THE CLIENT'S RULE.
-         *"if the file is existing in document library and also exist in staging library, don't allow
-         them to overwrite"* (2026-08-27). A name taken in BOTH libraries must come back as the
-         RENAME-ONLY refusal, never as the replaceable one - the staging branch above `continue`s,
-         so `approvedClash` is never set and the dialog cannot offer *Send for approval as a
-         replacement* for a file whose real blocker is a pending draft. */
+      /* ⚠ THE STAGING CLASH IS STILL RESOLVED FIRST, but the RULE it feeds changed, 2026-09-23
+         (client: "apparently client wants to be able to replace the file on pending and approve").
+         Until then, a name taken in staging made "both" come back rename-only, since a pending draft
+         could never be replaced at all. Now `replaceStaging` alone unlocks BOTH: replacing the draft
+         means that draft goes through approval, and Auto-route then replaces the filed copy anyway —
+         exactly the upload form's own rule (`decideClash` in `uploadBatches.ts`, "`both` IS UNLOCKED
+         BY THE STAGING CONSENT, NEVER THE APPROVED ONE"). Skipping this check when `replaceStaging`
+         is already true is what makes that hold here too — a file consented for staging replacement
+         must never be blocked a second time by ALSO looking taken on the approved side. */
       /* ── Duplicate on the APPROVED side ────────────────────────────────────
          Checked FIRST, and it is a refusal rather than a prompt.
 
@@ -2543,7 +2587,7 @@ export default function BulkUpload({
          before this existed. It is an extra guard, and a throttle must not become a new way to be
          blocked. `probeFolderByPath` already uses the OData parameter alias form, which is what
          keeps a deep path from returning 400 instead of 404 (gotcha #9). */
-      if (approvedSideLeaf && !replaceApproved) {
+      if (approvedSideLeaf && !replaceApproved && !replaceStaging) {
         const approved = await approvedSideClashInfo(
           approvedSideLeaf,
           finalName,
@@ -2559,7 +2603,7 @@ export default function BulkUpload({
           out.push({
             name: finalName,
             outcome: "skipped",
-            detail: `A document with this name is already filed in ${uploadingHc() ? "HC Documents" : "Documents"}. Nothing filed has been replaced — the original has already been approved, so check this is not the same document.`,
+            detail: `There is already an existing file with the same name.`,
             nameClash: true,
             approvedClash: true,
             suggestedName:
@@ -2572,9 +2616,89 @@ export default function BulkUpload({
         }
       }
 
+      /* ── The clashing draft is recycled BY PROXY, before the physical upload ──────────────
+         Mirrors `Form.tsx` exactly: when it succeeds, the name must be genuinely free before
+         `Files/Add` is asked to create something there (hence `overwrite=false` on that path); when
+         it cannot be confirmed, `directOverwriteFallback` takes over and `Files/Add` does the
+         overwrite itself, as it did before this proxy mechanism existed. See
+         `shared/clashProxyDeletion.ts` for the full mechanism. */
+      if (overwritePending) {
+        let uniqueId: string | undefined;
+        let path: string | undefined;
+        /* ⚠ THIS READ CANNOT SEE A COLLEAGUE'S HIDDEN DRAFT — `Files('name')` is the exact resource
+           Draft Item Security trims away for a pending file that is not this uploader's own. It
+           succeeds for the ORDINARY case (this uploader's own earlier upload, or a draft they can
+           otherwise see), which is worth trying first since it also yields `SubmissionFileId` — the
+           displaced record's own stamp — for free. */
+        try {
+          const priorRes: SPHttpClientResponse = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files('${encodeURIComponent(finalName)}')` +
+              `/ListItemAllFields?$select=SubmissionFileId,UniqueId`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (priorRes.ok) {
+            const prior = await priorRes.json();
+            const rawStamp =
+              typeof prior?.SubmissionFileId === "string"
+                ? prior.SubmissionFileId.trim()
+                : "";
+            if (rawStamp.length > 0) displacedFileId = rawStamp;
+            const rawUniqueId =
+              typeof prior?.UniqueId === "string" ? prior.UniqueId.trim() : "";
+            if (rawUniqueId.length > 0) uniqueId = rawUniqueId;
+          }
+        } catch {
+          /* Bookkeeping read only — a consented upload must never be held up by it. */
+        }
+        /* ⚠ THE HIDDEN-DRAFT FALLBACK — folders are NOT subject to Draft Item Security, only the
+           moderated FILE inside one is, so this read succeeds even when the file's own properties do
+           not. Read only when the visible attempt above found nothing, so the ordinary case costs
+           nothing extra. Same as `Form.tsx`'s identical fallback. */
+        if (!uniqueId) {
+          try {
+            const folderRes = await context.spHttpClient.get(
+              `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')?$select=ServerRelativeUrl`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (folderRes.ok) {
+              const folder = await folderRes.json();
+              const folderPath =
+                typeof folder?.ServerRelativeUrl === "string"
+                  ? folder.ServerRelativeUrl
+                  : "";
+              if (folderPath.length > 0) path = `${folderPath}/${finalName}`;
+            }
+          } catch {
+            /* Same rule as above. */
+          }
+        }
+        if (!uniqueId && !path) {
+          out.push({
+            name: finalName,
+            outcome: "failed",
+            detail:
+              "Could not confirm which existing document to replace, so nothing was uploaded. Try again in a moment.",
+          });
+          onState(i, "failed");
+          continue;
+        }
+        const cleared = await deleteClashingDraftByProxy(
+          context.spHttpClient,
+          siteUrl,
+          me,
+          { uniqueId, path },
+          finalName,
+        );
+        if (!cleared) directOverwriteFallback = true;
+      }
+
       try {
-        // HARDCODED FALSE, matching the upload form. Nothing on this screen may replace a document.
-        const addUrl = `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=false)?$select=ServerRelativeUrl`;
+        // `overwrite` is `true` ONLY on the last-resort fallback above — otherwise the proxy
+        // deletion has already made the name genuinely free, so an ordinary `overwrite=false`
+        // write is what actually creates the replacement (matching the upload form exactly).
+        const addUrl = `${siteUrl}/_api/web/GetFolderById(guid'${folderId}')/Files/Add(url='${encodeURIComponent(finalName)}',overwrite=${directOverwriteFallback ? "true" : "false"})?$select=ServerRelativeUrl`;
 
         let uploadRes = await postFileWithProgress(
           addUrl,
@@ -2700,6 +2824,24 @@ export default function BulkUpload({
             onState(i, "skipped");
             continue;
           }
+          /* ⚠ THE FALLBACK OVERWRITE ITSELF WAS REFUSED — expected the moment `CRS Upload` loses
+             `Edit Items` entirely (Task 13 of the 2026-09-18 tag/approve-by-proxy design), and this
+             is the SAFE direction to fail in: SharePoint refuses to overwrite the still-pending
+             draft rather than this account silently reusing its identity while `CRS — Execute
+             approved deletion` might still be about to recycle it. Checked AFTER `looksLikeNameClash`
+             — a throttle or network blip on this same fallback attempt deserves the identical "try
+             again" answer, not a raw error — matching `Form.tsx`'s own ordering exactly. */
+          if (directOverwriteFallback) {
+            out.push({
+              name: finalName,
+              outcome: "failed",
+              detail:
+                "Still clearing the way for this replacement — the earlier version has not finished " +
+                "being removed yet. Try uploading again in a moment.",
+            });
+            onState(i, "failed");
+            continue;
+          }
 
           out.push({ name: finalName, outcome: "failed", detail });
           onState(i, "failed");
@@ -2805,6 +2947,21 @@ export default function BulkUpload({
           }
         }
 
+        /* ⚠ THE DISPLACED RECORD IS MARKED "Replaced" ONLY NOW, AFTER TAGGING HAS SUCCEEDED —
+           matching `Form.tsx` exactly (`markRecordReplaced` there, at the equivalent point). If
+           this document could never be tagged, the displaced record stays reading "Deleted" —
+           the honest answer, since the replacement itself is not genuinely complete either.
+           Cannot throw; its own failures are logged and never the uploader's problem — the record
+           falls back to reading "Deleted", which is what it did before this feature existed. */
+        if (displacedFileId) {
+          await markRecordReplaced(
+            context.spHttpClient,
+            siteUrl,
+            displacedFileId,
+            me,
+          );
+        }
+
         out.push({ name: finalName, outcome: "uploaded" });
         onState(i, "done", uploadedSru);
       } catch (err) {
@@ -2835,6 +2992,7 @@ export default function BulkUpload({
     files: File[];
     overrides: Map<File, string>;
     replaceApproved?: Set<File>;
+    replaceStaging?: Set<File>;
   }): Promise<void> => {
     // Before anything else, and re-read rather than trusted from mount: an administrator may have
     // paused uploads since this page was opened. Nothing is lost — the selection stays as it is.
@@ -3023,6 +3181,7 @@ export default function BulkUpload({
         onPct,
         retry?.overrides,
         retry?.replaceApproved,
+        retry?.replaceStaging,
       );
       setStatus("");
       if (outcome.runError) {
@@ -3068,31 +3227,20 @@ export default function BulkUpload({
       });
       setPicked((prev) => prev.filter((p) => !uploadedFiles.has(p.file)));
 
-      /* Clashes with a free name to offer, decided once. Mapped back to the File that produced each
-         result so the retry can force the name onto the right object. */
-      const clashes: {
-        file: File;
-        from: string;
-        to: string;
-        approvedSide: boolean;
-      }[] = [];
-      const notes: { name: string; detail: string }[] = [];
+      /* EVERY file that failed on a name clash, decided once — whether or not a free name could be
+         offered (2026-08-27), since the suggestion is no longer what the dialog acts on (2026-09-23,
+         matching `Form.tsx`'s own unified `clashRows`; see the state's own comment). Mapped back to
+         the File that produced each result so the retry can target the right object. */
+      const clashes: { file: File; from: string; approvedSide: boolean }[] = [];
       outcome.results.forEach((r, i) => {
-        if (r.outcome !== "skipped" || !r.nameClash) return;
-        if (r.suggestedName && files[i]) {
-          clashes.push({
-            file: files[i],
-            from: r.name,
-            to: r.suggestedName,
-            approvedSide: r.approvedClash === true,
-          });
-        } else {
-          // No free name could be found — still say so, or the dialog omits it silently.
-          notes.push({ name: r.name, detail: r.detail ?? "" });
-        }
+        if (r.outcome !== "skipped" || !r.nameClash || !files[i]) return;
+        clashes.push({
+          file: files[i],
+          from: r.name,
+          approvedSide: r.approvedClash === true,
+        });
       });
       setBulkClashes(clashes);
-      setBulkClashNotes(notes);
 
       if (!anyProblem && okCount > 0) {
         // Same dialog as the single-file Form. A toast was easy to miss at the end of a long run, and
@@ -3135,6 +3283,7 @@ export default function BulkUpload({
     files: File[];
     overrides: Map<File, string>;
     replaceApproved?: Set<File>;
+    replaceStaging?: Set<File>;
   }): Promise<void> => {
     setPreflight(true);
     try {
@@ -4061,6 +4210,12 @@ export default function BulkUpload({
                 )}
               </label>
             </div>
+            {/* Sits above all three file-area states below — visible whenever files are
+            being picked or reviewed, not just the empty dropzone. Client, 2026-09-23. */}
+            <div style={{ color: "#666", fontSize: "12px", fontWeight: 400 }}>
+              Note: Please make sure the file names are correct before
+              uploading.
+            </div>
             {/* The file area has three states: empty drop zone, selected list, and
             live upload progress. Spec 2026-08-03 §3. */}
             {settings.allowedFileTypes.kind === "none" ? (
@@ -4347,123 +4502,108 @@ export default function BulkUpload({
       </div>
 
       {/* ── Name clashes, decided ONCE after the run ─────────────────────────────
-          Replaces the per-file "Replace Existing File" prompt and its `overwrite=true`. Same shape as
-          the upload form's dialog on purpose: an admin who has met one should recognise the other.
-          Icon is RED (`#FF4646`, client's reference graphic 2026-09-03), matching the same swap made
-          on the upload form's identical dialog — was amber (`#FF952A`) on both. */}
-      {(bulkClashes.length > 0 || bulkClashNotes.length > 0) && (
+          ⚠ REBUILT 2026-09-23 TO MATCH `Form.tsx`'s CURRENT Yes/No DIALOG EXACTLY, structure and
+          wording both (client: "change it to follow Normal upload form... it will follow the same
+          flow as the normal document upload") — see the long comment at `bulkClashes`' own
+          declaration for what changed and why. Icon stays RED (`#FF4646`, client's reference
+          graphic 2026-09-03) and the popup its DEFAULT width (420px) rather than the earlier 520px
+          override, matching the upload form's own 2026-09-11 sizing decision. */}
+      {bulkClashes.length > 0 && (
         <div className="dms-popup-overlay" role="dialog" aria-modal="true">
-          <div className="dms-popup" style={{ maxWidth: 520 }}>
-            <svg
-              className="dms-popup-svg"
-              viewBox="0 0 184 184"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <circle
-                opacity="0.3"
-                cx="91.9999"
-                cy="92"
-                r="75.4872"
-                fill="#FF4646"
-              />
-              <circle cx="92" cy="92" r="92" fill="#FF4646" fillOpacity="0.2" />
-              <circle
-                cx="92.0003"
-                cy="91.9998"
-                r="61.3333"
-                fill="white"
-                stroke="#FF4646"
-                strokeWidth="3"
-              />
-              <path
-                d="M93 66L93 100"
-                stroke="#FF4646"
-                strokeWidth="10"
-                strokeLinecap="round"
-              />
-              <path
-                d="M93 116.804L93 118"
-                stroke="#FF4646"
-                strokeWidth="10"
-                strokeLinecap="round"
-              />
-            </svg>
+          <div className="dms-popup">
+            <div className="dms-popup-icon">
+              <svg
+                className="dms-popup-svg"
+                viewBox="0 0 184 184"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <circle
+                  opacity="0.3"
+                  cx="91.9999"
+                  cy="92"
+                  r="75.4872"
+                  fill="#FF4646"
+                />
+                <circle
+                  cx="92"
+                  cy="92"
+                  r="92"
+                  fill="#FF4646"
+                  fillOpacity="0.2"
+                />
+                <circle
+                  cx="92.0003"
+                  cy="91.9998"
+                  r="61.3333"
+                  fill="white"
+                  stroke="#FF4646"
+                  strokeWidth="3"
+                />
+                <path
+                  d="M93 66L93 100"
+                  stroke="#FF4646"
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M93 116.804L93 118"
+                  stroke="#FF4646"
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
             <p className="dms-popup-title" style={{ color: "#a4262c" }}>
-              {bulkClashes.length + bulkClashNotes.length === 1
-                ? "A document with that name already exists"
-                : `${bulkClashes.length + bulkClashNotes.length} documents with those names already exist`}
+              {bulkClashes.length === 1
+                ? "Replace Existing File"
+                : "Replace Existing Files"}
             </p>
-            <p className="dms-popup-msg" style={{ marginBottom: 16 }}>
-              {bulkClashes.length + bulkClashNotes.length === 1
-                ? "It was"
-                : "They were"}{" "}
-              not uploaded. Nothing already filed has been changed or replaced.
-            </p>
+            {/* ONE plain filename per row, no strikethrough and no suggested name — matching the
+                upload form exactly (its own 2026-09-04 redesign: with only Yes/No there is no second
+                name to show, and a strikethrough implied the file was already gone). */}
             <div
               style={{
                 background: "#faf9f8",
                 border: "1px solid #edebe9",
                 borderRadius: 8,
                 padding: "12px 14px",
-                marginBottom: 20,
-                maxHeight: "40vh",
+                margin: "14px 0",
+                maxHeight: "38vh",
                 overflowY: "auto",
                 textAlign: "left",
               }}
             >
-              {bulkClashes.map((c) => (
+              {bulkClashes.map((c, i) => (
                 <div
                   key={c.from + String(c.file.size)}
                   style={{
                     fontSize: 13,
-                    lineHeight: 1.7,
+                    lineHeight: 1.6,
                     wordBreak: "break-word",
-                    marginBottom: 8,
+                    paddingTop: i === 0 ? 0 : 10,
+                    marginTop: i === 0 ? 0 : 10,
+                    borderTop: i === 0 ? "none" : "1px solid #edebe9",
                   }}
                 >
-                  <span
-                    style={{ color: "#605e5c", textDecoration: "line-through" }}
-                  >
-                    {c.from}
-                  </span>
-                  <br />
-                  <strong style={{ color: "#0f6c3f" }}>{c.to}</strong>
-                  {c.approvedSide && (
-                    <>
-                      <br />
-                      <span style={{ color: "#8a4b00", fontSize: 12 }}>
-                        The original has already been approved and filed — check
-                        this is not the same document.
-                      </span>
-                    </>
-                  )}
-                </div>
-              ))}
-              {bulkClashNotes.map((x) => (
-                <div
-                  key={`note-${x.name}`}
-                  style={{
-                    fontSize: 13,
-                    lineHeight: 1.7,
-                    wordBreak: "break-word",
-                    marginBottom: 8,
-                  }}
-                >
-                  <strong style={{ color: "#8a4b00" }}>{x.name}</strong>
-                  <br />
-                  <span style={{ color: "#605e5c", fontSize: 12 }}>
-                    {x.detail}
-                  </span>
+                  <span style={{ color: "#323130" }}>{c.from}</span>
                 </div>
               ))}
             </div>
-            {/* WARN: THE SAME LAYOUT AS THE UPLOAD FORM, INLINE AND WRAPPING (client,
-                2026-08-27: the bulk popup did not match the form). `dms-popup-actions` has no
-                flex-wrap, so THREE buttons - the normal case once a document is already filed on
-                the approved side - were squeezed onto one row here while the form let the third
-                drop to a second line. Two screens asking the same question must not look like
-                two different systems. */}
+            <p
+              style={{
+                fontSize: 13,
+                color: "#605e5c",
+                textAlign: "left",
+                margin: "0 0 14px",
+                lineHeight: 1.55,
+              }}
+            >
+              There is already an existing file with the same name.
+              <br />
+              Please confirm if you would like to proceed to overwrite{" "}
+              {bulkClashes.length === 1 ? "this file" : "these files"}.
+            </p>
             <div
               style={{
                 display: "flex",
@@ -4472,104 +4612,64 @@ export default function BulkUpload({
                 flexWrap: "wrap",
               }}
             >
-              {/* No Proceed when nothing can be renamed — Close is then the only honest action. */}
-              {bulkClashes.length > 0 && (
-                <button
-                  className="dms-popup-btn confirm"
-                  onClick={() => {
-                    /* Retry ONLY these files, under the new names. The list is passed explicitly rather
-                     than read from `picked`: the successful files were removed from it a moment ago
-                     and that setState has not landed, so reading it here would re-send them. */
-                    const overrides = new Map<File, string>();
-                    const retryFiles: File[] = [];
-                    for (const c of bulkClashes) {
-                      overrides.set(c.file, c.to);
-                      retryFiles.push(c.file);
-                    }
-                    setBulkClashes([]);
-                    setBulkClashNotes([]);
-                    handleUpload({ files: retryFiles, overrides }).catch(
-                      () => undefined,
-                    );
-                  }}
-                >
-                  {bulkClashes.length === 1
-                    ? "Upload with the new name"
-                    : "Upload with the new names"}
-                </button>
-              )}
-              {/* FILE A REPLACEMENT (client's revised brief, 2026-08-27). Offered ONLY for a document
-                  already filed on the APPROVED side. A clash in the approval library is a PENDING
-                  draft, which the client ruled may never be overwritten by anyone, so those stay
-                  rename-only.
-
-                  WARN: NO `overwrite` FLAG. The file goes to the approver under the same name; the
-                  filed copy is replaced by the ROUTING flow, and Auto-route currently copies with a
-                  NEW NAME on conflict - so without the flow change this does not replace anything. */}
-              {bulkClashes.some((c) => c.approvedSide) && (
-                <button
-                  className="dms-popup-btn danger"
-                  onClick={() => {
-                    const targets = bulkClashes.filter((c) => c.approvedSide);
-                    const one = targets.length === 1;
-                    /* ⚠ THIS USED TO SAY "sent for approval … replaced only once an approver approves",
-                     copied from the upload form where it IS true. It is not true here, and the
-                     difference is the whole risk: Bulk Upload stamps `BulkImport`, the auto-approve
-                     flow fires within a minute, and Auto-route replaces the filed document. NOBODY
-                     REVIEWS IT. The old wording told an admin there was a human gate between their
-                     click and an approved record being overwritten, and there is none.
-
-                     Corrected 2026-08-28, after the client described this path in their own words —
-                     *"Bulk upload is allowed to overwrite Document Library"*, which is what actually
-                     happens. The behaviour was already right; only the description was wrong. */
-                    const ok = window.confirm(
-                      `Replace the ${one ? "document" : `${targets.length} documents`} already filed in ` +
-                        `${uploadingHc() ? "HC Documents" : "Documents"}?\n\n` +
-                        `${one ? "It is" : "They are"} replaced AUTOMATICALLY — bulk imports skip ` +
-                        `approval, so nobody reviews this first.\n\n` +
-                        /* ⚠ NOT "stays in version history", which is what this said until 2026-08-31.
-                         Auto-route's Copy file DELETES the destination item and creates a new one,
-                         so version history never sees the old content — proven on site. The recycle
-                         bin is the only recovery, and it keeps the ORIGINAL uploader's name. */
-                        `The ${one ? "document it replaces is" : "documents they replace are"} moved ` +
-                        `to the site recycle bin, restorable for 93 days.`,
-                    );
-                    if (!ok) return;
-                    const replaceApproved = new Set<File>();
-                    const retryFiles: File[] = [];
-                    for (const c of targets) {
-                      replaceApproved.add(c.file);
-                      retryFiles.push(c.file);
-                    }
-                    setBulkClashes([]);
-                    setBulkClashNotes([]);
-                    // No renames: these keep their own names, which is the point.
-                    handleUpload({
-                      files: retryFiles,
-                      overrides: new Map<File, string>(),
-                      replaceApproved,
-                    }).catch(() => undefined);
-                  }}
-                >
-                  {/* "Replace", not "Send for approval" — see the confirm above. A bulk import is
-                    auto-approved, so this button IS the replacement, not a request for one. */}
-                  {bulkClashes.filter((c) => c.approvedSide).length === 1
-                    ? "Replace the filed document"
-                    : "Replace the filed documents"}
-                </button>
-              )}
+              {/* ⚠ YES REPLACES EACH ROW BY WHICHEVER MECHANISM THAT ROW NEEDS, exactly mirroring
+                  `Form.tsx`'s own Yes handler:
+                    • `approvedSide` → the file goes to the approval library like any other upload,
+                      under the SAME name — nothing is destroyed by pressing this. Auto-route
+                      replaces the filed copy later, automatically (see the warning above).
+                    • everything else (a pending-draft clash) → the ONLY path that sets
+                      `overwrite=true`, via the proxy-deletion mechanism in `runUpload`. It destroys
+                      a pending draft — possibly a colleague's invisible one — and version history on
+                      both approval libraries is what makes that recoverable. */}
+              <button
+                className="dms-popup-btn confirm"
+                onClick={() => {
+                  const replaceApproved = new Set<File>();
+                  const replaceStaging = new Set<File>();
+                  const retryFiles: File[] = [];
+                  for (const c of bulkClashes) {
+                    retryFiles.push(c.file);
+                    if (c.approvedSide) replaceApproved.add(c.file);
+                    else replaceStaging.add(c.file);
+                  }
+                  setBulkClashes([]);
+                  // No renames: every one of these keeps its own name, which is the point of Yes.
+                  handleUpload({
+                    files: retryFiles,
+                    overrides: new Map<File, string>(),
+                    replaceApproved:
+                      replaceApproved.size > 0 ? replaceApproved : undefined,
+                    replaceStaging:
+                      replaceStaging.size > 0 ? replaceStaging : undefined,
+                  }).catch(() => undefined);
+                }}
+              >
+                Yes
+              </button>
               <button
                 className="dms-popup-btn cancel"
                 onClick={() => {
+                  // Nothing to undo — every file is already skipped with its refusal showing, which
+                  // is where an uploader renames it by hand before re-adding it.
                   setBulkClashes([]);
-                  setBulkClashNotes([]);
+                  /* ⚠⚠ `live` MUST BE NULLED HERE TOO, OR THE PICKER IS GONE FOR GOOD (client,
+                     2026-09-23: "when I click cancel I cannot add more files and I have to cancel
+                     the entire thing"). `live` is set once per run (line ~3144) and — before this —
+                     was only ever cleared by `resetForm` (the full wipe) or by `dropFromRun` once
+                     every single row had been dropped one at a time. Declining a clash did neither,
+                     so the render stayed on `live ? progress : ...` FOR EVER: no dropzone, no
+                     "Add more", with the two clashing files still correctly sitting in `picked`
+                     (only UPLOADED files are ever removed from it) and no way back to them.
+
+                     `picked` is left untouched on purpose — the clashing files stay selected so the
+                     uploader can either press Upload again as-is (right back to this dialog) or
+                     remove them and add a renamed copy, per the comment above. `results` also stays,
+                     since it is still an accurate description of the run that just happened; the
+                     next `addFiles`/`removeFile` or the next run is what retires it. */
+                  setLive(null);
                 }}
               >
-                {/* The form's own wording, so the two dialogs read alike: the button says what the
-                    uploader is choosing to do instead, not merely that it closes. */}
-                {bulkClashes.length === 0
-                  ? "Close"
-                  : `Cancel, I’ll rename ${bulkClashes.length === 1 ? "it" : "them"}`}
+                No
               </button>
             </div>
           </div>

@@ -341,17 +341,26 @@ export default function PageAccess({
      admin page and an approver page would come back slightly different. */
 
   /**
-   * Groups worth ever considering for this page. Two exclusions are absolute:
-   *   - the site-entry group, because it contains everyone;
-   *   - view-only roles (MEMBER / GLOBAL / SEGVIEW), which never open an upload/approval-shaped page.
+   * Groups worth ever considering for this page. Two exclusions, one of them conditional:
+   *   - the site-entry group, because it contains everyone — always excluded;
+   *   - view-only roles (MEMBER / GLOBAL / SEGVIEW), which never open an upload/approval-shaped
+   *     page — EXCEPT the one page built specifically to serve them (Document-Viewer, see
+   *     `PagePolicy.allowViewOnlyRoles`'s own comment in pageAccessPolicy.ts). Without this
+   *     exception a C-Level group correctly granted that page by reconciliation would still never
+   *     appear here — this screen would go on showing "nobody has access" over a real grant.
    * This is a pool to filter FROM, not the answer — the answer is `granted`, below.
    */
+  const pageAllowsViewOnly = page !== undefined && policyForPage(page.fileName).allowViewOnlyRoles === true;
   const allGroups = groups
     .filter(
       (g) =>
         g.title.trim().toLowerCase() !== siteEntryGroupTitle().toLowerCase(),
     )
-    .filter((g) => VIEW_ONLY_ROLES.indexOf(roleFromGroupName(g.title)) === -1)
+    .filter(
+      (g) =>
+        pageAllowsViewOnly ||
+        VIEW_ONLY_ROLES.indexOf(roleFromGroupName(g.title)) === -1,
+    )
     .sort((a, b) => a.title.localeCompare(b.title));
 
   /**

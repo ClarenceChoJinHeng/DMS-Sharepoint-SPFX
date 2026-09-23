@@ -21,7 +21,7 @@ import {
   markRecordReplaced,
   readSubmissionRecordByFileId,
 } from "../../../shared/spSubmissionRecords";
-import { readFileETag } from "../../../shared/deletionGuard";
+import { deleteClashingDraftByProxy } from "../../../shared/clashProxyDeletion";
 import { formatSubmittedAt } from "../../../shared/mySubmissions";
 import { useState, useEffect, useRef } from "react";
 import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
@@ -2970,112 +2970,11 @@ export default function Form({ context }: IFormProps): React.ReactElement {
      * the deletion request itself could not be written, or if it never resolves within the poll
      * budget below.
      */
-    const deleteClashingDraftByProxy = async (
-      clashing: { uniqueId?: string; path?: string },
-      clashingName: string,
-    ): Promise<boolean> => {
-      const me = (context.pageContext.user.email ?? "").toLowerCase();
-      const now = new Date().toISOString();
-      /* The baseline `CRS — Execute approved deletion` checks before recycling — THIS is the exact
-         call site where the race was confirmed live, 2026-09-20 (see
-         `docs/2026-09-20-session-handoff.md` items 23-28: three uploads of one filename sharing one
-         `ItemUniqueId`, because this fallback overwrites the SAME identity in place, and the
-         proxy flow's own recycle landed a second after the newest upload). See
-         `shared/deletionGuard.ts` and `2026-09-20-etag-guarded-proxy-deletion-design.md`.
-         `undefined` on any read failure or for the `hidden` no-GUID case, deliberately — a safety
-         net for the FLOW's read, never a gate on the upload proceeding. */
-      const targetEtag = clashing.uniqueId
-        ? await readFileETag(context.spHttpClient, siteUrl, clashing.uniqueId)
-        : undefined;
-      try {
-        const listTitle = await listName(LIST_SUFFIX.requests);
-        const itemsUrl = `${siteUrl}/_api/web/lists/getbytitle('${listTitle}')/items`;
-        const requestHeaders = {
-          Accept: "application/json;odata=nometadata",
-          "Content-Type": "application/json;odata=nometadata",
-          "odata-version": "",
-        };
-        const body: Record<string, string> = {
-          Title: `Replace on upload — ${clashingName}`.slice(0, 255),
-          RequestType: "Deletion",
-          Status: "Approved",
-          // ⚠ EITHER MAY BE BLANK, NEVER BOTH — the caller already refuses before reaching here
-          // if neither resolved. `ItemUrl` is written for the `hidden`-clash case (a colleague's
-          // draft this account cannot resolve a GUID for), but the flow as documented in
-          // `2026-09-17-execute-approved-deletion-flow-runbook.md` §3 acts ONLY via
-          // `GetFileById(guid'...')` — it has no path-based fallback of its own. So a `hidden`
-          // clash with a blank `ItemUniqueId` will make the flow's own recycle call malformed
-          // (`GetFileById(guid'')`) and it will land in the Failure branch. Not the cause for an
-          // ordinary self-replace (this account's own file always resolves a real GUID first),
-          // but a real, separate gap for the colleague's-draft case — flag it if that specific
-          // scenario is what is actually being tested.
-          ItemUniqueId: clashing.uniqueId ?? "",
-          ItemUrl: clashing.path ?? "",
-          ItemName: clashingName,
-          RequestedBy: me,
-          RequestedAt: now,
-          Reason: "",
-          DecidedBy: me,
-          DecidedAt: now,
-          DecisionNote:
-            "No approval needed — the uploader replaced this draft directly.",
-        };
-        // See `targetEtag`'s own comment above — absent on any read failure or the `hidden` case.
-        if (targetEtag !== undefined) body.TargetETag = targetEtag;
-        const send = (
-          payload: Record<string, string>,
-        ): Promise<SPHttpClientResponse> =>
-          context.spHttpClient.post(itemsUrl, SPHttpClient.configurations.v1, {
-            headers: requestHeaders,
-            body: JSON.stringify(payload),
-          });
-        let res = await send(body);
-        // ⚠ `TargetETag` IS THE NEWEST COLUMN, so it drops FIRST on a 400 — one unknown field name
-        // fails the WHOLE write (gotcha #11), and this write has no other fallback: if it fails
-        // outright, the caller falls straight to the risky direct overwrite this guard exists to
-        // make safe, which would defeat the point on any site that has not yet added the column.
-        if (res.status === 400 && body.TargetETag !== undefined) {
-          const without = { ...body };
-          delete without.TargetETag;
-          res = await send(without);
-        }
-        if (!res.ok) return false;
-      } catch {
-        return false;
-      }
-      // Poll budget: ~10 attempts, 3s apart — about 30s. Bounded and short because it blocks the
-      // upload button, unlike the tag/decision flows' own background ~1-minute poll.
-      //
-      // ⚠ RESTORED TO THE ORIGINAL 10×3s ON 2026-09-19 — a briefly-shortened 3×2s version assumed
-      // the flow did not exist, which was wrong (it is built; see `deleteClashingDraftByProxy`'s own
-      // comment above). A real flow deserves the full, originally-intended budget rather than being
-      // starved of time to fire before this gives up and falls back.
-      for (let attempt = 0; attempt < 10; attempt++) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 3000));
-        try {
-          // ⚠ THE GUID PROBE IS PREFERRED — it is exact, where a path can in principle be reused by
-          // something else the instant it frees up. Falls back to the path only when no GUID was
-          // ever resolved, which is exactly the `hidden`-clash case this whole fallback exists for.
-          const check = clashing.uniqueId
-            ? await context.spHttpClient.get(
-                `${siteUrl}/_api/web/GetFileById(guid'${clashing.uniqueId}')?$select=Exists`,
-                SPHttpClient.configurations.v1,
-                { headers: { Accept: "application/json;odata=nometadata" } },
-              )
-            : await context.spHttpClient.get(
-                // OData alias form, never an inline literal — gotcha #9: an inline path 400s once
-                // deep enough, which reads as a malformed request rather than a missing file.
-                `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)?$select=Exists&@f='${encodeServerRelativePath(clashing.path ?? "")}'`,
-                SPHttpClient.configurations.v1,
-                { headers: { Accept: "application/json;odata=nometadata" } },
-              );
-          if (check.status === 404) return true;
-        } catch {
-          // Transient — keep polling within the budget rather than giving up on one failed check.
-        }
-      }
-      return false;
-    };
+    /* `deleteClashingDraftByProxy` is now shared with Bulk Upload — see `shared/clashProxyDeletion.ts`
+       for the full mechanism and the reasoning for extracting it (2026-09-23, client: "it will follow
+       the same flow as the normal document upload"). `me` is captured here rather than inside the
+       shared function, since only this component knows the signed-in user. */
+    const me = (context.pageContext.user.email ?? "").toLowerCase();
 
     const replaceStaging = replaceStagingIds.has(sf.id);
     const replaceApproved = replaceApprovedIds.has(sf.id);
@@ -3309,6 +3208,9 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         };
       }
       const cleared = await deleteClashingDraftByProxy(
+        context.spHttpClient,
+        siteUrl,
+        me,
         { uniqueId: displacedItemUniqueId, path: displacedItemPath },
         finalName,
       );
@@ -4867,7 +4769,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
           if (typedAnything) {
             setConfirmDialog({
               title: "Delete this file?",
-              body: `${me.file.name} has not been uploaded, and you will have to choose it again.`,
+              body: `${me.file.name} has not been uploaded.`,
               confirmLabel: "Delete",
               onConfirm: removeIt,
             });

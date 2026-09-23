@@ -44,6 +44,10 @@ import { primeNames } from "../../../shared/spNaming";
 import { useLiveRefresh } from "../../../shared/liveRefresh";
 import { writeAudit } from "../../../shared/spAuditLog";
 import { readFileETag } from "../../../shared/deletionGuard";
+// `readSubmissionRecordByFileId` — the ONLY way to tell "this document was replaced" from a
+// request row, since a replaced document's item identity can survive the replace unchanged (see
+// the guard in `decide`, below, for why a live-file probe alone cannot catch this).
+import { readSubmissionRecordByFileId } from "../../../shared/spSubmissionRecords";
 import { EVENT } from "../../../shared/auditLog";
 import { normalizeRoleValue } from "../../../shared/groupMapModel";
 import { isSystemAdmin } from "../../../shared/spGroups";
@@ -248,6 +252,21 @@ const s: Record<string, React.CSSProperties> = {
     color: "#242424",
     textAlign: "left",
     cursor: "pointer",
+  },
+  /* Same visual weight as `accHead` (the accordion section headers, "🗑 Delete Requests" /
+     "📤 Share Requests"), but a static `<div>`, not a button — this labels ONE request on the
+     single-request preview page reached from an email link, client, 2026-09-23: *"client complain
+     when clicking the email and redirect to the this page they can't tell if its delete or not."*
+     No toggle, no chevron, no cursor: there is nothing here to expand or collapse. */
+  fileViewTypeHead: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "10px 12px",
+    margin: "0 0 12px",
+    fontSize: 15,
+    fontWeight: 600,
+    color: "#242424",
   },
   meta: { fontSize: 11.5, color: "#6b7a71", marginTop: 4 },
   /* The folder trail, and the HC/Archived tags beside a request's file name (client, 2026-09-13:
@@ -1873,17 +1892,20 @@ export default function Requests({
       roleValue,
       groupId: 0,
       propagateAcl: false,
-      /* ⚠ 2026-09-21: `sendEmail` is now FALSE, deliberately. SharePoint's own invite email always
-         attributes "X invited you to view a file" to whoever's session calls ShareObject — the
-         APPROVER, never the requester — and there is no parameter to change that; it is tied to the
-         caller's identity by design. The 2026-08-21 mitigation below (naming the requester inside the
-         email body) was a workaround for that limit, not a fix for it — the header itself still named
-         the wrong person, and the client asked for the header to be correct. Access is still granted
-         here exactly as before; the notification is `CRS — Notify request activity`'s `ShareApproved`
-         case, which must email `ShareWith` (the recipient) with the correctly-resolved requester name
-         via its existing `GetActorName` lookup — see the CLAUDE.md entry dated 2026-09-21 for the
-         exact shape. Do not flip this back to `true` without also removing that flow-side email, or
-         the recipient gets two notices, one of them still wrongly attributed. */
+      /* ⚠ REVERSED AGAIN, 2026-09-24, BACK TO `false` — SUPERSEDES THE 2026-09-23 NOTE BELOW, KEPT
+         FOR THE HISTORY. That note records the client trying the native invite (`true`), accepting
+         its CC-to-owner side effect, and then hitting its OTHER consequence live: the invite always
+         names whoever's SESSION called ShareObject (the decider), never the actual requester — with
+         no parameter able to change that. The client's own verdict on seeing it live: *"Ok I think we
+         got ot restore back the email template later."* This is that restore — `sendEmail: false`
+         again, back to the 2026-09-21 shape.
+         ⚠ THE FLOW-SIDE HALF IS NOT CODE AND MUST BE DONE TOGETHER WITH THIS: `CRS — Notify request
+         activity`'s `ShareApproved` case needs its "Send an email (V2) 3" action (the "Dear
+         recipient..." email, addressed to `ShareWith`, naming the REQUESTER via `GetActorName`)
+         RESTORED — it was deleted on 2026-09-23 when `sendEmail` was flipped to `true`. Without it,
+         a request-approval share now sends NEITHER email (the native invite is off again, and the
+         flow's own custom email does not yet exist) until that action is rebuilt. See CLAUDE.md for
+         the exact shape to rebuild it in. */
       sendEmail: false,
       includeAnonymousLinkInEmail: false,
       emailSubject: `A document has been shared with you: ${row.itemName}`,
@@ -1971,6 +1993,80 @@ export default function Requests({
         setBusy(false);
         await load();
         return;
+      }
+
+      /* ⚠⚠ THE DOCUMENT WAS REPLACED SINCE THIS REQUEST WAS RAISED — refuse to decide it either
+         way, and auto-cancel instead (2026-09-23). Client: an approver could open a PENDING
+         deletion/share request, approve it, and — for a Share — have it silently execute against
+         the REPLACEMENT'S content rather than what was actually asked about, because Auto-route's
+         "Update file" versions the SAME item identity when a routed document is replaced
+         (2026-09-02) — the request's own `ItemUniqueId` still resolves, cleanly, to the wrong
+         thing. For a still-pending document, a staging-stage replace instead RECYCLES the old
+         draft outright (the proxy-deletion mechanism, 2026-09-18), so the id goes dead and the
+         request is reported "no longer exists" — technically honest, but left dangling forever
+         with nothing explaining why.
+
+         `row.submissionFileId` is the stamp taken of THIS EXACT document when the request was
+         raised (2026-09-10). A `CRS Submissions` record only ever gets `ReplacedAt` set ONCE, the
+         moment something else takes its name — so a set `replacedAt` means the document this
+         request names has been superseded, full stop, with no live-file probe or timestamp
+         compare needed. A failed read, or no stamp at all (a request older than 2026-09-10),
+         answers UNKNOWN and this check does nothing — fail open, same as everywhere else in this
+         file. Runs on EVERY decision attempt, approve or reject: rejecting a stale request is as
+         meaningless as approving one, and either click should end the same way. */
+      if ((row.submissionFileId ?? "").trim().length > 0) {
+        const record = await readSubmissionRecordByFileId(
+          context.spHttpClient,
+          siteUrl,
+          row.submissionFileId ?? "",
+        );
+        if (record?.replacedAt !== undefined) {
+          const cancelNote =
+            "Automatically cancelled — the document was replaced by a newer upload" +
+            (record.replacedBy ? ` from ${record.replacedBy}` : "") +
+            " before this request could be decided. Raise a new request against the current " +
+            "file if it is still needed.";
+          const cancelRes = await context.spHttpClient.post(
+            `${listUrl()}/items(${row.id})`,
+            SPHttpClient.configurations.v1,
+            {
+              headers: {
+                ...writeHeaders,
+                "X-HTTP-Method": "MERGE",
+                "IF-MATCH": "*",
+              },
+              body: JSON.stringify({
+                Status: "Cancelled",
+                DecisionNote: cancelNote,
+              }),
+            },
+          );
+          writeAudit(context.spHttpClient, siteUrl, {
+            event:
+              row.type === "Deletion"
+                ? EVENT.deletionRequested
+                : EVENT.shareRequested,
+            outcome: cancelRes.ok ? "Success" : "Failed",
+            source: "Requests",
+            at: new Date(),
+            actorName: context.pageContext.user.displayName,
+            actorEmail: me,
+            itemName: row.itemName,
+            itemUniqueId: row.itemUniqueId,
+            summary: `${row.type} request auto-cancelled — document replaced — ${row.itemName}`,
+          }).catch(() => undefined);
+          setNoticeBad(!cancelRes.ok);
+          setNotice(
+            cancelRes.ok
+              ? `Nothing was ${approve ? "approved" : "rejected"} — ${cancelNote}`
+              : `The document has been replaced, so nothing was ${approve ? "approved" : "rejected"}, but the request could not be marked cancelled (HTTP ${cancelRes.status}). Refresh and try again.`,
+          );
+          setDeciding(undefined);
+          setNote("");
+          setBusy(false);
+          await load();
+          return;
+        }
       }
 
       // ⚠⚠ A DELETION IS RESOLVED, NEVER EXECUTED, HERE (2026-09-17). Approving a deletion used to
@@ -2601,8 +2697,7 @@ export default function Requests({
             lineHeight: 1.5,
           }}
         >
-          This deletes it straight away — no approver decides this. It moves to
-          the recycle bin and can be restored within 93 days.
+          This deletes it straight away.
         </p>
         {directDeleteError && (
           <p style={{ fontSize: 12.5, color: "#a4262c", margin: "0 0 8px" }}>
@@ -2641,9 +2736,7 @@ export default function Requests({
                   }
                   setDirectDeleteConfirm(false);
                   setNoticeBad(false);
-                  setNotice(
-                    "Deleted. It has moved to the recycle bin and can be restored within 93 days.",
-                  );
+                  setNotice("Deleted.");
                 })
                 .catch((e) => {
                   setDirectDeleteBusy(false);
@@ -3555,7 +3648,7 @@ export default function Requests({
                     rule reads the same on both screens. The sentence it replaces explained WHY a
                     reason is needed; the requester still sees the note, so nothing is lost but the
                     lecture. */}
-                Reasoning is required
+                Please provide your reject reason.
               </p>
             )}
             <div style={s.actions}>
@@ -3722,6 +3815,16 @@ export default function Requests({
           <p style={s.quiet}>This request is not one you can see or act on.</p>
         ) : (
           <>
+            <div style={s.fileViewTypeHead}>
+              <span aria-hidden="true">
+                {viewing.type === "Deletion" ? "\u{1F5D1}️" : "\u{1F4E4}"}
+              </span>
+              <span>
+                {viewing.type === "Deletion"
+                  ? "Delete Request"
+                  : "Share Request"}
+              </span>
+            </div>
             {requestCard(
               viewing,
               viewing.status === "Pending" && canDecide(viewing, scope),

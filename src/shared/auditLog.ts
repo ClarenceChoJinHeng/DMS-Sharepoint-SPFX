@@ -23,6 +23,28 @@ export const EVENT = {
   uploaded: "Uploaded",
   approved: "Approved",
   rejected: "Rejected",
+  /* Added 2026-09-23, client: "can you add a cancel action in audit log for that file cancel?" —
+     the "Cancelled" badge on a My Submissions file (RecordState.withdrawn), NOT the same thing as
+     `requestCancelled` below. Mirrors the Approved/Rejected pair exactly: the bare word is the
+     DOCUMENT-level event (a PIC withdraws their own pending/rejected draft directly, no approver
+     involved), the "Request …" word is the REQUEST-level event (a genuine two-person deletion/share
+     request the requester pulls back before anyone decides it). Same TEXT-column safety as every
+     other entry here — see the file header.
+     ⚠ WRITTEN BY THE FLOW, NOT BY THIS CODEBASE, and NOT YET WRITTEN AT ALL — same "registered ahead
+     of the flow" order `Replaced`/`ShareRevoked`/`RequestCancelled` were added in. The distinguishing
+     condition already exists on every `CRS Requests` row with no code change needed to the writer:
+     `RequestType eq 'Deletion' and Stage eq 'pending' and RequestedBy eq DecidedBy` (self-approved,
+     on a still-pending draft — the exact, and only, shape `writeApprovedDeletionRequest`
+     (MySubmissions.tsx) produces for a PIC's own withdrawal; the SAME self-approved mechanism on an
+     APPROVED document, `Stage eq 'approved'`, is a genuine deletion of published content and should
+     keep resolving to the ordinary `RequestApproved`/`Deleted` trail, matching that file's own
+     "Deleted" badge). `CRS — Audit request activity`'s `EventKind` Compose needs this condition
+     checked BEFORE the general Approved/Rejected branches, resolving to `'Cancelled'` instead of
+     `'RequestApproved'` for that one case — whether the resulting "Request approved" row should then
+     be suppressed (mirroring the Replace-on-upload suppression) is a decision for whoever edits the
+     flow live; the row is written either way once that edit lands, only the FILTER needs this entry
+     to exist first. */
+  cancelled: "Cancelled",
   routed: "Routed",
   deleted: "Deleted",
   // The seven-year archive mover (Power Automate, 2026-09-02). Written by the two archive flows
@@ -75,6 +97,13 @@ export const EVENT = {
   shareRequested: "ShareRequested",
   requestApproved: "RequestApproved",
   requestRejected: "RequestRejected",
+  /* ⚠ WRITTEN BY `CRS — Audit request activity`, NOT BY THIS CODEBASE — same shape as `replaced`/
+     `shareRevoked` above. `EventKind`'s Compose currently maps a `Status eq 'Cancelled'` row
+     straight to `'Skip'` (a requester withdrawing their own raised request writes NO audit row at
+     all today). Registered here so the Action dropdown can offer it the moment that Compose is
+     changed to resolve to `'RequestCancelled'` instead of `'Skip'` for that case — the row is
+     written either way once the flow does; only the FILTER needs this entry to exist. */
+  requestCancelled: "RequestCancelled",
 } as const;
 
 export type AuditEventType = (typeof EVENT)[keyof typeof EVENT];
@@ -84,6 +113,7 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.uploaded]: "Uploaded",
   [EVENT.approved]: "Approved",
   [EVENT.rejected]: "Rejected",
+  [EVENT.cancelled]: "Cancelled",
   [EVENT.routed]: "Moved to Documents",
   [EVENT.deleted]: "Deleted",
   [EVENT.archived]: "Archived",
@@ -112,6 +142,7 @@ export const EVENT_LABEL: Record<string, string> = {
   [EVENT.shareRequested]: "Share requested",
   [EVENT.requestApproved]: "Request approved",
   [EVENT.requestRejected]: "Request rejected",
+  [EVENT.requestCancelled]: "Request cancelled",
 };
 
 /**
@@ -126,7 +157,10 @@ export const EVENT_LABEL: Record<string, string> = {
  * so its label needs no destination. Falls back to the static label whenever the library is blank —
  * every row written before `LibraryName` existed, and any row whose flow could not resolve it.
  */
-export function eventLabelForRow(eventType: string, libraryName?: string): string {
+export function eventLabelForRow(
+  eventType: string,
+  libraryName?: string,
+): string {
   const type = (eventType ?? "").trim();
   const lib = (libraryName ?? "").trim();
   if (type === EVENT.routed && lib.length > 0) return `Moved to ${lib}`;
@@ -135,13 +169,34 @@ export function eventLabelForRow(eventType: string, libraryName?: string): strin
 
 /** Every type, in the order the viewer offers them. */
 export const ALL_EVENT_TYPES: string[] = [
-  EVENT.uploaded, EVENT.approved, EVENT.rejected, EVENT.routed, EVENT.replaced, EVENT.deleted,
+  EVENT.uploaded,
+  EVENT.approved,
+  EVENT.rejected,
+  EVENT.cancelled,
+  EVENT.routed,
+  EVENT.replaced,
+  EVENT.deleted,
   EVENT.archived,
-  EVENT.uploadRefused, EVENT.accessGranted, EVENT.accessRevoked,
-  EVENT.reconciliationRun, EVENT.structureChanged, EVENT.migrationRun,
-  EVENT.segmentCreated, EVENT.segmentDeleted, EVENT.segmentRecoded, EVENT.abbreviationChanged, EVENT.policyChanged,
-  EVENT.groupMapChanged, EVENT.groupCreated, EVENT.groupDeleted, EVENT.membersChanged,
-  EVENT.deletionRequested, EVENT.shareRequested, EVENT.requestApproved, EVENT.requestRejected,
+  EVENT.uploadRefused,
+  EVENT.accessGranted,
+  EVENT.accessRevoked,
+  EVENT.reconciliationRun,
+  EVENT.structureChanged,
+  EVENT.migrationRun,
+  EVENT.segmentCreated,
+  EVENT.segmentDeleted,
+  EVENT.segmentRecoded,
+  EVENT.abbreviationChanged,
+  EVENT.policyChanged,
+  EVENT.groupMapChanged,
+  EVENT.groupCreated,
+  EVENT.groupDeleted,
+  EVENT.membersChanged,
+  EVENT.deletionRequested,
+  EVENT.shareRequested,
+  EVENT.requestApproved,
+  EVENT.requestRejected,
+  EVENT.requestCancelled,
   EVENT.shareRevoked,
 ];
 
@@ -252,7 +307,10 @@ function cap(text: string, max: number): string {
  * difference between "that is all that happened" and "there was more". A quietly clipped block is
  * indistinguishable from a complete one, which is the failure this whole feature exists to prevent.
  */
-export function joinDetails(lines: readonly string[] | undefined, max: number = DETAILS_MAX): string {
+export function joinDetails(
+  lines: readonly string[] | undefined,
+  max: number = DETAILS_MAX,
+): string {
   const all = (lines ?? []).map((l) => clean(l)).filter((l) => l.length > 0);
   const kept: string[] = [];
   let size = 0;
@@ -262,7 +320,9 @@ export function joinDetails(lines: readonly string[] | undefined, max: number = 
     const line = all[i];
     if (size + line.length + 1 > budget) {
       const dropped = all.length - kept.length;
-      kept.push(`… ${dropped} more line${dropped === 1 ? "" : "s"} not recorded`);
+      kept.push(
+        `… ${dropped} more line${dropped === 1 ? "" : "s"} not recorded`,
+      );
       return kept.join("\n");
     }
     kept.push(line);
@@ -326,6 +386,8 @@ export function buildAuditRow(e: AuditEvent): AuditRow {
  * guessing when the path is blank, and tolerates a leading slash.
  */
 export function segmentFromUnitPath(unitPath: string | undefined): string {
-  const parts = clean(unitPath).split("/").filter((p) => p.length > 0);
+  const parts = clean(unitPath)
+    .split("/")
+    .filter((p) => p.length > 0);
   return parts.length > 0 ? parts[0] : "";
 }

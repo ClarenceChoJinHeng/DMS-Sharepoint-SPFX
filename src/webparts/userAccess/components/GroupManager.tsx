@@ -2640,7 +2640,7 @@ export default function GroupManager({
               }}
             >
               <input
-                style={{ ...s.input, flex: "1 1 220px" }}
+                style={{ ...s.input, flex: "1 1 220px", maxWidth: "100%" }}
                 value={filter}
                 placeholder="Filter by name…"
                 /* ⚠ CLEARS THE SELECTION (client, 2026-09-22) — REVERSES the earlier "selection
@@ -2681,16 +2681,6 @@ export default function GroupManager({
                   <option value="__none__">Not mapped to anything</option>
                 </select>
               )}
-              {/* "What is shown", not "everything" — the same promise the audit log makes, and the only
-              one that stays true next to a filter. */}
-              <button
-                type="button"
-                style={s.ghost}
-                disabled={visible.length === 0}
-                onClick={exportShown}
-              >
-                Export what is shown
-              </button>
             </div>
 
             {/* Selection bar. Shown only once something is ticked, so the ordinary "I came here to look
@@ -2765,6 +2755,17 @@ export default function GroupManager({
                   </button>
                 </>
               )}
+
+              {/* "What is shown", not "everything" — the same promise the audit log makes, and the only
+              one that stays true next to a filter. */}
+              <button
+                type="button"
+                style={s.ghost}
+                disabled={visible.length === 0}
+                onClick={exportShown}
+              >
+                Export what is shown
+              </button>
             </div>
 
             {/* ── System administrators ──────────────────────────────────────────

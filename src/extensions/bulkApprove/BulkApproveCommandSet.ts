@@ -98,6 +98,19 @@ export default class BulkApproveCommandSet extends BaseListViewCommandSet<Record
         .then((v) => {
           if (this.probedKey !== key) return; // selection moved on; this answer is stale
           this.probeVerdict = v;
+          /* ⚠⚠ `raiseOnChange()` ALONE DID NOT MAKE THE BUTTON APPEAR — LIVE-CONFIRMED 2026-09-23,
+             "have to click twice to trigger": select once, nothing shows; reselect the same rows a
+             second time and it appears. `cmd.visible` was previously written ONLY inside the
+             SYNCHRONOUS body of `onListViewUpdated`, which has already returned by the time this
+             `.then()` fires — so the verdict updated here and `raiseOnChange()` told the framework
+             "something changed", but nothing had actually flipped `cmd.visible` to reflect it. The
+             button stayed hidden until a genuinely NEW selection change ran `onListViewUpdated`
+             again from scratch, this time reading the now-resolved (cached) verdict synchronously.
+             Fixed by writing `cmd.visible` HERE too, the moment the probe actually resolves, so a
+             single selection is enough — `raiseOnChange()` then only has to ask for a repaint of
+             state that is already correct, not produce it. */
+          const cmd = this.tryGetCommand(COMMAND);
+          if (cmd) cmd.visible = v === "granted";
           this.raiseOnChange();
         })
         .catch(() => undefined);

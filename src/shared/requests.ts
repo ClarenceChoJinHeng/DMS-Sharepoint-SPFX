@@ -252,7 +252,7 @@ export interface ValidationContext {
  * to PUT the message by matching on these. Re-stating "a reason is required" in the component would
  * be a second definition of the rule, free to disagree with the one that actually blocks the send.
  */
-export const REASON_REQUIRED = "Reasoning is required";
+export const REASON_REQUIRED = "Please provide your reject reason.";
 export const RECIPIENT_REQUIRED = "At least one recipient is required";
 
 /**
