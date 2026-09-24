@@ -4342,7 +4342,20 @@ export default function MySubmissions({
             !viewerOnlyMode;
           const showShare =
             approved && !canShareSelf && pureObserver !== true && openIsOwn;
-          const showDirectDelete = canDeleteSelf;
+          /* ⚠⚠ ON DOCUMENT-VIEWER, DIRECT DELETE IS ADMIN-ONLY (client, 2026-09-24: "in
+             Document-Viewer pls ensure only System admin can direct delete, everyone else is Share
+             only"). Everywhere else `canDeleteSelf` also covers an approver merely DECIDING
+             deletion for the unit (`policy.decidesDeletion`, 2026-09-22) — that stays true on the
+             ordinary My Submissions page, where the client has repeatedly asked for the instant
+             popup to stay available to approvers. Document-Viewer is the one surface where that
+             widening must not reach: it is reachable by clicking any document's Name column in
+             Documents/HC Documents/Archive/HC Archive, so whoever can READ a library can land here
+             — the request/decide role that made someone an "approver" for THAT unit is not the
+             same guarantee as being trusted to delete on sight from a page anyone can open a link
+             into. Share is untouched: `showDirectShare` below still follows `canShareSelf` exactly
+             as before, so an approver (or anyone else who already holds share rights) keeps that
+             ability here — only Delete narrows. */
+          const showDirectDelete = viewerOnlyMode ? systemAdmin : canDeleteSelf;
           const showDirectShare = approved && canShareSelf;
           return (
             <div style={s.askBar}>

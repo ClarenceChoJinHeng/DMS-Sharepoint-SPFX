@@ -17953,3 +17953,36 @@ up — do not guess at any of them from here.
    Share used to sit) — genuinely not buildable as a clean CSS/config change; see the entry directly
    above for the platform limitation and the two trade-offs a DOM-hack workaround would force. Needs
    a decision on which trade-off before it is built at all.
+
+## DOCUMENT-VIEWER: DIRECT DELETE IS NOW ADMIN-ONLY — AN ACCIDENTAL SIDE EFFECT, NOT A DELIBERATE RULE, TRACED AND FIXED (2026-09-24)
+Client, mid-pause, a fourth item outside the three above: *"I as an approver ... can delete files
+from Document-Viewer"* — reported against an earlier expectation that nobody but admin could delete
+there. **Traced via `git log`/`git show` before touching anything, not from memory. Not a revert —
+no such rule ever existed in code.**
+- **`showDirectDelete` HAS NEVER BEEN GATED BY `viewerOnlyMode`.** `Document-Viewer.aspx` mounts the
+  exact same `MySubmissions` component as the ordinary My Submissions page, with `viewerOnlyMode`
+  set. Only the REQUEST buttons (`showDelete`) were ever scoped `!viewerOnlyMode` (2026-08-21 — "the
+  request route is gone from Document-Viewer for every role"); direct actions were explicitly noted
+  at the time as *"UNCHANGED"* and deliberately left alone.
+- **THE ACTUAL MECHANISM: `canDeleteSelf` IS SHARED CODE, AND A 2026-09-22 WIDENING BLED ACROSS
+  PAGES.** 2026-09-17's proxy-deletion redesign removed `DEL`/`DELHC` from approver personas, so
+  between then and 2026-09-22 an approver held no direct SharePoint delete right anywhere —
+  `canDeleteSelf` correctly answered `false` on BOTH pages, no button visible anywhere. On
+  2026-09-22, per a client ask about the ORDINARY My Submissions page ("I was expecting this popup
+  that is currently being shown for system admin"), `canDeleteSelf` was widened to also cover an
+  approver who merely DECIDES deletion for a unit (`policy.decidesDeletion`) — correct and asked-for
+  on My Submissions, and never scoped away from Document-Viewer, since nothing at the time drew a
+  distinction between the two pages. That widening is what made the button reappear on
+  Document-Viewer as a side effect, not a deliberate choice.
+- **FIXED: `showDirectDelete = viewerOnlyMode ? systemAdmin : canDeleteSelf`.** On Document-Viewer,
+  only `systemAdmin` sees Delete now. `showDirectShare` is UNTOUCHED — everyone who already holds
+  share rights keeps it, per the client's own framing ("everyone else is Share only"). The ordinary
+  My Submissions page falls straight through to `canDeleteSelf` exactly as it was before this change
+  — approvers keep the instant delete popup there, unaffected.
+- **THE ROW-LEVEL TABLE'S OWN duplicate `canDelete` (the per-row Delete button in the submissions
+  list) NEEDED NO CHANGE** — Document-Viewer never renders that table at all; with `viewerOnlyMode`
+  true it shows either one opened document or a landing message, never a list, so that code path is
+  unreachable there regardless of this fix.
+- **✅ VERIFIED LIVE by the client — the Delete button is confirmed gone from Document-Viewer for a
+  non-admin approver.**
+- Verified: `tsc --noEmit` clean.
