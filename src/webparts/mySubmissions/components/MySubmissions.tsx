@@ -4441,39 +4441,27 @@ export default function MySubmissions({
                       : showDirectShare
                         ? /* ⚠ decidesThisDeletion CAN BE TRUE HERE (2026-09-21) — the approver still
                              shares directly (SHARE was untouched by the 2026-09-17 change), but no
-                             longer sees a delete option of ANY kind on this row. Without naming why,
-                             that reads as a page that quietly dropped a button.
-                             ⚠ "Shares it now — no approval needed." ITSELF IS GONE (client,
-                             2026-09-22: remove it) — matching the both-buttons-shown case just
-                             above, which already renders nothing here. Only the deciding-deletion
-                             sentence survives, since that one still says something the row's own
-                             buttons do not — same wording as the identical sibling case below. */
-                          decidesThisDeletion
-                          ? "You decide deletion requests for this unit in Approval & Request, so none is offered here."
-                          : ""
-                        : decidesThisDeletion
-                          ? /* Neither a direct action nor a request is on screen at all — this is the
-                               approver themselves, for an approved document, with no share right on
-                               this particular chain either (e.g. a segment-tier grant that fanned to
-                               this unit for delete but not share). Same wording as the share case,
-                               standing alone. */
-                            "You decide deletion requests for this unit in Approval & Request, so none is offered here."
-                          : !openIsOwn
-                            ? /* Reached via the "click-a-file-directly" fallback, on a document that
-                                 is not the viewer's own upload, with no direct or deciding right on
-                                 it either — see `openIsOwn`'s own comment above `open`. */
-                              "This is not one of your own uploads, so no request can be raised for it here."
-                            : (requestBlock ??
-                              /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
-                     REPLACES the buttons in that state, so "Your Approver decides these" was pointing
-                     at controls that were not on the screen — which reads as a page that failed to
-                     render rather than as a state. It stays where the buttons ARE shown, because
-                     there it explains who acts on them. */
-                              (openRequest?.status === "Pending"
-                                ? undefined
-                                : approved
-                                  ? "Your Approver decides these."
-                                  : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted."))}
+                             longer sees a delete option of ANY kind on this row. It used to name why
+                             (client, 2026-09-22 added it; client, 2026-09-24: remove it entirely,
+                             "dont put dialogs I didn't ask") — now silent, same as the
+                             both-buttons-shown case above. */
+                          ""
+                        : !openIsOwn
+                          ? /* Reached via the "click-a-file-directly" fallback, on a document that
+                               is not the viewer's own upload, with no direct or deciding right on
+                               it either — see `openIsOwn`'s own comment above `open`. */
+                            "This is not one of your own uploads, so no request can be raised for it here."
+                          : (requestBlock ??
+                            /* ⚠ WITHDRAWN WHILE A REQUEST IS PENDING (client, 2026-09-05). The banner above
+                 REPLACES the buttons in that state, so "Your Approver decides these" was pointing
+                 at controls that were not on the screen — which reads as a page that failed to
+                 render rather than as a state. It stays where the buttons ARE shown, because
+                 there it explains who acts on them. */
+                            (openRequest?.status === "Pending"
+                              ? undefined
+                              : approved
+                                ? "Your Approver decides these."
+                                : "Your Approver decides this. A file awaiting approval cannot be shared, only deleted."))}
               </span>
             </div>
           );
@@ -5616,6 +5604,14 @@ export default function MySubmissions({
                                      for this unit is as entitled to the instant popup as
                                      `systemAdmin`, with no self-loop risk (it self-approves, it does
                                      not raise a request to be decided later). */
+                                  /* ⚠ `canDelete`'s own `policy.decidesDeletion` term already covers
+                                     an approver who merely decides deletion for this unit — there
+                                     used to be a SEPARATE `decidesThisDeletion` const here checking
+                                     the identical term, whose only use was an `else if` branch that
+                                     could therefore never fire (canDelete was always already true by
+                                     then). Removed along with the notice it set, client, 2026-09-24:
+                                     "remove [that text], dont put dialogs I didn't ask". No behaviour
+                                     change — that branch never executed. */
                                   const canDelete =
                                     !approved ||
                                     systemAdmin ||
@@ -5628,37 +5624,9 @@ export default function MySubmissions({
                                       chain,
                                       policy.decidesDeletion,
                                     );
-                                  /* ⚠⚠ SAME FIX AS THE DETAIL VIEW's `decidesThisDeletion`, SAME
-                                     REASONING, DIFFERENT SURFACE (2026-09-21 — the client pointed at
-                                     THIS row-level "Delete" button specifically, asking why it
-                                     sometimes opens a reason-for-deletion dialog and sometimes goes
-                                     straight through: the two outcomes are `rights?.remove ===
-                                     "granted"` still being TRUE for a unit whose approver group has
-                                     not yet been re-created since 2026-09-17 — see the tenant-wide
-                                     `CRS Delete` audit this same session — versus a remediated unit,
-                                     where the live probe now correctly says "denied" and the click
-                                     fell into the SAME self-loop the detail view had: an approver
-                                     asking themselves, via a reason field, to delete a document only
-                                     they would ever decide on.
-                                     `canDelete` is false and unaffected by this — a genuinely
-                                     un-mapped PIC still needs the exact same fail-open behaviour it
-                                     always had. This only intercepts the ELSE branch, and only when
-                                     the click resolved to "this viewer is the decider", so nothing
-                                     about who CAN delete directly changes here. */
-                                  const decidesThisDeletion =
-                                    approved &&
-                                    !systemAdmin &&
-                                    canActDirectly(
-                                      chain,
-                                      policy.decidesDeletion,
-                                    );
                                   if (canDelete) {
                                     setWithdrawError(undefined);
                                     setWithdrawRow(r);
-                                  } else if (decidesThisDeletion) {
-                                    setRequestNotice(
-                                      "You decide deletion requests for this unit in Approval & Request, so none is offered here.",
-                                    );
                                   } else {
                                     setAsking("Deletion");
                                   }

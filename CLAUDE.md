@@ -17986,3 +17986,30 @@ no such rule ever existed in code.**
 - **✅ VERIFIED LIVE by the client — the Delete button is confirmed gone from Document-Viewer for a
   non-admin approver.**
 - Verified: `tsc --noEmit` clean.
+
+## "You decide deletion requests for this unit in Approval & Request, so none is offered here." — REMOVED (2026-09-24)
+Client, straight after the admin-only-delete fix above: *"can you remove [it]. Dont put dialogs I
+didn't ask."* The fix immediately above is exactly what made this sentence reachable at all — before
+it, `decidesThisDeletion` was structurally implied by `canDeleteSelf`/`canDelete` everywhere (both
+read the identical `canActDirectly(chain, policy.decidesDeletion)` term), so every branch reading it
+was **dead code**, kept and marked so rather than deleted. Narrowing `showDirectDelete` to
+`systemAdmin` on Document-Viewer broke that equivalence there specifically — a non-admin approver can
+now have `decidesThisDeletion === true` while `showDirectDelete === false`, which is exactly the gap
+this sentence existed to explain. The client does not want it explained; they want it silent.
+- **Detail view** (two of the three occurrences, both now `""` where the string was): the
+  `showDirectShare`-only branch (an approver who can share but not delete on Document-Viewer) reads
+  silent now, matching the both-buttons-shown case beside it. The standalone "neither direct action
+  nor request is on screen" branch was removed outright rather than blanked — it fell through to the
+  next check (`!openIsOwn`, then `requestBlock`/the generic "Your Approver decides these." fallback),
+  which is real, pre-existing text for a different audience, not new invented copy.
+- **Row-level table** (the third occurrence, `setRequestNotice(...)`): this one was **already dead
+  code before today's admin-only fix**, and stays dead code after it — the row-level `canDelete`
+  const was never touched by that fix, so its own `policy.decidesDeletion` term still makes
+  `decidesThisDeletion` structurally imply `canDelete` there. The whole `else if (decidesThisDeletion)`
+  branch, its `const decidesThisDeletion`, and the stale comment explaining a live scenario that
+  could never actually reach it were all removed — zero behaviour change, since that branch could
+  never fire either before or after.
+- `decidesThisDeletion` itself is UNTOUCHED in the detail view (still declared, still gates
+  `showDelete` at its one other use) — only its two now-removed uses in the caption ternary are gone.
+- Verified: `tsc --noEmit` clean, `eslint` on the file shows only its documented pre-existing
+  `max-lines` warning.
