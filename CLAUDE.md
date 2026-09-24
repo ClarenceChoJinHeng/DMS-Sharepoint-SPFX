@@ -17934,14 +17934,11 @@ Both fixes above (the Group Management badge, hiding Share) are **done, committe
 Three items from the same client message are NOT resolved and need feedback before picking this back
 up — do not guess at any of them from here.
 
-1. **CRS Search: Year/Confidentiality/Document Type filters reportedly don't narrow results, only
-   Segment does.** The whole narrowing pipeline (`hasSearchNarrowFilter`, `searchMetadataMatches`,
-   the REST batch read, dropdown population) was read end to end and treats all four filters
-   symmetrically — nothing found that would explain Segment working while the other three don't.
-   **Needed before touching any code**: with ONLY "Document type" set (no text, no other filters),
-   does the banner show a warning (e.g. *"X library could not be filtered"*), or does it silently
-   return unfiltered results — and has the tab been hard-refreshed recently? (This exact shape —
-   looks broken, is actually a stale tab/package — is this project's single most common false alarm.)
+1. **⏭ ANSWERED WITH LIVE EVIDENCE, NOT YET ROOT-CAUSED — see the dedicated entry below,
+   "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** The search code itself is confirmed
+   correct (symmetric, matches the documented design); the actual cause is live data corruption on
+   the document's own taxonomy fields (`Label` storing the numeric term id instead of the real
+   text), traced as far as the `CRS — Apply pending tags` flow's write, not yet past it.
 2. **Document-Viewer: clicking a file first shows a blank page, requires going back to the
    "Document Viewer tab" to actually load.** Checked for the two usual causes in this exact file's
    history (a React hooks-order violation below an early return; the URL-scrub issue already fixed
@@ -18013,3 +18010,77 @@ this sentence existed to explain. The client does not want it explained; they wa
   `showDelete` at its one other use) — only its two now-removed uses in the caption ternary are gone.
 - Verified: `tsc --noEmit` clean, `eslint` on the file shows only its documented pre-existing
   `max-lines` warning.
+
+## ⏸ CRS SEARCH'S "Document Type: Term Sheet" FILTER — TRACED TO LIVE DATA CORRUPTION, NOT A SEARCH BUG, PAUSED MID-INVESTIGATION (2026-09-24)
+Picks up item 1 of the 2026-09-24 pause point above. Client repro, live: searching "test" with no
+filters returns 83 results including `bulk4-test2-test2-19062026 - Copy (2).xlsx`
+(`GHO/COSEC/GUTHRIE/2024/Term Sheet`); the same search with Document Type = Term Sheet returns
+**"No Result Found"**, even though that exact file should match.
+- **THE SEARCH CODE ITSELF IS CONFIRMED CORRECT, AGAIN.** Re-read `hasSearchNarrowFilter`/
+  `searchMetadataMatches`/`metadataFilterMatches`/`runSearch`/`runListRead` end to end — symmetric,
+  matches the documented 2026-09-21 design exactly. Document Type/Year/Confidentiality are never
+  pushed to `$filter` (they 400/500 there, per the file's own established history); they are
+  narrowed CLIENT-SIDE against a fresh REST read of each candidate row's raw field.
+- **THE APP'S OWN DETAIL PANEL (via `FieldValuesAsText`) SHOWS THIS DOCUMENT'S DOCUMENT TYPE AS
+  "Term Sheet" CORRECTLY** — confirmed live via screenshot, ruling out the first, wrong hypothesis
+  ("the field was never tagged").
+- **⚠⚠ A DIRECT RAW `$select=Document_x0020_Type` READ ON THE LIVE ITEM (id 1677, `Restricted &
+  Confidential Document`) RETURNS `{"Label":"8","TermGuid":"ffd9961d-f70d-4044-b5b9-a404a1d50f3d",
+  "WssId":8}`.** The numeric WssId, stored AS the Label, on all three taxonomy fields — Year:
+  `"3"`/`WssId 3`, Confidentiality: `"5"`/`WssId 5`, same pattern all three times. This is exactly
+  why search's client-side narrowing (which reads the raw field the same way) never matches — the
+  row's own stored data genuinely does not say "Term Sheet" at the layer search compares against.
+  `FieldValuesAsText` masks this by resolving live against the term store regardless of what is
+  actually stored, which is why every OTHER screen in the app shows this document correctly.
+- **RULED OUT: `BulkUpload.tsx`'s payload-building, and the client's own "predates Apply pending
+  tags" theory.** The file's own `SubmissionFileId` (`SFI-20260924-JNXK`) is dated TODAY, per this
+  project's own `SFI-<yyyymmdd>-<4>` id format — disproving the theory before it needed testing. Its
+  `CRS Submissions` record (id 483) reads `TagStatus: "Tagged"`, `TagError: null`, and its
+  `TagPayload` contains the CORRECT, byte-exact values:
+  `"Document_x0020_Type":"Term Sheet|ffd9961d-f70d-4044-b5b9-a404a1d50f3d"`,
+  `"Year":"2024|5d081550-e418-4f3a-9f78-1cb994cc3ca6"`,
+  `"Confidentiality_x0020_Level":"Confidential|248d979e-73f4-4639-90ca-8f67d6cabf22"`. The staged
+  write payload is exactly right, confirmed by direct REST read, not inferred.
+- **`CRS — Apply pending tags` (read from the client's own fresh export,
+  `CRS—Applypendingtags_20260924085400.zip`) FORWARDS THE PAYLOAD UNCHANGED, THROUGH THIS PROJECT'S
+  OWN ESTABLISHED, ELSEWHERE-WORKING MECHANISM.** `GetFile` resolves the live list/item by
+  `ItemUniqueId`; `ApplyTags` POSTs `{"formValues": @{json(triggerOutputs()?['body/TagPayload'])},
+  "bNewDocumentUpdate": false}` to `.../validateUpdateListItem` — the exact shape `Form.tsx`/
+  `BulkUpload.tsx` used to call directly, before the 2026-09-18 tag-by-proxy migration. Nothing in
+  this flow constructs or reshapes the taxonomy value; it is a pure pass-through of the stored
+  string.
+- **⚠ ONE CONCRETE, SEPARATE BUG FOUND WHILE READING THIS, NOT YET FIXED: `TagPayload`/`TagError`
+  (and every other Note-type entry in `RECORD_COLUMNS`) ARE CREATED WITHOUT `RichText: false`.**
+  `FolderManager.tsx`'s column-creation POST (`~4792`) is a bare `{"Title": c.name, "FieldTypeKind":
+  c.type}` — SharePoint defaults a Note column to rich text unless told otherwise. Worth fixing
+  regardless of whether it turns out to be this bug's cause: a JSON blob a flow reads programmatically
+  should never be rich text.
+  - **⚠ NOT FULLY CONSISTENT WITH THE OBSERVED SYMPTOM ON ITS OWN.** Rich-text corruption typically
+    breaks `json(...)` parsing outright (stray HTML tags/entities), which would show as
+    `TagStatus: "Failed"` with a real error in `TagError` — not a clean `200`/`Tagged` carrying a
+    plausible-looking-but-wrong value.
+- **LEADING HYPOTHESIS, NOT CONFIRMED: SharePoint's per-site `TaxonomyHiddenList` term cache being
+  cold for these specific term GUIDs at write time.** Writing a taxonomy value by GUID via REST/CSOM
+  for a term the site has not "seen" before can store the WssId as a placeholder Label until that
+  cache catches up — which matches `Label === WssId` exactly, across all three fields, on what may
+  be this run's first use of these particular terms. `FieldValuesAsText` resolves live and bypasses
+  the stale cache, which is consistent with everything observed so far.
+- **⏭ NEXT STEP, NOT YET DONE — PAUSED HERE: read `ApplyTags`' RAW run-history Inputs for this exact
+  run (item 483 / `SFI-20260924-JNXK`)**, to see the literal body Power Automate actually POSTed. If
+  `"Term Sheet|ffd9961d-..."` is intact there, the corruption happens SharePoint-side during the
+  write (supports the TaxonomyHiddenList theory — not fixable from this repo). If it is already
+  wrong at that point, the fault is in how the flow reads/serializes the Note field before sending
+  (supports the rich-text theory, and would need the field type fixed plus a re-check of how the
+  trigger's own JSON round-trips).
+- **⚠ LIKELY NOT A ONE-OFF, IF THE TAXONOMYHIDDENLIST THEORY HOLDS.** Every document tagging a given
+  term for the FIRST time on this site — not only this one bulk-upload test file — could land with
+  the same corrupted Label, self-correcting only once that specific GUID has been cached once on
+  this site. Worth a wider check (how many documents currently show `Label === WssId` on any of the
+  three taxonomy fields) once the mechanism is actually confirmed, not before — guessing at scope
+  before the cause is settled risks chasing the wrong fix across many documents.
+- **Item 2 (Document-Viewer blank-page-on-first-click): client, 2026-09-24, "So far I dont encounter
+  it anymore, I will tell you when it happens."** Left open, not actively chased — nothing to
+  investigate further until it reproduces again.
+- **Item 3 (promote "Approve or reject" to a primary command-bar button): unchanged, still needs a
+  client decision on which trade-off** (see the dedicated entry above this pause point) before it is
+  built at all.
