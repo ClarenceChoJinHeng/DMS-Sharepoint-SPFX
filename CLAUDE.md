@@ -17934,15 +17934,13 @@ Both fixes above (the Group Management badge, hiding Share) are **done, committe
 Three items from the same client message are NOT resolved and need feedback before picking this back
 up — do not guess at any of them from here.
 
-1. **✅ CODE FIX BUILT AND SHIPPED, NOT YET DEPLOYED — see the dedicated entry below,
-   "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** 166 of 166 documents sharing three
-   specific term GUIDs are corrupted — a permanent SharePoint `TaxonomyHiddenList` cache
-   corruption, confirmed unfixable by our REST write, a repeat write, or SharePoint's own native
-   UI taxonomy picker. Since the platform bug cannot be repaired from here, the search filter was
-   changed to compare on `TermGuid` instead of the corrupted `Label` — `TermGuid` was never wrong
-   in any of the 166 documents checked. Confirmed present in the shipped `.sppkg`. **Needs
-   deployment and a live re-test** (search filtered by Document Type = Term Sheet should now find
-   the matching document).
+1. **✅✅ CLOSED, 2026-09-24 — see the dedicated entry below, "CRS SEARCH'S 'Document Type: Term
+   Sheet' FILTER..."** 166 of 166 documents sharing three specific term GUIDs were found corrupted
+   at the SharePoint level (`TaxonomyHiddenList` cache, confirmed unfixable by our REST write, a
+   repeat write, or SharePoint's own native UI taxonomy picker). The search filter was changed to
+   compare on `TermGuid` instead of the corrupted `Label` — `TermGuid` was never wrong in any
+   document checked. Deployed and live-verified: filtering by Document Type = Term Sheet now
+   returns 37 documents including the original failing case. Client confirmed: *"Ok, it works."*
 2. **Document-Viewer: clicking a file first shows a blank page, requires going back to the
    "Document Viewer tab" to actually load.** Checked for the two usual causes in this exact file's
    history (a React hooks-order violation below an early return; the URL-scrub issue already fixed
@@ -18155,7 +18153,14 @@ filters returns 83 results including `bulk4-test2-test2-19062026 - Copy (2).xlsx
     minification unlike a function name) appears **exactly twice** in the built
     `document-search-web-part` bundle — matching the two `.TermGuid` reads in the new `termGuidOf`
     function precisely, and appearing **zero times** before this change (it previously existed only
-    inside a comment, which minification strips). **NOT yet deployed or site-tested.**
+    inside a comment, which minification strips).
+  - **✅✅ DEPLOYED AND LIVE-VERIFIED THE SAME DAY.** Search "test" + Document Type = Term Sheet now
+    returns **37 documents**, including `bulk4-test2-test2-19062026 - Copy (2).xlsx` (item `#1677`,
+    the exact original failing case, corrupted `Label="8"` and all). The client's own words:
+    *"Ok, it works."* **CLOSES THE INVESTIGATION** — the filter is fixed. The underlying SharePoint
+    `TaxonomyHiddenList` corruption itself remains unrepaired (would still show `Label="8"` on a raw
+    `$select`, per every earlier finding above), but nothing in this app depends on that value any
+    more, so it is no longer a symptom anyone will see.
 - **⚠ SCOPE BEYOND THESE THREE TERMS IS STILL UNKNOWN, AND NOW MATTERS LESS BUT NOT NOT-AT-ALL.** Only
   Term Sheet / 2024 / Confidential were tested. The `TermGuid` fix above should transparently cover any
   OTHER corrupted term too, once deployed — but whether OTHER values (e.g. "Agreement", "2025",
