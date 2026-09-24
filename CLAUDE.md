@@ -17934,14 +17934,15 @@ Both fixes above (the Group Management badge, hiding Share) are **done, committe
 Three items from the same client message are NOT resolved and need feedback before picking this back
 up — do not guess at any of them from here.
 
-1. **⏭ ROOT-CAUSED TO SHAREPOINT ITSELF; CHEAP REPAIR RULED OUT; SCOPE TEST NOT YET RUN — see the
-   dedicated entry below, "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** The search code is
-   confirmed correct; the staged tag payload and the raw POST the flow actually sent to SharePoint
-   are BOTH confirmed correct too — the corruption happens on SharePoint's own side after accepting
-   a valid write. A repeat write does NOT self-heal it (tested live), pointing at a corrupted
-   `TaxonomyHiddenList` cache entry for these specific term GUIDs rather than a flaky write.
-   `scripts/check-taxonomy-relabel-scope.js` tests whether OTHER documents sharing these same term
-   GUIDs are also corrupted — not yet run.
+1. **⏭ CONFIRMED TENANT-WIDE, PREDATES OUR OWN CODE ENTIRELY, REPAIR STILL UNKNOWN — see the
+   dedicated entry below, "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** 166 of 166
+   documents sharing three specific term GUIDs (Term Sheet/2024/Confidential) are corrupted —
+   100%, spanning June through September 2026, crossing the 2026-09-18 tag-by-proxy migration
+   boundary with no discontinuity. **This is a permanent SharePoint `TaxonomyHiddenList` cache
+   corruption for these three terms on this site — nothing in this project's code caused it.**
+   Two REST-level repairs already ruled out (single write, repeat write). Next test: whether
+   SharePoint's own UI taxonomy picker can repair it (untested) — if not, this needs a Microsoft
+   support case, not a code fix.
 2. **Document-Viewer: clicking a file first shows a blank page, requires going back to the
    "Document Viewer tab" to actually load.** Checked for the two usual causes in this exact file's
    history (a React hooks-order violation below an early return; the URL-scrub issue already fixed
@@ -18091,22 +18092,48 @@ filters returns 83 results including `bulk4-test2-test2-19062026 - Copy (2).xlsx
   Label, every write that touches it gets stamped with the cached value regardless of what label was
   actually POSTed. `FieldValuesAsText` bypasses this cache with a live term-store lookup, which is
   why it alone reads correctly.
-- **⏭ NEXT STEP, NOT YET RUN: `scripts/check-taxonomy-relabel-scope.js`** (new, 2026-09-24) —
-  READ ONLY. If the corruption is a per-(site, TermGuid) cache entry rather than something specific
-  to this one document's write, then EVERY document using the same three term GUIDs (Term Sheet /
-  2024 / Confidential) should show the identical corruption, regardless of which flow or write path
-  tagged them or when. This scans other, unrelated documents across the approved-side libraries for
-  the same three term GUIDs and reports whether they are corrupted too:
-  - **All corrupted** → confirms a persistent, site-wide cache corruption for these specific terms —
-    almost certainly affects every document ever tagged with them, not just recent bulk-upload/
-    proxy-tagged ones. Worth a full scope count once confirmed, and likely needs a Microsoft support
-    case or a CSOM-level fix (the SharePoint UI's own taxonomy picker does proper term resolution
-    that the raw REST `validateUpdateListItem` write may not — untested, would need a live UI re-save
-    to confirm).
-  - **All correct** → the per-term cache theory is wrong; something specific to THIS document's
-    write is the real cause, and the theory needs revisiting from scratch.
-  - **Mixed** → neither theory alone explains it; whatever distinguishes the corrupted ones (upload
-    date, which flow wrote them) becomes the next thing to isolate.
+- **✅✅ RAN, 2026-09-24: `scripts/check-taxonomy-relabel-scope.js` — 166 OF 166 DOCUMENTS
+  CARRYING THESE THREE TERM GUIDS ARE CORRUPTED. 100%. ZERO EXCEPTIONS.** Scanned both approved-side
+  libraries (`Restricted & Confidential Document`, `Highly Confidential Document`), all three fields.
+  Every single hit — 33 on Document Type, 59+3 on Year, 69 on Confidentiality — shows `Label ===
+  WssId`. Not one correct instance found anywhere in the sample.
+  - **⚠⚠ THIS CONCLUSIVELY RULES OUT THE 2026-09-18 TAG/APPROVE-BY-PROXY MIGRATION AS THE CAUSE.**
+    The corrupted set spans document filenames dated `19062026` (19 June 2026) through today
+    (`24092026`) — three-plus months, crossing the migration boundary with no discontinuity. Files
+    tagged by the OLD direct-write path (`Form.tsx`/`BulkUpload.tsx` calling
+    `validateUpdateListItem` straight from the browser, pre-migration) show the IDENTICAL corruption
+    as files tagged by the new proxy flow. **This has never worked correctly for these three terms,
+    on this site, for as long as any of these documents have existed.** Nothing in this project's
+    code or flows introduced it.
+  - **CONFIRMS THE PER-(SITE, TERMGUID) CACHE THEORY OUTRIGHT.** With literally every document tested
+    corrupted regardless of write path or date, this is not a race condition or a first-use hiccup —
+    it is a permanently bad `TaxonomyHiddenList` entry for these three specific term GUIDs on this
+    site, sitting there for months with no self-healing.
+  - **⚠ SCOPE BEYOND THESE THREE TERMS IS STILL UNKNOWN.** Only Term Sheet / 2024 / Confidential were
+    tested (the three the original repro happened to use). Whether OTHER Document Type/Year/
+    Confidentiality values (e.g. "Agreement", "2025", "Restricted", "Highly Confidential") are ALSO
+    corrupted, or whether this is isolated to just these three specific term entries, is not yet
+    known — and matters a great deal, since "Agreement" in particular is likely used on far more
+    documents than "Term Sheet."
+- **⏭ NEXT STEP, NOT YET DONE: test whether SharePoint's OWN taxonomy picker UI can repair the cache
+  entry — no script, just clicking in the browser.** Our REST write (`validateUpdateListItem`) is
+  confirmed unable to fix this even on repeat; the UI's taxonomy field control uses a different
+  client-side resolution path (typically CSOM's `SetFieldValueByValue`) that may force a proper
+  re-sync of `TaxonomyHiddenList` where a raw REST string write does not.
+  - **How to test:** open item `#1677` (`bulk4-test2-test2-19062026 - Copy (2).xlsx`, or any of the
+    listed corrupted documents) directly in `Restricted & Confidential Document` — either the
+    library's own "All Documents" list view with Document Type as a visible column (double-click the
+    cell to edit), or the file's own Properties/Details pane. Open the **Document Type** field's
+    dropdown/picker, RE-SELECT "Term Sheet" (even though it already shows correctly there — the
+    picker resolves live, same as `FieldValuesAsText`), and Save. Repeat for Year and Confidentiality
+    Level if the UI allows editing them the same way.
+  - Then re-run `check-taxonomy-relabel.js` (dry run, `DO_WRITE = false` is enough) against that same
+    `SubmissionFileId`/item to see if the raw field's Label now reads correctly.
+  - **If it fixes it:** the remediation path is a manual UI re-save per affected document (tedious at
+    166+, but real) — or, better, a PnP PowerShell `Set-PnPTaxonomyFieldValue` call per item, which
+    uses the same proper CSOM resolution and can be scripted/batched unlike the UI.
+  - **If it does NOT fix it:** this is a genuine SharePoint Online platform-level data corruption that
+    no client-side mechanism (REST or CSOM) can repair, and needs a Microsoft support case.
 - **Item 2 (Document-Viewer blank-page-on-first-click): client, 2026-09-24, "So far I dont encounter
   it anymore, I will tell you when it happens."** Left open, not actively chased — nothing to
   investigate further until it reproduces again.
