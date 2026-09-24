@@ -17934,11 +17934,12 @@ Both fixes above (the Group Management badge, hiding Share) are **done, committe
 Three items from the same client message are NOT resolved and need feedback before picking this back
 up — do not guess at any of them from here.
 
-1. **⏭ ANSWERED WITH LIVE EVIDENCE, NOT YET ROOT-CAUSED — see the dedicated entry below,
-   "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** The search code itself is confirmed
-   correct (symmetric, matches the documented design); the actual cause is live data corruption on
-   the document's own taxonomy fields (`Label` storing the numeric term id instead of the real
-   text), traced as far as the `CRS — Apply pending tags` flow's write, not yet past it.
+1. **⏭ ROOT-CAUSED TO SHAREPOINT ITSELF, REPAIR NOT YET TESTED — see the dedicated entry below,
+   "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** The search code is confirmed correct; the
+   staged tag payload and the raw POST the flow actually sent to SharePoint are BOTH confirmed
+   correct too — the corruption happens on SharePoint's own side after accepting a valid write
+   (`TaxonomyHiddenList` cold-cache theory). `scripts/check-taxonomy-relabel.js` tests the one cheap
+   repair worth trying (re-assert the same value a second time); not yet run.
 2. **Document-Viewer: clicking a file first shows a blank page, requires going back to the
    "Document Viewer tab" to actually load.** Checked for the two usual causes in this exact file's
    history (a React hooks-order violation below an early return; the URL-scrub issue already fixed
@@ -18065,13 +18066,28 @@ filters returns 83 results including `bulk4-test2-test2-19062026 - Copy (2).xlsx
   cache catches up — which matches `Label === WssId` exactly, across all three fields, on what may
   be this run's first use of these particular terms. `FieldValuesAsText` resolves live and bypasses
   the stale cache, which is consistent with everything observed so far.
-- **⏭ NEXT STEP, NOT YET DONE — PAUSED HERE: read `ApplyTags`' RAW run-history Inputs for this exact
-  run (item 483 / `SFI-20260924-JNXK`)**, to see the literal body Power Automate actually POSTed. If
-  `"Term Sheet|ffd9961d-..."` is intact there, the corruption happens SharePoint-side during the
-  write (supports the TaxonomyHiddenList theory — not fixable from this repo). If it is already
-  wrong at that point, the fault is in how the flow reads/serializes the Note field before sending
-  (supports the rich-text theory, and would need the field type fixed plus a re-check of how the
-  trigger's own JSON round-trips).
+- **✅ ANSWERED, 2026-09-24: THE RAW `ApplyTags` INPUT IS CONFIRMED CORRECT — THE CORRUPTION IS
+  SHAREPOINT-SIDE, NOT IN THE FLOW.** Client pasted `ApplyTags`' own "Show raw inputs" for the run
+  that processed item 823 (`SFI-20260924-JNXK`, `Approval for Document`). The POST body reads
+  `"FieldValue":"Term Sheet|ffd9961d-f70d-4044-b5b9-a404a1d50f3d"`,
+  `"FieldValue":"2024|5d081550-e418-4f3a-9f78-1cb994cc3ca6"`,
+  `"FieldValue":"Confidential|248d979e-73f4-4639-90ca-8f67d6cabf22"` — byte-exact correct, real
+  labels, not digits. **This rules out the flow's serialization/rich-text theory as the cause**: the
+  exact request SharePoint received already carried the right value. Whatever corrupts the Label
+  into the WssId happens AFTER SharePoint accepts this write, which is exactly what the
+  `TaxonomyHiddenList` cold-cache theory predicts and the rich-text theory does not.
+  - **The `RichText: false` gap on `TagPayload`/`TagError` is STILL worth fixing** (it is a real
+    defect regardless), but it is now confirmed NOT the cause of this specific symptom — the payload
+    that left the flow was already clean JSON with the correct values.
+- **⏭ NEXT STEP, NOT YET RUN: `scripts/check-taxonomy-relabel.js`** (new, 2026-09-24) — reads the
+  document's raw taxonomy fields alongside `FieldValuesAsText` for the same fields, and, once
+  reviewed (`DO_WRITE = true`), tests whether simply re-asserting the exact same correct
+  `"Label|TermGuid"` value a SECOND time (via the identical `validateUpdateListItem` call
+  `CRS — Apply pending tags` already uses) forces SharePoint to resolve and cache the Label
+  correctly. If a second identical write self-heals it, the fix is a cheap retry-once added to the
+  flow. If it does not, the `TaxonomyHiddenList` cache issue needs a different mitigation (a forced
+  re-save through the SharePoint UI's own taxonomy picker, or waiting on a background cache job) and
+  is not fixable purely from this repo.
 - **⚠ LIKELY NOT A ONE-OFF, IF THE TAXONOMYHIDDENLIST THEORY HOLDS.** Every document tagging a given
   term for the FIRST time on this site — not only this one bulk-upload test file — could land with
   the same corrupted Label, self-correcting only once that specific GUID has been cached once on
