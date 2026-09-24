@@ -85,6 +85,13 @@ export default class HideAppBarApplicationCustomizer extends BaseApplicationCust
     // part cannot intercept a native SharePoint control, only hide the invitation to use it — the
     // real safety is still the copy-with-a-new-name behaviour on Auto-route's own Copy file step.
     this._hideApproveRejectCommand();
+    // Client, 2026-09-24: hide Share everywhere on this site. Sharing is meant to go through this
+    // project's own routes (an approver/admin's direct-share from Documents/HC Documents/Archive/HC
+    // Archive, or a PIC's request-and-approve flow) — SharePoint's native Share button bypasses both
+    // entirely, and this tenant's own sharing settings already block it for anyone but a site owner
+    // (see CLAUDE.md, "MEMBERS CANNOT SHARE"), so a visible button that mostly fails is worse than no
+    // button at all.
+    this._hideShareCommand();
   }
 
   private _injectNewFolderButton(): void {
@@ -216,6 +223,27 @@ export default class HideAppBarApplicationCustomizer extends BaseApplicationCust
         const text = (el.textContent ?? "").trim().toLowerCase();
         if (textsToHide.some((t) => text === t)) this._hideMenuItem(el);
       });
+  }
+
+  /**
+   * Hides the native Share command everywhere SharePoint renders it.
+   *
+   * Confirmed live 2026-09-24, from the client's own pasted command-bar markup: Share is a PRIMARY
+   * button (`data-id="share" data-automationid="shareCommand"`), a direct sibling of Open/Copy
+   * link/Delete/Pin to top — never nested in the "..." overflow, unlike the native Approve/Reject
+   * command above. So this hides the button itself, not a menu-item `<li>` — `_hideMenuItem`'s
+   * "closest <li>, else the element" fallback already covers that shape correctly with no change.
+   *
+   * ⚠ COVERS ONLY THE PRIMARY-BAR BUTTON. SharePoint's Share dialog is also reachable from a
+   * DIFFERENT surface — a file/folder's OWN row-level "..." context menu in the list view can carry
+   * its own "Share" entry, separate from this toolbar-level one. That has not been confirmed live on
+   * this tenant; if a share route survives here, check that menu next before assuming this method is
+   * incomplete.
+   */
+  private _hideShareCommand(): void {
+    document
+      .querySelectorAll<HTMLElement>('[data-automationid="shareCommand"]')
+      .forEach((el) => this._hideMenuItem(el));
   }
 
   /** Hides the enclosing `<li>` when present (a clean row removal), else the element itself. */

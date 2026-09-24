@@ -59,6 +59,24 @@ type Props = {
    */
   onChanged?: () => void;
   /**
+   * Fired every time THIS group's own member list is freshly read — mount, switching to a different
+   * `group.id`, or after an add/remove — with the list itself, at NO extra request (this component
+   * already fetched it for its own display).
+   *
+   * ⚠ A DIFFERENT JOB FROM `onChanged`, on purpose. `onChanged` means "something changed, your whole
+   * index may now be stale" and its usual handler is EXPENSIVE (a full site-wide reindex on Group
+   * Management, 1-2 minutes). This means "here is what this one group's members genuinely are right
+   * now" and is meant to be cheap: a host holding a per-group badge can patch just that one entry.
+   *
+   * Found live, 2026-09-24: the badge disagreed with the panel it sat beside (a group correctly
+   * expanded to 2 members while the collapsed row still read "1 person") because the FRESH read this
+   * component makes on every mount was never reported anywhere — the badge only ever corrected
+   * itself after an edit made THROUGH THIS SAME PANEL, so a membership change from any other route
+   * left it stale until the whole page reloaded. This closes that: merely EXPANDING a group now
+   * corrects its own badge, whether or not anything is added or removed.
+   */
+  onLoaded?: (members: SpGroupMember[]) => void;
+  /**
    * Membership of this group also carries SITE COLLECTION ADMINISTRATOR.
    *
    * Client, 2026-08-27: *"its ok to allow System Admin to have SCA, their version of system admin
@@ -146,6 +164,7 @@ export default function GroupMembersEditor({
   group,
   showToast,
   onChanged,
+  onLoaded,
   alsoSiteAdmin,
 }: Props): React.ReactElement {
   /**
@@ -177,10 +196,12 @@ export default function GroupMembersEditor({
 
   const reload = async (): Promise<void> => {
     try {
-      setMembers(
-        await getGroupMembers(context.spHttpClient, siteUrl, group.id),
-      );
+      const list = await getGroupMembers(context.spHttpClient, siteUrl, group.id);
+      setMembers(list);
       setFailed(false);
+      // Report the fresh read up regardless of caller (mount, add, remove) — see `onLoaded`'s own
+      // comment for why this must fire unconditionally rather than only after an edit.
+      if (onLoaded) onLoaded(list);
     } catch {
       setMembers(undefined);
       setFailed(true);

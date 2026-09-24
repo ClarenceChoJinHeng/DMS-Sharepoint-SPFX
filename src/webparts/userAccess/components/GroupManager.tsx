@@ -3207,6 +3207,13 @@ export default function GroupManager({
                         group={{ id: g.id, title: g.title }}
                         showToast={showToast}
                         onChanged={reloadMembers}
+                        /* Patches THIS group's badge from the exact read the panel just made for
+                           its own display — no extra request, and correct the moment it opens
+                           rather than only after an add/remove made through it. See
+                           `GroupMembersEditor`'s `onLoaded` for why this exists (2026-09-24). */
+                        onLoaded={(list) =>
+                          setMemberIndex((prev) => ({ ...(prev ?? {}), [g.id]: list }))
+                        }
                       />
                     )}
                   </div>

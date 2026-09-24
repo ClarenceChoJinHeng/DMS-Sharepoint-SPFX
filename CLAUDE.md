@@ -17855,3 +17855,76 @@ checked at all.
   account's identity shows up. If it migrates again (as it already has once, crs → gdc), both
   `MembersWithEmail` actions need the literal updated, same as every other hardcoded gdc/crs
   reference already catalogued in this file's SERVICE ACCOUNT MIGRATION section.
+
+## GROUP MANAGEMENT'S MEMBER-COUNT BADGE COULD DISAGREE WITH THE PANEL IT SAT BESIDE — FIXED (2026-09-24)
+Client screenshot: `GHO_GF_GIT_APPROVER` read **"1 person"** collapsed, and expanding it showed
+**two** — Goh Kheng Wei and Teh Boon Keong. Quick Search's own, entirely independent live lookup
+confirmed both genuinely hold the group, so this was not a permission or write problem — the
+COLLAPSED BADGE was simply stale.
+- **THE CAUSE: `GroupMembersEditor` always does its own fresh, correct `getGroupMembers` read on
+  mount (that is WHY the expanded panel showed 2 correctly) — but that fresh read was never reported
+  anywhere.** `GroupManager.tsx`'s badge is driven by a SEPARATE, bulk `memberIndex` populated once at
+  page load (`fetchAllGroupMembers`, all ~700+ groups in one request) and only ever refreshed via
+  `onChanged`, which itself only fires after an ADD or REMOVE made THROUGH THIS SAME PANEL. So a
+  membership change from ANY other route (a different session, Quick Search elsewhere, a direct edit)
+  left the badge stale until the whole page reloaded — merely EXPANDING a group never corrected it.
+- **FIXED with a new, cheap `onLoaded?: (members: SpGroupMember[]) => void` prop on
+  `GroupMembersEditor`**, fired from `reload()` on EVERY read (mount, switching `group.id`, and after
+  an add/remove) — at NO extra request, since the data is already in hand for the panel's own
+  display. `GroupManager.tsx`'s per-row mount now patches just that ONE group's entry into
+  `memberIndex` (`setMemberIndex(prev => ({ ...(prev ?? {}), [g.id]: list }))`), so opening a group's
+  panel now always corrects its own badge, whether or not anything is added or removed.
+  - **Deliberately SEPARATE from `onChanged`, not a replacement for it.** `onChanged`'s usual handler
+    (`reloadMembers`) is a full site-wide reindex — 1-2 minutes, confirmed live — and firing that on
+    every mere EXPAND would be a real regression. `onLoaded` patches only the one group actually being
+    looked at, which is both cheaper and, because it fires on every read rather than only after a
+    write, closes exactly the gap that produced this report.
+  - **Safe even when the bulk index totally failed** (`memberIndex === undefined`): patching in one
+    group's real data turns it into a sparse object, and every OTHER group's lookup (`memberIndex[id]`
+    on a key not present) still answers `undefined` exactly as before — no group is ever wrongly
+    reported as having zero members by this change.
+- **Verified**: `tsc --noEmit` clean, `eslint` on both files shows only the documented pre-existing
+  `max-lines` warning on `GroupManager.tsx` (no new categories), full suite **0 failures**.
+
+## THE NATIVE SHARE COMMAND IS HIDDEN SITE-WIDE — "PROMOTE Approve or reject TO PRIMARY" IS NOT BUILT (2026-09-24)
+Client: *"hide share button throughout the entire page"* and *"move our Approve or Reject button to
+be on the left side of the share button."* Confirmed live from the client's own pasted command-bar
+markup: `Share` is a PRIMARY command-bar button
+(`data-id="share" data-automationid="shareCommand"`), a direct sibling of Open/Copy link/Delete/Pin
+to top — unlike the native Approve/Reject command this customizer already hides, which is nested
+inside the "Integrate" flyout.
+- **HIDING SHARE IS DONE** — `HideAppBarApplicationCustomizer.ts` gained `_hideShareCommand()`,
+  called from the same `_onDomChange()` hook as `_hideApproveRejectCommand()`, using the identical
+  `[data-automationid="..."]` match-and-hide pattern. ⚠ **Covers only the toolbar-level button.**
+  SharePoint's Share dialog may also be reachable from a file/folder row's own "..." context menu as
+  a SEPARATE entry — not confirmed live on this tenant. If a share route survives after this, check
+  that menu before assuming the fix is incomplete.
+- **⚠⚠ "PROMOTE `Approve or reject` TO A PRIMARY, ALWAYS-VISIBLE BUTTON" IS NOT BUILT, and the reason
+  is a genuine SharePoint platform limitation, not an oversight.** The command bar's split between
+  primary buttons and the "..." overflow is computed entirely INSIDE SharePoint's own Fluent UI shell
+  at render time (available width vs. the full registered command set) — an SPFx `ListViewCommandSet`
+  manifest (`BulkApproveCommandSet.manifest.json`) has no `priority`/`alwaysPrimary` field or
+  equivalent, and there is no supported API to pin a custom command out of overflow.
+  - **A DOM-hack workaround exists in principle** (inject a new, independently-styled button directly
+    into the primary bar, and on click programmatically open the "..." menu — same proven technique
+    `_injectNewFolderButton`/`_triggerNativeFolderDialog` already use for "+ New Folder" — then poll
+    for and click the REAL "Approve or reject" overflow item, so the actual approve/reject execution
+    still runs through `BulkApproveCommandSet`'s one real implementation rather than a second copy).
+  - **⚠ THE REAL COMMAND'S VISIBILITY IS NOT A SIMPLE SELECTION CHECK — it is gated behind an ASYNC
+    per-item `checkApproveRight` ACL probe** (`BulkApproveCommandSet.onListViewUpdated`), which this
+    project's own comment on that file explicitly warns must stay the ONE implementation: *"A second
+    approval route that skipped them would not be a convenience, it would be a faster way to do the
+    damage they prevent."* A synthetic primary-bar button therefore has to either (a) always show and
+    silently do nothing when the selection can't actually be approved — the real command simply isn't
+    in the overflow menu to click, and a seemingly-live button doing nothing on click is a worse UX
+    than a missing menu item — or (b) re-run the SAME `checkApproveRight` probe itself (safe re-use,
+    not a second implementation, since it only gates visibility — the actual mutation still funnels
+    through the one real `onExecute`), which needs the selected row's item id read from raw DOM
+    (`ApplicationCustomizer`s have no structured `selectedRows` API the way a `ListViewCommandSet`
+    does), doubling the DOM-scraping fragility surface on top of the command-bar-shape assumptions
+    the New Folder button already carries.
+  - **NOT ATTEMPTED YET.** Flagged rather than shipped half-built: this is meaningfully more fragile
+    than a straightforward CSS hide, and worth confirming the client still wants it (and which of the
+    two trade-offs above) before spending the effort.
+- **Verified (hide-Share half only)**: `tsc --noEmit` clean, `eslint` clean on the changed file, full
+  suite **0 failures**.
