@@ -17789,3 +17789,69 @@ change.** Two genuine, previously undocumented live bugs were found and fixed al
     only the trigger cadence and the staleness filter changed. The one-email-per-approver, ten-cap,
     `convertFromUtc` Singapore-time-display behaviour documented earlier in this file for these two
     flows is unaffected.
+
+## ⏭ RECURRENCE NARROWED TO EVERY 30 MINUTES — AGREED 2026-09-24, NOT YET APPLIED LIVE
+Client, weighing the up-to-~1-hour polling lag documented above: *"30 minutes sounds like a more
+safe window."* Agreed change, on BOTH `CRS — Reminding Approver to Approve` and
+`CRS — HC approval reminder`: **Recurrence trigger, Frequency `Hour`/interval `1` → Frequency
+`Minute`/interval `30`.** Nothing else changes — `GetStale`'s filter, the `NextReminderAt` stamp
+math, and every action after it are untouched; `Time zone` stays irrelevant at this frequency, same
+as it already was at Hourly.
+- **THE LAG SHRINKS, IT DOES NOT DISAPPEAR** — same reasoning as the Hourly→Minute trade-off
+  already documented above, just a smaller window: the flow still only checks
+  `NextReminderAt le utcNow()` on a fixed schedule, so a reminder due at 2:33 PM is still caught by
+  whichever 30-minute poll lands next (2:30 or 3:00), never at the literal instant. The STORED
+  anchor stays locked to the original upload time regardless, per the drift-free design in §5 of
+  the runbook.
+- **COST: run count roughly doubles again** — 24/day → 48/day per flow, so **96/day combined**
+  across both flows (was 48/day combined at Hourly). Still a modest multiple against the documented
+  quota near-miss this tenant has already hit once (an hourly-recurrence flow silently exhausting
+  its daily run quota, with the next real approval simply not routed) — flagged as a known,
+  accepted trade-off, not a blind increase.
+- **✅ APPLIED AND VERIFIED, 2026-09-24.** Confirmed by reading fresh exports of both flows
+  (`CRS—HCapprovalreminder_20260924062200.zip`, `CRS—RemindingApprovertoApprove_20260924062215.zip`)
+  directly, not from a screenshot: both `Recurrence` triggers read
+  `"frequency":"Minute","interval":30,"startTime":"2026-08-31T01:00:00.000Z"` (the normal flow keeps
+  its `timeZone: "Singapore Standard Time"`, still inert at this frequency, same as it was at
+  Hourly).
+
+## ✅ REMINDER EMAILS NO LONGER GO TO A SYSTEM ADMIN, OR TO GDC SPECIFICALLY — APPLIED AND SAVED ON BOTH FLOWS (2026-09-24)
+Client: *"can we ensure that this emails doesnt fire to system admin and especially gdc."* Both
+reminder flows already excluded a document's own AUTHOR from its recipient list (so a self-approving
+uploader never gets nagged about their own file) — nothing excluded an ADMIN, and gdc was never
+checked at all.
+- **TWO EDITS, IDENTICAL ON BOTH FLOWS.** `GetMembers`' `parameters/uri` `$select` widened from
+  `Title,Email` to `Title,Email,IsSiteAdmin`; `MembersWithEmail`'s `where` gained two more `and()`
+  clauses on top of the existing blank-email and self-author checks:
+  `not(equals(coalesce(item()?['IsSiteAdmin'], false), true))` (drops anyone whose SharePoint
+  `IsSiteAdmin` flag is set — covers "system admin" generically, present or future, not just gdc by
+  name) and `not(equals(toLower(coalesce(item()?['Email'], '')), 'gdc@sdguthrie.com'))` (a second,
+  literal, guaranteed exclusion of gdc specifically — belt-and-braces on top of the flag check,
+  since the client called gdc out by name).
+- **⚠⚠ `crs@sdguthrie.com` IS DELIBERATELY NOT EXCLUDED, AND THE CLIENT CONFIRMED WHY.** Per an
+  earlier live investigation in this file, crs was never actually a Site Collection Administrator —
+  and the client confirmed directly, same session: *"crs@sdguthrie.com wont be the system admin
+  anymore, client switch from crs to gdc, they created a gdc account for me to ensure that the
+  ownership of crs is pass on to gdc, crs is now a normal account."* So `IsSiteAdmin` correctly
+  reads false for it, the literal check never matches it, and it goes on receiving reminders like
+  any other approver it's genuinely mapped to in a unit — which is right, since excluding it would
+  silently stop a legitimate approver from being reminded.
+- **✅ CONFIRMED SAVED ON BOTH, VIA CODE VIEW, NOT A SCREENSHOT MID-EDIT.** Normal flow
+  (`CRS — Reminding Approver to Approve`): `MembersWithEmail`'s `where` read back with all four
+  conditions, `gdc@sdguthrie.com` included, on the canvas (not the bare editor pane). HC flow
+  (`CRS — HC approval reminder`): the green **"Your flow is ready to go. We recommend you test it"**
+  banner, plus `GetMembers`' `$select=Title,Email,IsSiteAdmin` visible in Code view.
+- **⚠ ONE THING STILL GENUINELY UNVERIFIED, NOT FROM STATIC READING: whether `IsSiteAdmin` actually
+  comes back populated (not blank/null) from `_api/web/sitegroups(N)/users?$select=...,IsSiteAdmin`
+  on THIS tenant.** It is a standard, normally-selectable `SP.User` property, and the `where`
+  expression already guards it with `coalesce(..., false)` so a blank/missing value fails safe
+  (treated as "not an admin," i.e. still gets the email rather than silently vanishing) — but this
+  has not been confirmed against a real response body. **Next real reminder run (or the HC flow's
+  own "recommend you test it" prompt): check `GetMembers`' raw output for gdc's row and confirm
+  `IsSiteAdmin: true` is actually present**, rather than assuming the literal-email exclusion is
+  doing all the work silently.
+- **THE LITERAL `'gdc@sdguthrie.com'` IS THE ONE PLACE IN THESE TWO FLOWS THIS ADDRESS IS TYPED** —
+  same "one line to change, not a grep" reasoning this project applies everywhere else the service
+  account's identity shows up. If it migrates again (as it already has once, crs → gdc), both
+  `MembersWithEmail` actions need the literal updated, same as every other hardcoded gdc/crs
+  reference already catalogued in this file's SERVICE ACCOUNT MIGRATION section.
