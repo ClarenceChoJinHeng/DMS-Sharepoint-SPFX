@@ -17934,12 +17934,14 @@ Both fixes above (the Group Management badge, hiding Share) are **done, committe
 Three items from the same client message are NOT resolved and need feedback before picking this back
 up — do not guess at any of them from here.
 
-1. **⏭ ROOT-CAUSED TO SHAREPOINT ITSELF, REPAIR NOT YET TESTED — see the dedicated entry below,
-   "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** The search code is confirmed correct; the
-   staged tag payload and the raw POST the flow actually sent to SharePoint are BOTH confirmed
-   correct too — the corruption happens on SharePoint's own side after accepting a valid write
-   (`TaxonomyHiddenList` cold-cache theory). `scripts/check-taxonomy-relabel.js` tests the one cheap
-   repair worth trying (re-assert the same value a second time); not yet run.
+1. **⏭ ROOT-CAUSED TO SHAREPOINT ITSELF; CHEAP REPAIR RULED OUT; SCOPE TEST NOT YET RUN — see the
+   dedicated entry below, "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** The search code is
+   confirmed correct; the staged tag payload and the raw POST the flow actually sent to SharePoint
+   are BOTH confirmed correct too — the corruption happens on SharePoint's own side after accepting
+   a valid write. A repeat write does NOT self-heal it (tested live), pointing at a corrupted
+   `TaxonomyHiddenList` cache entry for these specific term GUIDs rather than a flaky write.
+   `scripts/check-taxonomy-relabel-scope.js` tests whether OTHER documents sharing these same term
+   GUIDs are also corrupted — not yet run.
 2. **Document-Viewer: clicking a file first shows a blank page, requires going back to the
    "Document Viewer tab" to actually load.** Checked for the two usual causes in this exact file's
    history (a React hooks-order violation below an early return; the URL-scrub issue already fixed
@@ -18079,21 +18081,32 @@ filters returns 83 results including `bulk4-test2-test2-19062026 - Copy (2).xlsx
   - **The `RichText: false` gap on `TagPayload`/`TagError` is STILL worth fixing** (it is a real
     defect regardless), but it is now confirmed NOT the cause of this specific symptom — the payload
     that left the flow was already clean JSON with the correct values.
-- **⏭ NEXT STEP, NOT YET RUN: `scripts/check-taxonomy-relabel.js`** (new, 2026-09-24) — reads the
-  document's raw taxonomy fields alongside `FieldValuesAsText` for the same fields, and, once
-  reviewed (`DO_WRITE = true`), tests whether simply re-asserting the exact same correct
-  `"Label|TermGuid"` value a SECOND time (via the identical `validateUpdateListItem` call
-  `CRS — Apply pending tags` already uses) forces SharePoint to resolve and cache the Label
-  correctly. If a second identical write self-heals it, the fix is a cheap retry-once added to the
-  flow. If it does not, the `TaxonomyHiddenList` cache issue needs a different mitigation (a forced
-  re-save through the SharePoint UI's own taxonomy picker, or waiting on a background cache job) and
-  is not fixable purely from this repo.
-- **⚠ LIKELY NOT A ONE-OFF, IF THE TAXONOMYHIDDENLIST THEORY HOLDS.** Every document tagging a given
-  term for the FIRST time on this site — not only this one bulk-upload test file — could land with
-  the same corrupted Label, self-correcting only once that specific GUID has been cached once on
-  this site. Worth a wider check (how many documents currently show `Label === WssId` on any of the
-  three taxonomy fields) once the mechanism is actually confirmed, not before — guessing at scope
-  before the cause is settled risks chasing the wrong fix across many documents.
+- **✅ RAN, 2026-09-24: `scripts/check-taxonomy-relabel.js` — A SECOND IDENTICAL WRITE DOES NOT FIX
+  IT.** `DO_WRITE = true` re-sent the exact same correct `"Term Sheet|ffd9961d-..."` etc. via
+  `validateUpdateListItem`. The write succeeded with **no field exceptions**, but re-reading the raw
+  fields immediately after shows the identical corruption — `Label="8" WssId=8` unchanged. **This
+  rules out "the write is flaky" as the mechanism.** It sharpens the hypothesis instead: SharePoint
+  isn't failing to apply what you send — it's resolving the write THROUGH `TaxonomyHiddenList`'s
+  cached entry for this term GUID on this site, and if THAT cache entry itself holds a corrupted
+  Label, every write that touches it gets stamped with the cached value regardless of what label was
+  actually POSTed. `FieldValuesAsText` bypasses this cache with a live term-store lookup, which is
+  why it alone reads correctly.
+- **⏭ NEXT STEP, NOT YET RUN: `scripts/check-taxonomy-relabel-scope.js`** (new, 2026-09-24) —
+  READ ONLY. If the corruption is a per-(site, TermGuid) cache entry rather than something specific
+  to this one document's write, then EVERY document using the same three term GUIDs (Term Sheet /
+  2024 / Confidential) should show the identical corruption, regardless of which flow or write path
+  tagged them or when. This scans other, unrelated documents across the approved-side libraries for
+  the same three term GUIDs and reports whether they are corrupted too:
+  - **All corrupted** → confirms a persistent, site-wide cache corruption for these specific terms —
+    almost certainly affects every document ever tagged with them, not just recent bulk-upload/
+    proxy-tagged ones. Worth a full scope count once confirmed, and likely needs a Microsoft support
+    case or a CSOM-level fix (the SharePoint UI's own taxonomy picker does proper term resolution
+    that the raw REST `validateUpdateListItem` write may not — untested, would need a live UI re-save
+    to confirm).
+  - **All correct** → the per-term cache theory is wrong; something specific to THIS document's
+    write is the real cause, and the theory needs revisiting from scratch.
+  - **Mixed** → neither theory alone explains it; whatever distinguishes the corrupted ones (upload
+    date, which flow wrote them) becomes the next thing to isolate.
 - **Item 2 (Document-Viewer blank-page-on-first-click): client, 2026-09-24, "So far I dont encounter
   it anymore, I will tell you when it happens."** Left open, not actively chased — nothing to
   investigate further until it reproduces again.
