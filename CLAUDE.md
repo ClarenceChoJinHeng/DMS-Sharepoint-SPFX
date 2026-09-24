@@ -18172,3 +18172,45 @@ filters returns 83 results including `bulk4-test2-test2-19062026 - Copy (2).xlsx
 - **Item 3 (promote "Approve or reject" to a primary command-bar button): unchanged, still needs a
   client decision on which trade-off** (see the dedicated entry above this pause point) before it is
   built at all.
+
+## ⏸ APPROVAL REMINDER EMAIL — LEGITIMATE ON THE ONE EMAIL CHECKED, TWO OPEN QUESTIONS, PAUSED MID-INVESTIGATION (2026-09-24)
+Client: *"Lets check the approval reminder, client reported they receive an email"* — no complaint
+specified, just wanted the flow's own run to be checked before deciding whether anything is wrong.
+Both `CRS — Reminding Approver to Approve` (normal) and `CRS — HC approval reminder` are on the
+2026-09-24 30-minute recurrence (per the earlier section in this file); both show "Succeeded" across
+every recent run in their 28-day history.
+- **✅ THE ONE EMAIL ACTUALLY CHECKED IS LEGITIMATE.** Client found the HC flow's **5:30 PM run** —
+  the only one among those inspected that both found something due AND sent an email — and pulled
+  `GetStale`'s raw output, `MembersWithEmail`'s output, and `Send_an_email_(V2)`'s raw Inputs.
+  Everything checks out: item `#346`, `Project 2-Bank B-Final Agreement-31082025.pdf`
+  (`HCApprovalDocument/GHO/GF/TREASURY/2025/Agreement`), `{ModerationStatus}: "Pending"` (still
+  genuinely awaiting approval), `Created: 2026-09-18` (6 days old, past the 3-day threshold),
+  `NextReminderAt: "2026-09-24"` (matches today, genuinely due). Recipient: Raymond Khoo Wei Men
+  (`weimen.khoo@sdguthrie.com`), `IsSiteAdmin: false` — a real, non-excluded approver, not gdc, not a
+  site admin. Subject/body/link all correctly name the right document and unit. **Nothing wrong with
+  this specific email.**
+- **⏭ OPEN QUESTION 1, NOT YET CHECKED: did `NextReminderAt` actually advance past today after this
+  send?** The item's `Modified: "2026-09-24T04:15:02Z"` (Editor = gdc, the proxy account) is from
+  EARLIER TODAY — almost certainly an earlier reminder-flow stamp on this same item. If that earlier
+  stamp left `NextReminderAt` sitting at `"2026-09-24"` rather than advancing it to `"2026-09-27"`
+  (the drift-free `addDays(NextReminderAt ?? Created+3, 3)` cadence this design is supposed to use),
+  the item would match `GetStale`'s `<= today` filter on EVERY 30-minute run for the rest of today —
+  up to ~48 duplicate reminders in one day for this one document, not the intended "one gentle nag
+  every 3 days." **Next step: re-read item `#346`'s `NextReminderAt` NOW, after the 5:30 PM send, and
+  confirm it reads `2026-09-27`, not still `2026-09-24`.**
+- **⏭ OPEN QUESTION 2, NOT YET CHECKED: the normal flow's own 5:30 PM run.** Client's own observation:
+  *"the 5:30 pm is running only for HC Approver, the non HC approver did not fully complete its
+  run."* The run-history LIST shows it as `Succeeded`, `00:00:01` duration — no evidence of a genuine
+  failure from that alone. **Leading, unconfirmed hypothesis: `GetStale` found zero due items at that
+  moment** (a real, benign outcome — nothing due right then), and Power Automate renders a
+  zero-iteration `Apply to each`'s inner actions (`GetApproverGroup`, `HasApprover`, etc.) in GREY
+  rather than green, which can visually read as "incomplete" even though the run legitimately
+  succeeded and did everything it needed to (nothing). **Next step: open that specific run, read
+  `GetStale`'s raw output** — an empty `value: []` array confirms the benign explanation; anything
+  else (a genuinely stuck action, a red failure, a non-empty array that never reached `Send an email`)
+  would point at a real defect and need its own trace.
+- **Also observed, not investigated further: both flows showed "empty" at the 4:59 PM mark.**
+  Consistent with nothing being due at that exact 30-minute tick — not treated as a finding on its own
+  unless open question 2 turns up something that makes it look otherwise.
+- **⚠ NEITHER OPEN QUESTION HAS BEEN ANSWERED. PAUSED HERE ON THE CLIENT'S OWN INSTRUCTION** to
+  document and compact before continuing.
