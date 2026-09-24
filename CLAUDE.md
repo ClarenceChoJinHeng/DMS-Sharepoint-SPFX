@@ -18189,15 +18189,56 @@ every recent run in their 28-day history.
   (`weimen.khoo@sdguthrie.com`), `IsSiteAdmin: false` — a real, non-excluded approver, not gdc, not a
   site admin. Subject/body/link all correctly name the right document and unit. **Nothing wrong with
   this specific email.**
-- **⏭ OPEN QUESTION 1, NOT YET CHECKED: did `NextReminderAt` actually advance past today after this
-  send?** The item's `Modified: "2026-09-24T04:15:02Z"` (Editor = gdc, the proxy account) is from
-  EARLIER TODAY — almost certainly an earlier reminder-flow stamp on this same item. If that earlier
-  stamp left `NextReminderAt` sitting at `"2026-09-24"` rather than advancing it to `"2026-09-27"`
-  (the drift-free `addDays(NextReminderAt ?? Created+3, 3)` cadence this design is supposed to use),
-  the item would match `GetStale`'s `<= today` filter on EVERY 30-minute run for the rest of today —
-  up to ~48 duplicate reminders in one day for this one document, not the intended "one gentle nag
-  every 3 days." **Next step: re-read item `#346`'s `NextReminderAt` NOW, after the 5:30 PM send, and
-  confirm it reads `2026-09-27`, not still `2026-09-24`.**
+- **✅ OPEN QUESTION 1 IS ANSWERED — `NextReminderAt` ADVANCED CORRECTLY, NOT STUCK.** The
+  `Approval for Highly Confidential Document` grid (Pending Files view, `NextReminderAt` column
+  visible) shows `9/27/2026` for `#346` and for every other pending row — the drift-free
+  `addDays(NextReminderAt ?? Created+3, 3)` cadence worked as designed. No re-fire-every-30-minutes
+  risk on this item.
+- **⚠⚠ A NEW, GENUINELY DIFFERENT FINDING SURFACED CHASING QUESTION 1: THE REMINDER FLOW'S OWN
+  `NextReminderAt` STAMP RE-TRIGGERS `HCNotifyApprovers`, SENDING A DUPLICATE "new document
+  submitted" EMAIL FOR AN ALREADY-TAGGED, DAYS-OLD DOCUMENT.** Client pasted two emails that arrived
+  within the same minute for item `#346` (6 days old, tagged since upload): a legitimate
+  `REMINDER: Approval Required` and, right beside it, `Approval Requested: Project 2-Bank B-Final
+  Agreement-31082025.pdf` — the ordinary "A new document has been submitted for your review and
+  approval" notification, on a document that was submitted six days earlier and already notified
+  once at the time.
+  - **THE MECHANISM, established from this project's own documented flow behaviour, not yet
+    confirmed by reading the two flows' run history side by side at the same minute.**
+    `HCNotifyApprovers`/`NotifyApprovers` trigger on **created OR MODIFIED** on the same approval
+    library (`2026-08-25` section, *"THE DUPLICATE-EMAIL GUARD IS `HasUnit`... The trigger is
+    created or modified — it must be, because the upload form uploads and THEN tags, so at
+    creation `UnitTid` does not exist yet. The first firing therefore stops at `HasUnit` = False
+    and the second sends."*). That guard was built to tell "created, not yet tagged" apart from
+    "modified, now tagged" — **it has no defence against a THIRD modification, days later, that
+    also happens to leave `HasUnit` true.** The reminder flow's own `Update item`/MERGE action
+    writes `NextReminderAt` onto this exact item on this exact library
+    (`2026-09-22` runbook §5) — a genuine SharePoint "Modified" event — which re-fires the
+    create-or-modify trigger. `HasUnit` is still true (the item has been tagged for days), so this
+    time the guard does NOT stop it, and the flow runs all the way through to `Send an email`.
+  - **SAME CLASS OF BUG THIS PROJECT HIT ONCE ALREADY, THE SAME DAY, ON A DIFFERENT FLOW PAIR.**
+    Per the 2026-09-24 "MAJOR INCIDENT #1" entry earlier in this file: writing `NextReminderAt`
+    also silently woke `CRS — Auto-approve bulk imports`, which watches the same list on
+    created-or-modified — fixed there with a `BulkImport ne 1` exclusion added to `GetStale`. This
+    is a THIRD flow reacting to the exact same write, and needs its own fix — excluding
+    `HCNotifyApprovers`'s trigger from firing is not the answer (it must still catch genuine new
+    uploads), the DEDUPE inside it needs to be stronger.
+  - **THE FIX, NOT YET APPLIED — Power Automate, not code:** `NextReminderAt` starts blank and is
+    only ever written by the reminder flow, and that flow never runs on a document less than 3 days
+    old — so on BOTH of the two LEGITIMATE `HasUnit` firings (created, then tagged), `NextReminderAt`
+    is still guaranteed blank. Add `and empty(coalesce(triggerBody()?['NextReminderAt'], ''))`
+    alongside the existing `HasUnit` condition in `MembersWithEmail`'s `where` (or wherever the
+    dedupe actually lives — re-check the exact action name before editing). This closes the gap
+    with no cost to the legitimate two-fire pattern, since neither of those two firings can ever
+    see `NextReminderAt` already populated.
+  - **NOT YET APPLIED, AND NOT YET CONFIRMED AGAINST THE ACTUAL RUN HISTORY** — this is the
+    leading, well-corroborated diagnosis from the documented mechanics and the timing match, not a
+    confirmed read of `HCNotifyApprovers`'s own trigger inputs at 5:3x PM. Before editing the flow,
+    open its run history for the minute these two emails went out and confirm it fired on a
+    MODIFIED event (not a coincidental second created-event) and that `HasUnit` genuinely evaluated
+    true.
+  - **⚠ SAME GAP LIKELY EXISTS ON THE NORMAL FLOW'S PAIR (`NotifyApprovers` / `CRS — Reminding
+    Approver to Approve`)** — same trigger shape, same `HasUnit` guard, same reminder-writes-
+    NextReminderAt mechanism. Fix both once confirmed on the HC pair.
 - **⏭ OPEN QUESTION 2, NOT YET CHECKED: the normal flow's own 5:30 PM run.** Client's own observation:
   *"the 5:30 pm is running only for HC Approver, the non HC approver did not fully complete its
   run."* The run-history LIST shows it as `Succeeded`, `00:00:01` duration — no evidence of a genuine
@@ -18212,5 +18253,7 @@ every recent run in their 28-day history.
 - **Also observed, not investigated further: both flows showed "empty" at the 4:59 PM mark.**
   Consistent with nothing being due at that exact 30-minute tick — not treated as a finding on its own
   unless open question 2 turns up something that makes it look otherwise.
-- **⚠ NEITHER OPEN QUESTION HAS BEEN ANSWERED. PAUSED HERE ON THE CLIENT'S OWN INSTRUCTION** to
-  document and compact before continuing.
+- **⚠ STATE AT THIS PAUSE: question 1 closed (cadence correct); the cross-flow duplicate-email
+  finding is diagnosed but NOT flow-confirmed or fixed; question 2 (the normal flow's 5:30 PM
+  grey-loop run) is still untouched.** Paused here on the client's own instruction to document and
+  compact before continuing.
