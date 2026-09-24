@@ -80,10 +80,18 @@ export interface TierFilter {
 export interface SearchCriteria {
   /** The free-text box. Multiple words are ANDed. */
   text: string;
+  /**
+   * The selected term's `TermGuid`, NEVER its label — since 2026-09-24. A document's raw taxonomy
+   * `Label` can be silently, permanently corrupted by SharePoint's own term cache; `TermGuid` in the
+   * same field is not. See `termGuidOf` in `DocumentSearch.tsx` for the full story. The filter
+   * dropdown still shows a real label, resolved live from the term store — only the VALUE it submits
+   * changed.
+   */
   documentType: string;
   year: string;
   confidentiality: string;
-  /** The selected segment's label, matched against `Business Segment`. */
+  /** The selected segment's label, matched against `Business Segment` — a PLAIN TEXT column, never
+   *  taxonomy, so it is not subject to the corruption the other three are compared past. */
   segment: string;
   /** Tier values, only ever for the selected segment's own tiers. */
   tiers: TierFilter[];
@@ -421,8 +429,13 @@ export function hasMetadataFilter(c: SearchCriteria): boolean {
 /**
  * Does one row satisfy the three filters REST could not apply?
  *
- * Compared trimmed and case-insensitively, because these are labels a person picked from a dropdown
- * and SharePoint's own casing is not guaranteed to match the term store's.
+ * ⚠ BOTH SIDES ARE `TermGuid`s, NOT LABELS — since 2026-09-24. Comparing on the raw `Label` a
+ * document's field carries was found live to be unsafe: SharePoint can silently, permanently corrupt
+ * that sub-property (a `TaxonomyHiddenList` cache issue on the tenant's own side, confirmed
+ * unfixable by any write this codebase can make), while `TermGuid` in the identical field was never
+ * wrong across every corrupted document checked. Still compared trimmed and case-insensitively —
+ * harmless for a GUID, and it means this function's logic never had to change when what it compares
+ * did.
  *
  * ⚠ A BLANK ROW VALUE FAILS A SET FILTER, and that is deliberate: a document with no Document Type
  * cannot be shown to be a `Letters with Counterparties`. It is NOT the "could not read" case — that

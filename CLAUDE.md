@@ -17934,15 +17934,15 @@ Both fixes above (the Group Management badge, hiding Share) are **done, committe
 Three items from the same client message are NOT resolved and need feedback before picking this back
 up — do not guess at any of them from here.
 
-1. **⏭ CONFIRMED TENANT-WIDE, PREDATES OUR OWN CODE ENTIRELY, REPAIR STILL UNKNOWN — see the
-   dedicated entry below, "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** 166 of 166
-   documents sharing three specific term GUIDs (Term Sheet/2024/Confidential) are corrupted —
-   100%, spanning June through September 2026, crossing the 2026-09-18 tag-by-proxy migration
-   boundary with no discontinuity. **This is a permanent SharePoint `TaxonomyHiddenList` cache
-   corruption for these three terms on this site — nothing in this project's code caused it.**
-   Two REST-level repairs already ruled out (single write, repeat write). Next test: whether
-   SharePoint's own UI taxonomy picker can repair it (untested) — if not, this needs a Microsoft
-   support case, not a code fix.
+1. **✅ CODE FIX BUILT AND SHIPPED, NOT YET DEPLOYED — see the dedicated entry below,
+   "CRS SEARCH'S 'Document Type: Term Sheet' FILTER..."** 166 of 166 documents sharing three
+   specific term GUIDs are corrupted — a permanent SharePoint `TaxonomyHiddenList` cache
+   corruption, confirmed unfixable by our REST write, a repeat write, or SharePoint's own native
+   UI taxonomy picker. Since the platform bug cannot be repaired from here, the search filter was
+   changed to compare on `TermGuid` instead of the corrupted `Label` — `TermGuid` was never wrong
+   in any of the 166 documents checked. Confirmed present in the shipped `.sppkg`. **Needs
+   deployment and a live re-test** (search filtered by Document Type = Term Sheet should now find
+   the matching document).
 2. **Document-Viewer: clicking a file first shows a blank page, requires going back to the
    "Document Viewer tab" to actually load.** Checked for the two usual causes in this exact file's
    history (a React hooks-order violation below an early return; the URL-scrub issue already fixed
@@ -18115,25 +18115,52 @@ filters returns 83 results including `bulk4-test2-test2-19062026 - Copy (2).xlsx
     corrupted, or whether this is isolated to just these three specific term entries, is not yet
     known — and matters a great deal, since "Agreement" in particular is likely used on far more
     documents than "Term Sheet."
-- **⏭ NEXT STEP, NOT YET DONE: test whether SharePoint's OWN taxonomy picker UI can repair the cache
-  entry — no script, just clicking in the browser.** Our REST write (`validateUpdateListItem`) is
-  confirmed unable to fix this even on repeat; the UI's taxonomy field control uses a different
-  client-side resolution path (typically CSOM's `SetFieldValueByValue`) that may force a proper
-  re-sync of `TaxonomyHiddenList` where a raw REST string write does not.
-  - **How to test:** open item `#1677` (`bulk4-test2-test2-19062026 - Copy (2).xlsx`, or any of the
-    listed corrupted documents) directly in `Restricted & Confidential Document` — either the
-    library's own "All Documents" list view with Document Type as a visible column (double-click the
-    cell to edit), or the file's own Properties/Details pane. Open the **Document Type** field's
-    dropdown/picker, RE-SELECT "Term Sheet" (even though it already shows correctly there — the
-    picker resolves live, same as `FieldValuesAsText`), and Save. Repeat for Year and Confidentiality
-    Level if the UI allows editing them the same way.
-  - Then re-run `check-taxonomy-relabel.js` (dry run, `DO_WRITE = false` is enough) against that same
-    `SubmissionFileId`/item to see if the raw field's Label now reads correctly.
-  - **If it fixes it:** the remediation path is a manual UI re-save per affected document (tedious at
-    166+, but real) — or, better, a PnP PowerShell `Set-PnPTaxonomyFieldValue` call per item, which
-    uses the same proper CSOM resolution and can be scripted/batched unlike the UI.
-  - **If it does NOT fix it:** this is a genuine SharePoint Online platform-level data corruption that
-    no client-side mechanism (REST or CSOM) can repair, and needs a Microsoft support case.
+- **✅ RAN, 2026-09-24: SHAREPOINT'S OWN NATIVE UI TAXONOMY PICKER ALSO FAILED TO REPAIR IT.** Client
+  opened `#1677` directly (Properties pane), used the real term picker to RE-SELECT "Term Sheet" for
+  Document Type (confirmed "✓ Saved" in the UI), then `check-taxonomy-relabel.js` (dry run) re-read the
+  raw field — the `BEFORE` state in that run, which reflects the UI edit and predates any REST write of
+  our own, still showed `Label="8" WssId=8`. **Every client-accessible write mechanism is now
+  exhausted: our REST write, a repeat REST write, and SharePoint's own UI.** This is backend
+  `TaxonomyHiddenList` corruption that nothing short of PnP PowerShell/CSOM at a lower level (untested,
+  availability unknown) or a Microsoft support case can repair.
+- **✅✅ BUILT AND SHIPPED, 2026-09-24: CRS SEARCH NO LONGER DEPENDS ON THE CORRUPTED `Label` AT ALL.**
+  Since the platform corruption cannot be repaired from here, the fix routes around it: in every raw
+  taxonomy field read across all 166+ corrupted documents checked, `TermGuid` was NEVER wrong — only
+  `Label`/`WssId` were. The comparison was moved from `Label` to `TermGuid`.
+  - **`termGuidOf()` (new, `DocumentSearch.tsx`)** extracts `.TermGuid` from a raw taxonomy field's
+    `{Label, TermGuid, WssId}` shape, replacing `textOf()` (which pulls `.Label`) at all three
+    narrowing call sites — `runSearch`'s batch-meta build, its UniqueId fallback, and `runListRead`'s
+    narrowing check. `textOf` is UNCHANGED and still used for everything else (filename, author,
+    Segment — a plain TEXT column, never taxonomy, so never subject to this corruption).
+  - **The three filter `<select>`s (`crs-doctype`/`crs-year`/`crs-conf`) now bind `value={o.id}`
+    instead of `value={o.label}`** — the DISPLAYED text is unchanged (`o.label`, still resolved live
+    and correctly from a genuine `/termStore/sets/.../children` read, `readTerms`, never from a
+    document's own stored field), only the VALUE submitted when a filter is picked changed from a
+    label to that term's GUID.
+  - **`SearchCriteria.documentType`/`year`/`confidentiality` now hold `TermGuid`s, not labels** —
+    confirmed this is their ONLY use in the component (the three `<select>` bindings; nothing displays
+    them as text anywhere), so this is a fully contained change with no other call site to update.
+  - **`metadataFilterMatches`/`searchMetadataMatches` in `shared/documentSearch.ts` needed NO logic
+    change** — the comparison itself is generic trimmed case-insensitive string equality, indifferent
+    to whether the strings are labels or GUIDs. Only their doc comments were updated (both `Search
+    Criteria`'s field comment and the two functions' own headers) so nobody reads them as still
+    describing label comparison.
+  - **This fixes the search filter for EVERY taxonomy term, not just these three** — the mechanism
+    (comparing on a value proven stable across the whole corrupted set) is general, so it also
+    protects against any OTHER term that turns out to have the same corruption (scope beyond these
+    three terms is still unconfirmed — see below).
+  - **Verified**: `tsc --noEmit` clean, full suite **2044/2044**, 44 lint warnings — the documented
+    pre-existing baseline, zero new on either touched file. `npm run build` succeeded and the shipped
+    `.sppkg` was unzipped and grepped directly: `TermGuid` (a property-access literal, survives
+    minification unlike a function name) appears **exactly twice** in the built
+    `document-search-web-part` bundle — matching the two `.TermGuid` reads in the new `termGuidOf`
+    function precisely, and appearing **zero times** before this change (it previously existed only
+    inside a comment, which minification strips). **NOT yet deployed or site-tested.**
+- **⚠ SCOPE BEYOND THESE THREE TERMS IS STILL UNKNOWN, AND NOW MATTERS LESS BUT NOT NOT-AT-ALL.** Only
+  Term Sheet / 2024 / Confidential were tested. The `TermGuid` fix above should transparently cover any
+  OTHER corrupted term too, once deployed — but whether OTHER values (e.g. "Agreement", "2025",
+  "Restricted") are ALSO corrupted is still worth knowing, both to confirm the fix actually resolves
+  them and to gauge the true size of the underlying platform problem.
 - **Item 2 (Document-Viewer blank-page-on-first-click): client, 2026-09-24, "So far I dont encounter
   it anymore, I will tell you when it happens."** Left open, not actively chased — nothing to
   investigate further until it reproduces again.

@@ -153,6 +153,29 @@ function textOf(v: unknown): string {
   return "";
 }
 
+/**
+ * The `TermGuid` off a taxonomy field's raw `{Label, TermGuid, WssId}` shape — never its `Label`.
+ *
+ * ⚠⚠ WHY THIS EXISTS AND MUST NOT BE REPLACED WITH `textOf`: live-tested 2026-09-24, `Label` can be
+ * PERMANENTLY CORRUPTED on SharePoint's own side — the raw field's `Label` sub-property silently
+ * equals the term's numeric `WssId` (e.g. `"8"` instead of `"Term Sheet"`) for reasons outside this
+ * codebase's control (a `TaxonomyHiddenList` cache entry gone bad; neither a repeat REST write nor
+ * SharePoint's own native taxonomy-picker UI could repair it, tested live). `FieldValuesAsText`
+ * resolves correctly because it does a LIVE term-store lookup, but it is a per-ITEM endpoint and
+ * cannot be used to narrow a batch of search hits.
+ *
+ * `TermGuid`, in every one of 166 corrupted documents checked live across both approved-side
+ * libraries, was NEVER wrong. So the metadata filters compare on `TermGuid` — a value proven stable
+ * — rather than the `Label` a corrupted term can silently poison. The filter dropdowns still show
+ * real, correct LABELS, because those come from a genuinely live `/termStore/sets/.../children` read
+ * (`readTerms`, below), never from a document's own stored field.
+ */
+function termGuidOf(v: unknown): string {
+  if (v === undefined || v === null || typeof v !== "object") return "";
+  const o = v as Record<string, unknown>;
+  return typeof o.TermGuid === "string" ? o.TermGuid.trim() : "";
+}
+
 /* ⚠ `MONTHS`/`formatDate()` — the private DD/MMM/YYYY re-implementation this file used to build
    dates from by hand — REMOVED 2026-09-21 (client: "I want 21 Sep 2026 no slash"). Both call sites
    (the file-detail panel's "Last updated" row, and the search-result row's `author · date · size`
@@ -1127,9 +1150,9 @@ export default function DocumentSearch({
           const id = Number(textOf(row.Id)) || 0;
           if (id === 0) continue;
           meta[id] = {
-            documentType: textOf(row[METADATA_FILTER_FIELDS.documentType]),
-            year: textOf(row[METADATA_FILTER_FIELDS.year]),
-            confidentiality: textOf(
+            documentType: termGuidOf(row[METADATA_FILTER_FIELDS.documentType]),
+            year: termGuidOf(row[METADATA_FILTER_FIELDS.year]),
+            confidentiality: termGuidOf(
               row[METADATA_FILTER_FIELDS.confidentiality],
             ),
             segment: textOf(row.Business_x0020_Segment),
@@ -1170,9 +1193,9 @@ export default function DocumentSearch({
         if (!resp.ok) continue;
         const row = resp.body as RawRow;
         meta[h.itemId] = {
-          documentType: textOf(row[METADATA_FILTER_FIELDS.documentType]),
-          year: textOf(row[METADATA_FILTER_FIELDS.year]),
-          confidentiality: textOf(row[METADATA_FILTER_FIELDS.confidentiality]),
+          documentType: termGuidOf(row[METADATA_FILTER_FIELDS.documentType]),
+          year: termGuidOf(row[METADATA_FILTER_FIELDS.year]),
+          confidentiality: termGuidOf(row[METADATA_FILTER_FIELDS.confidentiality]),
           segment: textOf(row.Business_x0020_Segment),
         };
       }
@@ -1248,14 +1271,14 @@ export default function DocumentSearch({
     for (const row of (r.body.value as RawRow[]) ?? []) {
       const file = (row.File as RawRow) ?? {};
       const author = (row.Author as RawRow) ?? {};
-      /* The narrowing REST could not do. `textOf` already handles a taxonomy field's
-         `{Label, TermGuid, WssId}` shape as well as a bare string. */
+      /* The narrowing REST could not do. `termGuidOf` compares on TermGuid, never the raw `Label` —
+         see its own comment for why (a corrupted, unfixable `Label` found live 2026-09-24). */
       if (
         narrowed &&
         !metadataFilterMatches(criteria, {
-          documentType: textOf(row[METADATA_FILTER_FIELDS.documentType]),
-          year: textOf(row[METADATA_FILTER_FIELDS.year]),
-          confidentiality: textOf(row[METADATA_FILTER_FIELDS.confidentiality]),
+          documentType: termGuidOf(row[METADATA_FILTER_FIELDS.documentType]),
+          year: termGuidOf(row[METADATA_FILTER_FIELDS.year]),
+          confidentiality: termGuidOf(row[METADATA_FILTER_FIELDS.confidentiality]),
         })
       ) {
         continue;
@@ -1728,7 +1751,7 @@ export default function DocumentSearch({
                   >
                     <option value="">Any</option>
                     {(fixedOptions.documentType ?? []).map((o) => (
-                      <option key={o.id} value={o.label}>
+                      <option key={o.id} value={o.id}>
                         {o.label}
                       </option>
                     ))}
@@ -1749,7 +1772,7 @@ export default function DocumentSearch({
                   >
                     <option value="">Any</option>
                     {(fixedOptions.year ?? []).map((o) => (
-                      <option key={o.id} value={o.label}>
+                      <option key={o.id} value={o.id}>
                         {o.label}
                       </option>
                     ))}
@@ -1773,7 +1796,7 @@ export default function DocumentSearch({
                   >
                     <option value="">Any</option>
                     {sortByConfidentialityOrder(fixedOptions.confidentiality ?? []).map((o) => (
-                      <option key={o.id} value={o.label}>
+                      <option key={o.id} value={o.id}>
                         {o.label}
                       </option>
                     ))}
