@@ -17928,3 +17928,28 @@ inside the "Integrate" flyout.
     two trade-offs above) before spending the effort.
 - **Verified (hide-Share half only)**: `tsc --noEmit` clean, `eslint` clean on the changed file, full
   suite **0 failures**.
+
+## ⏸ PAUSED 2026-09-24 — WAITING ON CLIENT FEEDBACK, THREE ITEMS FROM THE SAME BATCH STILL OPEN
+Both fixes above (the Group Management badge, hiding Share) are **done, committed, tested clean**.
+Three items from the same client message are NOT resolved and need feedback before picking this back
+up — do not guess at any of them from here.
+
+1. **CRS Search: Year/Confidentiality/Document Type filters reportedly don't narrow results, only
+   Segment does.** The whole narrowing pipeline (`hasSearchNarrowFilter`, `searchMetadataMatches`,
+   the REST batch read, dropdown population) was read end to end and treats all four filters
+   symmetrically — nothing found that would explain Segment working while the other three don't.
+   **Needed before touching any code**: with ONLY "Document type" set (no text, no other filters),
+   does the banner show a warning (e.g. *"X library could not be filtered"*), or does it silently
+   return unfiltered results — and has the tab been hard-refreshed recently? (This exact shape —
+   looks broken, is actually a stale tab/package — is this project's single most common false alarm.)
+2. **Document-Viewer: clicking a file first shows a blank page, requires going back to the
+   "Document Viewer tab" to actually load.** Checked for the two usual causes in this exact file's
+   history (a React hooks-order violation below an early return; the URL-scrub issue already fixed
+   2026-09-23) — neither applies. **Needed**: confirm this happens when clicking a file's Name link
+   FROM a library (Documents/HC Documents/Archive/HC Archive) that navigates INTO Document-Viewer,
+   and clarify what "Document Viewer tab" means — a separate already-open browser tab, or the same
+   tab navigated away and back.
+3. **"Approve or reject" promoted to a primary, always-visible command-bar button** (left of where
+   Share used to sit) — genuinely not buildable as a clean CSS/config change; see the entry directly
+   above for the platform limitation and the two trade-offs a DOM-hack workaround would force. Needs
+   a decision on which trade-off before it is built at all.
