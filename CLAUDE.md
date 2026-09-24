@@ -10164,6 +10164,10 @@ MembersWithEmail → PickEmails → Recipients → HasRecipients → Apply to ea
 - On SDG, **sign in as the SERVICE ACCOUNT before the first action** — the connection is baked in for
   life.
 
+## ✅ BUILT AND LIVE-VERIFIED 2026-09-24 — SEE THE DATED ENTRY AT THE VERY END OF THIS FILE. The
+## "AGREED AND NOT BUILT" heading below is stale; both flows are built, and a real SharePoint REST
+## bug (`BulkImport ne true` silently not working) was found and fixed along the way — read the
+## end-of-file entry before touching either flow again, it has the working filter text verbatim.
 ## ⏭ AGREED AND NOT BUILT: PER-FILE 3-DAY REMINDER CADENCE, ANCHORED TO UPLOAD TIME (2026-09-22)
 Client (relayed by Clarence): *"I think they are expecting those files to be sent in a 3 days cycle
 but during night time on the day it was uploaded."* Confirmed as a real redesign, not a
@@ -17685,3 +17689,103 @@ approve is trigger once, thanks."*
   reject` command (not the hidden native one), and per the client's own words it now triggers on the
   first selection.
 - Both changes are still uncommitted on `feat/folder-abbreviations` as of this writing.
+
+## ✅ THE PER-FILE 3-DAY REMINDER CADENCE IS BUILT AND LIVE — HC FLOW FULLY VERIFIED, NORMAL FLOW FIXED BUT NOT YET RE-TESTED (2026-09-24)
+Implements the design already agreed and runbooked in
+`docs/superpowers/specs/2026-09-22-per-file-reminder-cadence-runbook.md` — a `NextReminderAt`
+column, Hourly recurrence, and a drift-free `addDays(NextReminderAt ?? Created+3, 3)` cadence,
+replacing the old flat "reminded once a day, forever, from the day it happened to be checked"
+behaviour. Built live on BOTH `CRS — Reminding Approver to Approve` (normal) and
+`CRS — HC approval reminder` (HC twin). **Entirely Power Automate/SharePoint config — no code
+change.** Two genuine, previously undocumented live bugs were found and fixed along the way.
+
+- **THE STAMP ACTION WAS BUILT AS A NARROW `Send an HTTP request to SharePoint` WITH
+  `X-HTTP-Method: MERGE`, NEVER THE NATIVE "Update item" CONNECTOR ACTION.** The first attempt at
+  the native "Update item" picker auto-populated the write payload with EVERY other column on the
+  item — `Confidentiality_x0020_Level`, `LegallyPrivileged`, `Year`, `Document_x0020_Type`,
+  `BulkImport`, `Archived` — each defaulted to blank/`false`, which would have silently corrupted
+  every one of those fields on every reminded document. Caught by reading Code view before saving,
+  never by a failed run. Rebuilt as a plain HTTP MERGE touching ONLY `NextReminderAt` — the same
+  narrow-write pattern this project has used for every other single-field stamp in its flow
+  history (`ApprovedBy`, `RevokedBy`, the various audit-row writers). **Same trap this file has
+  recorded before under a different name: a connector's "convenience" action reading back and
+  rewriting the whole row is a live corruption risk whenever only one field is meant to change.**
+- **⚠⚠ MAJOR INCIDENT #1 — WRITING `NextReminderAt` ACCIDENTALLY RE-TRIGGERED A SEPARATE,
+  UNRELATED FLOW AND SILENTLY AUTO-APPROVED 31 DOCUMENTS.** After the normal flow's first live
+  test (36 documents processed), the pending count dropped from 38 to 7 — not because 31 documents
+  were skipped as "not yet due", but because they had been ROUTED AWAY entirely. The stamp write
+  counts as a SharePoint "modified" event on the SAME list `CRS — Auto-approve bulk imports in
+  Approval Document` watches (created-or-modified, `BulkImport = true`) — so writing
+  `NextReminderAt` on a bulk-imported item re-fired THAT flow, which auto-approved it, which then
+  triggered `Auto-route`'s copy-stamp-delete. Diagnosed via `DispForm.aspx?ID=637` returning "No
+  item exists... may have been deleted" (consistent with copy-stamp-delete, not a mere status
+  change) and confirmed by finding the file re-appearing under its original name in
+  `Restricted & Confidential Document`. **Not every swept-away file had "bulk" in its filename**
+  (`test4-test2-test4`, `test4-test3-test2`, `test4-test3-test4`, `test5-test-test-5` were all
+  caught too) — `BulkImport` is a hidden metadata flag, invisible from the name alone. **Fixed** by
+  adding a `BulkImport ne 1` exclusion to `GetStale`'s filter on BOTH flows (added proactively to
+  the HC flow before its own first test, having already been burned on the normal one).
+  - **⚠ THIS IS THE SAME MECHANISM THIS FILE HAS ALREADY DOCUMENTED ONCE**, under "BULK IMPORT
+    AUTO-APPROVE" and its own trigger-condition discussion — any write to a `CRS Requests` or
+    `Approval Document`-library item can silently wake a sibling flow watching the same list on
+    created-or-modified. **Whenever a NEW flow is built to periodically re-stamp a field on an
+    approval-library item, check what else watches that list for modifications before the first
+    live test, not after.**
+- **⚠⚠ MAJOR INCIDENT #2 — SharePoint'S CLASSIC REST `$filter` DOES NOT RELIABLY EVALUATE THE BARE
+  `true`/`false` KEYWORD AGAINST A YES/NO COLUMN — A NEW, PREVIOUSLY UNDOCUMENTED GOTCHA FOR THIS
+  PROJECT.** On the HC flow's first live test (after adding the `BulkImport ne true` exclusion),
+  `Apply to each` processed "1 of 1" instead of the expected "6 of 6" — and the ONE item it did
+  process was precisely the one the exclusion should have kept OUT. Diagnosed with a sequence of
+  raw `fetch()` calls run directly in the browser console, bypassing the Power Automate connector
+  entirely: the full resolved filter (read via "Show raw inputs" on `GetStale`) returned ZERO items
+  when run directly against the REST endpoint; `BulkImport ne true` in isolation ALSO returned
+  ZERO; a five-way comparison (`eq true`, `eq false`, `ne 1`, `eq 1`, `eq 0`) proved that
+  **`BulkImport eq true` and `BulkImport eq false` returned the IDENTICAL 6-item result set** —
+  i.e. the bare boolean keyword was not discriminating at all on this endpoint — while the integer
+  forms (`ne 1`/`eq 1`/`eq 0`) correctly split the data. **Fixed** by changing `BulkImport ne true`
+  to `BulkImport ne 1` in `GetStale`'s filter on BOTH flows, confirmed via Code view on each
+  (HC table GUID `d935aa6d-dc48-4832-ba7e-eca485ecdff3`, normal table GUID
+  `eeb1bb19-ec53-4c41-8dc9-ecf255979c9b`), and confirmed working via a final raw `fetch()` re-test
+  of the corrected full compound filter returning exactly the expected 6 items.
+  - **⚠ GENERAL RULE FOR THIS PROJECT, NEW: on the classic SharePoint REST `$filter` syntax used by
+    this connector, compare a Yes/No column against `1`/`0`, never the bare `true`/`false` keyword.**
+    Every other Boolean comparison already documented in this project's flow history
+    (`{ModerationStatus}`, `BulkImport` elsewhere) happened to already use the integer form by
+    convention or luck; this is the first time the keyword form was tried and shown to silently
+    fail. Add this to the standing checklist alongside "`0` typed into a Condition value box is
+    text, not a number" and "an embedded CRLF in an expression string" — a third distinct way a
+    Power Automate filter/condition can look syntactically fine and quietly evaluate wrong.
+  - **The item that had already been swept away by incident #1's broken first HC test run
+    (`348`) did not reappear once the fix landed, and this is NOT a remaining gap** — confirmed via
+    `GetStale`'s own raw output for the FIXED HC run, which never contained `348` at all (only
+    `331, 333, 341, 346, 367, 368`). `348`'s disappearance was a casualty of the EARLIER, broken run
+    (before the `BulkImport` fix was applied), which had already stamped its `NextReminderAt` and
+    triggered the same cross-flow auto-approve as incident #1, before the fix even existed.
+- **NEW DIAGNOSTIC SCRIPT: `scripts/check-reminder-due-status.js`** — read-only, browser console,
+  covers BOTH libraries in one run. Reproduces `GetStale`'s exact filter logic in JavaScript
+  (including the `BulkImport ne 1` exclusion and the drift-free `NextReminderAt` cadence math) over
+  an unfiltered read of every pending item, so a not-yet-due item still shows up with its reason
+  instead of silently vanishing from the report. Three buckets per library: "DUE FOR A REMINDER
+  RIGHT NOW", "EXCLUDED — BULK IMPORT, WOULD OTHERWISE BE DUE" (added specifically to make
+  incident #1's class of problem visible before a live test, not after), and "NOT YET DUE". Every
+  request is cache-busted (`bust()` + `Cache-Control: no-cache`), matching this project's standing
+  rule for any read whose freshness matters. Used throughout this session's testing to independently
+  confirm what each flow's own run history reported.
+- **FINAL VERIFIED STATE:**
+  - **HC flow (`CRS — HC approval reminder`): fully live-tested and correct.** The corrected run
+    processed exactly the 6 genuinely-due documents (`331, 333, 341, 346, 367, 368`), computed
+    correct `NextReminderAt` stamps (`Created+6` on first reminder, since the column started
+    blank), and correctly re-triggered on old test files whose earlier stamp had already passed —
+    confirming the repeating-cadence math, not just the first-fire case.
+  - **Normal flow (`CRS — Reminding Approver to Approve`): fixed and confirmed correct via Code
+    view (Hourly/1 recurrence, `NextReminderAt eq null`/`ne null` branches, `BulkImport ne 1`, the
+    safe HTTP-MERGE stamp action all verified saved), but NOT YET LIVE-TESTED against real due
+    candidates** — nothing on that library was due at session end; it self-confirms via the hourly
+    poll once real candidates cross the 3-day threshold (~Sep 25–26). Worth a follow-up check with
+    `check-reminder-due-status.js` once that window arrives, to confirm it behaves identically to
+    the already-proven HC flow rather than assuming parity.
+  - Both flows' `Create item`/email-send actions (the pre-existing "Dear [Approver]..." body,
+    approver-group lookup, `HasApprover`/`HasRecipients` guards) were NOT touched this session —
+    only the trigger cadence and the staleness filter changed. The one-email-per-approver, ten-cap,
+    `convertFromUtc` Singapore-time-display behaviour documented earlier in this file for these two
+    flows is unaffected.
