@@ -78,7 +78,10 @@ import {
   markRecordWithdrawn,
 } from "../../../shared/spSubmissionRecords";
 import { readFileETag } from "../../../shared/deletionGuard";
-import { CURRENT_PROXY_ACCOUNT_NAME } from "../../../shared/displayName";
+import {
+  CURRENT_PROXY_ACCOUNT_NAME,
+  displayNameFor,
+} from "../../../shared/displayName";
 // The metadata panel's rows. It DERIVES the tier rows from the item's own fields rather than naming
 // them, which is what makes Region/Estate·Mill appear on a segment nobody wrote code for.
 import {
@@ -4044,7 +4047,7 @@ export default function MySubmissions({
           >
             {/* "my submissions" is meaningless for the Viewer/C-Level/HOD/Admin audience this page
                 instance also serves (2026-09-21 report) — they have none of their own. */}
-            {viewerOnlyMode ? "‹ Back" : "‹ Back to my submissions"}
+            {viewerOnlyMode ? "‹ Back" : "‹ Back to my submission"}
           </button>
         </div>
 
@@ -4096,11 +4099,13 @@ export default function MySubmissions({
             bulk-imported file previously showed "GDC" one click above in the list and nothing here
             at all, since with no comment either the whole box failed its own render gate. */}
         {open.status === "Approved" &&
-          (open.approvedBy || open.approvalComment || isBulkUploadRow(open)) && (
+          (open.approvedBy ||
+            open.approvalComment ||
+            isBulkUploadRow(open)) && (
             <div style={s.approveBox}>
               {open.approvedBy ? (
                 <>
-                  <strong>Approved by</strong> {open.approvedBy}
+                  <strong>Approved by</strong> {displayNameFor(open.approvedBy)}
                   {open.approvalComment ? "." : ""}
                 </>
               ) : (
@@ -4523,7 +4528,7 @@ export default function MySubmissions({
       {/* The .crs-ms-detail phone rule moved into shared/fileDetailPanel.tsx with the grid it
           styles (2026-09-10). It sat here, on the LIST view, where nothing used it. */}
       <div style={s.headRow}>
-        <h2 style={s.h2}>My Submissions</h2>
+        <h2 style={s.h2}>My Submission</h2>
         <button
           type="button"
           style={s.headRefresh}
@@ -5437,7 +5442,9 @@ export default function MySubmissions({
                     <td style={s.td}>
                       {!r.recordState && r.status === "Approved" ? (
                         r.approvedBy ? (
-                          <span style={s.apprBy}>{r.approvedBy}</span>
+                          <span style={s.apprBy}>
+                            {displayNameFor(r.approvedBy)}
+                          </span>
                         ) : isBulkUploadRow(r) ? (
                           <span style={s.apprBy}>
                             {CURRENT_PROXY_ACCOUNT_NAME}

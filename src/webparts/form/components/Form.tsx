@@ -6646,7 +6646,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                   window.location.href = mySubmissionsUrl;
                 }}
               >
-                My Submissions
+                My Submission
               </button>
               <button
                 className="dms-popup-btn cancel"

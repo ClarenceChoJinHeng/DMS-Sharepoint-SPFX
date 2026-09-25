@@ -64,10 +64,12 @@ describe("displayNameFor", () => {
     );
   });
 
-  it("canonicalises the retired proxy account under the CURRENT name, not its own old one", () => {
-    // Changed 2026-09-23, client: "crs is approving but the move to documents is showing crs
-    // instead of gdc" — crs and gdc are one identity across time, from the client's point of view.
-    expect(displayNameFor("crs@sdguthrie.com")).toBe("Guthrie Document Centre");
+  it("no longer canonicalises crs — it is a normal account now, not a service identity", () => {
+    // Superseded 2026-09-25: crs briefly collapsed into gdc's display name (2026-09-23), then broke
+    // the next day when crs, now "a normal account" per the client, genuinely approved a document
+    // and the row read "Guthrie Document Centre" instead of crs's own name. Falls through to the
+    // ordinary guess, same as any other real account's address.
+    expect(displayNameFor("crs@sdguthrie.com")).toBe("Crs");
   });
 });
 
@@ -86,10 +88,10 @@ describe("canonicalServiceAccountName", () => {
     );
   });
 
-  it("recognises the retired crs proxy account, under the CURRENT name", () => {
-    expect(canonicalServiceAccountName("crs@sdguthrie.com")).toBe(
-      "Guthrie Document Centre",
-    );
+  it("no longer recognises crs as a service account — it is a normal account now", () => {
+    expect(
+      canonicalServiceAccountName("crs@sdguthrie.com"),
+    ).toBeUndefined();
   });
 
   it("returns undefined for a real person's address", () => {

@@ -3992,7 +3992,7 @@ export default function FolderManager({
             }
           } catch (e) {
             entries.push({
-              msg: `  ⚠ ${title}: submission reference / bulk import columns could not be ensured — ${(e as Error).message}. Uploads still work; My Submissions will not group them, and bulk imports will WAIT IN THE APPROVAL QUEUE instead of auto-approving.`,
+              msg: `  ⚠ ${title}: submission reference / bulk import columns could not be ensured — ${(e as Error).message}. Uploads still work; My Submission will not group them, and bulk imports will WAIT IN THE APPROVAL QUEUE instead of auto-approving.`,
               ok: false,
             });
           }
@@ -4043,7 +4043,7 @@ export default function FolderManager({
               }
             } catch (e) {
               entries.push({
-                msg: `  ⚠ ${title}: ${col.display} column could not be ensured — ${(e as Error).message}. Approving still works; My Submissions will show no approver or comment for documents in this library, and on an approval library the audit log will name the uploader as the approver.`,
+                msg: `  ⚠ ${title}: ${col.display} column could not be ensured — ${(e as Error).message}. Approving still works; My Submission will show no approver or comment for documents in this library, and on an approval library the audit log will name the uploader as the approver.`,
                 ok: false,
               });
             }
@@ -4710,7 +4710,7 @@ export default function FolderManager({
           );
           if (!made.ok) {
             entries.push({
-              msg: `⚠ ${subTitle}: could not be created (HTTP ${made.status}) — uploads still work, but a deleted file will vanish from My Submissions as before`,
+              msg: `⚠ ${subTitle}: could not be created (HTTP ${made.status}) — uploads still work, but a deleted file will vanish from My Submission as before`,
               ok: false,
             });
           } else {
@@ -4860,7 +4860,7 @@ export default function FolderManager({
           );
           if (!idxRes.ok) {
             entries.push({
-              msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed (HTTP ${idxRes.status}) — My Submissions will start failing on this list past 5,000 rows`,
+              msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed (HTTP ${idxRes.status}) — My Submission will start failing on this list past 5,000 rows`,
               ok: false,
             });
           }

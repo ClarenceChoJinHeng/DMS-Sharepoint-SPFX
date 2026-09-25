@@ -4721,7 +4721,7 @@ export default function BulkUpload({
                   window.location.href = mySubmissionsUrl;
                 }}
               >
-                My Submissions
+                My Submission
               </button>
               <button
                 className="dms-popup-btn cancel"

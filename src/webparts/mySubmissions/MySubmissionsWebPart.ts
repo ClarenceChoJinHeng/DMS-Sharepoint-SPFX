@@ -16,10 +16,11 @@ export interface IMySubmissionsWebPartProps {
 
 export default class MySubmissionsWebPart extends BaseClientSideWebPart<IMySubmissionsWebPartProps> {
   public render(): void {
-    const element: React.ReactElement<IMySubmissionsProps> = React.createElement(MySubmissions, {
-      context: this.context,
-      viewerOnlyMode: this.properties.viewerOnlyMode === true,
-    });
+    const element: React.ReactElement<IMySubmissionsProps> =
+      React.createElement(MySubmissions, {
+        context: this.context,
+        viewerOnlyMode: this.properties.viewerOnlyMode === true,
+      });
     ReactDom.render(element, this.domElement);
   }
 
@@ -35,7 +36,10 @@ export default class MySubmissionsWebPart extends BaseClientSideWebPart<IMySubmi
     return {
       pages: [
         {
-          header: { description: "Viewer / C-Level / Head of Department page (2026-09-21)" },
+          header: {
+            description:
+              "Viewer / C-Level / Head of Department page (2026-09-21)",
+          },
           groups: [
             {
               groupName: "Mode",
@@ -44,7 +48,7 @@ export default class MySubmissionsWebPart extends BaseClientSideWebPart<IMySubmi
                   text:
                     "This instance is the Viewer/C-Level/HOD page — hides the personal " +
                     "submissions list, and silently redirects a PIC or Approver who lands here to " +
-                    "their own page instead. Leave unticked on the real My Submissions page.",
+                    "their own page instead. Leave unticked on the real My Submission page.",
                 }),
               ],
             },

@@ -46,31 +46,28 @@ export function displayNameFor(email: string | undefined): string | undefined {
 }
 
 /**
- * The two proxy/service account IDENTITIES this project's Power Automate flows run as (or have run
- * as), keyed by the LOCAL PART only (lower-cased) so a bare mailbox alias and a full address both
- * resolve — see `canonicalServiceAccountName`'s own comment for why both shapes turn up in stored
- * data. Both keys map to the SAME display string.
+ * The proxy/service account IDENTITY this project's Power Automate flows currently run as, keyed by
+ * the LOCAL PART only (lower-cased) so a bare mailbox alias and a full address both resolve — see
+ * `canonicalServiceAccountName`'s own comment for why both shapes turn up in stored data.
  *
- * `gdc` (`gdc@sdguthrie.com`) is the CURRENT proxy; `crs` (`crs@sdguthrie.com`) is the RETIRED one —
- * the migration is written up in
- * `docs/superpowers/specs/2026-09-19-service-account-migration-crs-to-gdc-runbook.md`, and is not
- * finished across every flow at the time this was written, so `crs` is still live in some rows.
- *
- * ⚠ BOTH SHOW "Guthrie Document Centre" — DELIBERATE, CHANGED 2026-09-23. Until then `crs` showed
- * its OWN old name, "Guthrie Central Repository System", on the reasoning that a historical row
- * should read exactly as it was written. The client corrected that directly, having watched
- * `crs@sdguthrie.com` genuinely APPROVE a document (crs is still in active use as a live test
- * account, not purely a retired service identity) and then seeing "Moved to Documents" show the OLD
- * name instead of the current one: *"crs is approving but the move to documents is showing crs
- * instead of gdc"*. From the client's own point of view crs and gdc are ONE identity across time,
- * and every row attributed to either should read under today's name — never a name retired months
- * or years ago. `crs` is kept as a recognised KEY, not deleted: the row still needs to be recognised
- * as a service account at all (so it is never run through the human-name guesser,
- * `nameFromEmail`), it just no longer gets its own distinct label.
+ * ⚠ SUPERSEDED 2026-09-25 — `crs` IS NO LONGER IN THIS MAP, AND IT WAS FOR ONE DAY.
+ * `docs/superpowers/specs/2026-09-19-service-account-migration-crs-to-gdc-runbook.md` moved the
+ * FLOWS' own connection from `crs@sdguthrie.com` to `gdc@sdguthrie.com`; separately, the client
+ * confirmed `crs@sdguthrie.com` "wont be the system admin anymore... crs is now a normal account" —
+ * it is a live human test/approver account, not a retired proxy identity. On 2026-09-23 this map
+ * briefly collapsed `crs` into `gdc`'s display name, on the reasoning that the client saw the two as
+ * one identity across time. That broke the very next day: the client approved a document AS `crs`
+ * and the Audit Log's "Approved" row (correctly carrying `crs`'s own address as `ApprovedBy`) showed
+ * "Guthrie Document Centre" instead — reading as though the automated proxy had approved it, when a
+ * person actually had. **A genuine human action performed by `crs` must show `crs`, not the system
+ * that only ever performs UNATTENDED steps (routing, archiving, deletion execution).** `crs` is
+ * removed from this map entirely — not merely un-aliased to a different label — so it falls straight
+ * through `resolveActorDisplay` to the ordinary name-guessing path, exactly as any other real
+ * account's address would. If `crs@sdguthrie.com` is ever retired again into a purely automated
+ * role, re-add it here under `CURRENT_PROXY_ACCOUNT_NAME` at that point, not before.
  */
 const KNOWN_SERVICE_ACCOUNTS: Readonly<Record<string, string>> = {
   gdc: "Guthrie Document Centre",
-  crs: "Guthrie Document Centre",
 };
 
 /**

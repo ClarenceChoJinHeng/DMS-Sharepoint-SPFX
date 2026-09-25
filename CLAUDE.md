@@ -1,5 +1,185 @@
 # SDG DMS — Claude Code Project Context
 
+> 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-25, LATER SESSION — AUDIT LOG ACTOR
+> ATTRIBUTION: THREE FIXES, TWO CODE + DEPLOYED, ONE FLOW-ONLY + VERIFIED-FROM-EXPORT-BUT-NOT-YET
+> LIVE-TESTED.** All three are about WHO the Audit Log's "Who" column names, none of them are the
+> Bcc-lockdown work in the pointer immediately below this one (different topic, same day).
+>
+> **1. ✅ CODE, DEPLOYED: `crs@sdguthrie.com` NO LONGER SHOWS AS "Guthrie Document Centre".**
+> Client, bulk-approving as `crs`: *"it is showing GDC instead of CRS."* The 2026-09-23 decision to
+> merge `crs`'s display name into `gdc`'s (`shared/displayName.ts`'s `KNOWN_SERVICE_ACCOUNTS`) broke
+> the moment `crs` — confirmed by the client as "a normal account" now, not a retired proxy identity
+> — genuinely performed a human action. `crs` is removed from that map entirely; only `gdc` remains
+> a recognised service account. `crs@sdguthrie.com` now falls through to the ordinary name-guess and
+> shows **"Crs"** — not polished, but distinct from GDC, which is the property that matters. Full
+> detail, search `"crs → gdc" DISPLAY MERGE REVERSED`.
+>
+> **2. ✅ CODE, DEPLOYED AND CONFIRMED LIVE: "Request approved"/"Request rejected" NO LONGER LOGS
+> TWICE for an Owner-level approver.** Two independent writers were producing the identical row:
+> `Requests.tsx`'s own client-side `writeAudit(...)` call in `decide()`, AND the Power Automate flow
+> `CRS — Audit request activity`, which watches the same list and writes its own row on its next
+> poll. `CRS Audit Log` writes are restricted to `CRS Owners`/the service account, so for an ordinary
+> approver the client-side call was already a silent no-op — but for an Owner-level account (exactly
+> what produced this report), BOTH succeeded, independently, with no coordination. **This exact risk
+> was flagged the day the flow shipped, 2026-08-26, and sat unactioned for a month.** Fixed by
+> removing the redundant client-side call — the flow's own row is authoritative and richer. Built,
+> packaged via `npm run build`, verified inside the shipped `.sppkg`, uploaded, and **confirmed live**
+> from the client's own follow-up screenshot: exactly one "Deleted" row, exactly one "Request
+> approved" row. `MySubmissions.tsx` carries the identical shape at its own self-approve write-site
+> (already commented as "mostly a no-op") — NOT touched, since it wasn't the source of this report;
+> give it the same treatment if it's ever seen to double-write. Full detail, search `EVERY "Request
+> approved"/"Request rejected" AUDIT ROW WAS WRITTEN TWICE`.
+>
+> **3. ⏭ POWER AUTOMATE ONLY, APPLIED BY THE CLIENT AND VERIFIED FROM A FRESH EXPORT — NOT YET
+> LIVE-TESTED AGAINST A REAL DECISION OF EITHER KIND.** Client: *"if someone approve the deletion or
+> sharing request from File Request it will be the approver's name. But if in my submission or
+> document viewer, the Request approved will be the gdc name instead."* The reliable signal is
+> `RequestedBy === DecidedBy` — a genuine two-person decision (Requests/"File Request" page's
+> `decide()`, only reachable when someone with `APR`/`APRHC` decides a request somebody ELSE raised)
+> is the only case where they differ; My Submissions, Document-Viewer, and the Requests page's own
+> direct-delete are all BYTE-IDENTICAL self-approve writers with no field distinguishing which
+> screen wrote the row.
+>   - **`CRS — Audit request activity`'s `ActorEmail` Compose**: final `else` now reads
+>     `if(equals(toLower(RequestedBy), toLower(DecidedBy)), 'gdc@sdguthrie.com', DecidedBy)`.
+>   - **`CRS — Execute approved deletion`'s "Deleted" `Create_item`** (proactive, matching the
+>     already-established "Moved to Documents"/"Archived" precedent from 2026-09-23 — the RECYCLE is
+>     always performed by this same GDC-connected flow, regardless of who requested/decided):
+>     `item/ActorName`/`item/ActorEmail` hardcoded to the plain literals `"Guthrie Document Centre"`/
+>     `"gdc@sdguthrie.com"`. `GetActorName` left in place, unused for these two fields now.
+>   - **Both edits confirmed byte-for-byte correct from a fresh export of both flows** — not a
+>     screenshot mid-edit. **⏭ NEXT STEP: a real two-person decision (raised by one account, decided
+>     by a DIFFERENT real approver) should show that approver's name; a self-approve from any of the
+>     three surfaces should show "Guthrie Document Centre" on BOTH "Request approved" and "Deleted",
+>     even when a real (non-gdc) account clicks it.** Full detail, search `"Request approved" NOW
+>     SHOWS THE REAL APPROVER`.
+
+> ✅ **RESOLVED 2026-09-25 — GDC'S EMAIL EXPOSURE IS LOCKED DOWN TO EXACTLY THREE TYPES, VIA BCC
+> ONLY, CONFIRMED FROM A COMPLETE FRESH EXPORT OF ALL 24 LIVE FLOWS.** Client wanted
+> `gdc@sdguthrie.com` to receive a copy of exactly three notification emails — **file pending
+> approval**, **deletion pending approval**, **share pending approval** — always via **Bcc**, never
+> To or Cc, and nothing else at all (not even an approval-confirmation email). **This is now true,
+> verified against `PowerAutomateFlowsSDG/*.zip` exported 2026-09-25 04:00–04:11, all 24 flows.**
+>
+> **HOW IT WAS VERIFIED, so the same check can be repeated after any future flow edit:** every
+> `definition.json` was grepped for `gdc@sdguthrie`, then every hit was read in context and every
+> `Send_an_email_(V2)` action across all 24 flows was enumerated with its Subject and `Bcc` value.
+> Separately, every `emailMessage/To` and `emailMessage/Cc` field in the whole export was checked for
+> `gdc` — **zero hits, in either field, in any flow.**
+>
+> **THE THREE EMAILS THAT CORRECTLY BCC GDC:**
+> 1. `NotifyApprovers` — "Approval Requested: ..." (file pending approval, normal library).
+> 2. `HCNotifyApprovers` — "Approval Requested: ..." (file pending approval, HC library).
+> 3. `CRS — Notify request activity` — **TWO** of its seven email actions: "Approval Needed to
+>    Delete File: ..." (deletion pending) and "File Sharing Request: ..." (share pending). Both
+>    live in `Switch_1`'s `DeleteRequest`/`ShareRequest` cases exactly as expected.
+>
+> **EVERY OTHER EMAIL ACTION IN THE WHOLE TENANT HAS NO `Bcc` FIELD AT ALL, OR ACTIVELY EXCLUDES
+> GDC FROM ITS RECIPIENT LIST — enumerated, not assumed:**
+> - `CRS — Notify request activity`'s other five actions ("Approved File Sharing Request", "A
+>   document has been shared with you" [the native recipient invite, restored 2026-09-24], "Approved
+>   File Deletion Request", "Rejected File Sharing Request", "Rejected File Deletion Request") — none
+>   has a `Bcc` field at all.
+> - `Auto-route` and `HC Auto Route`'s Approved/Rejected emails (4 actions total) — no `Bcc` field.
+> - `CRS — Reminding Approver to Approve` and `CRS — HC approval reminder`'s reminder email — no
+>   `Bcc` field, **and** `MembersWithEmail`'s own `where` clause actively excludes
+>   `gdc@sdguthrie.com` (plus, separately, anyone with `IsSiteAdmin = true`) from ever being
+>   selected as a recipient in the first place.
+>
+> **THE REMAINING `gdc@sdguthrie` HITS ACROSS THE OTHER FLOWS ARE NOT EMAILS AT ALL** — confirmed by
+> reading each in context: the four audit-deletion flows and the two archive-mover flows either
+> write `gdc@sdguthrie.com` as an `ActorEmail`/`DeletedByEmail` comparison (excluding the proxy
+> account's own automated actions from being double-logged) or as an audit-log list-item field
+> stamp (`item/ActorEmail`), and `Auto-route`/`HC Auto Route` also call `_api/web/ensureuser` with
+> gdc's logon name to resolve the proxy identity for the `Editor` stamp on routed files — none of
+> these send mail to anyone.
+>
+> **⚠ ONE PRE-EXISTING LOOSE END, UNCHANGED, NOT A REGRESSION, LOW PRIORITY:**
+> `HasRecipients` in both `NotifyApprovers` and `HCNotifyApprovers` still reads
+> `length(union(body('PickEmails'), createArray('gdc@sdguthrie.com'))) > 0`, which is always true
+> regardless of whether `PickEmails` found a genuine recipient — so a unit with zero real approvers
+> still sends, with a blank `To` and only `Bcc: gdc` populated. Does **not** violate the "gdc only
+> gets these 3, and only by Bcc" rule (gdc still isn't in `To`/`Cc`), it just means the "no
+> recipients" guard is a no-op. Fix, if anyone is in either flow for another reason: `HasRecipients`
+> is a Condition ("If") action — Code view is read-only for it — so retype the left side via the
+> Parameters/condition-builder UI's fx editor as `length(body('PickEmails'))`, keep the operator and
+> the `0` on the right.
+>
+> **NOTHING FURTHER TO DO ON THE GDC/BCC TASK.** The three intended email types Bcc gdc correctly;
+> nothing else in the tenant's 24 flows sends him anything, in any field, under any outcome
+> (approved, rejected, the native share invite, or the reminder nags).
+>
+> **✅ SEPARATE FINDING FROM THE SAME AUDIT, ALSO RESOLVED 2026-09-25: A SLASHED DATE FORMAT
+> (`dd/MMM/yyyy`, e.g. `20/Sep/2026`) WAS INCONSISTENT WITH THE REST OF THE APP AND HAS BEEN
+> UNIFIED.** Client's own words: *"unslashed, client wants 20 Sept 2026 that is why most of the
+> display in the Audit log and etc is using unslashed."* `Auto-route` and `HC Auto Route`'s
+> **Approved** and **Rejected** emails each had an "Approval Date"/"Rejection Date" line using
+> `convertTimeZone(..., 'dd/MMM/yyyy')`, while every other notification email
+> (`NotifyApprovers`/`HCNotifyApprovers`'s Submission Date, `CRS — Notify request activity`'s
+> Requested Date) already used the unslashed `dd MMM yyyy`. **Both flows fixed, both fields, took
+> two rounds** — the first save only landed on the Approved email's "Approval Date" line; the
+> Rejected email's "Rejection Date" line needed a second, identical edit. **Confirmed from a fresh
+> export after each round**: zero remaining `dd/MMM/yyyy` anywhere in either flow, both date fields
+> now read `dd MMM yyyy` in both `Auto-route` and `HC Auto Route`, and gdc's Bcc-only exposure was
+> re-checked and is unaffected by either edit.
+>
+> **THE FULL EMAIL INVENTORY, FOR REFERENCE — 15 email-sending actions total across all 24 flows,
+> exactly 4 Bcc gdc (the 3 required TYPES; file-pending fires from two flows, normal + HC), the
+> other 11 never touch him in any field:**
+>
+> | # | Flow | Email | To | Bcc → gdc? |
+> |---|---|---|---|---|
+> | 1 | `Auto-route` | Approved | the file's uploader | — |
+> | 2 | `Auto-route` | Rejected | the file's uploader | — |
+> | 3 | `CRS — HC approval reminder` | REMINDER: Approval Required | each approver in the unit (loop) | — |
+> | 4 | `CRS — Notify request activity` | Approval Needed to Delete File | the unit's approver group | ✅ gdc |
+> | 5 | `CRS — Notify request activity` | File Sharing Request | the unit's approver group | ✅ gdc |
+> | 6 | `CRS — Notify request activity` | Approved File Sharing Request | the requester | — |
+> | 7 | `CRS — Notify request activity` | A document has been shared with you | the share recipient | — |
+> | 8 | `CRS — Notify request activity` | Approved File Deletion Request | the requester | — |
+> | 9 | `CRS — Notify request activity` | Rejected File Sharing Request | the requester | — |
+> | 10 | `CRS — Notify request activity` | Rejected File Deletion Request | the requester | — |
+> | 11 | `CRS — Reminding Approver to Approve` | REMINDER: Approval Required | each approver in the unit (loop) | — |
+> | 12 | `HC Auto Route` | Approved | the file's uploader | — |
+> | 13 | `HC Auto Route` | Rejected | the file's uploader | — |
+> | 14 | `HCNotifyApprovers` | Approval Requested | the unit's approver group | ✅ gdc |
+> | 15 | `NotifyApprovers` | Approval Requested | the unit's approver group | ✅ gdc |
+>
+> **⚠⚠ A LIVE FALSE ALARM, 2026-09-25 — GDC "RECEIVING" AN APPROVAL EMAIL IS NOT A BCC LEAK, IT IS
+> THE ALREADY-DOCUMENTED TENANT MAIL-FLOW-RULE BOUNCE, REPRODUCED WITH A CONCRETE EXAMPLE.**
+> Client's own screenshot: `Auto-route`'s "Approved: d-a-d-25092026.xlsx has been approved" email,
+> sender "Guthrie Document Centre" (gdc), `To: Clarence Cho` — exactly matching row 1 of the table
+> above (To = uploader, no `Bcc`). Beside it, an **"Undeliverable"** NDR, whose own text reads
+> *"A custom mail flow rule created by an admin at `simedarbyplantation.onmicrosoft.com` has blocked
+> your message. You are not allowed to send emails to external recipients."*
+>   - **THE MECHANISM, confirmed correct against the existing tenant-issue note further down this
+>     file (search `EXCHANGE ONLINE BLOCKS EVERY OUTBOUND EMAIL TO AN EXTERNAL ADDRESS`):** SD
+>     Guthrie's mail runs under `simedarbyplantation.onmicrosoft.com`, which has a transport rule
+>     blocking outbound mail from this connection to any address outside its own domains.
+>     `clarence@trinergydigital.com` (the test uploader, an agency account) is external to
+>     `sdguthrie.com`, so the send was blocked — and **an NDR always bounces back to the SENDER**,
+>     which is gdc, because the flow's connection runs AS gdc. That is the whole reason gdc "sees"
+>     this email: it is not a recipient of the approval notice, it is the mailbox that owns the
+>     connection the blocked send bounced back to.
+>   - **DOES NOT HAPPEN FOR A GENUINE `@sdguthrie.com` UPLOADER** — the rule only blocks EXTERNAL
+>     recipients, and it will reproduce for ANY email in the tenant whose recipient happens to be
+>     external, regardless of which flow sends it. It surfaced here specifically because testing used
+>     an external `@trinergydigital.com` account as the uploader.
+>   - **NOT FIXABLE FROM CODE OR POWER AUTOMATE** — needs SD Guthrie's own Exchange/IT admin to add a
+>     sending-account exception for gdc (or an exception for the specific external domain) on that
+>     tenant mail flow rule. This is the same pre-existing, already-documented limitation, now
+>     reproduced with a dated, concrete example rather than only a general note.
+>
+> **⏭ IN PROGRESS, NOT YET REPORTED BACK: client is now testing by submitting AND approving a
+> document AS the gdc account itself (2026-09-25), to see what happens when gdc is both the
+> uploader/approver and the flows' own sending identity.** Since `gdc@sdguthrie.com` is INTERNAL to
+> the tenant, the external mail-flow-rule bounce above should NOT fire in this scenario — worth
+> confirming on the next session whether it behaves cleanly (no NDR) and whether gdc, now genuinely
+> the document's own uploader/approver, correctly receives the `To`-addressed Approved/Rejected email
+> as the uploader (expected, per row 1/2/12/13 of the table — that's the uploader's own legitimate
+> copy, not a stray Bcc) alongside the separate Bcc it would also get from `NotifyApprovers` as the
+> approver's-group Bcc recipient (if gdc's account is genuinely mapped into that unit's approver
+> group). **No result from this test has been reported yet — do not assume either outcome.**
+
 > 📌 **START HERE IF YOU ARE PICKING UP AFTER 2026-09-23 — TWO REAL BUGS FOUND IN THE LIVE
 > `CRS — Notify request activity` FLOW, DIAGNOSED FROM THE CLIENT'S OWN FRESH EXPORT
 > (`CRS—Notifyrequestactivity_20260922180512.zip`) — NEITHER IS FIXED YET, BOTH ARE POWER AUTOMATE
@@ -18271,3 +18451,125 @@ every recent run in their 28-day history.
   next document to cross the 3-day threshold and get a reminder is the first real test that
   `HasUnit` now blocks it. Worth a quick check once one naturally comes up, rather than assuming
   the fix works from the expression alone.
+
+## ⚠⚠ "crs → gdc" DISPLAY MERGE REVERSED THE NEXT DAY — crs IS A NORMAL ACCOUNT, NOT A SERVICE IDENTITY (2026-09-25)
+Client, on the "Guthrie Document Centre" Who column decision (2026-09-23): *"I just approve as crs
+using the bulk approve but it is showing GDC instead of CRS."*
+- **THE 2026-09-23 MERGE WAS BUILT FOR A GOOD REASON AND BROKE ON ITS FIRST REAL TEST.** It unified
+  `crs`/`gdc` under one label on the theory that the client sees the two as one identity across
+  time — reasonable for an AUTOMATED row (a flow's own execution, e.g. "Moved to Documents"), and
+  wrong for a HUMAN one. Bulk-approving a document AS `crs` correctly stamps `ApprovedBy` with
+  `crs`'s own address, and the Audit Log's "Approved" row showed "Guthrie Document Centre" for it —
+  reading as though the unattended proxy had approved the document, when a person genuinely had.
+- **THE DECIDING FACT: `crs@sdguthrie.com` IS NOW A NORMAL ACCOUNT, PER THE CLIENT'S OWN WORDS**
+  (2026-09-19, SERVICE ACCOUNT MIGRATION section): *"crs@sdguthrie.com wont be the system admin
+  anymore... crs is now a normal account."* It is a live human test/approver identity, not a retired
+  proxy identity that happens to still appear in old rows — treating it as a service account was
+  never right once it started performing genuine human actions again.
+- **FIXED: `crs` REMOVED FROM `KNOWN_SERVICE_ACCOUNTS` ENTIRELY** (`shared/displayName.ts`) — not
+  re-aliased to its own old name, removed outright, so it falls through `resolveActorDisplay` to the
+  ordinary name-guessing path (`nameFromEmail`) exactly like any other real account's address. Only
+  `gdc` remains recognised as a service account.
+  - **`gdc` ITSELF IS UNTOUCHED** — `CURRENT_PROXY_ACCOUNT_EMAIL`/`CURRENT_PROXY_ACCOUNT_NAME` and
+    every automated row this project's flows write (routing, archiving, deletion execution) still
+    show "Guthrie Document Centre" correctly.
+  - **⚠ THIS PRODUCES "Crs" ON SCREEN**, not a polished real name — `nameFromEmail("crs@sdguthrie.com")`
+    guesses from the local part `"crs"`, same guessing behaviour every other unrecognised address on
+    this tenant gets. Distinct from GDC, which is the property that matters; not pretty.
+  - **If `crs@sdguthrie.com` is ever retired again into a purely automated role, re-add it to
+    `KNOWN_SERVICE_ACCOUNTS` at that point — not before.** The map now expresses "is this a service
+    account RIGHT NOW", not "has this address ever been one."
+  - Two pinned tests in `displayName.test.ts` updated to match (`displayNameFor("crs@...")` →
+    `"Crs"`, `canonicalServiceAccountName("crs@...")` → `undefined`).
+- **Verified**: `tsc --noEmit` clean, full suite **2044/2044 passing, 0 failed**, 44 lint warnings —
+  the documented pre-existing baseline, zero new. **NOT yet deployed or site-tested** — the test is
+  bulk-approving a document as `crs` and confirming the Audit Log's "Approved" row now reads "Crs",
+  distinct from any "Moved to Documents"/automated row on the same document, which should still read
+  "Guthrie Document Centre".
+
+## ⚠⚠ EVERY "Request approved"/"Request rejected" AUDIT ROW WAS WRITTEN TWICE FOR AN OWNER-LEVEL APPROVER (2026-09-25)
+Client, comment 38 (23 Sept, re-tested and screenshotted live): *"Why got 2 same records for Approver
+who approved deletion request?"* Diagnosed from a FRESH export of the actual live flow definitions
+(`PowerAutomateFlowsSDG/CRS—Auditrequestactivity_20260925040356.zip`,
+`CRS—Executeapproveddeletion_20260925040423.zip`), not from memory of an earlier build.
+- **TWO WRITERS, NO COORDINATION.** `Requests.tsx`'s `decide()` MERGEs the decision onto `CRS
+  Requests` in ONE write (confirmed — no hidden retry that could double it), then made its OWN
+  client-side `writeAudit(...)` call straight to `CRS Audit Log`. **Separately**, `CRS — Audit
+  request activity` watches the SAME `CRS Requests` list and writes its OWN "Deletion request
+  approved" row on its next poll, with a real resolved actor name (its own `GetActorName` lookup)
+  and its own 5-minute dedupe — but that dedupe only guards against THE FLOW re-writing its own row
+  twice; it has no way to know a completely separate, client-side writer also wrote one.
+- **⚠ THE CLIENT-SIDE CALL IS A SILENT NO-OP FOR MOST APPROVERS, WHICH IS WHY THIS WENT UNNOTICED.**
+  `CRS Audit Log` restricts writes to `CRS Owners`/the service account only, by design
+  (tamper-resistance) — so for an ordinary approver `Requests.tsx`'s `writeAudit(...).catch(() =>
+  undefined)` fails invisibly and nothing duplicates. **Goh Kheng Wei's own row landing at all is
+  the proof his account holds Owner-level write access** — for exactly that class of account, BOTH
+  writers succeed, independently, producing two rows a few minutes apart (the flow's own polling
+  cadence), same actor on both (his own `displayName` on the client side, his own resolved
+  `siteusers` name on the flow side) — matching the screenshot precisely, and explaining why
+  "Deleted" (which only the flow ever writes) appeared exactly once on the same document.
+- **⚠ THIS WAS ALREADY FLAGGED, THE DAY THE FLOW SHIPPED, AND NEVER ACTED ON.** The
+  2026-08-26 "DELETION/SHARE REQUEST AUDIT EVENTS" section's own closing note: *"in a future deploy,
+  remove the code-side `writeAudit` calls in `Requests.tsx`/`MySubmissions.tsx` — they are now
+  provably a no-op for every non-Owner account and would double-write against this flow for an
+  Owner's own actions."* Recorded a month before this report, sitting unactioned.
+- **FIXED: the redundant client-side `writeAudit(...)` call in `Requests.tsx`'s `decide()` is
+  removed** — the flow's own row is authoritative and richer, and the on-screen toast/notice never
+  depended on this call's result (driven purely by `rowWritten`/`failure` from the MERGE itself).
+  The now-unused `libraryTitle` import went with it. `writeAudit`/`EVENT` stay imported — still used
+  by the separate auto-cancel-stale-request path (2026-09-23) a few lines above.
+  - **⚠ `MySubmissions.tsx`'s OWN self-approve `writeAudit` call (line ~3077) HAS THE IDENTICAL
+    SHAPE AND CARRIES THE SAME RISK** — it already has a comment acknowledging it as "mostly a
+    no-op", but was NOT touched by this fix (it wasn't what produced this specific report; that
+    path writes `Status: "Approved"` at CREATION, a different flow trigger shape from the two-person
+    `decide()` path investigated here). Give it the same removal if it is ever seen to double-write.
+- **Verified**: `tsc --noEmit` clean, full suite **2044/2044 passing, 0 failed**, 44 lint warnings —
+  the documented pre-existing baseline, zero new (`Requests.tsx`'s own `max-lines` count actually
+  *dropped*, 4420 → 4417).
+- **✅ DEPLOYED AND CONFIRMED LIVE, SAME SESSION** — corrects the "NOT yet deployed" line this entry
+  originally carried. `npm run build` (the full production pipeline), verified inside the shipped
+  `.sppkg` (the removed block's distinctive text absent from `requests-web-part_5b69f50c40dfc70aad1a.js`),
+  uploaded and updated on the live site by the client. **Confirmed working from the client's own
+  follow-up screenshot** (`bulk4-test2-test2-19062026.xlsx`, deleted 25 Sep 14:55): exactly ONE
+  "Deleted" row and exactly ONE "Request approved" row — the duplicate is gone.
+
+## ✅ "Request approved" NOW SHOWS THE REAL APPROVER FOR A GENUINE TWO-PERSON DECISION, GDC FOR A SELF-APPROVE — APPLIED AND VERIFIED (2026-09-25)
+Client, live-testing right after the duplicate-row fix above: *"can you ensure if someone approve the
+deletion or sharing request from File Request it will be the approver's name. But if in my submission
+or document viewer, the the Request approved will be the gdc name instead."* Confirmed from a fresh
+export of both flows — not a screenshot.
+- **THE DISCRIMINATOR: `RequestedBy === DecidedBy`.** A genuine two-person decision — somebody with
+  `APR`/`APRHC` deciding a request somebody ELSE raised — is only reachable from the Requests/"File
+  Request" page's own `decide()`, and always writes a DIFFERENT `DecidedBy` from `RequestedBy`.
+  **My Submissions, Document-Viewer, and the Requests page's own direct-delete
+  (`writeApprovedDeletionRequest`/`writeDirectDeletionRequest`) are BYTE-IDENTICAL self-approve
+  writers** — both set `RequestedBy = DecidedBy = whoever clicked`, with no field anywhere
+  distinguishing which SCREEN wrote the row. That equality IS the only reliable signal, and it maps
+  exactly onto the client's own split: real decisions only happen one way, self-approves happen
+  several ways that all look alike from the data.
+  - **`performDirectShare` (both screens) writes NO `CRS Requests` row at all** — it's an immediate
+    `SP.Web.ShareObject` call, logged client-side as `EVENT.accessGranted`, never
+    `EVENT.requestApproved`. So "Request approved" for a SHARE can only ever come from a genuine
+    two-person decision already — nothing needed changing there; it already showed the real approver.
+- **FIX 1 — `CRS — Audit request activity`'s `ActorEmail` Compose.** The final `else` (previously
+  bare `DecidedBy`) now reads:
+  `if(equals(toLower(RequestedBy), toLower(DecidedBy)), 'gdc@sdguthrie.com', DecidedBy)`. Every other
+  branch (Pending → RequestedBy, Cancelled → RequestedBy, Revoked → RevokedBy) is untouched.
+  `ActorName` needed no change — it already resolves through `GetActorName`'s `siteusers` lookup on
+  `ActorEmail`, which now correctly returns GDC's own real Title once `ActorEmail` is GDC's address.
+- **FIX 2, PROACTIVE — `CRS — Execute approved deletion`'s "Deleted" `Create_item` HARDCODED TO
+  GDC, UNCONDITIONALLY.** Not asked for directly, but the same reasoning already established for
+  "Moved to Documents"/"Archived" on 2026-09-23 applies identically: the RECYCLE is always performed
+  by this SAME flow, running as GDC, regardless of who requested or decided it — so `item/ActorName`/
+  `item/ActorEmail` were changed from `DecidedBy`-with-`RequestedBy`-fallback to the plain literals
+  `"Guthrie Document Centre"`/`"gdc@sdguthrie.com"`. Without this, a REAL person self-approving from
+  My Submissions would have shown up on the "Deleted" row too — it only showed GDC in the earlier
+  test because gdc's own account happened to click. `GetActorName` is left in place, unused for these
+  two fields now — no need to touch its wiring.
+- **✅ BOTH VERIFIED FROM A FRESH EXPORT, byte-for-byte, not a screenshot mid-edit**
+  (`CRS—Auditrequestactivity_20260925070841.zip`, `CRS—Executeapproveddeletion_20260925070849.zip`).
+- **⏭ NOT YET LIVE-TESTED against a real decision of either kind.** The test: a genuine two-person
+  deletion/share decision (raised by one account, decided by a DIFFERENT real approver) should show
+  that approver's name on "Request approved"; a self-approve from My Submissions, Document-Viewer, or
+  the Requests page's own direct-delete should show "Guthrie Document Centre" on BOTH "Request
+  approved" and "Deleted", regardless of which real account clicked.

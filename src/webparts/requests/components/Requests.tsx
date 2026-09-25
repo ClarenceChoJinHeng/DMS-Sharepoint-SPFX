@@ -28,7 +28,6 @@ import { IRequestsProps } from "./IRequestsProps";
 import {
   cachedListTitle,
   LIST_SUFFIX,
-  libraryTitle,
   /* Derived, never a two-element literal — register #15. The approved-side pair is filtered out of
      it by KEY, so a site with no HC libraries yields one and nothing here has to know that. */
   libraryTargets,
@@ -2158,29 +2157,27 @@ export default function Requests({
       // it Pending invites a second approver to do the same thing again.
       const rowWritten = upd.ok;
 
-      writeAudit(context.spHttpClient, siteUrl, {
-        event: approve ? EVENT.requestApproved : EVENT.requestRejected,
-        outcome: failure || !rowWritten ? "Failed" : "Success",
-        source: "Requests",
-        at: new Date(),
-        actorName: context.pageContext.user.displayName,
-        actorEmail: me,
-        library: libraryTitle(),
-        itemName: row.itemName,
-        itemUniqueId: row.itemUniqueId,
-        summary: `${row.type} request ${decided.status.toLowerCase()} — ${row.itemName}`,
-        details: [
-          `Requested by ${row.requestedBy} on ${row.requestedAt}`,
-          `Reason: ${row.reason}`,
-          row.type === "Share"
-            ? `Recipients: ${(row.shareWith ?? []).join(", ")}`
-            : "",
-          failure ? `The action failed: ${failure}` : "",
-          rowWritten
-            ? ""
-            : "The request row could not be updated, so it may still show as pending.",
-        ].filter((d) => d.length > 0),
-      }).catch(() => undefined);
+      /* ⚠⚠ NO CLIENT-SIDE writeAudit HERE, DELIBERATELY — REMOVED 2026-09-25, AND IT WAS A REAL
+         DUPLICATE-ROW BUG, NOT MERE TIDYING. `CRS — Audit request activity` already watches
+         `CRS Requests` for exactly this write and logs its own "Request approved"/"Request
+         rejected" row (with a properly resolved actor name via its own `GetActorName` lookup, and
+         its own 5-minute dedupe against ITS OWN prior writes). `CRS Audit Log` restricts writes to
+         `CRS Owners`/the service account only (tamper-resistance), so a client-side call here was a
+         silent no-op for an ordinary approver — but for an approver who IS an Owner, both this call
+         AND the flow's own write succeeded, independently, with no coordination between them: two
+         "Deletion request approved" rows for one decision, same actor, a few minutes apart (the
+         flow's own polling cadence). Seen live 2026-09-25 — confirmed from the client's own
+         screenshot and a fresh read of the flow's actual exported definition, not assumed. This
+         exact risk was already flagged in this project's own history the day the flow shipped
+         (2026-08-26): "the code-side writeAudit calls... would double-write against this flow for
+         an Owner's own actions" — recorded, never acted on, until now. Removing it costs nothing:
+         the flow's row is authoritative and richer (a real resolved name, not just whatever
+         `context.pageContext.user.displayName` happens to hold), and the on-screen toast below
+         never depended on this call's result. The sibling write in `MySubmissions.tsx`'s
+         self-approve path (line ~3077) has the SAME shape and was already flagged there with a
+         comment acknowledging it — left alone for now since it was not what produced this report,
+         but it carries the identical risk and should get the same treatment if it is ever seen to
+         double-write. */
 
       setNoticeBad(failure !== undefined || !rowWritten);
       setNotice(
