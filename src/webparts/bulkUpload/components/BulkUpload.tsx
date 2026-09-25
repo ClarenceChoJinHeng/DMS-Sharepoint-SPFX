@@ -3609,6 +3609,44 @@ export default function BulkUpload({
             text-align: center; }
           .dms-fp-row { flex-direction: column; align-items: center; text-align: center; }
         }
+        /* FINER SUB-BREAKPOINTS INSIDE THE EXISTING 0-640px MOBILE ZONE (client, 2026-09-25, given
+           as exact pixel ranges). Placed AFTER the 640px blocks above so the later rule wins the
+           cascade where ranges overlap; the upper bounds below are capped at 640px so true
+           desktop past that point is untouched by any of this.
+           NO BACKTICKS ANYWHERE IN THIS BLOCK - it is a JS template literal and one ends it, with
+           the error reported as JSX hundreds of lines away. */
+        @media (max-width: 424px) {
+          .dms-filenote { margin-bottom: 10px; }
+          .dms-radio-group input[type="radio"] { margin: 0; }
+          .dms-radio-group { gap: 8px; }
+          .dms-detail-row { gap: 0px; }
+        }
+        @container (max-width: 424px) {
+          .dms-filenote { margin-bottom: 10px; }
+          .dms-radio-group input[type="radio"] { margin: 0; }
+          .dms-radio-group { gap: 8px; }
+          .dms-detail-row { gap: 0px; }
+        }
+        /* The Confidential Level field's own 263px cap (set inline) is what shrinks it away from
+           its neighbours on a narrow screen where the row has already stacked — dropped with
+           !important, since a CSS class cannot otherwise beat an inline style. The tooltip panel
+           gets the same left-edge overflow fix as the upload form's, at its own breakpoint. */
+        @media (max-width: 542px) {
+          .dms-field-conflevel { max-width: none !important; }
+          .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+          .dms-info.align-right .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+        }
+        @container (max-width: 542px) {
+          .dms-field-conflevel { max-width: none !important; }
+          .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+          .dms-info.align-right .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+        }
+        @media (min-width: 519px) and (max-width: 640px) {
+          .dms-detail-row { gap: 5px; }
+        }
+        @container (min-width: 519px) and (max-width: 640px) {
+          .dms-detail-row { gap: 5px; }
+        }
       `}</style>
 
       {/* Two wrappers: .dms-form-body is the query container (it may not carry the padding,
@@ -3995,7 +4033,10 @@ export default function BulkUpload({
               {/* Not renderSelect: the info icon belongs on the LABEL, and the label
               is a <span> holding a real <label htmlFor> so clicking the icon does
               not fall through and focus the select. */}
-              <div className="dms-field" style={{ maxWidth: 263 }}>
+              <div
+                className="dms-field dms-field-conflevel"
+                style={{ maxWidth: 263 }}
+              >
                 <span className="dms-labelrow">
                   <label htmlFor="dms-bulk-conf">
                     Confidential Level <em className="req">*</em>
@@ -4212,7 +4253,10 @@ export default function BulkUpload({
             </div>
             {/* Sits above all three file-area states below — visible whenever files are
             being picked or reviewed, not just the empty dropzone. Client, 2026-09-23. */}
-            <div style={{ color: "#666", fontSize: "12px", fontWeight: 400 }}>
+            <div
+              className="dms-filenote"
+              style={{ color: "#666", fontSize: "12px", fontWeight: 400 }}
+            >
               Note: Please make sure the file names are correct before
               uploading.
             </div>

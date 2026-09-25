@@ -213,6 +213,38 @@ const TABS = [
  *  against. Anything not listed here just renders its own name. */
 const TAB_LABEL: Record<string, string> = { Requests: "Permission" };
 
+/* Client, 2026-09-25: `s.wrap`'s `padding: 0 24px 48px` should not be there under 425px, and the
+   status tab row (All ... Archive) should become a dropdown under 768px rather than the wrapping
+   button row seen in the client's own screenshot. This file has no `<style>` block anywhere else —
+   every class here is a plain inline `React.CSSProperties` object, which cannot express a media
+   query — so both are a className-plus-`<style>` addition. `!important` on the padding is needed
+   because a CSS class alone cannot beat the inline `style={s.wrap}` it sits beside.
+
+   ⚠ THE DROPDOWN IS A SECOND CONTROL, NOT A REPLACEMENT — it is wired to the SAME `goTab` handler
+   the buttons already call, so "do not break the current logic" holds by construction: nothing
+   about tab state, counts or filtering changes, only which control is visible at a given width. */
+const MS_MOBILE_CSS = `
+  @media (max-width: 424px) {
+    .crs-ms-wrap { padding: 0 !important; }
+  }
+  .crs-ms-tab-select { display: none; }
+  @media (max-width: 767px) {
+    .crs-ms-tabs { display: none; }
+    .crs-ms-tab-select {
+      display: block;
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      border: 1px solid #c7c7c7;
+      border-radius: 4px;
+      margin-bottom: 16px;
+      background: #fff;
+      color: #1b1b1b;
+    }
+  }
+`;
+
 const s: Record<string, React.CSSProperties> = {
   // Capped and centred like the other full-page screens, so a wide monitor does not stretch the
   // rows into unreadable ribbons.
@@ -4015,7 +4047,8 @@ export default function MySubmissions({
         : undefined);
 
     return (
-      <section style={s.wrap}>
+      <section style={s.wrap} className="crs-ms-wrap">
+        <style>{MS_MOBILE_CSS}</style>
         <div style={s.backBand}>
           <button
             style={s.backLink}
@@ -4512,7 +4545,8 @@ export default function MySubmissions({
      genuine failure notice — by the time one exists, loading is already known to be over. */
   if (viewerOnlyMode) {
     return (
-      <section style={s.wrap}>
+      <section style={s.wrap} className="crs-ms-wrap">
+        <style>{MS_MOBILE_CSS}</style>
         <p style={s.empty}>
           {viewerOpenNotice ??
             (rows === undefined
@@ -4524,7 +4558,8 @@ export default function MySubmissions({
   }
 
   return (
-    <section style={s.wrap}>
+    <section style={s.wrap} className="crs-ms-wrap">
+      <style>{MS_MOBILE_CSS}</style>
       {/* The .crs-ms-detail phone rule moved into shared/fileDetailPanel.tsx with the grid it
           styles (2026-09-10). It sat here, on the LIST view, where nothing used it. */}
       <div style={s.headRow}>
@@ -4560,7 +4595,7 @@ export default function MySubmissions({
         </div>
       )}
 
-      <div style={s.tabs}>
+      <div style={s.tabs} className="crs-ms-tabs">
         {TABS.map((t) => (
           <button
             key={t}
@@ -4571,6 +4606,23 @@ export default function MySubmissions({
           </button>
         ))}
       </div>
+      {/* ⚠ SAME `goTab`/`tab`/`tabCounts` AS THE BUTTON ROW ABOVE, NEVER A SECOND DEFINITION —
+          under 768px this replaces the row (see `.crs-ms-tabs`/`.crs-ms-tab-select` in
+          MS_MOBILE_CSS), and at/above 768px MS_MOBILE_CSS keeps it hidden so the button row is
+          exactly what renders today. Client, 2026-09-25: on a phone the seven tabs wrap across
+          several short lines (own screenshot); a native select reads the same state in one row. */}
+      <select
+        className="crs-ms-tab-select"
+        aria-label="Filter by status"
+        value={tab}
+        onChange={(e) => goTab(e.target.value)}
+      >
+        {TABS.map((t) => (
+          <option key={t} value={t}>
+            {TAB_LABEL[t] ?? t} ({tabCounts[t] ?? 0})
+          </option>
+        ))}
+      </select>
 
       {/* ── Outgoing requests ────────────────────────────────────────────────────
           Client, 2026-08-20: "Add two tabs too showing Outgoing Request and inside it shows the

@@ -5163,6 +5163,61 @@ export default function Form({ context }: IFormProps): React.ReactElement {
             justify-content: center; text-align: center; gap: 8px; }
           .dms-dropzone.has-file .dms-filecard-action { margin-left: 0; }
         }
+        /* THREE FINER SUB-BREAKPOINTS INSIDE THE EXISTING 0-480px MOBILE ZONE (client, 2026-09-25,
+           given as exact pixel ranges). Kept as SEPARATE @media/@container blocks rather than
+           nested inside the 480px ones above — plain CSS has no rule nesting here, this is a JS
+           template literal building a flat stylesheet. Each new selector is placed AFTER its
+           480px counterpart so the later rule wins the cascade for the narrower ranges that
+           satisfy both queries at once; nothing above 480px is touched by any of this.
+           NO BACKTICKS ANYWHERE IN THIS BLOCK - it is a JS template literal and one ends it,
+           with the error reported as JSX hundreds of lines away. */
+        @media (max-width: 424px) {
+          .dms-batchcard { padding: 16px 7px; }
+          .dms-section { padding: 24px 10px; }
+          .dms-lp-wrap { height: 0px; margin-top: 0px; }
+          .dms-detail-row { gap: 5px; }
+          /* The tooltip panel overflowed past the left edge of the screen (client screenshot,
+             2026-09-25) — it is position: absolute, left: 0 against its icon, and on a narrow
+             phone the icon itself sits close enough to the edge that the 280px-wide panel runs
+             off it. Centring under the icon instead of hanging off its left edge keeps it on
+             screen regardless of where the icon sits. Both the plain and align-right variants
+             are overridden to the same centred rule, or the rightmost icon's panel would still
+             hang off its own right edge.
+             NO BACKTICKS IN THIS COMMENT - one already ended this template literal here once. */
+          .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); font-size: 12px; }
+          .dms-info.align-right .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+          .dms-batchcard-meta + .dms-batchcard-meta { margin-top: 20px; }
+          .dms-batch-files { padding: 0px 15px; }
+        }
+        @container (max-width: 424px) {
+          .dms-batchcard { padding: 16px 7px; }
+          .dms-section { padding: 24px 10px; }
+          .dms-lp-wrap { height: 0px; margin-top: 0px; }
+          .dms-detail-row { gap: 5px; }
+          .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); font-size: 12px; }
+          .dms-info.align-right .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+          .dms-batchcard-meta + .dms-batchcard-meta { margin-top: 20px; }
+          .dms-batch-files { padding: 0px 15px; }
+        }
+        /* The radio group's label gap tightens once it is narrow enough to matter but before the
+           425px handoff below restores the row layout. */
+        @media (min-width: 375px) and (max-width: 424px) {
+          .dms-radio-group label { gap: 4px; }
+        }
+        @container (min-width: 375px) and (max-width: 424px) {
+          .dms-radio-group label { gap: 4px; }
+        }
+        /* At 425px the radio group switches back to a row — bounded at 480px, where the outer
+           mobile query above stops firing anyway, so true desktop past that point is untouched
+           either way. */
+        @media (min-width: 425px) and (max-width: 480px) {
+          .dms-radio-group { flex-direction: row; }
+          .dms-radio-group input[type="radio"] { margin: 0; }
+        }
+        @container (min-width: 425px) and (max-width: 480px) {
+          .dms-radio-group { flex-direction: row; }
+          .dms-radio-group input[type="radio"] { margin: 0; }
+        }
         @keyframes dms-fadein { from { opacity: 0; } to { opacity: 1; } }
         @keyframes dms-popin { from { transform: scale(.92); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       `}</style>

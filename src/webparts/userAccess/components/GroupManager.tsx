@@ -138,6 +138,21 @@ type MapRow = {
   tier: string;
 };
 
+/**
+ * Group list overflow fix (client, 2026-09-25: two screenshots of the same list, the narrow one with
+ * a long group name running past the box). The name button is flex 1 with the default min-width
+ * auto, so an underscore-joined name with no break point could not shrink. min-width 0 plus
+ * overflow-wrap anywhere lets it break inside its own column; badges and Delete keep their size.
+ * Inert wherever the row already fits, which is every desktop case. @media not needed - the rules
+ * only engage when the name would overflow. important beats the inline styles.
+ * NO BACKTICKS IN THIS STRING - it is a template literal.
+ */
+const GM_LIST_CSS = `
+  .crs-gm-row { flex-wrap: nowrap !important; }
+  .crs-gm-name { min-width: 0 !important; overflow-wrap: anywhere; }
+  .crs-gm-row > span, .crs-gm-row > .crs-gm-del, .crs-gm-row > input { flex-shrink: 0; }
+`;
+
 const s: Record<string, React.CSSProperties> = {
   card: {
     border: "1px solid #e1e1e1",
@@ -1992,6 +2007,7 @@ export default function GroupManager({
 
   return (
     <div>
+      <style>{GM_LIST_CSS}</style>
       {/* ⚠ THE INTRO BANNER THAT USED TO SIT HERE ("Creating a group here grants nothing… Choosing
           a persona below…") IS GONE (2026-09-02, client's confirmed call). It referred to the
           create-one-group form's persona picker "below" — and with `hideCreateForm` now `true`
@@ -3101,12 +3117,15 @@ export default function GroupManager({
             <div
               style={{
                 marginTop: 10,
-                // ⚠ The cap is LIFTED while a group is open, and that is not cosmetic: the member
-                // editor's people picker is absolutely positioned, so a scroll container clips its
-                // results for any group near the bottom — trading a long page for a control that
-                // silently cannot be used. Same rule Folder Access follows.
-                maxHeight: openGroup === undefined ? "60vh" : undefined,
-                overflowY: openGroup === undefined ? "auto" : undefined,
+                // ⚠ REVERSED 2026-09-25: the cap now STAYS while a group is open. Lifting it (the
+                // old rule, to avoid clipping the member editor's absolutely positioned people
+                // picker) threw away the inner scroll offset, so opening a group jumped the page
+                // ("usually move me up") and the list became one very long page (client: "the
+                // overflow is gone and I have to scroll so long"). The picker sits inside this box,
+                // so its results extend the scrollable area rather than vanishing - near the bottom
+                // of the list they may need a scroll to reach.
+                maxHeight: "60vh",
+                overflowY: "auto",
               }}
             >
               {loading && <p style={s.hint}>Loading…</p>}
@@ -3121,7 +3140,7 @@ export default function GroupManager({
                 const rows = rowsFor(g);
                 return (
                   <div key={g.id}>
-                    <div style={s.row}>
+                    <div style={s.row} className="crs-gm-row">
                       {/* Ticking is the ONLY thing on this row that does not open or change anything —
                       it just marks. The destructive step is behind the bar above, with a count. */}
                       <input
@@ -3144,6 +3163,7 @@ export default function GroupManager({
                       <button
                         type="button"
                         style={s.groupName}
+                        className="crs-gm-name"
                         aria-expanded={openGroup === g.id}
                         onClick={() =>
                           setOpenGroup(openGroup === g.id ? undefined : g.id)
@@ -3193,6 +3213,7 @@ export default function GroupManager({
                       <button
                         type="button"
                         style={s.danger}
+                        className="crs-gm-del"
                         disabled={busy}
                         onClick={() => setDeleting(g)}
                       >

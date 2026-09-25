@@ -66,7 +66,11 @@ import {
   ReadableLibrary,
 } from "../../../shared/spNaming";
 // The trail builder My Submissions uses — see the note where `trailOf` used to be.
-import { folderTrail, trailText, formatSubmittedOn } from "../../../shared/mySubmissions";
+import {
+  folderTrail,
+  trailText,
+  formatSubmittedOn,
+} from "../../../shared/mySubmissions";
 // Same ordering the upload forms already apply to this exact dropdown (2026-09-18, client:
 // "Highly Confidential, Confidential & Restricted") — one definition, reused here rather than
 // left to the term store's alphabetical order this screen was still showing.
@@ -197,7 +201,7 @@ function termGuidOf(v: unknown): string {
 /* ─────────────────────────────── Styles ─────────────────────────────── */
 
 const s: Record<string, React.CSSProperties> = {
-  root: { fontFamily: 'Arial, sans-serif', color: "#242424" },
+  root: { fontFamily: "Arial, sans-serif", color: "#242424" },
 
   /* ---- The hero (client design, 2026-08-30) --------------------------------
      ⚠ Every key used anywhere in this file MUST exist in this object: it is a
@@ -285,7 +289,6 @@ const s: Record<string, React.CSSProperties> = {
   /* The pill. `overflow: hidden` is what clips the button's square corners to the rounded end. */
   heroBar: {
     display: "flex",
-    flexWrap: "wrap",
     alignItems: "center",
     background: "#fff",
     borderRadius: 6,
@@ -1161,7 +1164,12 @@ export default function DocumentSearch({
       }
 
       if (!narrowed) {
-        out.push({ library: lib, outcome: "ok", hits: libHits, unnarrowed: true });
+        out.push({
+          library: lib,
+          outcome: "ok",
+          hits: libHits,
+          unnarrowed: true,
+        });
         continue;
       }
 
@@ -1195,7 +1203,9 @@ export default function DocumentSearch({
         meta[h.itemId] = {
           documentType: termGuidOf(row[METADATA_FILTER_FIELDS.documentType]),
           year: termGuidOf(row[METADATA_FILTER_FIELDS.year]),
-          confidentiality: termGuidOf(row[METADATA_FILTER_FIELDS.confidentiality]),
+          confidentiality: termGuidOf(
+            row[METADATA_FILTER_FIELDS.confidentiality],
+          ),
           segment: textOf(row.Business_x0020_Segment),
         };
       }
@@ -1278,7 +1288,9 @@ export default function DocumentSearch({
         !metadataFilterMatches(criteria, {
           documentType: termGuidOf(row[METADATA_FILTER_FIELDS.documentType]),
           year: termGuidOf(row[METADATA_FILTER_FIELDS.year]),
-          confidentiality: termGuidOf(row[METADATA_FILTER_FIELDS.confidentiality]),
+          confidentiality: termGuidOf(
+            row[METADATA_FILTER_FIELDS.confidentiality],
+          ),
         })
       ) {
         continue;
@@ -1469,7 +1481,10 @@ export default function DocumentSearch({
         `/items(${h.itemId})/FieldValuesAsText`,
     )
       .then((r) => {
-        const text = (r.ok ? (r.body as Record<string, string>) : {}) as Record<string, string>;
+        const text = (r.ok ? (r.body as Record<string, string>) : {}) as Record<
+          string,
+          string
+        >;
         if (!r.ok) {
           setFieldText(text);
           return;
@@ -1488,9 +1503,12 @@ export default function DocumentSearch({
             `/items(${h.itemId})?$select=DocumentDate`,
         )
           .then((raw) => {
-            const iso = raw.ok ? (raw.body as { DocumentDate?: string }).DocumentDate : undefined;
+            const iso = raw.ok
+              ? (raw.body as { DocumentDate?: string }).DocumentDate
+              : undefined;
             const d = iso ? new Date(iso) : undefined;
-            if (d && !isNaN(d.getTime())) text.DocumentDate = formatSubmittedOn(d);
+            if (d && !isNaN(d.getTime()))
+              text.DocumentDate = formatSubmittedOn(d);
             setFieldText(text);
           })
           .catch(() => setFieldText(text));
@@ -1537,7 +1555,9 @@ export default function DocumentSearch({
              Form.tsx's `stagedAtLabel`. `formatSubmittedOn` is the ONE shared "21 Sep 2026" format
              (shared/mySubmissions.ts, settled 2026-08-30) every other date on this page — including
              `DocumentDate` a few lines above — already uses; `open.modified` is ISO, same shape. */
-          value: formatSubmittedOn(open.modified ? new Date(open.modified) : undefined),
+          value: formatSubmittedOn(
+            open.modified ? new Date(open.modified) : undefined,
+          ),
         },
         { label: "File size", value: formatBytes(open.size) },
       ],
@@ -1607,6 +1627,17 @@ export default function DocumentSearch({
 
   return (
     <div style={s.root}>
+      {/* ⚠ Media query, not `s.heroBtn` — an inline style object cannot express `@media`, and this
+          only needs to hide the button below a fixed width, never on desktop. */}
+      <style>
+        {`
+          @media (max-width: 425px) {
+            .hero-btn {
+              display: none !important;
+            }
+          }
+        `}
+      </style>
       {/* THE HERO (client design, 2026-08-30). The old heading, one-line explanation and flat search
           row are replaced by a full-bleed banner. What the explanation used to say — that searching
           shows only what you can already open — has NOT been dropped: it moves under the results,
@@ -1670,6 +1701,7 @@ export default function DocumentSearch({
                 ...s.heroBtn,
                 ...(busy ? { opacity: 0.6, cursor: "default" } : {}),
               }}
+              className="hero-btn"
               disabled={busy}
               onClick={runSearchSafely}
             >
@@ -1795,7 +1827,9 @@ export default function DocumentSearch({
                     }
                   >
                     <option value="">Any</option>
-                    {sortByConfidentialityOrder(fixedOptions.confidentiality ?? []).map((o) => (
+                    {sortByConfidentialityOrder(
+                      fixedOptions.confidentiality ?? [],
+                    ).map((o) => (
                       <option key={o.id} value={o.id}>
                         {o.label}
                       </option>
@@ -1873,8 +1907,8 @@ export default function DocumentSearch({
             ? "One library could not be searched"
             : `${failed.length} libraries could not be searched`}
           {": "}
-          {failed.map((f) => libraryLabel(f.library)).join(", ")}
-          , please try again
+          {failed.map((f) => libraryLabel(f.library)).join(", ")}, please try
+          again
         </div>
       ) : undefined}
 
@@ -1962,7 +1996,9 @@ export default function DocumentSearch({
                       page and must not disagree with it about the date format. */}
                   {[
                     h.author,
-                    formatSubmittedOn(h.modified ? new Date(h.modified) : undefined),
+                    formatSubmittedOn(
+                      h.modified ? new Date(h.modified) : undefined,
+                    ),
                     formatBytes(h.size),
                   ]
                     .filter((x) => x.length > 0 && x !== "—")

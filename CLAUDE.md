@@ -18573,3 +18573,28 @@ export of both flows — not a screenshot.
   that approver's name on "Request approved"; a self-approve from My Submissions, Document-Viewer, or
   the Requests page's own direct-delete should show "Guthrie Document Centre" on BOTH "Request
   approved" and "Deleted", regardless of which real account clicked.
+
+## MOBILE CSS PASS, SECOND BATCH — GDC SETTINGS + FOLDER/GROUP MANAGEMENT (2026-09-25)
+Continues the same day's first batch (Form, BulkUpload, Requests, MySubmissions, DocumentSearch).
+CSS-only except one behaviour reversal. `tsc` clean, lint zero new. NOT built, deployed or site-tested.
+- **CrsSettings.tsx**: `.crs-page { padding: 0 }` under 425px. `@media` only — `.crs-page` IS the
+  container, and a container query cannot style its own container.
+- **SegmentCreator.tsx** (first style block in the file, `SEG_MOBILE_CSS`, `@media` only because it
+  renders two fixed dialogs): "Appears under" radio labels drop `marginRight` under 375px; the Term set
+  ID label row (`labelRow`) wraps under 425px.
+- **BulkGroupProvisioner.tsx**: `flexWrap` REMOVED from the "Roles to set up" `tick` rows, all widths —
+  inert on desktop (the row always fitted); on narrow screens the text no longer drops under its checkbox.
+- **GroupManager.tsx** (`GM_LIST_CSS`): group row `nowrap`, name button `min-width: 0` +
+  `overflow-wrap: anywhere`, badges/Delete/checkbox `flex-shrink: 0` — a long underscore-joined group
+  name now breaks inside its column instead of running past the box. Inert wherever the row fits.
+- **⚠⚠ REVERSED: THE GROUP LIST'S 60vh SCROLL CAP NOW STAYS WHILE A GROUP IS OPEN.** It used to lift
+  on open so the member editor's absolutely-positioned people picker could not be clipped. Lifting it
+  threw away the inner scroll offset — the page JUMPED on open ("usually move me up") and the list
+  became one very long page ("the overflow is gone and I have to scroll so long"). The picker sits
+  INSIDE the scroll box, so its results extend the scrollable area rather than vanishing; for a group
+  near the bottom of the list they may need a scroll to reach. If that is reported, this is why.
+- **GroupMembersEditor.tsx** (`GME_MOBILE_CSS`, used for System Administrators AND every expanded
+  group): member name `min-width: 0` + `overflow-wrap: anywhere` at all widths; under 425px the panel
+  drops its `8px 10px 14px 24px` padding and member rows stack (`flex-direction: column`,
+  `align-items: flex-start`). The padding removal was applied MOBILE-ONLY — the client's "just remove"
+  gave no breakpoint, and removing it on desktop would put the text flush against the pink box edge.

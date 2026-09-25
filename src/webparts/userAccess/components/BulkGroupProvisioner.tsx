@@ -278,7 +278,9 @@ const s: Record<string, React.CSSProperties> = {
   },
   tick: {
     display: "flex",
-    flexWrap: "wrap",
+    /* No flexWrap (client, 2026-09-25): with wrap on, a narrow screen dropped the role text UNDER
+       its checkbox. Without it the text wraps inside its own column beside the box. On a desktop
+       the row always fitted, so wrap never engaged there and nothing changes. */
     alignItems: "flex-start",
     gap: 10,
     fontSize: 13,

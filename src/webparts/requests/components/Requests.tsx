@@ -159,6 +159,17 @@ type FileView =
     }
   | { state: "gone"; message: string };
 
+/* Client, 2026-09-25: the page shell's `padding: 0 24px 48px` (see `s.wrap` below) should not be
+   there under 425px. This file has no `<style>` block anywhere else — every other class here is a
+   plain inline `React.CSSProperties` object, which cannot express a media query — so this is a
+   className-plus-`<style>` addition rather than an edit to an existing block. `!important` is
+   needed because a CSS class alone cannot beat the inline `style={s.wrap}` it sits beside. */
+const REQ_MOBILE_CSS = `
+  @media (max-width: 424px) {
+    .crs-req-wrap { padding: 0 !important; }
+  }
+`;
+
 const s: Record<string, React.CSSProperties> = {
   wrap: {
     fontFamily: "Arial, sans-serif",
@@ -3695,7 +3706,8 @@ export default function Requests({
       documents: cachedHcLibraries()?.documents.urlSegment,
     };
     return (
-      <section style={s.wrap}>
+      <section style={s.wrap} className="crs-req-wrap">
+        <style>{REQ_MOBILE_CSS}</style>
         <div style={s.backBand}>
           <button
             type="button"
@@ -3793,7 +3805,8 @@ export default function Requests({
       setFileView(undefined);
     };
     return (
-      <section style={s.wrap}>
+      <section style={s.wrap} className="crs-req-wrap">
+        <style>{REQ_MOBILE_CSS}</style>
         <div style={s.backBand}>
           <button type="button" style={s.backLink} onClick={closeView}>
             ‹ Back to requests
@@ -3855,7 +3868,8 @@ export default function Requests({
   }
 
   return (
-    <section style={s.wrap}>
+    <section style={s.wrap} className="crs-req-wrap">
+      <style>{REQ_MOBILE_CSS}</style>
       {/* ⚠ RENAMED (client's mockup, 2026-09-03): "Requests" → "Document Deletion & Sharing
           Approval". The page this renders on is a separate, manual SharePoint edit — see
           `docs/superpowers/specs/2026-09-03-requests-page-redesign-scope.md` for the full scope,

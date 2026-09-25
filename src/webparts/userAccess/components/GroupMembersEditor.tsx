@@ -95,6 +95,22 @@ type Props = {
   alsoSiteAdmin?: boolean;
 };
 
+/**
+ * Narrow-screen overrides (client, 2026-09-25). Used on the System Administrators panel and inside
+ * every expanded group on Group Management. The name gets min-width 0 so a long address wraps
+ * inside its box instead of running past it (inert when it fits). Under 425px the member rows
+ * stack (name above its buttons) and the panel drops its 8px 10px 14px 24px padding.
+ * @media only: this renders inside GroupManager, which has position: fixed dialogs.
+ * important beats the inline styles. NO BACKTICKS IN THIS STRING - it is a template literal.
+ */
+const GME_MOBILE_CSS = `
+  .crs-gme-name { min-width: 0 !important; overflow-wrap: anywhere; }
+  @media (max-width: 424px) {
+    .crs-gme-wrap { padding: 0 !important; }
+    .crs-gme-row { flex-direction: column !important; align-items: flex-start !important; }
+  }
+`;
+
 const s: Record<string, React.CSSProperties> = {
   wrap: {
     padding: "8px 10px 14px 24px",
@@ -571,7 +587,8 @@ export default function GroupMembersEditor({
     alsoSiteAdmin === true && visibleMembers.length < (members ?? []).length;
 
   return (
-    <div style={s.wrap}>
+    <div style={s.wrap} className="crs-gme-wrap">
+      <style>{GME_MOBILE_CSS}</style>
       {members === undefined && !failed && (
         <p style={s.hint}>Loading members&hellip;</p>
       )}
@@ -624,8 +641,8 @@ export default function GroupMembersEditor({
           Same rule Group Management's own group list and Folder Access already follow. */}
       <div style={{ maxHeight: 260, overflowY: "auto" }}>
         {visibleMembers.map((m) => (
-          <div key={m.id} style={s.row}>
-            <span style={s.name}>{personDisplay(m.title, m.email)}</span>
+          <div key={m.id} style={s.row} className="crs-gme-row">
+            <span style={s.name} className="crs-gme-name">{personDisplay(m.title, m.email)}</span>
             {confirmRemove === m.id ? (
               <>
                 <button

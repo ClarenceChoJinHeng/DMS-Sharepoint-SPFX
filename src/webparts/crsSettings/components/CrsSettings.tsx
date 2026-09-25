@@ -366,6 +366,12 @@ export default function CrsSettings(
           .crs-card-head { flex-direction: column; }
           .crs-card-arrow { align-self: flex-end; }
         }
+        /* Client, 2026-09-25: under 425px the page loses its side padding. @media only - a
+           container query cannot style its own container, and .crs-page IS the container.
+           important beats the inline s.wrap padding. */
+        @media (max-width: 424px) {
+          .crs-page { padding: 0 !important; }
+        }
       `}</style>
       <div style={s.head}>
         <h1 style={s.h1}>{props.heading || "GDC Settings"}</h1>

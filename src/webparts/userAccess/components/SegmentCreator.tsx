@@ -105,6 +105,21 @@ function setCheckIsRecheckable(c: SetCheck): boolean {
   );
 }
 
+/**
+ * Mobile-only overrides (client, 2026-09-25). The rest of this file is inline style objects, which
+ * cannot carry a query. @media only, never @container: this component renders two position: fixed
+ * dialogs, and the layout containment container-type brings would re-anchor them to a box.
+ * important beats the inline styles. NO BACKTICKS IN THIS STRING - it is a template literal.
+ */
+const SEG_MOBILE_CSS = `
+  @media (max-width: 424px) {
+    .crs-seg-labelrow { flex-wrap: wrap !important; }
+  }
+  @media (max-width: 374px) {
+    .crs-seg-family { margin-right: 0 !important; }
+  }
+`;
+
 const s: Record<string, React.CSSProperties> = {
   msg: { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err: { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
@@ -1252,6 +1267,7 @@ export default function SegmentCreator({
 
   return (
     <div>
+      <style>{SEG_MOBILE_CSS}</style>
       {loadError && (
         <div style={{ ...s.msg, ...s.err }}>
           Could not read the existing segments — {loadError}. Adding one now risks a duplicate name
@@ -1701,7 +1717,7 @@ export default function SegmentCreator({
 
         <label style={s.label}>Appears under</label>
         {(["BusinessSegment", "Project"] as const).map((f) => (
-          <label key={f} style={{ fontSize: 13, marginRight: 16 }}>
+          <label key={f} className="crs-seg-family" style={{ fontSize: 13, marginRight: 16 }}>
             <input
               type="radio"
               name="family"
@@ -1721,7 +1737,7 @@ export default function SegmentCreator({
           </label>
         ))}
 
-        <span style={s.labelRow}>
+        <span style={s.labelRow} className="crs-seg-labelrow">
           <label style={{ ...s.label, marginTop: 0 }}>Term set ID</label>
           {/* Client QA item #57, 2026-09-13: "Include a Refresh button beside Open Term Store
               Management" — the same pairing `StructureManager.tsx` already has beside its own
