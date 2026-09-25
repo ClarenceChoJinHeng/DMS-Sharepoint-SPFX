@@ -9,3 +9,4 @@
 7. **Only what's needed.** No extra features, no extra comments unless I ask.
 8. **Explain simply.** Short bullet points.
 9. **Keep Obsidian current.** When logic changes, update the Components note (and `Open Items.md`) in the same change. New specs and plans go in the vault's `Specs/` and `Plans/`, not `docs/`.
+10. **Where things go.** New or changed rules go in `rules/<topic>.md` (and get an `@rules/<topic>.md` line in `CLAUDE.md`). New skills go in `.claude/skills/<name>/SKILL.md` (and a row in the vault's `Skills Index.md`). Never put rules or procedures back into `CLAUDE.md` itself.
