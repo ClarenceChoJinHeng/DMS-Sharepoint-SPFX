@@ -3234,12 +3234,15 @@ export default function Requests({
         {trailText(folderTrail(r.itemUrl ?? "", cardLibSegments)) || "—"}
       </div>
       <div style={s.meta}>
-        {/* ⚠ THE REQUESTER'S EMAIL IS GONE FOR A SHARE CARD (client, 2026-09-18, comments 6 & 10:
-            "no need show share by / Remove sharer, only show recipients email"). Kept for a
-            DELETION card — deciding whether to recycle a document is a different question from
-            deciding whether to grant access, and who is asking to delete something stays directly
-            relevant there. Unit and date are unchanged either way; only the identity is dropped. */}
-        {r.type !== "Share" && (
+        {/* ⚠ SUPERSEDED 2026-09-25 — the requester's identity is back on the Share card too, per the
+            client's own screenshot, now labelled "Request by:" (the Deletion card stays unlabelled,
+            since that was never asked to change). The 2026-09-18 removal (comments 6 & 10: "no need
+            show share by / Remove sharer, only show recipients email") stood for about a week before
+            the client asked for it back — kept here as the record of why it was ever hidden, not as
+            the current rule. */}
+        {r.type === "Share" ? (
+          <>Request by: {displayNameFor(r.requestedBy) ?? r.requestedBy} · </>
+        ) : (
           <>{displayNameFor(r.requestedBy) ?? r.requestedBy} · </>
         )}
         {r.unit} · {longDate(r.requestedAt)}
