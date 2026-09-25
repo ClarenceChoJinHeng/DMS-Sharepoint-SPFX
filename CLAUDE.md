@@ -18246,25 +18246,28 @@ every recent run in their 28-day history.
     `NotifyApprovers`'s own `HasUnit` and confirmed via its own Code view read-back —
     byte-identical `and` structure, same field names (`NextReminderAt` exists on both approval
     libraries per the 2026-09-22 runbook).
-- **⏭ OPEN QUESTION 2, NOT YET CHECKED: the normal flow's own 5:30 PM run.** Client's own observation:
+- **✅ OPEN QUESTION 2 IS CLOSED — CONFIRMED BENIGN, NOT A DEFECT.** Client's original observation:
   *"the 5:30 pm is running only for HC Approver, the non HC approver did not fully complete its
-  run."* The run-history LIST shows it as `Succeeded`, `00:00:01` duration — no evidence of a genuine
-  failure from that alone. **Leading, unconfirmed hypothesis: `GetStale` found zero due items at that
-  moment** (a real, benign outcome — nothing due right then), and Power Automate renders a
-  zero-iteration `Apply to each`'s inner actions (`GetApproverGroup`, `HasApprover`, etc.) in GREY
-  rather than green, which can visually read as "incomplete" even though the run legitimately
-  succeeded and did everything it needed to (nothing). **Next step: open that specific run, read
-  `GetStale`'s raw output** — an empty `value: []` array confirms the benign explanation; anything
-  else (a genuinely stuck action, a red failure, a non-empty array that never reached `Send an email`)
-  would point at a real defect and need its own trace.
-- **Also observed, not investigated further: both flows showed "empty" at the 4:59 PM mark.**
-  Consistent with nothing being due at that exact 30-minute tick — not treated as a finding on its own
-  unless open question 2 turns up something that makes it look otherwise.
-- **⚠ STATE: question 1 closed (cadence correct); the cross-flow duplicate-email bug is confirmed
-  and fixed on BOTH flows (saved, Code-view verified); question 2 (the normal flow's 5:30 PM
-  grey-loop run) is still open and untouched — that is the one remaining item.**
-- **⚠ NOT YET DONE, WORTH DOING BEFORE CALLING THIS CLOSED: no NEW live test has confirmed the fix
-  actually stops the duplicate.** Everything above proves the CAUSE and confirms the EDIT saved
-  correctly; the next document to cross the 3-day threshold and get a reminder is the first real
-  test that `HasUnit` now blocks the re-fire. Worth a quick check once one naturally comes up,
-  rather than assuming the fix works from the expression alone.
+  run."* That was a misreading of a normal rendering, confirmed two ways:
+  - Both flows' own `GetStale` raw outputs, read at the same later poll, returned
+    `"body": {"value": []}` — genuinely nothing due on either flow at that moment.
+  - The non-HC flow's run screen showed the identical shape the HC flow shows whenever `GetStale`
+    is empty: `Apply to each` green-checked at `0s`, with `GetApproverGroup`/`HasApprover`/
+    `GetMembers`/`MembersWithEmail`/`HasRecipients` all rendered with the grey circle-minus icon
+    rather than a green check — because a zero-iteration loop never runs its inner actions at all,
+    and Power Automate greys out "never ran" rather than marking it failed. The run banner itself
+    read **"Your flow ran successfully."** Nothing stuck, nothing failed, on either flow.
+  - **The leading hypothesis from the first pass on this was exactly right** — confirmed with the
+    raw output rather than left as an assumption.
+- **Also observed, not investigated further: both flows showed "empty" at the 4:59 PM mark** on
+  2026-09-24 — same benign explanation, now established as the correct one for this shape generally.
+- **✅ BOTH ORIGINAL QUESTIONS ARE NOW CLOSED, AND THE REAL BUG FOUND ALONG THE WAY IS FIXED.**
+  Question 1 (cadence correctness) — confirmed correct. Question 2 (the grey-loop appearance) —
+  confirmed benign on both flows. The cross-flow duplicate-email bug — root-caused with live
+  evidence and fixed on both `HCNotifyApprovers` and `NotifyApprovers`, confirmed saved via Code
+  view on both.
+- **⚠ ONE THING STILL NOT DONE: no NEW live test has confirmed the duplicate-email FIX actually
+  stops the re-fire.** Everything above proves the cause and confirms the edit saved correctly; the
+  next document to cross the 3-day threshold and get a reminder is the first real test that
+  `HasUnit` now blocks it. Worth a quick check once one naturally comes up, rather than assuming
+  the fix works from the expression alone.
