@@ -2282,7 +2282,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
          toast simply no longer recites how many. If anyone reports "it silently lost files", this
          is why: the numbers moved out of the message, not the files out of the set. */
       showToast(
-        `Up to ${MAX_FILES_PER_BATCH} documents per upload. Save and upload another set.`,
+        `Maximum ${MAX_FILES_PER_BATCH} files per upload. The first 20 files were uploaded. Please upload the remaining files separately.`,
         "error",
       );
       if (fileRef.current) fileRef.current.value = "";
@@ -2290,7 +2290,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
     }
     if (picked.length > room) {
       showToast(
-        `Up to ${MAX_FILES_PER_BATCH} documents per upload. Save and upload another set.`,
+        `Maximum ${MAX_FILES_PER_BATCH} files per upload. The first 20 files were uploaded. Please upload the remaining files separately.`,
         "error",
       );
       picked.length = room;
