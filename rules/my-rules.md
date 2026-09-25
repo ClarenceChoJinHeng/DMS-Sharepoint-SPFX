@@ -10,3 +10,4 @@
 8. **Explain simply.** Short bullet points.
 9. **Keep Obsidian current.** When logic changes, update the Components note (and `Open Items.md`) in the same change. New specs and plans go in the vault's `Specs/` and `Plans/`, not `docs/`.
 10. **Where things go.** New or changed rules go in `rules/<topic>.md` (and get an `@rules/<topic>.md` line in `CLAUDE.md`). New skills go in `.claude/skills/<name>/SKILL.md` (and a row in the vault's `Skills Index.md`). Never put rules or procedures back into `CLAUDE.md` itself.
+11. **Hand off before context runs out.** When I say the context is around 80%, or Claude Code warns it's nearly full, or the session is very long: stop at a safe point, run `/sdg-handoff` (it writes a handoff spec in the vault), then tell me to start a **new** session (not `/compact`, not resume) and say "continue from <spec name>". A new session reads only that spec, not the old conversation.
