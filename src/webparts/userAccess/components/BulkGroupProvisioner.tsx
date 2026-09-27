@@ -184,6 +184,13 @@ const ROW_DISPLAY: Record<string, { family: string; label: string }> = {
   clevel_global: { family: "C-level (Global)", label: "View, every segment" },
 };
 
+// Client, 2026-09-26. important beats the inline s.card padding. NO BACKTICKS IN THIS STRING.
+const BGP_MOBILE_CSS = `
+  @media (max-width: 424px) {
+    .crs-bgp-card { padding: 16px 7px !important; }
+  }
+`;
+
 const s: Record<string, React.CSSProperties> = {
   card: {
     border: "1px solid #e1e1e1",
@@ -1026,7 +1033,8 @@ export default function BulkGroupProvisioner({
   /* ── Render ───────────────────────────────────────────────────────────────── */
 
   return (
-    <div style={s.card}>
+    <div style={s.card} className="crs-bgp-card">
+      <style>{BGP_MOBILE_CSS}</style>
       {/* ⚠ COPY REPLACED VERBATIM (client's mockup, 2026-09-03: "Follow the exact copy, exact
           list"). The stale "set on Folder Access" reference is gone WITH this rewrite — Folder
           Access itself was retired 2026-08-23, and membership editing moved to Group Management;

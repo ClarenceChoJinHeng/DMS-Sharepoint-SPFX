@@ -41,6 +41,22 @@ import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
 const CONFIG_ROW_TITLE = "allowedExtensions";
 const COLUMN_INTERNAL_NAME = "AllowedFileTypes";
 
+// Client, 2026-09-27. Phones: each row is badge + name on line 1, toggle (left) and Remove (right)
+// on line 2. @media only (the confirm popups are position: fixed). NO BACKTICKS IN THIS STRING.
+const FT_MOBILE_CSS = `
+  @media (max-width: 424px) {
+    .crs-ft-wrap { padding: 0 !important; }
+  }
+  @media (max-width: 640px) {
+    .crs-ft-card { padding: 16px 10px !important; }
+    .crs-ft-head, .crs-ft-row { grid-template-columns: auto minmax(0, 1fr) !important; padding-left: 0 !important; padding-right: 0 !important; }
+    .crs-ft-head > :nth-child(3), .crs-ft-head > :nth-child(4) { display: none; }
+    .crs-ft-row { row-gap: 8px !important; }
+    .crs-ft-row > :nth-child(3) { grid-column: 1; grid-row: 2; }
+    .crs-ft-row > :nth-child(4) { grid-column: 2; grid-row: 2; justify-self: end; }
+  }
+`;
+
 const s: Record<string, React.CSSProperties> = {
   // Capped and CENTRED, like every other admin screen (AccessShell, FolderManager). The cap keeps the
   // Description column readable on a wide monitor; without `margin auto` it pinned hard left inside a
@@ -732,7 +748,8 @@ export default function FileTypeSettings({
 
   if (loading) {
     return (
-      <section style={s.wrap}>
+      <section style={s.wrap} className="crs-ft-wrap">
+        <style>{FT_MOBILE_CSS}</style>
         <h2 style={s.h2}>File Type Management</h2>
         <p style={{ fontSize: 13, color: "#605e5c" }}>
           Loading file type settings&hellip;
@@ -742,7 +759,8 @@ export default function FileTypeSettings({
   }
 
   return (
-    <section style={s.wrap}>
+    <section style={s.wrap} className="crs-ft-wrap">
+      <style>{FT_MOBILE_CSS}</style>
       <h2 style={s.h2}>File Type Management</h2>
       <p style={s.subtitle}>
         Control which file types can be uploaded to the repository.
@@ -789,7 +807,7 @@ export default function FileTypeSettings({
             <strong>multiple selections</strong>, and leave{" "}
             <strong>&quot;Allow fill-in choices&quot; off</strong>.
           </div>
-          <div style={s.card}>
+          <div style={s.card} className="crs-ft-card">
             <p style={s.cardTitle}>Built-in file types — currently in force</p>
             <div style={s.hint}>
               Read-only. These come from the code and apply only while the
@@ -799,6 +817,7 @@ export default function FileTypeSettings({
                 missing, so these come from the code) and can never carry a Remove. Inheriting the
                 four-column grid would reserve an empty 84px gutter on every row. */}
             <div
+              className="crs-ft-head"
               style={{
                 ...s.head,
                 gridTemplateColumns:
@@ -812,6 +831,7 @@ export default function FileTypeSettings({
             {normalizeFileTypes(FALLBACK_FILE_TYPES).map((ext) => (
               <div
                 key={ext}
+                className="crs-ft-row"
                 style={{
                   ...s.row,
                   gridTemplateColumns:
@@ -844,7 +864,7 @@ export default function FileTypeSettings({
             </div>
           )}
 
-          <div style={s.card}>
+          <div style={s.card} className="crs-ft-card">
             {/* The "File type settings" heading came off 2026-08-30 at the client's request: the page
                 is now titled File Type Management, so a card heading repeating it was one label too
                 many on a page that does exactly one thing. */}
@@ -852,7 +872,7 @@ export default function FileTypeSettings({
               Files already uploaded won't not be affected.
             </div>
 
-            <div style={s.head}>
+            <div style={s.head} className="crs-ft-head">
               <span>Extension</span>
               <span>Description</span>
               <span>Allowed</span>
@@ -880,6 +900,7 @@ export default function FileTypeSettings({
                 return (
                   <div
                     key={ext}
+                    className="crs-ft-row"
                     style={{
                       ...s.row,
                       background: highlight === ext ? "#fff8e1" : undefined,

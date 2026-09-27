@@ -102,6 +102,7 @@ const s: Record<string, React.CSSProperties> = {
  * @param onChange     called with the new `YYYY-MM-DD` value, or `""` when Clear is pressed.
  * @param placeholder  shown in the button when `value` is empty.
  * @param style        merged onto the outer wrapper — the caller's width, not this file's concern.
+ * @param className    on the outer wrapper, so a caller's CSS can reach `.crs-dp-panel` inside.
  */
 export function DatePicker({
   value,
@@ -110,6 +111,7 @@ export function DatePicker({
   disabled,
   id,
   style,
+  className,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -117,6 +119,7 @@ export function DatePicker({
   disabled?: boolean;
   id?: string;
   style?: React.CSSProperties;
+  className?: string;
 }): React.ReactElement {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | undefined>(undefined);
@@ -180,6 +183,7 @@ export function DatePicker({
   return (
     <div
       style={style ? { ...s.wrap, ...style } : s.wrap}
+      className={className}
       ref={(el) => {
         wrapRef.current = el ?? undefined;
       }}
@@ -203,7 +207,7 @@ export function DatePicker({
       </button>
 
       {open && (
-        <div style={s.panel} role="dialog" aria-label="Choose a date">
+        <div style={s.panel} className="crs-dp-panel" role="dialog" aria-label="Choose a date">
           <div style={s.nav}>
             <button
               type="button"

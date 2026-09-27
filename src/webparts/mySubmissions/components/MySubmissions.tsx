@@ -213,35 +213,34 @@ const TABS = [
  *  against. Anything not listed here just renders its own name. */
 const TAB_LABEL: Record<string, string> = { Requests: "Permission" };
 
-/* Client, 2026-09-25: `s.wrap`'s `padding: 0 24px 48px` should not be there under 425px, and the
-   status tab row (All ... Archive) should become a dropdown under 768px rather than the wrapping
-   button row seen in the client's own screenshot. This file has no `<style>` block anywhere else —
-   every class here is a plain inline `React.CSSProperties` object, which cannot express a media
-   query — so both are a className-plus-`<style>` addition. `!important` on the padding is needed
-   because a CSS class alone cannot beat the inline `style={s.wrap}` it sits beside.
-
-   ⚠ THE DROPDOWN IS A SECOND CONTROL, NOT A REPLACEMENT — it is wired to the SAME `goTab` handler
-   the buttons already call, so "do not break the current logic" holds by construction: nothing
-   about tab state, counts or filtering changes, only which control is visible at a given width. */
+// #code/ms-status-tabs-dropdown
 const MS_MOBILE_CSS = `
   @media (max-width: 424px) {
     .crs-ms-wrap { padding: 0 !important; }
+    .CanvasZone:has(.crs-ms-wrap) { padding-left: 8px !important; padding-right: 8px !important; }
+    .CanvasSection:has(.crs-ms-wrap),
+    .ControlZone:has(.crs-ms-wrap) { padding-left: 0 !important; padding-right: 0 !important; }
   }
-  .crs-ms-tab-select { display: none; }
-  @media (max-width: 767px) {
-    .crs-ms-tabs { display: none; }
-    .crs-ms-tab-select {
-      display: block;
-      width: 100%;
-      padding: 8px 10px;
-      font-size: 13px;
-      font-family: inherit;
-      border: 1px solid #c7c7c7;
-      border-radius: 4px;
-      margin-bottom: 16px;
-      background: #fff;
-      color: #1b1b1b;
-    }
+  .crs-ms-head { margin-bottom: 16px; }
+  @media (min-width: 425px) {
+    .crs-ms-head { margin-bottom: 0; }
+  }
+  .crs-ms-tabs { display: none; }
+  .crs-ms-tab-select {
+    display: block;
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    border: 1px solid #c7c7c7;
+    border-radius: 4px;
+    margin-bottom: 16px;
+    background: #fff;
+    color: #1b1b1b;
+  }
+  @media (min-width: 768px) {
+    .crs-ms-tabs { display: flex; }
+    .crs-ms-tab-select { display: none; }
   }
 `;
 
@@ -279,8 +278,8 @@ const s: Record<string, React.CSSProperties> = {
     color: "#0f6c3f",
   },
   sub: { fontSize: 13, color: "#666", margin: "0 0 20px" },
+  // #code/ms-status-tabs-dropdown (display lives in MS_MOBILE_CSS)
   tabs: {
-    display: "flex",
     gap: 4,
     borderBottom: "1px solid #edebe9",
     marginBottom: 16,
@@ -343,7 +342,9 @@ const s: Record<string, React.CSSProperties> = {
   },
   bOk: { color: "#0f6c3f", background: "#e7f4ec", border: "1px solid #b7dcc4" },
   bNo: { color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3" },
-  comment: { fontSize: 12, color: "#a4262c", marginTop: 4, lineHeight: 1.45 },
+  // `anywhere`, not BREAK_LONG: in a table cell only `anywhere` stops one long word widening the
+  // whole column (client, 2026-09-27).
+  comment: { fontSize: 12, color: "#a4262c", marginTop: 4, lineHeight: 1.45, overflowWrap: "anywhere" },
   // Approved By / Comment columns (2026-09-10). The comment is clamped to three lines so one long
   // approval note cannot make a row tower over its neighbours; the full text is in `title` and in
   // the detail view.
@@ -358,8 +359,9 @@ const s: Record<string, React.CSSProperties> = {
     WebkitBoxOrient: "vertical",
     overflow: "hidden",
     ...BREAK_LONG,
+    overflowWrap: "anywhere", // same reason as `comment`
   },
-  dash: { color: "#a19f9d" },
+  dash:{ color: "#a19f9d" },
   approveBox: {
     fontSize: 13,
     padding: "12px 14px",
@@ -477,6 +479,7 @@ const s: Record<string, React.CSSProperties> = {
     color: "#a4262c",
     lineHeight: 1.55,
     marginBottom: 16,
+    ...BREAK_LONG,
   },
   // ── Requests ──
   /* Every key used must EXIST here - `s` is a `Record<string, CSSProperties>`, so a missing one
@@ -4562,7 +4565,7 @@ export default function MySubmissions({
       <style>{MS_MOBILE_CSS}</style>
       {/* The .crs-ms-detail phone rule moved into shared/fileDetailPanel.tsx with the grid it
           styles (2026-09-10). It sat here, on the LIST view, where nothing used it. */}
-      <div style={s.headRow}>
+      <div style={s.headRow} className="crs-ms-head">
         <h2 style={s.h2}>My Submission</h2>
         <button
           type="button"
@@ -4606,11 +4609,7 @@ export default function MySubmissions({
           </button>
         ))}
       </div>
-      {/* ⚠ SAME `goTab`/`tab`/`tabCounts` AS THE BUTTON ROW ABOVE, NEVER A SECOND DEFINITION —
-          under 768px this replaces the row (see `.crs-ms-tabs`/`.crs-ms-tab-select` in
-          MS_MOBILE_CSS), and at/above 768px MS_MOBILE_CSS keeps it hidden so the button row is
-          exactly what renders today. Client, 2026-09-25: on a phone the seven tabs wrap across
-          several short lines (own screenshot); a native select reads the same state in one row. */}
+      {/* #code/ms-status-tabs-dropdown */}
       <select
         className="crs-ms-tab-select"
         aria-label="Filter by status"

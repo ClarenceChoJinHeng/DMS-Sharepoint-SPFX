@@ -119,15 +119,10 @@ function shortLibrary(libraryName?: string): string | undefined {
 
 /** Preset windows. Every query keeps a date bound, so the filter stays on an indexed column. */
 const s: Record<string, React.CSSProperties> = {
-  /* The Upload Form's page shell (client, 2026-09-04: *"the same padding spacing that the upload
-     form is using ... they do not want the pages to stick at the wall"*). `margin: 32px auto` plus
-     `padding: 0 24px 48px` is the pattern the Upload Form, My Submissions and the access pages
-     already share; this page had the centring and NO padding, so its content met the window edge.
-     The max-width is left alone deliberately - each page's is sized for its own content. */
+  // Page shell. No padding (client, 2026-09-27; it had 0 24px 48px from 2026-09-04).
   wrap: {
     maxWidth: 1180,
     margin: "32px auto",
-    padding: "0 24px 48px",
     fontFamily: "Arial, sans-serif",
     color: "#1b1b1b",
   },
@@ -1061,10 +1056,23 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
 
           ⚠ `!important` because the template is set INLINE in `s.filterFields`; confined to a query
           that exists only below 640px, so no desktop can reach it. */}
+      {/* #code/al-mobile-layout */}
       <style>{`
         @media (max-width: 640px) {
           .crs-al-filters { grid-template-columns: minmax(0, 1fr) !important; }
+          .crs-al-card { padding: 16px 10px !important; }
+          .crs-al-date-to .crs-dp-panel { left: auto !important; right: 0 !important; }
+          .crs-al-head { display: flex !important; align-items: center; justify-content: space-between; padding: 0 0 8px !important; }
+          .crs-al-head > :nth-child(2), .crs-al-head > :nth-child(3), .crs-al-head > :nth-child(4), .crs-al-wholabel { display: none; }
+          .crs-al-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; row-gap: 4px; padding: 10px 0 !important; }
+          .crs-al-row > :nth-child(1) { grid-column: 1; grid-row: 1; }
+          .crs-al-row > :nth-child(5) { grid-column: 2; grid-row: 1; text-align: right; }
+          .crs-al-row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+          .crs-al-row > :nth-child(3) { grid-column: 1 / -1; grid-row: 3; }
+          .crs-al-row > :nth-child(4) { display: none; }
+          .crs-al-pagerbtns { flex-wrap: wrap; }
         }
+        .crs-al-details { overflow-wrap: break-word; }
         .hide-limits-panel {
         display: none;
         }
@@ -1107,7 +1115,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
         </div>
       )}
 
-      <div style={s.card}>
+      <div style={s.card} className="crs-al-card">
         <p style={s.cardTitle}>Filter</p>
         <div style={s.filterGrid}>
           <div className="crs-al-filters" style={s.filterFields}>
@@ -1135,6 +1143,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                   onChange={setDateTo}
                   placeholder="To"
                   style={s.datePicker}
+                  className="crs-al-date-to"
                 />
               </div>
             </div>
@@ -1275,7 +1284,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
       )}
 
       {rows.length > 0 && (
-        <div style={s.card}>
+        <div style={s.card} className="crs-al-card">
           {/* A SECOND refresh, on the results header (client, 2026-08-24: *"can you add a refesh
               button like beside the column"*). The one in the filter card is 400–600px above this
               on a full page of rows, so the person watching for a flow to write a row has to scroll
@@ -1286,7 +1295,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
               four columns of every row below. Icon-only with a `title`: a second "Refresh" wide
               enough to read would push "Who" out of alignment, and the glyph is unambiguous next to
               a table. Runs the identical `load` call, focus included. */}
-          <div style={s.head}>
+          <div style={s.head} className="crs-al-head">
             {/* ⚠ CHANGING THE SORT RE-READS FROM THE SERVER, and passes the new direction
                 EXPLICITLY — `setState` has not landed when `load` runs in this handler, so relying on
                 state would sort by the PREVIOUS direction while the arrow showed the new one. Same
@@ -1331,7 +1340,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
             {/* The empty 40px track that holds "Who" away from "What" — see `s.head`. */}
             <span aria-hidden="true" />
             <span style={s.headWho}>
-              Who
+              <span className="crs-al-wholabel">Who</span>
               {/* ⚠ REFRESH NOW CLEARS THE FILTERS AND THE FOCUS (client, 2026-09-04: *"ensure if it
                   refreshes it reset and show everything again"*). It used to re-read with whatever
                   was set, focus included.
@@ -1378,7 +1387,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
           {rows.map((r) => {
             const open = expanded[r.Id] === true;
             return (
-              <div key={r.Id} style={s.row}>
+              <div key={r.Id} style={s.row} className="crs-al-row">
                 <span style={s.when}>{formatWhen(r.EventTime)}</span>
                 <span style={s.type}>
                   {eventLabelForRow(r.EventType, shortLibrary(r.LibraryName))}
@@ -1428,7 +1437,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                     )}
                   </div>
                   {open && r.Details && (
-                    <div style={s.details}>{r.Details}</div>
+                    <div style={s.details} className="crs-al-details">{r.Details}</div>
                   )}
                 </div>
                 {/* ⚠ `Source` IS NO LONGER SHOWN UNDER THE NAME (client, 2026-08-30). It is still
@@ -1485,7 +1494,7 @@ const AuditLog: React.FC<IAuditLogProps> = ({ context, siteUrl }) => {
                 : "s"}
               {total === undefined && next !== undefined ? " and more" : ""}
             </span>
-            <div style={s.pagerBtns}>
+            <div style={s.pagerBtns} className="crs-al-pagerbtns">
               <button
                 style={s.pageBtn}
                 disabled={loading || pageIdx === 0}

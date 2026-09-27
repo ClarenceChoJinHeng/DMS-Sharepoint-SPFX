@@ -36,7 +36,7 @@ export interface FileDetailPanelProps {
 }
 
 const s: Record<string, React.CSSProperties> = {
-  detailGrid: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 300px)", gap: 20, alignItems: "start" },
+  detailGrid: { display: "grid", gap: 20, alignItems: "start" },
   sectionTitle: { fontSize: 14, fontWeight: 600, color: "#201f1e", marginBottom: 10 },
   detailRow: { marginBottom: 12 },
   detailLabel: { fontSize: 11, fontWeight: 600, color: "#605e5c", textTransform: "uppercase", letterSpacing: 0.3 },
@@ -69,13 +69,30 @@ export function FileDetailPanel(props: FileDetailPanelProps): React.ReactElement
           ⚠ A MEDIA QUERY, NOT a container query: both host pages render fixed dialogs, and container
           containment would shrink them to this grid. !important because the template is inline. */}
       <style>{`
-        @media (max-width: 640px) {
-          .crs-ms-detail { grid-template-columns: minmax(0, 1fr) !important; }
+        .crs-ms-detail { grid-template-columns: minmax(0, 1fr); }
+        .crs-fdp-previewhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+        .crs-fdp-fullscreen { font-size: 13px; }
+        .crs-fdp-details { display: grid; grid-template-columns: minmax(0, 1fr); column-gap: 20px; }
+        @media (min-width: 600px) {
+          .crs-fdp-details { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        @media (min-width: 1024px) {
+          .crs-ms-detail { grid-template-columns: minmax(0, 1fr) minmax(0, 300px); }
+          .crs-fdp-fullscreen { display: none; }
+          .crs-fdp-details { grid-template-columns: minmax(0, 1fr); }
         }
       `}</style>
       <div className="crs-ms-detail" style={s.detailGrid}>
         <div>
-          <div style={s.sectionTitle}>Preview</div>
+          {/* #code/fdp-fullscreen-link */}
+          <div className="crs-fdp-previewhead" style={s.sectionTitle}>
+            <span>Preview</span>
+            {preview.kind !== "none" && (
+              <a className="crs-fdp-fullscreen" style={s.link} href={preview.openUrl} target="_blank" rel="noopener noreferrer">
+                Open full screen
+              </a>
+            )}
+          </div>
           {preview.kind === "image" ? (
             // Fit to WIDTH and scroll: fitting both dimensions shrinks a tall screenshot to a sliver.
             <div style={s.imageBox}>
@@ -114,12 +131,14 @@ export function FileDetailPanel(props: FileDetailPanelProps): React.ReactElement
               No details were recorded for this file, or they could not be read.
             </p>
           )}
-          {details.map(({ label, value }) => (
-            <div key={label} style={s.detailRow}>
-              <div style={s.detailLabel}>{label}</div>
-              <div style={s.detailValue}>{value}</div>
-            </div>
-          ))}
+          <div className="crs-fdp-details">
+            {details.map(({ label, value }) => (
+              <div key={label} style={s.detailRow}>
+                <div style={s.detailLabel}>{label}</div>
+                <div style={s.detailValue}>{value}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </>

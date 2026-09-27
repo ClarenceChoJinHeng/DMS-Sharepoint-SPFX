@@ -5174,8 +5174,6 @@ export default function Form({ context }: IFormProps): React.ReactElement {
         @media (max-width: 424px) {
           .dms-batchcard { padding: 16px 7px; }
           .dms-section { padding: 24px 10px; }
-          .dms-lp-wrap { height: 0px; margin-top: 0px; }
-          .dms-detail-row { gap: 5px; }
           /* The tooltip panel overflowed past the left edge of the screen (client screenshot,
              2026-09-25) — it is position: absolute, left: 0 against its icon, and on a narrow
              phone the icon itself sits close enough to the edge that the 280px-wide panel runs
@@ -5186,18 +5184,27 @@ export default function Form({ context }: IFormProps): React.ReactElement {
              NO BACKTICKS IN THIS COMMENT - one already ended this template literal here once. */
           .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); font-size: 12px; }
           .dms-info.align-right .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+          .dms-batchcard-meta { flex-direction: column; }
           .dms-batchcard-meta + .dms-batchcard-meta { margin-top: 20px; }
           .dms-batch-files { padding: 0px 15px; }
         }
         @container (max-width: 424px) {
           .dms-batchcard { padding: 16px 7px; }
           .dms-section { padding: 24px 10px; }
-          .dms-lp-wrap { height: 0px; margin-top: 0px; }
-          .dms-detail-row { gap: 5px; }
           .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); font-size: 12px; }
           .dms-info.align-right .dms-info-panel { left: 50%; right: auto; transform: translateX(-50%); }
+          .dms-batchcard-meta { flex-direction: column; }
           .dms-batchcard-meta + .dms-batchcard-meta { margin-top: 20px; }
           .dms-batch-files { padding: 0px 15px; }
+        }
+        /* Stacked detail row: tight gap, and the level-picker wrap collapses (client, 2026-09-26). */
+        @media (max-width: 606px) {
+          .dms-lp-wrap { height: 0px; margin-top: 0px; }
+          .dms-detail-row { gap: 5px; }
+        }
+        @container (max-width: 606px) {
+          .dms-lp-wrap { height: 0px; margin-top: 0px; }
+          .dms-detail-row { gap: 5px; }
         }
         /* The radio group's label gap tightens once it is narrow enough to matter but before the
            425px handoff below restores the row layout. */

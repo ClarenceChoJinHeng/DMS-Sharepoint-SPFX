@@ -343,8 +343,18 @@ function canAddTier(
   return check.state !== "malformed" && check.state !== "notfound" && check.state !== "checking";
 }
 
+// Client, 2026-09-26. @media only (this screen has a fixed discard dialog). important beats inline
+// styles. NO BACKTICKS IN THIS STRING.
+const SM_MOBILE_CSS = `
+  .crs-sm-structrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 14px 0 11px; }
+  @media (max-width: 374px) {
+    .crs-sm-tieractions { display: flex; align-items: center; flex: 1 1 100% !important; }
+    .crs-sm-remove { margin-left: auto; }
+  }
+`;
+
 const s: Record<string, React.CSSProperties> = {
-  msg:       { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
+  msg:      { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
   err:       { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
   warn: { ...NOTICE_ATTENTION },
   ok:        { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
@@ -374,7 +384,7 @@ const s: Record<string, React.CSSProperties> = {
   // same cause: split into a flex row to hold the "Open the Term Store" link and re-check button
   // beside the label, and the bottom gap `label` always had got dropped in the process. Found live
   // 2026-09-17: "button is sticking the input".
-  labelRow:  { display: "flex", alignItems: "center", gap: 5, marginTop: 14, marginBottom: 4 },
+  labelRow:  { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 5, marginTop: 14, marginBottom: 4 },
   infoWrap:  { position: "relative", display: "inline-flex", alignItems: "center" },
   /* Sits on the label row, so it reads as help for THAT field rather than as a page-level action —
      the term set ID is the one value on this form that has to be fetched from somewhere else. */
@@ -1479,6 +1489,7 @@ export default function StructureManager({
     const perUnitTaken = perUnitTierExists(onDemand);
     return (
       <>
+        <style>{SM_MOBILE_CSS}</style>
         {result !== undefined && resultBox(result)}
 
         <div style={s.card}>
@@ -1551,7 +1562,7 @@ export default function StructureManager({
                 {!fixed && " · folders named by abbreviation"}
                 {fixed && " · fixed — cannot be moved or removed"}
               </span>
-              <span style={{ flex: "0 0 auto" }}>
+              <span style={{ flex: "0 0 auto" }} className="crs-sm-tieractions">
                 {/* ⚠ ABSENT, NOT GREYED, WHEN A LEVEL CAN MOVE NEITHER WAY (client, 2026-09-09) —
                     the rule Remove below already follows. Three levels reach it for two different
                     reasons: Year and Document Type are `fixed`, a SUB UNIT is refused both ways by
@@ -1585,7 +1596,7 @@ export default function StructureManager({
                     is a control that will never do anything, and the meta line above already says
                     why it is not there. Greying it invites repeated clicking. */}
                 {!fixed && (
-                  <button style={s.danger} onClick={() => removeTier(i)}>Remove</button>
+                  <button style={s.danger} className="crs-sm-remove" onClick={() => removeTier(i)}>Remove</button>
                 )}
               </span>
             </div>
@@ -1699,7 +1710,8 @@ export default function StructureManager({
                 via `effectiveAddLabel`) — and only "New Folder Layer" still asks for one, since that
                 kind genuinely can be called anything. */}
             {adding.fromUnit ? (
-              <p style={{ ...s.hint, marginTop: 14 }}>
+              <div className="crs-sm-structrow">
+              <p style={{ ...s.hint, margin: 0 }}>
                 {/* ⚠ REPLACED THE EXPLANATORY SENTENCE WITH A CONCRETE EXAMPLE PATH (client,
                     2026-09-22) — the sentence form still read as something to configure; a real
                     path shows it instead. Built from what THIS segment actually has, never a
@@ -1714,6 +1726,19 @@ export default function StructureManager({
                   {" / [Sub Unit] / [Year] / [Document Type]"}
                 </code>
               </p>
+              {/* #code/sm-subunit-refresh */}
+              {!perUnitTaken && unitCheck.state !== "idle" && (
+                <button
+                  type="button"
+                  style={unitCheck.state === "checking" ? s.recheckOff : s.recheckBtn}
+                  disabled={unitCheck.state === "checking"}
+                  title="Check the Term Store again — use it after adding or editing sub unit terms there"
+                  onClick={() => setUnitRecheck((n) => n + 1)}
+                >
+                  {unitCheck.state === "checking" ? "…" : "↻ Refresh"}
+                </button>
+              )}
+              </div>
             ) : (
               <>
             <label style={{ ...s.label, marginTop: 14 }}>Folder naming</label>
@@ -1878,28 +1903,12 @@ export default function StructureManager({
                 .
               </p>
             )}
-            {/* ⚠ THE REFRESH BUTTON EXISTS BECAUSE THE CHECK IS DONE IN ANOTHER TAB (client,
-                2026-09-22): the walk runs once when this form opens, and adding a sub unit term
-                happens on the Term Store page this screen links to — a separate tab, so nothing
-                here observes it. Without a way to re-ask, the admin's only route back to a fresh
-                answer was closing and reopening the Add form. Mirrors the Term set ID's own
-                "↻ Re-check" exactly: `unitRecheck` is a pure trigger the check effect depends on,
-                bumped here, never read for its value. */}
+            {/* The Refresh button for this note sits on the Folder structure row above.
+                #code/sm-subunit-refresh */}
             {adding.fromUnit && !perUnitTaken && unitCheck.state !== "idle" && (
-              <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
-                <p style={{ ...(unitCheck.state === "none" ? { ...s.msg, ...s.warn } : s.hint), flex: 1 }}>
-                  {unitCheckNote(unitCheck, unitLabel(draft), seg.label, siteUrl)}
-                </p>
-                <button
-                  type="button"
-                  style={unitCheck.state === "checking" ? s.recheckOff : s.recheckBtn}
-                  disabled={unitCheck.state === "checking"}
-                  title="Check the Term Store again — use it after adding or editing sub unit terms there"
-                  onClick={() => setUnitRecheck((n) => n + 1)}
-                >
-                  {unitCheck.state === "checking" ? "…" : "↻ Refresh"}
-                </button>
-              </div>
+              <p style={unitCheck.state === "none" ? { ...s.msg, ...s.warn } : s.hint}>
+                {unitCheckNote(unitCheck, unitLabel(draft), seg.label, siteUrl)}
+              </p>
             )}
 
             {/* ⚠ THE LABEL FOR ONE SLOT, DERIVED ONCE AND USED BY BOTH BRANCHES BELOW. Two copies
@@ -2093,7 +2102,7 @@ export default function StructureManager({
                 {pathPreview(row, row.pending ?? row.chain)}
               </div>
             </div>
-            <div style={{ flex: "0 0 auto", display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10 }}>
               <span
                 style={{
                   ...s.badge,

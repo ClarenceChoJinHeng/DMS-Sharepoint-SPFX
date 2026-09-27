@@ -143,14 +143,26 @@ type MapRow = {
  * a long group name running past the box). The name button is flex 1 with the default min-width
  * auto, so an underscore-joined name with no break point could not shrink. min-width 0 plus
  * overflow-wrap anywhere lets it break inside its own column; badges and Delete keep their size.
- * Inert wherever the row already fits, which is every desktop case. @media not needed - the rules
- * only engage when the name would overflow. important beats the inline styles.
+ * Inert wherever the row already fits. important beats the inline styles.
+ * Under 646px (client, 2026-09-26): line 1 = checkbox + name, line 2 = badges left, Delete right.
  * NO BACKTICKS IN THIS STRING - it is a template literal.
  */
 const GM_LIST_CSS = `
-  .crs-gm-row { flex-wrap: nowrap !important; }
-  .crs-gm-name { min-width: 0 !important; overflow-wrap: anywhere; }
+  .crs-gm-row { flex-wrap: wrap !important; }
+  .crs-gm-name { min-width: 0 !important; overflow-wrap: anywhere; flex: 1 1 calc(100% - 40px) !important; }
+  .crs-gm-del { margin-left: auto; }
+  @media (min-width: 646px) {
+    .crs-gm-row { flex-wrap: nowrap !important; }
+    .crs-gm-name { flex: 1 1 0% !important; }
+    .crs-gm-del { margin-left: 0; }
+  }
   .crs-gm-row > span, .crs-gm-row > .crs-gm-del, .crs-gm-row > input { flex-shrink: 0; }
+  .crs-gm-lkhead { flex-wrap: wrap; }
+  @media (max-width: 424px) {
+    .crs-gm-row { padding: 8px 0px !important; }
+    .crs-gm-groupsbox { padding: 20px 7px !important; }
+    .crs-gm-quickbox { padding: 16px 7px !important; }
+  }
 `;
 
 const s: Record<string, React.CSSProperties> = {
@@ -2290,7 +2302,7 @@ export default function GroupManager({
       {/* ── What can this person reach? ─────────────────────────────────
           Placed ABOVE the group list on purpose: it answers a question about a PERSON, and the list
           below answers one about the site. An admin arrives here because somebody cannot get in. */}
-      <div style={s.card}>
+      <div style={s.card} className="crs-gm-quickbox">
         {/* "Quick Search" / shorter hint (client's mockup, 2026-09-03) — was "What can this person
             reach?" with a longer explanation. The screen still does exactly what it did; only the
             heading and the one-line description are shorter. */}
@@ -2359,6 +2371,7 @@ export default function GroupManager({
                 directory form of the same address. The display name is the fallback rather than a
                 blank line — a guest account can legitimately have no email. */}
                 <div
+                  className="crs-gm-lkhead"
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -2630,7 +2643,7 @@ export default function GroupManager({
       </div>
 
       {/* ── The groups ─────────────────────────────────────────────────── */}
-      <div style={s.card}>
+      <div style={s.card} className="crs-gm-groupsbox">
         {/* Collapsible, collapsed by default on the standalone page (client's CR, 2026-09-17) — the
             count stays visible either way, since it is useful on its own without opening the list. */}
         <button
@@ -3169,7 +3182,10 @@ export default function GroupManager({
                           setOpenGroup(openGroup === g.id ? undefined : g.id)
                         }
                       >
-                        {openGroup === g.id ? "▾" : "▸"} {g.title}
+                        {/* Non-breaking space keeps the arrow on the name's first line. */}
+                        {openGroup === g.id ? "▾" : "▸"}
+                        {" "}
+                        {g.title}
                       </button>
                       {/* PEOPLE, not mappings (client, 2026-08-23: *"instead of showing mappings only,
                       show how many users are there in each group, client doesnt understand what is

@@ -75,8 +75,7 @@ const s: Record<string, React.CSSProperties> = {
   err:      { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
   warn:     { ...NOTICE_ATTENTION },
   ok:       { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
-  card:     { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },
-  /* 17px, not 14 (client, 2026-09-08, having tried it in devtools first). This is the only line
+  card:     { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },  /* 17px, not 14 (client, 2026-09-08, having tried it in devtools first). This is the only line
      that says WHICH UNIT a wall of paths belongs to, and at 14px it read as another path rather
      than as the heading over them - the more so now the list beneath it scrolls, because the
      heading is the one fixed thing an admin scrolls back to. */
@@ -318,6 +317,14 @@ export interface SubtreeMigratorProps {
    */
   initialSegmentKey?: string;
 }
+
+// Client, 2026-09-26. @media only (the rename dialog is position: fixed). important beats the
+// inline s.card padding. NO BACKTICKS IN THIS STRING.
+const MIG_MOBILE_CSS = `
+  @media (max-width: 424px) {
+    .crs-mig-unitcard { padding: 14px 9px !important; }
+  }
+`;
 
 export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, onApplied, onScanned, initialSegmentKey, uploadsPaused }: SubtreeMigratorProps): React.ReactElement {
   const [loading, setLoading] = useState(true);
@@ -1834,6 +1841,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
 
   return (
     <div>
+      <style>{MIG_MOBILE_CSS}</style>
       {/* The client's banner (2026-09-06). It replaces the Power Automate warning that stood here.
 
           ⚠ IT IS STILL NOT A GATE — this screen refuses nothing, so a migration CAN be run with
@@ -2081,7 +2089,7 @@ export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onP
 
           {unitPages.slice.map((group) => {
             return (
-              <div key={group.tail} style={s.card}>
+              <div key={group.tail} style={s.card} className="crs-mig-unitcard">
                 <div style={s.unitName}>{group.tail}</div>
 
                 <div style={s.scroller}>

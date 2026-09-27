@@ -26,9 +26,12 @@ export default function GroupManagementPage({ context }: IAccessProps): React.Re
 
   return (
     <AccessShell
+      className="crs-gm-shell"
       title="Group Management"
       subtitle="Create the SharePoint groups a segment needs, see what any person can reach, and find the groups that grant nothing. Creating a group also writes its folder mappings."
     >
+      {/* Client, 2026-09-27: no shell padding on this page. important beats the inline wrap style. */}
+      <style>{".crs-gm-shell { padding: 0 !important; }"}</style>
       {/* ⚠ ORDER SWAPPED (client's mockup, 2026-09-03: "Move this to be below the section, after
           Group on this site"). Quick Search and the group list now come FIRST, Create group last —
           the create form was moved lower, not the lookup/list moved higher. */}

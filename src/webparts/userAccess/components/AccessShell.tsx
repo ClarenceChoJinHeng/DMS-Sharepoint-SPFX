@@ -32,12 +32,14 @@ export interface AccessShellProps {
   subtitle?: string;
   /** Only Folder Access needs one — see FolderAccessPage. */
   note?: React.ReactNode;
+  /** Lets one page restyle its own shell (e.g. Group Management's padding). */
+  className?: string;
   children: React.ReactNode;
 }
 
-export default function AccessShell({ title, subtitle, note, children }: AccessShellProps): React.ReactElement {
+export default function AccessShell({ title, subtitle, note, className, children }: AccessShellProps): React.ReactElement {
   return (
-    <section style={s.wrap}>
+    <section style={s.wrap} className={className}>
       <h2 style={s.h2}>{title}</h2>
       {subtitle !== undefined && <p style={s.subtitle}>{subtitle}</p>}
       {note !== undefined && <p style={s.note}>{note}</p>}

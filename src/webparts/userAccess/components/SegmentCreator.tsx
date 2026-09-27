@@ -112,11 +112,13 @@ function setCheckIsRecheckable(c: SetCheck): boolean {
  * important beats the inline styles. NO BACKTICKS IN THIS STRING - it is a template literal.
  */
 const SEG_MOBILE_CSS = `
-  @media (max-width: 424px) {
-    .crs-seg-labelrow { flex-wrap: wrap !important; }
+  .crs-seg-labelrow { flex-wrap: wrap !important; }
+  @media (max-width: 320px) {
+    .crs-seg-family { margin-right: 0 !important; }
   }
   @media (max-width: 374px) {
-    .crs-seg-family { margin-right: 0 !important; }
+    .crs-seg-tieractions { display: flex; align-items: center; flex: 1 1 100%; }
+    .crs-seg-remove { margin-left: auto; }
   }
 `;
 
@@ -1831,7 +1833,7 @@ export default function SegmentCreator({
                 column {columnNameFor(t) || "—"}
                 {i === tiers.length - 1 ? " · holds the access" : ""}
               </span>
-              <span>
+              <span className="crs-seg-tieractions">
                 <button style={s.iconBtn} disabled={i === 0} onClick={() => moveTier(i, -1)}>
                   ↑
                 </button>
@@ -1842,7 +1844,11 @@ export default function SegmentCreator({
                 >
                   ↓
                 </button>
-                <button style={s.danger} onClick={() => setTiers(tiers.filter((_x, j) => j !== i))}>
+                <button
+                  style={s.danger}
+                  className="crs-seg-remove"
+                  onClick={() => setTiers(tiers.filter((_x, j) => j !== i))}
+                >
                   Remove
                 </button>
               </span>

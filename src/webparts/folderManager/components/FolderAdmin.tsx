@@ -261,7 +261,7 @@ const s: Record<string, React.CSSProperties> = {
   railItem: {
     position: "relative",
     display: "flex",
-    flexWrap: "wrap",
+    // No flexWrap (client, 2026-09-26): wrap dropped a long label under its number.
     gap: 12,
     width: "100%",
     textAlign: "left",
