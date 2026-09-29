@@ -153,6 +153,7 @@ type FileView =
       state: "ready";
       name: string;
       fileRef: string;
+      uniqueId?: string;
       size?: string;
       modified?: Date;
       fieldText: Record<string, string>;
@@ -2294,7 +2295,7 @@ export default function Requests({
       const alias = `@f='${encodeServerRelativePath(path)}'`;
       const base = `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)`;
       const fr = await read(
-        `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`,
+        `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl,UniqueId&${alias}${bust()}`,
       );
       if (!fr.ok) {
         settle({
@@ -2311,6 +2312,7 @@ export default function Requests({
         Length?: string;
         TimeLastModified?: string;
         ServerRelativeUrl?: string;
+        UniqueId?: string;
       };
       /* The details are a decoration on the preview, so a failed read costs them and nothing else -
          the panel says so rather than blanking. */
@@ -2346,6 +2348,7 @@ export default function Requests({
         state: "ready",
         name: f.Name || row.itemName,
         fileRef: f.ServerRelativeUrl || path,
+        uniqueId: f.UniqueId,
         size: f.Length,
         modified: modified && !isNaN(modified.getTime()) ? modified : undefined,
         fieldText,
@@ -2404,7 +2407,7 @@ export default function Requests({
       const alias = `@f='${encodeServerRelativePath(path)}'`;
       const base = `${siteUrl}/_api/web/GetFileByServerRelativeUrl(@f)`;
       const fr = await read(
-        `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl&${alias}${bust()}`,
+        `${base}?$select=Name,Length,TimeLastModified,ServerRelativeUrl,UniqueId&${alias}${bust()}`,
       );
       if (!fr.ok) {
         settle({
@@ -2421,6 +2424,7 @@ export default function Requests({
         Length?: string;
         TimeLastModified?: string;
         ServerRelativeUrl?: string;
+        UniqueId?: string;
       };
       let fieldText: Record<string, string> = {};
       try {
@@ -2453,6 +2457,7 @@ export default function Requests({
         state: "ready",
         name: f.Name || "document",
         fileRef: f.ServerRelativeUrl || path,
+        uniqueId: f.UniqueId,
         size: f.Length,
         modified: modified && !isNaN(modified.getTime()) ? modified : undefined,
         fieldText,
@@ -3780,6 +3785,7 @@ export default function Requests({
               <FileDetailPanel
                 name={directFileView.name}
                 fileRef={directFileView.fileRef}
+                uniqueId={directFileView.uniqueId}
                 tenantRoot={tenantRoot}
                 siteUrl={siteUrl}
                 fieldText={directFileView.fieldText}
@@ -3852,6 +3858,7 @@ export default function Requests({
                 <FileDetailPanel
                   name={fileView.name}
                   fileRef={fileView.fileRef}
+                  uniqueId={fileView.uniqueId}
                   tenantRoot={tenantRoot}
                   siteUrl={siteUrl}
                   fieldText={fileView.fieldText}

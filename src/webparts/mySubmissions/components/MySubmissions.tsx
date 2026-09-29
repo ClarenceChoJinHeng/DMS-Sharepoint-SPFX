@@ -4107,7 +4107,10 @@ export default function MySubmissions({
             marginBottom: 6,
           }}
         >
-          <span style={badgeFor(open.status)}>{open.status}</span>
+          {/* #code/dv-hide-approved */}
+          {!(viewerOnlyMode && open.status === "Approved") && (
+            <span style={badgeFor(open.status)}>{open.status}</span>
+          )}
           {openRequest !== undefined && openRequest.status === "Pending" && (
             <span style={s.pendingChip}>
               {openRequest.type === "Share" ? "📤" : "🗑"}{" "}
@@ -4134,7 +4137,8 @@ export default function MySubmissions({
             ⚠ SAME GDC FALLBACK AS THE TABLE CELL, ADDED 2026-09-23 SO THE TWO NEVER DISAGREE — a
             bulk-imported file previously showed "GDC" one click above in the list and nothing here
             at all, since with no comment either the whole box failed its own render gate. */}
-        {open.status === "Approved" &&
+        {!viewerOnlyMode &&
+          open.status === "Approved" &&
           (open.approvedBy ||
             open.approvalComment ||
             isBulkUploadRow(open)) && (
@@ -4517,6 +4521,7 @@ export default function MySubmissions({
         <FileDetailPanel
           name={open.name}
           fileRef={open.fileRef}
+          uniqueId={open.uniqueId}
           tenantRoot={tenantRoot}
           siteUrl={siteUrl}
           fieldText={fieldText}

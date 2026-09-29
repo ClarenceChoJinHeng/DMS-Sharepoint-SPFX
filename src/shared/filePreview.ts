@@ -98,11 +98,18 @@ export function encodePath(serverRelativeUrl: string): string {
  * value — not the already-encoded path. Encoding it twice yields a "file not found" page that
  * looks exactly like a permissions problem.
  */
+// #code/pdf-preview-no-inline-viewer
+export function browserShowsPdfInline(): boolean {
+  if (typeof navigator === "undefined") return true;
+  return (navigator as { pdfViewerEnabled?: boolean }).pdfViewerEnabled !== false;
+}
+
 export function previewTarget(
   fileName: string,
   serverRelativeUrl: string,
   tenantRoot: string,
   webUrl: string,
+  uniqueId?: string,
 ): PreviewTarget {
   const kind = previewKind(fileName);
   const fileUrl = `${tenantRoot}${encodePath(serverRelativeUrl)}`;
@@ -122,6 +129,10 @@ export function previewTarget(
     };
   }
   if (kind === "pdf") {
+    const id = (uniqueId ?? "").replace(/[{}]/g, "").trim();
+    if (id && !browserShowsPdfInline()) {
+      return { kind, url: `${webUrl}/_layouts/15/embed.aspx?UniqueId=${encodeURIComponent(id)}`, fileUrl, openUrl: webOpen };
+    }
     // #view=FitH is a PDF Open Parameter the browser's native viewer honours — fits the page to
     // the iframe's width rather than its height, which otherwise leaves gutters on portrait pages.
     return { kind, url: `${fileUrl}#view=FitH`, fileUrl, openUrl: webOpen };

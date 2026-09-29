@@ -21,6 +21,8 @@ export interface FileDetailPanelProps {
   name: string;
   /** Server-relative path — `/sites/CRS/<Library>/…/<file>`. */
   fileRef: string;
+  /** The file's UniqueId. Lets a PDF preview on phones without a PDF viewer. */
+  uniqueId?: string;
   /** Origin with no path, e.g. `https://tenant.sharepoint.com`. */
   tenantRoot: string;
   /** The web's absolute URL. */
@@ -48,7 +50,7 @@ const s: Record<string, React.CSSProperties> = {
 
 export function FileDetailPanel(props: FileDetailPanelProps): React.ReactElement {
   const { name, fileRef, tenantRoot, siteUrl, fieldText } = props;
-  const preview = previewTarget(name, fileRef, tenantRoot, siteUrl);
+  const preview = previewTarget(name, fileRef, tenantRoot, siteUrl, props.uniqueId);
   /* The metadata rows come from shared/documentDetails.ts, which DERIVES the tier rows instead of
      naming them — a hardcoded Department/Unit pair read blank on every segment that names its tiers
      differently (Region / Estate·Mill on Upstream Ops, reported 2026-08-14). */

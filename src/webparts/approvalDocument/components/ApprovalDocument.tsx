@@ -80,7 +80,7 @@ interface IFileItem {
   OData__ModerationStatus: number;
   Author: { Title: string };
   Created: string;
-  File: { Length: string; ServerRelativeUrl: string };
+  File: { Length: string; ServerRelativeUrl: string; UniqueId?: string };
 }
 
 // SharePoint's OData layer double-encodes underscores in property names, so a field
@@ -835,7 +835,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items` +
         `?$filter=OData__ModerationStatus%20eq%202%20and%20FSObjType%20eq%200` +
         `&$expand=File,Author` +
-        `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl` +
+        `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl,File/UniqueId` +
         `&$orderby=Created%20asc&$top=200`;
       const res = await context.spHttpClient.get(
         url,
@@ -869,7 +869,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         context.spHttpClient.get(
           `${webUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libTitleOf(which))}')/items(${itemId})` +
             `?$expand=File,Author` +
-            `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl`,
+            `&$select=ID,FileLeafRef,OData__ModerationStatus,Created,Author/Title,File/Length,File/ServerRelativeUrl,File/UniqueId`,
           SPHttpClient.configurations.v1,
         );
       let where: ApprovalLib = lib;
@@ -1895,6 +1895,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
     item.File.ServerRelativeUrl,
     webUrl.split("/sites/")[0],
     webUrl,
+    item.File.UniqueId,
   );
 
   // Every column an approver is deciding on, in the same order as the Staging

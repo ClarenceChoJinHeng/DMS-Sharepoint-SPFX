@@ -1536,7 +1536,7 @@ export default function DocumentSearch({
     .map((r) => r.library);
 
   if (open) {
-    const preview = previewTarget(open.name, open.path, tenantRoot, siteUrl);
+    const preview = previewTarget(open.name, open.path, tenantRoot, siteUrl, open.uniqueId);
     const rows = buildDetailRows({
       fieldText: fieldText ?? {},
       leading: [

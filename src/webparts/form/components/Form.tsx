@@ -5804,6 +5804,7 @@ export default function Form({ context }: IFormProps): React.ReactElement {
                         </span>
                         <select
                           value={uploadMode}
+                          disabled={!privileged && offerable.length === 1}
                           onChange={(e) => switchMode(e.target.value)}
                         >
                           {offerable.map((m) => (

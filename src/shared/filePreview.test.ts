@@ -137,6 +137,42 @@ describe("previewTarget", () => {
     expect(t.fileUrl).toBe(`${ROOT}${PATH}.zip`);
   });
 
+  describe("PDF on a browser with no built-in PDF viewer (Chrome on Android)", () => {
+    const setPdfViewer = (v: boolean | undefined): void => {
+      Object.defineProperty(globalThis, "navigator", {
+        value: v === undefined ? undefined : { pdfViewerEnabled: v },
+        configurable: true,
+        writable: true,
+      });
+    };
+    afterEach(() => setPdfViewer(undefined));
+
+    it("uses SharePoint's embed viewer when the id is known", () => {
+      setPdfViewer(false);
+      const t = previewTarget("f.pdf", `${PATH}.pdf`, ROOT, WEB, "{AB12-CD34}");
+      expect(t.url).toBe(`${WEB}/_layouts/15/embed.aspx?UniqueId=AB12-CD34`);
+      expect(t.openUrl).toBe(`${ROOT}${PATH}.pdf?web=1`);
+    });
+
+    it("falls back to the raw file when no id is passed", () => {
+      setPdfViewer(false);
+      const t = previewTarget("f.pdf", `${PATH}.pdf`, ROOT, WEB);
+      expect(t.url).toBe(`${ROOT}${PATH}.pdf#view=FitH`);
+    });
+
+    it("keeps the raw file on browsers that show PDFs inline", () => {
+      setPdfViewer(true);
+      const t = previewTarget("f.pdf", `${PATH}.pdf`, ROOT, WEB, "AB12-CD34");
+      expect(t.url).toBe(`${ROOT}${PATH}.pdf#view=FitH`);
+    });
+
+    it("never touches Office files", () => {
+      setPdfViewer(false);
+      const t = previewTarget("f.docx", `${PATH}.docx`, ROOT, WEB, "AB12-CD34");
+      expect(t.url).toContain("WopiFrame.aspx");
+    });
+  });
+
   it("always populates fileUrl, whatever the kind", () => {
     for (const n of ["a.pdf", "b.docx", "c.png", "d.txt", "e.zip"]) {
       expect(previewTarget(n, `/sites/Ex/${n}`, ROOT, WEB).fileUrl).toBe(`${ROOT}/sites/Ex/${n}`);
