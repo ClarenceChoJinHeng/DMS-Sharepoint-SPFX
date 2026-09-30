@@ -344,12 +344,26 @@ const s: Record<string, React.CSSProperties> = {
   bNo: { color: "#a4262c", background: "#fde7e9", border: "1px solid #f1b0b3" },
   // `anywhere`, not BREAK_LONG: in a table cell only `anywhere` stops one long word widening the
   // whole column (client, 2026-09-27).
-  comment: { fontSize: 12, color: "#a4262c", marginTop: 4, lineHeight: 1.45, overflowWrap: "anywhere" },
+  // Rejected comment: red, clamped to three lines and capped at 360px like `apprComment` below (full text in `title`).
+  comment: {
+    maxWidth: 360,
+    fontSize: 12,
+    color: "#a4262c",
+    marginTop: 4,
+    lineHeight: 1.45,
+    whiteSpace: "pre-wrap",
+    display: "-webkit-box",
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+    overflowWrap: "anywhere",
+  },
   // Approved By / Comment columns (2026-09-10). The comment is clamped to three lines so one long
   // approval note cannot make a row tower over its neighbours; the full text is in `title` and in
   // the detail view.
   apprBy: { fontSize: 12.5, color: "#201f1e", ...BREAK_LONG },
   apprComment: {
+    maxWidth: 360,
     fontSize: 12,
     color: "#323130",
     lineHeight: 1.45,
