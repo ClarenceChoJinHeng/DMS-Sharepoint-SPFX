@@ -1620,6 +1620,8 @@ export default function BulkUpload({
     setTierValues({});
     setConfidentiality("");
     setLegallyPrivileged(false);
+    setKeyword("");
+    setKeywordBlocked(undefined);
     setResults(null);
     setRunError(null);
     setLive(null);

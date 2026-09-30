@@ -1873,7 +1873,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
                 window.location.href = pendingFilesUrl();
               }}
             >
-              Back to Approval & Request
+              Complete
             </button>
           </div>
         </div>

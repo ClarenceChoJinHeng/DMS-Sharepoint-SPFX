@@ -1,5 +1,5 @@
 /**
- * Checks that CRS Requests and CRS Audit Log have the columns the code writes.
+ * Checks that CRS Requests, CRS Audit Log and CRS Submissions have the columns the code writes.
  *
  * Sibling of scripts/check-hc-setup.js, which does the same job for the HC LIBRARY pair.
  *
@@ -22,6 +22,7 @@
  * The expected sets are COPIED from source and must stay in step with it:
  *   CRS Audit Log  -> AUDIT_COLUMNS in src/shared/spAuditLog.ts
  *   CRS Requests   -> COLUMNS in src/webparts/requests/components/Requests.tsx
+ *   CRS Submissions -> RECORD_COLUMNS in src/shared/submissionRecords.ts
  * A second definition of a schema is a thing that drifts, and the drifting copy is always the one
  * nobody reads. If a column is added to either list in code, add it here in the same change.
  *
@@ -76,6 +77,27 @@
       DecidedBy: [2, false],
       DecidedAt: [4, false],
       DecisionNote: [3, false],
+    },
+    "CRS Submissions": {
+      SubmissionRef: [2, false],
+      BatchRef: [2, false],
+      SubmissionFileId: [2, false],
+      ItemUniqueId: [2, false],
+      FileName: [2, false],
+      ItemPath: [3, false],
+      LibraryTitle: [2, false],
+      UploadedBy: [2, false],
+      UploadedAt: [4, false],
+      MetadataSnapshot: [3, false],
+      Source: [2, false],
+      ReplacedAt: [4, false],
+      ReplacedBy: [2, false],
+      ArchivedAt: [4, false],
+      WithdrawnAt: [4, false],
+      WithdrawnBy: [2, false],
+      TagPayload: [3, false],
+      TagStatus: [2, false],
+      TagError: [3, false],
     },
   };
 
