@@ -1314,11 +1314,18 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
         Accept: "application/json;odata=nometadata",
       };
 
+      // #code/approve-comment-in-body
+      const approveUrl = `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)/approve?@f='${safeUrl}'`;
+      const approveInit = {
+        headers: { ...headers, "Content-Type": "application/json;odata=nometadata" },
+        body: JSON.stringify({ comment: comments }),
+      };
+
       if (action === "Approved") {
         const res = await context.spHttpClient.post(
-          `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)/approve(comment='${safeComment}')?@f='${safeUrl}'`,
+          approveUrl,
           SPHttpClient.configurations.v1,
-          { headers },
+          approveInit,
         );
         if (!res.ok)
           throw new Error(
@@ -1363,7 +1370,7 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
             // it exists at the destination, and the moderation comment does not exist there.
             // ⚠ Checked separately: one unknown field name fails the WHOLE MERGE, so a library
             // missing ApprovalComment must still get ApprovedBy. Raw text — JSON escapes quotes;
-            // `safeComment` is quote-doubled for the approve() URL and is wrong here.
+            // `safeComment` is quote-doubled (a URL-literal escape) and is wrong here.
             const stamp: Record<string, string> = { ApprovedBy: approverEmail };
             const typed = comments.trim();
             if (
@@ -1392,9 +1399,9 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
               },
             );
             await context.spHttpClient.post(
-              `${webUrl}/_api/web/getfilebyserverrelativeurl(@f)/approve(comment='${safeComment}')?@f='${safeUrl}'`,
+              approveUrl,
               SPHttpClient.configurations.v1,
-              { headers },
+              approveInit,
             );
           }
         } catch {
