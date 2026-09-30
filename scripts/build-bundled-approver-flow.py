@@ -247,35 +247,37 @@ def definition(t):
     }
 
 
-def build(which):
-    t = TARGETS[which]
+def build(t, display_name, definition_fn, out):
+    """Writes an import zip: the base export's package with a new flow id, name and definition."""
     new_id = str(uuid.uuid4())
     with zipfile.ZipFile(t["base"]) as zin:
         names = zin.namelist()
         old_id = [n for n in names if n.endswith("definition.json")][0].split("/")[2]
-        with zipfile.ZipFile(t["out"], "w", zipfile.ZIP_DEFLATED) as zout:
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
             for n in names:
                 text = zin.read(n).decode("utf-8-sig")
                 if n.endswith("definition.json"):
                     j = json.loads(text)
                     old_def = j["properties"]["definition"]
-                    new_def = definition(t)
+                    new_def = definition_fn(t)
                     new_def["parameters"] = old_def.get("parameters", new_def["parameters"])
                     j["properties"]["definition"] = new_def
-                    j["properties"]["displayName"] = DISPLAY_NAME
+                    j["properties"]["displayName"] = display_name
                     j["name"] = new_id
                     text = json.dumps(j, ensure_ascii=False)
                 elif n == "manifest.json":
                     m = json.loads(text)
-                    m["details"]["displayName"] = DISPLAY_NAME
+                    m["details"]["displayName"] = display_name
                     res = m["resources"].pop(old_id)
-                    res["details"]["displayName"] = DISPLAY_NAME
+                    res["details"]["displayName"] = display_name
                     res["suggestedCreationType"] = "New"
                     m["resources"][new_id] = res
                     text = json.dumps(m, ensure_ascii=False)
                 text = text.replace(old_id, new_id)
                 zout.writestr(n.replace(old_id, new_id), text.encode("utf-8"))
-    print("wrote", t["out"], "flow id", new_id)
+    print("wrote", out, "flow id", new_id)
 
 
-build(sys.argv[1])
+if __name__ == "__main__":
+    target = TARGETS[sys.argv[1]]
+    build(target, DISPLAY_NAME, definition, target["out"])
