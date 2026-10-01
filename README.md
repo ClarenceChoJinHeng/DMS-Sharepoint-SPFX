@@ -1,77 +1,86 @@
-# sd-gatrie
+# sd-gatrie (CRS / Guthrie Document Centre)
 
-## Summary
+SPFx 1.23 web parts and extensions for SD Guthrie's document system on SharePoint Online.
+Live site: `https://sdguthrie.sharepoint.com/sites/CRS`
 
-Short summary on functionality and used technologies.
+## 1. Install
 
-[picture of the solution in action, if possible]
+You need:
 
-## Used SharePoint Framework Version
+- **Node.js 22** (22.14 or later, below 23). Use nvm to switch versions.
+- **Access** (ask SD Guthrie IT): Owner on the CRS site and its App Catalog, and the `gdc@sdguthrie.com` service account for Power Automate work.
+- **A test site set up like CRS.** The web parts read real SharePoint lists and libraries (CRS Config, CRS Group Map, CRS Submissions, the approval and document libraries). On an empty site most screens will not load. How to build one: section 9 of the CRS Developer Guide (link under "Where things are").
 
-![version](https://img.shields.io/badge/version-1.23.0-green.svg)
+Then, in this folder:
 
-## Applies to
+```
+nvm use 22
+npm ci
+npx heft trust-dev-cert
+```
 
-- [SharePoint Framework](https://aka.ms/spfx)
-- [Microsoft 365 tenant](https://docs.microsoft.com/sharepoint/dev/spfx/set-up-your-developer-tenant)
+`trust-dev-cert` is needed once per machine (it trusts the local HTTPS certificate).
 
-> Get your own free development tenant by subscribing to [Microsoft 365 developer program](http://aka.ms/o365devprogram)
+## 2. Run locally
 
-## Prerequisites
+1. Open `config/serve.json` and change `initialPage` and `serveConfigurations.default.pageUrl` to **your test site's** workbench:
+   `https://<tenant>.sharepoint.com/sites/<test-site>/_layouts/15/workbench.aspx`
+   It points at the live CRS site by default. The web parts read and write real lists, so do not test on live.
+2. Start the dev server:
+   ```
+   npm run start
+   ```
+3. The workbench opens. Add a web part from the toolbox.
 
-> Any special pre-requisites?
+To test on a real page instead, open the page with:
+`?debug=true&noredir=true&debugManifestsFile=https://localhost:4321/temp/build/manifests.js`
 
-## Solution
+Other commands:
 
-| Solution    | Author(s)                                               |
-| ----------- | ------------------------------------------------------- |
-| folder name | Author details (name, company, twitter alias with link) |
+| Command | What it does |
+| --- | --- |
+| `npx tsc --noEmit` | Type check |
+| `npx heft test --clean` | Run the tests |
 
-## Version history
+This project uses **Heft, not Gulp**. Ignore `gulp` in `package.json`.
 
-| Version | Date             | Comments        |
-| ------- | ---------------- | --------------- |
-| 1.1     | March 10, 2021   | Update comment  |
-| 1.0     | January 29, 2021 | Initial release |
+## 3. Build
 
-## Disclaimer
+1. In `config/package-solution.json`, add 1 to the last number of `version` (e.g. `1.0.578.0` → `1.0.579.0`).
+   Uploading the same version again makes it look like nothing changed.
+2. Build:
+   ```
+   npm run build
+   ```
+   This runs the tests, then creates `sharepoint/solution/sd-gatrie.sppkg`.
 
-**THIS CODE IS PROVIDED _AS IS_ WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTIES OF FITNESS FOR A PARTICULAR PURPOSE, MERCHANTABILITY, OR NON-INFRINGEMENT.**
+**Always use `npm run build`.** Never run `heft package-solution` on its own: it packages the old JavaScript from the last build.
 
----
+## 4. Deploy
 
-## Minimal Path to Awesome
+1. Go to the site's App Catalog: `https://sdguthrie.sharepoint.com/sites/CRS/AppCatalog`
+   (a site collection App Catalog, not the tenant one).
+2. Upload `sd-gatrie.sppkg`, replacing the old file. Click **Deploy**.
+3. Go to **Site contents**, find `sd-gatrie-client-side-solution` and click **Update** if it is offered.
+4. Hard refresh (Ctrl+F5) or open a new tab. Check the version in Site contents matches the one you built.
 
-- Clone this repository
-- Ensure that you are at the solution folder
-- in the command-line run:
-  - `npm install -g @rushstack/heft`
-  - `npm install`
-  - `heft start`
+Deploy to your test site first, then to CRS.
 
-> Include any additional steps as needed.
+## Where things are
 
-Other build commands can be listed using `heft --help`.
+| Folder | What is in it |
+| --- | --- |
+| `src/webparts/` | One folder per web part (e.g. `form` = Upload Form, `approvalDocument` = approval page, `mySubmissions`, `requests`, `documentSearch`, admin pages in `folderManager` and `userAccess`). |
+| `src/extensions/` | Library page add-ons: the "Approve or reject" panel (`bulkApprove`) and the + New Folder button that also hides SharePoint's own Upload/Approve/Share (`hideAppBar`). `uploadCommand` is legacy: ignore it. |
+| `src/shared/` | The app's logic (permissions, folder paths, upload checks, list names), each with a `.test.ts`. To change how something behaves, change it here. |
+| `config/` | `package-solution.json` (version, web part list) and `serve.json` (local run page). |
+| `scripts/` | Browser console scripts for checking live data (paste into F12 on the site). `check-*` / `diagnose-*` only read. |
+| `PowerAutomateFlowsSDG/` | Exports of the live Power Automate flows. |
 
-## Features
+For the full picture (architecture, APIs, configuration lists, flows, test site, troubleshooting), see the **[CRS Developer Guide](docs/developer-guide/CRS-Developer-Guide.docx)** (Word; a [PDF copy](docs/developer-guide/CRS-Developer-Guide.pdf) sits next to it). It has a flow diagram per component and a full Power Automate chapter.
 
-Description of the extension that expands upon high-level summary above.
+## Good to know
 
-This extension illustrates the following concepts:
-
-- topic 1
-- topic 2
-- topic 3
-
-> Notice that better pictures and documentation will increase the sample usage and the value you are providing for others. Thanks for your submissions advance.
-
-> Share your web part with others through Microsoft 365 Patterns and Practices program to get visibility and exposure. More details on the community, open-source projects and other activities from http://aka.ms/m365pnp.
-
-## References
-
-- [Getting started with SharePoint Framework](https://docs.microsoft.com/sharepoint/dev/spfx/set-up-your-developer-tenant)
-- [Building for Microsoft teams](https://docs.microsoft.com/sharepoint/dev/spfx/build-for-teams-overview)
-- [Use Microsoft Graph in your solution](https://docs.microsoft.com/sharepoint/dev/spfx/web-parts/get-started/using-microsoft-graph-apis)
-- [Publish SharePoint Framework applications to the Marketplace](https://docs.microsoft.com/sharepoint/dev/spfx/publish-to-marketplace-overview)
-- [Microsoft 365 Patterns and Practices](https://aka.ms/m365pnp) - Guidance, tooling, samples and open-source controls for your Microsoft 365 development
-- [Heft Documentation](https://heft.rushstack.io/)
+- **List and library names:** the client renames them. The code finds them from the candidate lists in `src/shared/naming.ts`. If a library stops loading after a rename, add its new title there, then build and deploy.
+- **Power Automate:** about 25 flows handle routing, tagging, emails and deletes. They are not in this code. Their exports are in `PowerAutomateFlowsSDG/`. They all run as the service account `gdc@sdguthrie.com`. Never remove that account from the site's Owners group.
+- **New web part:** add its ID to `componentIds` in `config/package-solution.json`, or it won't show in the toolbox (a test checks this).
