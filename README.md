@@ -77,12 +77,12 @@ Deploy to your test site first, then to CRS.
 | `src/shared/` | The app's logic (permissions, folder paths, upload checks, list names), each with a `.test.ts`. To change how something behaves, change it here. |
 | `config/` | `package-solution.json` (version, web part list) and `serve.json` (local run page). |
 | `scripts/` | Browser console scripts for checking live data (paste into F12 on the site). `check-*` / `diagnose-*` only read. |
-| `PowerAutomateFlowsSDG/` | Exports of the live Power Automate flows. |
+| *(not in the repo)* | Power Automate flow exports. Kept outside the repo by the project owner; ask for the latest `.zip` exports. |
 
-For the full picture (architecture, APIs, configuration lists, flows, test site, troubleshooting), see the **[CRS Developer Guide](docs/developer-guide/CRS-Developer-Guide.docx)** (Word; a [PDF copy](docs/developer-guide/CRS-Developer-Guide.pdf) sits next to it). It has a flow diagram per component and a full Power Automate chapter.
+For the full design (architecture, where the data is stored, every list and column, security, components, flows, test site, troubleshooting), see the **[CRS Software Design Specification](docs/developer-guide/CRS-Software-Design-Specification.docx)** (Word; a [PDF copy](docs/developer-guide/CRS-Software-Design-Specification.pdf) sits next to it).
 
 ## Good to know
 
 - **List and library names:** the client renames them. The code finds them from the candidate lists in `src/shared/naming.ts`. If a library stops loading after a rename, add its new title there, then build and deploy.
-- **Power Automate:** about 25 flows handle routing, tagging, emails and deletes. They are not in this code. Their exports are in `PowerAutomateFlowsSDG/`. They all run as the service account `gdc@sdguthrie.com`. Never remove that account from the site's Owners group.
+- **Power Automate:** about 25 flows handle routing, tagging, emails and deletes. They are not in this code, and their exports are not in this repo (the project owner keeps them). They all run as the service account `gdc@sdguthrie.com`. Never remove that account from the site's Owners group.
 - **New web part:** add its ID to `componentIds` in `config/package-solution.json`, or it won't show in the toolbox (a test checks this).

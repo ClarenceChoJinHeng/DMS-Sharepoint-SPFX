@@ -53,3 +53,17 @@ dev/**/*.bundle.js
 # docs/superpowers/specs/ and CLAUDE.md's own flow sections, which is exactly why
 # those must be updated whenever a flow changes.
 /PowerAutomateFlows/
+
+# Exported Power Automate flows (current folder). Kept out of the repo, same rule as
+# /PowerAutomateFlows/ above; the project owner keeps the backup.
+/PowerAutomateFlowsSDG/
+
+# Client data exports and live-site schema dumps (contain group names / staff names)
+/CRS-groups-*.csv
+crs-schema-*.json
+
+# Personal Claude Code settings
+.claude/settings.local.json
+# Old June Claude Code notes (kept locally only)
+.claude/requirements.md
+.claude/backlog.md
