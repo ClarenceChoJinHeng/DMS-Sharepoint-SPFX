@@ -8,5 +8,5 @@
 - A `$top` read can't prove something is absent. Filter server-side or page it.
 - Reads that decide an action are cache-busted (`Cache-Control: no-cache` + a unique URL param).
 - Never MERGE `OData__ModerationStatus` together with any other field (500). Write the field first, then the status.
-- Taxonomy value = `"Label|GUID"`. Compare terms by `TermGuid` (Labels are corrupted on SDG).
+- Taxonomy value = `"Label|GUID"`. Compare terms by `TermGuid`: REST `/items` often returns the term's WssId (a number) in `Label`; the stored name is fine.
 - Yes/No in `$filter`: compare to `1`/`0`, not `true`/`false`.
