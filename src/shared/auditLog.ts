@@ -1,0 +1,393 @@
+/**
+ * Audit log — the row shape, the summaries and the truncation rules.
+ *
+ * Spec: docs/superpowers/specs/2026-08-13-audit-log-design.md
+ *
+ * SPFx-free by design, the same split as naming.ts / spNaming.ts: everything that decides what a
+ * row SAYS lives here and is unit-tested, while spAuditLog.ts owns the request. The wording of a
+ * summary and the announcement of a truncation are the parts a reader relies on months later, so
+ * they are pinned by tests rather than by review.
+ *
+ * The caller supplies the event time. This module never reads the clock — a module that calls
+ * `new Date()` cannot have its date formatting tested.
+ */
+
+/**
+ * Event types, as written to the `EventType` column.
+ *
+ * `EventType` is a TEXT column, not Choice, deliberately: writing a value absent from a Choice
+ * column's `Choices` FAILS the whole write, so the day someone adds a type here every row of that
+ * type would be lost silently. Text cannot fail that way, and it indexes identically.
+ */
+export const EVENT = {
+  uploaded: "Uploaded",
+  approved: "Approved",
+  rejected: "Rejected",
+  /* Added 2026-09-23, client: "can you add a cancel action in audit log for that file cancel?" —
+     the "Cancelled" badge on a My Submissions file (RecordState.withdrawn), NOT the same thing as
+     `requestCancelled` below. Mirrors the Approved/Rejected pair exactly: the bare word is the
+     DOCUMENT-level event (a PIC withdraws their own pending/rejected draft directly, no approver
+     involved), the "Request …" word is the REQUEST-level event (a genuine two-person deletion/share
+     request the requester pulls back before anyone decides it). Same TEXT-column safety as every
+     other entry here — see the file header.
+     ⚠ WRITTEN BY THE FLOW, NOT BY THIS CODEBASE, and NOT YET WRITTEN AT ALL — same "registered ahead
+     of the flow" order `Replaced`/`ShareRevoked`/`RequestCancelled` were added in. The distinguishing
+     condition already exists on every `CRS Requests` row with no code change needed to the writer:
+     `RequestType eq 'Deletion' and Stage eq 'pending' and RequestedBy eq DecidedBy` (self-approved,
+     on a still-pending draft — the exact, and only, shape `writeApprovedDeletionRequest`
+     (MySubmissions.tsx) produces for a PIC's own withdrawal; the SAME self-approved mechanism on an
+     APPROVED document, `Stage eq 'approved'`, is a genuine deletion of published content and should
+     keep resolving to the ordinary `RequestApproved`/`Deleted` trail, matching that file's own
+     "Deleted" badge). `CRS — Audit request activity`'s `EventKind` Compose needs this condition
+     checked BEFORE the general Approved/Rejected branches, resolving to `'Cancelled'` instead of
+     `'RequestApproved'` for that one case — whether the resulting "Request approved" row should then
+     be suppressed (mirroring the Replace-on-upload suppression) is a decision for whoever edits the
+     flow live; the row is written either way once that edit lands, only the FILTER needs this entry
+     to exist first. */
+  cancelled: "Cancelled",
+  routed: "Routed",
+  deleted: "Deleted",
+  // The seven-year archive mover (Power Automate, 2026-09-02). Written by the two archive flows
+  // (`CRS — Archive after seven years` / its HC clone) via their own "Create item" action against
+  // this list — not through this module, since a flow cannot call TypeScript. Registered here
+  // anyway so the viewer's Action dropdown can filter on it, the same reason `routed`/`deleted` are
+  // registered rather than left as bare strings only a flow ever writes.
+  archived: "Archived",
+  /* ⚠⚠ WRITTEN BY THE FLOWS AND MISSING FROM HERE UNTIL 2026-09-03, WHICH IS WHY NEITHER COULD BE
+     FILTERED. Client: *"the Audit log is missing some filter such as the File Replace filter"*.
+     `EventType` is a **Text** column — deliberately, so a value absent from a Choice column's
+     `Choices` can never fail a write — so `Auto-route` / `HC Auto Route` have been writing `Replaced`
+     rows and `CRS — Audit request activity` `ShareRevoked` rows for days, correctly stored and
+     invisible to the Action dropdown, which is built from `ALL_EVENT_TYPES`.
+     ⚠ THE STANDING LESSON: a flow can introduce an event type without touching this file, and
+     nothing fails when it does. Whenever a flow gains a `Create item` with a new `EventType`, it must
+     be added here in the same breath — the row is written either way, and only the FILTER is lost. */
+  replaced: "Replaced",
+  shareRevoked: "ShareRevoked",
+  uploadRefused: "UploadRefused",
+  accessGranted: "AccessGranted",
+  accessRevoked: "AccessRevoked",
+  reconciliationRun: "ReconciliationRun",
+  structureChanged: "StructureChanged",
+  migrationRun: "MigrationRun",
+  segmentCreated: "SegmentCreated",
+  segmentDeleted: "SegmentDeleted",
+  // Re-coding a segment's TOP FOLDER (2026-09-11, spec 2026-09-11-segment-recode-design.md) — a
+  // physical rename, distinct from creating or deleting the mode row entirely.
+  segmentRecoded: "SegmentRecoded",
+  abbreviationChanged: "AbbreviationChanged",
+  policyChanged: "PolicyChanged",
+  groupMapChanged: "GroupMapChanged",
+  // The group LIFECYCLE — distinct from GroupMapChanged, which describes a MAPPING. Since
+  // 2026-08-14 those are two different screens and two different acts: a group can exist for days
+  // before anything is mapped to it, and deleting a group is not the same as removing its folder
+  // access (the ACL survives until reconciliation runs).
+  groupCreated: "GroupCreated",
+  groupDeleted: "GroupDeleted",
+  membersChanged: "MembersChanged",
+
+  // Deletion and share requests, 2026-08-15. Safe to add because `EventType` is a TEXT column — the
+  // day it becomes a Choice, every row of a type missing from `Choices` fails the whole write and is
+  // lost silently.
+  //
+  // The REQUEST and the DECISION are separate events on purpose. Who asked, and who allowed it, are
+  // different facts, often days apart and usually different people; one row saying "shared" would
+  // lose whichever half someone came looking for.
+  deletionRequested: "DeletionRequested",
+  shareRequested: "ShareRequested",
+  requestApproved: "RequestApproved",
+  requestRejected: "RequestRejected",
+  /* ⚠ WRITTEN BY `CRS — Audit request activity`, NOT BY THIS CODEBASE — same shape as `replaced`/
+     `shareRevoked` above. `EventKind`'s Compose currently maps a `Status eq 'Cancelled'` row
+     straight to `'Skip'` (a requester withdrawing their own raised request writes NO audit row at
+     all today). Registered here so the Action dropdown can offer it the moment that Compose is
+     changed to resolve to `'RequestCancelled'` instead of `'Skip'` for that case — the row is
+     written either way once the flow does; only the FILTER needs this entry to exist. */
+  requestCancelled: "RequestCancelled",
+} as const;
+
+export type AuditEventType = (typeof EVENT)[keyof typeof EVENT];
+
+/** Human labels, for the summary line and the viewer's filter list. */
+export const EVENT_LABEL: Record<string, string> = {
+  [EVENT.uploaded]: "Uploaded",
+  [EVENT.approved]: "Approved",
+  [EVENT.rejected]: "Rejected",
+  [EVENT.cancelled]: "Cancelled",
+  [EVENT.routed]: "Moved to Documents",
+  [EVENT.deleted]: "Deleted",
+  [EVENT.archived]: "Archived",
+  /* Shortened to "Replaced" (client, 2026-09-04). It previously read "Replaced by a newer upload"
+     to make clear the row records that THIS document was SUPERSEDED rather than that it did the
+     replacing — a distinction the bare word does lose. Their call: the event column is a label, not a
+     sentence, and the row's `Details` and `What` both name the file. */
+  [EVENT.replaced]: "Replaced",
+  [EVENT.shareRevoked]: "Share access revoked",
+  [EVENT.uploadRefused]: "Upload rejected",
+  [EVENT.accessGranted]: "Access granted",
+  [EVENT.accessRevoked]: "Access revoked",
+  [EVENT.reconciliationRun]: "Reconciliation run",
+  [EVENT.structureChanged]: "Folder structure changed",
+  [EVENT.migrationRun]: "Folder migration run",
+  [EVENT.segmentCreated]: "Segment created",
+  [EVENT.segmentDeleted]: "Segment deleted",
+  [EVENT.segmentRecoded]: "Segment top folder re-coded",
+  [EVENT.abbreviationChanged]: "Abbreviation changed",
+  [EVENT.policyChanged]: "File type policy changed",
+  [EVENT.groupMapChanged]: "Group Map changed",
+  [EVENT.groupCreated]: "Group created",
+  [EVENT.groupDeleted]: "Group deleted",
+  [EVENT.membersChanged]: "Group members changed",
+  [EVENT.deletionRequested]: "Deletion requested",
+  [EVENT.shareRequested]: "Share requested",
+  [EVENT.requestApproved]: "Request approved",
+  [EVENT.requestRejected]: "Request rejected",
+  [EVENT.requestCancelled]: "Request cancelled",
+};
+
+/**
+ * The label for ONE ROW, which for a routing event depends on where it went.
+ *
+ * Client, 2026-08-24: *"event is showing Moved to Documents for HC Documents"*. `EVENT_LABEL` is keyed
+ * on the event TYPE, and there is one `Routed` type for both verticals — so an HC document's routing
+ * row read *"Moved to Documents"* while the `Library` beside it said `HC Documents`. A row that
+ * contradicts itself is read as a bug, and here it also understates the sensitivity of what moved.
+ *
+ * Only `routed` is library-dependent: every other event happens IN a library rather than BETWEEN two,
+ * so its label needs no destination. Falls back to the static label whenever the library is blank —
+ * every row written before `LibraryName` existed, and any row whose flow could not resolve it.
+ */
+export function eventLabelForRow(
+  eventType: string,
+  libraryName?: string,
+): string {
+  const type = (eventType ?? "").trim();
+  const lib = (libraryName ?? "").trim();
+  if (type === EVENT.routed && lib.length > 0) return `Moved to ${lib}`;
+  return EVENT_LABEL[type] ?? type;
+}
+
+/** Every type, in the order the viewer offers them. */
+export const ALL_EVENT_TYPES: string[] = [
+  EVENT.uploaded,
+  EVENT.approved,
+  EVENT.rejected,
+  EVENT.cancelled,
+  EVENT.routed,
+  EVENT.replaced,
+  EVENT.deleted,
+  EVENT.archived,
+  EVENT.uploadRefused,
+  EVENT.accessGranted,
+  EVENT.accessRevoked,
+  EVENT.reconciliationRun,
+  EVENT.structureChanged,
+  EVENT.migrationRun,
+  EVENT.segmentCreated,
+  EVENT.segmentDeleted,
+  EVENT.segmentRecoded,
+  EVENT.abbreviationChanged,
+  EVENT.policyChanged,
+  EVENT.groupMapChanged,
+  EVENT.groupCreated,
+  EVENT.groupDeleted,
+  EVENT.membersChanged,
+  EVENT.deletionRequested,
+  EVENT.shareRequested,
+  EVENT.requestApproved,
+  EVENT.requestRejected,
+  EVENT.requestCancelled,
+  EVENT.shareRevoked,
+];
+
+/**
+ * Outcome of the AUDITED ACTION — never of the audit write itself.
+ *
+ * A row that was never written has no outcome to record; that is the honest limit of any
+ * self-hosted log and is stated on the page, not smuggled in as a status value here.
+ */
+export type AuditOutcome = "Success" | "Refused" | "Failed";
+
+/**
+ * What a caller describes.
+ *
+ * Nearly everything is optional because real call sites genuinely lack it: a policy change has no
+ * file, and a Power Automate deletion trigger hands over almost no metadata. An absent value is
+ * recorded as blank, which the viewer reads as "not recorded" — never as a different event.
+ */
+export interface AuditEvent {
+  event: string;
+  /** Defaults to "Success". */
+  outcome?: AuditOutcome;
+  /** Which writer produced the row — `UploadForm`, `FolderAccess`, `Flow:ApprovalActivity`. */
+  source: string;
+  /** When it happened. Supplied by the caller so this module stays clock-free. */
+  at: Date;
+  actorName?: string;
+  actorEmail?: string;
+  library?: string;
+  itemUniqueId?: string;
+  itemName?: string;
+  itemPath?: string;
+  segment?: string;
+  unitPath?: string;
+  /** Readable lines. Joined, and truncated with an announcement if oversized. */
+  details?: string[];
+  /**
+   * Overrides the derived summary.
+   *
+   * Run-style events (reconciliation, migration) need counts in the summary and only the caller
+   * knows them; deriving "Reconciliation run" alone would make every run look identical in the feed.
+   */
+  summary?: string;
+}
+
+/** The row as POSTed. Field names are the list's internal names, exactly. */
+export interface AuditRow {
+  Title: string;
+  EventTime: string;
+  EventType: string;
+  Outcome: string;
+  ActorName: string;
+  ActorEmail: string;
+  Source: string;
+  LibraryName: string;
+  ItemUniqueId: string;
+  ItemName: string;
+  ItemPath: string;
+  Segment: string;
+  UnitPath: string;
+  Details: string;
+}
+
+/** SharePoint's Text limit. `Title` is a Text column, so a long file name must not fail the write. */
+export const TITLE_MAX = 255;
+
+/**
+ * Budget for `Details`.
+ *
+ * A `Note` column holds far more than this, but a reconciliation over twelve segments can emit
+ * thousands of lines and there is no value in a row nobody can read. Well under any server limit,
+ * so the write never fails for size — a lost row is worse than a shortened one.
+ */
+export const DETAILS_MAX = 30000;
+
+function clean(v: string | undefined): string {
+  return (v ?? "").toString().trim();
+}
+
+/**
+ * ISO 8601 — what a plain `/items` POST requires for a DateTime column.
+ *
+ * NOT `M/D/YYYY h:mm tt`. Gotcha #1's locale format belongs to `validateUpdateListItem`, which parses
+ * dates in the SITE's locale; a direct REST item write goes through the OData layer instead and
+ * answers a locale string with *"Cannot convert a primitive value to the expected type
+ * 'Edm.DateTime'"* — a 400 naming the type but not the field. Applying one endpoint's rule to the
+ * other cost a deploy cycle on 2026-08-13.
+ *
+ * A happy consequence: `$filter` already needed ISO, so writes and filters use ONE format for this
+ * list and cannot be mismatched. `toISOString` is UTC and locale-independent by definition, which
+ * also removes the browser-locale hazard the hand-rolled version existed to avoid. Display is a
+ * separate concern and belongs in the viewer.
+ */
+export function formatEventTime(d: Date): string {
+  return d.toISOString();
+}
+
+/** Cut to a length, marking that it was cut. A silently clipped value reads as complete. */
+function cap(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, Math.max(0, max - 1))}…`;
+}
+
+/**
+ * Join detail lines within the budget, ALWAYS announcing what was dropped.
+ *
+ * The count of dropped lines is what makes a shortened block trustworthy: a reader can tell the
+ * difference between "that is all that happened" and "there was more". A quietly clipped block is
+ * indistinguishable from a complete one, which is the failure this whole feature exists to prevent.
+ */
+export function joinDetails(
+  lines: readonly string[] | undefined,
+  max: number = DETAILS_MAX,
+): string {
+  const all = (lines ?? []).map((l) => clean(l)).filter((l) => l.length > 0);
+  const kept: string[] = [];
+  let size = 0;
+  // Room reserved for the marker, so the announcement itself can never be the thing that overflows.
+  const budget = Math.max(0, max - 60);
+  for (let i = 0; i < all.length; i++) {
+    const line = all[i];
+    if (size + line.length + 1 > budget) {
+      const dropped = all.length - kept.length;
+      kept.push(
+        `… ${dropped} more line${dropped === 1 ? "" : "s"} not recorded`,
+      );
+      return kept.join("\n");
+    }
+    kept.push(line);
+    size += line.length + 1;
+  }
+  return kept.join("\n");
+}
+
+/**
+ * The one-line summary for the `Title` column.
+ *
+ * A caller-supplied summary always wins. Otherwise: the event's label, plus the item name when
+ * there is one. An event with neither is still readable — "File type policy changed" says enough on
+ * its own, and `Details` carries the rest.
+ */
+export function summarize(e: AuditEvent): string {
+  const supplied = clean(e.summary);
+  if (supplied.length > 0) return cap(supplied, TITLE_MAX);
+
+  const label = EVENT_LABEL[e.event] ?? clean(e.event);
+  const name = clean(e.itemName);
+  const base = name.length > 0 ? `${label} — ${name}` : label;
+  // "Upload rejected" already says it was refused; repeating it reads as a different, worse event.
+  const restate = e.outcome === "Refused" && e.event !== EVENT.uploadRefused;
+  return cap(restate ? `${base} (refused)` : base, TITLE_MAX);
+}
+
+/**
+ * Build the row.
+ *
+ * Every field is emitted, always, as a string — never omitted when absent. A partial body makes one
+ * missing value look like a different kind of event later, whereas an empty string reads correctly
+ * in the viewer as "not recorded". Nothing here can throw: a logger that throws while describing an
+ * action that already succeeded turns a logging gap into a user-visible failure.
+ */
+export function buildAuditRow(e: AuditEvent): AuditRow {
+  return {
+    Title: summarize(e),
+    EventTime: formatEventTime(e.at),
+    EventType: clean(e.event),
+    Outcome: e.outcome ?? "Success",
+    ActorName: cap(clean(e.actorName), TITLE_MAX),
+    ActorEmail: cap(clean(e.actorEmail), TITLE_MAX),
+    Source: cap(clean(e.source), TITLE_MAX),
+    LibraryName: cap(clean(e.library), TITLE_MAX),
+    ItemUniqueId: cap(clean(e.itemUniqueId), TITLE_MAX),
+    ItemName: cap(clean(e.itemName), TITLE_MAX),
+    // ItemPath is a Note column and so is NOT capped at 255 — that is the reason it is a Note.
+    // A truncated path cannot be matched back to a folder, which defeats recording it at all.
+    ItemPath: clean(e.itemPath),
+    Segment: cap(clean(e.segment), TITLE_MAX),
+    UnitPath: cap(clean(e.unitPath), TITLE_MAX),
+    Details: joinDetails(e.details),
+  };
+}
+
+/**
+ * The leading segment of a unit path, for callers that hold the path but not the segment.
+ *
+ * Convenience only — a caller that knows the segment should pass it. Returns "" rather than
+ * guessing when the path is blank, and tolerates a leading slash.
+ */
+export function segmentFromUnitPath(unitPath: string | undefined): string {
+  const parts = clean(unitPath)
+    .split("/")
+    .filter((p) => p.length > 0);
+  return parts.length > 0 ? parts[0] : "";
+}

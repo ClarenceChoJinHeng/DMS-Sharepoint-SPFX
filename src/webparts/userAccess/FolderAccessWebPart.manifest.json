@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "a5955b3e-0945-4ad4-9cb1-db8006c7fa7f",
+  "alias": "FolderAccessWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "Folder Access" },
+    "description": { "default": "Admin tool — map SharePoint groups to a segment, tier and role; controls who can reach each folder" },
+    "officeFabricIconFontName": "FolderHorizontal",
+    "properties": {}
+  }]
+}

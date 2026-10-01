@@ -1,0 +1,146 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "approval-document-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/approvalDocument/ApprovalDocumentWebPart.js",
+          "manifest": "./src/webparts/approvalDocument/ApprovalDocumentWebPart.manifest.json"
+        }
+      ]
+    },
+    "hide-app-bar-extension": {
+      "components": [
+        {
+          "entrypoint": "./lib/extensions/hideAppBar/HideAppBarApplicationCustomizer.js",
+          "manifest": "./src/extensions/hideAppBar/HideAppBarApplicationCustomizer.manifest.json"
+        }
+      ]
+    },
+    "form-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/form/FormWebPart.js",
+          "manifest": "./src/webparts/form/FormWebPart.manifest.json"
+        }
+      ]
+    },
+    "bulk-upload-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/bulkUpload/BulkUploadWebPart.js",
+          "manifest": "./src/webparts/bulkUpload/BulkUploadWebPart.manifest.json"
+        }
+      ]
+    },
+    "folder-manager-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/folderManager/FolderManagerWebPart.js",
+          "manifest": "./src/webparts/folderManager/FolderManagerWebPart.manifest.json"
+        }
+      ]
+    },
+    "crs-settings-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/crsSettings/CrsSettingsWebPart.js",
+          "manifest": "./src/webparts/crsSettings/CrsSettingsWebPart.manifest.json"
+        }
+      ]
+    },
+    "crs-configuration-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/crsConfiguration/CrsConfigurationWebPart.js",
+          "manifest": "./src/webparts/crsConfiguration/CrsConfigurationWebPart.manifest.json"
+        }
+      ]
+    },
+    "audit-log-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/auditLog/AuditLogWebPart.js",
+          "manifest": "./src/webparts/auditLog/AuditLogWebPart.manifest.json"
+        }
+      ]
+    },
+    "my-submissions-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/mySubmissions/MySubmissionsWebPart.js",
+          "manifest": "./src/webparts/mySubmissions/MySubmissionsWebPart.manifest.json"
+        }
+      ]
+    },
+    "document-search-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/documentSearch/DocumentSearchWebPart.js",
+          "manifest": "./src/webparts/documentSearch/DocumentSearchWebPart.manifest.json"
+        }
+      ]
+    },
+    "onboarding-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/onboarding/OnboardingWebPart.js",
+          "manifest": "./src/webparts/onboarding/OnboardingWebPart.manifest.json"
+        }
+      ]
+    },
+    "user-access-web-parts": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/userAccess/FolderAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/FolderAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/SiteAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/SiteAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/ApprovalLibraryAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/ApprovalLibraryAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/PageAccessWebPart.js",
+          "manifest": "./src/webparts/userAccess/PageAccessWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/FolderStructureWebPart.js",
+          "manifest": "./src/webparts/userAccess/FolderStructureWebPart.manifest.json"
+        },
+        {
+          "entrypoint": "./lib/webparts/userAccess/GroupManagementWebPart.js",
+          "manifest": "./src/webparts/userAccess/GroupManagementWebPart.manifest.json"
+        }
+      ]
+    },
+    "requests-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/requests/RequestsWebPart.js",
+          "manifest": "./src/webparts/requests/RequestsWebPart.manifest.json"
+        }
+      ]
+    },
+    "bulk-approve-extension": {
+      "components": [
+        {
+          "entrypoint": "./lib/extensions/bulkApprove/BulkApproveCommandSet.js",
+          "manifest": "./src/extensions/bulkApprove/BulkApproveCommandSet.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {
+    "FormWebPartStrings": "lib/webparts/form/loc/{locale}.js",
+    "BulkUploadWebPartStrings": "lib/webparts/bulkUpload/loc/{locale}.js",
+    "FolderManagerWebPartStrings": "lib/webparts/folderManager/loc/{locale}.js",
+    "OnboardingWebPartStrings": "lib/webparts/onboarding/loc/{locale}.js",
+    "UserAccessWebPartStrings": "lib/webparts/userAccess/loc/{locale}.js"
+  }
+}

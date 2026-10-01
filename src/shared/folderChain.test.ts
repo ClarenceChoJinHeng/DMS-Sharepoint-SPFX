@@ -1,0 +1,786 @@
+import { Level, parseLevels } from "./formModel";
+import {
+  buildOnDemandSegments,
+  folderCodeFor,
+  isAbbreviatedLevel,
+  builtInOnDemandTiers,
+  builtInTierFor,
+  decideTier,
+  effectiveOnDemandTiers,
+  allowedTierPositions,
+  canMoveBelowUnitTier,
+  clampTierPosition,
+  perUnitTierExists,
+  isFixedBelowUnitTier,
+  leadingPerUnitCount,
+  gridPlan,
+  isPermissioned,
+  needsLegacyBelowUnit,
+  splitChain,
+  validateChain,
+} from "./folderChain";
+
+const YEAR_SET = "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf";
+const DOCTYPE_SET = "866c5754-258e-401f-8685-03d20ae59b1d";
+
+const dept: Level = { label: "Department", column: "Department", labelCol: "Department", tidCol: "DepartmentTid" };
+const unit: Level = { label: "Unit", column: "Unit", labelCol: "Unit", tidCol: "UnitTid" };
+const fn: Level = {
+  label: "Function", column: "Function", labelCol: "Function", tidCol: "FunctionTid",
+  termSet: "11111111-1111-1111-1111-111111111111", permissioned: false,
+};
+const year: Level = { label: "Year", column: "Year", labelCol: "Year", termSet: YEAR_SET, permissioned: false };
+const docType: Level = {
+  label: "Document Type", column: "DocumentType", labelCol: "Document_x0020_Type",
+  termSet: DOCTYPE_SET, permissioned: false,
+};
+
+describe("isPermissioned — absent means true", () => {
+  it("treats a missing flag as permissioned", () => {
+    expect(isPermissioned(unit)).toBe(true);
+  });
+
+  it("demotes only on a literal false", () => {
+    expect(isPermissioned(year)).toBe(false);
+  });
+
+  // The fail-safe direction. A hand-authored row can easily contain the STRING
+  // "false", and reading that as a demotion would move a tier that needs an ACL
+  // into the inheriting suffix — a permissions widening nobody would see.
+  it("keeps a tier permissioned when the flag is a truthy non-boolean", () => {
+    expect(isPermissioned({ ...unit, permissioned: "false" as unknown as boolean })).toBe(true);
+  });
+});
+
+describe("parseLevels carries the new fields", () => {
+  // Without this the whole feature parses away to nothing: the chain reads as
+  // all-permissioned with no term sets, and the compatibility bridge then hides
+  // it by falling back to Year -> Document Type.
+  it("keeps termSet and permissioned:false", () => {
+    const parsed = parseLevels(JSON.stringify([unit, year]));
+    expect(parsed).toHaveLength(2);
+    expect(parsed[1].termSet).toBe(YEAR_SET);
+    expect(parsed[1].permissioned).toBe(false);
+  });
+
+  it("leaves permissioned undefined when the flag is absent", () => {
+    const parsed = parseLevels(JSON.stringify([unit]));
+    expect(parsed[0].permissioned).toBeUndefined();
+    expect(isPermissioned(parsed[0])).toBe(true);
+  });
+
+  it("ignores a permissioned flag that is not a literal false", () => {
+    const parsed = parseLevels('[{"label":"Unit","column":"Unit","permissioned":"false"}]');
+    expect(isPermissioned(parsed[0])).toBe(true);
+  });
+});
+
+describe("splitChain", () => {
+  it("splits at the permissioned boundary, preserving order", () => {
+    const { permissioned, onDemand } = splitChain([dept, unit, fn, year, docType]);
+    expect(permissioned.map((l) => l.label)).toEqual(["Department", "Unit"]);
+    expect(onDemand.map((l) => l.label)).toEqual(["Function", "Year", "Document Type"]);
+  });
+
+  it("handles a chain that is entirely permissioned", () => {
+    const { permissioned, onDemand } = splitChain([dept, unit]);
+    expect(permissioned).toHaveLength(2);
+    expect(onDemand).toHaveLength(0);
+  });
+});
+
+describe("validateChain", () => {
+  it("accepts a permissioned prefix followed by on-demand tiers", () => {
+    expect(validateChain([dept, unit, fn, year, docType])).toBeUndefined();
+  });
+
+  it("accepts today's live chain unchanged", () => {
+    expect(validateChain([dept, unit])).toBeUndefined();
+  });
+
+  it("rejects an empty chain", () => {
+    expect(validateChain([])?.code).toBe("empty");
+  });
+
+  // The rule that stops an ACL'd folder being nested inside an inheriting one.
+  // Reconciliation never walks there, so such a folder would never be created
+  // and the grant would silently not exist.
+  it("rejects a permissioned tier below a non-permissioned one", () => {
+    const err = validateChain([dept, year, unit]);
+    expect(err?.code).toBe("prefix-not-contiguous");
+    expect(err?.message).toContain("Unit");
+    expect(err?.message).toContain("Year");
+  });
+
+  it("rejects two tiers writing the same column", () => {
+    const err = validateChain([unit, { ...year, labelCol: "Unit" }]);
+    expect(err?.code).toBe("duplicate-column");
+  });
+});
+
+describe("needsLegacyBelowUnit — the compatibility bridge", () => {
+  // The regression the spec asks for: every live mode row today is [Department,
+  // Unit], and those sites must keep producing exactly Year -> Document Type
+  // until their row is migrated.
+  it("is true for the three live mode rows' shape", () => {
+    expect(needsLegacyBelowUnit([dept, unit])).toBe(true);
+  });
+
+  it("is false once any below-Unit tier is configured", () => {
+    expect(needsLegacyBelowUnit([dept, unit, year, docType])).toBe(false);
+  });
+});
+
+describe("permissioned depth — what caps reconciliation's term-tree walk", () => {
+  const subUnit: Level = {
+    label: "SubUnit", column: "SubUnit", labelCol: "SubUnit", tidCol: "SubUnitTid",
+    permissioned: false, // cascades: no termSet, terms live under each Unit
+  };
+
+  // FolderManager derives its walk depth from the permissioned tiers. If SubUnit ever
+  // counted here, reconciliation would create an ACL'd folder per subunit carrying only
+  // the owners group — invisible to the people who need it — and Units would stop being
+  // leaves, moving the Year x Document Type grid onto subunits.
+  it("counts Department and Unit but not SubUnit", () => {
+    expect(splitChain([dept, unit, subUnit, year, docType]).permissioned).toHaveLength(2);
+  });
+
+  it("is unchanged by adding below-Unit tiers", () => {
+    const before = splitChain([dept, unit]).permissioned.length;
+    const after = splitChain([dept, unit, subUnit, year, docType]).permissioned.length;
+    expect(after).toBe(before);
+  });
+
+  // A cascading tier is legal: termSet absent means "children of the tier above",
+  // which is exactly how each Unit gets its own SubUnits.
+  it("accepts a below-Unit tier with no termSet", () => {
+    expect(validateChain([dept, unit, subUnit, year, docType])).toBeUndefined();
+    expect(subUnit.termSet).toBeUndefined();
+  });
+
+  it("still rejects a permissioned tier below SubUnit", () => {
+    expect(validateChain([dept, subUnit, unit])?.code).toBe("prefix-not-contiguous");
+  });
+});
+
+describe("effectiveOnDemandTiers — one walk for migrated and unmigrated sites", () => {
+  // The regression the spec asks for: every live mode row is [Department, Unit],
+  // and those sites must keep producing exactly Year -> Document Type, with the
+  // same column internal names they have always written.
+  it("synthesises the legacy pair for an unmigrated chain", () => {
+    const tiers = effectiveOnDemandTiers([dept, unit], YEAR_SET, DOCTYPE_SET);
+    expect(tiers.map((t) => t.label)).toEqual(["Year", "Document Type"]);
+    expect(tiers.map((t) => t.labelCol)).toEqual(["Year", "Document_x0020_Type"]);
+    expect(tiers.map((t) => t.termSet)).toEqual([YEAR_SET, DOCTYPE_SET]);
+  });
+
+  it("produces the same path as the configured equivalent", () => {
+    const legacy = buildOnDemandSegments(effectiveOnDemandTiers([dept, unit], YEAR_SET, DOCTYPE_SET), {
+      Year: { id: "y", label: "2026" }, DocumentType: { id: "d", label: "Invoice" },
+    });
+    expect(legacy.segments).toEqual(["2026", "Invoice"]);
+  });
+
+  it("uses the configured chain once one exists", () => {
+    const tiers = effectiveOnDemandTiers([dept, unit, fn, year, docType], YEAR_SET, DOCTYPE_SET);
+    expect(tiers.map((t) => t.label)).toEqual(["Function", "Year", "Document Type"]);
+  });
+
+  // A configured chain wins even when it omits Year entirely — otherwise the
+  // legacy pair would reappear underneath and silently deepen every path.
+  it("does not append the legacy pair to a configured chain", () => {
+    const tiers = effectiveOnDemandTiers([dept, unit, fn], YEAR_SET, DOCTYPE_SET);
+    expect(tiers.map((t) => t.label)).toEqual(["Function"]);
+  });
+});
+
+describe("decideTier — not every Unit has SubUnits", () => {
+  const subUnit: Level = {
+    label: "SubUnit", column: "SubUnit", labelCol: "SubUnit", tidCol: "SubUnitTid",
+    permissioned: false,
+  };
+
+  it("skips a cascading tier when the term above has no children", () => {
+    expect(decideTier(subUnit, 0)).toBe("skip");
+  });
+
+  it("keeps a cascading tier when the term above has children", () => {
+    expect(decideTier(subUnit, 2)).toBe("keep");
+  });
+
+  // THE important case. "Not loaded" and "no subunits" both produce an empty list, and the
+  // shorter path lands in a folder that exists and looks correct — so a transient failure
+  // must never be read as "this tier does not apply".
+  it("reports unresolved when the option count is unknown", () => {
+    expect(decideTier(subUnit, undefined)).toBe("unresolved");
+  });
+
+  // A flat set that came back empty is a config fault to surface, not a signal that the
+  // tier is inapplicable here — Year and Document Type apply to every unit.
+  it("always keeps a tier with its own term set, even with no options", () => {
+    expect(decideTier(year, 0)).toBe("keep");
+    expect(decideTier(docType, undefined)).toBe("keep");
+  });
+});
+
+describe("gridPlan", () => {
+  // Matches the shipped two-tier arithmetic exactly: years + years*docTypes.
+  // 3 + 60, not 60 — every tier above the deepest is itself a folder.
+  it("counts every tier, not just the leaves", () => {
+    const p = gridPlan([["2024", "2025", "2026"], Array.from({ length: 20 }, (_, i) => `dt${i}`)]);
+    expect(p.total).toBe(63);
+  });
+
+  it("sizes a three-tier grid", () => {
+    // 2 functions + (2*2) years + (2*2*2) doc types = 2 + 4 + 8
+    const p = gridPlan([["HR", "Finance"], ["2025", "2026"], ["Invoice", "Receipt"]]);
+    expect(p.total).toBe(14);
+  });
+
+  it("gives the last-of-each path for the fast-path probe", () => {
+    const p = gridPlan([["2025", "2026"], ["Invoice", "Receipt"]]);
+    expect(p.lastPath).toEqual(["2026", "Receipt"]);
+  });
+
+  // Today's behaviour when the Document Type set is empty: build the year folders
+  // and stop. Nothing can nest inside a folder that cannot be created.
+  it("truncates at the first tier with no terms", () => {
+    const p = gridPlan([["2025", "2026"], [], ["Invoice"]]);
+    expect(p.total).toBe(2);
+    expect(p.tiers).toEqual([["2025", "2026"]]);
+    expect(p.lastPath).toEqual(["2026"]);
+  });
+
+  it("plans nothing for an empty chain", () => {
+    expect(gridPlan([]).total).toBe(0);
+    expect(gridPlan([[]]).total).toBe(0);
+  });
+});
+
+describe("buildOnDemandSegments", () => {
+  const pick = { Year: { id: "y1", label: "2026" }, DocumentType: { id: "d1", label: "Invoice" } };
+  /* ⚠ `Function` IS AN ORDINARY BELOW-UNIT LEVEL, so since 2026-09-09 it is named by its term's
+     ABBREVIATION — Year and Document Type are the only two that are not. These tests are about chain
+     ORDER, so they supply a code and go on asserting order; the naming rule itself is pinned in
+     "below-Unit folder codes" below. */
+  const fnCodes = { f1: "HR" };
+
+  it("produces folder names in chain order", () => {
+    const r = buildOnDemandSegments([year, docType], pick);
+    expect(r.segments).toEqual(["2026", "Invoice"]);
+    expect(r.missing).toEqual([]);
+  });
+
+  it("follows the chain when a tier is inserted at the top", () => {
+    const r = buildOnDemandSegments([fn, year, docType], {
+      ...pick, Function: { id: "f1", label: "Human Resource" },
+    }, fnCodes);
+    // The coded level and the two fixed ones, in chain order and named by their own rules.
+    expect(r.segments).toEqual(["HR", "2026", "Invoice"]);
+  });
+
+  it("follows the chain when a tier is inserted at the bottom", () => {
+    const r = buildOnDemandSegments([year, docType, fn], {
+      ...pick, Function: { id: "f1", label: "Human Resource" },
+    }, fnCodes);
+    expect(r.segments).toEqual(["2026", "Invoice", "HR"]);
+  });
+
+  // Reporting the gap rather than skipping it. A skipped tier routes the file to
+  // a shallower path that exists and looks correct.
+  it("reports a missing selection instead of shortening the path", () => {
+    const r = buildOnDemandSegments([fn, year, docType], pick);
+    expect(r.missing).toEqual(["Function"]);
+    expect(r.segments).not.toContain("");
+  });
+
+  it("sanitizes illegal characters out of a term label", () => {
+    const r = buildOnDemandSegments([docType], { DocumentType: { id: "d1", label: "Invoice/Receipt" } });
+    expect(r.segments).toEqual(["InvoiceReceipt"]);
+  });
+
+  it("treats a whitespace-only label as missing", () => {
+    const r = buildOnDemandSegments([year], { Year: { id: "y1", label: "   " } });
+    expect(r.missing).toEqual(["Year"]);
+    expect(r.segments).toEqual([]);
+  });
+});
+
+describe("builtInTierFor — re-adding Year or Document Type restores the built-in shape", () => {
+  /**
+   * The live defect, 2026-08-20: `Year` was removed and re-added through the add form, which
+   * derives `tidCol` for every tier. That flag is what tells the migrator and the upload form
+   * the column is plain text, so both wrote the bare label `2024` into the taxonomy column and
+   * SharePoint rejected all 18 documents with "The data returned from the tagging UI was not
+   * formatted correctly".
+   */
+  it("gives a re-added Year NO tidCol", () => {
+    const t = builtInTierFor("Year", YEAR_SET, DOCTYPE_SET);
+    expect(t).toBeDefined();
+    expect(t?.tidCol).toBeUndefined();
+    expect(t?.labelCol).toBe("Year");
+    expect(t?.permissioned).toBe(false);
+  });
+
+  it("gives a re-added Document Type the ENCODED internal name, not the sanitized one", () => {
+    // `DocumentType` does not exist as a column, and one unknown field name fails the WHOLE
+    // validateUpdateListItem call — taking every other tier's metadata with it.
+    const t = builtInTierFor("Document Type", YEAR_SET, DOCTYPE_SET);
+    expect(t?.labelCol).toBe("Document_x0020_Type");
+    expect(t?.tidCol).toBeUndefined();
+  });
+
+  it("matches case, padding and the sanitized column name an admin might retype", () => {
+    expect(builtInTierFor("  year  ", YEAR_SET, DOCTYPE_SET)?.label).toBe("Year");
+    expect(builtInTierFor("DOCUMENT  TYPE", YEAR_SET, DOCTYPE_SET)?.label).toBe("Document Type");
+    expect(builtInTierFor("DocumentType", YEAR_SET, DOCTYPE_SET)?.label).toBe("Document Type");
+  });
+
+  it("leaves a genuinely new tier alone, so it still gets its derived tidCol", () => {
+    expect(builtInTierFor("Category", YEAR_SET, DOCTYPE_SET)).toBeUndefined();
+    expect(builtInTierFor("SubUnit", YEAR_SET, DOCTYPE_SET)).toBeUndefined();
+    expect(builtInTierFor("", YEAR_SET, DOCTYPE_SET)).toBeUndefined();
+  });
+
+  it("returns a COPY, so an edit to the draft cannot mutate the shared definition", () => {
+    const a = builtInTierFor("Year", YEAR_SET, DOCTYPE_SET) as Level;
+    a.tidCol = "YearTid";
+    expect(builtInTierFor("Year", YEAR_SET, DOCTYPE_SET)?.tidCol).toBeUndefined();
+  });
+
+  it("is the SAME definition effectiveOnDemandTiers seeds from", () => {
+    // One definition, or the seeded pair and the re-added one drift — and the drifting copy
+    // would be the rare one nobody looks at.
+    const seeded = effectiveOnDemandTiers([dept, unit], YEAR_SET, DOCTYPE_SET);
+    expect(seeded).toEqual(builtInOnDemandTiers(YEAR_SET, DOCTYPE_SET));
+    expect(builtInTierFor("Year", YEAR_SET, DOCTYPE_SET)).toEqual(seeded[0]);
+    expect(builtInTierFor("Document Type", YEAR_SET, DOCTYPE_SET)).toEqual(seeded[1]);
+  });
+
+  it("keeps NO tidCol on either built-in tier", () => {
+    for (const t of builtInOnDemandTiers(YEAR_SET, DOCTYPE_SET)) expect(t.tidCol).toBeUndefined();
+  });
+});
+
+/**
+ * Per-unit tiers must be contiguous, exactly as permissioned ones are.
+ *
+ * Buah, 2026-09-07: `Clarence Kiwi` had no `termSet` — making it per-unit — and sat fourth, below
+ * `State`, `Year` and `Document Type`, all of which have one. The option lookup then asked the
+ * SEGMENT term set for the children of a Document Type term, which 404s, so all seven units in all
+ * six libraries reported "some of its folder values could not be read from the term store" and the
+ * migration could not run. Nothing had refused the chain when it was saved.
+ */
+describe("validateChain — per-unit tiers", () => {
+  const dept: Level = { label: "Department", column: "Department", labelCol: "Department", tidCol: "DepartmentTid" };
+  const unit: Level = { label: "Unit", column: "Unit", labelCol: "Unit", tidCol: "UnitTid" };
+  const shared = (label: string, termSet: string): Level =>
+    ({ label, column: label, labelCol: label, termSet, permissioned: false });
+  const perUnit = (label: string): Level =>
+    ({ label, column: label, labelCol: label, tidCol: label + "Tid", permissioned: false });
+
+  it("refuses Buah's real chain, naming both tiers", () => {
+    const err = validateChain([
+      dept, unit,
+      shared("State", "0339484f-2315-445d-887f-83534153a905"),
+      shared("Year", "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf"),
+      shared("Document Type", "866c5754-258e-401f-8685-03d20ae59b1d"),
+      perUnit("Clarence Kiwi"),
+    ]);
+    expect(err?.code).toBe("per-unit-not-contiguous");
+    expect(err?.message).toContain("Clarence Kiwi");
+    // Names the tier it sits below, so the admin can see which end to fix.
+    expect(err?.message).toContain("State");
+  });
+
+  it("accepts a per-unit tier directly below Unit", () => {
+    // The SubUnit shape: authored under each unit term, first below the permissioned prefix.
+    expect(validateChain([
+      dept, unit,
+      perUnit("SubUnit"),
+      shared("Year", "023a866a-…"),
+      shared("Document Type", "866c5754-…"),
+    ])).toBeUndefined();
+  });
+
+  it("accepts several per-unit tiers in a row", () => {
+    // A genuine cascade down the segment's own tree: each takes the children of the one above.
+    expect(validateChain([dept, unit, perUnit("SubUnit"), perUnit("Team")])).toBeUndefined();
+  });
+
+  it("accepts a chain of shared-list tiers only", () => {
+    expect(validateChain([
+      dept, unit,
+      shared("Year", "023a866a-…"),
+      shared("Document Type", "866c5754-…"),
+    ])).toBeUndefined();
+  });
+
+  /* ⚠ THE PERMISSIONED TIERS HAVE NO `termSet` EITHER — they draw from the segment set by
+     definition — so a rule that counted them would reject every valid chain in the system. */
+  it("does not count the permissioned prefix as per-unit", () => {
+    expect(validateChain([dept, unit, shared("Year", "023a866a-…")])).toBeUndefined();
+  });
+
+  it("treats a blank or whitespace termSet as per-unit, not as a shared list", () => {
+    /* The 2026-08-26 SDG incident: GHO's Year carried `"termSet": ""`, which IS the per-unit
+       discriminator, and both upload forms hid the tier. A blank string must never read as
+       "has a term set". */
+    const blank: Level = { label: "Year", column: "Year", labelCol: "Year", termSet: "", permissioned: false };
+    const err = validateChain([dept, unit, shared("State", "0339484f-…"), blank]);
+    expect(err?.code).toBe("per-unit-not-contiguous");
+    expect(err?.message).toContain("Year");
+  });
+
+  it("still refuses a permissioned tier below a non-permissioned one, first", () => {
+    // The older rule keeps priority — a chain broken both ways reports the permissioned fault,
+    // which is the one that would silently widen access.
+    const err = validateChain([dept, shared("Year", "023a866a-…"), unit, perUnit("SubUnit")]);
+    expect(err?.code).toBe("prefix-not-contiguous");
+  });
+});
+
+/**
+ * Year and Document Type are fixed below-Unit tiers (client, 2026-09-06 / 2026-09-07): they cannot
+ * be moved or removed, while every other tier can be added, moved or removed around them.
+ */
+describe("isFixedBelowUnitTier", () => {
+  const lvl = (label: string, column?: string): Level =>
+    ({ label, column: column ?? label, labelCol: column ?? label, permissioned: false });
+
+  it("recognises the two fixed tiers by label", () => {
+    expect(isFixedBelowUnitTier(lvl("Year"))).toBe(true);
+    expect(isFixedBelowUnitTier(lvl("Document Type"))).toBe(true);
+  });
+
+  /* The sanitized column is what an admin retyping the level from a config row would produce, and
+     `builtInTierFor` already matches it — the two must agree, or one screen locks the tier and the
+     other offers Remove. */
+  it("recognises Document Type by its sanitized column name too", () => {
+    expect(isFixedBelowUnitTier(lvl("Doc Type", "DocumentType"))).toBe(true);
+  });
+
+  it("is case- and whitespace-insensitive", () => {
+    expect(isFixedBelowUnitTier(lvl("  document   type  "))).toBe(true);
+    expect(isFixedBelowUnitTier(lvl("YEAR"))).toBe(true);
+  });
+
+  it("does not claim an ordinary tier", () => {
+    for (const label of ["State", "SubUnit", "Clarence Kiwi", "Archive", "Yearly", "Document"]) {
+      expect(isFixedBelowUnitTier(lvl(label))).toBe(false);
+    }
+  });
+
+  /* ⚠ THE IDENTITY IS THE NAME, NOT THE TERM SET. A tier removed and re-added through the form comes
+     back carrying whatever term set the admin typed, and it is STILL the fixed Year tier — the
+     column behind it is keyed on the name. */
+  it("still recognises Year when it carries a different term set", () => {
+    expect(isFixedBelowUnitTier({
+      label: "Year", column: "Year", labelCol: "Year",
+      termSet: "some-other-guid", permissioned: false,
+    })).toBe(true);
+  });
+
+  it("answers false for a blank or missing label", () => {
+    expect(isFixedBelowUnitTier({ label: "", column: "", labelCol: "" } as Level)).toBe(false);
+  });
+
+  /* ⚠ IT IS A UI RULE, NOT A VALIDITY RULE. Segments predating the decision may have no Year at all,
+     and refusing their chain would take their uploads down to enforce a preference. */
+  it("does not make validateChain reject a chain without the fixed tiers", () => {
+    const dept: Level = { label: "Department", column: "Department", labelCol: "Department", tidCol: "DepartmentTid" };
+    const unit: Level = { label: "Unit", column: "Unit", labelCol: "Unit", tidCol: "UnitTid" };
+    const state: Level = { label: "State", column: "State", labelCol: "State", termSet: "guid", permissioned: false };
+    expect(validateChain([dept, unit, state])).toBeUndefined();
+  });
+});
+
+/* ── Where a new below-Unit tier may go ────────────────────────────────────── */
+
+describe("allowedTierPositions", () => {
+  const perUnit = (label: string): Level => ({ label, column: label, permissioned: false });
+  const shared = (label: string): Level => ({
+    label, column: label, permissioned: false, termSet: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
+  });
+
+  /* GHO's live shape, and the one the client was looking at: Year and Document Type both carry a
+     term set, so a per-unit tier has exactly ONE valid home and the dropdown must collapse to it. */
+  const ghoBelowUnit = [shared("Year"), shared("Document Type")];
+
+  it("gives a per-unit tier only the slot directly under Unit when every existing tier is shared", () => {
+    expect(allowedTierPositions(ghoBelowUnit, true)).toEqual([0]);
+  });
+
+  it("lets a shared-list tier go anywhere when there is no per-unit run to sit above", () => {
+    expect(allowedTierPositions(ghoBelowUnit, false)).toEqual([0, 1, 2]);
+  });
+
+  /* ⚠ REVERSED 2026-09-08. It used to expect [0, 1] — a SECOND per-unit tier nested under the first,
+     which `validateChain` permits and nobody needs: there is one sub unit per unit. Offering that slot
+     also made the term check lie, since it walks to the UNIT level and would have answered about the
+     wrong one. A second per-unit tier is refused by `perUnitTierExists` with a reason, not by hiding a
+     slot that is technically valid. */
+  it("offers a per-unit tier the same single slot however many tiers exist", () => {
+    const withSub = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    expect(allowedTierPositions(withSub, true)).toEqual([0]);
+    expect(perUnitTierExists(withSub)).toBe(true);
+    expect(perUnitTierExists([shared("Year")])).toBe(false);
+    expect(perUnitTierExists([])).toBe(false);
+  });
+
+  it("keeps a shared-list tier from being inserted above an existing per-unit tier", () => {
+    const withSub = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    // 0 is absent: that slot would put a shared list between Unit and the tier cascading from it.
+    expect(allowedTierPositions(withSub, false)).toEqual([1, 2, 3]);
+  });
+
+  it("offers the first slot to either kind when nothing is below Unit yet", () => {
+    expect(allowedTierPositions([], true)).toEqual([0]);
+    expect(allowedTierPositions([], false)).toEqual([0]);
+  });
+
+  /* A blank or whitespace `termSet` IS the per-unit discriminator — the 2026-08-26 shape, where
+     GHO's Year carried `"termSet": ""` and both upload forms silently hid the tier. Reading it as a
+     shared list here would let a per-unit tier be placed below it. */
+  it("counts a blank or whitespace term set as per-unit, not as a shared list", () => {
+    const blank: Level = { label: "Year", column: "Year", permissioned: false, termSet: "  " };
+    expect(leadingPerUnitCount([blank, shared("Document Type")])).toBe(1);
+    expect(allowedTierPositions([blank, shared("Document Type")], false)).toEqual([1, 2]);
+  });
+
+  /* ⚠ THE PERMISSIONED TIERS HAVE NO TERM SET EITHER. Counting them would report every chain as
+     leading with per-unit tiers and hand a shared-list tier the wrong slots. */
+  it("does not count permissioned tiers, which never carry a term set", () => {
+    const dept: Level = { label: "Department", column: "Department" };
+    const unitLvl: Level = { label: "Unit", column: "Unit" };
+    // Handed a WHOLE chain it counts the two permissioned tiers and answers 2 - which would tell a
+    // shared-list tier it may not take slot 0 or 1 of a below-Unit run that has no per-unit tier at
+    // all. That is the mistake this signature exists to make impossible to write by accident.
+    expect(leadingPerUnitCount([dept, unitLvl, shared("Year")])).toBe(2);
+    // Handed the below-Unit run, which is what every caller passes, it answers correctly.
+    expect(leadingPerUnitCount([shared("Year")])).toBe(0);
+  });
+
+  const FIXED: Level[] = [
+    { label: "Department", column: "Department" },
+    { label: "Unit", column: "Unit" },
+  ];
+
+  /* ⚠ ONE-DIRECTIONAL SINCE 2026-09-08: every slot OFFERED must produce a chain `validateChain`
+     accepts. It is no longer "and every slot left out is one it refuses", because the per-unit rule
+     is now deliberately STRICTER than the validity rule — slot 1 for a second per-unit tier is
+     perfectly valid and simply not offered. Same split as `isFixedBelowUnitTier`: a UI rule, not a
+     validity rule, so a hand-authored chain is never broken by a preference. */
+  it.each([
+    ["per-unit", true],
+    ["shared-list", false],
+  ])("never offers a %s tier a slot validateChain would refuse", (_kind, fromUnit) => {
+    const belowUnit = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    const added = fromUnit ? perUnit("New") : shared("New");
+    for (const p of allowedTierPositions(belowUnit, fromUnit as boolean)) {
+      const run = belowUnit.slice(0, p).concat([added], belowUnit.slice(p));
+      expect(validateChain(FIXED.concat(run))).toBeUndefined();
+    }
+  });
+
+  /* The half that IS still bidirectional, and the one protecting a live segment: a shared-list tier
+     must never be offered a slot above the per-unit run, and every slot it is NOT offered must be one
+     `validateChain` refuses. That is the rule that caught Buah. */
+  it("offers a shared-list tier exactly the slots validateChain accepts", () => {
+    const belowUnit = [perUnit("Sub unit"), shared("Year"), shared("Document Type")];
+    const ok = allowedTierPositions(belowUnit, false);
+    for (let p = 0; p <= belowUnit.length; p++) {
+      const run = belowUnit.slice(0, p).concat([shared("New")], belowUnit.slice(p));
+      const err = validateChain(FIXED.concat(run));
+      if (ok.indexOf(p) === -1) expect(err?.code).toBe("per-unit-not-contiguous");
+      else expect(err).toBeUndefined();
+    }
+  });
+});
+
+describe("clampTierPosition", () => {
+  const perUnit = (label: string): Level => ({ label, column: label, permissioned: false });
+  const shared = (label: string): Level => ({
+    label, column: label, permissioned: false, termSet: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
+  });
+  const gho = [shared("Year"), shared("Document Type")];
+
+  /* THE EXACT DEFAULT THE ADD FORM SHIPPED WITH — `position: onDemand.length`, which rendered as
+     "After Document Type" with "Sub unit" already selected. The worst slot, pre-chosen. */
+  it("snaps the form's own default down to the only slot a per-unit tier may take", () => {
+    expect(clampTierPosition(gho, true, gho.length)).toBe(0);
+  });
+
+  it("leaves a slot alone when it is already allowed", () => {
+    expect(clampTierPosition(gho, false, 1)).toBe(1);
+    expect(clampTierPosition(gho, true, 0)).toBe(0);
+  });
+
+  it("pulls a shared-list tier down to the end of the per-unit run rather than above it", () => {
+    const withSub = [perUnit("Sub unit"), shared("Year")];
+    expect(clampTierPosition(withSub, false, 0)).toBe(1);
+  });
+
+  it("never returns a slot outside the allowed range, whatever it is handed", () => {
+    for (const bad of [-5, 99, NaN, 1.7]) {
+      const p = clampTierPosition(gho, true, bad);
+      expect(allowedTierPositions(gho, true).indexOf(p)).not.toBe(-1);
+    }
+  });
+});
+
+describe("canMoveBelowUnitTier", () => {
+  const perUnit = (label: string): Level => ({ label, column: label, permissioned: false });
+  const shared = (label: string): Level => ({
+    label, column: label, permissioned: false, termSet: "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf",
+  });
+  const dept: Level = { label: "Department", column: "Department" };
+  const unitLvl: Level = { label: "Unit", column: "Unit" };
+  // MHO after the 2026-09-08 migration: Sub Unit, then the two fixed tiers.
+  const chain = [dept, unitLvl, perUnit("Sub Unit"), shared("Year"), shared("Document Type")];
+  const SUB = 2, YEAR = 3, DOCTYPE = 4;
+
+  /* ⚠ THE REPORTED BUG: "I can move subunit below year, that is not suppose to happen." The move was
+     bounded to the below-Unit region and nothing more, so it succeeded and the SAVE refused it — two
+     screens after the chain preview had already shown the broken shape. */
+  it("refuses to move a per-unit tier below a shared-list one", () => {
+    expect(canMoveBelowUnitTier(chain, SUB, 1)).toBe(false);
+  });
+
+  it("refuses to move a shared-list tier above a per-unit one", () => {
+    expect(canMoveBelowUnitTier(chain, YEAR, -1)).toBe(false);
+  });
+
+  it("allows a swap between two shared-list tiers", () => {
+    expect(canMoveBelowUnitTier(chain, YEAR, 1)).toBe(true);
+    expect(canMoveBelowUnitTier(chain, DOCTYPE, -1)).toBe(true);
+  });
+
+  /* The permissioned prefix carries folder ACLs and is rendered locked; reordering one would ask
+     reconciliation to walk a tree that does not exist. */
+  it("refuses to move anything in the permissioned prefix", () => {
+    expect(canMoveBelowUnitTier(chain, 0, 1)).toBe(false);
+    expect(canMoveBelowUnitTier(chain, 1, 1)).toBe(false);
+  });
+
+  it("refuses a move that would leave the below-Unit region", () => {
+    expect(canMoveBelowUnitTier(chain, SUB, -1)).toBe(false);
+    expect(canMoveBelowUnitTier(chain, DOCTYPE, 1)).toBe(false);
+  });
+
+  /* ⚠ THE AGREEMENT THAT MATTERS: every move it ALLOWS must produce a chain the save accepts, and
+     every move it refuses inside the region must be one the save would have refused. Two answers to
+     "which swaps are legal" is how the buttons and the save come to disagree. */
+  it("agrees with validateChain on every move within the region", () => {
+    for (let i = 2; i < chain.length; i++) {
+      for (const d of [-1, 1]) {
+        const to = i + d;
+        if (to < 2 || to >= chain.length) continue;
+        const next = chain.slice();
+        const item = next[i];
+        next.splice(i, 1);
+        next.splice(to, 0, item);
+        expect(canMoveBelowUnitTier(chain, i, d)).toBe(validateChain(next) === undefined);
+      }
+    }
+  });
+});
+
+/* =====================================================================================
+ * Per-level folder codes (2026-09-09).
+ *
+ * Spec: docs/superpowers/specs/2026-09-09-below-unit-abbreviations-design.md
+ * ===================================================================================== */
+/* Every below-Unit level is named by its terms' abbreviations EXCEPT Year and Document Type
+   (client, 2026-09-09). Derived, never stored — see `isAbbreviatedLevel`. */
+describe("below-Unit folder codes", () => {
+  const sub: Level = { label: "Sub Unit", column: "SubUnit", permissioned: false };
+  // `Year` is one of the two fixed tiers, so it is NOT abbreviated — there is no code for `2024`.
+  const plain: Level = { label: "Year", column: "Year", permissioned: false, termSet: "y" };
+  const pickSub = { id: "T-1", label: "Expatriate Formalities Subunit" };
+  const pickYear = { id: "T-9", label: "2024" };
+  const codes = { "t-1": "EFS", "t-9": "YR24" };
+
+  it("names Year from the label — the fixed pair is never abbreviated", () => {
+    const r = buildOnDemandSegments([plain], { Year: pickYear }, codes);
+    expect(r.segments).toEqual(["2024"]);
+    expect(r.uncoded).toEqual([]);
+  });
+
+  it("ignores a code that exists for Year, so a stray row cannot rename its folders", () => {
+    expect(folderCodeFor(plain, "T-9", codes)).toBe("");
+  });
+
+  it("also exempts Document Type, matched the same way Year is", () => {
+    const dt: Level = { label: "Document Type", column: "DocumentType", permissioned: false };
+    expect(isAbbreviatedLevel(dt)).toBe(false);
+    expect(isAbbreviatedLevel(plain)).toBe(false);
+    expect(isAbbreviatedLevel(sub)).toBe(true);
+  });
+
+  it("names an ordinary below-Unit level from its code", () => {
+    const r = buildOnDemandSegments([sub], { SubUnit: pickSub }, codes);
+    expect(r.segments).toEqual(["EFS"]);
+    expect(r.missing).toEqual([]);
+    expect(r.uncoded).toEqual([]);
+  });
+
+  it("REPORTS a term with no code — it never falls back to the label", () => {
+    // The fallback is what would put `EFS` and `Expatriate Formalities Subunit` in one tree,
+    // and give the same term two folders the moment the code was filled in.
+    const r = buildOnDemandSegments([sub], { SubUnit: pickSub }, {});
+    expect(r.segments).toEqual([]);
+    expect(r.uncoded).toEqual(["Expatriate Formalities Subunit"]);
+  });
+
+  it("reports the TERM label, not the tier label — they answer different questions", () => {
+    const r = buildOnDemandSegments([sub], { SubUnit: pickSub }, {});
+    expect(r.uncoded).toEqual(["Expatriate Formalities Subunit"]);
+    expect(r.uncoded).not.toEqual(["Sub Unit"]);
+  });
+
+  it("treats a blank or whitespace code as no code", () => {
+    expect(buildOnDemandSegments([sub], { SubUnit: pickSub }, { "t-1": "   " }).uncoded.length).toBe(1);
+    expect(buildOnDemandSegments([sub], { SubUnit: pickSub }, { "t-1": "" }).uncoded.length).toBe(1);
+  });
+
+  it("treats a code that sanitizes to nothing as no code", () => {
+    // `///` yields an empty folder name, which would build `unit//2024` — SharePoint collapses that
+    // to `unit/2024`, a silent level-too-shallow. Reported instead.
+    expect(buildOnDemandSegments([sub], { SubUnit: pickSub }, { "t-1": "///" }).uncoded.length).toBe(1);
+  });
+
+  it("matches the code key case-insensitively in BOTH directions", () => {
+    // A GUID is written upper- and lower-case all over this codebase, and the abbreviation list
+    // stores whatever was pasted in. Normalising only the lookup made every hit miss — and a miss
+    // REFUSES the upload, so a coded level would have read as "no codes filled in".
+    expect(
+      buildOnDemandSegments([sub], { SubUnit: { id: "t-1", label: "x" } }, { "T-1": "EFS" }).segments,
+    ).toEqual(["EFS"]);
+    expect(
+      buildOnDemandSegments([sub], { SubUnit: { id: "T-1", label: "x" } }, { "t-1": "EFS" }).segments,
+    ).toEqual(["EFS"]);
+  });
+
+  it("still reports a tier with NO selection as missing, not uncoded", () => {
+    const r = buildOnDemandSegments([sub], {}, codes);
+    expect(r.missing).toEqual(["Sub Unit"]);
+    expect(r.uncoded).toEqual([]);
+  });
+
+  it("carries on past an uncoded tier so every problem is reported at once", () => {
+    // An uploader told about one gap at a time fixes one, retries, and meets the next.
+    const r = buildOnDemandSegments([sub, plain], { SubUnit: pickSub }, {});
+    expect(r.uncoded.length).toBe(1);
+    expect(r.missing).toEqual(["Year"]);
+  });
+
+  it("a chain written before codes existed is still abbreviated — the rule is derived", () => {
+    // No flag is stored anywhere, so an old chain and a new one behave identically. That is what
+    // makes the client's "enforce it everywhere" possible without a data migration.
+    const legacy: Level = { label: "Sub Unit", column: "SubUnit", permissioned: false };
+    expect(buildOnDemandSegments([legacy], { SubUnit: pickSub }, {}).uncoded).toEqual([
+      "Expatriate Formalities Subunit",
+    ]);
+  });
+});

@@ -1,0 +1,69 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Dependency directories
+node_modules
+
+# Build generated files
+dist
+lib
+lib-dts
+lib-commonjs
+lib-esm
+jest-output
+release
+solution
+temp
+*.sppkg
+.heft
+
+# Coverage directory used by tools like istanbul
+coverage
+
+# OSX
+.DS_Store
+
+# Visual Studio files
+.ntvs_analysis.dat
+.vs
+bin
+obj
+
+# Resx Generated Code
+*.resx.ts
+
+# Styles Generated Code
+*.scss.ts
+
+# Brainstorming visual companion
+.superpowers
+
+# Dev harness generated bundle
+dev/**/*.bundle.js
+
+# Client data exports — migration scratch, not source
+/DMS Group Map.csv
+/DMS Term Abbreviation.csv
+
+# Exported Power Automate flow definitions — tenant identifiers and connection
+# GUIDs, so not source-controlled (client's call, 2026-09-10). The flows are NOT
+# recoverable from this repo: their only record is the runbooks under
+# docs/superpowers/specs/ and CLAUDE.md's own flow sections, which is exactly why
+# those must be updated whenever a flow changes.
+/PowerAutomateFlows/
+
+# Exported Power Automate flows (current folder). Kept out of the repo, same rule as
+# /PowerAutomateFlows/ above; the project owner keeps the backup.
+/PowerAutomateFlowsSDG/
+
+# Client data exports and live-site schema dumps (contain group names / staff names)
+/CRS-groups-*.csv
+crs-schema-*.json
+
+# Personal Claude Code settings
+.claude/settings.local.json
+# Old June Claude Code notes (kept locally only)
+.claude/requirements.md
+.claude/backlog.md

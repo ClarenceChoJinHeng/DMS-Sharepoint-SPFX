@@ -1,0 +1,471 @@
+import {
+  FIXED_FIELDS,
+  BATCH_FIXED_FIELDS,
+  FILE_FIXED_FIELDS,
+  buildBatchRows,
+  buildFileRows,
+  buildDetailRows,
+  discoverTierFields,
+  documentUnit,
+  encodedKey,
+  fieldKeys,
+  formatBytes,
+  labelFromInternalName,
+  readField,
+  routeToApprover,
+  tidBase,
+  tierRows,
+} from "./documentDetails";
+
+/**
+ * A file on Upstream Operations Malaysia — the segment that exposed the bug. Its tiers are Region
+ * and Estate/Mill; it has no Department and no Unit, so a hardcoded panel showed neither and dropped
+ * both as blank.
+ */
+const UPOPSMY: Record<string, string> = {
+  Business_x005f_x0020_x005f_Segment: "Upstream Operations Malaysia",
+  BusinessSegmentTid: "11111111-1111-1111-1111-111111111111",
+  Region: "Johor",
+  RegionTid: "22222222-2222-2222-2222-222222222222",
+  EstateMill: "Bukit Example",
+  EstateMillTid: "33333333-3333-3333-3333-333333333333",
+  Year: "2024",
+  Document_x005f_x0020_x005f_Type: "Working File",
+  DocumentDate: "8/13/2026 12:00 AM",
+  Confidentiality_x005f_x0020_x005f_Level: "Confidential",
+  LegallyPrivileged: "Yes",
+  Remark: "test",
+};
+
+/** A Group Head Office file — Department and Unit, no Region. The other half of the same problem. */
+const GHO: Record<string, string> = {
+  Business_x005f_x0020_x005f_Segment: "Group Head Office",
+  BusinessSegmentTid: "aaaaaaaa-1111-1111-1111-111111111111",
+  Department: "Group Finance",
+  DepartmentTid: "bbbbbbbb-2222-2222-2222-222222222222",
+  Unit: "Corporate Reporting",
+  UnitTid: "cccccccc-3333-3333-3333-333333333333",
+  Year: "2026",
+};
+
+describe("encodedKey / fieldKeys — the double-encoded name, derived not typed", () => {
+  it("double-encodes every underscore", () => {
+    expect(encodedKey("Business_x0020_Segment")).toBe("Business_x005f_x0020_x005f_Segment");
+  });
+
+  it("handles a LEADING underscore, which is the built-in Description", () => {
+    expect(encodedKey("_ExtendedDescription")).toBe("_x005f_ExtendedDescription");
+  });
+
+  it("leaves a name with no underscore alone, and offers only one key for it", () => {
+    expect(encodedKey("DocumentDate")).toBe("DocumentDate");
+    expect(fieldKeys("DocumentDate")).toEqual(["DocumentDate"]);
+  });
+
+  it("puts the ENCODED spelling first — that is what a live response uses", () => {
+    expect(fieldKeys("Vendor_x002f_CustomerName")[0]).toBe("Vendor_x005f_x002f_x005f_CustomerName");
+  });
+
+  it("returns nothing for a blank name rather than a key that matches everything", () => {
+    expect(fieldKeys("")).toEqual([]);
+    expect(fieldKeys("   ")).toEqual([]);
+  });
+});
+
+describe("readField", () => {
+  it("finds a value under the double-encoded key", () => {
+    expect(readField(UPOPSMY, "Business_x0020_Segment")).toBe("Upstream Operations Malaysia");
+  });
+
+  it("finds a value under the plain key", () => {
+    expect(readField(UPOPSMY, "Region")).toBe("Johor");
+  });
+
+  it("is blank for an absent field, and survives a missing response", () => {
+    expect(readField(UPOPSMY, "Department")).toBe("");
+    expect(readField(undefined as unknown as Record<string, string>, "Region")).toBe("");
+  });
+
+  it("treats a whitespace-only value as blank, so it is dropped rather than shown empty", () => {
+    expect(readField({ Remark: "   " }, "Remark")).toBe("");
+  });
+});
+
+describe("tidBase", () => {
+  it("strips encoded characters to give the name the Tid column is derived from", () => {
+    expect(tidBase("Business_x0020_Segment")).toBe("BusinessSegment");
+  });
+
+  it("leaves an already-sanitized name alone", () => {
+    // sanitizeFolderSegment REMOVES illegal characters, so "Estate/Mill" became "EstateMill".
+    expect(tidBase("EstateMill")).toBe("EstateMill");
+    expect(tidBase("Department")).toBe("Department");
+  });
+});
+
+describe("labelFromInternalName", () => {
+  it("recovers the real display name when the space was encoded", () => {
+    expect(labelFromInternalName("Business_x0020_Segment")).toBe("Business Segment");
+  });
+
+  it("splits camel case for a name sanitized at creation", () => {
+    // "Estate/Mill" lost its slash permanently. "Estate Mill" is readable and does not invent
+    // punctuation nobody typed.
+    expect(labelFromInternalName("EstateMill")).toBe("Estate Mill");
+    expect(labelFromInternalName("SubUnit")).toBe("Sub Unit");
+  });
+
+  it("leaves a single-word name untouched", () => {
+    expect(labelFromInternalName("Region")).toBe("Region");
+    expect(labelFromInternalName("Unit")).toBe("Unit");
+  });
+
+  it("does not re-split a name the decoding already spaced", () => {
+    expect(labelFromInternalName("Project_x0020_Name")).toBe("Project Name");
+  });
+
+  it("keeps an acronym together rather than exploding it", () => {
+    expect(labelFromInternalName("ITOperatingUnit")).toBe("IT Operating Unit");
+  });
+
+  it("is blank for a blank name", () => {
+    expect(labelFromInternalName("")).toBe("");
+  });
+});
+
+describe("discoverTierFields — the fix for the vanished tiers", () => {
+  it("finds Region and Estate/Mill on a segment nobody wrote code for", () => {
+    // The whole point: no list anywhere names these.
+    expect(discoverTierFields(UPOPSMY)).toEqual(["Business_x0020_Segment", "Region", "EstateMill"]);
+  });
+
+  it("finds Department and Unit on Group Head Office", () => {
+    expect(discoverTierFields(GHO)).toEqual(["Business_x0020_Segment", "Department", "Unit"]);
+  });
+
+  it("PINS Business Segment first even when it arrives last", () => {
+    const reordered: Record<string, string> = {
+      Region: "Johor",
+      RegionTid: "x",
+      Business_x005f_x0020_x005f_Segment: "Upstream Operations Malaysia",
+      BusinessSegmentTid: "y",
+    };
+    expect(discoverTierFields(reordered)[0]).toBe("Business_x0020_Segment");
+  });
+
+  it("EXCLUDES the Tid columns themselves — they hold GUIDs", () => {
+    const found = discoverTierFields(UPOPSMY);
+    expect(found.filter((f) => /Tid$/.test(f))).toEqual([]);
+    expect(JSON.stringify(tierRows(UPOPSMY))).not.toContain("2222-2222");
+  });
+
+  it("ignores a field with no Tid twin — that is what makes it not a tier", () => {
+    // Year and Document Type are managed metadata and deliberately have no Tid column.
+    const found = discoverTierFields(UPOPSMY);
+    expect(found).not.toContain("Year");
+    expect(found).not.toContain("Document_x0020_Type");
+    expect(found).not.toContain("Remark");
+  });
+
+  it("does not list one field twice when both spellings are present", () => {
+    const both: Record<string, string> = {
+      Business_x005f_x0020_x005f_Segment: "A",
+      Business_x0020_Segment: "A",
+      BusinessSegmentTid: "x",
+    };
+    expect(discoverTierFields(both)).toEqual(["Business_x0020_Segment"]);
+  });
+
+  it("returns nothing rather than throwing on an empty or missing response", () => {
+    expect(discoverTierFields({})).toEqual([]);
+    expect(discoverTierFields(undefined as unknown as Record<string, string>)).toEqual([]);
+  });
+});
+
+describe("tierRows", () => {
+  it("labels and orders the tiers as the hierarchy reads", () => {
+    expect(tierRows(UPOPSMY)).toEqual([
+      { label: "Segment", value: "Upstream Operations Malaysia" },
+      { label: "Region", value: "Johor" },
+      { label: "Estate Mill", value: "Bukit Example" },
+    ]);
+  });
+
+  /* The label is the FAMILY's, not the column's (client, 2026-09-02). Pinned because the column is
+     `Business_x0020_Segment` for a project too — there is no second column — so nothing in the data
+     itself could ever catch a regression here. */
+  it("renames ONLY the top row when a segment label is given", () => {
+    expect(tierRows(UPOPSMY, "Group-Led Project")).toEqual([
+      { label: "Group-Led Project", value: "Upstream Operations Malaysia" },
+      { label: "Region", value: "Johor" },
+      { label: "Estate Mill", value: "Bukit Example" },
+    ]);
+  });
+
+  it("keeps Segment when no label is given — the twelve-of-thirteen case", () => {
+    expect(tierRows(UPOPSMY)[0].label).toBe("Segment");
+    expect(tierRows(UPOPSMY, undefined)[0].label).toBe("Segment");
+  });
+
+  it("drops a tier column that exists but has no value for this document", () => {
+    // An optional SubUnit does not apply to every unit; an em dash row would be noise.
+    const withEmptySub = { ...UPOPSMY, SubUnit: "", SubUnitTid: "" };
+    expect(tierRows(withEmptySub).map((r) => r.label)).not.toContain("Sub Unit");
+  });
+});
+
+describe("buildDetailRows", () => {
+  it("puts the tiers ABOVE the fixed fields — where it lives, then what it is", () => {
+    const labels = buildDetailRows({ fieldText: UPOPSMY }).map((r) => r.label);
+    expect(labels.indexOf("Region")).toBeLessThan(labels.indexOf("Document Type"));
+    expect(labels.indexOf("Estate Mill")).toBeLessThan(labels.indexOf("Document Type"));
+  });
+
+  it("includes every fixed field, in the library's own order, whether or not it has a value", () => {
+    const labels = buildDetailRows({ fieldText: UPOPSMY }).map((r) => r.label);
+    // "Remark" removed 2026-09-21 (client) — FILE_FIXED_FIELDS no longer includes it.
+    expect(labels).toEqual([
+      "Segment", "Region", "Estate Mill",
+      "Document Type", "Year", "Document Date", "Confidentiality",
+      "Legally Privileged", "Project Name", "Vendor / Customer", "Keyword",
+    ]);
+  });
+
+  it("shows a dash for a blank fixed field rather than dropping it (2026-09-11)", () => {
+    // UPOPSMY has no Project Name, Vendor/Customer or Keyword — the row still appears, with
+    // a dash, so a blank field and a MISSING one never look identical (client, 2026-09-11: "can we
+    // show Keyword -, like how ApprovalDocument.aspx shows empty dashes? Keeping it consistent").
+    const rows = buildDetailRows({ fieldText: UPOPSMY });
+    const byLabel = (label: string): string | undefined => rows.find((r) => r.label === label)?.value;
+    expect(byLabel("Project Name")).toBe("—");
+    expect(byLabel("Vendor / Customer")).toBe("—");
+    expect(byLabel("Details")).toBeUndefined();
+    expect(byLabel("Keyword")).toBe("—");
+  });
+
+  it("still DROPS a blank tier row — a different question, answered differently", () => {
+    // A Group Head Office document has no Region/Estate Mill at all: that tier does not apply, and
+    // padding every document on every segment with every OTHER segment's tier names is the clutter
+    // this rule exists to avoid. Fixed fields carry no such multiplication — there are always the
+    // same ten, on every document — which is why they get the opposite rule above.
+    const labels = buildDetailRows({ fieldText: GHO }).map((r) => r.label);
+    expect(labels).not.toContain("Region");
+    expect(labels).not.toContain("Estate Mill");
+  });
+
+  it("keeps a caller row EXACTLY as given, blank or not — 'unknown' is meant", () => {
+    const rows = buildDetailRows({
+      fieldText: {},
+      leading: [{ label: "Location", value: "" }],
+      trailing: [{ label: "File size", value: "unknown" }],
+    });
+    expect(rows).toEqual([
+      { label: "Location", value: "" },
+      { label: "File size", value: "unknown" },
+    ]);
+  });
+
+  it("puts leading rows first and trailing rows last", () => {
+    const rows = buildDetailRows({
+      fieldText: GHO,
+      leading: [{ label: "Location", value: "GHO › GF › CORU" }],
+      trailing: [{ label: "File size", value: "1.4 MB" }],
+    });
+    expect(rows[0].label).toBe("Location");
+    expect(rows[rows.length - 1].label).toBe("File size");
+  });
+
+  it("returns nothing but the caller's rows when the metadata could not be read", () => {
+    // The screen distinguishes "could not read" from "nothing recorded". `fetchFieldText` answers
+    // `{}` ONLY on a failed read — a real item always carries at least an Id — so an entirely empty
+    // `fieldText` must NOT be dashed out as though every field were read and found blank.
+    expect(buildDetailRows({ fieldText: {} })).toEqual([]);
+  });
+
+  it("names LegallyPrivileged so a 'No' is shown, not blanked", () => {
+    // Yes/No comes back as the words, which is the whole point on a privilege flag.
+    const rows = buildDetailRows({ fieldText: { LegallyPrivileged: "No" } });
+    expect(rows.find((r) => r.label === "Legally Privileged")?.value).toBe("No");
+  });
+
+  it("never re-parses the document date — it arrives formatted by SharePoint", () => {
+    // Re-parsing is how the M/D/YYYY trap of gotcha #1 gets reintroduced.
+    const rows = buildDetailRows({ fieldText: { DocumentDate: "8/13/2026 12:00 AM" } });
+    expect(rows.find((r) => r.label === "Document Date")?.value).toBe("8/13/2026 12:00 AM");
+  });
+});
+
+describe("FIXED_FIELDS", () => {
+  it("names no tier column — those are discovered, never listed", () => {
+    // The bug: Department and Unit were in this list, so Region and Estate/Mill could never appear.
+    const names = FIXED_FIELDS.map((f) => f.field);
+    expect(names).not.toContain("Department");
+    expect(names).not.toContain("Unit");
+    expect(names).not.toContain("Business_x0020_Segment");
+  });
+});
+
+describe("formatBytes", () => {
+  it("formats a byte string, which is what File/Length returns", () => {
+    expect(formatBytes("1483776")).toBe("1.4 MB");
+    expect(formatBytes(2048)).toBe("2 KB");
+  });
+
+  it("shows bytes below 1 KB", () => {
+    expect(formatBytes("512")).toBe("512 B");
+  });
+
+  it("drops the decimal above 10, where it is noise", () => {
+    expect(formatBytes(867532)).toBe("847 KB");
+  });
+
+  it("is blank rather than 'NaN' for anything unreadable", () => {
+    expect(formatBytes(undefined)).toBe("");
+    expect(formatBytes("")).toBe("");
+    expect(formatBytes("not a number")).toBe("");
+    expect(formatBytes(-5)).toBe("");
+  });
+
+  it("handles zero as a real size, not as missing", () => {
+    expect(formatBytes(0)).toBe("0 B");
+  });
+});
+
+/**
+ * A Group Head Office file with a below-Unit SubUnit tier — the shape that makes "deepest tier" the
+ * wrong routing key. SubUnit carries a Tid column exactly like a permissioned tier does.
+ */
+const WITH_SUBUNIT: Record<string, string> = {
+  Business_x005f_x0020_x005f_Segment: "Group Head Office",
+  BusinessSegmentTid: "seg-guid",
+  Department: "Group Finance",
+  DepartmentTid: "dept-guid",
+  Unit: "Corporate Reporting",
+  UnitTid: "unit-guid",
+  SubUnit: "Treasury Ops",
+  SubUnitTid: "subunit-guid",
+  Year: "2026",
+};
+
+describe("documentUnit", () => {
+  it("reads the tier chain with the GUIDs behind the labels", () => {
+    const u = documentUnit(WITH_SUBUNIT);
+    expect(u.segment).toBe("Group Head Office");
+    expect(u.tiers.map((t) => t.value)).toEqual(["Group Finance", "Corporate Reporting", "Treasury Ops"]);
+    expect(u.tiers.map((t) => t.guid)).toEqual(["dept-guid", "unit-guid", "subunit-guid"]);
+  });
+
+  it("keeps the segment out of the tier chain — it is named separately", () => {
+    expect(documentUnit(WITH_SUBUNIT).tiers.map((t) => t.label)).not.toContain("Business Segment");
+  });
+
+  it("works on a segment nobody wrote code for", () => {
+    const u = documentUnit(UPOPSMY);
+    expect(u.segment).toBe("Upstream Operations Malaysia");
+    expect(u.tiers.map((t) => t.label)).toEqual(["Region", "Estate Mill"]);
+  });
+
+  it("drops a tier with no GUID — it cannot route anything", () => {
+    const u = documentUnit({ Region: "Johor", RegionTid: "", EstateMill: "Bukit Benut", EstateMillTid: "e-guid" });
+    expect(u.tiers.map((t) => t.guid)).toEqual(["e-guid"]);
+    expect(u.unitTermGuid).toBe("e-guid");
+  });
+
+  it("is empty rather than throwing on a document with no tiers at all", () => {
+    const u = documentUnit({ Year: "2026" });
+    expect(u.tiers).toEqual([]);
+    expect(u.unitTermGuid).toBe("");
+  });
+});
+
+describe("routeToApprover", () => {
+  it("picks the tier an approver is actually mapped to, NOT the deepest one", () => {
+    // The whole reason the chain is returned: SubUnit is below Unit and no group is mapped to it, so
+    // routing on the deepest tier would file the request where nobody can see it.
+    const hit = routeToApprover(documentUnit(WITH_SUBUNIT), ["unit-guid"]);
+    expect(hit && hit.guid).toBe("unit-guid");
+    expect(hit && hit.value).toBe("Corporate Reporting");
+  });
+
+  it("searches deepest-first, so a department mapping never beats a unit one", () => {
+    const hit = routeToApprover(documentUnit(WITH_SUBUNIT), ["dept-guid", "unit-guid"]);
+    expect(hit && hit.guid).toBe("unit-guid");
+  });
+
+  it("matches case-insensitively — a GUID's case is not data", () => {
+    const hit = routeToApprover(documentUnit(WITH_SUBUNIT), ["UNIT-GUID"]);
+    expect(hit && hit.guid).toBe("unit-guid");
+  });
+
+  it("is undefined when nothing matches — which is NOT the same as no approver existing", () => {
+    expect(routeToApprover(documentUnit(WITH_SUBUNIT), ["someone-else"])).toBeUndefined();
+    // An unreadable Group Map arrives here as an empty set and must look identical.
+    expect(routeToApprover(documentUnit(WITH_SUBUNIT), [])).toBeUndefined();
+  });
+});
+
+/* ── The batch / file split (2026-08-22) ───────────────────────────────────────
+   The read-only batch view renders the destination once and each file's own details beneath it, so
+   the two halves must partition the fixed fields exactly — no field lost, none shown twice. */
+describe("batch and file field split", () => {
+  it("partitions FIXED_FIELDS with nothing lost or duplicated", () => {
+    const halves = BATCH_FIXED_FIELDS.concat(FILE_FIXED_FIELDS).map((f) => f.field);
+    expect(halves).toEqual(FIXED_FIELDS.map((f) => f.field));
+    expect(halves.length).toBe(new Set(halves).size);
+  });
+
+  it("puts Year and Document Type on the BATCH — they are folder tiers, chosen once", () => {
+    const names = BATCH_FIXED_FIELDS.map((f) => f.field);
+    expect(names).toContain("Year");
+    expect(names).toContain("Document_x0020_Type");
+    expect(FILE_FIXED_FIELDS.map((f) => f.field)).not.toContain("Year");
+  });
+
+  it("buildBatchRows carries the tiers and the built-in pair, and no per-file field", () => {
+    const ft = {
+      Business_x005f_x0020_x005f_Segment: "Group Head Office",
+      BusinessSegmentTid: "g-1",
+      Unit: "Tax",
+      UnitTid: "g-2",
+      Year: "2024",
+      Document_x005f_x0020_x005f_Type: "Agreement",
+      Remark: "please review",
+    };
+    const labels = buildBatchRows(ft).map((r) => r.label);
+    expect(labels).toEqual(["Segment", "Unit", "Document Type", "Year"]);
+    expect(labels).not.toContain("Remark");
+  });
+
+  it("buildFileRows carries every per-file field, dashed if blank, and no destination field", () => {
+    // "Remark" is fed into the fixture on purpose — FILE_FIXED_FIELDS no longer lists it (removed
+    // 2026-09-21), so this also proves an UNLISTED field in fieldText is correctly dropped, not
+    // just that a listed-but-blank one is dashed.
+    const rows = buildFileRows({
+      fieldText: { Year: "2024", Remark: "please review", ProjectName: "Alpha" },
+      trailing: [{ label: "File size", value: "1.4 MB" }],
+    });
+    const labels = rows.map((r) => r.label);
+    expect(labels).toEqual([
+      "Document Date", "Confidentiality", "Legally Privileged",
+      "Project Name", "Vendor / Customer", "Keyword",
+      "File size",
+    ]);
+    expect(labels).not.toContain("Year"); // a BATCH field — always excluded here, blank or not
+    expect(labels).not.toContain("Remark"); // no longer a fixed field at all
+    expect(rows.find((r) => r.label === "Project Name")?.value).toBe("Alpha");
+    expect(rows.find((r) => r.label === "Document Date")?.value).toBe("—");
+  });
+
+  it("dashes a blank fixed field in both halves, but a read failure still yields nothing", () => {
+    // One key present (Year, even blank) means "we read something", so both batch fields show a
+    // dash rather than vanishing.
+    expect(buildBatchRows({ Year: "  " })).toEqual([
+      { label: "Document Type", value: "—" },
+      { label: "Year", value: "—" },
+    ]);
+    // An entirely empty fieldText is the READ-FAILED case: nothing is dashed out, and a caller's own
+    // trailing row still comes through exactly as given.
+    expect(buildFileRows({ fieldText: {}, trailing: [{ label: "File size", value: "" }] }))
+      .toEqual([{ label: "File size", value: "" }]);
+  });
+});

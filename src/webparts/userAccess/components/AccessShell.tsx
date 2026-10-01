@@ -1,0 +1,49 @@
+import * as React from "react";
+
+/**
+ * Common chrome for the four access pages.
+ *
+ * Split out of Folder & Group Manager on 2026-08-07 (spec
+ * `2026-08-07-access-webpart-split-design.md`), then split again into ONE PAGE PER SURFACE at
+ * the client's direction. Each page is its own web part with its own Page Access row, so the
+ * person who manages folder mappings need not be the person who manages site entry.
+ *
+ * This exists so the four pages cannot drift apart visually — they are peers and should read
+ * as peers.
+ */
+const s: Record<string, React.CSSProperties> = {
+  wrap:     { maxWidth: 880, margin: "32px auto", padding: "0 24px 48px", fontFamily: "Arial, sans-serif" },
+  h2:       { fontSize: 28, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
+  subtitle: { fontSize: 13, color: "#666", margin: "0 0 24px" },
+  note:     { fontSize: 12, color: "#605e5c", lineHeight: 1.5, margin: "0 0 20px", padding: "10px 12px", background: "#f6f8f6", border: "1px solid #e1e8e3", borderRadius: 6 },
+};
+
+export interface AccessShellProps {
+  title: string;
+  /**
+   * OPTIONAL since 2026-09-04 — Page Access's was removed at the client's request and the heading now
+   * stands on its own there.
+   *
+   * ⚠ AN ABSENT SUBTITLE RENDERS NOTHING, not an empty paragraph. `<p>` carries the 24px bottom
+   * margin that separates the heading from the page, so rendering it empty would leave a blank gap
+   * that reads as a failed load rather than as a deliberate omission — and the five pages that DO
+   * pass one are unaffected either way.
+   */
+  subtitle?: string;
+  /** Only Folder Access needs one — see FolderAccessPage. */
+  note?: React.ReactNode;
+  /** Lets one page restyle its own shell (e.g. Group Management's padding). */
+  className?: string;
+  children: React.ReactNode;
+}
+
+export default function AccessShell({ title, subtitle, note, className, children }: AccessShellProps): React.ReactElement {
+  return (
+    <section style={s.wrap} className={className}>
+      <h2 style={s.h2}>{title}</h2>
+      {subtitle !== undefined && <p style={s.subtitle}>{subtitle}</p>}
+      {note !== undefined && <p style={s.note}>{note}</p>}
+      {children}
+    </section>
+  );
+}

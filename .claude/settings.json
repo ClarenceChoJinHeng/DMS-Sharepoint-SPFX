@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx heft *)",
+      "Bash(node harness.js)",
+      "Bash(npx eslint *)",
+      "Bash(grep -E \"Successes:|Failures:|Total:|warnings$\")",
+      "Bash(npm run *)",
+      "Bash(unzip -p sharepoint/solution/sd-guthrie.sppkg AppManifest.xml)",
+      "Bash(unzip -l sharepoint/solution/sd-guthrie.sppkg)",
+      "Bash(unzip -p sharepoint/solution/sd-guthrie.sppkg \"ClientSideAssets/my-submissions-web-part_*.js\")",
+      "Read(//tmp/**)"
+    ]
+  }
+}

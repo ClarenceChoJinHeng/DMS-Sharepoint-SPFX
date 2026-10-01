@@ -1,0 +1,22 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-web-part-manifest.schema.json",
+  "id": "ba145053-3728-4b6c-8a1e-a393c520abb2",
+  "alias": "FolderStructureWebPart",
+  "componentType": "WebPart",
+
+  "version": "*",
+  "manifestVersion": 2,
+
+  "requiresCustomScript": false,
+  "supportedHosts": ["SharePointWebPart", "SharePointFullPage"],
+  "supportsThemeVariants": true,
+
+  "preconfiguredEntries": [{
+    "groupId": "5c03119e-3074-46fd-976b-c60198311f70",
+    "group": { "default": "Advanced" },
+    "title": { "default": "Folder Structure" },
+    "description": { "default": "Admin tool — add or reorder the folder levels beneath Unit for a business segment" },
+    "officeFabricIconFontName": "FolderList",
+    "properties": {}
+  }]
+}

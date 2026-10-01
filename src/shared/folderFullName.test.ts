@@ -1,0 +1,94 @@
+import { pickFullNameField, SpFieldLite } from "./folderFullName";
+
+const field = (over: Partial<SpFieldLite>): SpFieldLite => ({
+  Title: "Full Name",
+  InternalName: "Full_x0020_Name",
+  TypeAsString: "Text",
+  ReadOnlyField: false,
+  ...over,
+});
+
+describe("pickFullNameField", () => {
+  it("returns the internal name, which is not derivable from the display name", () => {
+    // The whole reason this function exists: the same display name can encode either way
+    // depending on how the column was created. Both are real, so we read, never guess.
+    expect(pickFullNameField([field({})])).toBe("Full_x0020_Name");
+    expect(pickFullNameField([field({ InternalName: "FullName" })])).toBe("FullName");
+  });
+
+  it("returns undefined when the column is absent", () => {
+    // Soft state — reconciliation carries on without writing a full name rather than
+    // aborting a run whose real job is folders and ACLs.
+    expect(pickFullNameField([])).toBeUndefined();
+    expect(pickFullNameField([field({ Title: "Title", InternalName: "Title" })])).toBeUndefined();
+  });
+
+  it("ignores case and surrounding whitespace in the display name", () => {
+    expect(pickFullNameField([field({ Title: " full name " })])).toBe("Full_x0020_Name");
+  });
+
+  it("accepts the column however the space was typed", () => {
+    // Live 2026-08-02: Staging was created as "Full Name", Documents as "FullName".
+    // Exact matching filled one library and silently skipped ~190 folders in the other.
+    expect(pickFullNameField([field({ Title: "FullName", InternalName: "FullName" })])).toBe("FullName");
+    expect(pickFullNameField([field({ Title: "Full  Name" })])).toBe("Full_x0020_Name");
+    expect(pickFullNameField([field({ Title: "Full-Name" })])).toBe("Full_x0020_Name");
+  });
+
+  it("matches on the internal name when the display name was changed", () => {
+    // Renaming a column changes Title but never InternalName, so a client who renames
+    // "Full Name" to something friendlier must not silently lose the feature.
+    expect(pickFullNameField([field({ Title: "Department Full Title", InternalName: "Full_x0020_Name" })]))
+      .toBe("Full_x0020_Name");
+  });
+
+  it("still rejects a name that merely contains the words", () => {
+    // "fullname" is the whole key, not a substring test — a column called
+    // "Full Name Of Approver" is a different column and must not be written to.
+    expect(pickFullNameField([field({ Title: "Full Name Of Approver", InternalName: "Approver" })]))
+      .toBeUndefined();
+  });
+
+  it("rejects a read-only field of the same name", () => {
+    // A calculated column would accept the MERGE and silently discard the value, so it
+    // must not be selected at all — a silent no-op is worse than no column.
+    expect(pickFullNameField([field({ ReadOnlyField: true })])).toBeUndefined();
+  });
+
+  it("rejects non-text types", () => {
+    // A Choice column cannot hold an arbitrary term label; picking it would turn a
+    // config mistake into a per-folder write failure repeated hundreds of times.
+    expect(pickFullNameField([field({ TypeAsString: "Choice" })])).toBeUndefined();
+    expect(pickFullNameField([field({ TypeAsString: "Lookup" })])).toBeUndefined();
+  });
+
+  it("accepts multiple lines of text", () => {
+    expect(pickFullNameField([field({ TypeAsString: "Note", InternalName: "FullName" })])).toBe("FullName");
+  });
+
+  it("picks the exactly-titled column when a content type adds a second one", () => {
+    // Live 2026-08-03. Creating the column by hand and then adding a content type left
+    // Documents with two writable Text columns matching the relaxed key. "FullName" held
+    // the data; "Full Name" (FullName0) was the one the details pane rendered, so every
+    // folder looked empty. A list cannot hold two columns with the same display name, so
+    // the exact title resolves to exactly one — the column the client was told to create,
+    // and the one their content type and form are bound to.
+    expect(
+      pickFullNameField([
+        field({ Title: "FullName", InternalName: "FullName" }),
+        field({ Title: "Full Name", InternalName: "FullName0" }),
+      ]),
+    ).toBe("FullName0");
+  });
+
+  it("refuses to choose between near-names when none is titled exactly", () => {
+    // No principled winner, and guessing writes hundreds of folders to a column that may
+    // be the wrong one. Undefined makes the caller list both so a person can delete one.
+    expect(
+      pickFullNameField([
+        field({ Title: "FullName", InternalName: "FullName" }),
+        field({ Title: "Full-Name", InternalName: "FullName0" }),
+      ]),
+    ).toBeUndefined();
+  });
+});

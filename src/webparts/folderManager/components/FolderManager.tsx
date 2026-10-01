@@ -1,0 +1,9093 @@
+import * as React from "react";
+import { useState, useEffect } from "react";
+import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
+import {
+  searchSiteGroups,
+  fetchAllSiteGroups,
+  getGroupMembers,
+  addGroupMember,
+} from "../../../shared/spGroups";
+import { ensureSiteEntryGroup } from "../../../shared/siteEntryGroup";
+import {
+  findSiteEntryGroup,
+  siteEntryGroupTitle,
+  isForbiddenPageTarget,
+  normalizeRoleValue,
+} from "../../../shared/groupMapModel";
+// The SAME policy the admin screens filter with, so a page cannot be admin-only in the UI and wide
+// open in SharePoint. See docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md.
+import { normalizeTermGuid } from "../../../shared/segmentReadiness";
+import { needsGrant, shouldReadExistingAcl } from "../../../shared/grantSkip";
+import { fansFromSegmentTier } from "../../../shared/groupMapModel";
+import {
+  resolveRunScope,
+  coversEverySegment,
+  ScopeSegment,
+} from "../../../shared/reconScope";
+import {
+  groupDuplicateRows,
+  chooseKeeper,
+} from "../../../shared/folderMapDuplicates";
+import {
+  policyForPage,
+  derivedRolesForPage,
+} from "../../../shared/pageAccessPolicy";
+import {
+  groupRolesById,
+  intendedPageGroups,
+  groupsToRemove,
+  groupsForRequestLists,
+} from "../../../shared/pageGrants";
+// The submissions list's schema, shared with the pure module that reads it back.
+import { RECORD_COLUMNS } from "../../../shared/submissionRecords";
+import { EVENT } from "../../../shared/auditLog";
+import {
+  cachedListTitle,
+  hcAvailable,
+  LIST_SUFFIX,
+  libApiTitle,
+  namesPrimed,
+  allLibraryTitles,
+  cachedArchiveLibraries,
+  titleForNewList,
+  noteCreatedList,
+} from "../../../shared/naming";
+// One parser for the `#tab=` deep link, shared with the CRS Settings page that writes it — the two
+// halves of one contract, so they cannot drift.
+import { tabFromHash } from "../../../shared/adminPages";
+import { primeNames } from "../../../shared/spNaming";
+import { ensureColumn } from "../../../shared/spColumns";
+import {
+  REF_COLUMNS,
+  BULK_IMPORT_COLUMN,
+  ARCHIVED_COLUMN,
+  SUBMISSION_FILE_COLUMN,
+  APPROVED_BY_COLUMN,
+  APPROVAL_COMMENT_COLUMN,
+  KEYWORD_COLUMN,
+} from "../../../shared/optionalColumns";
+import { writeAudit } from "../../../shared/spAuditLog";
+import { IFolderManagerProps } from "./IFolderManagerProps";
+import {
+  loadFolderMapRows,
+  FolderMapRow,
+  resolveFolderByPath,
+  probeFolderByPath,
+  probeFolderById,
+  writeFolderMapping,
+  updateFolderMapping,
+  renameFolder,
+  deleteFolderMapRow,
+  ensureFolder,
+  encodeServerRelativePath,
+} from "../../../shared/dmsFolderMap";
+import {
+  sanitizeFolderSegment,
+  parseLevels,
+  parseReconModes,
+  RawModeRow,
+  Level,
+} from "../../../shared/formModel";
+import {
+  gridPlan,
+  isPermissioned,
+  splitChain,
+  validateChain,
+} from "../../../shared/folderChain";
+import {
+  abbrevListTitle,
+  AbbrevCollision,
+  AbbrevRow,
+  AbbrevTarget,
+  OrphanAbbrevRow,
+  UnclaimedTerm,
+  buildAbbrevIndex,
+  findCollisions,
+  lookupAbbrev,
+  planOrphanRepairs,
+} from "../../../shared/folderAbbreviation";
+import {
+  FULL_NAME_COLUMN_TITLE,
+  pickFullNameField,
+  SpFieldLite,
+} from "../../../shared/folderFullName";
+import AbbreviationManager from "./AbbreviationManager";
+// The three Folder Structure screens are MOUNTED here, not copied: they keep living in the
+// userAccess web part so the `Folder Structure` page stays working for any site that already has it
+// on a page (spec `2026-08-12-term-abbreviation-page-design.md` §6). Two copies of a screen that
+// rewrites `Levels` and creates columns in both libraries is exactly the drift this import avoids.
+import StructureManager from "../../userAccess/components/StructureManager";
+import SubtreeMigrator from "../../userAccess/components/SubtreeMigrator";
+import SegmentCreator from "../../userAccess/components/SegmentCreator";
+
+// A "mode" is a top-level container folder under the library root. These used to
+// be hardcoded (Departments / Projects); they are now discovered dynamically so
+// the tool works with the multi-segment model (Group Head Office, Group Upstream
+// Operations, …) or any future top-level folder naming.
+type Mode = string;
+/**
+ * The libraries, as a LOGICAL key — not necessarily what any of them is called on the site.
+ *
+ * "Staging" is kept as the key rather than renamed to "Approval Document" because it is also
+ * the value stored in the Group Map's `Target` column on every library-scope row, and it
+ * indexes LIBRARY_ROLES and the progress feeds. Renaming the key would silently orphan that
+ * stored data. Translate to the real title at the API boundary instead — libApiTitle().
+ *
+ * ⚠ IMPORTED, NOT DECLARED — and it was declared here until 2026-08-22, a second copy of the union
+ * that `naming.ts` also exports. Both said the same four keys, so nothing failed; but `libApiTitle`,
+ * `libraryTargets` and `allLibraryTitles` all switch on the SHARED one, while LIBRARY_ROLES and
+ * every progress feed indexed the LOCAL one. Adding a library to naming.ts would then have compiled
+ * cleanly here and been silently skipped by reconciliation — a library with no folders and no
+ * grants, on a run reporting success. Widening the union is only a loud failure if there is one
+ * union. Keep this an import.
+ */
+import { LibTarget } from "../../../shared/naming";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+
+/**
+ * The libraries a reconciliation run walks.
+ *
+ * The HC pair joins ONLY when the site actually has one, so a site without Highly Confidential
+ * behaves exactly as before and pays nothing — no extra reads, no empty progress panels, and no
+ * "library root not found" lines in the log for two libraries nobody asked for.
+ *
+ * A FUNCTION, not a constant, because `hcAvailable()` is answered by primeNames at mount and this
+ * module is evaluated long before that. A const captured at import time would always say "no HC".
+ */
+const BASE_LIBS: LibTarget[] = ["Staging", "Documents"];
+/**
+ * The library's REAL TITLE, for anything a person reads.
+ *
+ * `LibTarget` values are logical KEYS, not names: `Staging` is the stored `Target` on every
+ * library-scope Group Map row and the discriminator throughout this file. Renaming the key would
+ * orphan those rows. But showing the key put "Staging" and "StagingHC" on screen for libraries the
+ * client knows as "Approval Document" and "HC Approval Document" — asked about live 2026-08-17, and
+ * a fair complaint: nothing else in the product calls them that.
+ *
+ * So the key is translated at the point of DISPLAY, exactly as it is translated at the API boundary
+ * by the same function. Safe here and nowhere else: a name resolved at render time is fine for
+ * display and never for a request (see the StagingAccess `listBase` bug, 2026-08-14).
+ *
+ * An unresolved HC target returns its key rather than a guess, which is deliberate — the same
+ * loud-failure rule `libApiTitle` follows for requests.
+ */
+const libDisplayName = (lib: string): string => libApiTitle(lib);
+
+/**
+ * The libraries reconciliation builds and grants on — two, four with HC, and up to six with the
+ * seven-year archive.
+ *
+ * ⚠ THE ARCHIVE IS ALWAYS INCLUDED WHEN IT RESOLVES, on the client's instruction (2026-08-22) that
+ * it be built by reconciliation rather than by a flow. That is what makes its ACLs correct for free:
+ * the same term-tree walk, the same Group Map grants, the same browse corridor. A Power Automate
+ * alternative was rejected — it would be a second implementation of LIBRARY_ROLES living outside
+ * source control, and a folder a flow creates INHERITS ITS PARENT, which is how a unit folder
+ * becomes readable by its whole department.
+ *
+ * Cost: a full run does roughly 50% more work. Accepted, and stated in the spec.
+ *
+ * Derived from `cachedArchiveLibraries()` rather than listed, so this and `libraryTargets()` cannot
+ * disagree about which libraries exist.
+ */
+const reconLibs = (): LibTarget[] => {
+  const withHc: LibTarget[] = hcAvailable()
+    ? [...BASE_LIBS, "StagingHC", "DocumentsHC"]
+    : BASE_LIBS;
+  const arc = cachedArchiveLibraries();
+  if (!arc) return withHc;
+  return arc.hc ? [...withHc, "Archive", "ArchiveHC"] : [...withHc, "Archive"];
+};
+
+// libApiTitle — the title SharePoint actually answers to, for a logical library key — moved to
+// shared/naming.ts on 2026-08-14. It was private here while this was the only screen building a URL
+// from a LibTarget; StagingAccess turned out to need it too and, lacking it, had been asking for a
+// library called "Staging" that no longer exists.
+// Folder-derived content type that carries the Full Name column, so the value shows in
+// the details pane. Matched by NAME because its id differs per library. Optional: a site
+// without it still provisions normally, it just shows nothing in the pane.
+//
+// Two names are accepted, newest first, for the same reason list titles are probed per
+// suffix rather than from one global prefix: the client renames every DMS-named artefact
+// to CRS by hand, one at a time, so a site legitimately spends time with CRS lists and a
+// DMS-named content type. Probing both is what keeps a half-renamed site working — and
+// unlike a list, a miss here is silent, because an absent content type is a supported
+// state rather than an error.
+const FOLDER_CONTENT_TYPE_CANDIDATES = ["CRS Folder", "DMS Folder"];
+// Whichever candidate this library actually has, recorded by loadFolderContentTypeId.
+// Only ever read for log lines, so the fallback to the preferred name is cosmetic.
+let resolvedFolderCtName: string | undefined;
+// The top-level tabs. The two library tabs drive the folder tree; Reconciliation is the
+// term-store-driven provisioner (create + lock + map).
+//
+// The four ACCESS surfaces (folder, site, library, page) left this web part on 2026-08-07 for
+// their own "User Access" page — spec `2026-08-07-access-webpart-split-design.md`. They were
+// sub-tabs here, which buried the most frequent task (a person joins or moves) one level below
+// the least frequent ones. What remains is structure and provisioning only.
+/**
+ * `Staging` and `Documents` are no longer offered in the tab bar (client, 2026-08-12: "I am honestly
+ * not using it") — reconciliation and the Folder Access page cover what that manual folder tree did.
+ * They stay in the union because the tree's render branch and its helpers are still here; deleting
+ * that code is a separate cleanup, and keeping the branch type-reachable leaves the file compiling
+ * and lint-clean in the meantime.
+ */
+// Spelled out rather than `LibTarget | …`: since 2026-08-15 LibTarget carries the two HC keys, and
+// deriving Tab from it would invent two browsable tabs for libraries that have no tree UI at all.
+type Tab =
+  | "Staging"
+  | "Documents"
+  | "Reconciliation"
+  | "Abbreviations"
+  | "Levels"
+  | "Migrate"
+  | "NewSegment";
+
+/**
+ * Tabs the CRS Settings landing page may deep-link to, by slug.
+ *
+ * Only the three it actually links are listed. A slug is a PUBLIC name once shipped — the landing page
+ * writes it into a URL an admin may bookmark — so this map is the contract, and renaming a Tab value
+ * must not silently break it. Anything unrecognised falls through to the default tab, never to a blank
+ * screen.
+ */
+const DEEP_LINK_TABS: Record<string, Tab> = {
+  abbreviations: "Abbreviations",
+  structure: "Levels",
+  reconciliation: "Reconciliation",
+  migrate: "Migrate",
+  newsegment: "NewSegment",
+};
+
+/**
+ * The tab to open on: an explicit slug from a caller, else the URL hash, else Term Abbreviations.
+ *
+ * A guided flow passes the slug directly, because it is showing one step and the address bar is not
+ * where that decision lives. An unrecognised slug falls through to the hash and then to the default —
+ * never to a blank screen.
+ */
+function tabFromDeepLink(explicit?: string): Tab {
+  const named = DEEP_LINK_TABS[(explicit ?? "").trim().toLowerCase()];
+  if (named) return named;
+  // `window` is always present in a web part, but a guard costs nothing and keeps this callable from a
+  // test later.
+  const hash = typeof window === "undefined" ? "" : window.location.hash;
+  return DEEP_LINK_TABS[tabFromHash(hash)] ?? "Abbreviations";
+}
+
+// Reconciliation "modes" — mirror Form.tsx / the retired Reconciliation web part.
+// Each maps a term set to the segment container folder its terms live under.
+// Pilot slice: the four Head Office segments (2026); add the 2027 segments once
+// their term sets are onboarded (term-set GUID + its container folder name).
+type ReconMode = { key: string; termSetGuid: string; stagingFolder: string };
+const RECON_MODES: ReconMode[] = [
+  {
+    key: "gho",
+    termSetGuid: "08dd94cb-f76c-431c-9b37-e9c98f739ffc",
+    stagingFolder: "Group Head Office",
+  },
+  // PLACEHOLDER — Upstream Malaysia is NOT onboarded (client scope 2026-07-29 is the other
+  // three head offices). This GUID pre-dates the 2026-07-29 term-set rebuild and is stale.
+  // Inert: with no `mode` row in DMS Config the segment is never offered. Replace the GUID
+  // when the client creates the term set — nothing else needs to change.
+  {
+    key: "upstream_my_ho",
+    termSetGuid: "16a52947-57a3-4217-9a49-b48cb8b0dd31",
+    stagingFolder: "Upstream Malaysia Head Office",
+  },
+  {
+    key: "minamas_ho",
+    termSetGuid: "9ad00b00-a43c-4a8b-a39a-d0efa89ba706",
+    stagingFolder: "Minamas Head Office",
+  },
+  {
+    key: "nbpol_ho",
+    termSetGuid: "77c3993b-0c3c-4a18-89d9-d69209886322",
+    stagingFolder: "NBPOL Head Office",
+  },
+];
+type TermLite = { id: string; label: string };
+
+// Year/Period and Document Type term sets. Under each leaf (unit) folder the
+// provisioner pre-creates the full Year × Document Type grid (path order matches
+// the upload form: Unit / Year / Document Type). These inherit the unit's ACL.
+// Offline fallback only — the grid term sets are read at runtime from the DMS Config
+// `setting` rows (termSet_yearPeriod / termSet_documentType) via loadReconGridTermSets,
+// so a different tenant needs no code edit. These GUIDs are the sandbox values.
+const YEAR_TERMSET = "023a866a-5c0b-4f1b-ad42-2ddf7a9e7abf";
+const DOCTYPE_TERMSET = "866c5754-258e-401f-8685-03d20ae59b1d";
+
+/**
+ * How much of the Year × Document Type grid to pre-create under each unit folder.
+ * Set live from DMS Config (`recon_gridMode` setting row) — no redeploy to change.
+ *
+ *   off         — create nothing. The upload form ensure-creates Year/Document Type on
+ *                 first upload, and the Auto-route flow creates them in Documents as
+ *                 approved files land. Viewers then see only folders that hold documents.
+ *   currentYear — pre-create the current year's row only.
+ *   full        — every year × every document type (the original behaviour).
+ *
+ * Why `off` is the default: the grid is ~98% of a full run. With 3 years and 20 document
+ * types it is 63 folders per unit per library — 16,758 operations for 133 units, turning a
+ * ~6 minute run into ~4h20m, to produce folders that are overwhelmingly empty and that
+ * make browsing NOISIER for viewers. The structural folders that actually carry
+ * permissions are only ~360 operations.
+ */
+type GridMode = "off" | "currentYear" | "full";
+const DEFAULT_GRID_MODE: GridMode = "off";
+
+// One folder the provisioner will ensure exists + lock. termGuid is null for the
+// segment container folder (not a term); term folders (department, unit, …) carry
+// their GUID so Staging can be mapped for rename-proof routing. isLeaf marks the
+// deepest terms (upload targets) that get the Year × Document Type grid beneath.
+// assignTerm is the term used to look up DMS Group Map rows for THIS folder's tier:
+// the term-set GUID for the segment container, the term GUID for dept/unit folders.
+// fullName is the RAW term label for this one folder, written to the Full Name column
+// so the abbreviated folder still says what it is. It is deliberately not `label`:
+// label is a breadcrumb ("GHO > Group Finance > Treasury") built for the log and the
+// map row Title, and putting a breadcrumb in a per-folder column would repeat the
+// whole path on every row.
+// ancestorTerms is every term GUID ABOVE this folder on its own branch, outermost
+// first. It exists for departmental fan-out: a Group Map row on a non-leaf term
+// grants its role on every folder beneath it, so each folder needs to know which
+// terms could be reaching down onto it. Empty for the top tier.
+// termSetGuid identifies which MODE this target belongs to, so the below-Unit grid
+// can follow that segment's own configured chain. Without it every segment would
+// share one hardcoded Year → Document Type shape, which is the bug this replaces.
+type ProvTarget = {
+  termGuid: string | null;
+  assignTerm: string;
+  ancestorTerms: string[];
+  relPath: string;
+  label: string;
+  fullName: string;
+  section: string;
+  isLeaf: boolean;
+  termSetGuid: string;
+};
+
+// DMS Group Map role → SharePoint permission level. GLOBAL is a privileged
+// uploader bypass (not folder-scoped) and is never assigned to a folder.
+//
+// APR was "Design" until 2026-08-03. Design includes Add Items and Delete Items,
+// so approvers could always upload and "approve only" was never enforceable —
+// which is exactly the Head-of #2 persona. DMS Approve and DMS Delete are custom
+// levels the client creates once per site (copy Contribute / copy Read; see the
+// role-personas spec §3.1).
+//
+// Deploying before those levels exist fails SAFELY and visibly: the assignment
+// loop logs `no "<name>" role definition on site` and skips that one grant.
+// Nobody loses access — an existing approver keeps the Design grant already on
+// the folder — the change simply does not take effect until the level is made.
+//
+// UPL dropped from "Contribute" to "DMS Upload" on 2026-08-04. Contribute includes
+// Delete Items, so every uploader — PIC included — could delete any file in their
+// unit folder, not just their own uploads (Delete Items is folder-scoped, never
+// author-scoped). That made the client's rule "a PIC must get approval from the
+// head of unit before deleting" unenforceable. DMS Upload is Contribute minus
+// Delete Items; PICs raise a deletion REQUEST instead. See the
+// deletion-request-approval spec.
+//
+// DELS restores Staging delete for the people who should have it — the head-of
+// groups that also upload (Head of Department/Unit 1 and 4). It is a SEPARATE role
+// rather than a second upload level so the capability is carried by an explicit
+// group name (`_DELS`) instead of an admin remembering which of two upload
+// suffixes means "with delete". A wrong pick between two upload roles is invisible
+// until someone deletes something.
+//
+// DELS and DEL share the "DMS Delete" level — Read + Delete Items is what a deleter
+// needs in either library — and are kept apart by LIBRARY_ROLES below: DELS is
+// Staging-only, DEL is Documents-only. So the client still creates only three
+// custom levels.
+//
+// HC is absent by design: Highly Confidential is Phase 2 (see groupMapModel).
+const ROLE_TO_PERMISSION: Record<string, string> = {
+  // ⚠⚠ REVERTED 2026-09-22 — MEMBER/GLOBAL/SEGVIEW/DEPTVIEW BACK TO "Read", FROM "Restricted View".
+  // The 2026-09-14/15 change (see the struck history immediately below) narrowed these four roles to
+  // "Restricted View" specifically to block downloads. It also broke document PREVIEW for every one
+  // of them: "Restricted View" routes ALL viewing through Office Online's server-side renderer with
+  // no "Open Items" permission, and this project's preview code (`shared/filePreview.ts`) only sends
+  // Office docs (docx/xlsx/pptx/csv) through that route — PDF, image and plain-text previews fetch
+  // the raw file URL directly, which "Restricted View" refuses outright as "You can't access this
+  // item". Client, 2026-09-22, asked to fix that report ("we really got to fix the no access to this
+  // item for viewer viewing files") and, once the mechanism was explained, chose the guaranteed fix
+  // over the unverified one (routing PDF/image/text through WOPI too, which was offered and not
+  // taken — worth revisiting later as an ADDITION on top of "Read", not a replacement for it).
+  //
+  // ⚠ THIS GIVES UP THE NO-DOWNLOAD PROTECTION THE 2026-09-14/15 CHANGE EXISTED FOR. Say this
+  // plainly if asked why Viewer/C-Level/HOD can download again: it is the direct trade for preview
+  // working, not an oversight.
+  //
+  // ⚠ A STALE "Restricted View" BINDING CAN BE LEFT ON A FOLDER AFTER THIS RUNS — reconciliation
+  // only ever ADDS a folder-scope grant, so an already-provisioned folder keeps its old "Restricted
+  // View" role assignment alongside the new "Read" one once reconciliation re-runs. Harmless for
+  // access (SharePoint unions role assignments, and Read is the broader of the two, so having both
+  // denies nothing) but visible as a redundant binding — same class of leftover the short-lived
+  // 2026-09-15/16 "stale Read repair tool" existed to clean up, in the opposite direction. Not
+  // rebuilt here; `removeSingleRoleBinding` further down still has the shape for it if this needs
+  // tidying later.
+  //
+  // ⚠⚠ HISTORY, KEPT RATHER THAN DELETED — the original 2026-09-14 comment, so the earlier reasoning
+  // is not lost if this is ever revisited: "MEMBER/GLOBAL/SEGVIEW CHANGED FROM 'Read' TO 'Restricted
+  // View' (2026-09-14, client: 'change read to restricted view for all the groups for a more
+  // narrower read only to prevent user from download' — scoped, on their confirmation, to 'only the
+  // pure viewer roles'). Built-in level, present on every SharePoint site with no creation or prefix
+  // step — unlike the custom 'CRS …' levels, it needs no line in `applyPermissionPrefix` below, the
+  // same reason 'Read' itself needs none. If a tenant's own copy of this level is ever named
+  // differently, reconciliation already fails LOUD and NAMED ('no "Restricted View" role definition
+  // on site') rather than silently granting nothing — the same safety net every other level here
+  // relies on." `MEMBERHC` was DELIBERATELY left out of that change and stays plain "Read" below,
+  // unaffected by any of this.
+  MEMBER: "Read",
+  // Re-pointed at the site's actual prefix by applyPermissionPrefix() below. The DMS values are
+  // the legacy default, used until the role definitions have been read.
+  UPL: "DMS Upload",
+  APR: "DMS Approve",
+  // The HC twins (2026-08-24) resolve to the SAME permission levels as their plain counterparts —
+  // the separation is which LIBRARY the grant lands on (LIBRARY_ROLES), never the level.
+  APRHC: "DMS Approve",
+  DEL: "DMS Delete",
+  DELHC: "DMS Delete",
+  SHAREHC: "DMS Share",
+  DELS: "DMS Delete",
+  // The C-level view role, 2026-08-04. The custom viewer level, like MEMBER — the difference is
+  // not the level but how far the grant travels: every folder in every segment.
+  // Documents-only (see LIBRARY_ROLES); a viewer on Staging would be reading other
+  // people's pending drafts, which is the isolation rule the whole model rests on.
+  //
+  GLOBAL: "Read", // Reverted with MEMBER, 2026-09-22 — see that entry's comment.
+  // SEGVIEW — un-retired 2026-08-07 for the client's second C-Level shape, "view its own
+  // business segment only". Same level as GLOBAL and the same fan-DOWN; the difference is
+  // only how far it travels. A GLOBAL row is termless and reaches every segment; a SEGVIEW
+  // row carries a SEGMENT term and reaches that segment's folders alone.
+  //
+  // Documents-only, like GLOBAL, and for the same reason — see LIBRARY_ROLES. This is the
+  // one role where a mistake is both quiet and wide: a SEGVIEW row wrongly accepted on
+  // Staging hands one person every unapproved draft in an entire business segment.
+  SEGVIEW: "Read", // Reverted with MEMBER, 2026-09-22 — see that entry's comment.
+  // SHARE, 2026-08-15 — the right to grant someone else access, needed by whoever APPROVES a share
+  // request, because an approver can only approve what they can perform.
+  //
+  // "CRS Share" must contain Manage Permissions; nothing else in this table does, which is exactly
+  // why it is a separate level and a separate role. Verify it on the site rather than trusting the
+  // name — the same warning as CRS Approve and Approve Items, and with a worse failure: a level
+  // WITHOUT Manage Permissions leaves approvals failing at the last step, and one with too much
+  // hands a Head of Unit the ability to re-permission their whole unit.
+  SHARE: "DMS Share",
+  // The HC roles use the SAME permission levels as their plain counterparts, deliberately. There is
+  // no "CRS Upload HC" level and there must not be: the separation between ordinary and Highly
+  // Confidential is which LIBRARY the grant lands on, and that is held by LIBRARY_ROLES above. A
+  // second set of levels would be a second place for the same separation to live, and the two would
+  // drift — with the drift invisible until someone read an HC document they should not have.
+  UPLHC: "DMS Upload",
+  // 2026-08-17. The HC roles reuse the PLAIN permission levels — there is no "CRS Upload HC" and
+  // there must not be. The separation is which LIBRARY the grant lands on, held in ONE table
+  // (LIBRARY_ROLES); a parallel set of levels would be a second place for it to drift.
+  DELSHC: "DMS Delete",
+  MEMBERHC: "Read",
+  // ⚠⚠ WIDENED FROM "Read" TO "Restricted View" (2026-09-15, client: "You forgot about HOD" — the
+  // 2026-09-14 change had deliberately scoped DEPTVIEW out, on the client's own confirmation at the
+  // time; asked directly whether to include it now, they said yes, and "same rule everywhere DEPTVIEW
+  // appears" — both `Documents` and `DocumentsHC`, where `LIBRARY_ROLES` already grants it).
+  //
+  // The custom viewer level, like MEMBER and SEGVIEW — the difference is reach, not level: every
+  // unit beneath one department, in Documents and HC Documents.
+  //
+  // A Head of Department ALSO holds `DEL` and `SHARE` (2026-08-20's persona), and this does not touch
+  // either — those are SEPARATE role assignments on the same folder (`LIBRARY_ROLES.Documents` lists
+  // DEPTVIEW, DEL and SHARE as three independent entries for the `hod` persona), never merged into
+  // this one level. So a Head of Department keeps deleting and sharing approved documents exactly as
+  // before; only their OWN base view right — the one that let them browse and download without
+  // deleting or sharing anything — is narrowed. Reconciliation will ADD the new Restricted View
+  // grant to every HOD group without removing the old Read, exactly the same leftover the one-time
+  // "stale Read" repair tool (built 2026-09-15, removed 2026-09-16 after use) existed to clean up —
+  // if that class of leftover needs clearing again, `removeSingleRoleBinding` further down still
+  // has the shape for it.
+  DEPTVIEW: "Read", // Reverted with MEMBER, 2026-09-22 — see that entry's comment.
+  // Library entry, 2026-08-04. Plain Read on the LIST so an uploader/approver can open the
+  // library at all — Limited Access on the parent chain lets a direct folder URL through but
+  // confers no View Items on the list itself, so AllItems.aspx returns Access Denied without
+  // this. Deliberately Read and not the group's own level: DMS Upload at library scope would
+  // reach everything in the library that inherits, not just their unit folder.
+  //
+  // Safe at folder scope by construction: ENTRY is absent from LIBRARY_ROLES below, and the
+  // folder loop grants only what that table lists. A hand-written ENTRY row at Folder scope
+  // is skipped rather than approximated.
+  ENTRY: "Read",
+};
+
+/**
+ * Re-point the custom levels at whatever prefix this site uses.
+ *
+ * EVERY custom level must be listed below. A role left out keeps its literal default and silently
+ * grants nothing on a site using the other prefix — which is how SHARE shipped broken.
+ *
+ * MUTATES the map in place rather than replacing it, so the half-dozen existing readers
+ * (`ROLE_TO_PERMISSION[g.role]`, the accepts() guard, the op counter) pick up the change with no
+ * re-wiring — and so a reader that runs before detection still gets a usable legacy value instead
+ * of undefined, which those guards read as "this role grants nothing".
+ *
+ * Resolved from the site's OWN role definitions, never from the list prefix. Those two genuinely
+ * diverge: verified live 2026-08-05, the client's site has CRS lists and CRS levels but a DMS
+ * content type and a DMS_SITE_MEMBERS group. Deriving one from the other is right today and wrong
+ * on the next site.
+ */
+function applyPermissionPrefix(levelNames: string[]): void {
+  const prefix =
+    levelNames.indexOf("CRS Upload") !== -1
+      ? "CRS"
+      : levelNames.indexOf("DMS Upload") !== -1
+        ? "DMS"
+        : undefined;
+  // No match: leave the legacy values. Reconciliation then logs `no "DMS Upload" role definition
+  // on site` and grants nothing for that role — visible, and better than guessing at a name.
+  if (prefix === undefined) return;
+  ROLE_TO_PERMISSION.UPL = `${prefix} Upload`;
+  ROLE_TO_PERMISSION.APR = `${prefix} Approve`;
+  ROLE_TO_PERMISSION.DEL = `${prefix} Delete`;
+  ROLE_TO_PERMISSION.DELS = `${prefix} Delete`;
+  // SHARE was added on 2026-08-15 hardcoded to the DMS name and MISSED here — so on a CRS site, which
+  // the live one is, reconciliation would hunt for a "DMS Share" definition that does not exist, grant
+  // nothing, and every approved share would then fail at the last step for want of Manage Permissions.
+  // Exactly the failure the comment on SHARE warns about, arriving through a different door.
+  ROLE_TO_PERMISSION.SHARE = `${prefix} Share`;
+  ROLE_TO_PERMISSION.UPLHC = `${prefix} Upload`;
+  // 2026-08-17: DELSHC re-pointed here for the same reason SHARE had to be — a role whose level name
+  // is left at the DMS literal makes reconciliation hunt for a definition that does not exist on a
+  // CRS site, grant nothing, and report success. MEMBERHC and DEPTVIEW need no line: "Read" is a
+  // built-in level with no prefix.
+  ROLE_TO_PERMISSION.DELSHC = `${prefix} Delete`;
+  // The 2026-08-24 HC twins — missing from here is the exact defect SHARE and DELSHC each had once:
+  // on a CRS site reconciliation hunts for a "DMS …" definition that does not exist, grants
+  // nothing, and reports success.
+  ROLE_TO_PERMISSION.APRHC = `${prefix} Approve`;
+  ROLE_TO_PERMISSION.DELHC = `${prefix} Delete`;
+  ROLE_TO_PERMISSION.SHAREHC = `${prefix} Share`;
+}
+
+// Which roles each library accepts — the isolation rule that keeps viewers off
+// pending documents.
+//
+// A table, not the inline ternary it replaces. That ternary read "Staging gets
+// everything except MEMBER", which silently admitted every FUTURE role: DEL
+// would have landed on Staging the day it was added, handing deleters other
+// people's pending documents. Listing roles explicitly means a new role reaches
+// no library until someone names it here.
+//
+// DELS and DEL both map to "DMS Delete" but must never cross: a DELS row on
+// Documents would hand a Staging deleter other people's approved documents, and a
+// DEL row on Staging would hand a Documents deleter other people's pending ones.
+// The level cannot tell them apart, so this table is the only thing that does.
+// SEGVIEW joins GLOBAL on Documents ONLY (2026-08-07). Both are C-Level view roles and
+// neither may ever appear in the Staging list: a segment-wide viewer on Staging reads every
+// unapproved draft in that segment, which is the exact isolation this table exists to hold.
+// UPL and APR joined Documents on 2026-08-09 so one group serves a person in both libraries —
+// a PIC no longer needs the unit's base group just to read the approved archive. See
+// 2026-08-09-persona-driven-folder-access-design.md. DELS stays Staging-only: a Head of Unit
+// deletes PENDING work, never an approved document.
+// SHARE is DOCUMENTS-ONLY (2026-08-15). Sharing an unapproved draft would hand someone a document
+// nobody has approved yet — the isolation rule this table exists to hold. A share request can only
+// ever be raised against an approved document, so the approval library never needs it.
+//
+// THE HC ROWS, 2026-08-15. Read them for what is ABSENT: `UPL` and `APR` appear in neither, and that
+// single omission is the entire Highly Confidential feature. An ordinary uploader and an ordinary
+// approver reach the HC libraries not at all — not with reduced rights, not read-only, not at all.
+//
+// This table's whole reason for existing is that a new role reaches no library until someone names
+// it here, which is exactly the property HC needs. Adding "UPL" to StagingHC would hand every PIC in
+// the unit every Highly Confidential draft, and nothing on any screen would look different.
+//
+// MEMBER is absent from DocumentsHC: an SDG Employee reads their unit's approved documents and is
+// not HC-cleared. SEGVIEW and GLOBAL are absent from BOTH approval-side rows, HC included — a
+// segment-wide viewer on an approval library reads every unapproved draft in that segment.
+//
+// DEL, SEGVIEW, GLOBAL and SHARE DO appear on DocumentsHC, on the client's explicit instruction that
+// "the same HOD and the same C level segment and global can read". Their existing powers travel with
+// them: a Head of Department can delete an approved HC document and C-Level can share one. Both are
+// consequences of that instruction rather than of this table, and both are open questions in the spec.
+/* REVISED 2026-08-17 — spec 2026-08-17-hc-clearance-and-role-revision-design.md.
+   HC clearance is now a dedicated group for the two roles at the BOTTOM of the hierarchy only — the
+   uploader and the plain viewer. Every management role reaches HC through the role it already holds.
+
+   What matters here is what is ABSENT. `MEMBER` and `DELS` appear on NEITHER HC row, and that single
+   absence is the whole feature: it is what stops a plain PIC and a plain SDG Employee reaching HC.
+
+   Three changes, each avoiding a collision where a role held by TWO personas would grant to one of
+   them and not the other:
+     · APR added to both HC rows — APRHC retired, because it would then grant nothing extra.
+     · DELS REMOVED from StagingHC, replaced by DELSHC. This closed a live leak: the plain PIC holds
+       DELS, so every plain PIC held CRS Delete on the HC approval library.
+     · DEPTVIEW replaces DEL for Head of Department — which is what makes DEL safe on the HC rows,
+       since DEL is held ONLY by Head of Unit from today. If DEL is ever returned to a wider persona,
+       HC delete travels with it. */
+const LIBRARY_ROLES: Record<LibTarget, string[]> = {
+  // APRHC joined both approval rows on 2026-08-24 — it is a SUPERSET like UPLHC, so an HC Head of
+  // Unit approves ordinary documents through the same role that reaches HC.
+  Staging: ["UPL", "APR", "DELS", "UPLHC", "APRHC", "DELSHC"],
+  Documents: [
+    "MEMBER",
+    "DEPTVIEW",
+    "DEL",
+    "GLOBAL",
+    "SEGVIEW",
+    "UPL",
+    "APR",
+    "SHARE",
+    "UPLHC",
+    "APRHC",
+  ],
+  // NO `DEL` HERE, and that was a real mistake caught by test: C-Level carries DEL too
+  // (clevel_global = GLOBAL + DEL + SHARE), so DEL on this row would let a C-Level read and delete
+  // UNAPPROVED HC drafts — breaking the rule that keeps every view role off both approval libraries.
+  //
+  // ⚠ `APR` LEFT BOTH HC ROWS ON 2026-08-24 (client: "a normal HOU cannot see HC Approval Document
+  // and HC Documents … only HC HOU can see and approve and go into HC libraries"). The plain Head
+  // of Unit holds APR for their NORMAL approving, and a role held by two personas cannot grant to
+  // one and withhold from the other — so the HC approver is APRHC, held only by `hou_hc`. `DEL` and
+  // `SHARE` left DocumentsHC the same day for the same reason (the plain HoU holds both); the HoD's
+  // and HC HoU's approved-side HC powers ride on DELHC/SHAREHC instead. Restoring any of APR, DEL
+  // or SHARE to an HC row silently re-opens HC to every ordinary Head of Unit.
+  StagingHC: ["UPLHC", "DELSHC", "APRHC"],
+  DocumentsHC: [
+    "UPLHC",
+    "MEMBERHC",
+    "APRHC",
+    "DELHC",
+    "DEPTVIEW",
+    "GLOBAL",
+    "SEGVIEW",
+    "SHAREHC",
+  ],
+  /* THE SEVEN-YEAR ARCHIVE — NARROWED TO C-LEVEL ONLY, 2026-09-02 (client: "only C level and system
+     administrator have access to archive, so no more HOD till Normal viewer have access to Archive
+     Library"). REVERSES the 2026-08-22 rule directly below, kept as the record of what this used to
+     be: every persona (MEMBER, DEPTVIEW, DEL, SHARE, UPL, APR, UPLHC, APRHC, ...) had Read on both
+     archive libraries, mirroring their working-side counterparts. The client has now pulled that back
+     to the two C-Level roles only, until a "Normal viewer" (SDG Employee) grant to the archive is
+     separately decided and built.
+
+     "System administrator" needs NO row here. `CRS Owners` holds Full Control on the web regardless
+     of any folder ACL (the same reason the admin-page lockdown never has to name it) — adding it to
+     LIBRARY_ROLES would be a role no persona has ever held, matching nothing in the Group Map.
+
+     GLOBAL and SEGVIEW stay Read, via READ_ONLY_LIBS — nobody, C-Level included, can act on an
+     archived record.
+
+     ⚠ THIS DOES NOT REVOKE ANYTHING ALREADY GRANTED. Reconciliation only ADDS folder-scope grants —
+     `groupsToRemove`'s full-ACL assertion is page-scope only, because a folder root also carries
+     SharePoint's automatic Limited Access entries for everyone granted deeper in the tree, and
+     asserting there would strip those too (documented at length elsewhere in this file). So a site
+     that has already run reconciliation against the WIDER rule below keeps every previously-granted
+     HOD/PIC/HOU/MEMBER group's Read on Archive/ArchiveHC until it is removed by hand — narrowing
+     LIBRARY_ROLES only changes what NEW grants a future run will make.
+     Spec: docs/superpowers/specs/2026-08-22-seven-year-archive-design.md (the original, wider rule) */
+  Archive: ["GLOBAL", "SEGVIEW"],
+  ArchiveHC: ["GLOBAL", "SEGVIEW"],
+};
+
+/**
+ * Roles whose Documents grant is READ, whatever they mean on the approval library.
+ *
+ * This is the whole safety of letting one group serve both libraries. ROLE_TO_PERMISSION is
+ * flat — one level per role — so listing UPL under Documents WITHOUT this would grant
+ * "CRS Upload" there: Contribute minus Delete. Every PIC could then add and edit APPROVED
+ * documents in their unit, with no approval step and nothing in any log to show for it. The
+ * request was read-only; the flat table alone would have delivered write.
+ *
+ * A short exception list rather than a second full table, because the table is what an editor
+ * reads to answer "what does this role do", and two of them would let the answer depend on
+ * which one they happened to open.
+ */
+// APRHC is back (2026-08-24) and downgrades exactly as APR does: an approver reads the approved
+// side, never edits it. DELHC and SHAREHC are deliberately NOT here — delete and share on the
+// approved HC side is their entire purpose, as with DEL and SHARE. DELSHC is not here either: like
+// DELS it never reaches an approved-side library at all, so there is nothing to downgrade — and
+// listing it would imply it does. DEPTVIEW and MEMBERHC are Read already.
+const DOCUMENTS_READ_ONLY_ROLES: string[] = ["UPL", "APR", "UPLHC", "APRHC"];
+
+/**
+ * The APPROVED-side libraries, where those roles are downgraded to Read.
+ *
+ * Both of them, or the HC archive becomes writable by every cleared uploader — the exact bug this
+ * downgrade was written to prevent on `Documents`, reintroduced one library along.
+ */
+const APPROVED_SIDE_LIBS: LibTarget[] = ["Documents", "DocumentsHC"];
+
+/**
+ * The libraries the SITE-ENTRY group may hold Read on.
+ *
+ * ⚠⚠ STAGED FOR A LIVE TEST — EMPTIED 2026-09-14, NOT A PERMANENT DECISION YET. Client: *"what is
+ * the point of CRS_SITE_MEMBERS on the Document Library? … CRS_SITE_MEMBERS go into Document
+ * library and see nothing, so I see there is no need to assign CRS_SITE_MEMBERS to documents
+ * library."* They are right that it is a useless VIEWER grant — a bare `CRS_SITE_MEMBERS` member
+ * sees only an empty-looking segment folder, never a document — but that was never why it existed.
+ *
+ * This USED TO read `["Documents"]`, with the reasoning kept below because it is what the next run
+ * has to prove or disprove: *"`Documents` needs it because the approval guard resolves the
+ * destination folder AS THE APPROVER, and that read depends on it."* The theory being tested is that
+ * the ancestor-browse corridor (the block right above this one) already gets every approver's own
+ * role-group Read up to the library via SharePoint's automatic Limited-Access cascade, making this
+ * SEPARATE site-wide grant redundant. Nobody has verified that live.
+ *
+ * ⚠⚠ THE TEST: emptying this makes the site-entry pass below REMOVE `CRS_SITE_MEMBERS` from
+ * `Documents` on its next run (it already asserts both directions — grants when it should hold and
+ * does not, removes when it should not and does — so no other code change was needed for the
+ * removal half). After that run, approve ONE real document as an ordinary approver.
+ *   — Succeeds → the theory holds. Remove the whole site-entry-library-state pass (~200 lines,
+ *     starting at "SITE-ENTRY LIBRARY STATE" a few hundred lines below) in a follow-up change, since
+ *     nothing needs it any more.
+ *   — Fails, specifically on resolving the destination (not a folder-map or clash refusal) → put
+ *     `["Documents"]` back on the line below and reconcile again. One line, one run, nothing was
+ *     ever broken for a real approver in the meantime because this is caught BEFORE going live.
+ *
+ * ⚠ DO NOT DEPLOY THIS TO A PRODUCTION SITE WITHOUT BEING READY TO IMMEDIATELY REVERT IT. This
+ * exact grant has a real incident behind it (2026-08-16): wrong once before, and it broke every
+ * approval on the site with reconciliation reporting success — the run log gave no hint anything
+ * was wrong until an approver actually tried to use the page.
+ *
+ * `HC Documents` was NEVER in this set (see the retained reasoning) and stays untouched either way:
+ * an HC approver reaches it through their own `_APR_HC` group, and HC Auto-route runs as the
+ * service account — neither ever needed a site-wide grant, and this test does not concern them.
+ *
+ * A separate set rather than a reuse of APPROVED_SIDE_LIBS because the first version of this pass DID
+ * reuse it, and so granted the site-entry group Read on `HC Documents` — every site member able to
+ * open the Highly Confidential library. Caught on the very next run (2026-08-17). It contradicted the
+ * HC design directly: `MEMBER` is absent from the `DocumentsHC` row of LIBRARY_ROLES, and what is
+ * ABSENT from those rows is the feature. Site entry is that same grant wearing a different name.
+ */
+const SITE_ENTRY_LIBS: LibTarget[] = [];
+
+/**
+ * The libraries where EVERY role is Read, whatever it means elsewhere.
+ *
+ * Client, 2026-08-22: "for all the Archive files make sure all groups have read only." An archived
+ * document is a record — everyone who could read it still can, and nobody can act on it.
+ *
+ * ⚠ A LIBRARY RULE, NEVER AN EXTENSION OF `DOCUMENTS_READ_ONLY_ROLES`. Adding DEL and SHARE to that
+ * list is the obvious-looking edit and it is WRONG: that list applies across APPROVED_SIDE_LIBS, so
+ * it would silently strip a Head of Unit's delete and share on `Documents` — reversing the client's
+ * decision of 2026-08-20 as a side effect of building an archive, with nothing on any screen to show
+ * for it. The archive is read-only because of what the LIBRARY is, not which roles reach it.
+ */
+const READ_ONLY_LIBS: LibTarget[] = ["Archive", "ArchiveHC"];
+
+/**
+ * The three roles narrowed from "Read" to "Restricted View" — see the long note on `MEMBER` in
+ * `ROLE_TO_PERMISSION` above for why and when this changed. Kept as a local `string[]` rather than
+ * importing `pageAccessPolicy.ts`'s `VIEW_ONLY_ROLES` (the SAME three roles, a different concern —
+ * which PAGES they may reach): that one is typed to the narrower `GroupMapRole` union, and
+ * `permissionForRole`'s `role` parameter here is a plain `string`, so `.indexOf(role)` against the
+ * narrower type would not compile.
+ */
+const PURE_VIEWER_ROLES: string[] = ["MEMBER", "GLOBAL", "SEGVIEW"];
+
+/** The level a role grants IN A GIVEN LIBRARY. Always use this, never the raw table. */
+function permissionForRole(lib: LibTarget, role: string): string | undefined {
+  /* ⚠ STILL `undefined` FOR AN UNKNOWN ROLE. Returning a level unconditionally would grant on a
+     hand-written Group Map row naming a role that does not exist, and `ENTRY` — deliberately absent
+     from LIBRARY_ROLES — must keep being skipped rather than approximated. The lookup is what
+     answers "is this a role at all"; the library only decides the LEVEL. */
+  if (READ_ONLY_LIBS.indexOf(lib) > -1) {
+    if (!ROLE_TO_PERMISSION[role]) return undefined;
+    /* The 2026-08-22 client rule ("for all the Archive files make sure all groups have read only")
+       still forces every OTHER role down to plain "Read" here, whatever it holds elsewhere — a
+       deleter or sharer on Archive gets Read, not Delete/Share. Only the pure viewer roles get
+       their OWN narrower level here too, rather than being widened back up to plain Read. */
+    return PURE_VIEWER_ROLES.indexOf(role) > -1
+      ? ROLE_TO_PERMISSION[role]
+      : "Read";
+  }
+  if (
+    APPROVED_SIDE_LIBS.indexOf(lib) > -1 &&
+    DOCUMENTS_READ_ONLY_ROLES.indexOf(role) > -1
+  )
+    return "Read";
+  return ROLE_TO_PERMISSION[role];
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+// Throttle-safety tuning for reconciliation. These are the DEFAULTS/fallbacks —
+// they can be overridden live via DMS Config `setting` rows (recon_writeDelayMs /
+// recon_batchSize / recon_cooldownMs) so the client can tune speed without a redeploy.
+// withThrottleRetry() is the safety net: any write that still hits a 429/503 backs
+// off and retries, so a shorter delay is safe — an occasional throttle self-heals.
+// Lower delay = faster; too low risks 429s whose Retry-After penalty can be large,
+// so ~150ms is a sensible aggressive floor. Grid is sequential (the old parallel
+// burst was what tripped the throttle originally).
+const RECON_WRITE_DELAY_MS = 200; // pause between folder/permission writes (was 500)
+const RECON_BATCH_SIZE = 300; // writes before an automatic cooldown (was 150)
+const RECON_COOLDOWN_MS = 2500; // cooldown length, masked in the UI as "work" (was 4000)
+const RECON_EST_HTTP_MS = 250; // rough per-write network+server time, on top of the delay
+// (used only for the up-front estimate before a live rate exists)
+
+// Human-friendly duration: "45s" or "3m 07s".
+const fmtDur = (ms: number): string => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const sec = s % 60;
+  return `${Math.floor(s / 60)}m ${sec < 10 ? "0" : ""}${sec}s`;
+};
+// Rotating status text shown during the cooldown so the pause reads as progress.
+const COOLDOWN_MESSAGES = ["Discombobulating…", "Generating folders…"];
+
+// Retry a SharePoint request on transient throttling, honoring Retry-After (seconds)
+// with exponential backoff. Returns the final response (ok or not) after up to 5 retries.
+// Beyond the obvious 429/503, SharePoint Online's anti-abuse system can surface a
+// sustained WRITE burst as `403 E_ACCESSDENIED` / UnauthorizedAccessException even when
+// the caller has full permissions — indistinguishable at the status line from a real
+// denial except by the burst context. We treat that signature as retryable but only for
+// the first few attempts, so a GENUINE 403 still fails fast (after ~3 backoffs) instead
+// of masquerading as success forever.
+async function withThrottleRetry(
+  doPost: () => Promise<SPHttpClientResponse>,
+  onWait?: (ms: number) => void,
+): Promise<SPHttpClientResponse> {
+  for (let attempt = 0; ; attempt++) {
+    const res = await doPost();
+    const throttled = res.status === 429 || res.status === 503;
+    let burst403 = false;
+    if (res.status === 403 && attempt < 3) {
+      // Peek at a CLONE so the original body stays readable for the caller.
+      const body = await res
+        .clone()
+        .text()
+        .catch(() => "");
+      burst403 = /E_ACCESSDENIED|UnauthorizedAccessException/i.test(body);
+    }
+    if ((!throttled && !burst403) || attempt >= 5) return res;
+    const ra = Number(res.headers.get("Retry-After"));
+    const waitMs = ra > 0 ? ra * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+    if (onWait) onWait(waitMs);
+    await sleep(waitMs);
+  }
+}
+
+// Live reconciliation progress feed item (rendered in the two-panel progress view).
+type ProgItem = {
+  text: string;
+  status: "run" | "ok" | "skip" | "fail" | "warn" | "admin";
+};
+
+type GroupMapRow = { groupId: string; groupName: string; role: string };
+
+// SharePoint document libraries keep a system "Forms" folder (and other names
+// starting with "_") at the root — never show those as manageable sections.
+const isSystemFolder = (name: string): boolean =>
+  name === "Forms" || name.startsWith("_");
+
+const sanitize = (str: string): string =>
+  str.replace(/[\\/:*?"<>|#%]/g, "").trim();
+const uid = (): string => Math.random().toString(36).slice(2, 9);
+
+// Reserved tree key holding NEW top-level folders staged for creation directly
+// under the library root. "*" is illegal in SharePoint folder names, so this key
+// can never collide with a real discovered section (top-level folder) name.
+const NEW_TOP_LEVEL = "*pending-top-level*";
+
+/* ── Types ─────────────────────────────────────────────────────────────────── */
+
+type RoleDef = { id: number; name: string };
+type GroupPick = { id: string; displayName: string };
+type ExistingAssign = {
+  uid: string;
+  principalId: number;
+  title: string;
+  roleDefId: number;
+  kept: boolean;
+};
+type PendingAssign = { uid: string; group: GroupPick; roleDefId: number };
+type LogEntry = { msg: string; ok: boolean };
+// A library tab is keyed by the LIBRARY TITLE, resolved at run time, because the titles are
+// site-specific ("Approval Document", once "Staging") and the HC pair may not exist at all.
+type LogTab = string;
+
+// Permission state now lives directly on the folder node so a single "Update"
+// commit can apply renames, new-folder creation, and permission edits together.
+type PermDraft = {
+  existing: ExistingAssign[];
+  pending: PendingAssign[];
+  loaded: boolean;
+  loading: boolean;
+  isUnique: boolean | null;
+  open: boolean;
+};
+
+// Arbitrary-depth folder tree. `isNew` folders don't exist in SharePoint yet —
+// `path` stays null for them until the Update commit creates them. Existing
+// folders always recompute their real path from parentPath + name at commit
+// time (never trust a stored path directly) so an ancestor rename earlier in
+// the same commit correctly cascades to every descendant.
+type FolderNode = {
+  id: string;
+  name: string;
+  newName: string;
+  path: string | null;
+  isNew: boolean;
+  // Existing (non-new) folders only: staged for deletion but not yet recycled.
+  // confirmingDelete gates a second click before isDeleted is actually set.
+  isDeleted: boolean;
+  confirmingDelete: boolean;
+  childrenLoaded: boolean;
+  children: FolderNode[];
+  perm: PermDraft;
+};
+
+/* ── Styles ─────────────────────────────────────────────────────────────────── */
+
+const s: Record<string, React.CSSProperties> = {
+  wrap: {
+    maxWidth: 880,
+    margin: "32px auto",
+    padding: "0 24px 48px",
+    fontFamily: "Arial, sans-serif",
+  },
+  // Mounted inside a guided flow step, where the panel already supplies width, centring and padding.
+  // Reusing `wrap` there added a SECOND set of all three — an indent plus an 880px cap inside a panel
+  // often narrower than that, which is the "margin and padding" the client asked to remove. Font stays,
+  // because the flow does not set one on the step body.
+  wrapEmbedded: { fontFamily: "Arial, sans-serif" },
+  h2: { fontSize: 22, fontWeight: 700, color: "#1b1b1b", margin: "0 0 4px" },
+  subtitle: { fontSize: 13, color: "#666", margin: "0 0 24px" },
+  toggleWrap: { display: "flex", justifyContent: "center", marginBottom: 24 },
+  // flexWrap + narrower padding since the tab count reached seven: without wrapping the bar
+  // overflows the web part on a laptop and the last tabs become unreachable.
+  seg: {
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    maxWidth: "100%",
+    border: "1px solid #0f6c3f",
+    borderRadius: 8,
+    overflow: "hidden",
+  },
+  segBtn: {
+    padding: "8px 16px",
+    fontSize: 13,
+    fontFamily: "Arial, sans-serif",
+    fontWeight: 600,
+    cursor: "pointer",
+    background: "#fff",
+    color: "#0f6c3f",
+    border: "none",
+    borderRight: "1px solid #0f6c3f",
+  },
+  segActive: { background: "#0f6c3f", color: "#fff" },
+  secHeader: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    cursor: "pointer",
+    userSelect: "none",
+    margin: "0 0 10px",
+    padding: "4px 0",
+  },
+  secTitle: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: ".07em",
+    color: "#0f6c3f",
+    margin: 0,
+  },
+  ico: { fontSize: 11, color: "#0f6c3f", lineHeight: 1, flexShrink: 0 },
+  badge: {
+    fontSize: 11,
+    color: "#888",
+    background: "#f3f3f3",
+    borderRadius: 10,
+    padding: "1px 7px",
+    flexShrink: 0,
+  },
+  scrollPane: {
+    maxHeight: 560,
+    overflowY: "auto",
+    border: "1px solid #e0e0e0",
+    borderRadius: 6,
+    padding: "12px 16px",
+    marginBottom: 8,
+  },
+  parentRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 8,
+    padding: "6px 0",
+    borderBottom: "1px solid #f0f0f0",
+  },
+  childRow: { display: "flex", alignItems: "center", gap: 8, padding: "4px 0" },
+  chevBtn: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    padding: "2px 4px",
+    fontSize: 11,
+    color: "#666",
+    lineHeight: 1,
+    flexShrink: 0,
+  },
+  renameIn: {
+    padding: "5px 9px",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    fontFamily: "Arial, sans-serif",
+    fontSize: 13,
+    width: 200,
+    boxSizing: "border-box",
+  },
+  wasLabel: {
+    fontSize: 11,
+    color: "#aaa",
+    fontStyle: "italic",
+    whiteSpace: "nowrap",
+  },
+  permBtn: {
+    marginLeft: "auto",
+    background: "none",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    padding: "3px 10px",
+    fontSize: 11,
+    cursor: "pointer",
+    fontFamily: "Arial, sans-serif",
+    color: "#444",
+    flexShrink: 0,
+    whiteSpace: "nowrap",
+  },
+  permBtnOpen: { borderColor: "#0f6c3f", color: "#0f6c3f" },
+  childrenPane: {
+    marginLeft: 40,
+    borderLeft: "2px solid #e8f5ee",
+    paddingLeft: 12,
+    marginBottom: 4,
+  },
+  permPanel: {
+    margin: "2px 0 8px",
+    background: "#f8faf8",
+    border: "1px solid #d0e8d8",
+    borderRadius: 6,
+    padding: "10px 12px",
+  },
+  permTitle: {
+    fontSize: 10,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: ".06em",
+    color: "#0f6c3f",
+    margin: "0 0 8px",
+  },
+  assignRow: { display: "flex", alignItems: "center", gap: 6, marginBottom: 5 },
+  chip: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    color: "#0f6c3f",
+    fontWeight: 600,
+    fontSize: 11,
+    border: "1px solid #cfe8da",
+    borderRadius: 4,
+    padding: "3px 7px",
+    background: "#fff",
+    maxWidth: 190,
+    boxSizing: "border-box",
+    flexShrink: 0,
+  },
+  chipName: {
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  chipX: {
+    background: "none",
+    border: "none",
+    color: "#888",
+    cursor: "pointer",
+    fontSize: 11,
+    lineHeight: 1,
+    padding: 0,
+    flexShrink: 0,
+  },
+  roleSelect: {
+    flex: "0 0 130px",
+    padding: "4px 6px",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    fontSize: 12,
+    fontFamily: "Arial, sans-serif",
+    background: "#fff",
+  },
+  undoLink: {
+    background: "none",
+    border: "none",
+    color: "#0f6c3f",
+    cursor: "pointer",
+    fontSize: 11,
+    padding: 0,
+    fontFamily: "Arial, sans-serif",
+  },
+  searchWrap: { position: "relative", marginBottom: 6 },
+  searchIn: {
+    padding: "5px 9px",
+    border: "1px solid #c8c8c8",
+    borderRadius: 4,
+    fontFamily: "Arial, sans-serif",
+    fontSize: 12,
+    width: "100%",
+    boxSizing: "border-box",
+  },
+  dropdown: {
+    position: "absolute",
+    top: 30,
+    left: 0,
+    right: 0,
+    background: "#fff",
+    border: "1px solid #d0d0d0",
+    borderRadius: 4,
+    boxShadow: "0 6px 18px rgba(0,0,0,.14)",
+    zIndex: 100,
+    maxHeight: 180,
+    overflowY: "auto",
+  },
+  dropItem: {
+    padding: "7px 10px",
+    cursor: "pointer",
+    borderBottom: "1px solid #f2f2f2",
+    fontSize: 12,
+  },
+  addFolderBtn: {
+    background: "none",
+    border: "1px dashed #0f6c3f",
+    color: "#0f6c3f",
+    borderRadius: 4,
+    padding: "4px 12px",
+    fontSize: 12,
+    cursor: "pointer",
+    fontFamily: "Arial, sans-serif",
+    marginTop: 8,
+  },
+  actions: {
+    display: "flex",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    gap: 10,
+    marginTop: 16,
+  },
+  btn: {
+    padding: "8px 22px",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: "Arial, sans-serif",
+    fontSize: 13,
+  },
+  logBox: {
+    marginTop: 20,
+    background: "#f5f5f5",
+    borderRadius: 6,
+    padding: "12px 16px",
+  },
+  logTitle: {
+    fontSize: 11,
+    fontWeight: 700,
+    textTransform: "uppercase",
+    letterSpacing: ".05em",
+    color: "#555",
+    margin: "0 0 8px",
+  },
+  toast: {
+    position: "fixed",
+    top: 24,
+    right: 24,
+    color: "#fff",
+    padding: "14px 44px 14px 16px",
+    borderRadius: 6,
+    fontSize: 13,
+    zIndex: 9999,
+    minWidth: 280,
+    maxWidth: 420,
+    boxShadow: "0 4px 16px rgba(0,0,0,.18)",
+  },
+  toastClose: {
+    position: "absolute",
+    top: 10,
+    right: 12,
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    color: "#fff",
+    fontSize: 16,
+    opacity: 0.7,
+    lineHeight: "1",
+  },
+  confirmBar: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 10,
+    margin: "4px 0 8px",
+    padding: "8px 10px",
+    background: "#fdf3f3",
+    border: "1px solid #f1c0c0",
+    borderRadius: 4,
+    fontSize: 12,
+    color: "#a4262c",
+  },
+  dangerBtn: {
+    padding: "5px 14px",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: "Arial, sans-serif",
+    fontSize: 12,
+    border: "none",
+    background: "#a4262c",
+    color: "#fff",
+    flexShrink: 0,
+  },
+  ghostBtn: {
+    padding: "5px 14px",
+    borderRadius: 4,
+    cursor: "pointer",
+    fontFamily: "Arial, sans-serif",
+    fontSize: 12,
+    border: "1px solid #d0d0d0",
+    background: "#fff",
+    color: "#333",
+    flexShrink: 0,
+  },
+};
+
+/* ── GroupSearch ─────────────────────────────────────────────────────────────── */
+
+const GroupSearch: React.FC<{
+  disabled: boolean;
+  placeholder?: string;
+  onSearch: (q: string) => Promise<GroupPick[]>;
+  onPick: (g: GroupPick) => void;
+}> = ({ disabled, placeholder = "Search for a group…", onSearch, onPick }) => {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<GroupPick[]>([]);
+  const [open, setOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) return undefined;
+    const h = setTimeout(
+      () => {
+        setSearching(true);
+        onSearch(q.trim())
+          .then((r) => {
+            setResults(r);
+            setOpen(true);
+            setSearching(false);
+          })
+          .catch(() => {
+            setResults([]);
+            setOpen(false);
+            setSearching(false);
+          });
+      },
+      q.trim().length === 0 ? 0 : 300,
+    );
+    return () => clearTimeout(h);
+  }, [q, focused]);
+
+  return (
+    <div style={s.searchWrap}>
+      <input
+        style={s.searchIn}
+        placeholder={placeholder}
+        value={q}
+        disabled={disabled}
+        onFocus={() => {
+          setFocused(true);
+          setOpen(true);
+        }}
+        onBlur={() => {
+          window.setTimeout(() => {
+            setFocused(false);
+            setOpen(false);
+          }, 150);
+        }}
+        onChange={(e) => setQ(e.target.value)}
+      />
+      {searching && (
+        <span
+          style={{
+            position: "absolute",
+            right: 8,
+            top: 7,
+            fontSize: 11,
+            color: "#aaa",
+          }}
+        >
+          Searching…
+        </span>
+      )}
+      {open && (
+        <div style={s.dropdown}>
+          {results.length > 0 ? (
+            results.map((g) => (
+              <div
+                key={g.id}
+                style={s.dropItem}
+                onMouseDown={() => {
+                  onPick(g);
+                  setOpen(false);
+                  setFocused(false);
+                  setResults([]);
+                  setQ("");
+                }}
+              >
+                <div style={{ fontWeight: 600 }}>{g.displayName}</div>
+              </div>
+            ))
+          ) : (
+            <div style={{ ...s.dropItem, color: "#888", cursor: "default" }}>
+              {searching ? "Searching…" : "No groups found"}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ── Main ────────────────────────────────────────────────────────────────────── */
+
+export default function FolderManager({
+  context,
+  initialTab,
+  hideTabs,
+  onSegmentCreated,
+  hideSegmentDelete,
+  onAbbreviationsMissingChange,
+  onAbbreviationsLoadingChange,
+  onReconRunningChange,
+  onMigrateRunningChange,
+  onMigratePendingChange,
+  onMigrateApplied,
+  onMigrateScanned,
+  migrateInitialSegmentKey,
+  migrateUploadsPaused,
+  abbreviationsInitialSegmentKey,
+  onAbbreviationsDirtyChange,
+  onAbbreviationsRegisterSave,
+  hideSegmentCreate,
+  hideSegmentRecode,
+  onStructureDirtyChange,
+  onStructureSaved,
+}: IFolderManagerProps): React.ReactElement {
+  const siteUrl = context.pageContext.web.absoluteUrl;
+
+  // Active tab. `Staging`/`Documents` are no longer OFFERED (see the Tab type) — the folder tree
+  // they drove is retired, and `libTarget` now only ever holds its initial value, which keeps the
+  // tree's helpers compiling until that code is deleted.
+  // Opens on Term Abbreviations, NOT on the first tab, and the two are deliberately different since
+  // "New segment" moved to the front on 2026-08-15. Position states the sequence; the default states
+  // the likely job. Segments already exist on any site being administered, so landing every visit on
+  // a creation form invites a duplicate; Term Abbreviations is where the recurring work is, and a term
+  // with no code gets no folder, silently.
+  //
+  // …unless the URL names one. The CRS Settings landing page has three separate rows — Term
+  // Abbreviations, Folder Structure Management, Folder Reconciliations — which are all TABS of this
+  // single page, so without the deep link they would all land here and two of the three would look
+  // broken. An absent or unrecognised hash falls back to the default rather than showing nothing.
+  // `initialTab` (a guided flow driving one step) wins over the URL hash, which wins over the default.
+  const [tab, setTab] = useState<Tab>(() => tabFromDeepLink(initialTab));
+  const [libTarget] = useState<LibTarget>("Staging");
+  /**
+   * True while a mounted structure screen holds unsaved changes. Switching tabs UNMOUNTS it, which
+   * discards the edit silently, so the switch is REFUSED rather than confirmed — the Save button is
+   * a few pixels away, and a "discard?" prompt would put losing the work one click behind something
+   * that looks like ordinary navigation. Copied in behaviour from FolderStructurePage, whose three
+   * tabs now live here.
+   */
+  const [dirty, setDirty] = useState(false);
+  const [tabBlocked, setTabBlocked] = useState(false);
+  // Top-level container folders discovered under the library root, in display order.
+  const [sections, setSections] = useState<Mode[]>([]);
+  /* Where the segment list on the reconciliation screen actually came from.
+     `config` is the only trustworthy answer; the rest mean the built-in RECON_MODES is showing, and
+     that list contains a deliberate placeholder segment with a stale term-set GUID. Silent before
+     2026-08-21, when it offered four segments on a site with two and nothing said why. */
+  const [modeSource, setModeSource] = useState<
+    "config" | "failed" | "empty" | "no-sortorder"
+  >("config");
+  const [tree, setTree] = useState<Record<Mode, FolderNode[]>>({});
+  const [libRoot, setLibRoot] = useState<string | null>(null);
+  // Has primeNames() resolved? The tree CANNOT load before it has. Every library read goes
+  // through libApiTitle(), which maps the logical key "Staging" to the live title — and until
+  // priming lands that returns the legacy default, so getbytitle('Staging') 404s on this site
+  // (the library is titled "Approval Document") and the tab renders "No top-level folders under
+  // Staging yet" on a library holding 200 of them. Documents hid the bug: its title never
+  // changed, so it loaded correctly whether primed or not.
+  const [namesReady, setNamesReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [roleDefs, setRoleDefs] = useState<RoleDef[]>([]);
+  const [ownerGroupId, setOwnerGroupId] = useState<number | null>(null);
+  const [log, setLog] = useState<LogEntry[]>([]);
+  // Which slice of the log is on screen. "All" is the default because the prune,
+  // orphan-repair and site-entry passes name neither library, so they are reachable
+  // from nowhere else.
+  const [logTab, setLogTab] = useState<LogTab>("All");
+  /* SELECTIVE RECONCILIATION (register #18). `undefined` means "not chosen yet", which resolves to
+     ALL — the safe default is today's behaviour. A default of "only what changed" would make the
+     first run after an unseen manual edit skip the one segment that needed it. */
+  const [scopeSegs, setScopeSegs] = useState<ScopeSegment[] | undefined>(
+    undefined,
+  );
+  /* ⚠ STARTS EMPTY, NOT "everything" (client, 2026-09-04: *"Remmeber when I said auto select the
+     segment? This time let them select instead."*). It was `undefined`, which `resolveRunScope` reads
+     as EVERY segment — so opening the screen and pressing Run reconciled the whole site, and on this
+     site that is five segments and tens of minutes.
+     ⚠ `undefined` STILL MEANS ALL, and the "Select all" button still sets it — the meaning of the
+     value is unchanged, only what it starts as. That matters: `resolveRunScope` and the
+     `coversEverySegment` guard behind the Folder Map prune both key on it, and re-defining
+     `undefined` would have quietly changed which runs are allowed to delete orphaned rows.
+     ⚠ AN EMPTY SET IS REFUSED, not treated as all — `resolveRunScope` already fails closed, so the
+     screen says what to do instead of running something nobody chose. */
+  /* ⚠⚠ STARTS EMPTY — NOTHING TICKED — AND MUST STAY THAT WAY. `undefined` means ALL, and setting
+     it as the initial value pre-ticks every segment. That was tried on 2026-09-06, from a mockup
+     that showed ticked boxes, and the client rejected it immediately: *"I already told you to not
+     bring back the auto select for the folder recon."*
+     The reason it matters: a full run walks every segment's term tree and re-asserts every grant -
+     tens of minutes on a provisioned site. Pre-ticking makes the expensive run the DEFAULT, one
+     click away, for an admin who came to reconcile one segment. Making them choose is the point.
+     "Select all" is still there for anyone who wants the full run deliberately. */
+  const [scopePicked, setScopePicked] = useState<Set<string> | undefined>(
+    new Set<string>(),
+  );
+  /** Types into the segment filter. Display only — it never changes what a run covers. */
+  const [scopeFilter, setScopeFilter] = useState("");
+  /** One resolver for the picker, the run and the log, so they cannot disagree about coverage. */
+  const runScope = (): ReturnType<typeof resolveRunScope> =>
+    resolveRunScope(scopeSegs, scopePicked);
+  const [toast, setToast] = useState<{
+    message: string;
+    error: boolean;
+  } | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
+  // Section collapse state, keyed by section name; sections default to open.
+  const [modeOpen, setModeOpen] = useState<Record<Mode, boolean>>({});
+  /* ⚠ THE CONFIRM GATE IS GONE (client's design, 2026-09-06). Pressing "Update folder structure"
+     used to open a bar that asked a second time; the design shows one button with the segments
+     already on screen, so the run starts on the press.
+
+     Safe ONLY because reconciliation is idempotent - the gate was informational, never protective.
+     If anything destructive is ever added to that run, this state comes back. */
+  // Live reconciliation progress (two-panel view + rotating cooldown text).
+  const [reconRunning, setReconRunning] = useState(false);
+  const [reconPhase, setReconPhase] = useState("");
+  // One feed per library per kind — four panels. A single merged pair made a
+  // 700-step run read as one undifferentiated wall; the client's question is
+  // always "how is Staging doing", never "how is the run doing".
+  // All four keys always, even on a site with no HC: the panels render from reconLibs(), so the
+  // unused pair costs two empty arrays and nothing on screen. Keying them lazily would mean
+  // pushFolder spreading `undefined` the first time an HC step reported.
+  const emptyFeeds = (): Record<LibTarget, ProgItem[]> => ({
+    Staging: [],
+    Documents: [],
+    StagingHC: [],
+    DocumentsHC: [],
+    Archive: [],
+    ArchiveHC: [],
+  });
+  const [folderFeeds, setFolderFeeds] =
+    useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
+  const [assignFeeds, setAssignFeeds] =
+    useState<Record<LibTarget, ProgItem[]>>(emptyFeeds);
+  const [reconCounts, setReconCounts] = useState<{
+    folders: number;
+    assigns: number;
+  }>({ folders: 0, assigns: 0 });
+  // ETA: planned total throttled ops, run start time, and a ticking "now" so the
+  // elapsed/remaining estimate repaints every second even between ops.
+  const [reconPlanned, setReconPlanned] = useState(0);
+  /**
+   * Steps ATTEMPTED, which is what the ETA divides by.
+   *
+   * This used to reuse `reconCounts`, which counts things that CHANGED — folders
+   * created, groups assigned. On a re-run almost nothing changes, so the numerator
+   * stayed near zero while the denominator stayed at the full planned total, and
+   * the estimate ran away: a re-run that finished in three minutes advertised
+   * "~197m left". Attempted-vs-planned is the only pair that measures the same
+   * thing on both sides.
+   */
+  const [reconDone, setReconDone] = useState(0);
+  const [reconStartMs, setReconStartMs] = useState<number | undefined>(
+    undefined,
+  );
+  const [reconNow, setReconNow] = useState(0);
+
+  useEffect(() => {
+    if (!reconRunning) return;
+    const id = setInterval(() => setReconNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [reconRunning]);
+
+  // Guard against losing a run to a stray refresh or tab close. Reconciliation executes
+  // entirely in this page — there is no server-side job — so navigating away stops it
+  // mid-operation. Work already committed survives and a re-run resumes safely, but a
+  // folder interrupted between "created" and "inheritance broken" is briefly left
+  // INHERITING its parent's permissions until the next run repairs it. Worth a prompt.
+  // Told to the host on every transition, so the guided flow can hold its rail for the duration.
+  // Unconditional hook, above every early return, for the same reason as the abbreviation reports.
+  useEffect(() => {
+    if (onReconRunningChange) onReconRunningChange(reconRunning);
+  }, [onReconRunningChange, reconRunning]);
+
+  useEffect(() => {
+    if (!reconRunning) return;
+    const warn = (e: BeforeUnloadEvent): string => {
+      e.preventDefault();
+      // Browsers show their own wording and ignore ours, but a non-empty returnValue is
+      // still what triggers the prompt at all.
+      e.returnValue =
+        "Reconciliation is still running. Leaving now will stop it.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [reconRunning]);
+
+  // Keep the live feeds short so hundreds of ops don't flood the DOM.
+  const FEED_CAP = 40;
+  const pushFolder = (
+    lib: LibTarget,
+    text: string,
+    status: ProgItem["status"],
+  ): void =>
+    setFolderFeeds((f) => ({
+      ...f,
+      [lib]: [...f[lib].slice(-(FEED_CAP - 1)), { text, status }],
+    }));
+  const setLastFolder = (
+    lib: LibTarget,
+    text: string,
+    status: ProgItem["status"],
+  ): void =>
+    setFolderFeeds((f) => ({
+      ...f,
+      [lib]: f[lib].length
+        ? [...f[lib].slice(0, -1), { text, status }]
+        : [{ text, status }],
+    }));
+  const pushAssign = (
+    lib: LibTarget,
+    text: string,
+    status: ProgItem["status"],
+  ): void =>
+    setAssignFeeds((a) => ({
+      ...a,
+      [lib]: [...a[lib].slice(-(FEED_CAP - 1)), { text, status }],
+    }));
+  /** One planned step attempted — succeeded, skipped or failed alike. */
+  const step = (n = 1): void => setReconDone((d) => d + n);
+  // Surfaces a 429 backoff wait in the rotating status line (safety-net path).
+  const reconWaitNote = (ms: number): void =>
+    setReconPhase(
+      `Easing off — SharePoint is busy (${Math.round(ms / 1000)}s)…`,
+    );
+
+  // Status glyph for a progress-feed row (spinner while running, else a colored mark).
+  const progIcon = (status: ProgItem["status"]): React.ReactElement => {
+    if (status === "run") {
+      return (
+        <span
+          style={{
+            display: "inline-block",
+            width: 11,
+            height: 11,
+            border: "2px solid #cfe4d8",
+            borderTopColor: "#0f6c3f",
+            borderRadius: "50%",
+            animation: "fmspin 0.8s linear infinite",
+            flexShrink: 0,
+          }}
+        />
+      );
+    }
+    const marks: Record<string, [string, string]> = {
+      ok: ["✓", "#0f6c3f"],
+      skip: ["○", "#999"],
+      fail: ["✗", "#c0392b"],
+      admin: ["⚠", "#b45309"],
+      warn: ["⚠", "#b45309"],
+    };
+    const [ch, color] = marks[status] ?? ["•", "#666"];
+    return (
+      <span
+        style={{
+          color,
+          fontSize: 12,
+          width: 11,
+          textAlign: "center",
+          flexShrink: 0,
+        }}
+      >
+        {ch}
+      </span>
+    );
+  };
+
+  const showToast = (message: string, error: boolean): void => {
+    setToast({ message, error });
+    setTimeout(() => setToast(null), 5000);
+  };
+
+  const roleName = (id: number): string =>
+    roleDefs.find((r) => r.id === id)?.name ?? String(id);
+
+  /* ── REST ────────────────────────────────────────────────────────────────────── */
+
+  const getLibraryRoot = async (lib: string): Promise<string | null> => {
+    // Retry-wrapped: a single throttled GET here used to null out the WHOLE library
+    // pass in reconciliation (e.g. Documents skipped → no MEMBER grants land). Log the
+    // real HTTP status on genuine failure rather than reporting a false "not found"
+    // (CLAUDE.md gotcha #9 — a transient status is not missing data).
+    const res: SPHttpClientResponse = await withThrottleRetry(
+      () =>
+        context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/RootFolder?$select=ServerRelativeUrl`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json" } },
+        ),
+      reconWaitNote,
+    );
+    if (!res.ok) {
+      console.warn(
+        `getLibraryRoot('${libDisplayName(lib)}') failed: HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
+      return null;
+    }
+    const data = await res.json();
+    return data.ServerRelativeUrl ?? null;
+  };
+
+  const getFolders = async (
+    folderPath: string,
+  ): Promise<Array<{ Name: string; ServerRelativeUrl: string }>> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl('${encodeURIComponent(folderPath)}')/Folders?$select=Name,ServerRelativeUrl&$orderby=Name`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.value ?? [];
+  };
+
+  const moveFolder = async (
+    oldPath: string,
+    newPath: string,
+  ): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@s)/MoveTo(newUrl=@d)?@s='${encodeURIComponent(oldPath)}'&@d='${encodeURIComponent(newPath)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    // Said "addroleassignment HTTP …" until 2026-08-21 — a copy-paste from the grant helper that
+    // would have sent anyone debugging a failed RENAME looking at permissions instead.
+    if (!res.ok) throw new Error(`MoveTo HTTP ${res.status}`);
+  };
+
+  const getRoleAssignments = async (
+    folderPath: string,
+  ): Promise<ExistingAssign[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments?$expand=Member,RoleDefinitionBindings&@f='${encodeServerRelativePath(folderPath)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    const result: ExistingAssign[] = [];
+    for (const ra of data.value ?? []) {
+      if (ownerGroupId !== null && ra.PrincipalId === ownerGroupId) continue;
+      const rawBindings = ra.RoleDefinitionBindings;
+      const bindings: Array<{ RoleTypeKind: number; Id: number }> =
+        Array.isArray(rawBindings)
+          ? rawBindings
+          : (rawBindings?.value ?? rawBindings?.results ?? []);
+      const valid = bindings.find(
+        (b) => b.RoleTypeKind !== 1 && b.RoleTypeKind !== 7,
+      );
+      if (!valid) continue;
+      result.push({
+        uid: uid(),
+        principalId: ra.PrincipalId,
+        title: ra.Member?.Title ?? String(ra.PrincipalId),
+        roleDefId: valid.Id,
+        kept: true,
+      });
+    }
+    return result;
+  };
+
+  /**
+   * EVERY (principal, role definition) pair on a folder — unlike getRoleAssignments above, which
+   * keeps only the FIRST binding per principal.
+   *
+   * ⚠ THAT DIFFERENCE IS THE WHOLE POINT, and reusing the other reader for the skip check cost a
+   * measured 19m50s / 868 assignments on a settled segment (2026-08-19). SharePoint collects all of
+   * a principal's permission levels into ONE role assignment with several RoleDefinitionBindings, so
+   * an approver group holding CRS Approve + CRS Delete + CRS Upload read back as holding one of
+   * them — and the other two were re-granted on every run, for ever. The log made it plain: five
+   * grants re-issued and three skipped per unit, the three being whichever level came back first.
+   *
+   * It filters NOTHING, deliberately. The display reader drops RoleTypeKind 1 and 7 as noise; here a
+   * dropped binding can only cause a needed skip to be MISSED. Keeping every binding can only cause
+   * a wasted no-op write. Match on the raw Id and exclude nothing.
+   *
+   * Returns undefined — never [] — when the read fails, so the caller grants rather than skips.
+   */
+  const getAllRoleBindings = async (
+    folderPath: string,
+  ): Promise<Array<{ principalId: number; roleDefId: number }> | undefined> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments?$expand=RoleDefinitionBindings&@f='${encodeServerRelativePath(folderPath)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    const out: Array<{ principalId: number; roleDefId: number }> = [];
+    for (const ra of data.value ?? []) {
+      const raw = ra.RoleDefinitionBindings;
+      const bindings: Array<{ Id: number }> = Array.isArray(raw)
+        ? raw
+        : (raw?.value ?? raw?.results ?? []);
+      for (const b of bindings) {
+        if (typeof b?.Id === "number")
+          out.push({ principalId: ra.PrincipalId, roleDefId: b.Id });
+      }
+    }
+    return out;
+  };
+
+  const getHasUniquePerms = async (
+    folderPath: string,
+  ): Promise<boolean | null> => {
+    const res = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields?$select=HasUniqueRoleAssignments&@f='${encodeServerRelativePath(folderPath)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    return typeof data.HasUniqueRoleAssignments === "boolean"
+      ? data.HasUniqueRoleAssignments
+      : null;
+  };
+
+  const folderExists = async (path: string): Promise<boolean> => {
+    const res = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?@f='${encodeServerRelativePath(path)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    return res.ok;
+  };
+
+  const createFolder = async (path: string): Promise<void> => {
+    if (await folderExists(path)) return;
+    const res = await withThrottleRetry(
+      () =>
+        context.spHttpClient.post(
+          `${siteUrl}/_api/web/folders/AddUsingPath(DecodedUrl=@d,overwrite=false)?@d='${encodeServerRelativePath(path)}'`,
+          SPHttpClient.configurations.v1,
+          {
+            headers: {
+              Accept: "application/json;odata=nometadata",
+              "Content-Type": "application/json",
+            },
+          },
+        ),
+      reconWaitNote,
+    );
+    if (!res.ok)
+      throw new Error(
+        `create folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
+  };
+
+  const breakInheritance = async (path: string): Promise<void> => {
+    const res = await withThrottleRetry(
+      () =>
+        context.spHttpClient.post(
+          `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)?@f='${encodeServerRelativePath(path)}'`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        ),
+      reconWaitNote,
+    );
+    if (!res.ok) throw new Error(`breakroleinheritance HTTP ${res.status}`);
+  };
+
+  // Recycles the folder (and everything inside it) to the site Recycle Bin —
+  // recoverable, not a permanent delete.
+  const deleteFolder = async (path: string): Promise<void> => {
+    const res = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/recycle()?@f='${encodeServerRelativePath(path)}'`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok)
+      throw new Error(
+        `delete folder HTTP ${res.status} — ${(await res.text().catch(() => "")).slice(0, 200)}`,
+      );
+  };
+
+  // SP site group: the group's integer Id IS the role-assignment principal id.
+  // No ensureuser, no federateddirectoryclaimprovider claim. A GUID here means a
+  // legacy Entra row that must be recreated via the Group Map tab.
+  const spGroupPrincipalId = (groupId: string): number => {
+    const n = Number((groupId ?? "").trim());
+    if (!(n > 0) || n % 1 !== 0) {
+      throw new Error(
+        `"${groupId}" is not a SharePoint site-group id — recreate this Group Map row with the Group Map tab`,
+      );
+    }
+    return n;
+  };
+
+  // The only call in this component that REMOVES access. Deliberately narrow: it takes
+  // a principal, not a role definition, because SharePoint's removeroleassignment drops
+  // every binding that principal holds on that folder. Callers must therefore have
+  // already established that the ONLY binding there is the one they mean to remove —
+  // see the ancestor-read revoke in the assignment loop, which checks the group holds
+  // exactly "Read" and holds no Group Map row of its own at that tier.
+  //
+  // Limited Access is NOT removed by this and must not be: SharePoint maintains it on
+  // parent folders so a user can reach a child they are granted on. Stripping it would
+  // break access to the unit folder itself, which is the opposite of the intent.
+  // UNREACHABLE ON PURPOSE, and kept. `revokeAncestorRead` is hard-coded false in both
+  // ReconSettings defaults — the config row is deliberately ignored, because revoking
+  // ancestor Read fights the browse corridor that lets a user click down to their own
+  // folder (CLAUDE.md, RBAC section). Retained rather than deleted so the capability and
+  // the reasoning above survive if the client ever asks for it; deleting it would mean
+  // rediscovering the Limited Access caveat from scratch.
+  //
+  // A ONE-TIME "Prune archive access to C-Level only" repair tool used this on 2026-09-02 to
+  // catch up ClarenceDMSTesting and SDG after LIBRARY_ROLES.Archive/.ArchiveHC was narrowed to
+  // C-Level only — reconciliation only ever ADDS folder-scope grants, so the wider pre-narrowing
+  // grants had to be removed by hand once. Both sites confirmed clean; the tool (and its UI) was
+  // removed the same day so it does not sit in front of the client as an unexplained feature. See
+  // docs/superpowers/specs/2026-09-02-archive-audit-log-and-access-narrowing-runbook.md for the
+  // exact shape if this class of repair is ever needed again.
+  //
+  // ⚠ A SECOND repair followed on 2026-09-03 (the LIBRARY ROOT objects, which the folder pass never
+  // touched) and did NOT use this — it is worth knowing why, because this looks like the obvious
+  // call. A library root has no `ListItemAllFields`: it needs the LIST-scoped
+  // `/_api/web/lists(guid'…')/roleassignments`, addressed by the list's GUID, and its removal takes
+  // BOTH the principal id and the `roledefid`. This one is folder-scoped, addressed by
+  // server-relative path, and drops every binding a principal holds in one call. The two are not
+  // interchangeable; do not "simplify" a future library-root pass by routing it through here. That
+  // tool has also been removed (1.0.381.0), for the same reason as the first.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const removeRoleAssignment = async (
+    path: string,
+    principalId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(() =>
+      context.spHttpClient.post(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/removeroleassignment(principalid=${principalId})?@f='${encodeServerRelativePath(path)}'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const json = await res.json();
+        const sp =
+          json?.error?.message?.value ??
+          json?.error?.message ??
+          json?.["odata.error"]?.message?.value;
+        if (sp) msg += ` — ${sp}`;
+      } catch {
+        msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      }
+      throw new Error(msg);
+    }
+  };
+
+  // ⚠ THE ONE-BINDING FORM `removeRoleAssignment` ABOVE DELIBERATELY REFUSES: it drops EVERY
+  // binding a principal holds on a folder, which was exactly wrong for the one-time "stale Read"
+  // repair this served (built + run 2026-09-15/16, then REMOVED per the client, 2026-09-16 —
+  // "remove that tool for now", same convention this file's earlier archive-prune tools followed:
+  // build it, run it on every site, take it back out so it does not sit in front of the client as
+  // an unexplained feature). ⚠ UNREACHABLE ON PURPOSE, KEPT NOT DELETED — this is the
+  // ROLE-DEFINITION-SPECIFIC form (`roledefid=`), already proven at LIST scope in this file
+  // (Site Pages, CRS Requests, CRS Submissions removals) and confirmed to work identically at
+  // FOLDER/item scope — same `RoleAssignmentCollection.RemoveRoleAssignment` overload either way.
+  // If a future repair needs to strip ONE role binding without touching a principal's other grants
+  // on the same folder, this is the shape; re-wire it rather than rebuilding it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const removeSingleRoleBinding = async (
+    path: string,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(() =>
+      context.spHttpClient.post(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/removeroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeServerRelativePath(path)}'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const json = await res.json();
+        const sp =
+          json?.error?.message?.value ??
+          json?.error?.message ??
+          json?.["odata.error"]?.message?.value;
+        if (sp) msg += ` — ${sp}`;
+      } catch {
+        msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      }
+      throw new Error(msg);
+    }
+  };
+
+  // Library-scope grant. Separate from addRoleAssignment because that one addresses a
+  // FOLDER by server-relative path; a list is addressed by its GUID, and the two endpoints
+  // are not interchangeable. Takes the `/_api/web/lists(guid'…')` base already built by the
+  // caller, so the GUID is resolved once per library rather than per grant.
+  /**
+   * SharePoint's OWN reason for refusing a role assignment, not just the status.
+   *
+   * ⚠ THE FOLDER-SCOPED GRANT DISCARDED THIS UNTIL 2026-08-21, and it cost most of an evening. Seven
+   * grants on `Approval Document/GHO/GF/TAX` failed with a bare `addroleassignment HTTP 400`, which
+   * is consistent with at least three different causes — the folder still inheriting, a stale
+   * principal id, a bad role definition id — and distinguishing them by inspection produced two wrong
+   * theories in a row. The list-scoped twin twenty lines below had extracted the message all along.
+   *
+   * Gotcha #9's rule, in the place it was most needed: log the STATUS AND THE BODY before assuming a
+   * data problem. The ids go in too, because "which principal" is the question a stale-id failure
+   * turns on and nothing else in the log carries it.
+   */
+  const grantFailure = async (
+    res: SPHttpClientResponse,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<string> => {
+    let msg = `HTTP ${res.status} (principal ${principalId}, role ${roleDefId})`;
+    try {
+      const json = await res.json();
+      const sp =
+        json?.error?.message?.value ??
+        json?.error?.message ??
+        json?.["odata.error"]?.message?.value;
+      if (sp) msg += ` — ${sp}`;
+    } catch {
+      msg += ` — ${(await res.text().catch(() => "")).slice(0, 300)}`;
+    }
+    return msg;
+  };
+
+  const addRoleAssignmentToList = async (
+    listBase: string,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(() =>
+      context.spHttpClient.post(
+        `${listBase}/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const json = await res.json();
+        const sp =
+          json?.error?.message?.value ??
+          json?.error?.message ??
+          json?.["odata.error"]?.message?.value;
+        if (sp) msg += ` — ${sp}`;
+      } catch {
+        msg += ` — ${(await res.text().catch(() => "")).slice(0, 200)}`;
+      }
+      throw new Error(msg);
+    }
+  };
+
+  const addRoleAssignment = async (
+    path: string,
+    principalId: number,
+    roleDefId: number,
+  ): Promise<void> => {
+    const res = await withThrottleRetry(
+      () =>
+        context.spHttpClient.post(
+          `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields/roleassignments/addroleassignment(principalid=${principalId},roledefid=${roleDefId})?@f='${encodeServerRelativePath(path)}'`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        ),
+      reconWaitNote,
+    );
+    if (!res.ok)
+      throw new Error(
+        `addroleassignment ${await grantFailure(res, principalId, roleDefId)}`,
+      );
+  };
+
+  const searchGroups = async (query: string): Promise<GroupPick[]> => {
+    const groups = await searchSiteGroups(context.spHttpClient, siteUrl, query);
+    return groups.map((g) => ({ id: String(g.id), displayName: g.title }));
+  };
+
+  /* ── Init ────────────────────────────────────────────────────────────────────── */
+
+  /**
+   * Read the site's permission levels. RETURNS them as well as setting state.
+   *
+   * The return is the point, and its absence took a whole reconciliation run down on 2026-08-25.
+   * `roleDefs` is React STATE, and `runReconciliation` reads it from the closure it was created
+   * in — so a run started before this fetch resolves holds `[]`, every grant fails its lookup, and
+   * the run reports ~7,700 lines of `no "<level>" role definition on site` while granting NOTHING.
+   * It is not obviously broken from the log either: folders are still created, the counts look
+   * plausible, and every ACL on the site is simply left as the previous run left it.
+   *
+   * The tell that identified it: the warnings named `"CRS Approve"`, not `"DMS Approve"` — so
+   * `applyPermissionPrefix` HAD run. That is a module-level mutation and is visible immediately;
+   * `setRoleDefs` is state and was not visible to the closure already executing. Module global
+   * seen, React state not — the same trap as the run counters and `stopRef`.
+   *
+   * So the run calls this directly rather than trusting state to have arrived (see the guard at
+   * the top of `runReconciliation`).
+   */
+  /**
+   * The site OWNERS group's id, RETURNED as well as stored.
+   *
+   * ⚠ THE 1.0.237.0 BUG AGAIN, IN THE ONE PLACE THAT FIX DID NOT REACH (found 2026-08-27).
+   * `ownerGroupId` is `useState`, and it was filled ONLY by a mount-time effect while
+   * `runReconciliation` — one long async function — read it from the closure it was created in. A run
+   * started before that fetch resolved held `null` for its entire length, and the log said
+   * `⚠ Administrator pages: site Owners group or "Full Control" not resolved — none locked`.
+   *
+   * ⚠ AND THAT WAS THE SAFE CONSEQUENCE OF THREE. The admin-page lockdown refuses (fail-closed,
+   * correct). But the site-entry library pass then SKIPS restoring Owners after breaking a library's
+   * inheritance, and `protectedIds` in the page pass comes back EMPTY — so the pass that asserts a
+   * full ACL at page scope loses the one principal it is meant never to remove.
+   *
+   * Returned so the run can resolve it itself, exactly as `fetchRoleDefs` now does. Same shape, same
+   * reason: state set by an effect is not visible to a closure already running.
+   */
+  const resolveOwnerGroupId = async (): Promise<number | undefined> => {
+    try {
+      const res = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/AssociatedOwnerGroup?$select=Id`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      // Spelled out rather than `!= null`: the loose form meant "neither null nor undefined",
+      // which is right, but "fixing" it to `!== null` would pass undefined into a number.
+      if (data.Id === null || data.Id === undefined) return undefined;
+      setOwnerGroupId(data.Id as number);
+      return data.Id as number;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const fetchRoleDefs = async (): Promise<RoleDef[]> => {
+    const res = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/roledefinitions?$select=Id,Name,Hidden,RoleTypeKind`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok) throw new Error(`roledefinitions returned HTTP ${res.status}`);
+    const data = await res.json();
+    const all = (data.value ?? []) as Array<{
+      Id: number;
+      Name: string;
+      Hidden: boolean;
+      RoleTypeKind: number;
+    }>;
+    // Detect the custom-level prefix from the UNFILTERED list, before the hidden/system levels
+    // are dropped — the filter is about what an admin may pick, not about what exists.
+    applyPermissionPrefix(all.map((r) => r.Name));
+    /* ⚠⚠ FIXED 2026-09-15 — THIS USED TO FILTER ON `!r.Hidden`, AND THAT WAS THE WHOLE BUG BEHIND
+       "no Restricted View role definition on site" on SDG's live tenant. Verified directly via
+       `/_api/web/roledefinitions?$select=Id,Name,Hidden,RoleTypeKind` on that site: `Restricted
+       View` genuinely exists, spelled EXACTLY that, at Id 1073741832 — but with `Hidden: true`. So
+       this filter silently threw it out of `kept` on EVERY run, on EVERY site, before reconciliation
+       ever got to search for it by name. No redeploy, cache-clear or reinstall could ever have fixed
+       this — it was deterministic, in the matching logic itself, not a deployment problem, and it
+       cost a genuinely alarming detour (a stuck app reinstall, an emptied recycle bin) chasing what
+       turned out to be one wrong filter condition.
+
+       `Hidden` was never a reliable signal for "must never be granted" — it also covers levels
+       SharePoint hides from the admin's Permission Levels LISTING page (`role.aspx`) purely to stop
+       them being hand-edited/deleted there, while leaving them fully real and assignable (Restricted
+       View is exactly this: hidden from that one listing, present and correct in the "Edit User
+       Permissions" checkbox dialog, and a completely legitimate level to grant by name). It was
+       never the right test for "is this genuine internal plumbing" — `RoleTypeKind` already was.
+
+       Filtering on `RoleTypeKind` alone: `1` is Guest (`Limited Access`, SharePoint's automatic
+       traversal entry — never something to grant by name), `7` is the original code's own
+       System-kind exclusion, and `255` is what `Hidden` was ACTUALLY doing the real work of
+       excluding for `System.LimitedView`/`System.LimitedEdit` (both RoleTypeKind 255, confirmed on
+       the same live read) — neither of those two ever had a distinct RoleTypeKind of their own to
+       filter on before, so `Hidden` was carrying that weight alone. Restricted View's own
+       RoleTypeKind is `8`, which was never excluded by the RoleTypeKind half of the old condition —
+       only ever caught by the `Hidden` half, and that half is what had to go. */
+    const kept = all
+      .filter(
+        (r) =>
+          r.RoleTypeKind !== 1 &&
+          r.RoleTypeKind !== 7 &&
+          r.RoleTypeKind !== 255,
+      )
+      .map((r) => ({ id: r.Id, name: r.Name }));
+    setRoleDefs(kept);
+    return kept;
+  };
+
+  useEffect(() => {
+    const loadRoleDefs = async (): Promise<void> => {
+      // THROWS now rather than returning silently on a bad status — a failed read here used to
+      // leave `roleDefs` empty with nothing said anywhere, which is the same end state as the
+      // race above and just as invisible.
+      await fetchRoleDefs();
+    };
+    const loadOwnerGroup = async (): Promise<void> => {
+      await resolveOwnerGroupId();
+    };
+    // Names first, then everything else. Every list read in this component resolves through the
+    // cache, and an unprimed cache falls back to the legacy DMS titles — which 404 on a
+    // CRS-renamed site and would present as an empty term store rather than a naming problem.
+    primeNames(context.spHttpClient, siteUrl)
+      .catch(() => undefined)
+      // Set even when priming FAILED: the cache then holds the legacy defaults, which is the
+      // best guess available and is what this component used before priming existed. Leaving
+      // the flag false would strand the tree on a permanent spinner over a transient GET.
+      .then(() => setNamesReady(true))
+      .then(() => Promise.all([loadRoleDefs(), loadOwnerGroup()]))
+      .catch(() => undefined);
+  }, []);
+
+  /* ── Tree ────────────────────────────────────────────────────────────────────── */
+
+  const makeNode = (name: string, path: string): FolderNode => ({
+    id: uid(),
+    name,
+    newName: name,
+    path,
+    isNew: false,
+    isDeleted: false,
+    confirmingDelete: false,
+    childrenLoaded: false,
+    children: [],
+    perm: {
+      existing: [],
+      pending: [],
+      loaded: false,
+      loading: false,
+      isUnique: null,
+      open: false,
+    },
+  });
+
+  const makeNewNode = (): FolderNode => ({
+    id: uid(),
+    name: "",
+    newName: "",
+    path: null,
+    isNew: true,
+    isDeleted: false,
+    confirmingDelete: false,
+    childrenLoaded: true,
+    children: [],
+    perm: {
+      existing: [],
+      pending: [],
+      loaded: true,
+      loading: false,
+      isUnique: null,
+      open: true,
+    },
+  });
+
+  const loadTree = async (): Promise<void> => {
+    setLoading(true);
+    setExpandedIds({});
+    const root = await getLibraryRoot(libTarget);
+    setLibRoot(root);
+    if (!root) {
+      setSections([]);
+      setTree({});
+      setLoading(false);
+      showToast(`Could not find the "${libTarget}" library.`, true);
+      return;
+    }
+    // Discover the top-level container folders under the library root (e.g. the
+    // segment folders) instead of assuming a fixed Departments/Projects layout.
+    const topFolders = (await getFolders(root)).filter(
+      (f) => !isSystemFolder(f.Name),
+    );
+    const sectionNames = topFolders.map((f) => f.Name);
+    const result: Record<Mode, FolderNode[]> = {};
+    for (const f of topFolders) {
+      const parents = await getFolders(f.ServerRelativeUrl);
+      result[f.Name] = parents.map((p) =>
+        makeNode(p.Name, p.ServerRelativeUrl),
+      );
+    }
+    setSections(sectionNames);
+    setTree(result);
+    setLoading(false);
+  };
+
+  // Waits for namesReady — see the flag's declaration. Re-runs when it flips, so the tree
+  // loads as soon as the titles are known rather than needing a manual Refresh.
+  useEffect(() => {
+    if (!namesReady) return;
+    // The manual folder tree is no longer reachable from the tab bar, so this crawl — dozens of
+    // requests down every branch of a library — would run on every page load for a view nobody can
+    // open, and its failure toast would accuse the admin of a permissions problem on a tab that is
+    // not there. Reconciliation reads its own state and does not depend on this.
+    if (tab !== "Staging" && tab !== "Documents") return;
+    loadTree().catch(() => {
+      setLoading(false);
+      showToast("Could not load folders. Check your permissions.", true);
+    });
+  }, [libTarget, namesReady, tab]);
+
+  /* ── Generic tree mutation helpers (recursive, keyed by node id) ───────────────── */
+
+  const mapTree = (
+    nodes: FolderNode[],
+    id: string,
+    updater: (n: FolderNode) => FolderNode,
+  ): FolderNode[] =>
+    nodes.map((n) =>
+      n.id === id
+        ? updater(n)
+        : n.children.length > 0
+          ? { ...n, children: mapTree(n.children, id, updater) }
+          : n,
+    );
+
+  const updateNode = (
+    id: string,
+    updater: (n: FolderNode) => FolderNode,
+  ): void =>
+    setTree((prev) => {
+      const next: Record<Mode, FolderNode[]> = {};
+      for (const k of Object.keys(prev))
+        next[k] = mapTree(prev[k], id, updater);
+      return next;
+    });
+
+  const filterTree = (nodes: FolderNode[], id: string): FolderNode[] =>
+    nodes
+      .filter((n) => n.id !== id)
+      .map((n) =>
+        n.children.length > 0
+          ? { ...n, children: filterTree(n.children, id) }
+          : n,
+      );
+
+  const discardNode = (id: string): void =>
+    setTree((prev) => {
+      const next: Record<Mode, FolderNode[]> = {};
+      for (const k of Object.keys(prev)) next[k] = filterTree(prev[k], id);
+      return next;
+    });
+
+  /* ── Expand / lazy-load children ────────────────────────────────────────────── */
+
+  const toggleExpand = async (node: FolderNode): Promise<void> => {
+    const isOpen = !!expandedIds[node.id];
+    if (isOpen) {
+      setExpandedIds((prev) => ({ ...prev, [node.id]: false }));
+      return;
+    }
+    setExpandedIds((prev) => ({ ...prev, [node.id]: true }));
+    if (node.childrenLoaded || node.isNew || !node.path) return;
+    const kids = await getFolders(node.path).catch(() => []);
+    updateNode(node.id, (n) => ({
+      ...n,
+      childrenLoaded: true,
+      children: kids.map((c) => makeNode(c.Name, c.ServerRelativeUrl)),
+    }));
+  };
+
+  /* ── Add / discard folders (staged in-memory until Update) ─────────────────────── */
+
+  const addNewChild = (mode: Mode, parentId: string | null): void => {
+    const node = makeNewNode();
+    if (parentId === null) {
+      setTree((prev) => ({ ...prev, [mode]: [...(prev[mode] ?? []), node] }));
+      return;
+    }
+    setExpandedIds((prev) => ({ ...prev, [parentId]: true }));
+    updateNode(parentId, (n) => ({ ...n, children: [...n.children, node] }));
+  };
+
+  // Stage a brand-new TOP-LEVEL folder, created directly under the library root
+  // on Update. Works even when the library currently has no folders at all.
+  const addTopLevel = (): void =>
+    setTree((prev) => ({
+      ...prev,
+      [NEW_TOP_LEVEL]: [...(prev[NEW_TOP_LEVEL] ?? []), makeNewNode()],
+    }));
+
+  /* ── Delete existing folders (staged in-memory, requires confirmation, applied on Update) ── */
+
+  const requestDelete = (id: string): void =>
+    updateNode(id, (n) => ({ ...n, confirmingDelete: true }));
+
+  const cancelDelete = (id: string): void =>
+    updateNode(id, (n) => ({ ...n, confirmingDelete: false }));
+
+  const confirmDelete = (id: string): void =>
+    updateNode(id, (n) => ({ ...n, confirmingDelete: false, isDeleted: true }));
+
+  const undoDelete = (id: string): void =>
+    updateNode(id, (n) => ({ ...n, isDeleted: false }));
+
+  /* ── Permission draft mutations (existing + new nodes share the same shape) ────── */
+
+  const togglePermPanel = async (node: FolderNode): Promise<void> => {
+    if (node.isNew || node.perm.loaded) {
+      updateNode(node.id, (n) => ({
+        ...n,
+        perm: { ...n.perm, open: !n.perm.open },
+      }));
+      return;
+    }
+    updateNode(node.id, (n) => ({
+      ...n,
+      perm: { ...n.perm, open: true, loading: true },
+    }));
+    const path = node.path as string;
+    const [assignments, isUnique] = await Promise.all([
+      getRoleAssignments(path).catch(() => [] as ExistingAssign[]),
+      getHasUniquePerms(path).catch(() => null as boolean | null),
+    ]);
+    updateNode(node.id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        loading: false,
+        loaded: true,
+        existing: assignments,
+        isUnique,
+      },
+    }));
+  };
+
+  const permToggleKept = (id: string, aUid: string): void =>
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        existing: n.perm.existing.map((a) =>
+          a.uid === aUid ? { ...a, kept: !a.kept } : a,
+        ),
+      },
+    }));
+
+  const permSetExistingRole = (
+    id: string,
+    aUid: string,
+    roleDefId: number,
+  ): void =>
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        existing: n.perm.existing.map((a) =>
+          a.uid === aUid ? { ...a, roleDefId } : a,
+        ),
+      },
+    }));
+
+  const permAddGroup = (id: string, group: GroupPick): void =>
+    updateNode(id, (n) => {
+      if (n.perm.pending.some((a) => a.group.id === group.id)) return n;
+      const def = roleDefs.find((r) => r.name === "Read") ?? roleDefs[0];
+      return {
+        ...n,
+        perm: {
+          ...n.perm,
+          pending: [
+            ...n.perm.pending,
+            { uid: uid(), group, roleDefId: def?.id ?? 0 },
+          ],
+        },
+      };
+    });
+
+  const permSetPendingRole = (
+    id: string,
+    aUid: string,
+    roleDefId: number,
+  ): void =>
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        pending: n.perm.pending.map((a) =>
+          a.uid === aUid ? { ...a, roleDefId } : a,
+        ),
+      },
+    }));
+
+  const permRemovePending = (id: string, aUid: string): void =>
+    updateNode(id, (n) => ({
+      ...n,
+      perm: {
+        ...n.perm,
+        pending: n.perm.pending.filter((a) => a.uid !== aUid),
+      },
+    }));
+
+  /* ── Change detection ────────────────────────────────────────────────────────── */
+
+  const nodeHasChanges = (node: FolderNode): boolean => {
+    if (node.isNew) return true;
+    if (node.isDeleted) return true;
+    const renamed =
+      node.newName.trim() !== "" && node.newName.trim() !== node.name;
+    const permDirty =
+      node.perm.loaded &&
+      (node.perm.existing.some((a) => !a.kept) || node.perm.pending.length > 0);
+    return renamed || permDirty || node.children.some(nodeHasChanges);
+  };
+
+  const hasChanges =
+    sections.some((mode) => (tree[mode] ?? []).some(nodeHasChanges)) ||
+    (tree[NEW_TOP_LEVEL] ?? []).some(nodeHasChanges);
+
+  /* ── Update (rename + create + permissions, all in one commit) ─────────────────── */
+
+  // Validation walks the WHOLE tree regardless of what's currently expanded on
+  // screen, so an error can point at a folder buried inside a collapsed section.
+  // Each error carries the mode + ancestor chain needed to reveal it in the UI.
+  type ValidationError = { message: string; mode: Mode; ancestorIds: string[] };
+
+  const validateTree = (): ValidationError[] => {
+    const errors: ValidationError[] = [];
+    const walk = (
+      nodes: FolderNode[],
+      mode: Mode,
+      ancestorIds: string[],
+      parentLabel: string,
+    ): void => {
+      for (const n of nodes) {
+        // A folder marked for deletion is recycled whole — its children go with
+        // it, so any staged edits inside it are moot and don't need validating.
+        if (!n.isNew && n.isDeleted) continue;
+        if (n.isNew) {
+          const nm = n.newName.trim();
+          if (!nm)
+            errors.push({
+              message: `A new folder under "${parentLabel}" is missing a name.`,
+              mode,
+              ancestorIds,
+            });
+          else if (n.perm.pending.length === 0)
+            errors.push({
+              message: `"${nm}" (under "${parentLabel}") needs at least one group assigned.`,
+              mode,
+              ancestorIds,
+            });
+        } else if (n.perm.loaded) {
+          const dirty =
+            n.perm.existing.some((a) => !a.kept) || n.perm.pending.length > 0;
+          if (dirty) {
+            const remaining =
+              n.perm.existing.filter((a) => a.kept).length +
+              n.perm.pending.length;
+            if (remaining === 0)
+              errors.push({
+                message: `"${n.newName.trim() || n.name}" would end up with no groups assigned.`,
+                mode,
+                ancestorIds,
+              });
+          }
+        }
+        if (n.children.length > 0)
+          walk(
+            n.children,
+            mode,
+            [...ancestorIds, n.id],
+            n.newName.trim() || n.name || "(unnamed folder)",
+          );
+      }
+    };
+    sections.forEach((mode) => walk(tree[mode] ?? [], mode, [], mode));
+    // New top-level folders live under the library root; label them by library.
+    walk(tree[NEW_TOP_LEVEL] ?? [], NEW_TOP_LEVEL, [], libTarget);
+    return errors;
+  };
+
+  const handleUpdate = async (): Promise<void> => {
+    const problems = validateTree();
+    if (problems.length > 0) {
+      const first = problems[0];
+      setModeOpen((prev) => ({ ...prev, [first.mode]: true }));
+      if (first.ancestorIds.length > 0) {
+        setExpandedIds((prev) => {
+          const next = { ...prev };
+          first.ancestorIds.forEach((id) => {
+            next[id] = true;
+          });
+          return next;
+        });
+      }
+      showToast(first.message, true);
+      return;
+    }
+    if (!libRoot) {
+      showToast("Library root not found.", true);
+      return;
+    }
+
+    setBusy(true);
+    const entries: LogEntry[] = [];
+    const fullCtrlId = roleDefs.find((r) => r.name === "Full Control")?.id;
+    const ensurePrincipal = async (group: GroupPick): Promise<number> =>
+      spGroupPrincipalId(group.id);
+
+    // Pre-order walk: parents are created/renamed before their children are
+    // processed, so each child always receives its parent's up-to-date path.
+    const processNode = async (
+      node: FolderNode,
+      parentPath: string,
+    ): Promise<string | null> => {
+      const trimmedNew = node.newName.trim();
+
+      if (!node.isNew && node.isDeleted) {
+        const currentPath = `${parentPath}/${node.name}`;
+        try {
+          await deleteFolder(currentPath);
+          entries.push({ msg: `"${node.name}" — deleted ✓`, ok: true });
+        } catch (e) {
+          entries.push({
+            msg: `"${node.name}" — delete FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
+        }
+        // Recycling the folder takes its whole subtree with it — nothing left to descend into.
+        return null;
+      }
+
+      if (node.isNew) {
+        const fp = `${parentPath}/${sanitize(trimmedNew)}`;
+        try {
+          await createFolder(fp);
+          await breakInheritance(fp);
+          if (ownerGroupId !== null && fullCtrlId !== undefined)
+            await addRoleAssignment(fp, ownerGroupId, fullCtrlId);
+          for (const a of node.perm.pending) {
+            const pid = await ensurePrincipal(a.group);
+            await addRoleAssignment(fp, pid, a.roleDefId);
+          }
+          const summary = node.perm.pending
+            .map((a) => `${a.group.displayName}=${roleName(a.roleDefId)}`)
+            .join(", ");
+          entries.push({
+            msg: `"${trimmedNew}" — created · ${summary}`,
+            ok: true,
+          });
+          for (const child of node.children) await processNode(child, fp);
+          return fp;
+        } catch (e) {
+          entries.push({
+            msg: `"${trimmedNew}" — create FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
+          return null;
+        }
+      }
+
+      // Existing node: always derive the CURRENT real path from parentPath + the
+      // original name, since an ancestor rename earlier in this same commit
+      // shifts every descendant's real URL — never trust the stored node.path here.
+      const currentPath = `${parentPath}/${node.name}`;
+      let resolvedPath = currentPath;
+
+      if (trimmedNew && trimmedNew !== node.name) {
+        const newPath = `${parentPath}/${sanitize(trimmedNew)}`;
+        try {
+          await moveFolder(currentPath, newPath);
+          entries.push({ msg: `"${node.name}" → "${trimmedNew}" ✓`, ok: true });
+          resolvedPath = newPath;
+        } catch (e) {
+          entries.push({
+            msg: `"${node.name}" → "${trimmedNew}" FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
+        }
+      }
+
+      const perm = node.perm;
+      const permDirty =
+        perm.loaded &&
+        (perm.existing.some((a) => !a.kept) || perm.pending.length > 0);
+      if (permDirty) {
+        const kept = perm.existing.filter((a) => a.kept);
+        try {
+          await breakInheritance(resolvedPath);
+          if (ownerGroupId !== null && fullCtrlId !== undefined)
+            await addRoleAssignment(resolvedPath, ownerGroupId, fullCtrlId);
+          for (const a of kept)
+            await addRoleAssignment(resolvedPath, a.principalId, a.roleDefId);
+          for (const a of perm.pending) {
+            const pid = await ensurePrincipal(a.group);
+            await addRoleAssignment(resolvedPath, pid, a.roleDefId);
+          }
+          entries.push({
+            msg: `"${trimmedNew || node.name}" — permissions updated ✓`,
+            ok: true,
+          });
+        } catch (e) {
+          entries.push({
+            msg: `"${trimmedNew || node.name}" — permissions FAILED: ${(e as Error).message}`,
+            ok: false,
+          });
+        }
+      }
+
+      for (const child of node.children) await processNode(child, resolvedPath);
+      return resolvedPath;
+    };
+
+    for (const mode of sections) {
+      const modeRootPath = `${libRoot}/${mode}`;
+      for (const node of tree[mode] ?? []) {
+        await processNode(node, modeRootPath);
+      }
+    }
+    // New top-level folders are created directly under the library root.
+    for (const node of tree[NEW_TOP_LEVEL] ?? []) {
+      await processNode(node, libRoot);
+    }
+
+    setLog(entries);
+    setBusy(false);
+    const failed = entries.filter((e) => !e.ok).length;
+    const ok = entries.filter((e) => e.ok).length;
+    showToast(
+      failed > 0
+        ? `${ok} update${ok !== 1 ? "s" : ""} applied, ${failed} failed — see log.`
+        : ok > 0
+          ? `${ok} update${ok !== 1 ? "s" : ""} applied.`
+          : "No changes to update.",
+      failed > 0,
+    );
+    await loadTree();
+  };
+
+  /* ── Folder Reconciliation (term-store provisioner) ────────────────────────────── */
+
+  // Term-store readers (v2.1 taxonomy API) — same calls the retired Reconciliation
+  // web part used. Top-level terms = the first level under the set (departments for
+  // GHO); children recurse to the leaf (unit) terms.
+  const loadReconTops = async (termSetId: string): Promise<TermLite[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}/children`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    if (!res.ok)
+      throw new Error(`Term set ${termSetId} returned ${res.status}`);
+    const data = await res.json();
+    return (data.value ?? []).map(
+      (t: { id: string; labels: Array<{ name: string }> }) => ({
+        id: t.id,
+        label: t.labels[0].name,
+      }),
+    );
+  };
+
+  const loadReconChildren = async (
+    termSetId: string,
+    parentId: string,
+  ): Promise<TermLite[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}/terms/${parentId}/children`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json" } },
+    );
+    // THROWS on failure — do NOT soften this to `return []`. A silently empty child
+    // list truncates the term tree, and prune reads "term not enumerated" as "term
+    // deleted". Swallowing this error would let a throttle wipe a segment's map rows.
+    if (!res.ok)
+      throw new Error(`Term children ${parentId} returned ${res.status}`);
+    const data = await res.json();
+    return (data.value ?? []).map(
+      (t: { id: string; labels: Array<{ name: string }> }) => ({
+        id: t.id,
+        label: t.labels[0].name,
+      }),
+    );
+  };
+
+  // Name of a term SET (not a term), used as the full name of the segment container
+  // folder. Soft-fails to undefined: a missing label is cosmetic, and unlike the term
+  // TREE this value feeds nothing that prune or routing depends on.
+  const loadTermSetName = async (
+    termSetId: string,
+  ): Promise<string | undefined> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/v2.1/termStore/sets/${termSetId}`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      const name = (data.localizedNames ?? [])[0]?.name;
+      return typeof name === "string" && name.trim() !== "" ? name : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Resolve the Full Name column's INTERNAL name on a library, live. Never guessed —
+  // see the folderFullName module for why the display name does not determine it.
+  // Returns undefined when the column has not been added to that library yet, which
+  // is a soft state: the run proceeds and simply writes no full names.
+  const loadFullNameField = async (
+    lib: LibTarget,
+  ): Promise<{ internalName?: string; note?: string }> => {
+    // No $filter. A filter that fails returns the same undefined as a column that is
+    // genuinely absent, and the first run against a real site could not tell the two
+    // apart — CLAUDE.md gotcha #9. Reading all fields and matching in code costs one
+    // unfiltered read per library per run and removes the ambiguity.
+    const url =
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/fields` +
+      `?$select=Title,InternalName,TypeAsString,ReadOnlyField&$top=500`;
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        url,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) {
+        const body = (await res.text().catch(() => "")).slice(0, 200);
+        return { note: `field read failed: HTTP ${res.status} ${body}` };
+      }
+      const data = await res.json();
+      const fields = (data.value ?? []) as SpFieldLite[];
+      const internalName = pickFullNameField(fields);
+      if (internalName) return { internalName };
+      // Name the near-misses. "Column absent" and "column present but the wrong type"
+      // need different fixes, and the client cannot tell which one they are looking at.
+      const near = fields.filter(
+        (f) =>
+          (f.Title ?? "").trim().toLowerCase().indexOf("full") >= 0 ||
+          (f.InternalName ?? "").toLowerCase().indexOf("full") >= 0,
+      );
+      if (near.length > 0) {
+        const desc = near
+          .map(
+            (f) =>
+              `"${f.Title}" (${f.InternalName}, ${f.TypeAsString}${f.ReadOnlyField ? ", read-only" : ""})`,
+          )
+          .join("; ");
+        return {
+          note: `no usable "${FULL_NAME_COLUMN_TITLE}" column. Closest match: ${desc}`,
+        };
+      }
+      return {
+        note: `no column titled "${FULL_NAME_COLUMN_TITLE}" (${fields.length} fields read)`,
+      };
+    } catch (e) {
+      return { note: `field read threw: ${(e as Error).message}` };
+    }
+  };
+
+  // Resolve the DMS Folder content type's id on a library, by NAME.
+  //
+  // SharePoint's built-in Folder content type cannot take a custom column: its list
+  // settings page offers only "Delete this content type", and adding a field link by API
+  // fails too (verified 2026-08-03). So a folder that should show Full Name in the details
+  // pane has to carry a folder-derived content type that does accept columns, and this run
+  // stamps it — a folder created through the REST API gets the plain Folder type whatever
+  // the library's default-content-type setting says, because that governs the New button
+  // only.
+  //
+  // Resolved per library: the two libraries hold separate list-scoped copies of the same
+  // site content type, with DIFFERENT ids. Undefined when it is absent, which is a soft
+  // state — a site that has not provisioned it still gets all its folders.
+  const loadFolderContentTypeId = async (
+    lib: LibTarget,
+  ): Promise<string | undefined> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')/ContentTypes?$select=Id,Name`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return undefined;
+      const data = await res.json();
+      const rows = (data.value ?? []) as Array<{
+        Id?: { StringValue?: string };
+        Name?: string;
+      }>;
+      // Preference order, not "whichever matches first in the library's list": a library
+      // mid-rename can carry BOTH, and stamping the one being retired would mean the next
+      // run has to rewrite every folder again.
+      for (const candidate of FOLDER_CONTENT_TYPE_CANDIDATES) {
+        const hit = rows.find(
+          (c) =>
+            (c.Name ?? "").trim().toLowerCase() === candidate.toLowerCase(),
+        );
+        if (hit?.Id?.StringValue) {
+          resolvedFolderCtName = candidate;
+          return hit.Id.StringValue;
+        }
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // Read what a folder's list item already holds, so an unchanged folder costs a cheap GET
+  // instead of a throttled write. Undefined fields mean "unknown" (empty, or the read
+  // failed) and the caller writes.
+  const getFolderItemState = async (
+    serverRelativeUrl: string,
+    internalName?: string,
+    withModeration?: boolean,
+  ): Promise<{
+    fullName?: string;
+    contentTypeId?: string;
+    moderationStatus?: number;
+  }> => {
+    try {
+      // The column is optional: a library can carry the content type before anyone adds
+      // Full Name to it, and the content type must still be stamped in that state.
+      //
+      // OData__ModerationStatus is requested ONLY when the library has content approval on.
+      // Naming a field that does not exist fails the WHOLE request with HTTP 400 — not a null
+      // (CLAUDE.md #11) — so on a library without moderation this would break the Full Name
+      // and content-type writes too.
+      const base = internalName
+        ? `${internalName},ContentTypeId`
+        : "ContentTypeId";
+      const select = withModeration ? `${base},OData__ModerationStatus` : base;
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
+          `?@f='${encodeServerRelativePath(serverRelativeUrl)}'&$select=${select}`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return {};
+      const data = await res.json();
+      const v = internalName ? data[internalName] : undefined;
+      const ct = data.ContentTypeId;
+      const mod = data.OData__ModerationStatus;
+      return {
+        fullName: typeof v === "string" && v !== "" ? v : undefined,
+        contentTypeId: typeof ct === "string" && ct !== "" ? ct : undefined,
+        moderationStatus: typeof mod === "number" ? mod : undefined,
+      };
+    } catch {
+      return {};
+    }
+  };
+
+  // Write the given fields onto a folder's list item. Throws on failure so the caller can
+  // report it against the folder rather than losing it silently.
+  const setFolderItemFields = async (
+    serverRelativeUrl: string,
+    // Numbers as well as strings: OData__ModerationStatus is an integer, and quoting it
+    // makes SharePoint reject the merge (memory sp-column-formatting-gotchas records the
+    // same trap on the read side — the status is an integer, never a label).
+    values: Record<string, string | number>,
+  ): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
+        `?@f='${encodeServerRelativePath(serverRelativeUrl)}'`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+          // MERGE leaves every other field alone; IF-MATCH:* skips the etag round-trip.
+          "X-HTTP-Method": "MERGE",
+          "IF-MATCH": "*",
+        },
+        body: JSON.stringify(values),
+      },
+    );
+    // validateUpdateListItem returns 200 on field errors, but a plain MERGE does not —
+    // it 4xxs. Still surface the body: "field does not exist" and "read-only" read
+    // identically as a bare status code.
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(`HTTP ${res.status} ${detail}`);
+    }
+  };
+
+  // Load DMS Group Map keyed by term (lowercased UnitTermGuid) → its group rows.
+  // Same list/fields the upload form reads. A term can have several rows (one per
+  // role), so a folder gets every mapped group at its role's permission level.
+  const loadGroupMapForAssign = async (): Promise<
+    Map<string, GroupMapRow[]>
+  > => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupName,GroupId,UnitTermGuid,Role&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    const map = new Map<string, GroupMapRow[]>();
+    if (!res.ok) return map;
+    const data = await res.json();
+    for (const r of (data.value ?? []) as Array<{
+      GroupName?: string;
+      GroupId?: string;
+      UnitTermGuid?: string;
+      Role?: string;
+    }>) {
+      const term = (r.UnitTermGuid ?? "").toLowerCase();
+      // Accepts the long-form value an admin naturally types now that the GROUP NAMES use
+      // long suffixes ("UPLOADER" for UPL). Unrecognised values pass through and still fail
+      // accepts() below, so this widens what works without widening what is granted.
+      const role = normalizeRoleValue(r.Role ?? "");
+      if (!r.GroupId) continue;
+      // A GLOBAL row carries NO term by design — it is not scoped to a segment, so
+      // buildGroupMapRow forces Segment and UnitTermGuid empty. The termless guard
+      // below therefore used to discard it, which is why GLOBAL granted nothing
+      // anywhere. Keyed under "" instead, which is where the C-level fan-down looks
+      // for it. Every OTHER termless row is still dropped: without a term there is no
+      // folder to grant on, so it is a broken row, not a wide one.
+      if (!term && role !== "GLOBAL") continue;
+      const arr = map.get(term) ?? [];
+      arr.push({
+        groupId: r.GroupId,
+        groupName: r.GroupName ?? r.GroupId,
+        role,
+      });
+      map.set(term, arr);
+    }
+    return map;
+  };
+
+  /**
+   * Group Map rows with their item Ids, for the orphan-repair pass.
+   *
+   * Separate from loadGroupMapForAssign because that one keys by term and drops the
+   * Id — repair needs to WRITE specific rows, and re-pointing the wrong one is a
+   * permissions change.
+   */
+  /**
+   * Immediate subfolder names of a folder, by server-relative path.
+   *
+   * Uses the OData parameter alias, not an inline quoted literal: an inline path
+   * returns HTTP 400 once it is long enough (CLAUDE.md gotcha #9), which reads as a
+   * malformed request but looks like "no subfolders" to a caller that ignores it.
+   * Returns undefined — not [] — when the listing FAILED, so "could not read" is
+   * distinguishable from "genuinely empty". Reporting a folder as unclaimed on the
+   * strength of a throttled read would be the same class of bug the prune guard exists for.
+   */
+  const listSubfolders = async (
+    serverRelativeUrl: string,
+  ): Promise<string[] | undefined> => {
+    const res: SPHttpClientResponse = await withThrottleRetry(() =>
+      context.spHttpClient.get(
+        `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Folders?$select=Name&@f='${encodeServerRelativePath(serverRelativeUrl)}'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      ),
+    );
+    if (!res.ok) return undefined;
+    const data = await res.json();
+    return ((data.value ?? []) as Array<{ Name?: string }>)
+      .map((f) => f.Name ?? "")
+      .filter((n) => n.length > 0);
+  };
+
+  const loadGroupMapRowsForRepair = async (): Promise<
+    Array<{ itemId: number; termGuid: string; groupName: string }>
+  > => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=Id,GroupName,UnitTermGuid&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(`GDC Group Map read failed: HTTP ${res.status}. ${body}`);
+    }
+    const data = await res.json();
+    return (
+      (data.value ?? []) as Array<{
+        Id?: number;
+        GroupName?: string;
+        UnitTermGuid?: string;
+      }>
+    )
+      .map((r) => ({
+        itemId: r.Id ?? 0,
+        termGuid: (r.UnitTermGuid ?? "").trim(),
+        groupName: r.GroupName ?? "",
+      }))
+      .filter((r) => r.itemId > 0 && r.termGuid.length > 0);
+  };
+
+  /** MERGE one field on one list item. Throws with the body — a bare status hides
+   *  "field does not exist" behind the same 400 as "read-only". */
+  const patchListItem = async (
+    listTitle: string,
+    itemId: number,
+    fields: Record<string, string>,
+  ): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')/items(${itemId})`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+          "X-HTTP-Method": "MERGE",
+          "IF-MATCH": "*",
+        },
+        body: JSON.stringify(fields),
+      },
+    );
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 200);
+      throw new Error(`HTTP ${res.status} ${detail}`);
+    }
+  };
+
+  /**
+   * Term GUID → folder-name abbreviation.
+   *
+   * Lives here rather than in the shared module because a shared file that imports
+   * `@microsoft/sp-http` cannot be unit tested — see the note on abbrevListTitle().
+   *
+   * Deliberately NOT wrapped in a catch returning an empty map: an unreadable list
+   * must abort the run. An empty index makes every term look unmapped, which would
+   * skip every folder and report 175 false "needs attention" rows.
+   */
+  const loadAbbrevRows = async (): Promise<OrphanAbbrevRow[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(abbrevListTitle())}')/items?$select=Id,TermGuid,Title,Level,Abbreviation&$top=5000`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(
+        `${abbrevListTitle()} read failed: HTTP ${res.status}. ${body}`,
+      );
+    }
+    const data = await res.json();
+    // Id/Title/Level are read for the orphan-repair pass, which matches a dead row
+    // to a re-created term by LABEL — the one thing that survives a delete-and-re-add.
+    return (
+      (data.value ?? []) as Array<{
+        Id?: number;
+        TermGuid?: string;
+        Title?: string;
+        Level?: string;
+        Abbreviation?: string;
+      }>
+    ).map((r) => ({
+      itemId: r.Id ?? 0,
+      termGuid: r.TermGuid ?? "",
+      title: r.Title ?? "",
+      level: r.Level ?? "",
+      abbreviation: r.Abbreviation ?? "",
+    }));
+  };
+
+  const abbrevIndexOf = (
+    rows: readonly OrphanAbbrevRow[],
+  ): Map<string, string> =>
+    buildAbbrevIndex(
+      rows.map(
+        (r): AbbrevRow => ({
+          termGuid: r.termGuid,
+          abbreviation: r.abbreviation,
+        }),
+      ),
+    );
+
+  /**
+   * Term set GUID → the segment's level names, in depth order, from the same DMS
+   * Config `Levels` JSON the upload form reads.
+   *
+   * Needed because the abbreviation list stores a level NAME ("Unit"), and an
+   * orphan is only ever matched to a live term at the SAME level. Falls back to
+   * the pilot's shared chain, which is what all four Head Office segments use.
+   */
+  const FALLBACK_LEVEL_NAMES = ["Department", "Unit"];
+
+  /**
+   * Term set GUID → the mode's below-Unit tiers, in path order.
+   *
+   * Empty for every site that has not configured one, which is all of them today —
+   * `needsLegacyBelowUnit` then keeps the hardcoded Year → Document Type grid.
+   */
+  const loadReconOnDemandTiers = async (): Promise<Map<string, Level[]>> => {
+    const out = new Map<string, Level[]>();
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=TermSetGuid,Levels&$filter=ConfigType eq 'mode'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out;
+      const data = await res.json();
+      (
+        (data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>
+      ).forEach((r) => {
+        const guid = (r.TermSetGuid ?? "").trim().toLowerCase();
+        if (!guid) return;
+        const levels = parseLevels(r.Levels ?? "");
+        // A malformed chain must not half-build a tree. Reconciliation reports it and
+        // falls back to the legacy shape rather than creating folders in an order the
+        // upload form will not agree with.
+        if (validateChain(levels)) return;
+        const { onDemand } = splitChain(levels);
+        if (onDemand.length > 0) out.set(guid, onDemand);
+      });
+    } catch {
+      // Same posture as the level names below: a config hiccup costs the configured
+      // shape, not the run, and the legacy grid is correct for every live site.
+    }
+    return out;
+  };
+
+  const loadReconLevelNames = async (): Promise<Map<string, string[]>> => {
+    const out = new Map<string, string[]>();
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=TermSetGuid,Levels&$filter=ConfigType eq 'mode'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out;
+      const data = await res.json();
+      (
+        (data.value ?? []) as Array<{ TermSetGuid?: string; Levels?: string }>
+      ).forEach((r) => {
+        const guid = (r.TermSetGuid ?? "").trim().toLowerCase();
+        if (!guid) return;
+        // PERMISSIONED TIERS ONLY. These names are indexed by depth in the term tree,
+        // which reconciliation walks — and that tree contains only permissioned tiers.
+        // Leave the below-Unit entries in and every name shifts, so a missing
+        // abbreviation gets reported against the wrong tier.
+        const names = parseLevels(r.Levels ?? "")
+          .filter(isPermissioned)
+          .map((l) => l.label);
+        if (names.length > 0) out.set(guid, names);
+      });
+    } catch {
+      // A config hiccup costs the level NAMES, not the run — the fallback below
+      // is correct for every segment onboarded so far.
+    }
+    return out;
+  };
+
+  // Segments to provision come from the SAME DMS Config `mode` rows the upload form
+  // reads, so onboarding a segment is data-only (add a mode row → Run) — no redeploy.
+  // Falls back to the built-in RECON_MODES (GHO) if the config is empty/unreachable.
+  const loadReconModes = async (): Promise<
+    Array<{ termSetGuid: string; stagingFolder: string }>
+  > => {
+    /**
+     * ⚠ PRIME FIRST. `cachedListTitle` answers the LEGACY `DMS Config` until the name cache has been
+     * filled, and on a CRS-renamed site that 404s — which the old code turned into a SILENT fallback
+     * to the built-in `RECON_MODES`.
+     *
+     * Found live 2026-08-21: the picker offered FOUR segments on a site with two, including
+     * `Upstream Malaysia Head Office`, whose term-set GUID is a stale placeholder. The same REST call
+     * pasted into a browser returned both rows correctly — the read was never broken, it simply ran
+     * before priming finished. Priming makes ten sequential probes and this fires on a button press,
+     * so the race is easy to win.
+     *
+     * The tell was the LABELS: the config stores `GHO` and `MHO`, and the screen showed
+     * "Group Head Office" and "Minamas Head Office" — strings that exist only in the fallback.
+     *
+     * Awaited rather than gated on `namesReady`, so it holds regardless of which screen or flow
+     * mounted this component. A failed prime still proceeds: `cachedListTitle` then returns the
+     * legacy name, the read 404s, and `modeSource` reports it instead of pretending.
+     */
+    if (!namesPrimed())
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+    const base = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items`;
+    const filter = `&$filter=ConfigType eq 'mode'`;
+    const get = async (url: string): Promise<SPHttpClientResponse> =>
+      context.spHttpClient.get(url, SPHttpClient.configurations.v1, {
+        headers: { Accept: "application/json;odata=nometadata" },
+      });
+    try {
+      /**
+       * `SortOrder` is asked for and the read is RETRIED WITHOUT it on 400.
+       *
+       * ⚠ FOUND LIVE 2026-08-21. That column is created by `SegmentCreator`, so on a site whose mode
+       * rows were authored by hand it does not exist — and ONE unknown name in a `$select` fails the
+       * WHOLE request (gotcha #11), exactly as `PendingLevels` did to every guided flow on
+       * 2026-08-18. The read died, the silent fallback returned the built-in `RECON_MODES`, and
+       * reconciliation offered FOUR segments on a site that has two — including
+       * `Upstream Malaysia Head Office`, a deliberate placeholder whose term-set GUID is stale.
+       * Running it would have walked a term set that does not exist here.
+       *
+       * The abbreviations screen never asked for `SortOrder` and was therefore right all along, which
+       * is why two screens on one site disagreed about how many segments exist.
+       */
+      let res = await get(
+        `${base}?$select=TermSetGuid,StagingFolder,Levels,SortOrder${filter}&$orderby=SortOrder`,
+      );
+      if (res.status === 400) {
+        setModeSource("no-sortorder");
+        res = await get(
+          `${base}?$select=TermSetGuid,StagingFolder,Levels${filter}`,
+        );
+      }
+      if (!res.ok) {
+        setModeSource("failed");
+        return RECON_MODES;
+      }
+      const data = await res.json();
+      const modes = parseReconModes((data.value ?? []) as RawModeRow[]);
+      if (modes.length === 0) {
+        // EMPTY IS NOT UNKNOWN, and here it is not even a reason to guess. A site with no mode rows
+        // has no segments; offering four built-in ones invites provisioning a segment nobody created.
+        setModeSource("empty");
+        return RECON_MODES;
+      }
+      return modes;
+    } catch {
+      setModeSource("failed");
+      return RECON_MODES;
+    }
+  };
+
+  /* The segment tick-list is shown the moment the tab opens (client, 2026-09-06: *"I think if you
+     can just immediately show the Segments"*), so the list has to be READ here rather than on the
+     press of a button that no longer exists.
+
+     ⚠ DECLARED AFTER `loadReconModes`, NOT WITH THE OTHER HOOKS. `no-use-before-define` is on, and
+     this is safe only because nothing between the hook block and here returns early - checked. If an
+     early return is ever added above this line, this effect stops running on the render that takes
+     it and React throws "Rendered more hooks than during the previous render", which blanks the
+     whole web part.
+
+     Cheap and deliberately bounded: `loadReconModes` is ONE list read of the mode rows. The
+     expensive per-segment term walk is NOT done here and must not be added - it is ~115 requests for
+     GHO alone (spec §4.1).
+
+     Guarded on `scopeSegs === undefined` so re-rendering the tab does not re-read, and on the tab
+     itself so the other four screens pay nothing. A failed read leaves it `undefined`, which renders
+     no picker and lets the run cover everything - the behaviour before selective runs existed. */
+  useEffect(() => {
+    if (tab !== "Reconciliation" || scopeSegs !== undefined) return;
+    loadReconModes()
+      .then((m) =>
+        setScopeSegs(
+          m.map((x) => ({
+            key: x.termSetGuid,
+            stagingFolder: x.stagingFolder,
+          })),
+        ),
+      )
+      .catch(() => setScopeSegs(undefined));
+    // `loadReconModes` is a render-time const and is deliberately NOT a dependency: adding it would
+    // re-run this on every render, which is one list read per keystroke elsewhere on the page.
+  }, [tab, scopeSegs]);
+
+  // The Year × Document Type grid term sets come from the SAME DMS Config `setting`
+  // rows the upload form reads (termSet_yearPeriod / termSet_documentType), so the
+  // grid matches the form on any tenant with no code edit. Falls back to the built-in
+  // YEAR_TERMSET / DOCTYPE_TERMSET constants per-key if the row or the list is missing.
+  type ReconSettings = {
+    year: string;
+    docType: string;
+    gridMode: GridMode;
+    fanOut: boolean;
+    revokeAncestorRead: boolean;
+  };
+  const RECON_SETTINGS_FALLBACK: ReconSettings = {
+    year: YEAR_TERMSET,
+    docType: DOCTYPE_TERMSET,
+    gridMode: DEFAULT_GRID_MODE,
+    fanOut: false,
+    revokeAncestorRead: false,
+  };
+  const loadReconGridTermSets = async (): Promise<ReconSettings> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return RECON_SETTINGS_FALLBACK;
+      const data = await res.json();
+      const map: Record<string, string> = {};
+      (
+        (data.value ?? []) as Array<{ Title: string; SettingValue: string }>
+      ).forEach((item) => {
+        map[item.Title] = (item.SettingValue ?? "").trim();
+      });
+      const raw = (map.recon_gridMode || "").toLowerCase();
+      const gridMode: GridMode =
+        raw === "full"
+          ? "full"
+          : raw === "currentyear"
+            ? "currentYear"
+            : raw === "off"
+              ? "off"
+              : DEFAULT_GRID_MODE;
+      return {
+        year: map.termSet_yearPeriod || YEAR_TERMSET,
+        docType: map.termSet_documentType || DOCTYPE_TERMSET,
+        gridMode,
+        // Departmental fan-out is OPT-IN, and defaults off even though the design
+        // wants it on. The reason is historical data, not caution for its own sake:
+        // until 2026-07-29 the old isChainAuthorized required a MEMBER row at EVERY
+        // tier, so sites provisioned before then can still carry leftover
+        // department-tier MEMBER rows. Fanning those would silently grant Read on
+        // every unit folder in Documents — precisely the cross-unit leak the
+        // isolation model exists to prevent, applied to rows nobody remembers
+        // creating.
+        //
+        // So the run REPORTS what would fan while this is off (see the assignment
+        // loop) and grants nothing. An admin reads that list, deletes the leftovers,
+        // and only then sets the row to "on".
+        // Defaults ON as of 2026-08-07. Head of Department is a department-scoped persona,
+        // and unit folders have unique permissions, so with this off an HoD row grants Read
+        // on the department folder and nothing else — a folder that appears, to them, to
+        // contain no units. That is the persona not working rather than working narrowly.
+        // An explicit "off" still turns it off.
+        fanOut: (map.recon_departmentFanOut || "on").toLowerCase() === "on",
+        // SUPERSEDED 2026-08-07 — kept for the history, because the reasoning below is why
+        // the field still exists rather than being deleted outright. The client withdrew the
+        // rule it served; ancestor Read is granted again on every run, and this is hard-off.
+        //
+        // Original note: Ancestor browse Read is no longer granted at all: the client's rule
+        // is that a Head of Unit cannot see the department folder and a Head of Department
+        // cannot see the segment folder. Only a C-level (segment-tier) row sees from
+        // the segment down.
+        //
+        // But reconciliation has only ever ADDED assignments, so every site already
+        // provisioned carries the ancestor Read grants made by earlier runs. Removing
+        // the granting code fixes new folders and changes nothing on existing ones —
+        // the requirement would read as met while every current user still saw their
+        // parents, and the run log would report a clean pass.
+        //
+        // Hence a revoke pass, and hence it is OPT-IN. This is the first operation in
+        // this codebase that deletes anything, so the default REPORTS every candidate
+        // and removes none. An admin reads that list, satisfies themselves it contains
+        // only what they expect, and then sets the row to "on".
+        // HARD OFF as of 2026-08-07, config row ignored. The requirement it served was
+        // withdrawn, and the ancestor Read it stripped is now granted again on every run —
+        // so an admin flipping this row would have the two passes fight, and would break
+        // in-library navigation for every user. Kept as a field rather than deleted so the
+        // setting name stays recognisable if it reappears in a client's config list.
+        revokeAncestorRead: false,
+      };
+    } catch {
+      return RECON_SETTINGS_FALLBACK;
+    }
+  };
+
+  // Reconciliation speed knobs, tunable live from DMS Config `setting` rows without a
+  // redeploy: recon_writeDelayMs / recon_batchSize / recon_cooldownMs. Falls back to
+  // the module defaults. Lets the client dial the delay down to find their tenant's
+  // throttle floor (withThrottleRetry catches any 429 that slips through).
+  const loadReconThrottle = async (): Promise<{
+    delayMs: number;
+    batchSize: number;
+    cooldownMs: number;
+  }> => {
+    const fallback = {
+      delayMs: RECON_WRITE_DELAY_MS,
+      batchSize: RECON_BATCH_SIZE,
+      cooldownMs: RECON_COOLDOWN_MS,
+    };
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return fallback;
+      const data = await res.json();
+      const map: Record<string, string> = {};
+      (
+        (data.value ?? []) as Array<{ Title: string; SettingValue: string }>
+      ).forEach((item) => {
+        map[item.Title] = (item.SettingValue ?? "").trim();
+      });
+      const num = (v: string | undefined, d: number): number => {
+        const n = Number(v);
+        return Number.isFinite(n) && n > 0 ? n : d;
+      };
+      return {
+        delayMs: num(map.recon_writeDelayMs, fallback.delayMs),
+        batchSize: num(map.recon_batchSize, fallback.batchSize),
+        cooldownMs: num(map.recon_cooldownMs, fallback.cooldownMs),
+      };
+    } catch {
+      return fallback;
+    }
+  };
+
+  // Flatten the term store into the folders to provision, parent-before-child so a
+  // parent always exists before we create its child. The segment container folder
+  // (mode.stagingFolder) has no term; every term below it carries its GUID.
+  /**
+   * Enumerate every folder target from the term store.
+   *
+   * Also reports which segments could NOT be fully enumerated. This matters far more
+   * than it looks: prune decides a row is orphaned by asking "is its term in the
+   * enumerated set?", so a segment that silently came back empty would make every one
+   * of its rows look deleted. Callers MUST treat a non-empty `incomplete` as a reason
+   * to skip pruning.
+   */
+  const buildProvisionTargets = async (): Promise<{
+    targets: ProvTarget[];
+    incomplete: string[];
+    /**
+     * The `stagingFolder` of every segment whose term walk failed, as a bare key.
+     *
+     * ⚠ SEPARATE FROM `incomplete`, which carries a human sentence (`"GHO — …503"`). Anything that
+     * has to ACT on incompleteness needs the segment, and parsing it back out of the message would
+     * make the guard depend on the wording of an error string.
+     */
+    incompleteSections: string[];
+    missingAbbrev: UnclaimedTerm[];
+    collisions: AbbrevCollision[];
+    abbrevRows: OrphanAbbrevRow[];
+  }> => {
+    const out: ProvTarget[] = [];
+    const incomplete: string[] = [];
+    const incompleteSections: string[] = [];
+    // Terms with no abbreviation are skipped, not guessed at, and reported here.
+    // These are also the "unclaimed" half of an orphan repair: a re-created term
+    // has a new GUID, so it arrives here looking like a brand-new term.
+    const missingAbbrev: UnclaimedTerm[] = [];
+    // Every named target, so siblings sharing an abbreviation can be caught before
+    // a single folder is created.
+    const abbrevTargets: AbbrevTarget[] = [];
+    const abbrevRows = await loadAbbrevRows();
+    const abbrevIndex = abbrevIndexOf(abbrevRows);
+    const levelNamesBySet = await loadReconLevelNames();
+    /* SCOPED (register #18). The segment WALK narrows to what the administrator ticked; every
+       site-wide pass — site entry, library state, page access, the admin lockdown, the HC gating
+       check — still runs in FULL, because each asserts state that has no segment. See
+       ALWAYS_FULL_PASSES in shared/reconScope.ts.
+       Keyed on `termSetGuid`: mode rows carry no `key` once parsed, and the term set is what
+       actually identifies a segment. */
+    const modes =
+      runScope().segments.length > 0
+        ? (await loadReconModes()).filter((m) =>
+            runScope().segments.some((x) => x.key === m.termSetGuid),
+          )
+        : await loadReconModes();
+    for (const mode of modes) {
+      // Segment container: not a mapped term, but groups target it via the term-set GUID.
+      // Its full name is the TERM SET's name, read live. mode.stagingFolder cannot serve
+      // here — in DMS Config it already holds the abbreviation ("GHO"), which is exactly
+      // the string Full Name exists to explain. Falls back to the folder name if the read
+      // fails, so a term-store hiccup costs a label, not the run.
+      const segmentFullName =
+        (await loadTermSetName(mode.termSetGuid)) ?? mode.stagingFolder;
+      // The term-set GUID IS now placed in every descendant's ancestorTerms (2026-08-09),
+      // so a segment-tier row can reach the segment's folders — which is what the C-Level
+      // "view one business segment" persona is.
+      //
+      // The original reason it was withheld still stands and is still enforced, just one
+      // layer down instead of here: sites provisioned before 2026-07-29 can carry leftover
+      // segment-tier MEMBER rows, and fanning one would grant Read across an entire
+      // business segment. The fanned loop therefore accepts a segment-tier inheritance for
+      // **SEGVIEW only** (see segmentTermSets there). Withholding the term entirely was the
+      // blunter version of the same rule and made the intended role unusable.
+      out.push({
+        termGuid: null,
+        assignTerm: mode.termSetGuid,
+        ancestorTerms: [],
+        relPath: `/${mode.stagingFolder}`,
+        label: mode.stagingFolder,
+        fullName: segmentFullName,
+        section: mode.stagingFolder,
+        isLeaf: false,
+        termSetGuid: mode.termSetGuid,
+      });
+      // A failure anywhere in this segment's tree marks the WHOLE segment incomplete.
+      // Targets gathered before the failure are kept (creating a subset of folders is
+      // harmless and idempotent) — but prune must not run against a partial picture.
+      try {
+        const tops = await loadReconTops(mode.termSetGuid);
+        for (const top of tops) {
+          // Term labels are NOT safe as folder names. A "/" is the worst case — it is both
+          // rejected by SharePoint (HTTP 400, SPException -2130575245) and read as a path
+          // separator, so it silently implies an extra folder level. Real example: the
+          // Minamas unit "Value Creation / Value Transformation".
+          // Path segments are sanitised; the DISPLAY label and the map row Title keep the
+          // raw term text, so the log and the index still read like the term store.
+          // Folder names come from the abbreviation list, NOT the term label. The
+          // labels are long and their fullwidth ampersands cost 9 encoded characters
+          // each, which put the worst-case path within 73 characters of the ~330
+          // limit where GetFolderByServerRelativeUrl starts returning 400.
+          // See the 2026-07-30 folder-abbreviation-naming spec.
+          //
+          // sanitizeFolderSegment still applies: a "/" in a name is both rejected by
+          // SharePoint and read as a path separator.
+          //
+          // A term with no abbreviation is SKIPPED and reported, never guessed at.
+          // Falling back to the label would create a folder at a path the next run
+          // does not expect, and uploads resolve by UniqueId so nobody would notice.
+          //
+          // `depth` is 1-based (top = the first level in the segment's Levels chain).
+          // It resolves the level NAME the orphan-repair pass matches on, so a dead
+          // "Legal" department can never be repaired from a live "Legal" unit.
+          const levelNames =
+            levelNamesBySet.get(
+              (mode.termSetGuid ?? "").trim().toLowerCase(),
+            ) ?? FALLBACK_LEVEL_NAMES;
+          // How deep the PERMISSIONED tiers go — `levelNames` is already filtered to
+          // them (see loadReconLevelNames). Caps the walk below.
+          //
+          // Until 2026-08-10 the walk recursed until a term had no children, which was
+          // correct only because nothing was ever nested below Unit. The client's
+          // SubUnit tier nests INSIDE the segment term set but INHERITS the unit's ACL,
+          // so an uncapped walk would create an ACL'd folder per subunit carrying only
+          // the owners group — invisible to the people who need it — and would stop
+          // Units being leaves, moving the Year × Document Type grid onto subunits.
+          // The term tree and the Levels chain now agree deliberately, not by accident.
+          const permissionedDepth = Math.max(1, levelNames.length);
+          const seg = (
+            termGuid: string,
+            label: string,
+            depth: number,
+          ): string | undefined => {
+            const abbrev = lookupAbbrev(abbrevIndex, termGuid);
+            if (abbrev === undefined) {
+              missingAbbrev.push({
+                termGuid,
+                label,
+                level: levelNames[depth - 1] ?? `Level ${depth}`,
+              });
+              return undefined;
+            }
+            return sanitizeFolderSegment(abbrev) || abbrev;
+          };
+          const topSeg = seg(top.id, top.label, 1);
+          if (topSeg === undefined) continue; // reported; its children are unreachable
+          abbrevTargets.push({
+            parentPath: `/${mode.stagingFolder}`,
+            termGuid: top.id,
+            abbreviation: topSeg,
+            label: top.label,
+          });
+          // ancestorTerms leads with the SEGMENT (the term-set GUID) since 2026-08-09, so a
+          // segment-tier row reaches this department and everything under it. Restricted to
+          // SEGVIEW in the fanned loop — see segmentTermSets there.
+          const topTarget: ProvTarget = {
+            termGuid: top.id,
+            assignTerm: top.id,
+            ancestorTerms: [mode.termSetGuid],
+            relPath: `/${mode.stagingFolder}/${topSeg}`,
+            label: `${mode.stagingFolder} > ${top.label}`,
+            fullName: top.label,
+            section: mode.stagingFolder,
+            isLeaf: false,
+            termSetGuid: mode.termSetGuid,
+          };
+          out.push(topTarget);
+          // Recurse; returns whether the term had children. A term with no children
+          // is a leaf (the upload target) and gets the Year × Document Type grid.
+          // `ancestors` carries raw labels for display, `pathAncestors` the sanitised
+          // segments for the folder path — they can differ and must not be conflated.
+          // `termAncestors` mirrors `ancestors` but carries term GUIDs rather than
+          // labels, and INCLUDES top (which `ancestors` excludes) because a row on
+          // the top tier fans down just like any other non-leaf row.
+          const walk = async (
+            parentId: string,
+            ancestors: string[],
+            pathAncestors: string[],
+            termAncestors: string[],
+          ): Promise<boolean> => {
+            // STOP at the permissioned boundary. `ancestors` excludes top, so a direct
+            // child of top is depth 2. Returning false (rather than skipping inside the
+            // loop) is what makes the caller mark this term a LEAF — the deepest
+            // permissioned folder, which is the upload target and where the grid hangs.
+            // Anything deeper in the term tree is a below-Unit tier: created on demand
+            // by the upload form, inheriting this folder's ACL, never provisioned here.
+            if (ancestors.length + 2 > permissionedDepth) return false;
+            const children = await loadReconChildren(
+              mode.termSetGuid,
+              parentId,
+            );
+            for (const child of children) {
+              // ancestors excludes `top`, so a direct child of top has depth 2.
+              const childSeg = seg(child.id, child.label, ancestors.length + 2);
+              if (childSeg === undefined) continue; // reported; skip this subtree
+              const chain = [...ancestors, child.label];
+              const pathChain = [...pathAncestors, childSeg];
+              const termChain = [...termAncestors, child.id];
+              const parentPath = `/${mode.stagingFolder}/${topSeg}${pathAncestors.length > 0 ? "/" + pathAncestors.join("/") : ""}`;
+              abbrevTargets.push({
+                parentPath,
+                termGuid: child.id,
+                abbreviation: childSeg,
+                label: child.label,
+              });
+              const childTarget: ProvTarget = {
+                termGuid: child.id,
+                assignTerm: child.id,
+                ancestorTerms: termAncestors,
+                relPath: `/${mode.stagingFolder}/${topSeg}/${pathChain.join("/")}`,
+                label: `${mode.stagingFolder} > ${top.label} > ${chain.join(" > ")}`,
+                fullName: child.label,
+                section: mode.stagingFolder,
+                isLeaf: false,
+                termSetGuid: mode.termSetGuid,
+              };
+              out.push(childTarget);
+              childTarget.isLeaf = !(await walk(
+                child.id,
+                chain,
+                pathChain,
+                termChain,
+              ));
+            }
+            return children.length > 0;
+          };
+          // termAncestors starts with the SEGMENT then the top term, so every descendant
+          // inherits both. Outermost first, matching the ProvTarget contract.
+          topTarget.isLeaf = !(await walk(
+            top.id,
+            [],
+            [],
+            [mode.termSetGuid, top.id],
+          ));
+        }
+      } catch (e) {
+        incomplete.push(`${mode.stagingFolder} — ${(e as Error).message}`);
+        incompleteSections.push(mode.stagingFolder);
+      }
+    }
+    return {
+      targets: out,
+      incomplete,
+      incompleteSections,
+      missingAbbrev,
+      collisions: findCollisions(abbrevTargets),
+      abbrevRows,
+    };
+  };
+
+  // Provision from the term store into BOTH libraries in one run: create each folder
+  // if missing and break inheritance at every level (segment → department → unit).
+  // Owner group is re-added as Full Control so admins keep access. Then AUTO-ASSIGN
+  // the DMS Group Map groups to each folder by role. Staging gets UPL→Contribute and
+  // APR→Design only (MEMBER is Documents-only for isolation); Documents gets MEMBER→Read
+  // only; GLOBAL is skipped everywhere. Staging term folders are also mapped (term → UniqueId) for
+  // rename-proof upload routing; Documents is not mapped. Idempotent: folders/maps
+  // are not duplicated; role assignments merge (re-adding an existing one is a no-op),
+  // and manual extra grants survive. Folders whose term has no group-map rows are
+  // logged as a warning (locked admin-only until groups are added).
+  const runReconciliation = async (): Promise<void> => {
+    setBusy(true);
+    setReconRunning(true);
+    setFolderFeeds(emptyFeeds());
+    setAssignFeeds(emptyFeeds());
+    setReconCounts({ folders: 0, assigns: 0 });
+    setReconDone(0);
+    setReconPlanned(0);
+    setReconStartMs(undefined);
+    setReconPhase("Generating folders…");
+    const entries: LogEntry[] = [];
+    // Throttle governor: pause between writes, and auto-cooldown every N writes. The
+    // cooldown is invisible — the spinner keeps running and the status text rotates so
+    // it reads as continuous work (no user click needed to resume). Speed knobs come
+    // from DMS Config (recon_writeDelayMs / recon_batchSize / recon_cooldownMs) so the
+    // client can tune without a redeploy; withThrottleRetry catches any 429 that slips.
+    const throttle = await loadReconThrottle();
+    let opCount = 0;
+    const tick = async (): Promise<void> => {
+      opCount++;
+      await sleep(throttle.delayMs);
+      if (opCount % throttle.batchSize === 0) {
+        for (const msg of COOLDOWN_MESSAGES) {
+          setReconPhase(msg);
+          await sleep(throttle.cooldownMs / COOLDOWN_MESSAGES.length);
+        }
+        setReconPhase("Generating folders…");
+      }
+    };
+    const bumpFolders = (): void =>
+      setReconCounts((c) => ({ ...c, folders: c.folders + 1 }));
+    const bumpAssigns = (): void =>
+      setReconCounts((c) => ({ ...c, assigns: c.assigns + 1 }));
+    try {
+      // Permission levels, resolved HERE and not read from state.
+      //
+      // See `fetchRoleDefs`. Reading `roleDefs` from this closure is what made the 2026-08-25 run
+      // grant nothing at all: press Run before the mount-time fetch resolves and every lookup below
+      // misses. State is used when it is already populated (the normal case, and it saves a
+      // request); otherwise the run fetches them itself before touching anything.
+      let defs: RoleDef[] = roleDefs;
+      if (defs.length === 0) {
+        setReconPhase("Reading permission levels...");
+        defs = await fetchRoleDefs().catch(() => [] as RoleDef[]);
+      }
+      // REFUSES rather than continuing, and this is the one place in this run that fails CLOSED.
+      // Every grant resolves its level through this list, so an empty one does not degrade the run
+      // — it silently empties it, while folders are still created and inheritance still broken. A
+      // run that grants nothing but reports warnings is far worse than one that stops and says why.
+      if (defs.length === 0) {
+        entries.push({
+          msg: `✗ Could not read this site's permission levels, so NOTHING was granted and the run stopped before making changes. Reload the page and run again.`,
+          ok: false,
+        });
+        setLog(entries);
+        setReconPhase("Stopped — permission levels could not be read");
+        setBusy(false);
+        setReconRunning(false);
+        return;
+      }
+      const fullCtrlId = defs.find((r) => r.name === "Full Control")?.id;
+      const readId = defs.find((r) => r.name === "Read")?.id;
+
+      /* THE OWNERS GROUP, RESOLVED BY THE RUN ITSELF — see `resolveOwnerGroupId`. State filled by a
+         mount-time effect is not visible to this closure, so a run started before it settled read
+         `null` throughout. Uses the state when it is already there, otherwise fetches. */
+      const ownersId: number | undefined =
+        typeof ownerGroupId === "number"
+          ? ownerGroupId
+          : await resolveOwnerGroupId();
+      /* REFUSES, for the same reason the empty-levels check above does — and the reason is stronger
+         here. Without the Owners id: the admin pages are not locked (safe), a library whose
+         inheritance this run BREAKS never gets Owners back (a lockout), and `protectedIds` in the
+         page pass is empty, so the one principal that must never be removed at page scope is not
+         protected. A run that can cause removals it cannot undo must not start. */
+      if (ownersId === undefined) {
+        entries.push({
+          msg: `✗ Could not resolve this site's Owners group, so the run stopped before making changes — locking the admin pages and protecting Owners both depend on it. Reload the page and run again.`,
+          ok: false,
+        });
+        setLog(entries);
+        setReconPhase("Stopped — site Owners group could not be read");
+        setBusy(false);
+        setReconRunning(false);
+        return;
+      }
+      // Read now serves two purposes: recognising a leftover ancestor browse grant (they
+      // are all exactly Read) and granting site entry below. Without it the run still
+      // provisions folders correctly — it just cannot do either of those.
+      if (readId === undefined)
+        entries.push({
+          msg: `⚠ "Read" role definition not found — site entry and ancestor-browse cleanup will be skipped`,
+          ok: false,
+        });
+
+      // ── Site entry, FIRST ──────────────────────────────────────────────────────
+      //
+      // Find or create DMS_SITE_MEMBERS and give it Read on the web. Until now this was a
+      // sentence in a runbook ("Set up site entry"), and the only thing that noticed it had
+      // been skipped was a warning at the very END of the run — by which point every folder
+      // was already locked. A step that exists only in prose gets skipped.
+      //
+      // Order is not cosmetic. A folder grant alone confers Limited Access: the user can
+      // open that folder by direct link, but the site root denies them, so they cannot
+      // reach anything by navigating. Lock folders first and grant entry afterwards and
+      // there is a window in which a correctly provisioned uploader can reach nothing at
+      // all — and if the run dies in that window, that is the state the site is left in.
+      // Granting entry first means the worst case is a user who can open the site and sees
+      // nothing yet, which the next run resolves.
+      //
+      // See the access-scope-mapping spec §4 and the site-entry-access-layer spec.
+      /* Resolved inside the site-entry block below and read by the Site Pages check after it.
+         `undefined` when that block could not resolve the group, which makes the later check
+         report "not checked" rather than guessing. */
+      let sitePagesEntryId: number | undefined;
+      try {
+        setReconPhase("Ensuring site entry…");
+        // Find-or-create through the shared module (siteEntryGroup.ts). It THROWS rather than
+        // creating when the group list cannot be read — creating on an unreadable list would make
+        // a second entry group alongside the real one, both looking correct. The catch below
+        // already treats that as non-fatal and names it in the log.
+        const ensured = await ensureSiteEntryGroup(
+          context.spHttpClient,
+          siteUrl,
+        );
+        if (ensured.created)
+          entries.push({ msg: `${siteEntryGroupTitle()} created`, ok: true });
+        const entryId = ensured.group.id;
+        // Carried out of this block for the Site Pages check below — that assertion needs the same
+        // principal, and re-resolving it would be a second answer to "which group is the entry group".
+        sitePagesEntryId = entryId;
+        if (readId === undefined) {
+          entries.push({
+            msg: `⚠ ${siteEntryGroupTitle()}: cannot grant site Read — no "Read" role definition`,
+            ok: false,
+          });
+        } else {
+          // The root web always has unique permissions, so there is no inheritance to break
+          // here — unlike a library or a page. Grant directly.
+          //
+          // Checked before granting rather than leaning on addroleassignment being
+          // idempotent, purely so the log distinguishes "already had it" from "granted
+          // now". Both outcomes are fine; only one of them is news.
+          const webRas = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/roleassignments?$select=PrincipalId`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          let holds = false;
+          if (webRas.ok) {
+            const raJson = await webRas.json();
+            holds = (
+              (raJson.value ?? []) as Array<{ PrincipalId?: number }>
+            ).some((ra) => ra.PrincipalId === entryId);
+          }
+          if (holds) {
+            entries.push({
+              msg: `${siteEntryGroupTitle()}: already holds a role on the site ✓`,
+              ok: true,
+            });
+          } else {
+            const grant = await withThrottleRetry(() =>
+              context.spHttpClient.post(
+                `${siteUrl}/_api/web/roleassignments/addroleassignment(principalid=${entryId},roledefid=${readId})`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              ),
+            );
+            entries.push(
+              grant.ok
+                ? {
+                    msg: `${siteEntryGroupTitle()} → Read on the site ✓`,
+                    ok: true,
+                  }
+                : {
+                    msg: `⚠ ${siteEntryGroupTitle()} → Read on the site FAILED (HTTP ${grant.status}) — users will reach folders by direct link only`,
+                    ok: false,
+                  },
+            );
+          }
+        }
+      } catch (e) {
+        // Never fatal. Folder provisioning is still worth doing, and the failure is named
+        // rather than swallowed so it is not mistaken for a folder problem.
+        entries.push({
+          msg: `⚠ Site entry could not be ensured — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      /* ── Submission reference columns ───────────────────────────────────────────
+       *
+       * `SubmissionId` and `BatchId`, stamped by the upload form so My Submissions can group a
+       * person's files into the submission they actually sent (2026-08-22, spec
+       * `2026-08-22-submission-grouping-design.md`).
+       *
+       * ⚠ ALL FOUR LIBRARIES, not just the approval side. SharePoint's copy carries over only columns
+       * that EXIST at the destination, so a file routed by Auto-route into `Documents` would arrive
+       * with its reference silently stripped — and a submission would lose its files one by one as
+       * they were approved. Exactly the trap that cost `Remark` and `LegallyPrivileged` in 2026-08-10.
+       *
+       * ASSERTED EVERY RUN rather than left to a provisioning step: a library added later, or a site
+       * built from an older runbook, would otherwise stop grouping with nothing to say so. Fifth
+       * instance of that rule on this page.
+       *
+       * `ensureColumn` is idempotent and reads `/fields` first, so on a provisioned site this costs
+       * one read per library and creates nothing. A FAILURE is reported, never fatal: the upload form
+       * checks for the columns itself and simply does not stamp when they are absent. */
+      try {
+        for (const title of allLibraryTitles()) {
+          try {
+            const madeSub = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              REF_COLUMNS[0],
+              "Submission Id",
+            );
+            const madeBat = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              REF_COLUMNS[1],
+              "Batch Id",
+            );
+            /* ⚠ ALSO ON ALL FOUR, and for the SAME reason as the pair above: Auto-route's copy carries
+               over only columns that exist at the destination. The marker is meaningless in `Documents`
+               — the file has already arrived — but a column absent there would silently strip it from
+               every routed file, and the day someone wants to find what was bulk-imported it would be
+               gone. Cheap to keep, impossible to recover. */
+            const madeImp = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              BULK_IMPORT_COLUMN,
+              "Bulk Import",
+              "Boolean",
+            );
+            /* ⚠ AND THE ARCHIVE MARKER, on every library for the same reason again. It is written in
+               the ARCHIVE, but the column must exist in `Documents` too or the move that sets it has
+               nowhere to write; and My Submissions reads it across every library it lists, where one
+               unknown field name in a `$select` fails the WHOLE request (gotcha #11) rather than
+               returning the row without it. */
+            const madeArc = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              ARCHIVED_COLUMN,
+              "Archived",
+              "Boolean",
+            );
+            /* ⚠ AND THE PER-FILE REFERENCE — the JOIN KEY of the submission record (2026-08-27).
+               On all four for the third time and the strongest reason yet: this is the ONLY thing
+               that identifies a file to its recorded row once Auto-route has copied it, because the
+               copy carries a NEW `UniqueId` and the source holding the old one is deleted. Absent
+               from the approved side and every routed document becomes unresolvable, which the page
+               renders as DELETED — so a missing column here would report every successfully approved
+               file to its own uploader as destroyed. Spec §2. */
+            const madeSfi = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              SUBMISSION_FILE_COLUMN,
+              "Submission File Id",
+            );
+            /* ⚠ AND THE UPLOADER'S KEYWORDS (2026-09-04), on every library for the fourth time and
+               the same reason: the routed copy keeps only columns that EXIST at the destination, so a
+               `Keyword` missing from the approved side would be stripped off every document the
+               moment it was approved — the one point at which it stops being a draft and becomes the
+               record people search. Silent, on a green run. */
+            const madeKey = await ensureColumn(
+              context.spHttpClient,
+              siteUrl,
+              title,
+              KEYWORD_COLUMN,
+              "Keyword",
+            );
+            if (
+              madeSub ||
+              madeBat ||
+              madeImp ||
+              madeArc ||
+              madeSfi ||
+              madeKey
+            ) {
+              entries.push({
+                msg: `  ↳ ${title}: submission reference / bulk import column(s) created ✓`,
+                ok: true,
+              });
+            }
+          } catch (e) {
+            entries.push({
+              msg: `  ⚠ ${title}: submission reference / bulk import columns could not be ensured — ${(e as Error).message}. Uploads still work; My Submission will not group them, and bulk imports will WAIT IN THE APPROVAL QUEUE instead of auto-approving.`,
+              ok: false,
+            });
+          }
+        }
+        entries.push({
+          msg: `Submission reference and bulk import columns: present on all GDC libraries ✓`,
+          ok: true,
+        });
+
+        /* ⚠ THE APPROVER'S EMAIL AND THE APPROVAL COMMENT, on EVERY CRS library (2026-09-10).
+           SharePoint records no "approved by" field, and `Editor` is not a stand-in for one — proven
+           live from a trigger payload after `File.Approve()` AND a MERGE of `OData__ModerationStatus`
+           both left `Editor` as the uploader. Both approval routes WRITE these at the moment of
+           approval; this pass only creates them, the same as every column above.
+           Approval-side only until 2026-09-10. Now on the approved side and the archive too, because
+           My Submissions reads an approved document from where it was ROUTED, and Auto-route's copy
+           carries a column over only when it exists at the destination (client: *"to be able to know
+           who approve and can still be track in the system and not just email"*).
+           `allLibraryTitles()` already leaves out an unresolved HC pair and a site with no archive,
+           so nothing here tries to create a column on a library that does not exist. */
+        for (const title of allLibraryTitles()) {
+          for (const col of [
+            {
+              name: APPROVED_BY_COLUMN,
+              display: "Approved By",
+              kind: "Text" as const,
+            },
+            {
+              name: APPROVAL_COMMENT_COLUMN,
+              display: "Approval Comment",
+              kind: "Note" as const,
+            },
+          ]) {
+            try {
+              const made = await ensureColumn(
+                context.spHttpClient,
+                siteUrl,
+                title,
+                col.name,
+                col.display,
+                col.kind,
+              );
+              if (made) {
+                entries.push({
+                  msg: `  ↳ ${title}: ${col.display} column created ✓`,
+                  ok: true,
+                });
+              }
+            } catch (e) {
+              entries.push({
+                msg: `  ⚠ ${title}: ${col.display} column could not be ensured — ${(e as Error).message}. Approving still works; My Submission will show no approver or comment for documents in this library, and on an approval library the audit log will name the uploader as the approver.`,
+                ok: false,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({
+          msg: `  ⚠ Submission reference / bulk import columns not checked — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      /* ── Can the site-entry group READ Site Pages? ──────────────────────────────
+       *
+       * ⚠ FOUND ON SITE 2026-08-21: the Site Pages LIST had unique permissions with only Owners on
+       * it, so EVERY page that inherits — the site home page included — was AccessDenied for every
+       * non-admin. The site was unusable, and nothing said so: the pages with their own ACLs (the
+       * upload form, the approval queue) worked perfectly, which is what makes it so hard to spot.
+       *
+       * THE MIRROR OF THE LIBRARY ASSERTION TWENTY LINES BELOW. That one checks a CRS library does
+       * NOT inherit, because inheriting is a leak. This checks Site Pages IS readable, because not
+       * being readable is a lockout. Same structural gap — the mechanism is driven by grant rows and
+       * the thing needing the state has none — and the sixth time it has bitten.
+       *
+       * REPORTS, NEVER REPAIRS. The library pass may break inheritance because that only ever
+       * REMOVES access; granting Read here would ADD it, on the one list that also holds the ten
+       * admin pages this run deliberately locks. An admin reading "nobody can open the home page"
+       * will act; a run that silently widened permissions on Site Pages is the kind of thing nobody
+       * finds until it matters.
+       *
+       * FAILS OPEN on every read: an unreadable list or ACL reports uncertainty, never a false
+       * alarm that would train an admin to ignore this line. */
+      try {
+        const spRes = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('Site Pages')?$select=Id,HasUniqueRoleAssignments`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!spRes.ok) {
+          entries.push({
+            msg: `  ⚠ Site Pages: could not be read (HTTP ${spRes.status}) — whether ${siteEntryGroupTitle()} can open the site's pages was NOT checked`,
+            ok: false,
+          });
+        } else {
+          const sp = await spRes.json();
+          if (sp.HasUniqueRoleAssignments !== true) {
+            // Inheriting from a web where the entry group holds Read, which the check above just
+            // ensured. Nothing to do, and saying so is what makes a later `⚠` meaningful.
+            entries.push({
+              msg: `Site Pages: inherits site permissions — every member can open the home page ✓`,
+              ok: true,
+            });
+          } else if (sitePagesEntryId === undefined) {
+            entries.push({
+              msg: `  ⚠ Site Pages has unique permissions and ${siteEntryGroupTitle()} could not be resolved — page access NOT checked`,
+              ok: false,
+            });
+          } else {
+            const raRes = await context.spHttpClient.get(
+              `${siteUrl}/_api/web/lists(guid'${sp.Id}')/roleassignments?$select=PrincipalId`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!raRes.ok) {
+              entries.push({
+                msg: `  ⚠ Site Pages has unique permissions and its ACL could not be read (HTTP ${raRes.status}) — page access NOT checked`,
+                ok: false,
+              });
+            } else {
+              const raJson = await raRes.json();
+              const listed = (
+                (raJson.value ?? []) as Array<{ PrincipalId?: number }>
+              ).some((ra) => ra.PrincipalId === sitePagesEntryId);
+              entries.push(
+                listed
+                  ? {
+                      msg: `Site Pages: unique permissions, ${siteEntryGroupTitle()} is granted ✓`,
+                      ok: true,
+                    }
+                  : {
+                      msg: `⚠ NOBODY CAN OPEN THE SITE HOME PAGE: Site Pages has unique permissions and ${siteEntryGroupTitle()} is NOT on it. Every page that inherits — the home page included — is refused for every non-administrator, while pages with their own permissions still work. Fix: Site Pages → Library settings → Permissions for this library → Grant Permissions → ${siteEntryGroupTitle()} → Read. Do NOT tick "share everything in this folder": it would unlock the administrator pages.`,
+                      ok: false,
+                    },
+              );
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({
+          msg: `  ⚠ Site Pages access could not be checked — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      // ── Library-scope grants ───────────────────────────────────────────────────
+      //
+      // A Group Map row with Scope = Library grants its role on a whole LIBRARY rather
+      // than on a unit folder. Target holds the library title. See the
+      // access-scope-mapping spec.
+      //
+      // Runs after site entry and before the folder passes: breaking a library's
+      // inheritance resets what flows down to its folders, so doing it after the folders
+      // were locked would mean the next run is the first one that is actually correct.
+      try {
+        setReconPhase("Applying library access…");
+        // Read the scoped rows directly. loadGroupMapForAssign keys by term and drops
+        // Scope/Target, which a library row does not have and does not need.
+        //
+        // Scope/Target are newer than this list, and a $select naming a column that does
+        // not exist fails the WHOLE request with 400 — so a site without the columns must
+        // not lose its folder provisioning over it. Absent columns simply mean no library
+        // rows exist yet.
+        const scopedRes = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!scopedRes.ok) {
+          entries.push({
+            msg: `Library access: skipped — Scope/Target columns not present on GDC Group Map`,
+            ok: true,
+          });
+        } else {
+          const scopedJson = await scopedRes.json();
+          const libRows = (
+            (scopedJson.value ?? []) as Array<{
+              GroupId?: string;
+              GroupName?: string;
+              Role?: string;
+              Scope?: string;
+              Target?: string;
+            }>
+          )
+            .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "library")
+            .filter(
+              (r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "",
+            );
+          if (libRows.length === 0) {
+            entries.push({
+              msg: `Library access: no Library-scope mappings`,
+              ok: true,
+            });
+          } else {
+            // Needed to re-grant after a break — see below. Resolved here rather than
+            // threaded out of the site-entry pass so this block stands alone.
+            const groupsNow = await fetchAllSiteGroups(
+              context.spHttpClient,
+              siteUrl,
+            );
+            const entryPid = findSiteEntryGroup(groupsNow)?.id;
+            const brokenThisRun = new Set<string>();
+            for (const row of libRows) {
+              const lib = (row.Target ?? "").trim();
+              const role = normalizeRoleValue(row.Role ?? "");
+              // Library scope, but resolved the same way as folder scope on purpose. A
+              // hand-written UPL row targeting Documents would otherwise grant CRS Upload at
+              // the LIBRARY ROOT — write access to every folder that inherits. Downgrading it
+              // to Read here costs nothing for the rows that belong at this scope (ENTRY is
+              // Read either way) and closes that off.
+              const levelName = permissionForRole(lib as LibTarget, role);
+              const roleDefId = defs.find((r) => r.name === levelName)?.id;
+              const label = `${row.GroupName || row.GroupId} → ${libDisplayName(lib)}`;
+              if (levelName === undefined) {
+                entries.push({
+                  msg: `  ⚠ ${label}: role "${role}" grants nothing (retired or unknown) — skipped`,
+                  ok: false,
+                });
+                continue;
+              }
+              if (roleDefId === undefined) {
+                entries.push({
+                  msg: `  ⚠ ${label}: no "${levelName}" role definition on site — skipped`,
+                  ok: false,
+                });
+                continue;
+              }
+              const listRes = await context.spHttpClient.get(
+                `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=Id,HasUniqueRoleAssignments`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              );
+              if (!listRes.ok) {
+                entries.push({
+                  msg: `  ⚠ ${label}: library "${libDisplayName(lib)}" not found — check the Target value`,
+                  ok: false,
+                });
+                continue;
+              }
+              const listJson = await listRes.json();
+              const listId: string = listJson.Id;
+              const listBase = `${siteUrl}/_api/web/lists(guid'${listId}')`;
+              // Did the site-entry group have access to this library BEFORE we touched it?
+              //
+              // This decides whether it is restored after the break, and it is asked rather
+              // than assumed. Documents MUST keep it — the approval guard resolves the
+              // destination folder as the approver and depends on that Read. Staging must
+              // NOT gain it: site entry means "can open the site", and a plain member who is
+              // neither uploader nor approver has no business reaching Staging at all.
+              //
+              // Deciding by library NAME would bake that into a constant and be wrong the
+              // moment a library is renamed or a third one appears. Preserving whatever was
+              // already in force cannot be wrong about either.
+              let entryHadAccess = false;
+              if (entryPid !== undefined) {
+                const before = await context.spHttpClient.get(
+                  `${listBase}/roleassignments?$select=PrincipalId`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                );
+                if (before.ok) {
+                  const bj = await before.json();
+                  entryHadAccess = (
+                    (bj.value ?? []) as Array<{ PrincipalId?: number }>
+                  ).some((ra) => ra.PrincipalId === entryPid);
+                }
+              }
+              if (
+                listJson.HasUniqueRoleAssignments !== true &&
+                !brokenThisRun.has(listId)
+              ) {
+                // copyRoleAssignments=false, always. With true, every inherited grant is
+                // copied forward, so the library stays visible to exactly the same people
+                // and the run reports success — a failure that is invisible from the log.
+                const broke = await withThrottleRetry(() =>
+                  context.spHttpClient.post(
+                    `${listBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                    SPHttpClient.configurations.v1,
+                    {
+                      headers: { Accept: "application/json;odata=nometadata" },
+                    },
+                  ),
+                );
+                if (!broke.ok) {
+                  entries.push({
+                    msg: `  ✗ ${libDisplayName(lib)}: could not break inheritance (HTTP ${broke.status}) — nothing granted`,
+                    ok: false,
+                  });
+                  continue;
+                }
+                brokenThisRun.add(listId);
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}: inheritance broken (no permissions copied)`,
+                  ok: true,
+                });
+                // Two principals go back on, and BOTH are load-bearing.
+                //
+                // Owners: with nothing copied, the only remaining access is site collection
+                // administrators. An owner who is not also a site collection admin would
+                // lose the library.
+                if (fullCtrlId !== undefined) {
+                  try {
+                    await addRoleAssignmentToList(
+                      listBase,
+                      ownersId,
+                      fullCtrlId,
+                    );
+                    entries.push({
+                      msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`,
+                      ok: true,
+                    });
+                  } catch (e) {
+                    entries.push({
+                      msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`,
+                      ok: false,
+                    });
+                  }
+                }
+                // Site entry: the approval guard resolves the destination folder in
+                // Documents AS THE APPROVER, and that works only because the site-entry
+                // group holds Read on the library by INHERITANCE. Breaking inheritance
+                // discards it, and every approver on the site then 404s on every
+                // destination folder — approval refused for everyone, with a log that says
+                // the run succeeded. See the access-scope-mapping spec §5.
+                if (!entryHadAccess) {
+                  // It did not have access before, so it does not get any now. Logged rather
+                  // than silent: on Staging this is the correct and intended outcome, and an
+                  // unexplained absence here would look like the restore had failed.
+                  entries.push({
+                    msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} had no access before — not granted (site entry is not library access)`,
+                    ok: true,
+                  });
+                } else if (entryPid !== undefined && readId !== undefined) {
+                  try {
+                    await addRoleAssignmentToList(listBase, entryPid, readId);
+                    entries.push({
+                      msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read restored (keeps approval working)`,
+                      ok: true,
+                    });
+                  } catch (e) {
+                    entries.push({
+                      msg: `  ✗ ${libDisplayName(lib)}: could not restore ${siteEntryGroupTitle()} — approvals may fail — ${(e as Error).message}`,
+                      ok: false,
+                    });
+                  }
+                } else {
+                  entries.push({
+                    msg: `  ⚠ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} or "Read" not resolved — approvals may fail until it holds Read here`,
+                    ok: false,
+                  });
+                }
+              }
+              try {
+                await addRoleAssignmentToList(
+                  listBase,
+                  spGroupPrincipalId(row.GroupId ?? ""),
+                  roleDefId,
+                );
+                entries.push({
+                  msg: `  ↳ ${label} → ${levelName} (library)`,
+                  ok: true,
+                });
+                /* The panel is the library the row TARGETS, not a constant. Every library-scope
+                   grant was pushed to the Documents feed regardless of its Target, so the 17
+                   Staging grants appeared under "Documents group assignments" while the Staging
+                   panel sat empty — spotted live 2026-08-17. The grants themselves always landed
+                   correctly; only the reporting was wrong, which on a screen whose whole job is
+                   showing what happened to which library is worse than it sounds.
+
+                   Falls back to Documents for an unrecognised Target rather than dropping the line:
+                   a row aimed at a library that does not exist is already reported as an error
+                   above, and losing its progress entry as well would hide the evidence. */
+                const panel: LibTarget =
+                  reconLibs().indexOf(lib as LibTarget) > -1
+                    ? (lib as LibTarget)
+                    : "Documents";
+                pushAssign(
+                  panel,
+                  `${libDisplayName(lib)} → ${row.GroupName} (${levelName}, library scope)`,
+                  "ok",
+                );
+                bumpAssigns();
+                await tick();
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ ${label} → ${levelName} FAILED: ${(e as Error).message}`,
+                  ok: false,
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({
+          msg: `⚠ Library access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      /* ── HC GATING IS CONFIGURED ─────────────────────────────────────────────
+         Asserts, on EVERY run, that a site with HC libraries also has the
+         `hcConfidentialityLevel` config row — because without it the Highly Confidential level is
+         offered to EVERY uploader, cleared or not.
+
+         ⚠ FOUND LIVE 2026-08-19, and the mechanism is worth stating because it inverts.
+         `effectiveHcLevel` falls back to the LIBRARIES when the row is blank, and `hcAvailable()`
+         is answered by resolving those libraries BY TITLE — which SharePoint security-trims. So an
+         uncleared uploader gets `List 'HC Approval Document' does not exist`, HC reads as "not on
+         this site", `isHcLevel` is false for every level, nothing is filtered, and the level they
+         must never see is the one they are shown. A site with no HC at all produces the identical
+         answer from the identical probe, which is why nothing could tell them apart.
+
+         Setting the row fixes it outright: `effectiveHcLevel` returns a configured value regardless
+         of library visibility, so `canOfferHc` then fails on `hcAvailable` and the level is hidden.
+         The row is therefore not decoration — it is the gate — and its absence is invisible from
+         every screen. Hence an assertion rather than a note in a runbook.
+
+         Reported, never repaired: the LABEL must match the client's own term, and guessing it would
+         hide a level that is legitimately selectable on a site whose term is named differently. */
+      try {
+        if (hcAvailable()) {
+          const cfgRes = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items` +
+              `?$select=Title,SettingValue&$filter=Title eq 'hcConfidentialityLevel'&$top=1`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (!cfgRes.ok) {
+            // Fails OPEN on the read: an unreadable config list proves nothing, and a false alarm
+            // here would send an administrator chasing a row that is already there.
+            entries.push({
+              msg: `⚠ Could not check hcConfidentialityLevel (HTTP ${cfgRes.status}) — HC gating not verified`,
+              ok: false,
+            });
+          } else {
+            const rows = ((await cfgRes.json()).value ?? []) as Array<{
+              SettingValue?: string;
+            }>;
+            const value = (rows[0]?.SettingValue ?? "").trim();
+            if (value.length === 0) {
+              entries.push({
+                msg: `⚠ HC libraries exist but the hcConfidentialityLevel config row is ${rows.length === 0 ? "MISSING" : "blank"} — the Highly Confidential level is NOT being gated, and every uploader can see it. Add a GDC Config row: Title "hcConfidentialityLevel", ConfigType "setting", SettingValue = the confidentiality term's label (e.g. "Highly Confidential").`,
+                ok: false,
+              });
+            } else {
+              entries.push({
+                msg: `✓ HC gating configured — "${value}" is restricted to cleared uploaders`,
+                ok: true,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({
+          msg: `⚠ HC gating check skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      // ── SITE-ENTRY LIBRARY STATE ──────────────────────────────────────────────
+      //
+      // Asserts, on EVERY run, that the site-entry group holds Read on the approved-side
+      // libraries and holds nothing on the approval-side ones.
+      //
+      // ── Why this is ENFORCED rather than authored ────────────────────────────
+      // It is not configuration; it is a structural requirement of the approval flow. The
+      // approval guard resolves the destination folder in Documents AS THE APPROVER, and that
+      // works only because the site-entry group holds Read on that library. Without it every
+      // approver 404s on every destination — approval refused for everyone, with a run log that
+      // reports success.
+      //
+      // Until now the only thing maintaining it was the one-time `entryHadAccess` restore at the
+      // moment inheritance was first broken. That freezes whatever state happened to exist then,
+      // and is skipped forever after (the block is guarded on HasUniqueRoleAssignments). Found
+      // live 2026-08-16 in the EXACT INVERSE of the intent: the site-entry group held Read on the
+      // approval library, where it must never be, and held nothing on Documents, where it must
+      // always be. Neither could self-correct, and no screen reported either one.
+      //
+      // A Group Map row would also work, and must NOT be the answer: it would leave the entire
+      // approval flow depending on an administrator remembering one row on every new site.
+      //
+      // Decided by the logical LibTarget key via APPROVED_SIDE_LIBS, never by library title —
+      // titles get renamed (`Staging` → `Approval Document`) and a name test would silently stop
+      // matching. Gotcha #12, in a place where the cost of silence is over-exposure.
+      try {
+        setReconPhase("Checking site-entry library access…");
+        const groupsForEntry = await fetchAllSiteGroups(
+          context.spHttpClient,
+          siteUrl,
+        );
+        const entryId = findSiteEntryGroup(groupsForEntry)?.id;
+        if (entryId === undefined) {
+          entries.push({
+            msg: `⚠ ${siteEntryGroupTitle()}: group not found — site-entry library access not checked`,
+            ok: false,
+          });
+        } else if (readId === undefined) {
+          entries.push({
+            msg: `⚠ Site-entry library access: no "Read" role definition on site — skipped`,
+            ok: false,
+          });
+        } else {
+          for (const lib of reconLibs()) {
+            // SITE_ENTRY_LIBS, not APPROVED_SIDE_LIBS — see the comment on that constant. The HC
+            // pair is closed to everyone without HC clearance, on both sides.
+            const shouldHold = SITE_ENTRY_LIBS.indexOf(lib) > -1;
+            const listRes = await context.spHttpClient.get(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=Id,HasUniqueRoleAssignments`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!listRes.ok) {
+              entries.push({
+                msg: `  ⚠ ${libDisplayName(lib)}: library not found (HTTP ${listRes.status}) — site-entry access not checked`,
+                ok: false,
+              });
+              continue;
+            }
+            const lj = await listRes.json();
+            const entryListBase = `${siteUrl}/_api/web/lists(guid'${lj.Id}')`;
+            if (lj.HasUniqueRoleAssignments !== true) {
+              /* AN INHERITING CRS LIBRARY IS A LIVE EXPOSURE, so this breaks it rather than
+                 reporting it.
+
+                 The site-entry group holds Read on the WEB, so a library that still inherits is
+                 readable by every site member — every uploader, approver and viewer — no matter how
+                 carefully the folders beneath it are locked. There is no case in which a CRS library
+                 should inherit.
+
+                 Found live 2026-08-17: BOTH HC libraries were in exactly this state. The libraries
+                 existed, the folder tree was built and locked, and the whole time the library root
+                 was readable by anyone who could open the site — on the two libraries where that
+                 matters most. Nothing reported it, because the block that breaks inheritance runs
+                 inside the library-scope ROWS loop and the HC libraries have no rows. The same
+                 structural gap as the page lockdown: the mechanism is driven by grant rows, and the
+                 thing that needs protecting has none.
+
+                 copyRoleAssignments=false, as everywhere else: with true every inherited grant is
+                 carried forward, so the library stays readable by exactly the same people and the
+                 run reports success — a failure invisible from the log. */
+              const broke = await withThrottleRetry(() =>
+                context.spHttpClient.post(
+                  `${entryListBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ),
+              );
+              if (!broke.ok) {
+                entries.push({
+                  msg: `  ✗ ${libDisplayName(lib)}: INHERITS site permissions and could not be secured (HTTP ${broke.status}) — every site member can read this library`,
+                  ok: false,
+                });
+                continue;
+              }
+              entries.push({
+                msg: `  ↳ ${libDisplayName(lib)}: inherited site permissions — inheritance BROKEN (no permissions copied)`,
+                ok: true,
+              });
+              /* Owners go straight back on. With nothing copied, the only remaining access is site
+                 collection administrators, so an owner who is not also one would lose the library.
+                 `typeof`, not `!== undefined`: ownerGroupId is `number | null`, and null slips past
+                 an undefined check straight into the request as the string "null". */
+              if (fullCtrlId !== undefined) {
+                try {
+                  await addRoleAssignmentToList(
+                    entryListBase,
+                    ownersId,
+                    fullCtrlId,
+                  );
+                  entries.push({
+                    msg: `  ↳ ${libDisplayName(lib)}: site Owners → Full Control restored`,
+                    ok: true,
+                  });
+                } catch (e) {
+                  entries.push({
+                    msg: `  ✗ ${libDisplayName(lib)}: could not restore site Owners — ${(e as Error).message}`,
+                    ok: false,
+                  });
+                }
+              }
+              // Fall through deliberately: the site-entry rule below now applies to a library with
+              // unique permissions, which is the only state in which it means anything.
+            }
+            const raRes = await context.spHttpClient.get(
+              `${entryListBase}/roleassignments?$select=PrincipalId,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=RoleDefinitionBindings`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!raRes.ok) {
+              // Never guessed at: an unreadable ACL is not evidence of absence. Acting on it would
+              // either re-grant what is already there or remove what nobody could see.
+              entries.push({
+                msg: `  ⚠ ${libDisplayName(lib)}: could not read permissions (HTTP ${raRes.status}) — site-entry state not enforced`,
+                ok: false,
+              });
+              continue;
+            }
+            const raJson = await raRes.json();
+            const held = (
+              (raJson.value ?? []) as Array<{
+                PrincipalId?: number;
+                RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+              }>
+            ).filter((ra) => ra.PrincipalId === entryId);
+
+            if (shouldHold && held.length === 0) {
+              try {
+                await addRoleAssignmentToList(entryListBase, entryId, readId);
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} → Read GRANTED (approval resolves destinations as the approver and needs it)`,
+                  ok: true,
+                });
+                bumpAssigns();
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ ${libDisplayName(lib)}: could not grant ${siteEntryGroupTitle()} — APPROVALS MAY FAIL — ${(e as Error).message}`,
+                  ok: false,
+                });
+              }
+            } else if (!shouldHold && held.length > 0) {
+              // Every binding, not just Read: a hand-made grant may be at any level, and removing
+              // only the one this code would have made would leave the wider one in place.
+              let removed = 0;
+              for (const ra of held) {
+                for (const binding of ra.RoleDefinitionBindings ?? []) {
+                  if (binding.Id === undefined) continue;
+                  const del = await withThrottleRetry(() =>
+                    context.spHttpClient.post(
+                      `${entryListBase}/roleassignments/removeroleassignment(principalid=${entryId},roledefid=${binding.Id})`,
+                      SPHttpClient.configurations.v1,
+                      {
+                        headers: {
+                          Accept: "application/json;odata=nometadata",
+                        },
+                      },
+                    ),
+                  );
+                  if (del.ok) removed++;
+                  else
+                    entries.push({
+                      msg: `  ✗ ${libDisplayName(lib)}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`,
+                      ok: false,
+                    });
+                }
+              }
+              if (removed > 0) {
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} REMOVED (${removed} level(s)) — site entry is a door into the site, not library access`,
+                  ok: true,
+                });
+              }
+            } else {
+              entries.push({
+                msg: `  ✓ ${libDisplayName(lib)}: ${siteEntryGroupTitle()} ${shouldHold ? "holds Read" : "has no access"} — correct`,
+                ok: true,
+              });
+            }
+            await tick();
+          }
+        }
+      } catch (e) {
+        entries.push({
+          msg: `⚠ Site-entry library access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      /* ── THE SUBMISSIONS LIST ────────────────────────────────────────────────────
+         Created HERE rather than by a page, and that is a deliberate departure.
+
+         Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md (trap 3).
+         The requests list is created when an administrator opens the Requests page. There is no
+         equivalent page for this one: the screen that READS it is My Submissions, which every
+         uploader opens — so a Provision button there would be shown to precisely the people who
+         cannot press it (creating a list needs Manage Lists). Reconciliation is admin-only and
+         idempotent, and already asserts the reference columns on four libraries, so it is the
+         honest home. One fewer manual step at cutover.
+
+         An upload before this has run writes NO record and is otherwise unaffected — the writers
+         check first and degrade silently. */
+      try {
+        setReconPhase("Checking the submissions list…");
+        // titleForNewList, NOT cachedListTitle: a list that does not exist yet cannot be in the
+        // name cache, so cachedListTitle answers the legacy `DMS Submissions` — which on a
+        // CRS-renamed site creates the one list nobody can find. Same trap as the Requests page.
+        const subTitle = titleForNewList(LIST_SUFFIX.submissions);
+        const subBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(subTitle)}')`;
+        const probe = await context.spHttpClient.get(
+          `${subBase}?$select=Id`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (probe.status === 404) {
+          const made = await withThrottleRetry(() =>
+            context.spHttpClient.post(
+              `${siteUrl}/_api/web/lists`,
+              SPHttpClient.configurations.v1,
+              {
+                headers: {
+                  Accept: "application/json;odata=nometadata",
+                  "Content-Type": "application/json;odata=nometadata",
+                  // SPFx injects 4.0, under which SharePoint cannot infer the entity set for a
+                  // JSON-light entry payload. Learned on the audit log, re-learned on the file-type
+                  // page. Do NOT restore __metadata here.
+                  "odata-version": "",
+                },
+                body: JSON.stringify({
+                  Title: subTitle,
+                  BaseTemplate: 100,
+                  Description:
+                    "One row per uploaded file, so an uploader's submission survives the document being deleted.",
+                }),
+              },
+            ),
+          );
+          if (!made.ok) {
+            entries.push({
+              msg: `⚠ ${subTitle}: could not be created (HTTP ${made.status}) — uploads still work, but a deleted file will vanish from My Submission as before`,
+              ok: false,
+            });
+          } else {
+            noteCreatedList(LIST_SUFFIX.submissions, subTitle);
+            entries.push({ msg: `  ↳ ${subTitle}: list created ✓`, ok: true });
+          }
+        } else if (!probe.ok) {
+          // Neither present nor absent. Creating on top of that is how a duplicate list appears.
+          entries.push({
+            msg: `⚠ ${subTitle}: could not check whether it exists (HTTP ${probe.status}) — not created`,
+            ok: false,
+          });
+        }
+        /* Columns asserted whether or not this run created the list, and EVERY one attempted rather
+           than aborting on the first failure: a run that stopped half way left the requests list
+           with ten of seventeen columns and no route forward (2026-08-20). Repeatable by
+           construction — an "already exists" 400 simply omits the column from `added`.
+
+           ⚠ NO `NumberOfLines` on the Note columns. It belongs to `SP.FieldMultiLineText`, not
+           `SP.Field`, and with `odata=nometadata` SharePoint infers the type from the ENDPOINT, so
+           the extra property is rejected outright. That was the exact point every requests-list
+           provisioning run died. */
+        const liveSubTitle = cachedListTitle(LIST_SUFFIX.submissions);
+        const colFailed: string[] = [];
+        let colAdded = 0;
+        /* ⚠⚠ THE EXISTING COLUMNS ARE READ FIRST, AND SKIPPING THEM IS THE WHOLE POINT (fixed
+           2026-09-03, found on ClarenceDMSTesting). This loop used to POST all 14 unconditionally on
+           the assumption that a duplicate comes back 400 and is "success by omission". **IT DOES
+           NOT.** SharePoint allows duplicate DISPLAY names and silently derives a unique INTERNAL
+           name by appending a number — so every run created a fresh set. The live list held
+           `SubmissionRef` through `SubmissionRef15` and `ArchivedAt`, `ArchivedAt0`, `ArchivedAt1`,
+           `ArchivedAt2`: sixteen runs, fourteen junk columns each.
+
+           ⚠ IT NEVER BROKE THE FEATURE, WHICH IS WHY IT SURVIVED. Reads and writes name the first,
+           unsuffixed column, so records worked perfectly throughout; the only symptom was a growing
+           column list and a run reporting `14 column(s) created` every time — a number nobody had a
+           reference for. Left alone it ends at SharePoint's per-list column ceiling, where creation
+           starts failing for real.
+
+           ⚠ FAILS CLOSED: an unreadable field list creates NOTHING and says so. A missed create is
+           repaired by the next run; a blind create is permanent junk that cannot be undone safely,
+           because deleting a column takes its data with it and does NOT go to the recycle bin. */
+        let haveCols: string[] | undefined;
+        try {
+          const fRes = await withThrottleRetry(() =>
+            context.spHttpClient.get(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields?$select=InternalName&$top=5000`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            ),
+          );
+          if (fRes.ok) {
+            const fData = await fRes.json();
+            haveCols = (
+              (fData.value ?? []) as Array<{ InternalName?: string }>
+            ).map((f) => (f.InternalName ?? "").toLowerCase());
+          }
+        } catch {
+          haveCols = undefined;
+        }
+        if (haveCols === undefined) {
+          entries.push({
+            msg: `⚠ ${liveSubTitle}: could not read its columns, so none were created or checked. Re-running is safe and will retry.`,
+            ok: false,
+          });
+        } else {
+          for (const c of RECORD_COLUMNS) {
+            if (haveCols.indexOf(c.name.toLowerCase()) > -1) continue;
+            const r = await withThrottleRetry(() =>
+              context.spHttpClient.post(
+                `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields`,
+                SPHttpClient.configurations.v1,
+                {
+                  headers: {
+                    Accept: "application/json;odata=nometadata",
+                    "Content-Type": "application/json;odata=nometadata",
+                    "odata-version": "",
+                  },
+                  body: JSON.stringify({
+                    Title: c.name,
+                    FieldTypeKind: c.type,
+                  }),
+                },
+              ),
+            );
+            if (r.ok) colAdded++;
+            else colFailed.push(`${c.name} (HTTP ${r.status})`);
+          }
+          /* REPORTED, NEVER DELETED. These are the duplicates the defect above left behind. They are
+             inert — nothing reads or writes them — but a column deletion takes its data with it and
+             does not reach the recycle bin, so this names them and leaves the decision to a person.
+             Matched as one of our own names followed by digits, so a client-authored column can
+             never be counted. */
+          /* Plain string test, NOT a built regex: the names come from a config array, so a dynamic
+             pattern would be flagged by lint and would need escaping for no benefit. "Our name, then
+             nothing but digits" is exactly what SharePoint's auto-suffix produces. */
+          const isStray = (n: string): boolean =>
+            RECORD_COLUMNS.some((c) => {
+              const base = c.name.toLowerCase();
+              if (n.length <= base.length || n.slice(0, base.length) !== base)
+                return false;
+              const tail = n.slice(base.length);
+              return tail.split("").every((ch) => ch >= "0" && ch <= "9");
+            });
+          const strays = haveCols.filter(isStray);
+          if (strays.length > 0) {
+            /* ⚠ `ok: true` DELIBERATELY, and this shipped wrong for exactly one build.
+               `errorsBeforePrune` counts !ok entries and BLOCKS the orphan prune — a guard that
+               exists because a partial TERM STORE read returns a short target list that makes
+               healthy map rows look dead. A leftover display column cannot shorten that list, so
+               gating the prune on it disables self-healing over something cosmetic — and
+               PERMANENTLY, since these duplicates persist until somebody deletes 200-odd columns by
+               hand. Caught on SDG's first run with the fix: `Prune skipped — run had 1 error(s)`,
+               the one error being this very line. Same reasoning and the same `ok: true` as the
+               Full Name column warning above. The ⚠ still puts it in "Needs attention". */
+            entries.push({
+              msg: `⚠ ${liveSubTitle}: ${strays.length} duplicate column(s) left by earlier runs (e.g. ${strays.slice(0, 3).join(", ")}). They are INERT — nothing reads or writes them — and are safe to delete by hand in list settings. No further run will create more.`,
+              ok: true,
+            });
+          }
+        }
+        /* ⚠ `Author` IS INDEXED, AND THIS LIST NEEDS IT MOST. It gains a row per uploaded FILE, so it
+           crosses the 5,000-item list-view threshold faster than anything else here — and My
+           Submissions reads it `$filter=AuthorId eq <me>`, which starts failing at that point. `$top`
+           does not lift the threshold; only an index does. The same provisioning note `Created By` on
+           `Documents` already carries, asserted every run rather than left in a runbook.
+
+           MERGE on the FIELD, which is how a built-in column is indexed — `ensureColumn` cannot do it
+           because there is no column to create. Failure is reported, never fatal: the list works
+           perfectly until it is large. */
+        try {
+          const idxRes = await withThrottleRetry(() =>
+            context.spHttpClient.post(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(liveSubTitle)}')/fields/getbyinternalnameortitle('Author')`,
+              SPHttpClient.configurations.v1,
+              {
+                headers: {
+                  Accept: "application/json;odata=nometadata",
+                  "Content-Type": "application/json;odata=nometadata",
+                  "odata-version": "",
+                  "X-HTTP-Method": "MERGE",
+                  "IF-MATCH": "*",
+                },
+                body: JSON.stringify({ Indexed: true }),
+              },
+            ),
+          );
+          if (!idxRes.ok) {
+            entries.push({
+              msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed (HTTP ${idxRes.status}) — My Submission will start failing on this list past 5,000 rows`,
+              ok: false,
+            });
+          }
+        } catch (e) {
+          entries.push({
+            msg: `⚠ ${liveSubTitle}: "Created By" could not be indexed — ${(e as Error).message}`,
+            ok: false,
+          });
+        }
+        if (colAdded > 0)
+          entries.push({
+            msg: `  ↳ ${liveSubTitle}: ${colAdded} column(s) created ✓`,
+            ok: true,
+          });
+        if (colFailed.length > 0) {
+          // NAMED, and it does not claim success: a list missing SubmissionFileId records uploads
+          // that can never be joined back to their file, which the page would show as deleted.
+          entries.push({
+            msg: `⚠ ${liveSubTitle}: these columns could not be added: ${colFailed.join(", ")}. Re-running is safe and will retry them.`,
+            ok: false,
+          });
+        }
+      } catch (e) {
+        // Never fatal. A site with no submissions list behaves exactly as it did before the feature.
+        entries.push({
+          msg: `⚠ Submissions list check skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      /* ── REQUEST & SUBMISSION LIST ACCESS ────────────────────────────────────────
+         Scopes BOTH lists to the groups that actually need them, and takes the site-wide grant off.
+
+         Client, 2026-08-27, on how much of a request row a site member can read: *"I think best to
+         go to option 2, I don't want to get a lash back later on."* Option 1 — granting the
+         site-entry group `CRS Request` — is what this pass did until today. It works, and it lets
+         ANY site member read every row (filenames, paths, who submitted what) and edit anyone
+         else's. On the submissions list that would be every upload anyone has ever made.
+
+         ⚠ THE ROLES, NOT THE NAME SUFFIXES. The agreed wording named the `_UPLOADER`/`_APPROVER`/
+         `_HOD` groups; `groupsForRequestLists` derives from the ROLES those stand for, because names
+         carry old spellings, a group can be renamed while its id survives, and `roleFromGroupName`
+         falls through to MEMBER for anything unrecognised.
+
+         ⚠ THE REVOKE IS SEQUENCED AND CONDITIONAL, AND WITHOUT IT OPTION 2 ACHIEVES NOTHING. Adding
+         ~470 grants while leaving the site-entry assignment in place changes the exposure not at
+         all. But removal is the dangerous direction, so it happens only after every grant on that
+         list succeeded, and never when nothing was derived. The cost of a wrong removal is nobody
+         can raise a request, found by an uploader; the cost of a delayed one is one more run of an
+         exposure nobody is watching. Fail toward the second.
+
+         ⚠ EVERY BINDING FOR THAT PRINCIPAL COMES OFF, not just `CRS Request`. Inheritance was broken
+         with `copyRoleAssignments=true`, so the site-entry group also carries the web's Read — and
+         removing only the level this code granted would leave the read exposure entirely intact.
+
+         ⚠ ONE PRINCIPAL, NEVER A FULL ASSERTION. A list root is not a leaf: it carries SharePoint's
+         automatic Limited Access entries for every principal granted further down. `groupsToRemove`
+         is safe at page scope for exactly that reason and must not be lifted here.
+
+         `copyRoleAssignments=TRUE` on the break, as before: this pass adds a capability, and `false`
+         would strip whatever the web granted, including access an administrator set deliberately. */
+      try {
+        setReconPhase("Checking request and submission list access…");
+        /* BOTH PREFIXES, because the level is named for the site and this is the one lookup with no
+           entry in ROLE_TO_PERMISSION to be re-pointed by `applyPermissionPrefix`. Accepting both is
+           cheaper than a table entry for a level no ROLE maps to. */
+        const requestDefId =
+          defs.find((r) => r.name === "CRS Request")?.id ??
+          defs.find((r) => r.name === "DMS Request")?.id;
+        const groupsForReq = await fetchAllSiteGroups(
+          context.spHttpClient,
+          siteUrl,
+        );
+        const reqEntryId = findSiteEntryGroup(groupsForReq)?.id;
+
+        /* Its OWN Group Map read. The page pass reads the same list a few lines below, but inside
+           its own scope — and sharing it would mean reshaping the most site-verified block in this
+           file for a new feature. One extra GET per run.
+
+           `undefined` is NOT-READ and `[]` is read-and-nobody-qualifies. Both stop the revoke, for
+           different reasons and with different messages: the first is a failure we must not act on,
+           the second is a legitimate state on a site with no Group Map rows. Reading them as the
+           same thing is how a run with an unreadable list locks every uploader out. */
+        let qualifying: ReturnType<typeof groupsForRequestLists> | undefined;
+        try {
+          const gmRes = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (gmRes.ok) {
+            const gmJson = await gmRes.json();
+            qualifying = groupsForRequestLists(
+              groupRolesById(
+                (gmJson.value ?? []) as Array<{
+                  GroupId?: string;
+                  GroupName?: string;
+                  Role?: string;
+                  Scope?: string;
+                  Target?: string;
+                }>,
+              ),
+            );
+          }
+        } catch {
+          /* stays undefined — see above */
+        }
+
+        if (requestDefId === undefined) {
+          /* Reported, never approximated. Granting Contribute instead would hand uploaders Delete
+             Items on the lists that ARE the record of who asked for and uploaded what. */
+          entries.push({
+            msg: `⚠ No "GDC Request" permission level on this site, so request and submission list access was NOT set — create it (copy Contribute, untick Delete Items and Delete Versions) and re-run`,
+            ok: false,
+          });
+        } else if (qualifying === undefined) {
+          entries.push({
+            msg: `⚠ GDC Group Map could not be read — request and submission list access NOT checked, and nothing was revoked`,
+            ok: false,
+          });
+        } else {
+          for (const suffix of [
+            LIST_SUFFIX.requests,
+            LIST_SUFFIX.submissions,
+          ]) {
+            const title = cachedListTitle(suffix);
+            const res = await context.spHttpClient.get(
+              `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(title)}')?$select=Id,HasUniqueRoleAssignments`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (res.status === 404) {
+              /* NOT an error. The requests list is created when the Requests page is first opened,
+                 and a site that has never used either feature is a normal state. */
+              entries.push({
+                msg: `✓ ${title}: list does not exist yet — nothing to check`,
+                ok: true,
+              });
+              continue;
+            }
+            if (!res.ok) {
+              entries.push({
+                msg: `⚠ ${title}: could not be read (HTTP ${res.status}) — access NOT checked`,
+                ok: false,
+              });
+              continue;
+            }
+            const json = await res.json();
+            const listBase = `${siteUrl}/_api/web/lists(guid'${json.Id}')`;
+            let unique = json.HasUniqueRoleAssignments === true;
+            if (!unique) {
+              const broke = await withThrottleRetry(() =>
+                context.spHttpClient.post(
+                  `${listBase}/breakroleinheritance(copyRoleAssignments=true,clearSubscopes=false)`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ),
+              );
+              if (!broke.ok) {
+                entries.push({
+                  msg: `✗ ${title}: inherits site permissions and could not be given its own (HTTP ${broke.status}) — uploaders will be refused`,
+                  ok: false,
+                });
+                continue;
+              }
+              unique = true;
+              entries.push({
+                msg: `  ↳ ${title}: inherited site permissions — now has its own (existing access kept)`,
+                ok: true,
+              });
+            }
+
+            const raRes = await context.spHttpClient.get(
+              `${listBase}/roleassignments?$select=PrincipalId,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=RoleDefinitionBindings`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!raRes.ok) {
+              // An unreadable ACL is not evidence of absence. Re-granting blind would be a guess,
+              // and revoking blind would remove what nobody could see.
+              entries.push({
+                msg: `⚠ ${title}: could not read permissions (HTTP ${raRes.status}) — access not enforced, nothing revoked`,
+                ok: false,
+              });
+              continue;
+            }
+            const raJson = await raRes.json();
+            const assignments = (raJson.value ?? []) as Array<{
+              PrincipalId?: number;
+              RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+            }>;
+            const holdsRequest: Record<number, true> = {};
+            for (const ra of assignments) {
+              if (ra.PrincipalId === undefined) continue;
+              if (
+                (ra.RoleDefinitionBindings ?? []).some(
+                  (b) => b.Id === requestDefId,
+                )
+              ) {
+                holdsRequest[ra.PrincipalId] = true;
+              }
+            }
+
+            let granted = 0;
+            let skipped = 0;
+            let failed = 0;
+            for (const g of qualifying) {
+              let pid = 0;
+              try {
+                pid = spGroupPrincipalId(g.groupId);
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ ${title}: ${g.groupName || g.groupId} — ${(e as Error).message}`,
+                  ok: false,
+                });
+                failed++;
+                continue;
+              }
+              if (holdsRequest[pid]) {
+                skipped++;
+                continue;
+              }
+              try {
+                await addRoleAssignmentToList(listBase, pid, requestDefId);
+                granted++;
+                bumpAssigns();
+                await tick();
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ ${title}: could not grant ${g.groupName || g.groupId} — ${(e as Error).message}`,
+                  ok: false,
+                });
+                failed++;
+              }
+            }
+            /* ONE line per LIST, never one per group. On a two-segment site this loop touches ~470
+               groups, and a line each would bury every real finding the run made. */
+            entries.push({
+              msg: `${failed > 0 ? "⚠" : "✓"} ${title}: ${granted} group(s) granted, ${skipped} already correct${failed > 0 ? `, ${failed} FAILED` : ""} (add and edit a row; never delete one)`,
+              ok: failed === 0,
+            });
+
+            // ── The site-wide grant comes off, if and only if it is safe ──
+            const entryHeld =
+              reqEntryId === undefined
+                ? []
+                : assignments.filter((ra) => ra.PrincipalId === reqEntryId);
+            if (reqEntryId === undefined) {
+              entries.push({
+                msg: `⚠ ${title}: ${siteEntryGroupTitle()} not found, so the site-wide grant could not be checked`,
+                ok: false,
+              });
+            } else if (entryHeld.length === 0) {
+              entries.push({
+                msg: `✓ ${title}: not readable site-wide ✓`,
+                ok: true,
+              });
+            } else if (qualifying.length === 0) {
+              /* Nobody derived. Revoking here would leave the list reachable by NO ONE, on a site
+                 whose Group Map simply has no rows yet — and the people who would discover it are
+                 uploaders being refused. */
+              entries.push({
+                msg: `⚠ ${title}: still readable by every site member — no group holds an upload, approve or Head-of-Department role yet, so the site-wide grant was LEFT IN PLACE. Provision groups, then re-run.`,
+                ok: false,
+              });
+            } else if (failed > 0) {
+              entries.push({
+                msg: `⚠ ${title}: still readable by every site member — ${failed} group grant(s) failed, so the site-wide grant was LEFT IN PLACE deliberately. Fix those and re-run.`,
+                ok: false,
+              });
+            } else {
+              let removed = 0;
+              let removeFailed = false;
+              for (const ra of entryHeld) {
+                for (const binding of ra.RoleDefinitionBindings ?? []) {
+                  if (binding.Id === undefined) continue;
+                  const del = await withThrottleRetry(() =>
+                    context.spHttpClient.post(
+                      `${listBase}/roleassignments/removeroleassignment(principalid=${reqEntryId},roledefid=${binding.Id})`,
+                      SPHttpClient.configurations.v1,
+                      {
+                        headers: {
+                          Accept: "application/json;odata=nometadata",
+                        },
+                      },
+                    ),
+                  );
+                  if (del.ok) removed++;
+                  else {
+                    removeFailed = true;
+                    entries.push({
+                      msg: `  ✗ ${title}: could not remove ${siteEntryGroupTitle()} "${binding.Name ?? binding.Id}" (HTTP ${del.status})`,
+                      ok: false,
+                    });
+                  }
+                }
+              }
+              if (removed > 0 && !removeFailed) {
+                // NAMED. Silently removing a grant an administrator may have made by hand is worse
+                // than not removing it, because they go on believing it is there.
+                entries.push({
+                  msg: `  ↳ ${title}: ${siteEntryGroupTitle()} REMOVED (${removed} binding(s)) — the list is no longer readable by every site member`,
+                  ok: true,
+                });
+              } else if (removeFailed) {
+                entries.push({
+                  msg: `⚠ ${title}: ${siteEntryGroupTitle()} could not be fully removed — the list may still be readable site-wide`,
+                  ok: false,
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // Never fatal: a missing list, or a throttled read, must not fail the run.
+        entries.push({
+          msg: `⚠ Request and submission list access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      // ── PAGE ACCESS PASS ──────────────────────────────────────────────────────
+      // Re-asserts every `Scope = Page` row, so page access self-heals the same way folder
+      // and library access do.
+      //
+      // The client's rule, 2026-08-05: page and library access are DERIVED from the role, not
+      // curated per page. An uploader has the upload form because they are an uploader — so a
+      // grant removed by hand in SharePoint is drift to be repaired, not a decision to respect.
+      // The supported way to revoke is to remove the mapping (which deletes the row and the
+      // grant together) or to delete the group.
+      //
+      // That is a deliberate reversal of the "curated state should not self-heal" argument, and
+      // it holds only because the row IS the record of the role. If page grants ever become
+      // hand-curated exceptions, this pass has to become report-only.
+      try {
+        setReconPhase("Applying page access…");
+        const pgRes = await context.spHttpClient.get(
+          `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupId,GroupName,Role,Scope,Target&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!pgRes.ok) {
+          entries.push({
+            msg: `Page access: skipped — Scope/Target columns not present on GDC Group Map`,
+            ok: true,
+          });
+        } else {
+          const pgJson = await pgRes.json();
+          const allRows = (pgJson.value ?? []) as Array<{
+            GroupId?: string;
+            GroupName?: string;
+            Role?: string;
+            Scope?: string;
+            Target?: string;
+          }>;
+          const pageRows = allRows
+            .filter((r) => (r.Scope ?? "").trim().toLowerCase() === "page")
+            .filter(
+              (r) => (r.Target ?? "").trim() !== "" && (r.GroupId ?? "") !== "",
+            );
+          /* THE HALF THAT USED TO BE THROWN AWAY (spec 2026-08-19 §1). Page access was granted only
+             to groups with a Page row, and nothing creates those rows — bulk provisioning writes
+             FOLDER rows. On dcistaging that meant 8 of 120 uploader/approver groups could open the
+             upload form, and the log said `8 mappings applied`, which was true and told nobody.
+             The roles are now derived from the same response. */
+          const groupRoles = groupRolesById(allRows);
+          if (readId === undefined) {
+            entries.push({
+              msg: `⚠ Page access: no "Read" role definition on site — skipped`,
+              ok: false,
+            });
+          } else {
+            const PAGES_LIST = "Site Pages";
+            const pagesBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(PAGES_LIST)}')`;
+            // The site's real welcome page, not just the "home.aspx" constant: a renamed welcome
+            // page would slip past the constant, and locking it makes the whole site unreachable
+            // for everyone who is not an administrator.
+            let welcome = "";
+            try {
+              const wRes = await context.spHttpClient.get(
+                `${siteUrl}/_api/web/RootFolder?$select=WelcomePage`,
+                SPHttpClient.configurations.v1,
+                { headers: { Accept: "application/json;odata=nometadata" } },
+              );
+              if (wRes.ok) {
+                const wj = await wRes.json();
+                welcome =
+                  ((wj.WelcomePage ?? "") as string)
+                    .split("/")
+                    .pop()
+                    ?.toLowerCase() ?? "";
+              }
+            } catch {
+              /* fall back to the constant alone */
+            }
+
+            const itemsRes = await context.spHttpClient.get(
+              `${pagesBase}/items?$select=Id,FileLeafRef,HasUniqueRoleAssignments&$top=500`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!itemsRes.ok) {
+              entries.push({
+                msg: `⚠ Page access: could not read ${PAGES_LIST} (HTTP ${itemsRes.status}) — skipped`,
+                ok: false,
+              });
+            } else {
+              const itemsJson = await itemsRes.json();
+              const items = (
+                (itemsJson.value ?? []) as Array<{
+                  Id: number;
+                  FileLeafRef?: string;
+                  HasUniqueRoleAssignments?: boolean;
+                }>
+              ).map((p) => ({
+                id: p.Id,
+                file: (p.FileLeafRef ?? "").toLowerCase(),
+                unique: p.HasUniqueRoleAssignments === true,
+              }));
+
+              /* DRIVEN BY THE PAGES, not by the rows. A page whose policy names roles is
+                 processed whether or not anyone wrote a row for it — that inversion IS the fix.
+                 Hand-made rows still contribute their own targets, so a row aimed at a page the
+                 policy says nothing about (a deliberate exception) is still honoured. */
+              const derivedFiles = items
+                .filter(
+                  (p) =>
+                    p.file !== "" && derivedRolesForPage(p.file).length > 0,
+                )
+                .map((p) => p.file);
+              const rowFiles = pageRows.map((r) =>
+                (r.Target ?? "").trim().toLowerCase(),
+              );
+              const files: string[] = [];
+              for (const f of derivedFiles.concat(rowFiles))
+                if (f !== "" && files.indexOf(f) === -1) files.push(f);
+
+              /* ONLY site Owners is protected, matching the lockdown pass below.
+                 The site-entry group is deliberately NOT protected: it holds Read on the WEB, so on
+                 an inheriting page it is present by inheritance and disappears the moment
+                 inheritance is broken. A page-SCOPE assignment for it can therefore only have been
+                 added by hand, and it would give every plain member the upload form — exactly what
+                 the policy exists to prevent. Members/Visitors likewise: a CRS page granted to the
+                 site's default members group is not a grant to respect.
+                 `typeof`, not `!== undefined`: ownerGroupId is `number | null`, and null slips past
+                 an undefined check straight into the array. */
+              const protectedIds: number[] = [ownersId];
+
+              if (files.length === 0) {
+                // Says so, rather than saying nothing. Silence here reads as "page access was fine",
+                // and on a site whose pages are named so that no rule matches, that is exactly wrong.
+                entries.push({
+                  msg: `Page access: no page on this site carries a role policy, and no Page-scope mapping exists — nothing to grant`,
+                  ok: true,
+                });
+              } else {
+                entries.push({
+                  msg: `Page access: ${files.length} page(s) to assert, from ${groupRoles.length} group(s) with roles and ${pageRows.length} mapping row(s)`,
+                  ok: true,
+                });
+              }
+
+              for (const file of files) {
+                const rowsForPage = pageRows.filter(
+                  (r) => (r.Target ?? "").trim().toLowerCase() === file,
+                );
+                if (isForbiddenPageTarget(file) || file === welcome) {
+                  // Refused by name, every run, rather than applied once and regretted. The row
+                  // is left in place: deleting authored data on the client's behalf is not this
+                  // pass's job, and the refusal is logged so it can be removed deliberately.
+                  /* Reads correctly whether it arrived from a row or from derivation. A client who
+                     set the welcome page TO the upload form would otherwise be told "0 mapping(s)
+                     refused", which reads as a bug in the tool rather than a refusal. */
+                  entries.push({
+                    msg:
+                      rowsForPage.length > 0
+                        ? `  ⚠ ${file}: the site home page cannot be restricted — ${rowsForPage.length} mapping(s) refused`
+                        : `  ⚠ ${file}: the site home page cannot be restricted — page access NOT applied to it`,
+                    ok: false,
+                  });
+                  continue;
+                }
+                if (policyForPage(file).adminOnly) {
+                  /* REFUSED so the two page passes cannot fight (spec §4).
+                     An adminOnly page has roles: [], so GroupMapBuilder never offers one — but a
+                     hand-authored row can still target it. Without this, THIS pass would grant Read
+                     and the lockdown pass below would strip it again, every run, both logged, for
+                     ever. Refusing here makes the order of the two passes irrelevant, which is a
+                     correctness property rather than a sequencing convention.
+                     The row is left in place, as with the welcome page: deleting authored data is
+                     not this pass's job. */
+                  entries.push({
+                    msg: `  ⚠ ${file}: administrator-only page — ${rowsForPage.length} mapping(s) refused (it is locked to site owners below)`,
+                    ok: false,
+                  });
+                  continue;
+                }
+                const item = items.find((p) => p.file === file);
+                if (!item) {
+                  /* Only a ROW can be wrong here. A derived file name came FROM this list, so it
+                     cannot be missing; a row's Target is typed by hand and a typo is worth naming. */
+                  if (rowsForPage.length > 0) {
+                    entries.push({
+                      msg: `  ⚠ ${file}: page not found in ${PAGES_LIST} — check the Target value`,
+                      ok: false,
+                    });
+                  }
+                  continue;
+                }
+                const intended = intendedPageGroups(file, groupRoles, pageRows);
+                if (
+                  intended.length === 0 &&
+                  derivedRolesForPage(file).length > 0
+                ) {
+                  /* WARNED, NOT REFUSED (spec §5). An empty set is correct on a site with no groups
+                     yet, and the page still ends up Owners-only — administrator-only until groups
+                     exist. Refusing would leave it INHERITING, i.e. readable by every site member,
+                     which is worse. This is the exact state dcistaging sat in for two days with
+                     nothing reporting it. */
+                  entries.push({
+                    msg: `  ⚠ ${file}: restricted, but no group holds ${derivedRolesForPage(file).join(" or ")} — nobody but site owners can open it`,
+                    ok: false,
+                  });
+                }
+                const itemBase = `${pagesBase}/items(${item.id})`;
+                if (!item.unique) {
+                  // copyRoleAssignments=false, as everywhere else: with true, every inherited
+                  // grant is carried forward, so the page stays visible to exactly the same
+                  // people and the run reports success.
+                  const broke = await withThrottleRetry(() =>
+                    context.spHttpClient.post(
+                      `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                      SPHttpClient.configurations.v1,
+                      {
+                        headers: {
+                          Accept: "application/json;odata=nometadata",
+                        },
+                      },
+                    ),
+                  );
+                  if (!broke.ok) {
+                    entries.push({
+                      msg: `  ✗ ${file}: could not break inheritance (HTTP ${broke.status}) — nothing granted`,
+                      ok: false,
+                    });
+                    continue;
+                  }
+                  entries.push({
+                    msg: `  ↳ ${file}: inheritance broken (no permissions copied)`,
+                    ok: true,
+                  });
+                  // typeof, not !== undefined: ownerGroupId is `number | null` when the
+                  // associated owner group could not be resolved, and null would slip past an
+                  // undefined check straight into the request as "null".
+                  if (fullCtrlId !== undefined) {
+                    try {
+                      await addRoleAssignmentToList(
+                        itemBase,
+                        ownersId,
+                        fullCtrlId,
+                      );
+                      entries.push({
+                        msg: `  ↳ ${file}: site Owners → Full Control restored`,
+                        ok: true,
+                      });
+                    } catch (e) {
+                      entries.push({
+                        msg: `  ✗ ${file}: could not restore site Owners — ${(e as Error).message}`,
+                        ok: false,
+                      });
+                    }
+                  }
+                }
+                /* ── ASSERT, don't only add (spec §4) ───────────────────────────────────
+                   Removing a group is SAFE HERE AND NOWHERE ELSE. A Site Pages item is a LEAF, so
+                   its role assignments hold only what somebody deliberately granted. A library or
+                   folder root also carries SharePoint's automatic Limited Access entry for every
+                   principal with a grant further down — ~308 of them on the approval library — and
+                   stripping "anything not intended" there would take every group's folder access
+                   away on a run that reported success. Do not lift this block above a leaf. */
+                const held: Record<number, true> = {};
+                const raRes = await context.spHttpClient.get(
+                  `${itemBase}/roleassignments?$select=PrincipalId,Member/Title,Member/PrincipalType,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=Member,RoleDefinitionBindings`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                );
+                if (!raRes.ok) {
+                  // FAILS OPEN for this page: stripping what could not be read removes grants
+                  // nobody saw. The grants below still run, so a transient read never denies a page.
+                  entries.push({
+                    msg: `  ⚠ ${file}: could not read current permissions (HTTP ${raRes.status}) — nothing removed`,
+                    ok: false,
+                  });
+                } else {
+                  const raJson = await raRes.json();
+                  const assignments = (raJson.value ?? []) as Array<{
+                    PrincipalId?: number;
+                    Member?: { Title?: string; PrincipalType?: number };
+                    RoleDefinitionBindings?: Array<{
+                      Id?: number;
+                      Name?: string;
+                    }>;
+                  }>;
+                  const current = assignments
+                    .filter((ra) => ra.PrincipalId !== undefined)
+                    .map((ra) => ({
+                      principalId: ra.PrincipalId as number,
+                      title: ra.Member?.Title ?? `principal ${ra.PrincipalId}`,
+                      // 8 = SharePointGroup. A USER principal is never a candidate: individual
+                      // grants were rejected as a mechanism in the per-person removal spec, and
+                      // removing them here would quietly implement what that spec declined.
+                      isGroup: ra.Member?.PrincipalType === 8,
+                      bindings: ra.RoleDefinitionBindings ?? [],
+                    }));
+                  for (const c of current) held[c.principalId] = true;
+                  for (const gone of groupsToRemove(
+                    intended,
+                    current,
+                    protectedIds,
+                  )) {
+                    const full = current.filter(
+                      (c) => c.principalId === gone.principalId,
+                    )[0];
+                    for (const binding of full?.bindings ?? []) {
+                      if (binding.Id === undefined) continue;
+                      const del = await withThrottleRetry(() =>
+                        context.spHttpClient.post(
+                          `${itemBase}/roleassignments/removeroleassignment(principalid=${gone.principalId},roledefid=${binding.Id})`,
+                          SPHttpClient.configurations.v1,
+                          {
+                            headers: {
+                              Accept: "application/json;odata=nometadata",
+                            },
+                          },
+                        ),
+                      );
+                      if (del.ok) {
+                        delete held[gone.principalId];
+                        /* NAMED, never counted silently. An administrator who granted this by hand
+                           must be able to read why it went — removing it silently is worse than not
+                           removing it, because they go on believing it is there. */
+                        const why =
+                          derivedRolesForPage(file).length > 0
+                            ? `holds no ${derivedRolesForPage(file).join(" or ")} role`
+                            : `no mapping grants this page`;
+                        entries.push({
+                          msg: `  ⚠ ${file}: removed ${gone.title} ("${binding.Name ?? binding.Id}") — ${why}`,
+                          ok: false,
+                        });
+                      } else {
+                        entries.push({
+                          msg: `  ✗ ${file}: could not remove ${gone.title} (HTTP ${del.status}) — they can still open this page`,
+                          ok: false,
+                        });
+                      }
+                    }
+                  }
+                }
+
+                for (const g of intended) {
+                  const label = `${g.groupName || g.groupId} → ${file}`;
+                  let pid = 0;
+                  try {
+                    pid = spGroupPrincipalId(g.groupId);
+                  } catch (e) {
+                    entries.push({
+                      msg: `  ✗ ${label} FAILED: ${(e as Error).message}`,
+                      ok: false,
+                    });
+                    continue;
+                  }
+                  if (held[pid]) {
+                    // Already there. Re-granting is harmless, but 120 identical lines per page bury
+                    // the ones that changed, which is what a log is for.
+                    continue;
+                  }
+                  try {
+                    // ALWAYS Read, never a row's own level. A page is opened or it is not, and
+                    // granting "CRS Upload" on a page item is a meaningless binding that reads, in
+                    // the permissions UI, like an upload right on the page.
+                    await addRoleAssignmentToList(itemBase, pid, readId);
+                    entries.push({
+                      msg: `  ↳ ${label} → Read (page, ${g.source === "derived" ? `from ${g.via}` : "mapping row"})`,
+                      ok: true,
+                    });
+                    /* A PAGE grant has no library, so no panel is right — there are only the four
+                       library feeds. Documents is arbitrary but stable, and the line says "page
+                       scope" so it cannot be mistaken for a library grant. A fifth panel for pages
+                       would be the honest fix; not worth reshaping the progress UI for it today. */
+                    // Parked in the Documents panel because a PAGE grant belongs to no library
+                    // and there is no panel for one. Prefixed so it cannot be read later as a
+                    // grant on the Documents library, which is a different and much wider thing.
+                    pushAssign(
+                      "Documents",
+                      `Site page: ${file} → ${g.groupName || g.groupId} (Read, page scope)`,
+                      "ok",
+                    );
+                    bumpAssigns();
+                    await tick();
+                  } catch (e) {
+                    entries.push({
+                      msg: `  ✗ ${label} FAILED: ${(e as Error).message}`,
+                      ok: false,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch (e) {
+        entries.push({
+          msg: `⚠ Page access skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      /* ── ADMIN PAGE LOCKDOWN ────────────────────────────────────────────────────────────
+         Spec: docs/superpowers/specs/2026-08-17-admin-page-lockdown-design.md
+
+         CRS_SITE_MEMBERS holds Read on the WEB — it must, or a user granted only a folder is
+         denied on Home and the site reads as broken — and Site Pages inherits from the web. So
+         every uploader could open every admin page: Folder Administration, Group Management,
+         Site Access, Folder Access, Page Access, the Audit Log, Bulk Upload. Confirmed live
+         2026-08-16 with a guest holding only Read plus Limited Access.
+
+         The pass ABOVE cannot fix it, and that is the whole point: it iterates pages that HAVE
+         Group Map rows, and an adminOnly page has roles: [] so no row can exist for it. The
+         mechanism is driven by grants and the thing needing protection has none — the same
+         structural gap that left both HC libraries readable (finding #10) and inverted the
+         site-entry grant (#7). Both were fixed by ASSERTING the required state every run.
+
+         Deliberately a SEPARATE pass with its own Site Pages read rather than a restructure of
+         the block above: that block builds everything inside `if (pageRows.length > 0)`, and
+         reshaping the most site-verified code in this file days before a client migration is the
+         wrong risk. One extra GET per run, out of thousands.
+
+         Site collection administrators bypass role assignments entirely, so this cannot lock an
+         administrator out of their own site. */
+      try {
+        setReconPhase("Locking administrator pages…");
+        const PAGES_LIST = "Site Pages";
+        const pagesBase = `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(PAGES_LIST)}')`;
+
+        // The site's REAL welcome page, not just the "home.aspx" constant — a renamed welcome page
+        // slips past the constant, and locking it makes the site unreachable for everyone who is
+        // not an administrator. Same read, and same reasoning, as the pass above.
+        let adminWelcome = "";
+        try {
+          const wRes = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/RootFolder?$select=WelcomePage`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (wRes.ok) {
+            const wj = await wRes.json();
+            adminWelcome =
+              ((wj.WelcomePage ?? "") as string)
+                .split("/")
+                .pop()
+                ?.toLowerCase() ?? "";
+          }
+        } catch {
+          /* fall back to the constant alone */
+        }
+
+        const pgItemsRes = await context.spHttpClient.get(
+          `${pagesBase}/items?$select=Id,FileLeafRef,HasUniqueRoleAssignments&$top=500`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        );
+        if (!pgItemsRes.ok) {
+          // FAILS OPEN on the READ: there is no page list to act on, and inventing one is not
+          // possible. The runbook's manual restriction step stays the backstop.
+          entries.push({
+            msg: `⚠ Administrator pages: could not read ${PAGES_LIST} (HTTP ${pgItemsRes.status}) — none checked`,
+            ok: false,
+          });
+        } else if (fullCtrlId === undefined) {
+          // Without Owners to restore, breaking inheritance would leave the page reachable only by
+          // site collection administrators — a lockout of every ordinary owner. Refuse instead.
+          entries.push({
+            msg: `⚠ Administrator pages: site Owners group or "Full Control" not resolved — none locked`,
+            ok: false,
+          });
+        } else {
+          const pgJson2 = await pgItemsRes.json();
+          const adminPageItems = (
+            (pgJson2.value ?? []) as Array<{
+              Id: number;
+              FileLeafRef?: string;
+              HasUniqueRoleAssignments?: boolean;
+            }>
+          )
+            .map((p) => ({
+              id: p.Id,
+              file: (p.FileLeafRef ?? "").toLowerCase(),
+              unique: p.HasUniqueRoleAssignments === true,
+            }))
+            // Matched by FILE NAME through the same policy the admin screens filter with. On a site
+            // holding other content a page called "Configuration.aspx" would match — accepted, and
+            // mitigated by logging every lock BY NAME so a wrong one is visible in the run log
+            // rather than discovered by whoever lost access. An exact allow-list was rejected: this
+            // client renames everything at import, and the list would stop matching silently.
+            .filter(
+              (p) =>
+                p.file !== "" &&
+                !isForbiddenPageTarget(p.file) &&
+                p.file !== adminWelcome,
+            )
+            .filter((p) => policyForPage(p.file).adminOnly);
+
+          if (adminPageItems.length === 0) {
+            entries.push({
+              msg: `Administrator pages: none found in ${PAGES_LIST}`,
+              ok: true,
+            });
+          }
+
+          for (const page of adminPageItems) {
+            const itemBase = `${pagesBase}/items(${page.id})`;
+            let locked = page.unique;
+
+            if (!page.unique) {
+              /* copyRoleAssignments=false, as everywhere else: with true every inherited grant is
+                 carried forward, so the page stays visible to exactly the same people and the run
+                 reports success — a failure invisible from the log. */
+              const broke = await withThrottleRetry(() =>
+                context.spHttpClient.post(
+                  `${itemBase}/breakroleinheritance(copyRoleAssignments=false,clearSubscopes=true)`,
+                  SPHttpClient.configurations.v1,
+                  { headers: { Accept: "application/json;odata=nometadata" } },
+                ),
+              );
+              if (!broke.ok) {
+                // Reported as STILL OPEN, never as locked. A page reported locked that is not is
+                // the one outcome worse than today's, because it stops anyone looking.
+                entries.push({
+                  msg: `  ✗ ${page.file}: INHERITS site permissions and could not be locked (HTTP ${broke.status}) — every site member can still open it`,
+                  ok: false,
+                });
+                continue;
+              }
+              entries.push({
+                msg: `  ↳ ${page.file}: inherited site permissions — LOCKED to site owners`,
+                ok: true,
+              });
+              locked = true;
+              try {
+                await addRoleAssignmentToList(itemBase, ownersId, fullCtrlId);
+                entries.push({
+                  msg: `  ↳ ${page.file}: site Owners → Full Control restored`,
+                  ok: true,
+                });
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ ${page.file}: could not restore site Owners — ${(e as Error).message}`,
+                  ok: false,
+                });
+              }
+            }
+            if (!locked) continue;
+
+            /* ASSERT IN BOTH DIRECTIONS (spec §3), which is the half that is easy to leave out.
+               A page can be UNIQUE AND STILL EXPOSED — inheritance broken, with a group granted
+               Read on it by hand or by an earlier version of this code. Checking only
+               HasUniqueRoleAssignments would call that page locked. */
+            const raRes = await context.spHttpClient.get(
+              `${itemBase}/roleassignments?$select=PrincipalId,Member/Title,RoleDefinitionBindings/Id,RoleDefinitionBindings/Name&$expand=Member,RoleDefinitionBindings`,
+              SPHttpClient.configurations.v1,
+              { headers: { Accept: "application/json;odata=nometadata" } },
+            );
+            if (!raRes.ok) {
+              // FAILS OPEN for THIS page: stripping assignments from a list we could not read would
+              // remove grants nobody could see. Unreadable is not evidence of absence.
+              entries.push({
+                msg: `  ⚠ ${page.file}: could not read permissions (HTTP ${raRes.status}) — left as is`,
+                ok: false,
+              });
+              continue;
+            }
+            const raJson2 = await raRes.json();
+            const assignments = (raJson2.value ?? []) as Array<{
+              PrincipalId?: number;
+              Member?: { Title?: string };
+              RoleDefinitionBindings?: Array<{ Id?: number; Name?: string }>;
+            }>;
+            let stripped = 0;
+            for (const ra of assignments) {
+              if (ra.PrincipalId === ownersId) continue; // the one principal that stays
+              if (ra.PrincipalId === undefined) continue;
+              for (const binding of ra.RoleDefinitionBindings ?? []) {
+                if (binding.Id === undefined) continue;
+                const del = await withThrottleRetry(() =>
+                  context.spHttpClient.post(
+                    `${itemBase}/roleassignments/removeroleassignment(principalid=${ra.PrincipalId},roledefid=${binding.Id})`,
+                    SPHttpClient.configurations.v1,
+                    {
+                      headers: { Accept: "application/json;odata=nometadata" },
+                    },
+                  ),
+                );
+                if (del.ok) {
+                  stripped++;
+                  /* Named, never counted silently. An administrator who deliberately granted
+                     someone the Audit Log will see it taken away and read why — removing it
+                     silently would be worse than not removing it, because they would go on
+                     believing the grant was there. */
+                  entries.push({
+                    msg: `  ↳ ${page.file}: removed ${ra.Member?.Title ?? `principal ${ra.PrincipalId}`} ("${binding.Name ?? binding.Id}") — administrator-only page`,
+                    ok: true,
+                  });
+                } else {
+                  entries.push({
+                    msg: `  ✗ ${page.file}: could not remove ${ra.Member?.Title ?? ra.PrincipalId} (HTTP ${del.status}) — they can still open this page`,
+                    ok: false,
+                  });
+                }
+              }
+            }
+            if (page.unique && stripped === 0) {
+              entries.push({
+                msg: `✓ ${page.file}: administrator-only, already locked — correct`,
+                ok: true,
+              });
+            }
+            await tick();
+          }
+        }
+      } catch (e) {
+        entries.push({
+          msg: `⚠ Administrator page lockdown skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      // Ancestor rel-paths of a target, excluding the folder itself and the library root.
+      // e.g. "/A/B/C" -> ["/A", "/A/B"]. Used to grant each unit group Read up its own path
+      // so members can browse down to their folder; siblings without a grant stay
+      // security-trimmed (invisible) in the view.
+      const ancestorRelPaths = (relPath: string): string[] => {
+        const parts = relPath.split("/").filter(Boolean);
+        const out: string[] = [];
+        let cur = "";
+        for (let i = 0; i < parts.length - 1; i++) {
+          cur += `/${parts[i]}`;
+          out.push(cur);
+        }
+        return out;
+      };
+      // Full rows, not just term GUIDs: the presence of a row is NOT proof the row is
+      // still correct, so each one gets verified below. See the folder-map-integrity spec.
+      const mapRows = await loadFolderMapRows(context.spHttpClient, siteUrl);
+      /* ⚠ DUPLICATES USED TO VANISH HERE, and it cost a site (2026-08-19). This was
+         `mapByTerm.set(r.termGuid.toLowerCase(), r)` over every row, and `set` OVERWRITES — so a
+         term with two rows collapsed to the last one. The repair pass below repointed THAT row at
+         the rebuilt folder and never saw the other, which went on pointing at a folder this same
+         run had just deleted. Nothing reported it and nothing could ever fix it.
+
+         The cost is a silent upload REFUSAL: `lookupFolderMapping` reads $top=1, so it takes
+         whichever row comes first; when that is the stale one the probe gets 404, which
+         `probeFolderUploadAccess` treats as conclusive (security trimming answers 404 too), the
+         path is dropped, and the uploader is told their unit is not ready. Their folder exists and
+         their ACL is correct. 56 of 67 terms were in that state and every uploader was refused.
+
+         Normalised with `normalizeTermGuid`, not a bare toLowerCase: the upload form's own filter
+         strips braces and whitespace as well as case, and two halves of the system disagreeing
+         about what a term GUID is would create duplicates by a second route. */
+      const dupeGroups = groupDuplicateRows(mapRows);
+      if (dupeGroups.length > 0) {
+        setReconPhase("Repairing duplicate folder-map rows…");
+        // Probe every candidate ONCE. Only a positive answer counts as alive: a throttle or a
+        // permission error must never put an id in this set, or a good row is deleted on the
+        // strength of a failed request.
+        const liveIds = new Set<string>();
+        for (const g of dupeGroups) {
+          for (const r of g.rows) {
+            if (!r.folderUniqueId) continue;
+            const probe = await probeFolderById(
+              context.spHttpClient,
+              siteUrl,
+              r.folderUniqueId,
+            );
+            if (probe.folder) liveIds.add(r.folderUniqueId);
+          }
+        }
+        let removed = 0;
+        for (const g of dupeGroups) {
+          const verdict = chooseKeeper(g.rows, liveIds);
+          if (!verdict) continue;
+          if (!verdict.confident) {
+            /* Nothing resolved, so which row is right is not knowable — REPORTED and left alone.
+               A wrong deletion here takes a unit's upload path away, and the person who finds out
+               is an uploader. The repair pass below repoints the survivor. */
+            entries.push({
+              msg: `  ⚠ ${verdict.keep.title}: ${g.rows.length} folder-map rows and none of their folders could be found — none deleted; the row will be repointed below`,
+              ok: false,
+            });
+            continue;
+          }
+          for (const dead of verdict.remove) {
+            try {
+              await deleteFolderMapRow(
+                context.spHttpClient,
+                siteUrl,
+                dead.itemId,
+              );
+              removed++;
+              // NAMED, never counted silently — the same rule as the admin page lockdown.
+              entries.push({
+                msg: `  ↳ ${dead.title}: removed a duplicate folder-map row pointing at a missing folder (${dead.folderUniqueId})`,
+                ok: true,
+              });
+            } catch (e) {
+              entries.push({
+                msg: `  ✗ ${dead.title}: could not remove its duplicate row — uploads to this unit may still be refused (${(e as Error).message})`,
+                ok: false,
+              });
+            }
+          }
+        }
+        entries.push({
+          msg: `Folder map: ${dupeGroups.length} term(s) had more than one row — ${removed} stale row(s) removed`,
+          ok: removed > 0 || dupeGroups.length === 0,
+        });
+        // Re-read, so everything below sees the repaired list rather than the one we just changed.
+        mapRows.length = 0;
+        mapRows.push(
+          ...(await loadFolderMapRows(context.spHttpClient, siteUrl)),
+        );
+      }
+      const mapByTerm = new Map<string, FolderMapRow>();
+      for (const r of mapRows) {
+        if (r.termGuid) mapByTerm.set(normalizeTermGuid(r.termGuid), r);
+      }
+      // Each folder's name BEFORE this run, snapshotted once.
+      //
+      // Read live from the row instead and the Staging pass — which rewrites
+      // FolderUrl after a successful rename — would make the later Documents pass
+      // believe the name was already correct. Documents would skip the rename and
+      // the create step would make an empty folder at the new name, stranding the
+      // real one under the old name. Snapshotting keeps every library renaming
+      // from the same origin regardless of pass order.
+      const oldNameByTerm = new Map<string, string>();
+      for (const r of mapRows) {
+        const name = (r.folderUrl ?? "").split("/").pop() ?? "";
+        if (r.termGuid && name)
+          oldNameByTerm.set(r.termGuid.toLowerCase(), name);
+      }
+      const groupMap = await loadGroupMapForAssign();
+      /* Which SP groups actually exist, for the dead-mapping check in the grant loop.
+       *
+       * ⚠ WHY THIS EXISTS (found on site 2026-08-20). Deleting a group leaves its Group Map rows
+       * behind pointing at an id nothing resolves to. `toGrant` is built straight from those rows
+       * and never checks — so the unit silently loses that role's access while the run reports
+       * success. The `no group-map groups for this folder` warning cannot catch it: that fires only
+       * when EVERY group is gone, and the real case is one of five deleted by accident.
+       *
+       * ⚠ `$top=5000`, NOT `fetchAllSiteGroups`, whose 500 cap this site is already at (499). A
+       * TRUNCATED read reports live groups as missing, which is the one wrong answer that matters —
+       * it would send an admin re-creating groups that already exist.
+       *
+       * FAILS OPEN: `undefined` on any error, and the check below reports nothing. Claiming a group
+       * is missing when the read failed is worse than staying quiet — the admin's fix for a missing
+       * group is to create it, and creating one that exists under a different name is how a unit
+       * ends up with two. */
+      const liveGroupIds: Set<number> | undefined = await context.spHttpClient
+        .get(
+          `${siteUrl}/_api/web/sitegroups?$select=Id&$top=5000`,
+          SPHttpClient.configurations.v1,
+          { headers: { Accept: "application/json;odata=nometadata" } },
+        )
+        .then(async (r) => {
+          if (!r.ok) return undefined;
+          const rows = ((await r.json()).value ?? []) as Array<{ Id?: number }>;
+          const out = new Set<number>();
+          for (const g of rows) if (typeof g.Id === "number") out.add(g.Id);
+          return out.size > 0 ? out : undefined; // empty is unreadable, not "no groups exist"
+        })
+        .catch(() => undefined);
+      const scope = runScope();
+      if (scope.refused) {
+        // A mis-click, not an instruction to do nothing and report success.
+        entries.push({ msg: `⚠ ${scope.refused}`, ok: false });
+        setLog((prev) => [...prev, ...entries]);
+        setBusy(false);
+        setReconRunning(false);
+        return;
+      }
+      // Named in the log AND in the audit row: a run record that does not say what it covered is
+      // unreadable a month later, and someone will compare a two-segment run with a five-segment
+      // one and conclude something broke.
+      entries.push({ msg: `Folder tree: covering ${scope.label}`, ok: true });
+      // ⚠ TRUE ONLY WHEN EVERY SEGMENT WAS WALKED. The orphan passes below decide a row is dead by
+      // asking "is its term among the terms THIS RUN enumerated" — so on a scoped run every row of
+      // every UNCOVERED segment answers no. That deleted all 67 of GHO's Folder Map rows during an
+      // MHO-only run on 2026-08-19 and refused every GHO uploader with "your unit isn't ready to
+      // receive uploads yet", which is the message reconciliation itself tells them to fix.
+      //
+      // The mirror of ALWAYS_FULL_PASSES: those passes must never be NARROWED by scope, and these two
+      // must never be WIDENED beyond it. The spec wrote down one direction and not the other.
+      const fullCoverage = coversEverySegment(scopeSegs, scope);
+      const {
+        targets,
+        incomplete: incompleteSegments,
+        incompleteSections,
+        missingAbbrev,
+        collisions,
+        abbrevRows,
+      } = await buildProvisionTargets();
+      // The segment tier, identified by term-set GUID. Derived from the targets already in
+      // hand — a segment container is the one target with no term of its own — rather than
+      // re-reading the modes, so the two can never disagree about what "a segment" is.
+      // Used by the fan-down to let SEGVIEW, and only SEGVIEW, inherit from this tier.
+      const segmentTermSets = new Set<string>(
+        targets
+          .filter((t) => t.termGuid === null)
+          .map((t) => t.assignTerm.toLowerCase()),
+      );
+      // relPath → the term that folder stands for. Every ancestor folder is itself a
+      // target (the segment folder and each department folder both get one), so this
+      // covers the whole tree. The ancestor-read revoke needs it to answer the one
+      // question that separates a leftover browse grant from a legitimate one: does
+      // this group hold a Group Map row AT this tier? A department-tier viewer's Read
+      // on its own department folder must survive; a unit group's Read on that same
+      // folder must not.
+      const termByRelPath = new Map<string, string>();
+      for (const t of targets)
+        termByRelPath.set(t.relPath, (t.assignTerm ?? "").toLowerCase());
+      // Role assignments per ancestor path, fetched once. A twelve-unit department
+      // would otherwise re-read the same department folder twelve times per library.
+      const ancAssignCache = new Map<string, ExistingAssign[]>();
+      // Ancestor browse grants MADE by this run, keyed `${ancestorFullPath}|${principalId}`.
+      // Kept apart from ancAssignCache rather than appended to it: an ExistingAssign carries
+      // uid/title/kept read back from SharePoint, and inventing those to represent a grant we
+      // just made would put fabricated data into a structure other passes read as truth.
+      // Twelve units under one department means eleven repeat grants without this.
+      const ancGranted = new Set<string>();
+      // A collision aborts BEFORE anything is created. Two siblings resolving to
+      // one path means one folder, one ACL, and two units' documents inside it —
+      // the isolation the whole permission model rests on. A partial run would
+      // create that merged folder before anyone read the log.
+      if (collisions.length > 0) {
+        for (const c of collisions) {
+          entries.push({
+            msg: `✖ COLLISION in ${c.parentPath}: "${c.abbreviation}" is used by ${c.labels.join(" | ")}`,
+            ok: false,
+          });
+        }
+        entries.push({
+          msg: `Nothing was created. Give each of these a distinct abbreviation in ${abbrevListTitle()}, then run again.`,
+          ok: false,
+        });
+        setLog((prev) => [...prev, ...entries]);
+        showToast(
+          `${collisions.length} abbreviation collision(s) — nothing was created.`,
+          false,
+        );
+        setBusy(false);
+        return;
+      }
+      // Not fatal: every other term still provisions. But it must be loud, because
+      // a unit with no folder has no map row and its uploaders are blocked.
+      for (const m of missingAbbrev) {
+        entries.push({
+          msg: `⚠ SKIPPED (no abbreviation): ${m.label} — add a row to ${abbrevListTitle()} for term ${m.termGuid}`,
+          ok: false,
+        });
+      }
+      // Surface enumeration failures as real errors. Without this they were invisible:
+      // the segment just produced no targets, the run looked clean, and prune would
+      // then delete every map row for it. See the prune guard below.
+      for (const seg of incompleteSegments) {
+        entries.push({
+          msg: `⚠ could not fully read the term store for ${seg} — folders may be missing and pruning is disabled for this run`,
+          ok: false,
+        });
+      }
+      if (targets.length === 0) {
+        showToast("No terms found in the term store to provision.", false);
+        setBusy(false);
+        return;
+      }
+      // Year × Document Type grid labels (from their term sets) — pre-created under
+      // each leaf/unit folder. Both are flat term sets, so top-level terms suffice.
+      // Sanitize labels to safe folder names with the SAME helper the upload form uses
+      // (formModel.sanitizeFolderSegment), so reconciliation and Form.tsx always agree on
+      // the folder name — e.g. a Document Type term containing illegal chars like "/".
+      const gridSets = await loadReconGridTermSets();
+      // State the fan-out mode up front. Off is the default and is the state in
+      // which a Head of Department silently does not work, so it must be visible
+      // at the top of the log rather than inferred from the absence of grants.
+      entries.push({
+        msg: gridSets.fanOut
+          ? `Departmental fan-out: ON — a mapping on a department reaches every unit beneath it`
+          : `Departmental fan-out: off (recon_departmentFanOut) — parent-tier mappings are reported, not granted`,
+        ok: true,
+      });
+      // Unconditional since 2026-08-07: there is no longer an "off" state to report. The
+      // banner used to describe the revoke pass, which is hard-off — so on a run that was
+      // busily GRANTING ancestor Read it announced "nothing is removed", which is true and
+      // entirely beside the point. Stated positively, it now matches the ↳ lines below it.
+      entries.push({
+        msg: `Ancestor browse Read: GRANTING — each group gets Read up its own path so it can browse down to its folder; siblings stay security-trimmed`,
+        ok: true,
+      });
+      let yearLabels: string[] = [];
+      let docTypeLabels: string[] = [];
+      // Term set GUID → the folder names of each below-Unit tier, in path order.
+      // One entry per SEGMENT, because each mode configures its own chain.
+      const gridTiersBySet = new Map<string, string[][]>();
+      const onDemandTiers = await loadReconOnDemandTiers();
+      if (gridSets.gridMode === "off") {
+        // Nothing to pre-create. Year/Document Type folders are made on demand by the
+        // upload form, and in Documents by the Auto-route flow as approved files land.
+        entries.push({
+          msg: `Year × Document Type grid: skipped (recon_gridMode = off) — folders are created on first use`,
+          ok: true,
+        });
+      } else {
+        yearLabels = (
+          await loadReconTops(gridSets.year).catch(() => [] as TermLite[])
+        )
+          .map((y) => sanitizeFolderSegment(y.label))
+          .filter(Boolean);
+        docTypeLabels = (
+          await loadReconTops(gridSets.docType).catch(() => [] as TermLite[])
+        )
+          .map((d) => sanitizeFolderSegment(d.label))
+          .filter(Boolean);
+        if (gridSets.gridMode === "currentYear" && yearLabels.length > 0) {
+          const thisYear = String(new Date().getFullYear());
+          const match = yearLabels.filter((y) => y === thisYear);
+          // No term for the current year (e.g. the client has not added 2027 yet) — fall
+          // back to the LAST year in the set rather than silently building all of them.
+          yearLabels = match.length > 0 ? match : yearLabels.slice(-1);
+        }
+        entries.push({
+          msg: `Year × Document Type grid: ${gridSets.gridMode} — ${yearLabels.length} year(s) × ${docTypeLabels.length} document type(s) per unit`,
+          ok: true,
+        });
+
+        // Per-segment below-Unit chains. A mode with none configured keeps the two
+        // legacy arrays above, so a site migrates one mode row at a time instead of
+        // all at once — and a half-configured site still builds a complete path.
+        const tierLabelCache = new Map<string, string[]>();
+        const labelsForSet = async (setGuid: string): Promise<string[]> => {
+          const key = (setGuid ?? "").trim().toLowerCase();
+          if (!key) return [];
+          const hit = tierLabelCache.get(key);
+          if (hit) return hit;
+          const tops: TermLite[] = await loadReconTops(setGuid).catch(
+            () => [] as TermLite[],
+          );
+          const labels = tops
+            .map((tl: TermLite) => sanitizeFolderSegment(tl.label))
+            .filter(Boolean);
+          tierLabelCache.set(key, labels);
+          return labels;
+        };
+        // forEach into an array first: the SPFx tsconfig does not target ES2015, so
+        // `for…of` over a Map is a compile error (same family as gotcha #3 in CLAUDE.md).
+        const onDemandEntries: Array<{ setGuid: string; tiers: Level[] }> = [];
+        onDemandTiers.forEach((tiers, setGuid) =>
+          onDemandEntries.push({ setGuid, tiers }),
+        );
+        for (const { setGuid, tiers } of onDemandEntries) {
+          const resolved: string[][] = [];
+          for (const tier of tiers) {
+            let labels = await labelsForSet(tier.termSet ?? "");
+            // currentYear is a property of the YEAR set, not of a fixed position in
+            // the chain — so it follows the term set wherever the admin puts the tier.
+            if (
+              gridSets.gridMode === "currentYear" &&
+              (tier.termSet ?? "").trim().toLowerCase() ===
+                (gridSets.year ?? "").trim().toLowerCase() &&
+              labels.length > 0
+            ) {
+              const thisYear = String(new Date().getFullYear());
+              const match = labels.filter((y) => y === thisYear);
+              labels = match.length > 0 ? match : labels.slice(-1);
+            }
+            resolved.push(labels);
+          }
+          const plan = gridPlan(resolved);
+          gridTiersBySet.set(setGuid, plan.tiers);
+          entries.push({
+            msg:
+              `Below-Unit structure for this segment: ${tiers.map((t) => t.label).join(" → ")} ` +
+              `— ${plan.total} folder(s) per unit` +
+              (plan.tiers.length < tiers.length
+                ? `; "${tiers[plan.tiers.length].label}" has no terms, so nothing below it is pre-created`
+                : ""),
+            ok: true,
+          });
+        }
+      }
+
+      /**
+       * The below-Unit tiers for a target's own segment, falling back to the legacy
+       * Year → Document Type pair. Resolved per target, never once per run: two
+       * segments may configure different shapes.
+       */
+      const gridTiersFor = (t: ProvTarget): string[][] =>
+        gridTiersBySet.get((t.termSetGuid ?? "").trim().toLowerCase()) ??
+        gridPlan([yearLabels, docTypeLabels]).tiers;
+      // Estimate the workload up front: count every throttled op (each incurs the
+      // inter-write delay). Structural folder (1) + Year×DocType grid per leaf +
+      // applicable group grants per lib. Ancestor browse grants aren't throttled, so
+      // they're excluded — the live rate absorbs their real time. Worst case (assumes
+      // nothing exists yet); re-runs finish faster as existing folders skip.
+      // Per SEGMENT, not per run — each mode may configure a different chain, and the
+      // estimate divides elapsed time by ops completed, so counting a different set
+      // here than the build loop attempts is what makes the "time left" figure lie.
+      const gridPerLeafFor = (t: ProvTarget): number =>
+        gridPlan(gridTiersFor(t)).total;
+      // Resolved once per library, before the estimate, because whether the column
+      // exists changes the op count. Absent on a library = that library gets no full
+      // names and is told so once, rather than once per folder.
+      const fullNameFields = new Map<LibTarget, string>();
+      const folderCtIds = new Map<LibTarget, string>();
+      /** Libraries with content approval on — the only ones a moderation status may be written to. */
+      const moderatedLibs = new Set<LibTarget>();
+      for (const lib of reconLibs()) {
+        const ct = await loadFolderContentTypeId(lib);
+        if (ct) folderCtIds.set(lib, ct);
+        // Names both candidates: "no CRS Folder content type" on a site that still has the
+        // DMS-named one would read as a missing artefact rather than a rename half-done.
+        else
+          entries.push({
+            msg: `⚠ ${libDisplayName(lib)}: no ${FOLDER_CONTENT_TYPE_CANDIDATES.map((n) => `"${n}"`).join(" or ")} content type — folders keep the built-in Folder type and the details pane will not show Full Name`,
+            ok: true,
+          });
+        const f = await loadFullNameField(lib);
+        if (f.internalName) fullNameFields.set(lib, f.internalName);
+        // ok:true deliberately. This is a warning, not an error: `errorsBeforePrune`
+        // counts !ok entries and blocks the orphan prune, and that guard exists because
+        // a partial TERM STORE read returns a short target list that makes healthy map
+        // rows look deleted. A missing display column cannot shorten the target list, so
+        // gating prune on it would silently disable self-healing over a cosmetic column.
+        // The ⚠ still puts it in "Needs attention" where an admin will see it.
+        else
+          entries.push({
+            msg: `⚠ ${libDisplayName(lib)}: ${f.note ?? "no Full Name column"} — folders will show only their abbreviation`,
+            ok: true,
+          });
+
+        // Does this library moderate? Folders created in a content-approval library arrive
+        // PENDING (verified live 2026-08-07: every folder in Approval Document was status 2),
+        // and a pending FOLDER is hidden from anyone who cannot see drafts. Today that is
+        // nobody, because Draft Item Security is "any user who can read items" — but the
+        // moment it is tightened to approver-only for per-uploader isolation, every folder
+        // vanishes for every non-approver and the library renders empty. Same failure as
+        // memory dms-content-approval-blocks-uploader, reached from a different direction.
+        //
+        // So approve the folders as they are provisioned. Files are untouched: they are the
+        // things actually under review, and approving them here would defeat the whole point.
+        //
+        // SCOPE: structural folders (segment / department / unit) ONLY — NOT the Year ×
+        // Document Type grid under each unit. See the note at the grid loop for why, and why
+        // Draft Item Security must therefore stay at "any user who can read items".
+        try {
+          const modRes: SPHttpClientResponse = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(libApiTitle(lib))}')?$select=EnableModeration`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (modRes.ok && (await modRes.json()).EnableModeration === true) {
+            moderatedLibs.add(lib);
+            entries.push({
+              msg: `${libDisplayName(lib)}: content approval is on — provisioned folders will be approved so they stay visible`,
+              ok: true,
+            });
+          }
+        } catch {
+          // Unreadable means "assume not moderated": writing OData__ModerationStatus to a
+          // library without moderation fails the whole merge, taking Full Name with it.
+        }
+      }
+      let plannedOps = 0;
+      for (const lib of reconLibs()) {
+        for (const t of targets) {
+          plannedOps += 1;
+          if (fullNameFields.has(lib)) plannedOps += 1;
+          if (t.isLeaf) plannedOps += gridPerLeafFor(t);
+          // Count exactly what the assignment loop will attempt: this folder's own
+          // rows PLUS any fanned down from a parent tier, de-duplicated on
+          // group + role the same way. The estimate divides elapsed time by ops
+          // COMPLETED, so counting a different set here is what produced the
+          // "~197m left" on a three-minute run — the numerator and denominator
+          // must measure the same thing.
+          const countKeys = new Set<string>();
+          // Ancestors only when fan-out is actually on — a reported-but-not-granted
+          // row costs no write, and counting it would inflate the estimate.
+          const terms = gridSets.fanOut
+            ? [t.assignTerm, ...t.ancestorTerms]
+            : [t.assignTerm];
+          for (const term of terms) {
+            for (const g of groupMap.get(term.toLowerCase()) ?? []) {
+              if (permissionForRole(lib, g.role) === undefined) continue;
+              if (LIBRARY_ROLES[lib].indexOf(g.role) === -1) continue;
+              countKeys.add(`${g.groupId}|${g.role}`);
+            }
+          }
+          plannedOps += countKeys.size;
+        }
+      }
+      const reconStart = Date.now();
+      setReconPlanned(plannedOps);
+      setReconStartMs(reconStart);
+      setReconNow(reconStart);
+      // ── RENAME PASS ────────────────────────────────────────────────────────
+      // Runs to completion across EVERY library before the create/lock loop, and
+      // before anything writes to the Folder Map.
+      //
+      // Two earlier attempts put this inside the library loop and both failed the
+      // same way. The Staging map row is the only record of a folder's previous
+      // name, so renaming Staging and refreshing that row destroyed the very
+      // information the Documents pass needed: Documents then saw "already
+      // correct", skipped the rename, and the create step made an empty folder at
+      // the new name while the real one kept the old one. Persisted, so re-running
+      // could not repair it either.
+      //
+      // Renaming first, then updating the row once, removes the ordering entirely.
+      // It also has to precede the create step regardless: `full` points at the new
+      // name, so creating first would put an empty folder exactly where the rename
+      // needs to land, and the rename would report a collision against it.
+      //
+      // Note this reverts a folder renamed by hand. Deliberate — the abbreviation
+      // list is the single source of truth and every library must agree — and
+      // harmless, because uploads resolve by UniqueId rather than by path.
+      const renameLibs = reconLibs();
+      const renameRoots = new Map<string, string>();
+      for (const lib of renameLibs) {
+        const r = await getLibraryRoot(lib);
+        if (r) renameRoots.set(lib, r);
+      }
+      for (const t of targets) {
+        if (!t.termGuid) continue; // segment containers have no term, so no abbreviation
+        const wantName = t.relPath.split("/").pop() ?? "";
+        const oldName = oldNameByTerm.get(t.termGuid.toLowerCase()) ?? "";
+        // Case-insensitive: SharePoint treats sibling names as case-insensitive for
+        // uniqueness, so CORU → Coru would collide with itself and report a
+        // conflict that is not one.
+        if (
+          !oldName ||
+          !wantName ||
+          oldName.toLowerCase() === wantName.toLowerCase()
+        )
+          continue;
+        const parentRel = t.relPath.slice(0, t.relPath.lastIndexOf("/"));
+        let newStagingUrl = "";
+        for (const lib of renameLibs) {
+          const libRoot = renameRoots.get(lib);
+          if (!libRoot) continue;
+          const oldProbe = await probeFolderByPath(
+            context.spHttpClient,
+            siteUrl,
+            `${libRoot}${parentRel}/${oldName}`,
+          );
+          if (!oldProbe.folder) continue; // nothing under the old name here
+          const renamed = await renameFolder(
+            context.spHttpClient,
+            siteUrl,
+            oldProbe.folder.serverRelativeUrl,
+            wantName,
+          );
+          if (renamed.ok) {
+            entries.push({
+              msg: `  ✎ ${libDisplayName(lib)}${parentRel}: renamed ${oldName} → ${wantName}`,
+              ok: true,
+            });
+            if (lib === "Staging")
+              newStagingUrl = renamed.serverRelativeUrl ?? "";
+            await tick();
+          } else if (renamed.conflict) {
+            // Two terms want one folder name. Forcing it would merge two units'
+            // documents behind a single ACL — the isolation failure findCollisions
+            // exists to prevent — so this needs a person.
+            entries.push({
+              msg: `  ⚠ ${t.label} — cannot rename "${oldName}" to "${wantName}" in ${libDisplayName(lib)}: a folder of that name is already there. Fix the abbreviation, then re-run.`,
+              ok: false,
+            });
+          } else {
+            entries.push({
+              msg: `  ✗ ${t.label} — rename "${oldName}" → "${wantName}" in ${libDisplayName(lib)} FAILED (HTTP ${renamed.status}) ${renamed.detail ?? ""}`,
+              ok: false,
+            });
+          }
+        }
+        // Refresh the stored path only now, with every library already handled. The
+        // UniqueId is untouched by a rename, so the verification step later treats
+        // the row as valid and would otherwise leave FolderUrl permanently stale —
+        // it self-heals only when the folder is missing.
+        const row = mapByTerm.get(normalizeTermGuid(t.termGuid));
+        if (newStagingUrl && row) {
+          await updateFolderMapping(context.spHttpClient, siteUrl, row.itemId, {
+            folderUniqueId: row.folderUniqueId,
+            folderUrl: newStagingUrl,
+            title: t.label,
+          });
+          row.folderUrl = newStagingUrl;
+        }
+      }
+
+      for (const lib of reconLibs()) {
+        /* Segment-tier roles this library refused to fan down, deduped. Collected rather than
+           logged per folder — see the note at the refusal itself. */
+        const fanRefusals: string[] = [];
+        const root = await getLibraryRoot(lib);
+        if (!root) {
+          entries.push({
+            msg: `${libDisplayName(lib)}: library root not found — skipped`,
+            ok: false,
+          });
+          continue;
+        }
+        for (const t of targets) {
+          const full = `${root}${t.relPath}`;
+          const folderLabel = `${libDisplayName(lib)}${t.relPath}`;
+          try {
+            pushFolder(lib, `${folderLabel} — creating…`, "run");
+            // Did THIS run reset the folder's ACL? Both branches below that break
+            // inheritance use copyRoleAssignments=false, so they leave only site Owners and
+            // every planned grant is genuinely missing. Only the third branch — already
+            // locked, left alone — can hold grants worth skipping, and it is the whole
+            // steady state of a re-run.
+            let aclWasReset = false;
+            const existed = await folderExists(full);
+            if (!existed) {
+              await createFolder(full);
+              await breakInheritance(full);
+              aclWasReset = true;
+              if (ownerGroupId !== null && fullCtrlId !== undefined)
+                await addRoleAssignment(full, ownerGroupId, fullCtrlId);
+              entries.push({
+                msg: `${folderLabel} — created + locked ✓`,
+                ok: true,
+              });
+              setLastFolder(lib, `${folderLabel} — created + locked`, "ok");
+              bumpFolders();
+              await tick();
+            } else {
+              const isUnique = await getHasUniquePerms(full);
+              /**
+               * ⚠ `!== true`, NOT `=== false`. `getHasUniquePerms` returns **null** when the read
+               * FAILS, and null is not false — so the old test sent an UNKNOWN folder down the
+               * "already locked" path, skipped the break, and then every `addroleassignment` on it
+               * returned HTTP 400, because you cannot grant on a folder that is inheriting.
+               *
+               * Seen live 2026-08-21 on `Approval Document/GHO/GF/TAX`, during a run that was
+               * throttling (a 503 on the term store in the same log). The admin had deliberately
+               * removed the folder's unique permissions; reconciliation reported it as locked and
+               * left it INHERITING with all seven grants failed — so the unit's uploader could not
+               * upload, and every other department group could read its pending documents. Reported
+               * as `already locked, skipped`, which is the opposite of what had happened.
+               *
+               * Breaking again when it was in fact already locked is HARMLESS: the break uses
+               * `copyRoleAssignments=false`, so the ACL is reset to site Owners and every mapped
+               * grant is re-applied from the rows in the very next step. The end state is identical;
+               * the cost is one folder's writes. Against that, assuming "locked" on an unknown read
+               * leaves a folder open and ungranted while reporting success.
+               *
+               * `empty ≠ unknown`, in the place where the cost is an exposed folder.
+               */
+              if (isUnique !== true) {
+                await breakInheritance(full);
+                aclWasReset = true;
+                if (ownerGroupId !== null && fullCtrlId !== undefined)
+                  await addRoleAssignment(full, ownerGroupId, fullCtrlId);
+                const how =
+                  isUnique === false
+                    ? "existed, locked ✓"
+                    : "existed, permissions unreadable — re-locked ✓";
+                entries.push({ msg: `${folderLabel} — ${how}`, ok: true });
+                setLastFolder(
+                  lib,
+                  `${folderLabel} — ${isUnique === false ? "existed, locked" : "re-locked"}`,
+                  "ok",
+                );
+                bumpFolders();
+                await tick();
+              } else {
+                entries.push({
+                  msg: `${folderLabel} — already locked, skipped`,
+                  ok: true,
+                });
+                setLastFolder(lib, `${folderLabel} — already there`, "skip");
+              }
+            }
+            // Counted whichever branch ran, including "already there". Counting only
+            // the branches that WROTE something is what made the estimate run away
+            // on a re-run.
+            step();
+            // Full Name: the abbreviation is the folder's name, so the raw term label
+            // goes on the item to keep the tree readable in the details pane.
+            //
+            // Written on every run, not only at creation, for two reasons: it backfills
+            // the trees that already exist (this column arrives after they were built),
+            // and it is how a RENAMED term's label catches up — the rename pass above
+            // moves the folder when the ABBREVIATION changes, but a term relabelled in
+            // the term store with its abbreviation untouched changes nothing on disk and
+            // would otherwise keep its stale full name forever.
+            //
+            // The read guard keeps that cheap: an unchanged value costs one GET, which
+            // is not throttled, instead of a write that is. On a settled tree this is
+            // the normal case, so the extra pass is close to free.
+            const fullNameField = fullNameFields.get(lib);
+            const wantCtId = folderCtIds.get(lib);
+            if (fullNameField || wantCtId) {
+              // Planned as one step per target per library, so it is counted here
+              // whether the merge turns out to be needed or not.
+              if (fullNameFields.has(lib)) step();
+              try {
+                const moderated = moderatedLibs.has(lib);
+                const state = await getFolderItemState(
+                  full,
+                  fullNameField,
+                  moderated,
+                );
+                const values: Record<string, string | number> = {};
+                if (fullNameField && state.fullName !== t.fullName)
+                  values[fullNameField] = t.fullName;
+                // Stamp the content type in the SAME merge — no extra request, no extra
+                // throttle cost. Compared case-insensitively because SharePoint is not
+                // consistent about the hex casing it returns.
+                if (
+                  wantCtId &&
+                  (state.contentTypeId ?? "").toLowerCase() !==
+                    wantCtId.toLowerCase()
+                ) {
+                  values.ContentTypeId = wantCtId;
+                }
+                // Moderation status MUST travel in its own merge. SharePoint rejects any
+                // request that sets it alongside another field:
+                //   "You cannot change moderation status and set other item properties at
+                //    that same time." (-2146232832, HTTP 500)
+                //
+                // It must also run AFTER the property merge, never before: in a moderated
+                // library ANY property write re-pends the item. Approving first and then
+                // writing Full Name leaves the folder Pending, which is not cosmetic — a
+                // pending folder is invisible to an uploader under approver-only draft
+                // security, and the upload form then reports "the mapped unit folder no
+                // longer exists" because its UniqueId lookup 404s for that user.
+                const wrote: string[] = [];
+                // The property write and the approve are caught SEPARATELY, because they are
+                // not equally serious. A failed Full Name is cosmetic — the folder still
+                // controls access correctly, just with a blank label in the details pane. A
+                // failed APPROVE leaves the folder Pending, which hides it from every
+                // uploader but its creator and makes the upload form report "the mapped unit
+                // folder no longer exists". One shared catch reported both as ok:true, so the
+                // serious one hid inside a wall of the cosmetic one.
+                try {
+                  if (Object.keys(values).length > 0) {
+                    await setFolderItemFields(full, values);
+                    if (fullNameField && values[fullNameField] !== undefined) {
+                      wrote.push(`${FULL_NAME_COLUMN_TITLE} = ${t.fullName}`);
+                    }
+                    if (values.ContentTypeId !== undefined) {
+                      wrote.push(
+                        `content type → ${resolvedFolderCtName ?? FOLDER_CONTENT_TYPE_CANDIDATES[0]}`,
+                      );
+                    }
+                  }
+                } catch (e) {
+                  // Not fatal, and deliberately ok:true — a label failure must not stop the
+                  // folder's ACL work, which is the part that actually controls access, nor
+                  // gate the orphan prune.
+                  entries.push({
+                    msg: `  ⚠ ${folderLabel} — could not set ${FULL_NAME_COLUMN_TITLE}: ${(e as Error).message}`,
+                    ok: true,
+                  });
+                }
+                // Re-approve when the folder was already pending, OR when the write above
+                // just re-pended it. Missing that second case is what silently un-approves
+                // a settled tree on every run.
+                //
+                // Runs even if the property write threw: a folder left Pending by a failed
+                // Full Name still needs approving, and skipping it would turn a cosmetic
+                // failure into an access one.
+                const rePended = Object.keys(values).length > 0;
+                const wasPending =
+                  state.moderationStatus !== undefined &&
+                  state.moderationStatus !== 0;
+                if (moderated && (rePended || wasPending)) {
+                  try {
+                    await setFolderItemFields(full, {
+                      OData__ModerationStatus: 0,
+                    });
+                    // Says WHAT was done, not why draft security makes it matter. The old
+                    // reason named approver-only draft security, which this project turned OFF
+                    // on 2026-08-19 (all libraries are now "any user who can read items") — so
+                    // it went stale the same day and asserted a setting the site no longer has.
+                    // The stamp itself is still correct and still needed: content approval is on
+                    // in both approval libraries, so an unstamped folder stays Pending.
+                    wrote.push(
+                      "approved (content approval is on in this library)",
+                    );
+                  } catch (e) {
+                    // ok:FALSE. An access failure, not a label failure: the folder stays
+                    // Pending and its unit cannot reach their own files inside it. It must
+                    // read as an error and it must gate the clean-run guards.
+                    entries.push({
+                      msg: `  ✗ ${folderLabel} — COULD NOT APPROVE, folder stays pending and will be invisible to its uploaders: ${(e as Error).message}`,
+                      ok: false,
+                    });
+                  }
+                }
+                if (wrote.length > 0) {
+                  entries.push({ msg: `  ↳ ${wrote.join(", ")}`, ok: true });
+                  await tick();
+                }
+              } catch (e) {
+                // Only getFolderItemState can reach here now — both writes catch their own.
+                // A failed READ means we could not tell what the folder already had, so
+                // nothing was attempted. ok:true: it changed nothing and must not gate the
+                // orphan prune, but it IS worth surfacing, because a folder whose state is
+                // unreadable is also a folder we did not approve.
+                entries.push({
+                  msg: `  ⚠ ${folderLabel} — could not read folder state, ${FULL_NAME_COLUMN_TITLE} and approval skipped: ${(e as Error).message}`,
+                  ok: true,
+                });
+              }
+            }
+            // Map Staging term folders only (the segment container has no term).
+            if (lib === "Staging" && t.termGuid) {
+              const existingRow = mapByTerm.get(normalizeTermGuid(t.termGuid));
+              if (!existingRow) {
+                // Unmapped term → create the row.
+                const resolved = await resolveFolderByPath(
+                  context.spHttpClient,
+                  siteUrl,
+                  full,
+                );
+                if (resolved) {
+                  await writeFolderMapping(context.spHttpClient, siteUrl, {
+                    termGuid: t.termGuid,
+                    folderUniqueId: resolved.uniqueId,
+                    title: t.label,
+                    folderUrl: resolved.serverRelativeUrl,
+                    section: t.section,
+                  });
+                  entries.push({
+                    msg: `  ↳ mapped ${t.label} → ${resolved.uniqueId}`,
+                    ok: true,
+                  });
+                }
+              } else {
+                // Mapped already — VERIFY the stored UniqueId instead of assuming it is
+                // right. Ask whether THAT folder still exists; do NOT compare against
+                // whatever sits at the term-label path. A renamed or moved folder keeps
+                // its UniqueId, so it still resolves and the row is left alone — that is
+                // the rename-proofing working. Comparing by path would see a difference
+                // and repoint the row at a freshly created empty folder, abandoning the
+                // real one and its documents.
+                const probe = await probeFolderById(
+                  context.spHttpClient,
+                  siteUrl,
+                  existingRow.folderUniqueId,
+                );
+                if (probe.folder) {
+                  // Row still valid. Nothing to do — any rename already happened
+                  // before the folder was created, further up this iteration.
+                } else if (probe.confirmedMissing) {
+                  // The mapped folder is gone (deleted, then recreated by this run or by
+                  // hand). Repoint the row at the folder that is actually there now —
+                  // this is the self-heal that the old skip-if-mapped logic prevented.
+                  const resolved = await resolveFolderByPath(
+                    context.spHttpClient,
+                    siteUrl,
+                    full,
+                  );
+                  if (resolved) {
+                    await updateFolderMapping(
+                      context.spHttpClient,
+                      siteUrl,
+                      existingRow.itemId,
+                      {
+                        folderUniqueId: resolved.uniqueId,
+                        folderUrl: resolved.serverRelativeUrl,
+                        title: t.label,
+                      },
+                    );
+                    existingRow.folderUniqueId = resolved.uniqueId;
+                    existingRow.folderUrl = resolved.serverRelativeUrl;
+                    entries.push({
+                      msg: `  ↻ remapped ${t.label} — stale folder id replaced with ${resolved.uniqueId}`,
+                      ok: true,
+                    });
+                  } else {
+                    entries.push({
+                      msg: `  ⚠ ${t.label} — mapped folder is gone and no folder found at ${full}; row left as-is`,
+                      ok: false,
+                    });
+                  }
+                } else {
+                  // Throttle, permission error, malformed request — NOT evidence of
+                  // deletion. Changing the row on this would be acting on a guess.
+                  entries.push({
+                    msg: `  ⚠ ${t.label} — could not verify mapped folder (HTTP ${probe.status}); row left unchanged`,
+                    ok: false,
+                  });
+                }
+              }
+            }
+            // Auto-assign DMS Group Map groups to this folder by role. Staging gets
+            // UPL/APR only; Documents gets MEMBER (viewer) groups only. Idempotent
+            // (add-role merges). A folder whose term has no rows is flagged.
+            const groupRows = groupMap.get(t.assignTerm.toLowerCase()) ?? [];
+
+            // Departmental fan-out. A row on a NON-LEAF term (a department) applies
+            // to that folder AND to every folder beneath it, at the row's own level —
+            // the mirror of the ancestor Read fan-UP below. Without it, Head of
+            // Department is indistinguishable from Head of Unit: unit folders have
+            // unique permissions, so a department-tier grant stops dead at the
+            // department folder and never reaches a single unit.
+            //
+            // Leaf rows never fan, because a leaf has no descendants — unit isolation
+            // holds by construction rather than by a special case that could be got
+            // wrong. And since the model is leaf-only today (no department rows exist
+            // on any site), this is inert until an admin deliberately creates one.
+            //
+            // NOTE for deeper Levels chains than [Department, Unit]: with a 2027
+            // segment (Region -> Estate/Mill) a Region-tier row reaches everything
+            // below it. That is the honest meaning of a Region row, but it is wider
+            // than "departmental fan-out" suggests — review before onboarding those
+            // segments. Spec §4.1.
+            const inherited: Array<{ row: GroupMapRow; fromTerm: string }> = [];
+            for (const anc of t.ancestorTerms) {
+              for (const g of groupMap.get(anc.toLowerCase()) ?? []) {
+                inherited.push({ row: g, fromTerm: anc });
+              }
+            }
+
+            // Isolation rule: which roles this library accepts. MEMBER (base/viewer)
+            // groups are Documents-only and must NEVER land on Staging, else a viewer
+            // could read pending documents. A fanned row is filtered identically —
+            // inheriting a grant must not widen which library it reaches.
+            const accepts = (role: string): boolean =>
+              permissionForRole(lib, role) !== undefined &&
+              LIBRARY_ROLES[lib].indexOf(role) !== -1;
+
+            const applicable = groupRows.filter((g) => accepts(g.role));
+            const fanned = inherited.filter((i) => accepts(i.row.role));
+
+            // One list, direct rows first, de-duplicated on group + role. A group
+            // holding BOTH a unit row and a department row for the same role would
+            // otherwise be granted twice: harmless (add-role merges) but it doubles
+            // the log and makes the run look like it did more work than it did.
+            // Direct wins, so the log attributes the grant to the nearer row.
+            const seenGrant = new Set<string>();
+            const toGrant: Array<{ row: GroupMapRow; viaTerm?: string }> = [];
+            const g0 = (r: GroupMapRow): string => r.groupName || r.groupId;
+            for (const g of applicable) {
+              const k = `${g.groupId}|${g.role}`;
+              if (seenGrant.has(k)) continue;
+              seenGrant.add(k);
+              toGrant.push({ row: g });
+            }
+            for (const i of fanned) {
+              const k = `${i.row.groupId}|${i.row.role}`;
+              if (seenGrant.has(k)) continue;
+              seenGrant.add(k);
+              // Opt-in. While recon_departmentFanOut is off we REPORT the grant and
+              // make none — see loadReconGridTermSets for why a leftover
+              // department-tier row makes silently granting unacceptable. Reported
+              // as a warning, not an error: this is the configured behaviour, and an
+              // error would gate the orphan prune on it.
+              //
+              // SEGVIEW is EXEMPT from the gate, for exactly the reason GLOBAL needs no gate:
+              // the role name is itself the consent. The gate exists because a leftover
+              // segment- or department-tier MEMBER row is indistinguishable BY TIER from a
+              // deliberate wide grant. SEGVIEW cannot be that — it granted nothing on any
+              // site until 2026-08-07, so every row that exists was written deliberately, and
+              // a segment-tier row IS its intended shape rather than a legacy accident.
+              // A C-LEVEL row sits at the SEGMENT tier, and every role it carries reaches the whole
+              // segment (2026-08-19, client: "allow Clevel to delete and share"). ⚠ THE SAFETY IS
+              // THE TIER, NOT THE ROLE: `DEL` and `SHARE` are also held by `hou`, whose rows sit at
+              // the UNIT tier and are never fanned. Consulting this on a DEPARTMENT-tier row would
+              // re-open the leftover-row hole the gate below exists to refuse.
+              const fromSegment = segmentTermSets.has(
+                (i.fromTerm ?? "").toLowerCase(),
+              );
+              const cLevelFan = fromSegment && fansFromSegmentTier(i.row.role);
+              if (!gridSets.fanOut && i.row.role !== "SEGVIEW" && !cLevelFan) {
+                entries.push({
+                  msg: `  ⚠ ${g0(i.row)} would inherit ${permissionForRole(lib, i.row.role)} on ${folderLabel} from a parent-tier mapping — not granted (recon_departmentFanOut is off)`,
+                  ok: true,
+                });
+                continue;
+              }
+              // A SEGMENT-tier row reaches descendants for SEGVIEW alone (2026-08-09). The
+              // segment term-set GUID is now in every descendant's ancestorTerms so the
+              // C-Level "one business segment" persona can work at all — but a leftover
+              // segment-tier MEMBER row from before 2026-07-29 is indistinguishable BY TIER
+              // from a deliberate one, and honouring it would hand a viewer Read across an
+              // entire business segment. SEGVIEW cannot be such a leftover: it granted
+              // nothing on any site until 2026-08-07, so every row that exists was written
+              // on purpose. The role name is the consent, exactly as it is for GLOBAL.
+              //
+              // NOT gated on recon_departmentFanOut either: that switch is about DEPARTMENT
+              // rows, and turning it off must not silently disable a C-Level.
+              if (fromSegment && !fansFromSegmentTier(i.row.role)) {
+                /**
+                 * COUNTED, NOT PRINTED PER FOLDER (2026-08-21).
+                 *
+                 * This fires on EVERY folder in a segment for EVERY non-fanning role the group holds
+                 * — after the C-Level personas became view-only on 2026-08-20, that is two lines per
+                 * folder per library, several hundred per run. On the run that mattered it buried
+                 * seven `✗ addroleassignment` failures on one unit so thoroughly that the admin could
+                 * not paste the log without it truncating before the failures.
+                 *
+                 * The fact is per GROUP AND ROLE, not per folder: the answer is identical everywhere,
+                 * and knowing it happened on 47 folders adds nothing to knowing it happened. Summarised
+                 * once at the end of the library instead, with the count and the fix.
+                 *
+                 * The 2026-08-18 lesson survives — the message still names the ROLE, never just the
+                 * group, because what is refused is the group's OTHER roles and never its SEGVIEW row.
+                 */
+                // An ARRAY with indexOf, not a Set: SPFx's tsconfig has no downlevelIteration,
+                // so a Set cannot be spread or iterated here (CLAUDE.md #3).
+                const refusal = `${g0(i.row)} role ${i.row.role} (${permissionForRole(lib, i.row.role)})`;
+                if (fanRefusals.indexOf(refusal) === -1)
+                  fanRefusals.push(refusal);
+                continue;
+              }
+              toGrant.push({ row: i.row, viaTerm: i.fromTerm });
+            }
+
+            // C-level view fan-down. A GLOBAL row carries no term at all and reaches
+            // every folder in every segment, at Read, in Documents only.
+            //
+            // NOT gated by recon_departmentFanOut, and that is the whole reason it is a
+            // role of its own. The gate exists because a leftover segment- or
+            // department-tier MEMBER row from before 2026-07-29 is indistinguishable,
+            // BY TIER, from a deliberate wide grant, so tier-based fanning has to be
+            // opt-in. A GLOBAL row has no tier to be mistaken for and has never granted
+            // anything until now: the explicit role name is the consent, so no switch is
+            // needed and none should be added.
+            //
+            // MEMBER keeps its guard untouched — a segment-tier MEMBER row still fans
+            // nowhere, at any setting.
+            //
+            // GLOBAL rows are stored with an empty UnitTermGuid, so they key on "".
+            for (const g of groupMap.get("") ?? []) {
+              if (g.role !== "GLOBAL" || !accepts(g.role)) continue;
+              const k = `${g.groupId}|${g.role}`;
+              if (seenGrant.has(k)) continue;
+              seenGrant.add(k);
+              toGrant.push({ row: g, viaTerm: "(all segments)" });
+            }
+
+            // Only a LEAF (unit) folder is expected to carry Group Map rows — the model is
+            // leaf-only by design (see CLAUDE.md / the leaf-only authorization spec), so the
+            // segment and department tiers having none is the correct state, not a problem.
+            // Warning on them buried the real warnings under ~260 structurally unfixable
+            // ones. Parent tiers stay admin-only and silent; members reach their unit
+            // through the ancestor Read grants below.
+            //
+            // Tested against toGrant, not applicable: a unit reached ONLY by a
+            // department row is properly provisioned, and calling it "admin-only"
+            // would send an admin hunting for a row that should not exist.
+            //
+            // ⚠ SAYS "FOLDER", NOT "UNIT". `isLeaf` means "nothing below it in the term tree", which
+            // is normally a unit — but a DEPARTMENT with no units yet also comes back as a leaf, and
+            // then this line told the admin to go and find a unit that does not exist. Seen on site
+            // 2026-08-20 for a newly added department. The tier vocabulary is also segment-specific
+            // (Unit / Estate-Mill / Refinery), so naming any one of them here is wrong somewhere.
+            if (toGrant.length === 0 && t.isLeaf) {
+              entries.push({
+                msg: `  ⚠ ${folderLabel} — no group-map groups for this folder (locked admin-only)`,
+                ok: true,
+              });
+            }
+            // ONE read replaces up to five writes per folder per library on a re-run.
+            //
+            // Until 1.0.177.0 every grant below was re-POSTed on every run. SharePoint takes a
+            // duplicate as a no-op, so it never failed — it just cost a round trip and a
+            // throttle tick each time, which is most of why re-running a provisioned segment
+            // cost as long as provisioning it (register #18).
+            //
+            // ⚠ A FAILED READ IS `undefined`, NEVER `[]`, and grants everything. `[]` is a
+            // folder we read and found empty; `undefined` is a folder we could not read, and
+            // skipping on that would leave a group silently ungranted on a run reporting
+            // success. getRoleAssignments swallows a non-OK status into `[]` itself, which is
+            // the same safe direction — it grants — so this only has to catch a throw.
+            let existingAcl:
+              | Array<{ principalId: number; roleDefId: number }>
+              | undefined = [];
+            if (shouldReadExistingAcl(aclWasReset, toGrant.length)) {
+              existingAcl = await getAllRoleBindings(full).catch(
+                () => undefined,
+              );
+            }
+            let skippedGrants = 0;
+            const grantedPids: Array<{ groupName: string; pid: number }> = [];
+            /* Mapping rows whose GROUP IS GONE. Reported ONCE per folder and named, because the
+               admin's next action is per group, not per row — a unit's approver group carries six
+               rows and six identical lines would bury the finding.
+
+               Named rather than counted: "2 rows point at a missing group" is unactionable, while
+               the NAME goes straight into the bulk provisioner. The fix is deliberately stated,
+               because reconciliation cannot do it — it grants to groups that exist and never
+               creates them, so re-running this is not the repair however much it looks like it. */
+            if (liveGroupIds !== undefined) {
+              const deadNames: string[] = [];
+              for (const { row: g } of toGrant) {
+                // Through the SAME converter the grant itself uses, never a second parse of the
+                // stored string — a check that disagreed with the grant about which principal a
+                // row means would report the wrong group as missing.
+                if (liveGroupIds.has(spGroupPrincipalId(g.groupId))) continue;
+                if (deadNames.indexOf(g.groupName) === -1)
+                  deadNames.push(g.groupName);
+              }
+              if (deadNames.length > 0) {
+                entries.push({
+                  msg: `  ⚠ ${folderLabel} — mapping row(s) point at group(s) that no longer exist: ${deadNames.join(", ")}. Nothing was granted for them. Re-create them with Bulk provisioning on Group Management, then reconcile again.`,
+                  ok: false,
+                });
+              }
+            }
+            for (const { row: g, viaTerm } of toGrant) {
+              // Fanned grants are logged distinctly. "Why does this group hold
+              // DMS Approve on a unit folder with no row for it" is otherwise
+              // unanswerable from the log, and an unexplained grant is
+              // indistinguishable from a bug.
+              const arrow = viaTerm ? "↳↓" : "↳";
+              const via = viaTerm
+                ? " (inherited from a parent-tier mapping)"
+                : "";
+              // Resolved ONCE, per library. Read straight from ROLE_TO_PERMISSION and an
+              // uploader's Documents grant would say "CRS Upload" in the log while the
+              // assignment said Read — or worse, actually be CRS Upload.
+              const levelName = permissionForRole(lib, g.role);
+              const roleDefId = defs.find((r) => r.name === levelName)?.id;
+              if (roleDefId === undefined) {
+                entries.push({
+                  msg: `  ⚠ ${g.groupName} — no "${levelName}" role definition on site`,
+                  ok: false,
+                });
+                pushAssign(
+                  lib,
+                  `${t.label}: "${levelName}" role missing on site`,
+                  "warn",
+                );
+                step();
+                continue;
+              }
+              step();
+              try {
+                const pid = spGroupPrincipalId(g.groupId);
+                if (!needsGrant(existingAcl, pid, roleDefId)) {
+                  // Still a granted principal for the ancestor-browse pass below: the group
+                  // holds the role, so it still needs Read up its own path. Dropping it from
+                  // grantedPids would take that corridor away and the library would render
+                  // empty for its members — the 2026-08-04 regression, by another route.
+                  grantedPids.push({ groupName: g.groupName, pid });
+                  skippedGrants++;
+                  continue;
+                }
+                await addRoleAssignment(full, pid, roleDefId);
+                // Two roles can resolve to ONE permission level — APR and UPL are both Read on
+                // Documents, DELS and DELSHC are both CRS Delete on the approval library. Without
+                // this the second is written again AND printed again, so the log showed the same
+                // group → same level twice on one folder and read as a double grant (client,
+                // 2026-08-19: "its basically confusing the client").
+                if (existingAcl)
+                  existingAcl.push({ principalId: pid, roleDefId });
+                grantedPids.push({ groupName: g.groupName, pid });
+                entries.push({
+                  msg: `  ${arrow} ${g.groupName} → ${levelName}${via}`,
+                  ok: true,
+                });
+                pushAssign(
+                  lib,
+                  `${t.label} → ${g.groupName} (${levelName})${via}`,
+                  "ok",
+                );
+                bumpAssigns();
+                await tick();
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ ${g.groupName} → ${levelName} FAILED: ${(e as Error).message}`,
+                  ok: false,
+                });
+                // Most common cause: the SP group doesn't exist yet (or is a legacy Entra
+                // row). Surface the admin-needs-to-create-it message in the right panel.
+                pushAssign(
+                  lib,
+                  `Group "${g.groupName}" not found — ask an administrator to create it`,
+                  "admin",
+                );
+              }
+            }
+            // One line per FOLDER, never per group: on a settled site this is every group on
+            // every folder, and a line each would bury the run's real findings under
+            // thousands saying nothing happened.
+            if (skippedGrants > 0) {
+              entries.push({
+                msg: `  ↳ ${folderLabel} — ${skippedGrants} group grant(s) already correct, skipped`,
+                ok: true,
+              });
+            }
+            // Ancestor browse Read: granted, so a user can click down to their folder.
+            //
+            // This pass used to grant each group Read on every ancestor folder on its
+            // path so members could click down to their unit.
+            //
+            // RESTORED 2026-08-07, having been removed on 2026-08-04. The 2026-08-04 rule
+            // ("a Head of Unit must not see the department folder, a Head of Department
+            // must not see the segment folder") was WITHDRAWN by the client's next
+            // restatement: navigation now starts at the business segment for every family,
+            // in both libraries. "View the unit folder ONLY" meant not seeing SIBLING
+            // units — which siblings already are, since they carry no grant and SharePoint
+            // security-trims them.
+            //
+            // Removing the grant was never visible on an existing site, because earlier
+            // runs had already made the assignments and reconciliation only ever added.
+            // It bites on a NEW library: every folder is new, none gets ancestor Read, and
+            // the library root renders empty for every non-admin. That is exactly the state
+            // the recreated Approval Document library is in, which is how this was caught.
+            if (grantedPids.length > 0 && readId !== undefined) {
+              for (const anc of ancestorRelPaths(t.relPath)) {
+                const ancFull = `${root}${anc}`;
+                // Declared with a definite type rather than inferred from the cache read:
+                // the loop below reassigns it after each grant, which loses the narrowing
+                // that the undefined-check would otherwise give.
+                const cached = ancAssignCache.get(ancFull);
+                let existing: ExistingAssign[];
+                if (cached === undefined) {
+                  existing = await getRoleAssignments(ancFull);
+                  ancAssignCache.set(ancFull, existing);
+                } else {
+                  existing = cached;
+                }
+                for (const gp of grantedPids) {
+                  // The site-entry group reaches the site, never a folder. It is not part
+                  // of anyone's browse path and must not be granted one.
+                  if (gp.groupName === siteEntryGroupTitle()) continue;
+                  // Idempotent: a second unit under the same department must not re-grant
+                  // Read its parent already holds. The cache makes that one probe per
+                  // ancestor per run rather than one per unit.
+                  const grantKey = `${ancFull}|${gp.pid}`;
+                  if (ancGranted.has(grantKey)) continue;
+                  if (
+                    existing.some(
+                      (a) => a.principalId === gp.pid && a.roleDefId === readId,
+                    )
+                  )
+                    continue;
+                  try {
+                    await addRoleAssignment(ancFull, gp.pid, readId);
+                    ancGranted.add(grantKey);
+                    entries.push({
+                      msg: `  ↳ ${gp.groupName} — Read (browse) on ${anc}`,
+                      ok: true,
+                    });
+                    pushAssign(
+                      lib,
+                      `${anc} → ${gp.groupName} Read (ancestor browse)`,
+                      "ok",
+                    );
+                    await tick();
+                  } catch (e) {
+                    entries.push({
+                      msg: `  ✗ ${gp.groupName} — failed to grant Read on ${anc}: ${(e as Error).message}`,
+                      ok: false,
+                    });
+                  }
+                }
+              }
+            }
+            // Under leaf (unit) folders, pre-create the Year × Document Type grid.
+            // These inherit the unit's ACL (no lock, no map). Idempotent via
+            // ensureFolder. Logged as a per-unit count, not one line per folder.
+            //
+            // These grid folders are NOT approved, and deliberately so — two reasons it
+            // cannot be done here:
+            //   1. The fast path below settles the entire grid on ONE probe, so a per-folder
+            //      approve in this loop would never fire on a site that already has its grid.
+            //   2. ensureFolder is shared with Form.tsx / BulkUpload.tsx, where the caller is
+            //      an UPLOADER. Writing OData__ModerationStatus = 0 needs ApproveItems, which
+            //      a PIC does not hold — so uploaders keep creating Pending grid folders
+            //      between runs no matter what this pass does.
+            // Consequence: Draft Item Security must stay "any user who can read items". Under
+            // approver-only, a PIC sees an empty unit folder and cannot browse to their own
+            // pending files. Closing it needs an end-of-run library sweep (page by `ID gt`,
+            // never a $filter on FSObjType — the grid puts these libraries over the 5,000-item
+            // list-view threshold). Not built: the only requirement that wanted approver-only
+            // was per-uploader isolation, which is out of scope.
+            const tierNames = t.isLeaf ? gridTiersFor(t) : [];
+            const plan = gridPlan(tierNames);
+            if (t.isLeaf && plan.total > 0) {
+              const gridTotal = plan.total;
+              let grid = 0;
+              // FAST PATH. The grid is built in order, so if the LAST year's LAST
+              // document-type folder is there, the whole grid is there. One probe
+              // replaces 63 round-trips per leaf per library. Without this a no-op
+              // re-run cost the same as a first run (measured: 6,090 folders in
+              // 111m for 48 units, of which only 6 were real group assignments).
+              // Trade-off: a folder hand-deleted from the middle of a COMPLETE grid
+              // is not restored here — the upload form ensure-creates it on demand.
+              // probeFolderByPath retries 429s, so a throttle cannot fake "incomplete"
+              // and trigger a needless full rebuild.
+              const gridProbe = await probeFolderByPath(
+                context.spHttpClient,
+                siteUrl,
+                `${full}/${plan.lastPath.join("/")}`,
+              );
+              if (gridProbe.folder) {
+                entries.push({
+                  msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid already complete (${gridTotal}), skipped`,
+                  ok: true,
+                });
+                setLastFolder(
+                  lib,
+                  `${t.label} grid: already complete, skipped`,
+                  "skip",
+                );
+                // The fast path settles every planned grid step in one probe; the
+                // estimate has to see them land or it keeps counting them as pending.
+                step(gridTotal);
+              } else {
+                pushFolder(lib, `${t.label} grid: 0 / ${gridTotal}`, "run");
+                // One walk down the configured chain, replacing the old fixed
+                // Year-then-Document-Type pair. Depth-first and SEQUENTIAL (never
+                // parallel) — a parallel burst is what tripped the 429 throttle.
+                const buildTier = async (
+                  parent: string,
+                  depth: number,
+                ): Promise<void> => {
+                  if (depth >= plan.tiers.length) return;
+                  for (const name of plan.tiers[depth]) {
+                    const made = await ensureFolder(
+                      context.spHttpClient,
+                      siteUrl,
+                      parent,
+                      name,
+                    );
+                    step();
+                    if (made) {
+                      grid++;
+                      bumpFolders();
+                    }
+                    setLastFolder(
+                      lib,
+                      `${t.label} grid: ${grid} / ${gridTotal}`,
+                      "run",
+                    );
+                    // Only pace REAL writes. Charging the throttle delay to a folder that
+                    // already existed is what made a no-op re-run as slow as a first run.
+                    if (made?.created) await tick();
+                    if (!made) continue;
+                    await buildTier(made.serverRelativeUrl, depth + 1);
+                  }
+                };
+                await buildTier(full, 0);
+              }
+              entries.push({
+                msg: `  ↳ ${libDisplayName(lib)}${t.relPath} — Year × Document Type grid: ${grid} folder(s) ensured`,
+                ok: true,
+              });
+              setLastFolder(
+                lib,
+                `${t.label} grid: ${grid} / ${gridTotal} ✓`,
+                "ok",
+              );
+            }
+          } catch (e) {
+            entries.push({
+              msg: `${libDisplayName(lib)}${t.relPath} — FAILED: ${(e as Error).message}`,
+              ok: false,
+            });
+          }
+        }
+        if (fanRefusals.length > 0) {
+          // ONE line per library, naming every refused group+role and the fix. The count is the
+          // folder-independent part; the ACTION is what the old per-folder spam never gave.
+          entries.push({
+            msg:
+              `  ⚠ ${libDisplayName(lib)}: ${fanRefusals.length} segment-tier role(s) did not fan down — ` +
+              `${fanRefusals.join(", ")}. A segment-tier row fans down for the view roles only. ` +
+              `These are leftover rows from before C-Level became view-only: re-create the group on ` +
+              `Group Management to clear them.`,
+            ok: true,
+          });
+        }
+      }
+      // Site-entry self-heal: ensure every member of a group we MANAGE is also in
+      // DMS_SITE_MEMBERS, so users added the native way (bypassing the web part's
+      // auto-add) can still open the site. See site-entry-access-layer spec §7a.
+      //
+      // "Managed" comes from the Group Map's GroupId column, NOT from a title prefix.
+      // Until 2026-08-04 this filtered on `title.startsWith("DMS_")`, which the client's
+      // new prefix-less convention (GHO_GF_CORU_UPLOADER) matches zero of — and the failure
+      // is silent: nobody gets site entry and the run still reports ✓, producing "only SOME
+      // users cannot open the site", the hardest version of this to diagnose.
+      //
+      // Reading the list is also strictly more accurate than the name test ever was: it
+      // finds a group whatever it is called, covers every Scope in one query, and skips a
+      // group somebody hand-named with our prefix but never actually mapped.
+      try {
+        setReconPhase("Syncing site-entry group…");
+        const allGroups = await fetchAllSiteGroups(
+          context.spHttpClient,
+          siteUrl,
+        );
+        const entryGroup = findSiteEntryGroup(allGroups);
+        if (!entryGroup) {
+          entries.push({
+            msg: `⚠ ${siteEntryGroupTitle()} not found — run "Set up site entry" first (site-entry sync skipped)`,
+            ok: false,
+          });
+        } else {
+          const entryMembers = await getGroupMembers(
+            context.spHttpClient,
+            siteUrl,
+            entryGroup.id,
+          );
+          const already = new Set(
+            entryMembers.map((m) => m.loginName.toLowerCase()),
+          );
+          // GroupId ONLY. That column predates Scope/Target, so this cannot hit the
+          // whole-request HTTP 400 that naming a nonexistent $select column causes
+          // (CLAUDE.md #11) — no fallback query needed, and every scope is included.
+          const managedIds = new Set<number>();
+          const idRes = await context.spHttpClient.get(
+            `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.groupMap))}')/items?$select=GroupId&$top=5000`,
+            SPHttpClient.configurations.v1,
+            { headers: { Accept: "application/json;odata=nometadata" } },
+          );
+          if (idRes.ok) {
+            const idJson = await idRes.json();
+            for (const r of (idJson.value ?? []) as Array<{
+              GroupId?: string;
+            }>) {
+              const n = Number((r.GroupId ?? "").toString().trim());
+              if (n > 0 && n % 1 === 0) managedIds.add(n);
+            }
+          } else {
+            entries.push({
+              msg: `⚠ site-entry sync: could not read Group Map ids (HTTP ${idRes.status}) — no members synced`,
+              ok: false,
+            });
+          }
+          managedIds.delete(entryGroup.id);
+          const managedGroups = allGroups.filter((g) => managedIds.has(g.id));
+          if (idRes.ok && managedIds.size === 0) {
+            entries.push({
+              msg: `${siteEntryGroupTitle()}: no mapped groups in Group Map — nothing to sync`,
+              ok: true,
+            });
+          }
+          let healed = 0;
+          for (const g of managedGroups) {
+            const members = await getGroupMembers(
+              context.spHttpClient,
+              siteUrl,
+              g.id,
+            ).catch(() => []);
+            for (const m of members) {
+              if (already.has(m.loginName.toLowerCase())) continue;
+              try {
+                await addGroupMember(
+                  context.spHttpClient,
+                  siteUrl,
+                  entryGroup.id,
+                  m.loginName,
+                );
+                already.add(m.loginName.toLowerCase());
+                healed++;
+              } catch {
+                /* skip a member that can't be added; not fatal */
+              }
+            }
+          }
+          entries.push({
+            msg:
+              healed > 0
+                ? `${siteEntryGroupTitle()}: added ${healed} member(s) missing site entry ✓`
+                : `${siteEntryGroupTitle()}: all mapped-group members already have site entry ✓`,
+            ok: true,
+          });
+        }
+      } catch (e) {
+        entries.push({
+          msg: `Site-entry sync skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      // ── Prune orphaned Folder Map rows ────────────────────────────────────────
+      // A row whose TERM no longer exists is never visited by the loop above, so it
+      // would linger forever. This is the only place that can see them: the run has
+      // just enumerated every valid term.
+      //
+      // Deletes LIST ROWS ONLY, never folders. A row is derived data that a later run
+      // can rebuild from the term store + the folder tree; the folder holds documents
+      // that exist nowhere else. A folder left behind is reported so a human can decide.
+      const errorsBeforePrune = entries.filter((e) => !e.ok).length;
+      if (!fullCoverage) {
+        // Skipped ENTIRELY rather than filtered to the covered segments. Filtering would need every
+        // row to declare its segment reliably, and a row whose segment cannot be determined would
+        // then be deleted by the rule meant to protect it. Orphan cleanup is maintenance, not
+        // urgency: a full run does it, and doing nothing is always recoverable.
+        entries.push({
+          msg: `Orphan cleanup skipped — this run covered ${scope.label}, and a row is only judged dead against a COMPLETE term list. Run every segment to prune orphaned rows.`,
+          ok: true,
+        });
+      } else if (incompleteSegments.length > 0) {
+        // Checked separately from the error count even though an entry was already
+        // pushed above — this is THE condition prune must never run under, and it
+        // should not depend on that entry still being there.
+        entries.push({
+          msg: `Prune skipped — the term store could not be fully read (${incompleteSegments.length} segment(s)); rows are never pruned against a partial term list`,
+          ok: true,
+        });
+      } else if (errorsBeforePrune > 0) {
+        // Hard guard. A half-failed term-store read returns a SHORT target list, and a
+        // short list makes perfectly healthy rows look orphaned — pruning on that would
+        // wipe the map wholesale. No clean run, no prune.
+        entries.push({
+          msg: `Prune skipped — run had ${errorsBeforePrune} error(s); orphaned map rows are only removed after a clean run`,
+          ok: true,
+        });
+      } else {
+        try {
+          setReconPhase("Pruning orphaned folder map rows…");
+          const enumerated = new Set(
+            targets
+              .filter((t) => t.termGuid)
+              .map((t) => (t.termGuid as string).toLowerCase()),
+          );
+          let pruned = 0;
+          for (const row of mapRows) {
+            if (!row.termGuid) continue;
+            if (enumerated.has(row.termGuid.toLowerCase())) continue; // term alive — handled above
+            const probe = await probeFolderById(
+              context.spHttpClient,
+              siteUrl,
+              row.folderUniqueId,
+            );
+            if (!probe.folder && !probe.confirmedMissing) {
+              // Could not tell. Keep the row; never delete on a guess.
+              entries.push({
+                msg: `  ⚠ orphaned row "${row.title}" — could not verify its folder (HTTP ${probe.status}); row kept`,
+                ok: false,
+              });
+              continue;
+            }
+            try {
+              await deleteFolderMapRow(
+                context.spHttpClient,
+                siteUrl,
+                row.itemId,
+              );
+              pruned++;
+              entries.push({
+                msg: probe.folder
+                  ? `  ✂ pruned "${row.title}" — term deleted from the term store. Its FOLDER still exists at ${probe.folder.serverRelativeUrl} and was NOT touched — delete it manually if that is intended.`
+                  : `  ✂ pruned "${row.title}" — term and folder both gone`,
+                ok: true,
+              });
+            } catch (e) {
+              entries.push({
+                msg: `  ✗ could not prune "${row.title}": ${(e as Error).message}`,
+                ok: false,
+              });
+            }
+          }
+          entries.push({
+            msg:
+              pruned > 0
+                ? `Folder Map: pruned ${pruned} orphaned row(s) ✓`
+                : `Folder Map: no orphaned rows ✓`,
+            ok: true,
+          });
+        } catch (e) {
+          entries.push({
+            msg: `Prune skipped — ${(e as Error).message}`,
+            ok: false,
+          });
+        }
+
+        // ── Repair term-GUID orphans ───────────────────────────────────────────
+        // Deleting a term and re-adding it under the same name orphans a row in
+        // DMS Term Abbreviation and DMS Group Map at once; the re-created term
+        // carries a NEW guid, so nothing joins them. Only the LABEL survives, and
+        // the abbreviation row keeps it in Title — that is the whole repair.
+        //
+        // The abbreviation row is NEVER auto-deleted, unlike a Folder Map row. A
+        // map row is derivable (term + folder on disk rebuilds it); an abbreviation
+        // exists nowhere else, and deleting one lets a later re-created term take a
+        // DIFFERENT abbreviation, which Task 4's rename pass would then apply to a
+        // live folder full of documents. Repair, or report. See spec 2026-08-02 §7.
+        //
+        // Inside the same else-branch as the prune, so it inherits both guards: a
+        // partial term-store read must never look like a mass deletion.
+        try {
+          setReconPhase("Repairing term-GUID orphans…");
+          const enumeratedTerms = new Set(
+            targets
+              .filter((t) => t.termGuid)
+              .map((t) => (t.termGuid as string).toLowerCase()),
+          );
+          const orphanRows = abbrevRows.filter(
+            (r) =>
+              r.termGuid.trim().length > 0 &&
+              !enumeratedTerms.has(r.termGuid.trim().toLowerCase()),
+          );
+          if (orphanRows.length === 0) {
+            entries.push({
+              msg: `${abbrevListTitle()}: no orphaned rows ✓`,
+              ok: true,
+            });
+          } else {
+            const plan = planOrphanRepairs(orphanRows, missingAbbrev);
+            const groupRows =
+              plan.repairs.length > 0 ? await loadGroupMapRowsForRepair() : [];
+
+            for (const rep of plan.repairs) {
+              const oldGuid = rep.orphan.termGuid.trim().toLowerCase();
+              // Every row holding the dead GUID is the same unit by definition —
+              // the join cannot DISCOVER the new GUID, but it is how the answer is
+              // applied once the label has established it.
+              const affected = groupRows.filter(
+                (g) => g.termGuid.toLowerCase() === oldGuid,
+              );
+              try {
+                await patchListItem(abbrevListTitle(), rep.orphan.itemId, {
+                  TermGuid: rep.term.termGuid,
+                });
+              } catch (e) {
+                entries.push({
+                  msg: `  ✗ could not re-point "${rep.orphan.abbreviation}" (${rep.orphan.title}): ${(e as Error).message}`,
+                  ok: false,
+                });
+                continue;
+              }
+              let groupsFixed = 0;
+              for (const g of affected) {
+                try {
+                  await patchListItem(
+                    cachedListTitle(LIST_SUFFIX.groupMap),
+                    g.itemId,
+                    {
+                      UnitTermGuid: rep.term.termGuid,
+                    },
+                  );
+                  groupsFixed++;
+                } catch (e) {
+                  entries.push({
+                    msg: `  ✗ re-pointed the abbreviation but NOT the group "${g.groupName}": ${(e as Error).message}. That folder will be locked admin-only until this row is fixed by hand.`,
+                    ok: false,
+                  });
+                }
+              }
+              entries.push({
+                msg: `  ✎ ${rep.orphan.abbreviation} — "${rep.orphan.title}" was re-created; re-pointed to ${rep.term.termGuid}${affected.length > 0 ? ` (+${groupsFixed} of ${affected.length} group-map row(s))` : ""}. Run again to create its folder.`,
+                ok: true,
+              });
+            }
+
+            for (const amb of plan.ambiguous) {
+              entries.push({
+                msg:
+                  `  ? AMBIGUOUS: "${amb.orphan.title}" (${amb.orphan.level}, ${amb.orphan.abbreviation}) — ` +
+                  `${amb.orphanCandidates.length} orphaned row(s) and ${amb.termCandidates.length} re-created term(s) share that name ` +
+                  `[${amb.termCandidates.map((t) => t.termGuid).join(", ")}]. ` +
+                  `Not repaired: the same name exists under more than one parent, and re-pointing the wrong one would grant another department's groups access to this folder. Set TermGuid by hand.`,
+                ok: false,
+              });
+            }
+
+            for (const u of plan.unmatched) {
+              entries.push({
+                msg:
+                  `  ⚠ ORPHANED: "${u.title}" (${u.level}, ${u.abbreviation}) — its term ${u.termGuid} no longer exists and no re-created term matches the name. ` +
+                  `The row was KEPT: it holds the only copy of the abbreviation. Delete it by hand once you are sure the term is gone for good.`,
+                ok: false,
+              });
+            }
+
+            entries.push({
+              msg: `${abbrevListTitle()}: ${plan.repairs.length} repaired, ${plan.ambiguous.length} ambiguous, ${plan.unmatched.length} orphaned`,
+              ok: plan.ambiguous.length === 0 && plan.unmatched.length === 0,
+            });
+          }
+        } catch (e) {
+          entries.push({
+            msg: `Orphan repair skipped — ${(e as Error).message}`,
+            ok: false,
+          });
+        }
+      }
+
+      // ── Folders no live term claims: REPORT + QUARANTINE ─────────────────────
+      // ⚠ OUTSIDE the orphan-cleanup guard above, deliberately, and it was INSIDE it for a day.
+      // That guard exists because the prune judges a row dead by asking whether its term was in
+      // THIS RUN's targets — false for every uncovered segment, which is how a scoped run deleted
+      // GHO's Folder Map rows on 2026-08-19. This pass asks a different question: it DESCENDS FROM
+      // `targets`, so on a scoped run it only ever looks inside the segments that were walked and
+      // cannot see another segment's folders at all. Gating it too meant strays were never
+      // quarantined on a scoped run — and scoped runs are now the normal way to work.
+      //
+      // Reconciliation only ever walks term store → libraries, never the reverse,
+      // so a permanently deleted term leaves its folder behind with broken
+      // inheritance INTACT — still granting Contribute and Design to that unit's
+      // groups. Deleting a term revokes nobody's access; the folder stays
+      // reachable by direct link or by browsing the library. Spec 2026-08-02 §8.
+      //
+      // Report only. NEVER deleted: there are documents behind it.
+      try {
+        setReconPhase("Checking for folders with no term…");
+        const expected = new Set(targets.map((t) => t.relPath.toLowerCase()));
+        // Descend only into non-leaf targets. Below a leaf sit the Year ×
+        // Document Type grid folders, which have no term by design and would
+        // otherwise be reported as unclaimed — hundreds of false positives.
+        const descendFrom = targets.filter((t) => !t.isLeaf);
+        /* ⚠ A SEGMENT WHOSE TERM WALK FAILED IS NOT DESCENDED INTO, and leaving this out cost a
+             false report of SIX live units on 2026-08-20.
+
+             `walk` marks the WHOLE segment incomplete on any failure but KEEPS the targets gathered
+             before it, so a 503 reading one department's children leaves that department in
+             `targets` (it was walked) while its units are absent (they were not). This pass then
+             descends from the department, finds six folders that are not in `expected`, and calls
+             them strays — telling the administrator to "move them somewhere real, then delete the
+             folder" about six real units.
+
+             Nothing was damaged, and only by luck: every real unit folder already has unique
+             permissions, so the `already quarantined` branch fired instead of the one that breaks
+             inheritance. A legitimately locked folder and a previously quarantined stray are
+             indistinguishable to that check, so it must never be what stands between a term-store
+             hiccup and a wrongly secured folder.
+
+             ⚠ SAME DEFECT AS THE 2026-08-19 SCOPED PRUNE, ON A DIFFERENT AXIS — and the comment
+             above this block asserts safety on the wrong one. "Descends from targets" answers
+             SCOPE (an unwalked segment is not in targets at all). It says nothing about targets
+             being SHORT INSIDE a segment that WAS walked. Two independent ways for the target list
+             to be incomplete; the pass needs guarding against both.
+
+             Per SEGMENT, not globally: a 503 in GHO must not stop MHO's strays being quarantined,
+             or one flaky read would disable the whole pass site-wide. */
+        const skipSections = new Set(
+          (incompleteSections ?? [])
+            .map((x) => (x ?? "").trim().toLowerCase())
+            .filter((x) => x.length > 0),
+        );
+        let unclaimed = 0;
+        let unreadable = 0;
+        let skippedIncomplete = 0;
+        for (const lib of reconLibs()) {
+          const root = await getLibraryRoot(lib);
+          if (!root) continue;
+          for (const t of descendFrom) {
+            // Its term list is short, so "not in `expected`" cannot mean "no term claims this".
+            if (skipSections.has((t.section ?? "").trim().toLowerCase())) {
+              skippedIncomplete++;
+              continue;
+            }
+            const names = await listSubfolders(`${root}${t.relPath}`);
+            if (names === undefined) {
+              unreadable++;
+              continue;
+            }
+            for (const name of names) {
+              if (expected.has(`${t.relPath}/${name}`.toLowerCase())) continue;
+              unclaimed++;
+              /* ── QUARANTINE (register #19, spec 2026-08-19) ────────────────────────────
+                   ⚠ THIS USED TO BE REPORT-ONLY, and its own message stated the problem: "its
+                   permissions are unchanged". Unchanged means the folder INHERITS from the segment
+                   folder above it — and that folder deliberately grants Read to every group in the
+                   segment, because it is the ancestor-browse corridor people navigate down. So a
+                   folder nobody was granted was readable by everyone in the segment. Found live
+                   2026-08-18: an HC-cleared uploader could see a `COSEC` folder belonging to a unit
+                   they had no mapping to. Not a permissions failure — a folder the system did not
+                   know about, sitting inside a corridor built for the folders it does.
+
+                   So: break inheritance, put site Owners back, and NAME it with its document count.
+                   Nothing is deleted, ever — the folder may hold the only copy of real documents,
+                   and deleting a term revokes nobody's access. Quarantine removes the accidental
+                   AUDIENCE, never the content. */
+              const strayPath = `${root}${t.relPath}/${name}`;
+              const label = `${libDisplayName(lib)}${t.relPath}/${name}`;
+              /* Counted, and UNKNOWN is not zero. An empty stray is a ten-second tidy-up; one
+                   holding documents is a small migration, and the difference decides what the
+                   administrator does next. Reporting an uncountable folder as empty would invite
+                   somebody to delete it. */
+              let docs = "an unknown number of";
+              try {
+                const cRes = await withThrottleRetry(() =>
+                  context.spHttpClient.get(
+                    `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)?$select=ItemCount&@f='${encodeServerRelativePath(strayPath)}'`,
+                    SPHttpClient.configurations.v1,
+                    {
+                      headers: { Accept: "application/json;odata=nometadata" },
+                    },
+                  ),
+                );
+                if (cRes.ok) {
+                  const cj = await cRes.json();
+                  if (typeof cj.ItemCount === "number")
+                    docs = String(cj.ItemCount);
+                }
+              } catch {
+                /* count stays unknown — the exposure is real either way */
+              }
+
+              // ⚠ REUSES getHasUniquePerms — it did NOT, and the copy never answered true.
+              //
+              // The bespoke version asked the same URL with `Accept: application/json;odata=nometadata`
+              // instead of `application/json`, and read `HasUniqueRoleAssignments` off the result. It
+              // silently returned false on every run, so a folder quarantined three times running was
+              // reported as newly quarantined three times (site, 2026-08-20).
+              //
+              // The shared helper is proven by the whole run above it: every `already locked, skipped`
+              // line is that same call answering correctly. One question, one implementation — the
+              // second copy is exactly the one that goes wrong, because nothing else depends on it.
+              //
+              // `null` means the read failed, which is NOT "already quarantined": breaking inheritance
+              // again is harmless, and claiming a folder is contained when we could not check is not.
+              let already = false;
+              try {
+                already = (await getHasUniquePerms(strayPath)) === true;
+              } catch {
+                /* treated as not yet quarantined; breaking again is harmless */
+              }
+
+              if (already) {
+                // Idempotent by construction: the folder's own ACL is the record, so nothing is
+                // stored anywhere and a later run simply re-reports it.
+                entries.push({
+                  msg: `  ⚠ ALREADY QUARANTINED: ${label} — no live term maps to this folder. It holds ${docs} item(s). Move them somewhere real, then delete the folder.`,
+                  ok: false,
+                });
+                continue;
+              }
+              try {
+                await breakInheritance(strayPath);
+                if (fullCtrlId !== undefined) {
+                  await addRoleAssignment(strayPath, ownersId, fullCtrlId);
+                }
+                entries.push({
+                  msg: `  ⚠ QUARANTINED: ${label} — no live term maps to this folder. Inheritance broken; only site owners can open it now. It holds ${docs} item(s). Nothing was deleted.`,
+                  ok: false,
+                });
+              } catch (e) {
+                // Reported as STILL EXPOSED, never as quarantined — the same rule as the admin
+                // page lockdown. A folder we failed to secure must not read as secured.
+                entries.push({
+                  msg: `  ✗ STILL EXPOSED: ${label} — no live term maps to it and it could NOT be secured (${(e as Error).message}). Everyone in this segment can still open it.`,
+                  ok: false,
+                });
+              }
+            }
+          }
+        }
+        if (unreadable > 0) {
+          entries.push({
+            msg: `  ⚠ could not list ${unreadable} folder(s) while checking for unclaimed folders — that part of the tree was not checked`,
+            ok: false,
+          });
+        }
+        // SAID OUT LOUD. A pass that quietly checked less than the admin thinks it did is how
+        // "no strays were reported" gets read as "there are no strays".
+        if (skippedIncomplete > 0) {
+          entries.push({
+            msg: `  ⚠ unclaimed-folder check skipped for ${(incompleteSections ?? []).join(", ")} — its term store could not be fully read, so a folder missing from the term list is NOT evidence of a stray. Re-run once the term store responds.`,
+            ok: false,
+          });
+        }
+        /* THE LIMIT, STATED. The walk descends only into non-leaf targets, because below a leaf
+             sit the Year / Document Type folders the upload form creates on demand — they have no
+             term BY DESIGN, and reporting them would be hundreds of false positives. So a stray
+             created directly inside a unit is indistinguishable from a legitimate on-demand folder
+             and must stay undetected. Silence here is how "reconciliation checks for stray folders"
+             comes to be read as ALL stray folders. */
+        entries.push({
+          msg: `  Unclaimed-folder check covers segment and department levels only — a folder created directly inside a unit cannot be told apart from the Year / Document Type folders the upload form creates.`,
+          ok: true,
+        });
+        if (unclaimed === 0 && unreadable === 0) {
+          entries.push({
+            msg: `Folders: every folder maps to a live term ✓`,
+            ok: true,
+          });
+        }
+      } catch (e) {
+        entries.push({
+          msg: `Unclaimed-folder check skipped — ${(e as Error).message}`,
+          ok: false,
+        });
+      }
+
+      setLog(entries);
+      const failed = entries.filter((e) => !e.ok).length;
+
+      // ONE row per run, carrying the whole log. Two reasons that is worth more than it looks: the
+      // on-screen log is lost the moment anyone navigates away, and one row per FOLDER would bury
+      // every other event in the audit log the first time somebody reconciles.
+      //
+      // Counts come from LOCALS, never from `reconCounts`: that is React state set during the run,
+      // so this closure still sees its render-time value — reading it here would faithfully record
+      // zero.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.reconciliationRun,
+        outcome: failed > 0 ? "Failed" : "Success",
+        source: "FolderManager",
+        at: new Date(),
+        actorName: context.pageContext.user.displayName,
+        actorEmail: context.pageContext.user.email,
+        library: "Approval Document + Documents",
+        summary:
+          `Reconciliation — ${targets.length} folder(s) reconciled` +
+          (failed > 0 ? `, ${failed} error(s)` : ", no errors"),
+        details: entries.map((e) => `${e.ok ? "✓" : "✗"} ${e.msg}`),
+      }).catch(() => undefined);
+
+      showToast(
+        failed > 0
+          ? `Reconciled with ${failed} error(s) — see log.`
+          : `Reconciled ${targets.length} folder(s) across Staging + Documents — locked + groups assigned from GDC Group Map.`,
+        failed > 0,
+      );
+    } catch (e) {
+      showToast(`Reconciliation failed: ${(e as Error).message}`, true);
+    } finally {
+      setBusy(false);
+      setReconRunning(false);
+      setReconPhase("");
+    }
+  };
+
+  /* ── Render helpers ──────────────────────────────────────────────────────────── */
+
+  const renderPermPanel = (node: FolderNode): React.ReactElement | null => {
+    const panel = node.perm;
+    if (!panel.open) return null;
+    return (
+      <div style={s.permPanel}>
+        <p style={s.permTitle}>
+          {node.isNew ? "Assign groups" : "Permissions"}
+        </p>
+        {panel.loading ? (
+          <p style={{ fontSize: 12, color: "#666", margin: 0 }}>Loading…</p>
+        ) : (
+          <>
+            {!node.isNew && (
+              <>
+                <p
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    textTransform: "uppercase" as const,
+                    letterSpacing: ".05em",
+                    color: "#555",
+                    margin: "0 0 6px",
+                  }}
+                >
+                  Current assignments
+                </p>
+                {panel.existing.length === 0 ? (
+                  <p
+                    style={{
+                      fontSize: 12,
+                      color: "#888",
+                      margin: "0 0 10px",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    {panel.isUnique === false
+                      ? "This folder inherits permissions from its parent — no unique assignments are set at the folder level. Add groups below to break inheritance and assign explicit access."
+                      : "No groups assigned to this folder yet. Add groups below."}
+                  </p>
+                ) : (
+                  panel.existing.map((a) => (
+                    <div
+                      key={a.uid}
+                      style={{ ...s.assignRow, opacity: a.kept ? 1 : 0.45 }}
+                    >
+                      <span
+                        style={{
+                          ...s.chip,
+                          ...(a.kept
+                            ? {}
+                            : ({
+                                textDecoration: "line-through",
+                              } as React.CSSProperties)),
+                        }}
+                      >
+                        <span style={s.chipName} title={a.title}>
+                          {a.title}
+                        </span>
+                      </span>
+                      <select
+                        style={s.roleSelect}
+                        value={a.roleDefId}
+                        disabled={busy || !a.kept}
+                        onChange={(e) =>
+                          permSetExistingRole(
+                            node.id,
+                            a.uid,
+                            Number(e.target.value),
+                          )
+                        }
+                      >
+                        {roleDefs.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.name}
+                          </option>
+                        ))}
+                      </select>
+                      {a.kept ? (
+                        <button
+                          style={s.chipX}
+                          disabled={busy}
+                          title="Remove"
+                          onClick={() => permToggleKept(node.id, a.uid)}
+                        >
+                          ✕
+                        </button>
+                      ) : (
+                        <button
+                          style={s.undoLink}
+                          disabled={busy}
+                          onClick={() => permToggleKept(node.id, a.uid)}
+                        >
+                          Undo
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </>
+            )}
+
+            <p
+              style={{
+                fontSize: 10,
+                fontWeight: 700,
+                textTransform: "uppercase" as const,
+                letterSpacing: ".05em",
+                color: "#555",
+                margin: "10px 0 6px",
+              }}
+            >
+              {node.isNew ? "Groups (required)" : "Add groups"}
+            </p>
+            {panel.pending.map((a) => (
+              <div key={a.uid} style={s.assignRow}>
+                <span style={s.chip}>
+                  <span style={s.chipName} title={a.group.displayName}>
+                    {a.group.displayName}
+                  </span>
+                </span>
+                <select
+                  style={s.roleSelect}
+                  value={a.roleDefId}
+                  disabled={busy}
+                  onChange={(e) =>
+                    permSetPendingRole(node.id, a.uid, Number(e.target.value))
+                  }
+                >
+                  {roleDefs.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  style={s.chipX}
+                  disabled={busy}
+                  onClick={() => permRemovePending(node.id, a.uid)}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+            <GroupSearch
+              disabled={busy}
+              placeholder={
+                node.isNew
+                  ? "Add group (required)…"
+                  : "Search for a group to add…"
+              }
+              onSearch={searchGroups}
+              onPick={(g) => permAddGroup(node.id, g)}
+            />
+
+            <p
+              style={{
+                fontSize: 11,
+                color: "#888",
+                marginTop: 8,
+                marginBottom: 0,
+              }}
+            >
+              {node.isNew
+                ? "This folder and its permissions will be created when you click Update."
+                : "Changes are applied when you click Update below."}
+            </p>
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderAddForm = (
+    mode: Mode,
+    parentNode: FolderNode | null,
+  ): React.ReactElement => (
+    <div style={{ paddingTop: 8 }}>
+      <button
+        style={s.addFolderBtn}
+        disabled={busy}
+        onClick={() => addNewChild(mode, parentNode ? parentNode.id : null)}
+      >
+        {`+ ${parentNode ? "Add subfolder" : "Add folder"}`}
+      </button>
+    </div>
+  );
+
+  const renderNode = (
+    node: FolderNode,
+    mode: Mode,
+    depth: number,
+  ): React.ReactElement => {
+    const isOpen = !!expandedIds[node.id];
+    const changed =
+      !node.isNew &&
+      !node.isDeleted &&
+      node.newName.trim() !== "" &&
+      node.newName.trim() !== node.name;
+    const permCount =
+      node.perm.existing.filter((a) => a.kept).length +
+      node.perm.pending.length;
+    const noPendingChanges =
+      !node.perm.existing.some((a) => !a.kept) &&
+      node.perm.pending.length === 0;
+    const permLabel = (() => {
+      const arrow = node.perm.open ? "▴" : "▾";
+      if (node.isNew) return `Groups ${arrow}`;
+      if (!node.perm.loaded) return `Permissions ${arrow}`;
+      if (node.perm.isUnique === false && noPendingChanges)
+        return `Permissions (inherited) ${arrow}`;
+      return `Permissions (${permCount} group${permCount !== 1 ? "s" : ""}) ${arrow}`;
+    })();
+
+    return (
+      <div key={node.id}>
+        <div style={depth === 0 ? s.parentRow : s.childRow}>
+          <button
+            style={s.chevBtn}
+            onClick={() => {
+              toggleExpand(node).catch(() => undefined);
+            }}
+            title={isOpen ? "Collapse" : "Expand subfolders"}
+          >
+            {isOpen ? "▾" : "▸"}
+          </button>
+          <span style={{ fontSize: depth === 0 ? 16 : 14, flexShrink: 0 }}>
+            {node.isNew ? "🆕" : depth === 0 ? "📁" : "📂"}
+          </span>
+          <input
+            className="fm-in"
+            type="text"
+            value={node.newName}
+            disabled={busy || node.isDeleted}
+            placeholder={node.isNew ? "New folder name" : undefined}
+            onChange={(e) =>
+              updateNode(node.id, (n) => ({ ...n, newName: e.target.value }))
+            }
+            style={{
+              ...s.renameIn,
+              fontWeight: depth === 0 && !node.isNew ? 600 : 400,
+              borderColor: changed || node.isNew ? "#0f6c3f" : "#c8c8c8",
+              textDecoration: node.isDeleted ? "line-through" : undefined,
+              color: node.isDeleted ? "#a4262c" : undefined,
+              opacity: node.isDeleted ? 0.6 : 1,
+            }}
+          />
+          {node.childrenLoaded && node.children.length > 0 && (
+            <span style={s.badge}>
+              {node.children.length} subfolder
+              {node.children.length !== 1 ? "s" : ""}
+            </span>
+          )}
+          {changed && <span style={s.wasLabel}>was: {node.name}</span>}
+          {node.isNew && (
+            <span style={{ ...s.wasLabel, color: "#0f6c3f" }}>
+              new — not yet created
+            </span>
+          )}
+          {node.isDeleted && (
+            <span style={{ ...s.wasLabel, color: "#a4262c" }}>
+              marked for deletion
+            </span>
+          )}
+
+          {!node.isDeleted && (
+            <button
+              style={{ ...s.permBtn, ...(node.perm.open ? s.permBtnOpen : {}) }}
+              onClick={() => {
+                togglePermPanel(node).catch(() => undefined);
+              }}
+            >
+              {permLabel}
+            </button>
+          )}
+          {node.isNew && (
+            <button
+              style={{ ...s.permBtn, color: "#a4262c", borderColor: "#a4262c" }}
+              disabled={busy}
+              onClick={() => discardNode(node.id)}
+            >
+              Discard
+            </button>
+          )}
+          {!node.isNew && !node.isDeleted && !node.confirmingDelete && (
+            <button
+              style={{ ...s.permBtn, color: "#a4262c", borderColor: "#a4262c" }}
+              disabled={busy}
+              onClick={() => requestDelete(node.id)}
+            >
+              Delete
+            </button>
+          )}
+          {!node.isNew && node.isDeleted && (
+            <button
+              style={s.undoLink}
+              disabled={busy}
+              onClick={() => undoDelete(node.id)}
+            >
+              Undo
+            </button>
+          )}
+        </div>
+
+        {node.confirmingDelete && (
+          <div style={s.confirmBar}>
+            <span>
+              Delete &quot;{node.name}&quot; and everything inside it? This
+              moves it to the site Recycle Bin.
+            </span>
+            <button
+              style={s.dangerBtn}
+              disabled={busy}
+              onClick={() => confirmDelete(node.id)}
+            >
+              Yes, delete
+            </button>
+            <button
+              style={s.ghostBtn}
+              disabled={busy}
+              onClick={() => cancelDelete(node.id)}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
+        {!node.isDeleted && renderPermPanel(node)}
+
+        {!node.isDeleted && (
+          <div style={s.childrenPane}>
+            {isOpen &&
+              node.children.map((child) => renderNode(child, mode, depth + 1))}
+            {renderAddForm(mode, node)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /* ── Render ──────────────────────────────────────────────────────────────────── */
+
+  /**
+   * The retired manual folder tree. Always false now that the tab bar cannot reach `Staging` or
+   * `Documents` — kept as a named test so the tree's own controls stay attached to the tree rather
+   * than to "not Reconciliation", which since this restructure also means Abbreviations, Levels,
+   * Migrate and New segment. That inverted read would have rendered a Refresh/Update pair over
+   * every one of the mounted screens, each with its own Save.
+   */
+  const treeTab = tab === "Staging" || tab === "Documents";
+
+  return (
+    <section style={hideTabs ? s.wrapEmbedded : s.wrap}>
+      <style>{`.fm-in:focus { outline: none; box-shadow: 0 0 0 2px rgba(15,108,63,.18); }`}</style>
+
+      {/* Heading and tab bar both belong to the standalone "All tools" view. A guided flow supplies its
+          own heading and its own step rail, and a second row of tabs beside that rail would offer a way
+          out of the flow that looks like part of it. */}
+      {!hideTabs && <h2 style={s.h2}>Folder Administration</h2>}
+      {!hideTabs && (
+        <p style={s.subtitle}>
+          The tabs run left to right in the order the work happens: add a
+          segment, name the folders its terms produce, shape the levels beneath
+          Unit, move what is already filed, then build the tree. Who can see a
+          folder is set on the <strong>Folder Access</strong> page.
+        </p>
+      )}
+
+      {/*
+        One home for folder administration — spec `2026-08-12-term-abbreviation-page-design.md` §6.
+        The order is the order the work happens in, and since 2026-08-15 that starts with the segment
+        (client's request): create it, name the terms, shape the levels, move what is already filed,
+        reconcile. It sat last while it was judged "the rarest", which read the tab bar as a frequency
+        ranking rather than a sequence — but nothing else on this page can be done until a segment
+        exists, so last was the one position that could not be right.
+
+        The LABEL says "New segment" while the tab also DELETES one. Deliberate: retiring a segment
+        has its own guided flow, and naming the tab for its destructive half would put "delete" in
+        front of an admin whose job here is almost always to add.
+
+        The `newsegment` deep-link slug is UNCHANGED — it is a public name once shipped. This is a
+        label and a position, not a rename.
+
+        `Staging` and `Documents` are gone (client, 2026-08-12: "I am honestly not using it"). They
+        were a manual folder tree — reconciliation and the Folder Access page now cover it from data.
+      */}
+      <div
+        style={{ ...s.toggleWrap, ...(hideTabs ? { display: "none" } : {}) }}
+      >
+        <div style={s.seg}>
+          {(
+            [
+              ["NewSegment", "New segment"],
+              ["Abbreviations", "Term Abbreviations"],
+              ["Levels", "Folder levels"],
+              ["Migrate", "Move existing folders"],
+              ["Reconciliation", "Folder Reconciliation"],
+            ] as Array<[Tab, string]>
+          ).map(([t, label], i, arr) => (
+            <button
+              key={t}
+              onClick={() => {
+                if (t === tab) return;
+                // An unsaved edit refuses the switch rather than losing it — see `dirty`.
+                if (dirty) {
+                  setTabBlocked(true);
+                  return;
+                }
+                setTabBlocked(false);
+                setTab(t);
+              }}
+              style={{
+                ...s.segBtn,
+                ...(i === arr.length - 1 ? { borderRight: "none" } : {}),
+                ...(tab === t ? s.segActive : {}),
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {tabBlocked && (
+        <div
+          style={{
+            fontSize: 13,
+            padding: "10px 12px",
+            borderRadius: 6,
+            marginBottom: 16,
+            lineHeight: 1.5,
+            ...NOTICE_ATTENTION,
+          }}
+        >
+          Finish or clear what you are editing first — leaving this tab would
+          lose it.
+        </div>
+      )}
+
+      {tab === "Abbreviations" ? (
+        <AbbreviationManager
+          context={context}
+          siteUrl={siteUrl}
+          onDirtyChange={(d) => {
+            setDirty(d);
+            // Clear the refusal as soon as its reason is gone, so a saved edit does not leave a
+            // warning telling them to do what they just did.
+            if (!d) setTabBlocked(false);
+            // Surfaced so a guided flow can hold its Next for the same reason this holds a tab
+            // switch — same shape as StructureManager's onStructureDirtyChange, below.
+            if (onAbbreviationsDirtyChange) onAbbreviationsDirtyChange(d);
+          }}
+          registerSave={onAbbreviationsRegisterSave}
+          onMissingChange={onAbbreviationsMissingChange}
+          onLoadingChange={onAbbreviationsLoadingChange}
+          initialSegmentKey={abbreviationsInitialSegmentKey}
+        />
+      ) : tab === "Levels" ? (
+        <StructureManager
+          context={context}
+          siteUrl={siteUrl}
+          onDirtyChange={(d) => {
+            setDirty(d);
+            if (!d) setTabBlocked(false);
+            // Surfaced so a guided flow can hold its Next for the same reason this holds a tab
+            // switch. Reported up, never acted on here — this component keeps its own behaviour.
+            if (onStructureDirtyChange) onStructureDirtyChange(d);
+          }}
+          // Reported up so a guided flow can re-read the segment list it read at mount. This
+          // component needs nothing from it — its own tab reads the chain fresh each time.
+          onSaved={onStructureSaved}
+        />
+      ) : tab === "Migrate" ? (
+        <SubtreeMigrator
+          context={context}
+          siteUrl={siteUrl}
+          onRunningChange={onMigrateRunningChange}
+          onPendingChange={onMigratePendingChange}
+          onApplied={onMigrateApplied}
+          onScanned={onMigrateScanned}
+          initialSegmentKey={migrateInitialSegmentKey}
+          uploadsPaused={migrateUploadsPaused}
+        />
+      ) : tab === "NewSegment" ? (
+        // Same dirty guard: a half-typed segment costs more to retype than a level edit, and
+        // losing it to a tab click would be the same silent discard.
+        <SegmentCreator
+          context={context}
+          siteUrl={siteUrl}
+          onDirtyChange={(d) => {
+            setDirty(d);
+            if (!d) setTabBlocked(false);
+          }}
+          onCreated={onSegmentCreated}
+          // Inverted here, once: the prop that travels is "hide", the prop SegmentCreator takes is
+          // "allow", and both defaults must mean the button is shown.
+          allowDelete={!hideSegmentDelete}
+          allowCreate={!hideSegmentCreate}
+          allowRecode={!hideSegmentRecode}
+        />
+      ) : tab === "Reconciliation" ? (
+        <div>
+          {/* ⚠ THE TECHNICAL PARAGRAPH IS GONE (client, 2026-09-06: *"Change and follow the exact
+              layout and exact copy"*). It described the whole mechanism — broken inheritance, role
+              mapping, `recon_gridMode`, the grid — to an admin whose question at that moment is
+              only "what will pressing this do to my site". None of it was wrong; all of it was for
+              a different reader.
+              ⚠ NOTHING IT DESCRIBED HAS CHANGED. The run still locks every folder it creates, still
+              grants from CRS Group Map, and is still safe to re-run. That behaviour is documented in
+              the code and in the run's own log, which names every folder and every grant. */}
+          {/* ⚠ SUPPRESSED INSIDE A GUIDED FLOW, where the step prints its own hint immediately above
+              this — the client's screenshot showed both, one under the other, saying the same thing
+              twice. `hideTabs` is the only signal this component has for "I am embedded in a flow",
+              and it is exactly true in that case. Standalone (All tools) still needs this line: there
+              is no step hint there, and without it the screen opens with no description at all. */}
+          {!hideTabs && (
+            <p
+              style={{
+                fontSize: 13,
+                color: "#444",
+                lineHeight: 1.5,
+                margin: "0 0 16px",
+              }}
+            >
+              Create folders and enable group access.
+            </p>
+          )}
+          {scopeSegs !== undefined && scopeSegs.length > 1 && (
+            /* SELECTIVE RECONCILIATION (register #18). Shown only where it can save anything — one
+               segment has nothing to choose between. Every box starts TICKED: the safe default is
+               today's behaviour, and defaulting to a subset would make the first run after an unseen
+               manual edit skip the segment that needed it.
+               ⚠ An unticked segment is NOT "clean" — nothing here inspects the site. It covers less,
+               that is all, and the copy says so. */
+            <div
+              style={{
+                margin: "4px 0 8px",
+                padding: "10px 12px",
+                background: "#fff",
+                border: "1px solid #cfe4d8",
+                borderRadius: 4,
+                fontSize: 12,
+              }}
+            >
+              {/* Heading and "Select all" on ONE line, to the client's design (2026-09-06). The
+                  count rule sits beside the heading rather than under the list, because it is a
+                  property of the choice and not a message about the current state. */}
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  marginBottom: 8,
+                }}
+              >
+                <div
+                  style={{ fontWeight: 600, color: "#1b1b1b", fontSize: 13 }}
+                >
+                  Select business segments to run{" "}
+                  <span
+                    style={{
+                      fontWeight: 400,
+                      color: "#8a8886",
+                      fontStyle: "italic",
+                    }}
+                  >
+                    (min. 1 segment)
+                  </span>
+                </div>
+                <button
+                  style={s.ghostBtn}
+                  disabled={busy}
+                  onClick={() => setScopePicked(undefined)}
+                >
+                  Select all
+                </button>
+              </div>
+              {/* ⚠ THE FILTER NARROWS THE LIST, NEVER THE RUN. An unticked segment is excluded
+                  because it is unticked, not because it is hidden — so typing here can never
+                  silently shrink what a run covers. `runScope` reads `scopePicked`, which this does
+                  not touch. */}
+              <input
+                type="search"
+                value={scopeFilter}
+                disabled={busy}
+                placeholder="Search segments"
+                onChange={(e) => setScopeFilter(e.target.value)}
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "7px 10px",
+                  marginBottom: 8,
+                  border: "1px solid #c8c8c8",
+                  borderRadius: 4,
+                  font: "inherit",
+                  fontSize: 12,
+                }}
+              />
+              {/* ⚠ SAYS WHEN THIS LIST IS NOT YOUR CONFIGURATION. The built-in fallback contains a
+                  PLACEHOLDER segment whose term-set GUID is stale, so running against it walks a term
+                  set that does not exist and can create a folder tree for a segment nobody made.
+                  Silent until 2026-08-21, when it offered four segments on a site with two. */}
+              {modeSource !== "config" && (
+                <div
+                  style={{
+                    margin: "0 0 8px",
+                    padding: "8px 10px",
+                    background: "#fff9f0",
+                    border: "1px solid #f3e3c3",
+                    borderRadius: 4,
+                    color: "#6b4a12",
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <strong>
+                    These are built-in segments, not your configuration.
+                  </strong>{" "}
+                  {modeSource === "empty"
+                    ? "The GDC Config list has no `mode` rows, so there is nothing to reconcile — create a segment first."
+                    : modeSource === "no-sortorder"
+                      ? "The mode rows were read without their SortOrder column, so the order below may not match your configuration."
+                      : "The GDC Config list could not be read, so this is a hardcoded list."}{" "}
+                  One of them — <strong>Upstream Malaysia Head Office</strong> —
+                  is a placeholder with a term set that does not exist on this
+                  site. <strong>Do not run this</strong> until the segment list
+                  matches the Term Abbreviations screen.
+                </div>
+              )}
+              {/* One segment per ROW, to the client's design. Scrolls past a handful rather than
+                  growing the page — nothing in here is absolutely positioned, so a scroll container
+                  cannot clip anything (the trap that has bitten three other screens). */}
+              <div
+                style={{
+                  maxHeight: 168,
+                  overflowY: "auto",
+                  border: "1px solid #edebe9",
+                  borderRadius: 4,
+                  marginBottom: 8,
+                }}
+              >
+                {scopeSegs
+                  .filter(
+                    (seg) =>
+                      (seg.stagingFolder ?? "")
+                        .toLowerCase()
+                        .indexOf(scopeFilter.trim().toLowerCase()) !== -1,
+                  )
+                  .map((seg) => {
+                    const on =
+                      scopePicked === undefined || scopePicked.has(seg.key);
+                    return (
+                      <label
+                        key={seg.key}
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "7px 10px",
+                          borderBottom: "1px solid #f3f2f1",
+                          cursor: busy ? "default" : "pointer",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={on}
+                          disabled={busy}
+                          onChange={() => {
+                            const next = new Set(
+                              scopePicked ?? scopeSegs.map((x) => x.key),
+                            );
+                            if (next.has(seg.key)) next.delete(seg.key);
+                            else next.add(seg.key);
+                            setScopePicked(next);
+                          }}
+                        />
+                        <span>{seg.stagingFolder}</span>
+                      </label>
+                    );
+                  })}
+                {/* An empty list after typing is the filter's doing, not a missing configuration —
+                    said plainly, or it reads as the segments having disappeared. */}
+                {scopeSegs.filter(
+                  (seg) =>
+                    (seg.stagingFolder ?? "")
+                      .toLowerCase()
+                      .indexOf(scopeFilter.trim().toLowerCase()) !== -1,
+                ).length === 0 && (
+                  <div style={{ padding: "10px 12px", color: "#666" }}>
+                    No segment matches &ldquo;{scopeFilter.trim()}&rdquo;. Clear
+                    the box to see them all.
+                  </div>
+                )}
+              </div>
+              {/* The refusal still has to be visible: with nothing ticked the run button is greyed,
+                  and a disabled button states that something is wrong without saying what. */}
+              <div
+                style={{
+                  color: runScope().refused ? "#a4262c" : "#666",
+                  marginBottom: 6,
+                }}
+              >
+                {runScope().refused ??
+                  `This run will cover ${runScope().label}.`}
+              </div>
+              <div style={{ color: "#666", marginTop: 6, lineHeight: 1.45 }}>
+                Leaving a segment out only means this run does not look at it —
+                it does not mean that segment is up to date. Site-wide checks
+                (site entry, library permissions, page access, administrator
+                pages) always run in full.
+              </div>
+            </div>
+          )}
+          {/* ── The client's green panel (2026-09-06) ─────────────────────────────────────────
+              REPLACES THE TWO-STAGE CONFIRM. Pressing "Update folder structure" used to open a bar
+              that asked again; the design has one button and the segments already on screen, so it
+              runs on the press.
+
+              ⚠ THAT IS ACCEPTABLE ONLY BECAUSE RECONCILIATION IS IDEMPOTENT. The confirm was
+              INFORMATIONAL, never protective - a second run of a finished segment writes nothing and
+              costs one read per folder. If anything destructive is ever added to this run, the
+              confirm has to come back.
+
+              ⚠ "KEEP THIS TAB OPEN" IS CARRIED OVER AND MUST STAY. It is the one sentence here that
+              is not decoration: the run happens in the browser, and a folder interrupted between
+              creation and locking stays INHERITING until the next run. It lost the confirm bar it
+              used to live in, not its reason. */}
+          <div
+            style={{
+              margin: "4px 0 8px",
+              padding: "14px 16px",
+              background: "rgba(235, 244, 231, 1)",
+              borderRadius: 6,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+              {/* The mark from the client's design. WHITE on the green disc, per *"the icon is also
+                  white"* — so it is drawn with `stroke="#fff"` rather than inheriting. */}
+              <span
+                style={{
+                  flexShrink: 0,
+                  width: 28,
+                  height: 28,
+                  borderRadius: "50%",
+                  background: "#0f6c3f",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                aria-hidden="true"
+              >
+                <svg width="16" height="16" viewBox="0 0 14 15" fill="none">
+                  <path
+                    d="M12.1307 12.1307C9.52722 14.7342 5.30612 14.7342 2.70262 12.1307C0.0991263 9.52722 0.099126 5.30612 2.70262 2.70262C5.30612 0.0991262 9.52722 0.0991262 12.1307 2.70262M12.75 0.75V3.35C12.75 3.38682 12.7202 3.41667 12.6833 3.41667H10.0833"
+                    stroke="#fff"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </span>
+              <div>
+                <div
+                  style={{
+                    fontWeight: 600,
+                    color: "#0f6c3f",
+                    fontSize: 14,
+                    marginBottom: 4,
+                  }}
+                >
+                  Update folder structure
+                </div>
+                <div
+                  style={{ color: "#3d4b42", fontSize: 12.5, lineHeight: 1.5 }}
+                >
+                  Run Folder Reconciliation to apply the latest folder
+                  structure, group, roles, and permissions.
+                  <br />
+                  <br />
+                  Keep this tab open until the process is complete. Do not
+                  refresh, close, or leave the page.
+                  <br />
+                  <br />
+                  If interrupted, run the reconciliation again before allowing
+                  users to access the folders.
+                </div>
+              </div>
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                marginTop: 12,
+                marginLeft: 40,
+                flexWrap: "wrap",
+              }}
+            >
+              {/* Greyed when refused, not merely inert. The inline green survived `disabled`, so an
+                  empty segment tick list produced a button that looked live and did nothing — which
+                  reads as a broken page, and the admin's next move is to reload rather than tick a
+                  segment. The reason renders beside the picker above. */}
+              <button
+                /* ⚠ NO ICON INSIDE THE BUTTON — the design has the mark ONCE, on the disc at the top
+                   left of the panel, and repeating it in the button is what threw the row out of
+                   line: the taller content pushed the label off the baseline of the "Usually a few
+                   minutes" note beside it (client, 2026-09-06). The earlier instruction that "the
+                   icon is also white" is satisfied by the disc, which is where the icon lives. */
+                style={{
+                  ...s.btn,
+                  background:
+                    busy || runScope().refused !== undefined
+                      ? "#b6c6bd"
+                      : "#0f6c3f",
+                  color: "#fff",
+                  border: "none",
+                  cursor:
+                    busy || runScope().refused !== undefined
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+                disabled={busy || runScope().refused !== undefined}
+                onClick={() => {
+                  runReconciliation().catch(() => undefined);
+                }}
+              >
+                {busy ? "Running…" : "Update folder structure"}
+              </button>
+              <span style={{ fontSize: 12, color: "#5f6f62" }}>
+                Usually a few minutes — longer for larger segments
+              </span>
+            </div>
+          </div>
+
+          {/* ⚠ "Remove stale Read grants" — the one-time repair for the leftover Read binding the
+              2026-09-14 Restricted View change left behind on MEMBER/GLOBAL/SEGVIEW/DEPTVIEW groups
+              — was built and run on both sites 2026-09-15/16, then REMOVED here on the client's
+              instruction (2026-09-16: "remove that tool for now"), same convention this file's
+              earlier archive-prune tools followed. Recoverable: the write it used
+              (`removeSingleRoleBinding`) is kept, not deleted, a few hundred lines up. */}
+
+          {(reconRunning ||
+            folderFeeds.Staging.length > 0 ||
+            folderFeeds.Documents.length > 0 ||
+            assignFeeds.Staging.length > 0 ||
+            assignFeeds.Documents.length > 0) && (
+            <div style={{ marginTop: 18 }}>
+              <style>{"@keyframes fmspin{to{transform:rotate(360deg)}}"}</style>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  gap: 10,
+                  marginBottom: 10,
+                }}
+              >
+                {reconRunning && (
+                  <span
+                    style={{
+                      display: "inline-block",
+                      width: 16,
+                      height: 16,
+                      border: "2px solid #cfe4d8",
+                      borderTopColor: "#0f6c3f",
+                      borderRadius: "50%",
+                      animation: "fmspin 0.8s linear infinite",
+                    }}
+                  />
+                )}
+                <strong style={{ fontSize: 13, color: "#0f6c3f" }}>
+                  {reconRunning
+                    ? reconPhase || "Working…"
+                    : "Reconciliation complete"}
+                  {reconRunning && (
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        fontWeight: 400,
+                        color: "#8a5a00",
+                      }}
+                    >
+                      — keep this tab open; leaving stops the run
+                    </span>
+                  )}
+                </strong>
+                <span style={{ fontSize: 12, color: "#666" }}>
+                  {reconCounts.folders} folders created · {reconCounts.assigns}{" "}
+                  groups assigned
+                </span>
+                {(() => {
+                  // reconDone, NOT reconCounts: the estimate must divide by steps
+                  // ATTEMPTED. reconCounts only rises when something changed, so on a
+                  // re-run it sits near zero against a full planned total and the
+                  // estimate runs away — the "~197m left" on a three-minute re-run.
+                  const elapsedMs = reconStartMs
+                    ? Math.max(0, reconNow - reconStartMs)
+                    : 0;
+                  if (!reconRunning) {
+                    // Final line after a run completes.
+                    return reconStartMs ? (
+                      <span style={{ fontSize: 12, color: "#666" }}>
+                        · took {fmtDur(elapsedMs)}
+                      </span>
+                    ) : null;
+                  }
+                  const remainingOps = Math.max(0, reconPlanned - reconDone);
+                  // Use the live rate once there are enough samples to mean anything.
+                  // 25, not 5: the first steps are all cheap "already there" skips, and
+                  // extrapolating a whole run from them under-reads it as badly as the
+                  // old counter over-read it.
+                  const remainMs =
+                    reconDone >= 25
+                      ? remainingOps * (elapsedMs / reconDone)
+                      : remainingOps *
+                          (RECON_WRITE_DELAY_MS + RECON_EST_HTTP_MS) +
+                        Math.floor(reconPlanned / RECON_BATCH_SIZE) *
+                          RECON_COOLDOWN_MS;
+                  const pct =
+                    reconPlanned > 0
+                      ? Math.min(
+                          100,
+                          Math.round((reconDone / reconPlanned) * 100),
+                        )
+                      : 0;
+                  return (
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "#0f6c3f",
+                        fontWeight: 600,
+                      }}
+                    >
+                      · {pct}% · ~{fmtDur(remainMs)} left
+                      <span style={{ color: "#999", fontWeight: 400 }}>
+                        {" "}
+                        ({fmtDur(elapsedMs)} elapsed
+                        {reconPlanned > 0
+                          ? `, ${reconDone}/${reconPlanned} steps`
+                          : ""}
+                        )
+                      </span>
+                    </span>
+                  );
+                })()}
+              </div>
+              {reconPlanned > 0 && reconRunning && (
+                <div
+                  style={{
+                    height: 6,
+                    borderRadius: 4,
+                    background: "#ececec",
+                    overflow: "hidden",
+                    marginBottom: 12,
+                  }}
+                >
+                  <div
+                    style={{
+                      height: "100%",
+                      background: "#0f6c3f",
+                      borderRadius: 4,
+                      transition: "width .3s ease",
+                      width: `${Math.min(100, (reconDone / reconPlanned) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
+              {/* One row per library, two panels each. Grouping by library rather than
+                  by kind is what the client actually reads: "is Staging done" is a
+                  question, "are all folders done across both libraries" is not. */}
+              {reconLibs().map((lib) => (
+                <div key={lib} style={{ marginBottom: 14 }}>
+                  {/* The title, not the key — `key={lib}` above stays the key, because a React key
+                      must be a stable identifier and two libraries could in principle share a title. */}
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#0f6c3f",
+                      textTransform: "uppercase",
+                      letterSpacing: ".05em",
+                      marginBottom: 6,
+                    }}
+                  >
+                    {libDisplayName(lib)}
+                  </div>
+                  {/* flexWrap + flex-basis makes the two panels sit side-by-side on wide
+                      screens and stack on narrow (mobile) — no media query needed. */}
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    {(
+                      [
+                        {
+                          title: `${libDisplayName(lib)} folders`,
+                          feed: folderFeeds[lib],
+                        },
+                        {
+                          title: `${libDisplayName(lib)} group assignments`,
+                          feed: assignFeeds[lib],
+                        },
+                      ] as const
+                    ).map((panel) => (
+                      <div
+                        key={panel.title}
+                        style={{
+                          flex: "1 1 280px",
+                          minWidth: 0,
+                          border: "1px solid #e5e5e5",
+                          borderRadius: 4,
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            padding: "6px 10px",
+                            background: "#f7f7f7",
+                            fontSize: 12,
+                            fontWeight: 600,
+                            color: "#444",
+                            borderBottom: "1px solid #eee",
+                          }}
+                        >
+                          {panel.title}
+                        </div>
+                        {/* ⚠ THE ROWS WRAP NOW; THEY USED TO SCROLL SIDEWAYS. The old note here read
+                            "rows keep nowrap (no ellipsis clip) so the whole message is reachable",
+                            and sliding left and right on EVERY row to read a line is not reachable in
+                            any useful sense — a run prints hundreds of them. Wrapping reaches the
+                            same end (nothing is clipped) with only vertical scrolling.
+                            overflowX stays as a backstop for a token with no break opportunity at
+                            all; with the text wrapping it should never actually engage. */}
+                        <div
+                          style={{
+                            maxHeight: 220,
+                            overflowY: "auto",
+                            overflowX: "auto",
+                            padding: "4px 0",
+                          }}
+                        >
+                          {panel.feed.length === 0 ? (
+                            <div
+                              style={{
+                                padding: "6px 10px",
+                                fontSize: 12,
+                                color: "#aaa",
+                              }}
+                            >
+                              —
+                            </div>
+                          ) : (
+                            panel.feed.map((it, i) => (
+                              <div
+                                key={i}
+                                style={{
+                                  display: "flex",
+                                  /* ⚠⚠ NO `flexWrap: "wrap"` HERE, AND ADDING IT BROKE THIS PANEL
+                                     OUTRIGHT (mine, commit 0751900, reported 2026-09-08 with a
+                                     screenshot). The text beside this icon was `white-space: nowrap`,
+                                     so its min-content width is the WHOLE sentence — the flex line
+                                     could never fit, so it broke on every single row and the panel
+                                     rendered as a bullet alone on one line with its message on the
+                                     next, over a horizontal scrollbar.
+                                     THE CLAIM THAT PASS RESTED ON WAS "wrap is inert while a row
+                                     fits". True, and a row holding a nowrap child WIDER THAN ITS
+                                     CONTAINER never fits — so it wrapped always, on every screen.
+                                     That is the one shape the reasoning missed, and it is the only
+                                     one of the sixteen rows that pass touched with a nowrap child. */
+                                  alignItems: "flex-start",
+                                  gap: 8,
+                                  padding: "3px 10px",
+                                  fontSize: 12,
+                                  color:
+                                    it.status === "admin" ? "#b45309" : "#333",
+                                }}
+                              >
+                                {progIcon(it.status)}
+                                {/* `minWidth: 0` is what lets this shrink inside the flex row at all
+                                    — a flex item's default `min-width: auto` floors it at its
+                                    min-content width, which for a long path is most of the sentence. */}
+                                <span
+                                  style={{
+                                    minWidth: 0,
+                                    overflowWrap: "break-word",
+                                  }}
+                                >
+                                  {it.text}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ⚠ THE TWO ONE-TIME ARCHIVE PRUNE TOOLS LIVED HERE AND ARE BOTH GONE (folder-level in
+              1.0.365.0, this library-root one in 1.0.381.0). Client, on the first: *"we don't want to
+              confuse the client with a new feature like this"*, and the same on this one once it had
+              run on both sites. They were repairs for access granted under the pre-2026-09-02 rule,
+              not features — a permanent button offering to strip permissions is exactly the kind of
+              thing an admin presses to find out what it does.
+
+              ⚠ THEY ARE RECOVERABLE, NOT LOST. Both shapes are in
+              `docs/superpowers/specs/2026-09-02-archive-audit-log-and-access-narrowing-runbook.md`,
+              which is where to start if a fourth segment is ever onboarded under the old rule. The
+              distinction that cost a 404 the first time: the folder-level pass used
+              `.../ListItemAllFields/roleassignments`, and a library ROOT has no `ListItemAllFields` —
+              it needs the LIST-scoped `lists(guid'...')/roleassignments`, whose removal takes BOTH
+              the principal id and the role-definition id, unlike the folder-scope call. */}
+        </div>
+      ) : loading ? (
+        <p style={{ fontSize: 13, color: "#666" }}>Loading folders…</p>
+      ) : (
+        /* UNREACHABLE from the tab bar: the manual folder tree below served the retired
+           `Staging`/`Documents` tabs. Kept compiling so its removal is a separate, reviewable
+           change rather than a 200-line deletion buried in a tab restructure. */
+        <>
+          {sections.length === 0 &&
+            (tree[NEW_TOP_LEVEL] ?? []).length === 0 && (
+              <p style={{ fontSize: 13, color: "#999" }}>
+                No top-level folders under {libTarget} yet — create the first
+                one below.
+              </p>
+            )}
+
+          {sections.map((mode) => {
+            const open = modeOpen[mode] !== false; // sections default to open
+            const nodes = tree[mode] ?? [];
+            return (
+              <div key={mode} style={{ marginBottom: 28 }}>
+                <div
+                  style={s.secHeader}
+                  onClick={() =>
+                    setModeOpen((prev) => ({
+                      ...prev,
+                      [mode]: open ? false : true,
+                    }))
+                  }
+                >
+                  <span style={s.ico}>{open ? "▾" : "▸"}</span>
+                  <p style={s.secTitle}>{mode}</p>
+                  {nodes.length > 0 && (
+                    <span style={s.badge}>{nodes.length}</span>
+                  )}
+                </div>
+
+                {open && (
+                  <>
+                    {nodes.length === 0 ? (
+                      <p style={{ fontSize: 13, color: "#999" }}>
+                        No folders found under {libTarget}/{mode}.
+                      </p>
+                    ) : (
+                      <div style={s.scrollPane}>
+                        {nodes.map((node) => renderNode(node, mode, 0))}
+                      </div>
+                    )}
+
+                    {libRoot && renderAddForm(mode, null)}
+                  </>
+                )}
+              </div>
+            );
+          })}
+
+          {/* New top-level folders staged for creation directly under the library root */}
+          {(tree[NEW_TOP_LEVEL] ?? []).length > 0 && (
+            <div style={{ marginBottom: 20 }}>
+              <p style={s.secTitle}>
+                New top-level folder
+                {(tree[NEW_TOP_LEVEL] ?? []).length !== 1 ? "s" : ""}
+              </p>
+              <div style={s.scrollPane}>
+                {(tree[NEW_TOP_LEVEL] ?? []).map((node) =>
+                  renderNode(node, NEW_TOP_LEVEL, 0),
+                )}
+              </div>
+            </div>
+          )}
+
+          {libRoot && (
+            <div style={{ paddingTop: 4 }}>
+              <button
+                style={s.addFolderBtn}
+                disabled={busy}
+                onClick={addTopLevel}
+              >
+                + Add top-level folder
+              </button>
+            </div>
+          )}
+        </>
+      )}
+
+      {treeTab && (
+        <div style={s.actions}>
+          <button
+            onClick={() => loadTree().catch(() => undefined)}
+            disabled={busy || loading}
+            style={{
+              ...s.btn,
+              marginRight: "auto",
+              background: "#fff",
+              color: "#0f6c3f",
+              border: "1px solid #0f6c3f",
+            }}
+          >
+            Refresh
+          </button>
+          <button
+            onClick={() => {
+              handleUpdate().catch(() => undefined);
+            }}
+            disabled={busy || loading || !hasChanges}
+            style={{
+              ...s.btn,
+              background:
+                !busy && !loading && hasChanges ? "#0f6c3f" : "#9bbfaa",
+              color: "#fff",
+              border: "none",
+              cursor: !busy && !loading && hasChanges ? "pointer" : "default",
+            }}
+          >
+            {busy ? "Updating…" : "Update"}
+          </button>
+        </div>
+      )}
+
+      {/* The log belongs to the run that produced it. Ungated it would sit under the mounted
+          structure screens too, where a stale reconciliation report reads as that screen's output. */}
+      {(tab === "Reconciliation" || treeTab) &&
+        log.length > 0 &&
+        (() => {
+          /* The log is split by WHERE and by SEVERITY, because those answer different
+           questions: "what happened in Documents" and "what do I have to fix".
+           Warnings and Errors are filtered VIEWS, so an entry appears both in its
+           library tab and in its severity tab — that is the point of triage.
+
+           Severity comes from the marker the message carries, not from `ok`. The
+           two disagree on purpose elsewhere in this file: several genuine warnings
+           are pushed with ok:true so they cannot gate the orphan prune, and a
+           missing abbreviation is pushed with ok:false. The glyph is the author's
+           actual intent; the flag is a control signal. */
+          const isError = (e: LogEntry): boolean =>
+            /✗|FAILED|✖/.test(e.msg) || (!e.ok && !/⚠|\?/.test(e.msg));
+          const isWarning = (e: LogEntry): boolean =>
+            !isError(e) && /⚠|(^|\s)\?\s/.test(e.msg);
+          const errors = log.filter(isError);
+          const warnings = log.filter(isWarning);
+          // An entry naming both libraries belongs to both; one naming neither (the
+          // prune, orphan repair and site-entry passes) is reachable only from All,
+          // which is why All exists and is the default.
+          /* ⚠ THE TABS WERE HARDCODED "Documents" AND "Staging", AND `Staging` MATCHED NOTHING.
+           Found live 2026-08-19: a from-scratch run that built hundreds of `Approval Document/…`
+           folders reported `Staging (0)`. The library was renamed in 2026-08-06 and this literal
+           silently stopped matching — gotcha #12 again, in the one place whose whole job is telling
+           you what happened. A zero here reads as "that library was skipped", which on a
+           reconciliation report is worse than no tab at all. It also had no HC tabs, so half the
+           libraries were reachable only from All.
+
+           `Documents` is a SUBSTRING of `HC Documents`, so a plain indexOf would file every HC line
+           under Documents as well. An occurrence preceded by "HC " belongs to the HC library and to
+           that one only. */
+          const mentionsLib = (msg: string, name: string): boolean => {
+            const hc = name.indexOf("HC ") === 0;
+            let i = msg.indexOf(name);
+            while (i !== -1) {
+              if (hc || !(i >= 3 && msg.slice(i - 3, i) === "HC ")) return true;
+              i = msg.indexOf(name, i + 1);
+            }
+            return false;
+          };
+          const forLib = (lib: string): LogEntry[] =>
+            log.filter((e) => mentionsLib(e.msg, lib));
+          const tabs: Array<{ key: string; rows: LogEntry[] }> = [
+            { key: "All", rows: log },
+            // Driven by reconLibs(), so a site without the HC pair shows two library tabs and a site
+            // with it shows four — never a tab for a library that does not exist.
+            ...reconLibs().map((l) => ({
+              key: libDisplayName(l),
+              rows: forLib(libDisplayName(l)),
+            })),
+            { key: "Warnings", rows: warnings },
+            { key: "Errors", rows: errors },
+          ];
+          const active = tabs.find((t) => t.key === logTab) ?? tabs[0];
+          const colourOf = (e: LogEntry): string =>
+            isError(e) ? "#d13438" : isWarning(e) ? "#b45309" : "#0f6c3f";
+          const glyphOf = (e: LogEntry): string =>
+            isError(e) ? "✗" : isWarning(e) ? "⚠" : "✓";
+          // Most messages were written with their own leading glyph, from before the
+          // renderer added one — hence "⚠ ⚠ Documents/…". Strip it at RENDER only:
+          // isError/isWarning classify by reading that glyph out of the text, so
+          // removing it from the stored message would silently demote every warning
+          // to a success. Leading spaces are preserved because indentation is how
+          // per-folder detail lines are nested under their folder.
+          const textOf = (e: LogEntry): string =>
+            e.msg.replace(/^(\s*)[✓⚠✗✖]\s*/, "$1");
+          return (
+            <div style={s.logBox}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                  marginBottom: 10,
+                }}
+              >
+                {tabs.map((t) => {
+                  const on = t.key === active.key;
+                  const alert =
+                    t.key === "Errors" && t.rows.length > 0
+                      ? "#d13438"
+                      : t.key === "Warnings" && t.rows.length > 0
+                        ? "#b45309"
+                        : undefined;
+                  return (
+                    <button
+                      key={t.key}
+                      onClick={() => setLogTab(t.key)}
+                      style={{
+                        padding: "5px 12px",
+                        borderRadius: 14,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        fontFamily: "inherit",
+                        border: `1px solid ${on ? (alert ?? "#0f6c3f") : "#d8d8d8"}`,
+                        background: on ? (alert ?? "#0f6c3f") : "#fff",
+                        color: on ? "#fff" : (alert ?? "#555"),
+                      }}
+                    >
+                      {t.key} ({t.rows.length})
+                    </button>
+                  );
+                })}
+              </div>
+              {active.rows.length === 0 ? (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color:
+                      active.key === "Errors" || active.key === "Warnings"
+                        ? "#0f6c3f"
+                        : "#999",
+                  }}
+                >
+                  {active.key === "Errors"
+                    ? "No errors. 🎉"
+                    : active.key === "Warnings"
+                      ? "No warnings — every folder got a group."
+                      : "Nothing logged for this view."}
+                </div>
+              ) : (
+                // Scrolls rather than growing the page: a full run logs thousands of
+                // lines and the tab bar has to stay reachable.
+                <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                  {active.rows.map((entry, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        fontSize: 12,
+                        color: colourOf(entry),
+                        marginBottom: 4,
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {glyphOf(entry)} {textOf(entry)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+      {toast && (
+        <div
+          style={{
+            ...s.toast,
+            background: toast.error ? "#d13438" : "#0f6c3f",
+          }}
+        >
+          {toast.message}
+          <button onClick={() => setToast(null)} style={s.toastClose}>
+            ✕
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}

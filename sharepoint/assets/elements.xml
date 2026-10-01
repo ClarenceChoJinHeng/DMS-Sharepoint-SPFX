@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Registers the application customizer that replaces the library command bar's
+  "+ Create or upload" with "+ New Folder".
+
+  WHY THIS FILE EXISTS
+  The customizer itself (src/extensions/hideAppBar/) was written and bundled long ago, and its
+  component id has been in the feature's componentIds all along — but bundling a component only
+  makes it AVAILABLE. An application customizer runs only where a UserCustomAction points at it,
+  and no such registration existed anywhere in this repo. So the code was deployed, correct, and
+  inert: the button kept reading "+ Create or upload" on every library, with nothing on any screen
+  or in any log to suggest the feature had ever been built.
+
+  BEFORE DEPLOYING THIS, check the site for a hand-made registration:
+    /_api/web/usercustomactions?$select=Title,Location,ClientSideComponentId
+  Two registrations of one component load it twice — two "+ New Folder" buttons, and a
+  MutationObserver each. If a row for c1d2e3f4-... is already there, delete it and let this file own
+  the registration, so the state is described by source control rather than by whoever ran a script
+  once.
+-->
+<Elements xmlns="http://schemas.microsoft.com/sharepoint/">
+  <CustomAction
+      Title="CRS New Folder Button"
+      Location="ClientSideExtension.ApplicationCustomizer"
+      ClientSideComponentId="c1d2e3f4-a5b6-47c8-d9e0-f1a2b3c4d5e6"
+      ClientSideComponentProperties="{}">
+  </CustomAction>
+  <!--
+    Bulk approve/reject, in the library command bar.
+
+    RegistrationId 101 is the DOCUMENT LIBRARY template, so this registers against every document
+    library on the site — there is no per-library registration for a command set. The command itself
+    then hides everywhere except the two approval libraries (see onListViewUpdated), which is why
+    that check lives in code rather than here.
+  -->
+  <CustomAction
+      Title="CRS Bulk Approve"
+      RegistrationId="101"
+      RegistrationType="List"
+      Location="ClientSideExtension.ListViewCommandSet.CommandBar"
+      ClientSideComponentId="6d1a9f47-3c82-4e15-b7a0-9f2e5c8d4136"
+      ClientSideComponentProperties="{}">
+  </CustomAction>
+</Elements>

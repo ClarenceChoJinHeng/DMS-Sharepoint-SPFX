@@ -1,0 +1,2506 @@
+import * as React from "react";
+import { useState, useEffect } from "react";
+import { SPHttpClient, SPHttpClientResponse } from "@microsoft/sp-http";
+import { WebPartContext } from "@microsoft/sp-webpart-base";
+import { Level, parseLevels, PENDING_LEVELS_FIELD } from "../../../shared/formModel";
+import {
+  effectiveOnDemandTiers,
+  isAbbreviatedLevel,
+  splitChain,
+  validateChain,
+} from "../../../shared/folderChain";
+import { paginate, Pager } from "../../../shared/pagination";
+
+/** Unit cards per page (the client's number, 2026-09-09). Three keeps the page to a screen or two. */
+const UNITS_PER_PAGE = 3;
+import {
+  backfillNeeds,
+  Collision,
+  Destination,
+  EffectiveTier,
+  effectiveTiers,
+  TierOptionInput,
+  findCollisions,
+  LeafFolder,
+  LeafPlan,
+  planLeaf,
+  suggestRename,
+  validateRename,
+} from "../../../shared/subtreeMigration";
+import { EVENT } from "../../../shared/auditLog";
+import { cachedListTitle, libraryTargets, LibTarget, LIST_SUFFIX } from "../../../shared/naming";
+import { primeNames } from "../../../shared/spNaming";
+import { UPLOAD_PAUSE_SETTING, uploadsArePaused } from "../../../shared/uploadPause";
+import { writeAudit } from "../../../shared/spAuditLog";
+import {
+  deleteFolderIfEmpty,
+  encodeServerRelativePath,
+  ensureFolder,
+  loadFolderMapRows,
+  moveFileTo,
+  resolveProxyLoginName,
+  stampEditorAsProxy,
+} from "../../../shared/dmsFolderMap";
+import { NOTICE_ATTENTION } from "../../../shared/noticeStyles";
+import {
+  CURRENT_PROXY_ACCOUNT_EMAIL,
+  CURRENT_PROXY_ACCOUNT_NAME,
+} from "../../../shared/displayName";
+
+/**
+ * Subtree Migration — bring documents already filed into the shape the structure now describes.
+ *
+ * Piece 3 of the configurable folder chain, spec
+ * `docs/superpowers/specs/2026-08-11-subtree-migration-design.md`.
+ *
+ * ONE model for all three edits (spec §3.0): work out which TIER each path segment belongs to,
+ * then rebuild the path in tier order. A tier with no segment is a gap the admin fills (an ADD);
+ * segments out of order come back sorted (a REORDER); a segment whose tier is gone is absent from
+ * the result (a REMOVE, and therefore a collapse). The first build looked only at folders directly
+ * under the Unit, which detects an insertion and nothing else — it reported "nothing to move" for a
+ * reorder and activated the new structure against folders still in the old shape.
+ *
+ * Every decision lives in `shared/subtreeMigration.ts` and is unit-tested. This file is the REST
+ * calls and the rendering.
+ */
+
+/** Depth guard for the folder walk. The deepest legitimate chain is nowhere near this. */
+const MAX_DEPTH = 8;
+
+/** Conflict rows rendered before the list is cut short. See the note beside it. */
+const CONFLICT_LIMIT = 50;
+
+const s: Record<string, React.CSSProperties> = {
+  msg:      { fontSize: 13, padding: "10px 12px", borderRadius: 6, marginBottom: 16, lineHeight: 1.5 },
+  err:      { background: "#fdf3f3", border: "1px solid #f1c9c9", color: "#a4262c" },
+  warn:     { ...NOTICE_ATTENTION },
+  ok:       { background: "#f1f8f4", border: "1px solid #c6e3d1", color: "#0f6c3f" },
+  card:     { border: "1px solid #e1e1e1", borderRadius: 8, padding: "14px 16px", marginBottom: 12, background: "#fff" },  /* 17px, not 14 (client, 2026-09-08, having tried it in devtools first). This is the only line
+     that says WHICH UNIT a wall of paths belongs to, and at 14px it read as another path rather
+     than as the heading over them - the more so now the list beneath it scrolls, because the
+     heading is the one fixed thing an admin scrolls back to. */
+  unitName: { fontSize: 17, fontWeight: 600, color: "#1b1b1b", fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
+  /* The library heading inside a unit card (client, 2026-09-08: 16px and black). It was 12px in
+     #605e5c — the same tone as the folder lines beneath it, so it read as one of them rather than as
+     the thing that separates six libraries' worth of folders from each other.
+     `#1b1b1b` is `unitName`'s black, not a new one: the unit heading above stays a step larger at
+     17px, so the two still read as a hierarchy rather than as two headings of equal weight. */
+  libName:  { fontSize: 16, fontWeight: 600, color: "#1b1b1b" },
+  /* THE PER-UNIT FOLDER LIST SCROLLS (client, 2026-09-08: *"put overscroll for each section, it
+     is too long"*). GHO alone scanned 131 folders across 5 units, each entry a path, an action
+     and its filenames - thousands of pixels of one page, with the Rebuild button somewhere past
+     the end of it.
+
+     WARN: THE HEADING AND THE TIER DROPDOWNS STAY OUTSIDE THIS BOX, and that is not tidiness.
+     Those selects are what decide the plan for every folder listed below them; scrolled away
+     with the list, an admin reads "needs a value chosen above" with the control that sets it off
+     screen. Same rule the abbreviation editor follows - only the rows move.
+
+     WARN: SAFE HERE ONLY BECAUSE NOTHING INSIDE IS ABSOLUTELY POSITIONED. A scroll container
+     clips such a child, which has already cost this project three screens (the people picker,
+     the upload form info panels, the member-add dropdown). The only fixed element in this file
+     is the rename dialog, which renders far outside these groups. Re-check before adding a
+     popover to a folder row. A native select is unaffected - the browser draws its list outside
+     the DOM flow.
+
+     overscroll-behavior: contain stops the PAGE scrolling on when the box hits its end, which
+     matters with five of these stacked. 360px is one number, tuned to show several entries; it
+     is a cap, so a short unit still renders at its own height and does not scroll at all. */
+  scroller: { maxHeight: 360, overflowY: "auto", overscrollBehavior: "contain", paddingRight: 6, marginTop: 4 },
+  move:     { fontSize: 12, color: "#605e5c", fontFamily: "Consolas, monospace", wordBreak: "break-all", padding: "4px 0" },
+  // The full server-relative path, under the summary line. Quieter than the line above it because it
+  // is for confirming WHICH folder, not for reading at a glance.
+  // The folder's full path, and the FIRST thing on each entry (client, 2026-08-19: *"give the full
+  // Path of the folder and then give the file list under that path"*). It leads because it is the
+  // only unambiguous identifier — the tier segments alone repeat across units and libraries.
+  pathLine: { fontSize: 12, color: "#323130", fontFamily: "Consolas, monospace", wordBreak: "break-all" },
+  // What will happen to it, under the path.
+  action:   { fontSize: 12, color: "#605e5c", paddingLeft: 12 },
+  // The documents inside. Present only when there ARE some — an empty folder already says "empty" on
+  // the line above, and a blank list under it would read as a failed load.
+  fileList: { fontSize: 11, color: "#0f6c3f", wordBreak: "break-word", paddingLeft: 24 },
+  // One folder = one block, separated so the path/action/files grouping is visible at a glance.
+  entry:    { padding: "6px 0", borderTop: "1px solid #f0f0f0" },
+  /* The FIRST entry under a library heading (client, 2026-09-08: "ensure the first border top always
+     have border: 1px solid black"). It is what separates the heading from its list; the hairline
+     between entries stays faint, so one strong rule per library reads as a section break instead of
+     six identical lines. */
+  entry1:   { padding: "6px 0", borderTop: "1px solid #000" },
+  btn:      { background: "#0f6c3f", color: "#fff", border: "none", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
+  ghost:    { background: "#fff", color: "#1b1b1b", border: "1px solid #c8c8c8", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "pointer" },
+  off:      { background: "#f3f2f1", color: "#a19f9d", border: "1px solid #e1dfdd", borderRadius: 4, padding: "7px 14px", fontSize: 13, cursor: "not-allowed" },
+  label:    { display: "block", fontSize: 12, fontWeight: 600, color: "#323130", margin: "10px 0 4px" },
+  input:    { width: "100%", boxSizing: "border-box", padding: "7px 9px", fontSize: 13, border: "1px solid #c8c8c8", borderRadius: 4 },
+  small:    { boxSizing: "border-box", padding: "5px 8px", fontSize: 12, border: "1px solid #c8c8c8", borderRadius: 4, fontFamily: "Consolas, monospace", overflowWrap: "break-word" },
+  hint:     { fontSize: 11, color: "#8a8886", marginTop: 3, lineHeight: 1.5 },
+  log:      { fontSize: 12, fontFamily: "Consolas, monospace", maxHeight: 320, overflowY: "auto", border: "1px solid #e1e1e1", borderRadius: 6, padding: "8px 10px", background: "#fafafa", overflowWrap: "break-word" },
+  logRow:   { padding: "2px 0", wordBreak: "break-all" },
+  badge:    { fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 10, marginLeft: 8 },
+  modalBg:  { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 },
+  modal:    { background: "#fff", borderRadius: 8, padding: 24, maxWidth: 560, width: "100%", maxHeight: "80vh", overflowY: "auto" },
+  conflict: { border: "1px solid #f0d9b5", background: "#fffdf8", borderRadius: 6, padding: "10px 12px", marginBottom: 10 },
+  row:      { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 6 },
+};
+
+/** A DMS Config `mode` row, reduced to what this screen needs. */
+interface SegmentRow {
+  id: number;
+  key: string;
+  label: string;
+  stagingFolder: string;
+  /** The LIVE chain — what uploads are using right now. */
+  chain: Level[];
+  /**
+   * A chain authored in the Folder levels tab but not yet applied. When present it is the TARGET
+   * shape this screen migrates towards, and applying it is the last step of the run.
+   */
+  pending?: Level[];
+  chainError?: string;
+}
+
+/** One library, resolved. Both hold the same tree and a unit can be adrift in one only. */
+interface LibCtx {
+  /* ⚠ WAS `"Staging" | "Documents"`, which is how the HC pair went unmigrated for four days without
+     anything reporting it (register #15). The HC libraries could not even be EXPRESSED here. Retyping
+     this first is what made the rest mechanical: the compiler found every place that assumed two. */
+  key: LibTarget;
+  title: string;
+  urlSegment: string;
+  /** Content approval on. Decides whether folders this tool creates must be stamped Approved. */
+  moderated: boolean;
+}
+
+interface TermLite {
+  id: string;
+  label: string;
+  /**
+   * Folder code, when this term's LEVEL is `abbreviated` and the term has an abbreviation row.
+   *
+   * ⚠ Carried on the option rather than looked up again at the dropdown, so the code that names the
+   * folder and the code the plan was built from are the same value. Two lookups is how a destination
+   * comes to disagree with what the scan decided.
+   */
+  code?: string;
+}
+
+/** Every file in one library, indexed the two ways this screen needs. */
+interface FileIndex {
+  /** File names by containing folder path — for collision detection. */
+  byFolder: Record<string, string[]>;
+}
+
+/** What the scan found for one unit in one library. */
+interface UnitScan {
+  lib: LibCtx;
+  unitPath: string;
+  /** `nbpolho/cds/upsupport` — identity shared across libraries, so one choice serves both. */
+  tail: string;
+  /** Target chain tiers that apply to this unit. */
+  tiers: EffectiveTier[];
+  /** Options per chain index, for the destination pickers and the metadata stamp. */
+  optionsByTier: Record<number, TermLite[]>;
+  /**
+   * Option lists of tiers that USED to exist and no longer do. Lets a segment belonging to a
+   * removed tier be told apart from one belonging to nothing — a deliberate collapse versus a
+   * folder nobody recognises.
+   */
+  /** Options of levels that USED to be in the chain, with codes where those levels were coded. */
+  removedOptions: TierOptionInput[][];
+  leaves: LeafFolder[];
+  /** Files in a folder that also has subfolders — reported, never moved. */
+  looseFiles: string[];
+  /** Set when this unit cannot be planned; it is reported and skipped. */
+  unresolved?: string;
+}
+
+/**
+ * Three dots that fade in turn, for a button whose work takes a while.
+ *
+ * Client, 2026-09-07: *"can you add like the ... the dots moving?"* — a static "Checking…" on a
+ * scan that walks every folder in six libraries gives no sign it is still alive, and a run that
+ * looks dead is one somebody reloads mid-way.
+ *
+ * ⚠ SVG WITH SMIL, NOT A CSS ANIMATION, AND THAT IS THE HOUSE PATTERN RATHER THAN A PREFERENCE.
+ * This file styles everything with inline objects, and **inline styles cannot carry `@keyframes`**
+ * — the same reason `GroupManager`'s spinner is an SVG with `animateTransform`. Adding a stylesheet
+ * for three dots would also mean a `<style>` template literal, which is where the backtick trap in
+ * this codebase keeps biting.
+ *
+ * `aria-hidden` because the button's own text already says "Checking"; a screen reader announcing
+ * three animated dots adds nothing.
+ */
+function MovingDots(): React.ReactElement {
+  // Staggered by a third of the cycle each, so one dot is always at full opacity.
+  const delays = ["0s", "0.32s", "0.64s"];
+  return (
+    <svg width="18" height="6" viewBox="0 0 18 6" aria-hidden="true" style={{ marginLeft: 4 }}>
+      {delays.map((begin, i) => (
+        <circle key={begin} cx={3 + i * 6} cy="3" r="2" fill="currentColor" opacity="0.25">
+          <animate
+            attributeName="opacity"
+            values="0.25;1;0.25"
+            dur="0.96s"
+            begin={begin}
+            repeatCount="indefinite"
+          />
+        </circle>
+      ))}
+    </svg>
+  );
+}
+
+export interface SubtreeMigratorProps {
+  context: WebPartContext;
+  siteUrl: string;
+  /**
+   * Whether uploads are paused site-wide, as the HOST already knows it.
+   *
+   * ⚠ ONLY `true` HIDES THE WARNING. `undefined` — the standalone mount, or a config list that could
+   * not be read — keeps showing it, because a reminder nobody needed costs a glance while a missing
+   * one costs a migration that can never finish.
+   *
+   * Reported on site 2026-09-07: *"the error keeps showing for some reason even after I off the
+   * upload"*. The banner was rendered UNCONDITIONALLY — a permanent reminder wearing the costume of
+   * a state. That is the same mistake already recorded against StagingAccess's "Unable to verify
+   * current permissions": a state drawn as a static sibling tells the admin something is wrong on
+   * every visit and trains them to ignore it on the day it is true.
+   */
+  uploadsPaused?: boolean;
+  /**
+   * True while this screen is SCANNING or MOVING, so a host can hold its own navigation.
+   *
+   * Both phases run entirely in this page, so unmounting the component stops them part-way. The
+   * scan is the case that bit on site (2026-08-19): the guided flow's Next stayed live while the
+   * button read "Checking…", and pressing it would have thrown the scan away with nothing said.
+   * Same report-upward shape as `onReconRunningChange`.
+   */
+  onRunningChange?: (running: boolean) => void;
+  /**
+   * Called once the staged chain has actually been switched on.
+   *
+   * ⚠ WITHOUT THIS THE NEW `migrate` GATE WOULD NEVER RELEASE. It reads `pendingLevels`, which comes
+   * from a segment list the host read earlier — applying the chain here does not change that copy,
+   * so Next would stay held until the admin navigated away and back. Same shape and same reason as
+   * `onSaved` on the levels screen: the host re-reads the list that OWNS the fact.
+   */
+  onApplied?: () => void;
+  /**
+   * A CHECK has finished — reported however it ended, including an error.
+   *
+   * ⚠ It is the ONLY thing that can say whether any folders need moving. Since 2026-09-09 the flow
+   * gates Next on it, because the two cases that made the old `pendingLevels` lock wrong — subunit
+   * terms added, an abbreviation changed — stage nothing, so nothing else would hold the step.
+   */
+  onScanned?: () => void;
+  /**
+   * True when a scan has found folders to rebuild and the run has NOT happened yet.
+   *
+   * Walking past this step with moves outstanding leaves the segment half-changed: `PendingLevels`
+   * still set, folders still in the old shape, and the next step turns uploads back on over it.
+   * False when the scan found nothing — a segment with no work is a legitimate end state and must
+   * not trap the flow.
+   */
+  onPendingChange?: (pending: boolean) => void;
+  /**
+   * The segment the HOST has already chosen, pre-selecting this screen's own picker.
+   *
+   * ⚠ WHY (client, 2026-08-20): *"After selecting I got to select again which is weird."* The guided
+   * flow asks for the segment once and prints it in the header, then this screen asked again with an
+   * empty box — so the admin picks Group Head Office, sees "Segment: Group Head Office" at the top,
+   * and is asked for it a second time. Same family as the segment picker standing in front of steps
+   * that make no use of one (`stepUsesSegment`): the flow already knows, so it should not ask.
+   *
+   * ⚠ APPLIED WHEN THE SEGMENTS ARRIVE, NOT AT MOUNT. The list is loaded async, so a `useState`
+   * initialiser would run before there is anything to match against — the `initialX`-is-read-once
+   * trap that cost a live bug in `FolderManager`. It also only fills a picker the admin has not
+   * touched, so it can never override a deliberate choice.
+   */
+  initialSegmentKey?: string;
+}
+
+// Client, 2026-09-26. @media only (the rename dialog is position: fixed). important beats the
+// inline s.card padding. NO BACKTICKS IN THIS STRING.
+const MIG_MOBILE_CSS = `
+  @media (max-width: 424px) {
+    .crs-mig-unitcard { padding: 14px 9px !important; }
+  }
+`;
+
+export default function SubtreeMigrator({ context, siteUrl, onRunningChange, onPendingChange, onApplied, onScanned, initialSegmentKey, uploadsPaused }: SubtreeMigratorProps): React.ReactElement {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | undefined>(undefined);
+  const [segments, setSegments] = useState<SegmentRow[]>([]);
+  const [legacySets, setLegacySets] = useState<{ year: string; docType: string }>({ year: "", docType: "" });
+  const [chosen, setChosen] = useState<string>("");
+  /**
+   * Pre-select the host's segment once the list has loaded.
+   *
+   * Guarded on `chosen` being empty so it fills a picker nobody has touched and never overrides a
+   * deliberate choice — including the admin deliberately picking a DIFFERENT segment here. Matching
+   * on `key`, the same value the option elements carry, so a segment absent from the list (a
+   * different site, a retired segment) simply leaves the picker empty rather than selecting nothing
+   * and looking broken.
+   */
+  useEffect(() => {
+    if (!initialSegmentKey || chosen !== "") return;
+    if (segments.filter((x) => x.key === initialSegmentKey).length === 0) return;
+    setChosen(initialSegmentKey);
+  }, [segments, initialSegmentKey]);
+  const [scanning, setScanning] = useState(false);
+  const [scanError, setScanError] = useState<string | undefined>(undefined);
+  const [scans, setScans] = useState<UnitScan[] | undefined>(undefined);
+  const [fileIndex, setFileIndex] = useState<Record<string, FileIndex>>({});
+  /** Destinations per unit tail, keyed by chain index. */
+  const [dest, setDest] = useState<Record<string, Record<number, Destination | undefined>>>({});
+  /** Resolved collisions: new file name, keyed by SOURCE file path. */
+  const [renames, setRenames] = useState<Record<string, string>>({});
+  /* Which page of unit cards is showing (client, 2026-09-09: *"it is too long, can we use reuse the
+     pagination to show three cards and then next pagination?"*). A card holds up to six library
+     sections now, each with its own heading, dropdown and folder list, so twelve of them is a very
+     long page. */
+  const [unitPage, setUnitPage] = useState(0);
+  /**
+   * Whether uploads are paused, as far as THIS screen knows. `undefined` means not established.
+   *
+   * ⚠⚠ THE PROP ALONE IS NOT ENOUGH, and that is the whole reason this exists. `uploadsPaused` is
+   * passed only by the GUIDED FLOW's mount; the standalone Migrate tab has no step 1 and passes
+   * nothing, so it is permanently `undefined` there. Gating `canRun` on the prop would have blocked
+   * that tab for ever — and that tab is precisely the route with no forward gate, i.e. the one the
+   * gate is for.
+   */
+  const [pausedNow, setPausedNow] = useState<boolean | undefined>(uploadsPaused);
+  const [running, setRunning] = useState(false);
+  const [log, setLog] = useState<Array<{ text: string; ok: boolean }>>([]);
+  const [done, setDone] = useState<string | undefined>(undefined);
+
+  // ONE effect covering BOTH phases, rather than a call beside every setScanning/setRunning: those
+  // are set in several places each, and the one that got forgotten would be the failure path — which
+  // is exactly when a host must be released rather than left padlocked for ever.
+  useEffect(() => {
+    if (onRunningChange) onRunningChange(scanning || running);
+  }, [scanning, running]);
+
+  /* The host's value wins whenever it has one: the flow's own step 1 re-reads the setting when its
+     toggle is pressed and reports it down, so this keeps the button in step with that without a
+     second request. */
+  useEffect(() => {
+    if (uploadsPaused !== undefined) setPausedNow(uploadsPaused);
+  }, [uploadsPaused]);
+
+  const [confirm, setConfirm] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+
+  const webPath = new URL(siteUrl).pathname.replace(/\/$/, "");
+  /**
+   * The run log, mirrored outside React state so the audit row can carry it.
+   *
+   * A ref, not `log`: reading state from inside the run would give the render-time value — an empty
+   * array — which is the same stale-closure trap that would otherwise have made reconciliation
+   * record zero counts.
+   */
+  const logBuffer = React.useRef<string[]>([]);
+
+  const say = (text: string, ok: boolean): void => {
+    logBuffer.current.push(`${ok ? "✓" : "✗"} ${text}`);
+    setLog((prev) => prev.concat([{ text, ok }]));
+  };
+
+  /* ---------- Load ------------------------------------------------------- */
+
+  /**
+   * Staged chains by config item id, read separately from the main query.
+   *
+   * `PendingLevels` does not exist on a site that has never staged a change, and one unknown name
+   * in `$select` fails the WHOLE request with HTTP 400 rather than returning null (gotcha #11).
+   */
+  const loadPendingChains = async (): Promise<Record<number, Level[]>> => {
+    const out: Record<number, Level[]> = {};
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+          `/items?$select=Id,${PENDING_LEVELS_FIELD}&$filter=ConfigType eq 'mode'&$top=200`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return out;
+      for (const r of ((await res.json()).value ?? []) as Array<Record<string, unknown>>) {
+        const raw = r[PENDING_LEVELS_FIELD];
+        if (typeof raw !== "string" || raw.trim() === "") continue;
+        const parsed = parseLevels(raw);
+        if (parsed.length > 0) out[Number(r.Id)] = parsed;
+      }
+    } catch {
+      // Treated as "nothing staged": the migration then targets the LIVE shape, finds no drift and
+      // moves nothing — the safe direction to fail in.
+    }
+    return out;
+  };
+
+  const loadSegments = async (): Promise<SegmentRow[]> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+        `/items?$select=Id,Title,ModeLabel,StagingFolder,Levels&$filter=ConfigType eq 'mode'&$top=200`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) throw new Error(`the configuration list returned HTTP ${res.status}`);
+    const data = await res.json();
+    const pending = await loadPendingChains();
+    return ((data.value ?? []) as Array<{
+      Id: number; Title?: string; ModeLabel?: string; StagingFolder?: string; Levels?: string;
+    }>)
+      .map((r) => {
+        const chain = parseLevels(r.Levels ?? "");
+        const row: SegmentRow = {
+          id: r.Id,
+          key: (r.Title ?? "").trim(),
+          label: (r.ModeLabel ?? r.Title ?? "").trim(),
+          stagingFolder: (r.StagingFolder ?? "").trim(),
+          chain,
+        };
+        const staged = pending[r.Id];
+        if (staged && staged.length > 0) row.pending = staged;
+        // Validate the chain being migrated TOWARDS. A malformed staged chain has no correct
+        // destination, and applying it at the end of the run would break every upload.
+        const err = validateChain(row.pending ?? chain);
+        if (err) row.chainError = err.message;
+        return row;
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+  };
+
+  const loadLegacyTermSets = async (): Promise<{ year: string; docType: string }> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+        `/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'&$top=200`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) return { year: "", docType: "" };
+    const rows = ((await res.json()).value ?? []) as Array<{ Title?: string; SettingValue?: string }>;
+    const get = (k: string): string =>
+      (rows.filter((r) => (r.Title ?? "").trim() === k)[0]?.SettingValue ?? "").trim();
+    return { year: get("termSet_yearPeriod"), docType: get("termSet_documentType") };
+  };
+
+  /**
+   * Read the site-wide pause straight from `CRS Config`.
+   *
+   * ⚠⚠ IT INTERPRETS AN UNREADABLE ANSWER AS **NOT PAUSED**, WHICH IS THE OPPOSITE DIRECTION FROM
+   * `uploadsArePaused`'s own documented default — and deliberately so, because the two decisions have
+   * opposite costs. That helper answers *"should this uploader be blocked?"*, where a wrong `true`
+   * takes every uploader on the site down over a transient read. This answers *"is it safe to move
+   * folders?"*, where a wrong `true` migrates on top of live traffic — the loop that cost three days
+   * on GHO. So `undefined` here must never satisfy the gate.
+   *
+   * The helper is still what parses the VALUE, so `yes`/`true`/`on`/`1`/`paused` mean the same thing
+   * on this screen as they do to an uploader. Only the treatment of a failed READ differs.
+   */
+  const readPause = async (): Promise<boolean | undefined> => {
+    try {
+      // Names first: `cachedListTitle` answers the legacy `DMS Config` until priming settles, which
+      // 404s on a CRS-renamed site — the 1.0.207.0 race, paid for three times in this project.
+      await primeNames(context.spHttpClient, siteUrl).catch(() => undefined);
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+          `/items?$select=Title,SettingValue&$filter=ConfigType eq 'setting'&$top=200`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) return undefined;
+      const rows = ((await res.json()).value ?? []) as Array<{ Title?: string; SettingValue?: string }>;
+      const row = rows.filter((r) => (r.Title ?? "").trim() === UPLOAD_PAUSE_SETTING)[0];
+      // A MISSING row is a real answer: nothing has ever paused uploads, so they are on.
+      return uploadsArePaused(row?.SettingValue);
+    } catch {
+      return undefined;
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    // Names first: an unprimed cache resolves to the legacy DMS titles, which 404 on a renamed site
+    // and present as "the configuration could not be read".
+    /* Only where the host did not supply it — the guided flow has already read this fact, and a
+       second read would be a second answer to one question. */
+    if (uploadsPaused === undefined) {
+      readPause()
+        .then((v) => setPausedNow(v))
+        .catch(() => undefined);
+    }
+    primeNames(context.spHttpClient, siteUrl)
+      .catch(() => undefined)
+      .then(() => loadLegacyTermSets())
+      .then((sets) => {
+        if (!cancelled) setLegacySets(sets);
+      })
+      .catch(() => undefined)
+      .then(() => loadSegments())
+      .then((rows) => {
+        if (cancelled) return;
+        setSegments(rows);
+        setLoading(false);
+      })
+      .catch((e: Error) => {
+        if (cancelled) return;
+        setLoadError(e.message);
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* ---------- Term store ------------------------------------------------- */
+
+  // A Map in a ref, not state: the scan reads it inside one long async loop, where a state update
+  // would not be visible to the next iteration — every unit would re-fetch the same flat set.
+  const termCache = React.useRef(new Map<string, TermLite[] | undefined>());
+
+  /**
+   * Read a term collection. `undefined` means the call FAILED — distinct from an empty array,
+   * which means "this term has no children". Every optional-tier decision rests on that
+   * difference: empty skips a tier, unknown must skip the whole unit.
+   */
+  const loadTerms = async (url: string): Promise<TermLite[] | undefined> => {
+    const cache = termCache.current;
+    if (cache.has(url)) return cache.get(url);
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        url,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json" } },
+      );
+      if (!res.ok) {
+        cache.set(url, undefined);
+        return undefined;
+      }
+      const data = await res.json();
+      const out = ((data.value ?? []) as Array<{ id: string; labels?: Array<{ name?: string; isDefault?: boolean }> }>)
+        .map((t) => ({
+          id: t.id,
+          label:
+            (t.labels ?? []).filter((l) => l.isDefault !== false)[0]?.name ??
+            (t.labels ?? [])[0]?.name ??
+            "",
+        }))
+        .filter((t) => t.label !== "");
+      cache.set(url, out);
+      return out;
+    } catch {
+      cache.set(url, undefined);
+      return undefined;
+    }
+  };
+
+  const setChildren = (setGuid: string): Promise<TermLite[] | undefined> =>
+    loadTerms(`${siteUrl}/_api/v2.1/termStore/sets/${setGuid}/children`);
+
+  const termChildren = (setGuid: string, termId: string): Promise<TermLite[] | undefined> =>
+    loadTerms(`${siteUrl}/_api/v2.1/termStore/sets/${setGuid}/terms/${termId}/children`);
+
+  /* ---------- Folders and files ------------------------------------------ */
+
+  /**
+   * Child folders of a path. The path goes in as an OData alias, never an inline literal —
+   * gotcha #9: a long encoded path in a quoted literal returns HTTP 400, which reads as a missing
+   * folder, and these are the deepest paths in the system.
+   */
+  const childFolders = async (
+    path: string,
+  ): Promise<Array<{ name: string; url: string; uniqueId: string }>> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.get(
+      // ⚠ `UniqueId` IS THE RENAME-PROOF KEY, and it rides along in this request for nothing. See
+      // the Folder Map index in `collectScans`: a folder's stored ADDRESS goes stale the moment any
+      // ancestor is renamed, and its UniqueId never does.
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/Folders?$select=Name,ServerRelativeUrl,UniqueId` +
+        `&@f='${encodeServerRelativePath(path)}'&$orderby=Name`,
+      SPHttpClient.configurations.v1,
+      { headers: { Accept: "application/json;odata=nometadata" } },
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return ((data.value ?? []) as Array<{ Name?: string; ServerRelativeUrl?: string; UniqueId?: string }>)
+      /* ⚠ THE `Forms` EXCLUSION IS GONE (2026-09-07), AND IT WAS SKIPPING REAL DOCUMENTS.
+         It read `f.Name !== "Forms"` and was plainly meant to skip SharePoint's own system folder —
+         but that folder lives at `<library>/Forms`, a SIBLING of the segment folder, and this walk
+         starts at `<library>/<stagingFolder>` and only ever descends. So the exclusion could never
+         reach the system folder, and the one thing it did reach was a Document Type the client had
+         genuinely named **Forms**.
+
+         Found on site: `ApprovalDocument/GHO/GCA/EG/2024/Forms` held a pending upload, the scan
+         listed every sibling of it and not Forms, so that document would never have been migrated —
+         and `2024` could never empty, leaving the chain pending for ever. Silent in both directions:
+         nothing reported the folder, and nothing reported the file.
+
+         If a system folder ever DOES need excluding, exclude it by PATH at the library root, never
+         by name at every depth — a name filter cannot tell a system folder from a term. */
+      .filter((f) => (f.Name ?? "") !== "")
+      .map((f) => ({
+        name: f.Name as string,
+        url: f.ServerRelativeUrl as string,
+        uniqueId: f.UniqueId ?? "",
+      }));
+  };
+
+  /**
+   * Every LEAF folder below a unit — one with no subfolders.
+   *
+   * Leaves are where documents live, because the upload form always creates the whole chain before
+   * writing the file. Planning per leaf is what lets one algorithm serve add, reorder and remove:
+   * the leaf's own path segments say which tier values it represents.
+   */
+  const walkLeaves = async (unitPath: string): Promise<LeafFolder[]> => {
+    const out: LeafFolder[] = [];
+    const visit = async (path: string, segments: string[], depth: number): Promise<void> => {
+      if (depth > MAX_DEPTH) return;
+      const kids = await childFolders(path);
+      if (kids.length === 0) {
+        if (segments.length > 0) out.push({ path, segments, files: [] });
+        return;
+      }
+      for (const k of kids) await visit(k.url, segments.concat([k.name]), depth + 1);
+    };
+    await visit(unitPath, [], 0);
+    return out;
+  };
+
+  /**
+   * Every file in a library, indexed by folder and returned as rows.
+   *
+   * Read WHOLE-LIBRARY and filtered in memory rather than a query per folder. `$top` +
+   * `@odata.nextLink` pages reliably, whereas `GetItems` returns no paging token in this shape — a
+   * per-folder query would silently stop at one page, or repeat page one while reporting progress.
+   * The rows carry `Id`, which the metadata stamp needs.
+   */
+  const readLibraryFiles = async (
+    lib: LibCtx,
+    cols: string[],
+  ): Promise<{ index: FileIndex; rows: Array<{ id: number; path: string; values: Record<string, string> }> }> => {
+    const index: FileIndex = { byFolder: {} };
+    const rows: Array<{ id: number; path: string; values: Record<string, string> }> = [];
+    const select = ["Id", "FileRef", "FileSystemObjectType"].concat(cols).join(",");
+    let url: string | undefined =
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib.title)}')` +
+      `/items?$select=${encodeURIComponent(select)}&$top=5000`;
+    while (url) {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        url,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!res.ok) {
+        const detail = (await res.text().catch(() => "")).slice(0, 160);
+        // A column named in $select that does not exist fails the WHOLE request with 400, not a
+        // null (gotcha #11) — so this reads as "cannot list the files" when it is a missing column.
+        throw new Error(`could not read ${lib.title} (HTTP ${res.status}) ${detail}`);
+      }
+      const data = await res.json();
+      for (const r of (data.value ?? []) as Array<Record<string, unknown>>) {
+        if (r.FileSystemObjectType !== 0) continue;
+        const path = String(r.FileRef ?? "");
+        if (!path) continue;
+        const folder = path.slice(0, path.lastIndexOf("/"));
+        const name = path.slice(path.lastIndexOf("/") + 1);
+        if (!index.byFolder[folder]) index.byFolder[folder] = [];
+        index.byFolder[folder].push(name);
+        const values: Record<string, string> = {};
+        for (const c of cols) values[c] = typeof r[c] === "string" ? (r[c] as string) : "";
+        rows.push({ id: Number(r.Id), path, values });
+      }
+      url = data["odata.nextLink"] ?? data["@odata.nextLink"] ?? undefined;
+    }
+    return { index, rows };
+  };
+
+  const isModerated = async (listTitle: string): Promise<boolean> => {
+    try {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(listTitle)}')?$select=EnableModeration`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      return res.ok && (await res.json()).EnableModeration === true;
+    } catch {
+      // Unreadable means "assume not moderated": writing OData__ModerationStatus to a library
+      // without moderation fails the whole merge.
+      return false;
+    }
+  };
+
+  /** Stamp a folder Approved. Spec §2.2 — a Pending folder is invisible to the whole unit. */
+  const approveFolder = async (path: string): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/GetFolderByServerRelativeUrl(@f)/ListItemAllFields` +
+        `?@f='${encodeServerRelativePath(path)}'`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json;odata=nometadata",
+          "X-HTTP-Method": "MERGE",
+          "IF-MATCH": "*",
+        },
+        // Integer, never a quoted string — quoting it makes SharePoint reject the merge.
+        body: JSON.stringify({ OData__ModerationStatus: 0 }),
+      },
+    );
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 160);
+      throw new Error(`HTTP ${res.status} ${detail}`);
+    }
+  };
+
+  /* ---------- Chains ----------------------------------------------------- */
+
+  /** The chain being migrated TOWARDS: the staged one when there is one, else the live one. */
+  const targetChain = (seg: SegmentRow): Level[] => seg.pending ?? seg.chain;
+
+  const belowUnitOf = (chain: Level[]): Level[] =>
+    effectiveOnDemandTiers(chain, legacySets.year, legacySets.docType);
+
+  const belowUnit = (seg: SegmentRow): Level[] => belowUnitOf(targetChain(seg));
+
+  /** Below-Unit tiers the LIVE chain has and the target does not — removed by this edit. */
+  const removedTiers = (seg: SegmentRow): Level[] => {
+    const keys: Record<string, true> = {};
+    for (const t of belowUnit(seg)) keys[(t.labelCol ?? t.column ?? "").toLowerCase()] = true;
+    return belowUnitOf(seg.chain).filter((l) => !keys[(l.labelCol ?? l.column ?? "").toLowerCase()]);
+  };
+
+  /**
+   * Options for a list of tiers, for one unit.
+   *
+   * A flat tier (has `termSet`) has one list for every unit. A cascading tier draws from the term
+   * above, so tier 0 comes from the unit's own term. For a deeper cascading tier the parent is not
+   * chosen yet, so the union of every possible parent's children is used: the question is only
+   * "could this folder name belong at this tier?", and a union answers it without inventing a
+   * destination.
+   */
+  const tierOptionsFor = async (
+    tiers: Level[],
+    unitTermId: string | undefined,
+    segmentSet: string,
+    mapUnreadable?: boolean,
+  ): Promise<{ options: Array<TermLite[] | undefined>; note?: string }> => {
+    const out: Array<TermLite[] | undefined> = [];
+    for (let i = 0; i < tiers.length; i++) {
+      const set = (tiers[i].termSet ?? "").trim();
+      if (set) {
+        out.push(await setChildren(set));
+        continue;
+      }
+      if (i === 0) {
+        if (!unitTermId) {
+          /* ⚠ TWO CAUSES, TWO MESSAGES. This said only "its folder is not in the Folder Map" — which
+             reads as "nobody ever mapped this unit" and sends an admin to reconcile or re-provision.
+             On MHO the rows were all present and the LOOKUP was at fault, so the message named the
+             wrong problem entirely (2026-09-08). Now that the lookup is rename-proof, an absent row
+             is the honest reading of a miss — so it says so AND names the fix — while an unreadable
+             list gets its own sentence, because "we could not ask" and "the answer is no" are
+             different facts and only one of them is worth acting on. */
+          return {
+            options: out,
+            note: mapUnreadable
+              ? "the Folder Map could not be read, so the term behind this folder is unknown — " +
+                "nothing is wrong with this unit as far as we can tell; try the check again"
+              : "this folder has no Folder Map row, so the term behind it cannot be found and the " +
+                "values that belong under it cannot be read. Run Folder Reconciliation on this " +
+                "segment, then check again",
+          };
+        }
+        out.push(await termChildren(segmentSet, unitTermId));
+        continue;
+      }
+      const parents = out[i - 1];
+      if (!parents) {
+        out.push(undefined);
+        continue;
+      }
+      const union: TermLite[] = [];
+      let failed = false;
+      for (const p of parents) {
+        const kids = await termChildren(segmentSet, p.id);
+        if (!kids) {
+          failed = true;
+          break;
+        }
+        for (const k of kids) if (union.filter((u) => u.id === k.id).length === 0) union.push(k);
+      }
+      out.push(failed ? undefined : union);
+    }
+    return { options: out };
+  };
+
+  /* ---------- Scan ------------------------------------------------------- */
+
+  /**
+   * Find every unit, its leaf folders, and the term data needed to place them.
+   *
+   * Separate from `scan` so the run can call it again afterwards: whether the staged structure gets
+   * switched on depends on whether any drift is LEFT, and the only trustworthy answer is a fresh
+   * look at the folders rather than bookkeeping over what was attempted.
+   */
+  const collectScans = async (
+    seg: SegmentRow,
+  ): Promise<{ rows: UnitScan[]; files: Record<string, FileIndex> }> => {
+    if (seg.chainError) throw new Error(seg.chainError);
+    const { permissioned } = splitChain(targetChain(seg));
+    const tiers = belowUnit(seg);
+    const gone = removedTiers(seg);
+    if (tiers.length === 0) {
+      throw new Error("this segment has no folder levels below Unit, so there is nothing to migrate into.");
+    }
+    if (!seg.stagingFolder) {
+      throw new Error("this segment has no top folder name (StagingFolder) on its configuration row.");
+    }
+
+    // The segment term set is needed whenever a tier — target OR removed — cascades from the level
+    // above. A removed cascading tier still has to be recognisable, or its folders read as strays.
+    let setGuid = "";
+    if (tiers.concat(gone).filter((t) => !(t.termSet ?? "").trim()).length > 0) {
+      const res: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')` +
+          `/items?$select=TermSetGuid&$filter=ConfigType eq 'mode' and Title eq '${encodeURIComponent(seg.key)}'&$top=1`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (res.ok) setGuid = (((await res.json()).value ?? [])[0]?.TermSetGuid ?? "").trim();
+      if (!setGuid) {
+        throw new Error(
+          "one of the levels below Unit takes its values from the level above, which needs this " +
+            "segment's term set — but its configuration row has no TermSetGuid.",
+        );
+      }
+    }
+
+    /* Folder codes, read ONCE per scan — and only when some level actually opted in, so a segment
+       with none makes no extra request at all.
+
+       ⚠⚠ IT THROWS RATHER THAN CARRYING ON UNCODED, and swallowing it was a real hole in the first
+       version of this. An empty map makes every term look uncoded, so `optionFolderName` falls back
+       to the LABEL — and this function feeds the RENAME. A transient 403 or 500 on that one list
+       would have had the migrator cheerfully re-file a coded level's folders under their full
+       labels, which is the exact state the codes were switched on to remove, done in bulk and
+       reported as success.
+
+       Nothing else in this scan is allowed to guess either: the term-set read above throws, and the
+       upload form refuses rather than naming a folder it cannot name. Same rule, same reason — an
+       unreadable list is "do not touch this", never "there are none". */
+    const codeByTerm: Record<string, string> = {};
+    if (tiers.concat(gone).filter(isAbbreviatedLevel).length > 0) {
+      const cres: SPHttpClientResponse = await context.spHttpClient.get(
+        `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.abbreviation))}')` +
+          `/items?$select=TermGuid,Abbreviation&$top=5000`,
+        SPHttpClient.configurations.v1,
+        { headers: { Accept: "application/json;odata=nometadata" } },
+      );
+      if (!cres.ok) {
+        throw new Error(
+          `the folder abbreviations could not be read (HTTP ${cres.status}). One of this segment's ` +
+            `levels is named by abbreviations, so nothing can be planned without them — try the ` +
+            `check again.`,
+        );
+      }
+      (
+        ((await cres.json()).value ?? []) as Array<{
+          TermGuid?: string;
+          Abbreviation?: string;
+        }>
+      ).forEach((r) => {
+        const k = (r.TermGuid ?? "").trim().toLowerCase();
+        const v = (r.Abbreviation ?? "").trim();
+        if (k && v) codeByTerm[k] = v;
+      });
+    }
+    /** Attach the code to each option of a level that opted in. Others are returned untouched. */
+    const withCodes = (chain: Level[], chainIndex: number, opts: TermLite[]): TermLite[] => {
+      if (!chain[chainIndex] || !isAbbreviatedLevel(chain[chainIndex])) return opts;
+      return opts.map((o) => {
+        const c = codeByTerm[(o.id ?? "").trim().toLowerCase()];
+        return c ? { ...o, code: c } : o;
+      });
+    };
+
+    // Unit folder -> its term, so a cascading tier can read that unit's own values. Keyed on the
+    // last (permissioned + 1) path segments, identical in every library.
+    const depth = Math.max(1, permissioned.length);
+    const tailOf = (path: string): string =>
+      path.split("/").slice(-(depth + 1)).join("/").toLowerCase();
+    const bareId = (id: string): string => id.replace(/[{}]/g, "").trim().toLowerCase();
+
+    /* ⚠ BUILT FROM THE LIVE FOLDERS, NOT FROM THE ROW'S STORED `FolderUrl` — and reading that field
+       was a real bug, found on MHO 2026-09-08.
+
+       A Folder Map row's address is written once and then DELIBERATELY never refreshed: while the
+       stored `folderUniqueId` still resolves, reconciliation reports "row still valid" and leaves it
+       alone, because repointing by path would abandon a real folder for a freshly created empty one.
+       So renaming a DEPARTMENT to its abbreviation (`Corporate Communication` -> `CC`) leaves every
+       unit row beneath it naming the old department for ever — the unit's own name never changed, so
+       nothing re-derives its path. The tail lookup then missed for ~30 of MHO's 49 units, and each
+       reported "its folder is not in the Folder Map" while its row was sitting there intact.
+
+       ⚠ AND KEYING ON `folderUniqueId` DIRECTLY DOES NOT WORK, which is the trap here: the map only
+       maps the APPROVAL library's folders (`lib === "Staging"` in reconciliation), while this scan
+       walks all six. The tail deliberately drops the library segment so ONE row serves all of them.
+       So the tail stays the shared key — it is just derived from where the folders ARE. */
+    const termByTail: Record<string, string> = {};
+    let mapUnreadable = false;
+    try {
+      const termByUid: Record<string, string> = {};
+      for (const row of await loadFolderMapRows(context.spHttpClient, siteUrl)) {
+        if (row.folderUniqueId && row.termGuid) termByUid[bareId(row.folderUniqueId)] = row.termGuid;
+      }
+      const staging = libraryTargets().filter((t) => t.key === "Staging")[0];
+      if (staging) {
+        let level = [{ url: `${webPath}/${staging.urlSegment}/${seg.stagingFolder}` }];
+        for (let d = 0; d < depth; d++) {
+          const next: Array<{ url: string }> = [];
+          for (const node of level) next.push(...(await childFolders(node.url)));
+          level = next;
+        }
+        for (const unit of level) {
+          const term = termByUid[bareId((unit as { uniqueId?: string }).uniqueId ?? "")];
+          if (term) termByTail[tailOf(unit.url)] = term;
+        }
+      }
+    } catch {
+      /* ⚠ REPORTED AS UNREADABLE, NOT AS EMPTY. An empty index and a failed read produce the same
+         missing lookups but mean opposite things — "nobody mapped this unit, go and reconcile" vs
+         "we could not ask". Telling an admin to reconcile over a throttled read sends them to do
+         work that changes nothing. */
+      mapUnreadable = true;
+    }
+
+    /* DERIVED, never a literal — see `libraryTargets`. Two libraries on a site without the HC pair,
+       four with it, and the migrator can no longer silently skip half the site. */
+    const libs: LibCtx[] = libraryTargets().map((t) => ({ ...t, moderated: false }));
+    /* `moderated: false` above is an INITIALISER, not an assumption — every library is asked. Do not
+       "simplify" it to a constant: HC Approval Document moderates and HC Documents does not, and a
+       folder this tool creates in a moderated library must be stamped Approved or every document
+       moved into it is invisible to the whole unit. */
+    for (const lib of libs) lib.moderated = await isModerated(lib.title);
+
+    // Plain-text tier columns only, so one library read serves collision detection here and the
+    // metadata stamp later. A managed-metadata tier is excluded — see `colFor` in backfillMetadata.
+    const cols: string[] = [];
+    for (const t of tiers) {
+      const col = t.tidCol ? t.labelCol ?? t.column : undefined;
+      if (col && cols.indexOf(col) < 0) cols.push(col);
+    }
+
+    const files: Record<string, FileIndex> = {};
+    const rows: UnitScan[] = [];
+    for (const lib of libs) {
+      files[lib.key] = (await readLibraryFiles(lib, cols)).index;
+      const root = `${webPath}/${lib.urlSegment}/${seg.stagingFolder}`;
+      let level: Array<{ name: string; url: string }> = [{ name: seg.stagingFolder, url: root }];
+      for (let d = 0; d < depth; d++) {
+        const next: Array<{ name: string; url: string }> = [];
+        for (const node of level) next.push(...(await childFolders(node.url)));
+        level = next;
+      }
+      for (const unit of level) {
+        const tail = tailOf(unit.url);
+        const target = await tierOptionsFor(tiers, termByTail[tail], setGuid, mapUnreadable);
+        const removed = await tierOptionsFor(gone, termByTail[tail], setGuid, mapUnreadable);
+        const unreadable = target.options.filter((o) => o === undefined).length > 0;
+        /* ⚠ CODES GO IN HERE, and this is the half that decides whether switching a level to codes
+           renames the existing folders or turns every one of them into a stray. `effectiveTiers` now
+           carries {label, code}; `assignSegments` matches EITHER and records the CANONICAL name, so a
+           folder still called `Expatriate Formalities Subunit` is recognised and given a destination
+           of `EFS`. Pass labels only and every existing folder reads as unrecognised. */
+        const coded = target.options.map((o, i) => withCodes(tiers, i, (o ?? []) as TermLite[]));
+        const eff = effectiveTiers(
+          coded.map((o) => (o ?? []).map((t) => ({ label: t.label, code: t.code }))),
+        );
+        const optionsByTier: Record<number, TermLite[]> = {};
+        for (const t of eff) optionsByTier[t.chainIndex] = coded[t.chainIndex] ?? [];
+
+        const leaves = await walkLeaves(unit.url);
+        for (const leaf of leaves) leaf.files = (files[lib.key].byFolder[leaf.path] ?? []).slice();
+        // Files in a folder that also has subfolders: their path does not say which tier values
+        // they belong to, so there is no destination to derive. Reported, never moved.
+        const leafPaths: Record<string, true> = {};
+        for (const leaf of leaves) leafPaths[leaf.path] = true;
+        const looseFiles: string[] = [];
+        for (const folder of Object.keys(files[lib.key].byFolder)) {
+          if (folder.indexOf(`${unit.url}/`) !== 0 || leafPaths[folder]) continue;
+          for (const f of files[lib.key].byFolder[folder]) looseFiles.push(`${folder}/${f}`);
+        }
+
+        const row: UnitScan = {
+          lib,
+          unitPath: unit.url,
+          tail,
+          tiers: eff,
+          optionsByTier,
+          // A REMOVED level's folders may also have been code-named, so its options need codes too —
+          // otherwise a collapse leaves them looking like strays instead of being dropped.
+          removedOptions: removed.options.map((o, i) =>
+            (withCodes(gone, i, (o ?? []) as TermLite[])).map((t) => ({
+              label: t.label,
+              code: t.code,
+            })),
+          ),
+          leaves,
+          looseFiles,
+        };
+        if (target.note) row.unresolved = target.note;
+        else if (unreadable) row.unresolved = "some of its folder values could not be read from the term store";
+        else if (eff.length === 0) row.unresolved = "none of the levels below Unit have values for this unit";
+        rows.push(row);
+      }
+    }
+    return { rows, files };
+  };
+
+  const scan = async (): Promise<void> => {
+    const seg = segments.filter((x) => x.key === chosen)[0];
+    if (!seg) return;
+    setScanning(true);
+    setScanError(undefined);
+    setScans(undefined);
+    setDest({});
+    setRenames({});
+    setLog([]);
+    // Cleared alongside the state, or a second run's audit row would carry the first run's lines.
+    logBuffer.current = [];
+    setDone(undefined);
+    // Back to the first page: `paginate` clamps, so a stale page can never render empty, but landing
+    // half way down a fresh result reads as a broken screen.
+    setUnitPage(0);
+    try {
+      const { rows, files } = await collectScans(seg);
+      setScans(rows);
+      setFileIndex(files);
+    } catch (e) {
+      setScanError((e as Error).message);
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  /* ---------- Plan ------------------------------------------------------- */
+
+  /**
+   * The `dest` key for one library's copy of one unit.
+   *
+   * ⚠⚠ ONE DEFINITION, AND THAT IS THE WHOLE SAFETY OF THIS CHANGE. Destinations are derived in TWO
+   * independent places — `plansFor`, which drives the display AND the move, and `finishPending`, the
+   * fresh re-scan that decides whether the chain goes LIVE. If those two ever disagree about the key,
+   * a migration moves every folder correctly and then REFUSES to switch the new shape on, because the
+   * re-scan judges them misplaced. Both must call this.
+   *
+   * ⚠ THE LIBRARY KEY GOES FIRST, and the separator is `|`. A tail is a folder path and can
+   * contain almost anything a folder name can, so putting it first would make the split ambiguous;
+   * with the library key leading, everything before the first `|` IS the key, and `|` is illegal in
+   * a SharePoint folder name so it cannot appear in either half.
+   * (The first version used a NUL character as the separator. It compiled and even worked, but a NUL
+   * byte in a source file breaks grep and diffs for everyone afterwards - not worth the cleverness.)
+   */
+  const destKey = (row: UnitScan): string => `${row.lib.key}|${row.tail}`;
+
+  const plansFor = (row: UnitScan): LeafPlan[] => {
+    if (row.unresolved) return [];
+    const chosenDest = dest[destKey(row)] ?? {};
+    return row.leaves.map((leaf) =>
+      planLeaf(row.unitPath, leaf, row.tiers, chosenDest, row.removedOptions),
+    );
+  };
+
+  /** Plans that would actually relocate something. */
+  const movesOf = (row: UnitScan): LeafPlan[] =>
+    plansFor(row).filter((p) => p.to !== undefined && p.to !== p.leaf.path);
+
+  // Work SCANNED BUT NOT YET RUN, reported so a guided flow can hold its Next.
+  //
+  // Declared HERE, not with the other state: `movesOf` must already exist, and it must stay above the
+  // `loading` / `loadError` early returns below — a hook after a conditional return breaks the rules
+  // of hooks the first time the component loads slowly.
+  //
+  // ⚠ ONLY WHEN A SCAN ACTUALLY FOUND MOVES. A segment with nothing to migrate is a legitimate end
+  // state and must not trap the flow. It reports false again the moment the run finishes, so the gate
+  // releases itself rather than needing anyone to clear it.
+  const pendingNow = (scans ?? []).reduce((n, r) => n + movesOf(r).length, 0);
+  /* ⚠ A SCAN THAT FOUND WORK IT CANNOT PLAN YET IS STILL PENDING, and counting MOVES alone missed
+     it. A newly added level has no value chosen, so every plan is `missingTiers` and `pendingNow` is
+     0 — meaning the gate that exists to stop an admin walking past an unfinished migration was open
+     for precisely the state the migration STARTS in (client, 2026-09-09, on a scan reporting 4 units
+     needing a value beside a live Next).
+     `0 moves` means either "nothing to do" or "cannot work out what to do yet", and only the first
+     may release the gate. Empty is not unknown, again.
+     ⚠ A STRAY-ONLY SCAN STILL RELEASES IT, deliberately: a stray cannot be resolved by this tool at
+     all, so blocking on one would hold the flow for ever. */
+  const choiceNow = (scans ?? []).reduce(
+    (n, r) => n + plansFor(r).filter((pl) => pl.missingTiers.length > 0).length,
+    0,
+  );
+  useEffect(() => {
+    if (onPendingChange) {
+      onPendingChange(
+        scans !== undefined && done === undefined && (pendingNow > 0 || choiceNow > 0),
+      );
+    }
+    /* ⚠ REPORTED ON AN ERROR TOO. Gating the flow on a scan that must SUCCEED would strand an admin
+       on this step, with uploads still off, for as long as the scan kept failing — the reason
+       `reconcileRan` counts a finished run rather than a good one. */
+    if (onScanned && (scans !== undefined || scanError !== undefined)) onScanned();
+  }, [scans, scanError, pendingNow, choiceNow, done]);
+
+  /**
+   * Collisions as they stand BEFORE any rename — the stable list the form renders.
+   *
+   * Rendering the *unresolved* list instead was a real bug: the moment a typed name settled a
+   * clash its row vanished, taking with it any way to see or correct what had been typed. A
+   * mistyped extension would then apply silently, from a form whose only job is renaming.
+   *
+   * So the rows are driven by the original names and stay put, while `unresolvedFor` decides
+   * whether the run may proceed. Two computations, two different jobs.
+   */
+  const collisionsFor = (lib: string): Collision[] => {
+    const plans: LeafPlan[] = [];
+    for (const row of scans ?? []) {
+      if (row.lib.key !== lib) continue;
+      for (const p of movesOf(row)) plans.push(p);
+    }
+    return findCollisions(plans, (fileIndex[lib] ?? { byFolder: {} }).byFolder);
+  };
+
+  /**
+   * Collisions that REMAIN once the admin's renames are applied — the gate on the run.
+   *
+   * Re-running the same tested detector over the resolved names, rather than checking each form row
+   * against its siblings, means "is it settled?" and "what collides?" cannot drift apart. It also
+   * catches a rename that settles one clash by creating another somewhere else.
+   */
+  const unresolvedFor = (lib: string): Collision[] => {
+    const plans: LeafPlan[] = [];
+    for (const row of scans ?? []) {
+      if (row.lib.key !== lib) continue;
+      for (const p of movesOf(row)) {
+        const renamed = p.leaf.files.map((f) => renames[`${p.leaf.path}/${f}`] ?? f);
+        plans.push({ ...p, leaf: { ...p.leaf, files: renamed } });
+      }
+    }
+    return findCollisions(plans, (fileIndex[lib] ?? { byFolder: {} }).byFolder);
+  };
+
+  /** The name a file will actually be moved under. */
+  const effectiveName = (path: string): string =>
+    renames[path] ?? path.slice(path.lastIndexOf("/") + 1);
+
+  /** A typed name's problem, if any. Blocks the run — see `validateRename`. */
+  const renameProblem = (path: string): string | undefined => {
+    const typed = renames[path];
+    if (typed === undefined) return undefined;
+    return validateRename(path.slice(path.lastIndexOf("/") + 1), typed);
+  };
+
+  /** The value that made a file distinct — what the suggested name should carry. */
+  const distinguisherFor = (filePath: string): string => {
+    const folder = filePath.slice(0, filePath.lastIndexOf("/"));
+    for (const row of scans ?? []) {
+      for (const p of plansFor(row)) {
+        if (p.leaf.path !== folder) continue;
+        if (p.dropped.length > 0) return p.dropped.join(" ");
+        return p.leaf.segments[0] ?? "";
+      }
+    }
+    return "";
+  };
+
+  /* Keyed per LIBRARY since 2026-09-09 (client: *"Since you going to put for all units you might as
+     well remove this ... default for all six"*). A unit-level default was designed first and removed
+     on their instruction: with a dropdown per library, a second control governing the same folders
+     means two places to look and an inheritance rule to explain. One control, one meaning — at the
+     cost of one answer per library where they agree. */
+  const setDestination = (key: string, chainIndex: number, value: Destination | undefined): void => {
+    setDest((prev) => {
+      const next: Record<number, Destination | undefined> = { ...(prev[key] ?? {}) };
+      if (value) next[chainIndex] = value;
+      else delete next[chainIndex];
+      return { ...prev, [key]: next };
+    });
+  };
+
+  /* ---------- Run -------------------------------------------------------- */
+
+  const stampFile = async (
+    lib: LibCtx,
+    id: number,
+    values: Array<{ FieldName: string; FieldValue: string }>,
+  ): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(lib.title)}')/items(${id})/validateUpdateListItem`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: { Accept: "application/json;odata=nometadata", "Content-Type": "application/json" },
+        // bNewDocumentUpdate stops this counting as a fresh upload, so no new version is cut and no
+        // check-out is demanded.
+        body: JSON.stringify({ formValues: values, bNewDocumentUpdate: true }),
+      },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // validateUpdateListItem returns 200 even when every field failed — gotcha #4.
+    const results = ((await res.json()).value ?? []) as Array<{
+      FieldName?: string; HasException?: boolean; ErrorMessage?: string;
+    }>;
+    const bad = results.filter((r) => r.HasException);
+    if (bad.length > 0) {
+      throw new Error(bad.map((b) => `${b.FieldName}: ${b.ErrorMessage ?? "rejected"}`).join("; "));
+    }
+  };
+
+  /**
+   * Part B: make every file's tier columns agree with where the file actually sits.
+   *
+   * Reachable WITHOUT a move, by its own button. The first live run proved why: the folders moved,
+   * the tagging failed, and the retry found nothing to move — so the only path to the repair was
+   * closed. A repair step reachable only through the thing that broke it is not a repair step.
+   */
+  const backfillMetadata = async (
+    seg: SegmentRow,
+    rows: UnitScan[],
+  ): Promise<{ stamped: number; failed: number; checkable: boolean }> => {
+    const tiers = belowUnit(seg);
+    let stamped = 0;
+    let failed = 0;
+
+    /**
+     * The column to compare and stamp for a tier — or `undefined` for one this tool must not touch.
+     *
+     * **A tier with no `tidCol` is MANAGED METADATA**, and the migration leaves it alone. Two
+     * independent reasons, either sufficient:
+     *   1. A taxonomy field needs `Label|GUID` (gotcha #5). The bare label fails with "The data
+     *      returned from the tagging UI was not formatted correctly" — seen live 2026-08-11 on
+     *      `Year` and `Document_x0020_Type` — and it took the valid `CreditCard` write down with it,
+     *      because one bad field fails the whole call.
+     *   2. Nothing needed writing. A migration rearranges ANCESTORS; the `2024` and `Tax Return`
+     *      folders keep their names and values. Reading one back as a plain string yields "" — the
+     *      value is an object — so every file looked like it needed a stamp it did not need.
+     */
+    const colFor = (i: number): string | undefined => {
+      const lvl = tiers[i];
+      if (!lvl || !lvl.tidCol) return undefined;
+      return lvl.labelCol ?? lvl.column;
+    };
+    const allCols: string[] = [];
+    for (let i = 0; i < tiers.length; i++) {
+      const col = colFor(i);
+      if (col && allCols.indexOf(col) < 0) allCols.push(col);
+    }
+    // NO checkable tier is not the same as every tier agreeing, and the caller must be able to
+    // tell them apart. A segment whose only below-Unit tiers are Year and Document Type has
+    // nothing this pass may touch, so it returns 0/0 having looked at nothing — and reporting
+    // that as "already match" asserts a check that never ran. Empty is not unknown.
+    if (allCols.length === 0) return { stamped, failed, checkable: false };
+
+    const byLib: Record<string, Array<{ id: number; path: string; values: Record<string, string> }>> = {};
+    for (const lib of rows.map((r) => r.lib)) {
+      if (byLib[lib.key]) continue;
+      try {
+        byLib[lib.key] = (await readLibraryFiles(lib, allCols)).rows;
+      } catch (e) {
+        failed++;
+        say(`${lib.title}: ${(e as Error).message}`, false);
+        byLib[lib.key] = [];
+      }
+    }
+
+    for (const row of rows) {
+      if (row.unresolved) continue;
+      const label = `${row.lib.key} · ${row.tail}`;
+      try {
+        const prefix = `${row.unitPath}/`;
+        const files = (byLib[row.lib.key] ?? []).filter((f) => f.path.indexOf(prefix) === 0);
+        const idByPath: Record<string, number> = {};
+        for (const f of files) idByPath[f.path] = f.id;
+        for (const need of backfillNeeds(row.unitPath, files, row.tiers, colFor)) {
+          // Grouped per tier, not flattened, so one rejected tier can be retried alone. ONE bad
+          // field name fails the WHOLE validateUpdateListItem call (gotcha #4).
+          const groups: Array<{ label: string; values: Array<{ FieldName: string; FieldValue: string }> }> = [];
+          for (const field of need.fields) {
+            const lvl = tiers[field.chainIndex];
+            if (!lvl) continue;
+            const labelCol = lvl.labelCol ?? lvl.column;
+            if (!labelCol) continue;
+            const values = [{ FieldName: labelCol, FieldValue: field.label }];
+            const term = (row.optionsByTier[field.chainIndex] ?? []).filter(
+              (o) => o.label.trim().toLowerCase() === field.label.trim().toLowerCase(),
+            )[0];
+            // No matching term means no GUID: the label is still written and the id left alone,
+            // rather than filled with a guess that would outlive the run.
+            if (term) values.push({ FieldName: lvl.tidCol as string, FieldValue: term.id });
+            groups.push({ label: lvl.label, values });
+          }
+          const all: Array<{ FieldName: string; FieldValue: string }> = [];
+          for (const g of groups) for (const v of g.values) all.push(v);
+          if (all.length === 0) continue;
+          try {
+            await stampFile(row.lib, idByPath[need.path], all);
+            stamped++;
+          } catch {
+            // Retry tier by tier to salvage the ones that are fine and name the one that is not.
+            let wrote = 0;
+            for (const g of groups) {
+              try {
+                await stampFile(row.lib, idByPath[need.path], g.values);
+                wrote++;
+              } catch (e2) {
+                failed++;
+                say(
+                  `${label}: could NOT tag ${g.label} on ${need.path.split("/").pop()} — ${(e2 as Error).message}`,
+                  false,
+                );
+              }
+            }
+            if (wrote > 0) stamped++;
+          }
+        }
+      } catch (e) {
+        failed++;
+        say(`${label}: ${(e as Error).message}`, false);
+      }
+    }
+    return { stamped, failed, checkable: true };
+  };
+
+  const activatePending = async (seg: SegmentRow): Promise<void> => {
+    const res: SPHttpClientResponse = await context.spHttpClient.post(
+      `${siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(cachedListTitle(LIST_SUFFIX.config))}')/items(${seg.id})`,
+      SPHttpClient.configurations.v1,
+      {
+        headers: {
+          Accept: "application/json;odata=nometadata",
+          "Content-Type": "application/json",
+          "X-HTTP-Method": "MERGE",
+          "IF-MATCH": "*",
+        },
+        body: JSON.stringify({
+          Levels: JSON.stringify(seg.pending ?? seg.chain),
+          [PENDING_LEVELS_FIELD]: "",
+        }),
+      },
+    );
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 160);
+      throw new Error(
+        `The folders were moved, but the new structure could not be switched on ` +
+          `(HTTP ${res.status}). ${detail} Uploads are still using the old shape — open ` +
+          `"Move existing folders" again and it will finish the job.`,
+      );
+    }
+    /* ONE hook point for BOTH routes — the end of a Rebuild (`finishPending`) and the standalone
+       Apply button both come through here, because this is the only writer that clears
+       `PendingLevels`. Reporting from the two callers instead would be two chances to forget. */
+    if (onApplied) onApplied();
+  };
+
+  /**
+   * Switch the staged structure on, but ONLY once nothing movable is left in the old shape.
+   *
+   * The check is a FRESH scan, not a tally of what this run attempted: a move that reported success
+   * but landed somewhere unexpected can only be caught by looking.
+   *
+   * A STRAY does not block activation — this tool cannot resolve one at all, and letting it hold a
+   * structure change hostage forever would leave the client with no way forward. It is named in the
+   * result instead, so the trade is visible rather than silent.
+   */
+  const finishPending = async (seg: SegmentRow): Promise<string> => {
+    if (!seg.pending) return "";
+    let outstanding = 0;
+    let strays = 0;
+    try {
+      const fresh = await collectScans(seg);
+      for (const row of fresh.rows) {
+        if (row.unresolved) {
+          outstanding++;
+          continue;
+        }
+        // ⚠ THE SECOND DERIVATION — see `destKey`. Reading a different key here would refuse to
+        // activate a chain whose folders had all been moved correctly.
+        const chosenDest = dest[destKey(row)] ?? {};
+        for (const leaf of row.leaves) {
+          const p = planLeaf(row.unitPath, leaf, row.tiers, chosenDest, row.removedOptions);
+          if (p.strays.length > 0) strays++;
+          else if (p.to === undefined || p.to !== p.leaf.path) outstanding++;
+        }
+      }
+    } catch (e) {
+      return (
+        ` The new structure was NOT switched on, because the folders could not be re-checked ` +
+        `afterwards (${(e as Error).message}). Uploads are still using the old shape — run this ` +
+        `again once that is resolved.`
+      );
+    }
+    if (outstanding > 0) {
+      return (
+        ` The new structure is still waiting: ${outstanding} folder(s) are not in the new shape yet. ` +
+        `Uploads carry on unchanged until every one is done, so nobody sees a half-changed library.`
+      );
+    }
+    await activatePending(seg);
+    setSegments((prev) =>
+      prev.map((p) =>
+        p.key === seg.key ? { ...p, chain: seg.pending as Level[], pending: undefined } : p,
+      ),
+    );
+    return (
+      ` Every folder is in the new shape, so the new structure is now LIVE — uploaders will see it ` +
+      `on their next page load.` +
+      (strays > 0
+        ? ` ${strays} folder(s) were left alone because their names match no folder level; they are ` +
+          `listed above and still need a decision.`
+        : "")
+      /* ⚠ " Turn the two flows back on." WAS APPENDED HERE AND IS GONE (2026-09-07). It referred to
+         Auto-route and the folder-approval flow, and the line telling an admin to pause them was
+         removed from this screen at the client's request the same day — so this was instructing them
+         to restore something nothing had asked them to stop. An instruction whose counterpart no
+         longer exists reads as a step they missed. Pausing those flows was always OPTIONAL; the
+         reasoning is recorded at the removal site above. */
+    );
+  };
+
+  const run = async (): Promise<void> => {
+    const seg = segments.filter((x) => x.key === chosen)[0];
+    if (!seg || !scans) return;
+    /* ⚠⚠ RE-READ IMMEDIATELY BEFORE ANYTHING MOVES — the check that actually matters, and the same
+       rule the upload form follows for this very setting and for the stale chain (gotcha 10b): the
+       state that counts is the one at WRITE time, not at render time. The button's own condition was
+       decided when the page loaded, and an admin can pause or resume in another tab, or leave this
+       screen open across a working day.
+       Refuses on an unestablished answer too, for the reason on `readPause`. */
+    const fresh = await readPause();
+    setPausedNow(fresh);
+    if (fresh !== true) {
+      setConfirm(false);
+      setConfirmText("");
+      setDone(
+        fresh === false
+          ? "Nothing was moved. Uploads are ON, so a document filed mid-run could land in the old" +
+            " shape and never be moved — which leaves the structure change unable to go live. Turn" +
+            " uploads off, then run this again."
+          : "Nothing was moved. Whether uploads are paused could not be read just now, and moving" +
+            " folders while the site is accepting documents is what this check exists to prevent." +
+            " Try again in a moment.",
+      );
+      return;
+    }
+    setRunning(true);
+    setConfirm(false);
+    setConfirmText("");
+    setLog([]);
+    // Cleared alongside the state, or a second run's audit row would carry the first run's lines.
+    logBuffer.current = [];
+    setDone(undefined);
+    let movedFiles = 0;
+    let failed = 0;
+    let removedFolders = 0;
+    const emptied: Array<{ lib: LibCtx; path: string; unitPath: string }> = [];
+    let attributionFailed = 0;
+    // Every file this run successfully moved, for the attribution pass at the very end — see the
+    // comment where this is pushed to, for why stamping cannot happen inline with the move.
+    const movedForAttribution: Array<{ lib: LibCtx; path: string }> = [];
+    // Resolved ONCE for the whole run, not per file — see `resolveProxyLoginName`'s own comment.
+    // `undefined` means every stamp attempt below is skipped; the moves themselves are unaffected.
+    const proxyLoginName = await resolveProxyLoginName(context.spHttpClient, siteUrl);
+
+    try {
+      for (const row of scans) {
+        const label = `${row.lib.key} · ${row.tail}`;
+        if (row.unresolved) {
+          say(`${label}: left alone — ${row.unresolved}`, false);
+          continue;
+        }
+        for (const loose of row.looseFiles) {
+          say(`${label}: ${loose.split("/").pop()} sits outside the folder levels — left alone`, false);
+        }
+        for (const plan of plansFor(row)) {
+          if (plan.strays.length > 0) {
+            say(`${label}: "${plan.strays.join(", ")}" matches no folder level — left alone`, false);
+            continue;
+          }
+          if (plan.to === undefined) continue; // needs a destination; reported in the UI
+          if (plan.to === plan.leaf.path) continue;
+
+          try {
+            // Ancestors first, then the destination leaf folder itself.
+            for (const ancestor of plan.ancestors) {
+              const cut = ancestor.path.lastIndexOf("/");
+              const made = await ensureFolder(
+                context.spHttpClient,
+                siteUrl,
+                ancestor.path.slice(0, cut),
+                ancestor.path.slice(cut + 1),
+              );
+              if (!made) throw new Error(`could not create ${ancestor.path}`);
+              // Left Pending, this folder — and every document moved into it — is invisible to the
+              // whole unit. Spec §2.2.
+              if (made.created && row.lib.moderated) await approveFolder(ancestor.path);
+            }
+            const cut = plan.to.lastIndexOf("/");
+            const leafMade = await ensureFolder(
+              context.spHttpClient,
+              siteUrl,
+              plan.to.slice(0, cut),
+              plan.to.slice(cut + 1),
+            );
+            if (!leafMade) throw new Error(`could not create ${plan.to}`);
+            if (leafMade.created && row.lib.moderated) await approveFolder(plan.to);
+
+            for (const file of plan.leaf.files) {
+              const from = `${plan.leaf.path}/${file}`;
+              const toName = renames[from] ?? file;
+              const res = await moveFileTo(context.spHttpClient, siteUrl, from, `${plan.to}/${toName}`);
+              if (!res.ok) {
+                failed++;
+                say(
+                  `${label}: could NOT move ${file} — ` +
+                    (res.conflict
+                      ? `a file called ${toName} is already there`
+                      : `HTTP ${res.status} ${res.detail ?? ""}`),
+                  false,
+                );
+                continue;
+              }
+              movedFiles++;
+              say(`${label}: ${file} → ${plan.to.slice(row.unitPath.length + 1)}/${toName}`, true);
+              // Recorded, NOT stamped here. `backfillMetadata` (below) writes its OWN
+              // `validateUpdateListItem` call for tier columns on this same file, and that call does
+              // NOT set `Editor` explicitly — so SharePoint would restamp it back to the ADMIN
+              // running this tool as an ordinary side effect of that later, unrelated write, undoing
+              // an Editor stamp made here. The attribution pass must run LAST, after every other
+              // write this run makes to the file, or a later write can silently clobber it.
+              movedForAttribution.push({ lib: row.lib, path: `${plan.to}/${toName}` });
+            }
+            // Queue the emptied source for cleanup, after every move is done.
+            emptied.push({ lib: row.lib, path: plan.leaf.path, unitPath: row.unitPath });
+          } catch (e) {
+            failed++;
+            say(`${label}: could NOT move ${plan.leaf.segments.join("/")} — ${(e as Error).message}`, false);
+          }
+        }
+      }
+
+      // Cleanup last, deepest first, and only folders this run emptied. `deleteFolderIfEmpty`
+      // re-checks at the moment of deletion — a file uploaded mid-run lands in a folder the plan
+      // believes it emptied, and deleting that would destroy a document nobody was migrating.
+      const candidates: Array<{ lib: LibCtx; path: string }> = [];
+      for (const e of emptied) {
+        let path = e.path;
+        while (path.length > e.unitPath.length && path.indexOf(e.unitPath) === 0) {
+          if (candidates.filter((c) => c.path === path && c.lib.key === e.lib.key).length === 0) {
+            candidates.push({ lib: e.lib, path });
+          }
+          path = path.slice(0, path.lastIndexOf("/"));
+        }
+      }
+      candidates.sort((a, b) => b.path.split("/").length - a.path.split("/").length);
+      for (const c of candidates) {
+        const res = await deleteFolderIfEmpty(context.spHttpClient, siteUrl, c.path);
+        if (res.deleted) {
+          removedFolders++;
+          continue;
+        }
+        // "Still holds something" is the normal case for an ancestor with other branches, so it is
+        // only worth reporting when the folder failed for some other reason.
+        if (res.reason && res.status !== 404 && !/still holds/.test(res.reason)) {
+          say(`${c.lib.key}: could not tidy up ${c.path} — ${res.reason}`, false);
+        }
+      }
+
+      const tags = await backfillMetadata(seg, scans);
+      failed += tags.failed;
+
+      // LAST, deliberately — after every other write this run makes to a moved file, so nothing
+      // written afterwards (the tier-column backfill above) can restamp `Editor` back to the admin
+      // running this tool as a side effect of an unrelated field update.
+      if (proxyLoginName) {
+        for (const m of movedForAttribution) {
+          const stamp = await stampEditorAsProxy(
+            context.spHttpClient,
+            siteUrl,
+            m.lib.title,
+            m.path,
+            proxyLoginName,
+          );
+          if (!stamp.ok) {
+            attributionFailed++;
+            say(
+              `${m.lib.key}: could not set Modified By on ${m.path.split("/").pop()} — ` +
+                (stamp.detail ?? "unknown reason"),
+              false,
+            );
+          }
+        }
+      }
+
+      setDone(
+        `Moved ${movedFiles} document(s), tidied ${removedFolders} empty folder(s), tagged ` +
+          `${tags.stamped} document(s).` +
+          (failed > 0
+            ? ` ${failed} problem(s) listed above — nothing holding a document was deleted, so ` +
+              `running this again is safe and will retry them.`
+            : "") +
+          // Attribution is reported separately from `failed` on purpose — every document above IS
+          // correctly moved; only the Modified By label on some of them could not be set. A stuck
+          // attribution stamp is not fixed by pressing this again (the file is no longer part of
+          // any plan the next scan would find), so this is stated as a fact rather than a retry hint.
+          (proxyLoginName === undefined && movedFiles > 0
+            ? ` The proxy account could not be resolved this run, so Modified By was left as-is on ` +
+              `every moved document.`
+            : attributionFailed > 0
+              ? ` Modified By could not be set to the proxy account on ${attributionFailed} ` +
+                `document(s) — listed above; the documents themselves moved correctly.`
+              : "") +
+          (await finishPending(seg)),
+      );
+
+      // ONE row for the run, carrying the whole log — this is the only durable record of which
+      // documents moved where, and the on-screen log is gone as soon as anyone navigates away.
+      // Counts come from the loop LOCALS, never from React state set during the run.
+      writeAudit(context.spHttpClient, siteUrl, {
+        event: EVENT.migrationRun,
+        outcome: failed > 0 ? "Failed" : "Success",
+        source: "SubtreeMigrator",
+        at: new Date(),
+        /* ⚠⚠ THE PROXY ACCOUNT, NOT `context.pageContext.user` (2026-09-23, client: "ensure audit
+           log is recorded as GDC and not the person who select the file to move"). This tool runs
+           in the admin's OWN browser session — the migration genuinely executes under their
+           credentials, unlike Auto-route, which runs server-side as the connection it was built
+           with — but this project already treats "the system moved it" as the attribution that
+           matters here: `stampEditorAsProxy` a few lines up already restamps every MOVED FILE's own
+           `Editor` column to this same identity (2026-09-20), specifically so Modified By reads
+           consistently regardless of which admin happened to run the tool. This audit row now
+           follows the same rule, rather than naming whichever admin clicked Rebuild. */
+        actorName: CURRENT_PROXY_ACCOUNT_NAME,
+        actorEmail: CURRENT_PROXY_ACCOUNT_EMAIL,
+        segment: seg.label,
+        // Names what it ACTUALLY walked. A record saying two libraries on a four-library run reads
+        // as a decision rather than an oversight.
+        library: libraryTargets().map((t) => t.title).join(" + "),
+        summary:
+          `Folder migration — ${movedFiles} document(s) moved, ${removedFolders} folder(s) tidied, ` +
+          `${tags.stamped} tagged` + (failed > 0 ? `, ${failed} problem(s)` : ""),
+        details: [
+          `Segment: ${seg.label}`,
+          `Documents moved: ${movedFiles}`,
+          `Empty folders tidied: ${removedFolders}`,
+          `Documents re-tagged from their path: ${tags.stamped}`,
+          `Modified By set to the proxy account on: ${movedFiles - attributionFailed} of ${movedFiles}`,
+          `Problems: ${failed}`,
+          "Nothing holding a document is ever deleted, so re-running this is safe.",
+          "—",
+        ].concat(logBuffer.current),
+      }).catch(() => undefined);
+
+      setScans(undefined);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  /** Part B on its own, from the nothing-to-move state. */
+  const runTagsOnly = async (): Promise<void> => {
+    const seg = segments.filter((x) => x.key === chosen)[0];
+    if (!seg || !scans) return;
+    setRunning(true);
+    setLog([]);
+    // Cleared alongside the state, or a second run's audit row would carry the first run's lines.
+    logBuffer.current = [];
+    setDone(undefined);
+    try {
+      const tags = await backfillMetadata(seg, scans);
+      setDone(
+        !tags.checkable
+          ? "Nothing to check here. This segment's only below-Unit levels are Year and Document " +
+            "Type, which are managed metadata — this tool never writes them, so it cannot confirm " +
+            "them either. If a document's Year looks wrong, set it on the document itself."
+          : tags.stamped === 0 && tags.failed === 0
+          ? "Every document's folder columns already match where it sits — nothing to change."
+          : `Tagged ${tags.stamped} document(s).` +
+            (tags.failed > 0 ? ` ${tags.failed} problem(s) listed above; running this again is safe.` : ""),
+      );
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  /* ---------- Render ----------------------------------------------------- */
+
+  if (loading) return <p style={{ fontSize: 13, color: "#605e5c" }}>Loading…</p>;
+  if (loadError) return <div style={{ ...s.msg, ...s.err }}>The segments could not be read: {loadError}</div>;
+
+  const seg = segments.filter((x) => x.key === chosen)[0];
+  const belowForSeg = seg ? belowUnit(seg) : [];
+  const rowsWithWork = (scans ?? []).filter((r) => {
+    if (r.unresolved !== undefined) return true;
+    if (movesOf(r).length > 0) return true;
+    return plansFor(r).filter((p) => p.strays.length > 0 || p.to === undefined).length > 0;
+  });
+  const conflicts: Array<{ lib: string; collision: Collision }> = [];
+  let unresolvedCount = 0;
+  /* The SAME derived list as the scan. A literal here would leave HC collisions undetected — and
+     collision handling is the one part of this tool standing between a move and an overwrite. */
+  for (const lib of libraryTargets().map((t) => t.key)) {
+    for (const c of collisionsFor(lib)) conflicts.push({ lib, collision: c });
+    unresolvedCount += unresolvedFor(lib).length;
+  }
+  // Every typed name is checked, not only the ones still colliding: a name can be unique and still
+  // unusable — ".pdf" dropped, an illegal character — and that must block just as firmly.
+  let badNames = 0;
+  for (const { collision } of conflicts) {
+    for (const c of collision.claimants) if (renameProblem(c.path)) badNames++;
+  }
+  let totalMoves = 0;
+  let needingChoice = 0;
+  /* ⚠ A FOURTH STATE the 2026-09-07 three-state fix could not see: a unit whose options could not
+     be READ has no moves and no `needingChoice`, yet reaches `groups` — so it fell into the
+     stray-only branch, which wrongly claims the migration is finished. See CLAUDE.md, 2026-09-08. */
+  let unreadableUnits = 0;
+  for (const r of scans ?? []) {
+    totalMoves += movesOf(r).length;
+    needingChoice += plansFor(r).filter((p) => p.missingTiers.length > 0).length;
+    if (r.unresolved !== undefined) unreadableUnits++;
+  }
+  /* ⚠⚠ EVERY FOLDER MUST HAVE A VALUE BEFORE ANYTHING MOVES (client, 2026-09-09: *"ensure all is
+     selected for the file movement then only the Rebuild folders button is available, if they did not
+     move anything and rebuild folders the file and folder will go astray"*).
+     `needingChoice === 0` is the new half. Before it, Rebuild lit up as soon as ONE move was planned
+     — so a run could move 49 folders and leave a library untouched, and `finishPending`'s fresh scan
+     would then count those folders as outstanding and REFUSE to switch the new shape on. The result
+     is a segment stuck on CHANGE PENDING after a run that reported success: the exact loop that cost
+     three days on GHO.
+     ⚠ STRAYS ARE DELIBERATELY NOT COUNTED HERE. `needingChoice` counts plans with `missingTiers`;
+     a stray also has `to === undefined` but cannot be resolved by this tool at all, so gating on that
+     would hold the flow for ever — the same rule `finishPending` follows when it counts strays
+     separately from outstanding folders.
+     ⚠ AND IT CANNOT DEADLOCK: a tier whose options could not be READ makes its unit `unresolved`,
+     which `unresolvedCount` already blocks on and which renders no dropdown to be stuck at. */
+  /* ⚠⚠ AND UPLOADS MUST BE PAUSED (2026-09-09). The red banner on this screen has said so since
+     2026-08-19 and refused nothing — its own comment admitted it: *"IT IS STILL NOT A GATE... a
+     migration CAN be run with uploads on"*, on the reasoning that the BLOCK lived one level up in the
+     guided flow's step 1. Two routes defeated that: the flow's own Back button (closed in 1.0.504.0)
+     and the STANDALONE Migrate tab, which has no step 1 at all and therefore never had a gate.
+     `=== true` only, so an unestablished answer refuses — see `readPause` for why this one fact fails
+     closed where `uploadsArePaused` fails open. */
+  const canRun =
+    totalMoves > 0 &&
+    needingChoice === 0 &&
+    unresolvedCount === 0 &&
+    badNames === 0 &&
+    pausedNow === true;
+
+  /** Units grouped by tail, so one set of pickers serves both libraries. */
+  const groups: Array<{ tail: string; rows: UnitScan[] }> = [];
+  for (const row of rowsWithWork) {
+    const existing = groups.filter((g) => g.tail === row.tail)[0];
+    if (existing) existing.rows.push(row);
+    else groups.push({ tail: row.tail, rows: [row] });
+  }
+
+  /**
+   * Everything still listed is a STRAY, and there is nothing left this tool can do.
+   *
+   * ⚠⚠ THE DEAD END THIS EXISTS FOR (client, 2026-09-09, on Buah). `rowsWithWork` deliberately KEEPS
+   * a stray-only row, so `groups.length > 0` - and the Apply card is gated on `groups.length === 0`.
+   * Three things then locked together: Rebuild is disabled (`canRun` needs `totalMoves > 0`, and a
+   * stray is never a move), Apply never renders, and the guided flow's Next is held because the
+   * segment still carries `PendingLevels`. Nothing to move, nothing to apply, nothing to click.
+   *
+   * ⚠ AND THE RULE IT BREAKS WAS ALREADY WRITTEN DOWN, one function away: `finishPending` says in as
+   * many words that *a stray does not block activation - this tool cannot resolve one at all, and
+   * letting it hold a structure change hostage forever would leave the client with no way forward*.
+   * That rule governed the END of a Rebuild and had never been applied to the standalone Apply
+   * button, which is the only route left when there is no Rebuild to run.
+   *
+   * ⚠ EVERY OTHER KIND OF OUTSTANDING WORK STILL BLOCKS. Moves, folders awaiting a value, units whose
+   * options could not be READ, and unsettled collisions each mean the old shape is not finished with;
+   * only a stray is genuinely unresolvable. `unreadableUnits` in particular must stay here - a unit
+   * that could not be checked is unknown, not clean, and switching the chain on over it is the
+   * silent-misfile direction.
+   */
+  const strayOnlyRemains =
+    groups.length > 0 &&
+    totalMoves === 0 &&
+    needingChoice === 0 &&
+    unreadableUnits === 0 &&
+    unresolvedCount === 0 &&
+    badNames === 0;
+
+  /* ⚠ THREE CARDS A PAGE, AND EVERY AGGREGATE ABOVE THEM IS STILL WHOLE-SCAN — which is what makes
+     paging this safe. `shared/pagination` carries the rule in its own header: *paging must never hide
+     outstanding work without saying so*, and the pager's total is the safety rather than decoration.
+     Here the heading ("12 unit(s) need a value chosen"), the folders-waiting count and the Rebuild
+     button's own count are all computed from `scans`, never from what is rendered — so a choice made
+     on page 1 and a unit still unanswered on page 4 are both accounted for while off screen.
+     ⚠ AND THE CHOICES THEMSELVES SURVIVE PAGING: `dest` is component state keyed per library, not
+     tied to the rendered card. */
+  const unitPages = paginate(groups, unitPage, UNITS_PER_PAGE);
+
+  return (
+    <div>
+      <style>{MIG_MOBILE_CSS}</style>
+      {/* The client's banner (2026-09-06). It replaces the Power Automate warning that stood here.
+
+          ⚠ IT IS STILL NOT A GATE — this screen refuses nothing, so a migration CAN be run with
+          uploads on, and doing so is the loop the pause exists to prevent: a file filed
+          mid-migration lands in the OLD shape and, if it arrives after its folder was scanned, is
+          never moved, so the pending chain can never apply. The BLOCK now lives one level up, in the
+          guided flow's `blocksNext` on step 1 (1.0.452.0). Reaching this screen with uploads on is
+          therefore only possible from the standalone Migrate tab, which has no step 1 — which is
+          exactly why the warning is still worth rendering here.
+
+          ⚠ AND IT IS CONDITIONAL NOW. It was rendered unconditionally, so it went on demanding that
+          uploads be turned off after they had been (reported on site 2026-09-07). Only a KNOWN-paused
+          state hides it: `undefined` — the standalone mount, or an unreadable config — still shows
+          it, because a needless reminder costs a glance and a missing one costs the whole
+          migration. */}
+      {uploadsPaused !== true && (
+        <div style={{ ...s.msg, ...s.warn }}>
+          <span aria-hidden="true" style={{ marginRight: 6 }}>&#9888;</span>
+          <strong>Uploads must be turned off before continuing.</strong> Go back to Step 1 to turn off
+          uploads.
+        </div>
+      )}
+      {/* ⚠ THE POWER AUTOMATE CAVEAT IS GONE FROM THE UI ENTIRELY (client, 2026-09-07: *"can you
+          remove this?"*), AND THIS COMMENT IS NOW THE ONLY RECORD OF IT. Its own flow step went on
+          2026-09-06 and this quiet line was the last place it was said anywhere on screen.
+
+          What it said, so it is not lost: pausing Auto-route and the folder-approval flow before a
+          migration is OPTIONAL and no safety matter — leaving them running damages nothing, because
+          Auto-route reads moderation status and takes the False branch for a moved pending file. But
+          a migration produces hundreds of no-op runs, and an EXHAUSTED DAILY QUOTA means the next
+          real approval is never routed, silently. That consequence is now told to nobody.
+
+          Do not re-add it here without the client asking. If it ever needs saying again, the runbook
+          (2026-08-08-auto-route-flow-and-draft-isolation.md §5.6) is the better home for it than a
+          screen an admin reads while mid-migration. */}
+
+      {/* An editable dropdown here is only right when THIS screen is picking the segment — when a
+          guided flow already asked and pre-selected it (`initialSegmentKey`), an interactive select
+          invites re-choosing a value the flow itself decided, which reads as being asked twice (client,
+          2026-08-26, on the Retire flow's identical dropdown: "just put a message indicator, that's
+          enough"). Same rule already applied elsewhere in this file's own header text — the flow
+          printing the segment is not enough on its own if the control below it still looks choosable. */}
+      {initialSegmentKey ? (
+        <p style={s.label}>
+          Segment: <strong>{seg ? seg.label : initialSegmentKey}</strong>
+        </p>
+      ) : (
+        <>
+          <label style={s.label} htmlFor="mig-seg">Business segment</label>
+          <select
+            id="mig-seg"
+            style={s.input}
+            value={chosen}
+            disabled={scanning || running}
+            onChange={(e) => {
+              setChosen(e.target.value);
+              setScans(undefined);
+              setDest({});
+              setRenames({});
+              setLog([]);
+              setDone(undefined);
+              setScanError(undefined);
+            }}
+          >
+            <option value="">Choose a segment…</option>
+            {segments.map((x) => (
+              <option key={x.key} value={x.key}>{x.label}</option>
+            ))}
+          </select>
+        </>
+      )}
+      {seg && (
+        <p style={s.hint}>
+          {seg.pending === undefined ? (
+            <>
+              Documents should be filed as{" "}
+              {[seg.stagingFolder || seg.label, ...seg.chain.map((l) => `[${l.label}]`)].join(" / ")}
+            </>
+          ) : (
+            <>
+              Uploads currently use{" "}
+              <strong>
+                {[seg.stagingFolder || seg.label, ...seg.chain.map((l) => `[${l.label}]`)].join(" / ")}
+              </strong>
+              .
+              {/* ⚠ A REAL BREAK, NOT A MARGIN. These are two chains of five or six levels each; run
+                  together they wrap into one block and which chain is which is lost — the whole
+                  point of the line is telling the live shape from the pending one. */}
+              <br />
+              Waiting to be applied:{" "}
+              <strong>
+                {[seg.stagingFolder || seg.label, ...(seg.pending ?? []).map((l) => `[${l.label}]`)].join(" / ")}
+              </strong>
+              . The new shape goes live when every folder is in it.
+            </>
+          )}
+        </p>
+      )}
+
+      <div style={{ marginTop: 14 }}>
+        <button
+          style={chosen && !scanning && !running ? s.btn : s.off}
+          disabled={!chosen || scanning || running}
+          onClick={scan}
+        >
+          {scanning ? (
+            <>
+              Checking
+              <MovingDots />
+            </>
+          ) : (
+            "Check for existing files in the old folder structure"
+          )}
+        </button>
+      </div>
+
+      {scanError && <div style={{ ...s.msg, ...s.err, marginTop: 16 }}>{scanError}</div>}
+
+      {scans && groups.length === 0 && !scanError && (
+        <div style={{ ...s.msg, ...s.ok, marginTop: 16 }}>
+          Nothing to move — every folder in this segment already sits where the structure says.
+        </div>
+      )}
+
+      {/* Tagging must be reachable WITHOUT a move: the first live run moved the folders, failed the
+          tagging, then found nothing to move — closing the only route to the repair. */}
+      {scans && groups.length === 0 && !scanError && (
+        <div style={{ ...s.card, marginTop: 4 }}>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: "0 0 12px" }}>
+            The folder columns on each document should say which folder it is in. Checking is
+            harmless and changes only what disagrees.
+          </p>
+          <button style={running ? s.off : s.ghost} disabled={running} onClick={runTagsOnly}>
+            {running ? (
+              <>
+                Checking
+                <MovingDots />
+              </>
+            ) : (
+              "Check document tags"
+            )}
+          </button>
+        </div>
+      )}
+
+      {/* ⚠ `strayOnlyRemains` IS THE SECOND WAY IN, and without it a stray-only scan is a dead end -
+          see that const for the whole diagnosis. The other two `groups.length === 0` blocks above are
+          deliberately NOT widened: "every folder already sits where the structure says" would be flatly
+          false with strays listed underneath it. */}
+      {scans && (groups.length === 0 || strayOnlyRemains) && !scanError && seg?.pending !== undefined && (
+        <div style={{ ...s.card, marginTop: 4 }}>
+          <p style={{ fontSize: 13, lineHeight: 1.6, margin: "0 0 12px" }}>
+            <strong>{seg.label}</strong> has a structure change waiting, and{" "}
+            {strayOnlyRemains
+              ? "nothing left that can be moved automatically — the folders listed below match no level in the chain, so this tool will not guess where they belong. They stay exactly where they are; applying the change does not touch them"
+              : "nothing needs moving"}
+            . Applying it makes uploaders start using{" "}
+            <span style={{ fontFamily: "Consolas, monospace" }}>
+              {[seg.stagingFolder || seg.label, ...(seg.pending ?? []).map((l) => `[${l.label}]`)].join(" / ")}
+            </span>
+            .
+          </p>
+          <button
+            style={running ? s.off : s.btn}
+            disabled={running}
+            onClick={() => {
+              setRunning(true);
+              setLog([]);
+              activatePending(seg)
+                .then(() => {
+                  setSegments((prev) =>
+                    prev.map((p) =>
+                      p.key === seg.key ? { ...p, chain: seg.pending as Level[], pending: undefined } : p,
+                    ),
+                  );
+                  setDone("The new structure is now live — uploaders will see it on their next page load.");
+                  setScans(undefined);
+                })
+                .catch((e: Error) => setDone(e.message))
+                .then(() => setRunning(false))
+                .catch(() => undefined);
+            }}
+          >
+            {running ? (
+              <>
+                Applying
+                <MovingDots />
+              </>
+            ) : (
+              "Apply the new structure"
+            )}
+          </button>
+        </div>
+      )}
+
+      {scans && groups.length > 0 && (
+        <div style={{ marginTop: 20 }}>
+          <h3 style={{ fontSize: 15, margin: "0 0 4px" }}>
+            {/* "0 folder(s) to rebuild" is true but useless: it reads as "nothing to do" when the
+                real state is "waiting for you". Lead with what is being asked for. */}
+            {/* ⚠ THREE STATES, NOT TWO. The `else` branch used to assume that no moves meant values
+                were being waited for — but there is a third case, and the client hit it the moment
+                a migration finished: everything left is a STRAY, a folder whose name matches no
+                level in the chain. A stray can never be given a value (there is no dropdown, by
+                design — the tool refuses to guess where it belongs), so the screen told the admin to
+                choose a value, offered nothing to choose, and disabled Rebuild. A dead end.
+                `needingChoice` is what separates them: it counts plans with missing tiers. */}
+            {totalMoves > 0
+              ? `${totalMoves} folder(s) to rebuild across ${groups.length} unit(s)`
+              : needingChoice > 0
+                ? `${groups.length} unit(s) need a value chosen before anything can move`
+                : unreadableUnits > 0
+                  ? `${unreadableUnits} unit(s) could not be checked — the new shape cannot go live yet`
+                  : "Nothing left to move — but some folders could not be placed automatically"}
+          </h3>
+          <p style={s.hint}>
+            {totalMoves === 0 && needingChoice === 0 && unreadableUnits > 0 ? (
+              /* ⚠ SAYS IT BLOCKS, because it does. Names neither Rebuild nor Apply: both are
+                 unavailable here, and pointing at a dead control reads as a broken page. */
+              <>
+                The unit(s) listed below could not be checked — the reason is on each one. Until
+                they can be, the pending structure <strong>cannot be applied</strong>: nothing has
+                been assessed, so switching the new shape on would leave their documents in the old
+                one while new uploads used the new one. Fix the reason given, then press{" "}
+                <strong>Check for existing files</strong> again.
+              </>
+            ) : totalMoves === 0 && needingChoice === 0 ? (
+              /* The stray-only state. Says what to DO — nothing here is a button, so an admin left
+                 with the generic "documents move into the shape..." blurb has no idea the screen is
+                 finished with them. */
+              <>
+                The migration is finished. The folder(s) listed below have names that match no level
+                in this segment&rsquo;s structure, so the tool will not guess where they belong —
+                move them into a real folder by hand if you want them filed, or leave them. Neither
+                blocks anything.
+              </>
+            ) : (
+              <>
+                Documents move into the shape the structure describes. Approved documents stay
+                approved, and the only folders deleted are ones left completely empty.
+                {needingChoice > 0 && ` ${needingChoice} folder(s) are waiting on a value for a new level.`}
+              </>
+            )}
+          </p>
+
+          {unitPages.slice.map((group) => {
+            return (
+              <div key={group.tail} style={s.card} className="crs-mig-unitcard">
+                <div style={s.unitName}>{group.tail}</div>
+
+                <div style={s.scroller}>
+                {group.rows.map((row) => {
+                  /* PER LIBRARY SINCE 2026-09-09, and the unit-level default that used to sit above
+                     this whole block is GONE on the client's instruction. Both the count and the
+                     option list are read from THIS row rather than from `group.rows[0]`: options
+                     could in principle differ per library, and reading the first row's would quietly
+                     offer one library's values for another's folders. */
+                  const key = destKey(row);
+                  const chosenDest = dest[key] ?? {};
+                  // Counted, not just collected: a picker labelled only "Credit_Card" looks like it is
+                  // about to overwrite folders that already have a value. Saying how many folders are
+                  // actually missing it makes clear it only fills the gaps.
+                  const missingCount: Record<number, number> = {};
+                  for (const p of plansFor(row)) {
+                    for (const t of p.missingTiers) missingCount[t] = (missingCount[t] ?? 0) + 1;
+                  }
+                  /* TIERS ALREADY CHOSEN STAY IN THIS LIST, and leaving them out was a live bug
+                     (client, 2026-08-19: *"the moment I select Archive 1 I cannot select Archive 2 no
+                     more. I have to go back and come back"*). `missingCount` counts folders with NO
+                     value, so choosing one resolves every plan, empties the map, and the select
+                     unmounts with it. The control that sets a value disappeared the instant it was
+                     used, and the only way to change your mind was to re-scan. */
+                  const chosenTiers = Object.keys(chosenDest)
+                    .map((k) => Number(k))
+                    .filter((k) => chosenDest[k] !== undefined);
+                  const needed = Object.keys(missingCount)
+                    .map((k) => Number(k))
+                    .concat(chosenTiers)
+                    .filter((k, i, all) => all.indexOf(k) === i)
+                    .sort((a, b) => a - b);
+                  return (
+                  <div key={row.lib.key + row.unitPath} style={{ marginTop: 10 }}>
+                    <div style={s.libName}>
+                      {row.lib.title}
+                      {row.unresolved && (
+                        <span style={{ ...s.badge, background: "#fff4e5", color: "#7a4f00" }}>
+                          {row.unresolved}
+                        </span>
+                      )}
+                    </div>
+                    {/* INSIDE `s.scroller`, WHICH THAT STYLE'S OWN COMMENT WARNS AGAINST - it says the
+                        tier dropdowns stay OUTSIDE the box so the control cannot scroll away from the
+                        folders it governs. That reasoning applied to ONE control governing every
+                        library; a per-library control sits directly above its own folders and scrolls
+                        WITH them, so "needs a value chosen above" stays true and adjacent. A native
+                        select is unaffected by the cap either way - the browser draws its list
+                        outside the DOM flow. */}
+                    {needed.map((chainIndex) => {
+                      const level = belowForSeg[chainIndex];
+                      const opts = row.optionsByTier[chainIndex] ?? [];
+                      return (
+                        <div key={chainIndex} style={{ marginTop: 6 }}>
+                          <label style={s.label} htmlFor={`mig-d-${key}-${chainIndex}`}>
+                            {level ? level.label : `Level ${chainIndex + 1}`}
+                            {missingCount[chainIndex]
+                              ? ` — for the ${missingCount[chainIndex]} folder(s) below that have no value for it`
+                              /* Every folder in THIS library now has a value, so the count would read
+                                 "0 folder(s)". Say what the control now does - it is still live, and
+                                 changing it re-plans this library's folders. */
+                              : " — chosen; change it to re-plan the folders below"}
+                          </label>
+                          <select
+                            id={`mig-d-${key}-${chainIndex}`}
+                            style={s.input}
+                            disabled={running}
+                            value={chosenDest[chainIndex] ? (chosenDest[chainIndex] as Destination).id : ""}
+                            onChange={(e) => {
+                              const picked = opts.filter((o) => o.id === e.target.value)[0];
+                              setDestination(
+                                key,
+                                chainIndex,
+                                // The code rides along, so a chosen destination is named the same
+                                // way an existing folder at that tier is.
+                                picked
+                                  ? { label: picked.label, id: picked.id, code: picked.code }
+                                  : undefined,
+                              );
+                            }}
+                          >
+                            {/* ⚠ IT READS AS UNCHOSEN, NOT AS A CHOICE, and that changed with the
+                                Rebuild gate. It said "Leave this library alone" — but a dropdown only
+                                appears when this library HAS folders missing a value, and leaving those
+                                behind now blocks Rebuild outright (and blocked activation even before
+                                it). So the option promised something that was never a viable end
+                                state; naming it for what it is stops it reading as a way to skip. */}
+                            <option value="">Choose a value&hellip;</option>
+                            {opts.map((o) => (
+                              <option key={o.id} value={o.id}>{o.label}</option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+                    {/* ⚠ EVERY LINE HERE IS A FOLDER, NOT A FILE, and the client read them as files
+                        (2026-08-19: *"IT shows two files from GHO Approval Document but I only see
+                        one"*). Two things caused that: the count was appended only when non-zero, so
+                        an EMPTY folder showed no count at all and looked like a phantom entry; and
+                        nothing on the line said "folder". An empty leaf is completely normal — its
+                        documents were approved and routed away, leaving the folder behind — and
+                        whether a line holds documents is exactly what decides if it matters. */}
+                    {plansFor(row).map((p, pi) => {
+                      // The first row carries the section rule; every other one a hairline.
+                      const rowStyle = pi === 0 ? s.entry1 : s.entry;
+                      // Stated on EVERY line, including zero. `empty` is the common, harmless case
+                      // and must read as such rather than as a missing number.
+                      const count = p.leaf.files.length;
+                      const holds = count === 0
+                        ? "empty"
+                        : `${count} document${count === 1 ? "" : "s"}`;
+                      // `files` holds names already, but take the tail defensively: a full path here
+                      // would wrap over several lines and bury the folder line it belongs to.
+                      // One entry per line, not comma-joined: this is a LIST of what is in the
+                      // folder, and a joined string of four long composed names wraps into a block
+                      // nobody reads (client, 2026-08-19).
+                      const names = p.leaf.files.map((f) => f.split("/").pop() ?? f);
+                      if (p.strays.length > 0) {
+                        return (
+                          <div key={p.leaf.path} style={rowStyle}>
+                            <div style={s.pathLine}>{p.leaf.path}</div>
+                            <div style={{ ...s.action, color: "#7a4f00" }}>
+                              {holds} — &quot;{p.strays.join(", ")}&quot; matches no folder level, will
+                              be left alone
+                            </div>
+                            {names.map((n) => <div key={n} style={s.fileList}>{n}</div>)}
+                          </div>
+                        );
+                      }
+                      if (p.to === undefined) {
+                        return (
+                          <div key={p.leaf.path} style={rowStyle}>
+                            <div style={s.pathLine}>{p.leaf.path}</div>
+                            <div style={{ ...s.action, color: "#7a4f00" }}>
+                              {holds} — needs a value chosen above
+                            </div>
+                            {names.map((n) => <div key={n} style={s.fileList}>{n}</div>)}
+                          </div>
+                        );
+                      }
+                      if (p.to === p.leaf.path) return null;
+                      return (
+                        <div key={p.leaf.path} style={rowStyle}>
+                          <div style={s.pathLine}>{p.leaf.path}</div>
+                          <div style={s.action}>
+                            {holds} &rarr; {p.to.slice(row.unitPath.length + 1)}
+                          </div>
+                          {names.map((n) => <div key={n} style={s.fileList}>{n}</div>)}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  );
+                })}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* `units`, not `folders`: a card IS a unit, and the folder counts are stated in the
+              summary above and on the Rebuild button. */}
+          <Pager page={unitPages} onPage={setUnitPage} label="units" />
+
+          {conflicts.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <h3
+                style={{
+                  fontSize: 15,
+                  margin: "0 0 4px",
+                  color: unresolvedCount + badNames > 0 ? "#a4262c" : "#0f6c3f",
+                }}
+              >
+                {conflicts.length} filename clash(es)
+                {unresolvedCount + badNames > 0
+                  ? ` — ${unresolvedCount + badNames} still to settle`
+                  : " — all settled"}
+              </h3>
+              <p style={s.hint}>
+                Removing a level puts documents that were in separate folders into the same one.
+                These share a name, so all but one of each group must be renamed — the extension is
+                kept automatically. Nothing moves until every clash is settled.
+              </p>
+              <div style={{ marginTop: 10 }}>
+                <button
+                  style={running ? s.off : s.ghost}
+                  disabled={running}
+                  onClick={() => {
+                    // One decision instead of N. The suggestion carries the value that made each
+                    // file distinct, which is the information the removal is about to destroy.
+                    setRenames((prev) => {
+                      const next = { ...prev };
+                      for (const { collision } of conflicts) {
+                        const movers = collision.claimants.filter((c) => !c.existing);
+                        // The first mover keeps its name only when nothing already at the
+                        // destination owns it; otherwise every mover needs a new one.
+                        const keepFirst = movers.length === collision.claimants.length;
+                        movers.forEach((c, i) => {
+                          if (keepFirst && i === 0) return;
+                          const name = c.path.slice(c.path.lastIndexOf("/") + 1);
+                          next[c.path] = suggestRename(name, distinguisherFor(c.path));
+                        });
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  Use suggested names for all
+                </button>
+              </div>
+              {conflicts.slice(0, CONFLICT_LIMIT).map(({ lib, collision }) => {
+                // Settled when every claimant's EFFECTIVE name is unique within the destination
+                // and each typed name is usable. Shown per group so the admin can see progress
+                // rather than watching rows disappear.
+                const names = collision.claimants.map((c) => effectiveName(c.path).trim().toLowerCase());
+                const duplicated = names.filter((n, i) => names.indexOf(n) !== i).length > 0;
+                const invalid = collision.claimants.filter((c) => renameProblem(c.path)).length > 0;
+                const settled = !duplicated && !invalid;
+                return (
+                  <div
+                    key={`${lib}${collision.folder}${collision.name}`}
+                    style={{
+                      ...s.conflict,
+                      marginTop: 10,
+                      ...(settled ? { borderColor: "#c6e3d1", background: "#f7fbf8" } : {}),
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontFamily: "Consolas, monospace", color: "#605e5c" }}>
+                      {lib} · {collision.folder}/<strong>{collision.name}</strong>
+                      <span
+                        style={{
+                          ...s.badge,
+                          background: settled ? "#f1f8f4" : "#fdf3f3",
+                          color: settled ? "#0f6c3f" : "#a4262c",
+                        }}
+                      >
+                        {settled ? "settled" : "needs a different name"}
+                      </span>
+                    </div>
+                    {collision.claimants.map((c) => {
+                      const name = c.path.slice(c.path.lastIndexOf("/") + 1);
+                      const problem = renameProblem(c.path);
+                      return (
+                        <div key={c.path}>
+                          <div style={s.row}>
+                            <span style={{ ...s.move, flex: "1 1 260px" }}>
+                              {c.existing ? "already there: " : "from "}
+                              {c.path}
+                            </span>
+                            {c.existing ? (
+                              <span style={{ ...s.hint, flex: "0 0 240px" }}>keeps its name</span>
+                            ) : (
+                              <input
+                                style={{
+                                  ...s.small,
+                                  flex: "0 0 240px",
+                                  ...(problem ? { borderColor: "#a4262c" } : {}),
+                                }}
+                                disabled={running}
+                                value={renames[c.path] ?? name}
+                                onChange={(e) => setRenames((prev) => ({ ...prev, [c.path]: e.target.value }))}
+                              />
+                            )}
+                          </div>
+                          {problem && (
+                            <div style={{ ...s.hint, color: "#a4262c", marginLeft: 4 }}>
+                              The name {problem}.
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+              {conflicts.length > CONFLICT_LIMIT && (
+                <p style={{ ...s.hint, color: "#a4262c" }}>
+                  Showing the first {CONFLICT_LIMIT}. {conflicts.length} clashes is a sign the level
+                  being removed carries real meaning — consider keeping it, or removing its values
+                  one at a time.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div style={{ marginTop: 18, borderTop: "1px solid #edebe9", paddingTop: 16 }}>
+            <button
+              style={canRun && !running ? s.btn : s.off}
+              disabled={!canRun || running}
+              onClick={() => setConfirm(true)}
+            >
+              {running ? (
+                <>
+                  Working
+                  <MovingDots />
+                </>
+              ) : (
+                `Rebuild ${totalMoves} folder(s)`
+              )}
+            </button>
+            {unresolvedCount + badNames > 0 && (
+              <span style={{ ...s.hint, marginLeft: 10, color: "#a4262c" }}>
+                {badNames > 0
+                  ? "Fix the names marked in red first."
+                  : "Settle the filename clashes first."}
+              </span>
+            )}
+            {/* ⚠ A WHOLE-SCAN COUNT, which is what makes this safe under pagination: the folders
+                still waiting are usually on another page, and a reason that only described the
+                visible cards would send the admin looking on the wrong one. It names the page count
+                too, because with three units a page "8 folders" alone does not say where to look. */}
+            {/* ⚠ AHEAD OF THE VALUE-CHOOSING REASON, because it is the one an admin must act on
+                FIRST: choosing values is pointless until uploads are off. Named separately for the
+                two states, since "could not be read" and "they are on" need different actions. */}
+            {conflicts.length === 0 && totalMoves > 0 && pausedNow !== true && (
+              <span style={{ ...s.hint, marginLeft: 10, color: "#a4262c" }}>
+                {pausedNow === false
+                  ? "Turn uploads off first — see the warning above. A document filed mid-run can land in the old shape and never be moved."
+                  : "Whether uploads are paused could not be read, so this will not run. Try again in a moment."}
+              </span>
+            )}
+            {conflicts.length === 0 && needingChoice > 0 && totalMoves > 0 && pausedNow === true && (
+              <span style={{ ...s.hint, marginLeft: 10, color: "#7a4f00" }}>
+                {needingChoice} folder(s) across {unitPages.total} unit(s) still have no value chosen.
+                Every one needs a value before anything moves — a library left unchosen stays in the
+                old shape, and the new structure then cannot be switched on.
+              </span>
+            )}
+            {/* ⚠ THE SAME THREE-WAY SPLIT AS THE HEADING. "Choose a value for at least one unit"
+                beside a list containing only STRAYS is an instruction that cannot be followed —
+                there is no control to follow it with. */}
+            {conflicts.length === 0 && totalMoves === 0 && (
+              <span style={{ ...s.hint, marginLeft: 10 }}>
+                {needingChoice > 0
+                  /* ⚠ NO LONGER "at least one": every folder needs a value now, so an instruction to
+                     answer one would leave the button greyed after it was followed. */
+                  ? "Choose a value for every folder listed — each library has its own."
+                  : "Nothing to rebuild — the folders below have to be moved by hand."}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {log.length > 0 && (
+        <div style={{ ...s.log, marginTop: 20 }}>
+          {log.map((line, i) => (
+            <div key={i} style={{ ...s.logRow, color: line.ok ? "#0f6c3f" : "#a4262c" }}>
+              {line.text}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {done && <div style={{ ...s.msg, ...s.ok, marginTop: 16 }}>{done}</div>}
+
+      {confirm && (
+        <div style={s.modalBg} role="dialog" aria-modal="true">
+          <div style={s.modal}>
+            {/* The client's own title and copy (2026-09-06).
+                ⚠ TWO FACTS CAME OFF WITH THE OLD WORDING AND BOTH ARE STILL TRUE: approved documents
+                stay APPROVED (a move preserves moderation status — verified 2026-08-11), and the
+                only folders deleted are ones left completely EMPTY. They were reassurance rather
+                than warning, which is why they were the half that could go; the warning half — no
+                undo, and old links stop working — is what the new copy keeps. */}
+            <h3 style={{ margin: "0 0 12px", fontSize: 17 }}>
+              <span aria-hidden="true" style={{ marginRight: 8 }}>
+                &#9888;
+              </span>
+              Important: confirm folder structure change
+            </h3>
+            <p style={{ fontSize: 13, lineHeight: 1.6 }}>
+              Documents in {totalMoves} folders will be moved to the new folder
+              structure. This action cannot be undone. Links to the existing
+              folders will no longer work after the move — users are required to
+              access the documents using their new folder locations.
+            </p>
+            <p style={{ fontSize: 13, lineHeight: 1.6 }}>
+              Type <strong>MOVE</strong> to continue.
+            </p>
+            <input
+              style={s.input}
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="MOVE"
+            />
+            <div style={{ marginTop: 16 }}>
+              <button
+                style={confirmText.trim().toUpperCase() === "MOVE" ? s.btn : s.off}
+                disabled={confirmText.trim().toUpperCase() !== "MOVE"}
+                onClick={() => {
+                  run().catch(() => undefined);
+                }}
+              >
+                {/* "Submit", to the client's design. ⚠ The typed-MOVE gate above is unchanged and is
+                    what actually guards this — a generic label makes the typed word the only thing
+                    naming the action, so that field must never become optional. */}
+                Submit
+              </button>{" "}
+              <button
+                style={s.ghost}
+                onClick={() => {
+                  setConfirm(false);
+                  setConfirmText("");
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

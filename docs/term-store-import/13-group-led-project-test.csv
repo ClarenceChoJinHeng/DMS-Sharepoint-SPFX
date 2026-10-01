@@ -1,0 +1,8 @@
+Term Set Name,Term Set Description,LCID,Available for Tagging,Term Description,Level 1 Term,Level 2 Term,Level 3 Term,Level 4 Term,Level 5 Term,Level 6 Term,Level 7 Term
+Group Led Project,EXAMPLE TEST DATA - invented placeholder departments and units for testing segment creation under the "Group Project" (Appears under) category on the test site. Structure is Department then Unit - exactly 2 levels. Do NOT add a third level or the depth check will refuse the segment.,,True,,,,,,,,
+,,,True,,Project Alpha,,,,,,
+,,,True,,Project Alpha,Planning,,,,,
+,,,True,,Project Alpha,Execution,,,,,
+,,,True,,Project Beta,,,,,,
+,,,True,,Project Beta,Planning,,,,,
+,,,True,,Project Beta,Execution,,,,,

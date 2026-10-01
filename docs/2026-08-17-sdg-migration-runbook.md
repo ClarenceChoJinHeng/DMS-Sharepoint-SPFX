@@ -1,0 +1,757 @@
+# CRS — migration runbook for SD Guthrie's tenant
+
+**Date:** 2026-08-17, **amended 2026-08-24 — read §0.5 FIRST**
+**Package:** 1.0.231.0+ (bump the version before packaging)
+**Target:** SDG tenant, one site collection. Site collection app catalog **already exists**.
+**Flow identity:** an SDG-issued ("Guthrie") account, never the Trinergy one.
+
+> Work top to bottom. The order is a **dependency order**, not a preference: several steps create
+> nothing and report success when the step before them was skipped. Every step has a **Verify** —
+> do it before moving on. A step that cannot be verified has not been done.
+
+---
+
+## 0. Before anything
+
+| # | Check | How | If it fails |
+|---|---|---|---|
+| 0.1 | Your permission level | Site Settings → Site collection administrators | **Site Collection Administrator is required.** Site Owner alone cannot manage the in-site term store (§3) and may not create permission levels (§6). Establish this before starting, not at step 3. |
+| 0.2 | App catalog | Site Contents shows **Apps for SharePoint** | Ask a SharePoint Administrator for one line: `Add-SPOSiteCollectionAppCatalog -Site <url>`. Nothing else can proceed. |
+| 0.3 | Existing content | Site Contents | The built-in `Documents` library has the URL segment **`Shared Documents`**, not `Documents`. Never build a path from the title. |
+| 0.4 | The flow account | Sign in to Power Automate as it once | If it is a personal SDG account rather than a shared service account, **say so in writing now.** A flow runs under the connection its first action creates, so that identity is permanent; when the account is deactivated both flows stop **silently** and present as "my colleague's folder doesn't exist". |
+
+**Naming.** This client uses the **`CRS`** prefix. `naming.ts` probes `CRS <suffix>` before
+`DMS <suffix>` per list, so a partial rename degrades gracefully — but provision everything as `CRS`
+from the start and each probe costs one request instead of two.
+
+---
+
+## 0.5 What changed since 2026-08-17 — amendments, 2026-08-24
+
+A week of building sits between the original and today. **The body below is still correct except where
+this section overrides it.** Two numbers first, because they decide how the day is planned:
+
+| | Cost | Why |
+|---|---|---|
+| **Reconciliation, per segment** | **~60–75 min** | MHO's first run: 71 minutes, 2,441 folders, ~980 grants. Two live segments, so **2+ hours**. It runs IN THE BROWSER — the tab must stay open, and there is no resume. |
+| **The flows** | **~2–3 hours** | §13 says *two flows*. **There are now twelve.** |
+
+**Plan it as: start reconciliation as early as the data allows, and build flows in a second window
+while it runs.** Everything before §12 is setup that gates it.
+
+### New since 2026-08-17
+
+| Step | Goes with | If skipped |
+|---|---|---|
+| **`Archive` + `HC Archive` libraries**, content approval **OFF** | §5 | Nothing archives until 2033, so this is safe to defer — but **check for a name collision first**: the titles `Archive` / `CRSArchive` / `HC Archive` / `HCArchive` were **verified absent on SDG 2026-08-23**. A pre-existing `Archive` would be adopted as ours and filled with ~140 CRS folders. |
+| **`CRS Request` permission level** — copy Contribute, untick **Delete Items** AND **Delete Versions** | §6 | Every deletion and share request returns **403** and the whole feature is inert. |
+| **Grant `CRS_SITE_MEMBERS` the `CRS Request` level ON the `CRS Requests` list** | after §7 | Same 403. The list is created inheriting site permissions, where that group holds Read — and Read cannot add items. |
+| **Grant the flow account Contribute ON the `CRS Audit Log` list** | after §7 | Every flow row fails to write. `writeAudit` never blocks the action it logs, so **the log simply stops filling, with nothing anywhere to say why.** |
+| **`hcConfidentialityLevel` config row** = the confidentiality term's own label | §9 | **EVERY uploader is offered the Highly Confidential level.** The fallback probes the HC libraries by title, SharePoint security-trims them for an uncleared user, HC then reads as *not on this site*, and the level is shown to exactly the person who must not see it. Reconciliation reports the missing row but cannot repair it — the label must match the client's own term. |
+| **`legallyPrivilegedFor`** (e.g. `Confidential;Highly Confidential`), **`allowExternalSharing`**, **`tenantDomains`**, **`uploadsPaused` = `no`** | §9 | A blank `legallyPrivilegedFor` never offers the tick. Sharing fails CLOSED without the other two — and **no domains supplied means every recipient reads as external.** |
+| **Confirm the Site Pages LIST has no ACL of its own** | §8 | On our test site it did, and **every non-admin was denied the home page** while group membership, the page ACL and the user's own session all read correct. The tell is the asymmetry — pages with their own ACL work, inheriting pages do not. Fix = grant `CRS_SITE_MEMBERS` Read on the **list**, and **UNTICK "Share everything in this folder, even items with unique permissions"**, which is on by default and would unlock all ten locked admin pages. |
+| **Delete `Home.aspx`** — WARN: **ONLY IF `CollabHome.aspx` ALSO EXISTS** | §8 | On the TEST site `Home.aspx` was a System Account stray - never published, linked from nothing, answering AccessDenied - and `CollabHome.aspx` was the real home page. **SDG HAS NO `CollabHome.aspx`: `Home.aspx` IS its home page, and following this line literally would delete it** (checked 2026-08-26). List Site Pages first; delete only the stray, never the only home page. |
+| **`Bulk Upload` is now an UPLOADER page**, not an admin one | §8, §8.1 | It moved out of `MUST_LOCK`. Locking it fights the derived page pass, which now grants it — one granting and one stripping, every run, for ever. It is also deliberately **off** the CRS Settings landing page. |
+| **`SubUnit` IS built** | §15 gap #8 | Authored under each unit, no term-set id needed. That gap row is stale. |
+
+### Corrections to the body
+
+- **§6's open question is resolved.** `CRS Approve` does **not** need Add Items. The Head of Unit
+  persona carries `UPLHC`, which `LIBRARY_ROLES.Staging` lists on the normal approval library too, so
+  the upload right arrives with the persona's own role. Use the persona, never a hand-made group.
+- **§13 is the big one — see the amendment inside it.**
+- **§15: the audit log now records the FILE LIFECYCLE**, not admin activity only — verified end to end
+  on both verticals, 2026-08-23/24. That gap row stops applying once the six audit flows exist.
+- **§15: CRS Search's metadata filters are PROVEN BROKEN, not an unverified assumption.**
+  `DepartmentOWSTEXT` and its siblings exist but come back **null on real documents**, so a tier
+  filter matches nothing — which reads to a user as *"there are no such documents"*. The fix is a
+  Search Schema mapping to `RefinableStringNN` plus an **asynchronous re-index**, routinely hours.
+  **Do not attempt it on migration day, and do not describe those filters as working.** Free-text
+  search and the approval-library half are unaffected.
+
+---
+
+## 1. Deploy the package
+
+1. Upload `sharepoint/solution/sd-gatrie.sppkg` to the site collection app catalog.
+2. Trust it when prompted.
+3. Site Contents → **Add an app** → add the solution.
+
+**`skipFeatureDeployment` is `false` and must stay false.** It is what activates the feature that
+provisions `elements.xml`, which is the only thing registering the `+ New Folder` customizer. With it
+`true` the package deploys, every web part works, and the customizer never runs — with nothing
+anywhere connecting the two.
+
+**Verify:** the app appears in Site Contents and its web parts are offered when editing a page.
+
+**After any later re-upload you must also click Update in Site Contents.** Feature elements run on
+install and update only. The bundle refreshes on its own, so web parts appear to update while the
+customizer does not — which reads as "the fix didn't work" rather than "the app wasn't updated".
+
+---
+
+## 2. The `+ New Folder` customizer
+
+Bundling a component only makes it *available*. An application customizer runs only where a
+`UserCustomAction` points at it.
+
+**Verify first:**
+
+```
+/_api/web/usercustomactions?$select=Title,Location,ClientSideComponentId
+```
+
+- **One entry** for `c1d2e3f4-a5b6-47c8-d9e0-f1a2b3c4d5e6` → done.
+- **Zero** → the feature did not provision it. This happened on ClarenceDMSTesting even with
+  `skipFeatureDeployment: false`, so treat it as likely rather than exceptional, and register by
+  hand:
+
+```js
+await fetch(`${web}/_api/web/usercustomactions`, {
+  method: 'POST',
+  headers: {
+    Accept: 'application/json;odata=nometadata',
+    'Content-Type': 'application/json;odata=nometadata',
+    'X-RequestDigest': digest,
+  },
+  body: JSON.stringify({
+    Title: 'CRSNewFolderButton',
+    Location: 'ClientSideExtension.ApplicationCustomizer',
+    ClientSideComponentId: 'c1d2e3f4-a5b6-47c8-d9e0-f1a2b3c4d5e6',
+    ClientSideComponentProperties: '{}',
+  }),
+});
+```
+
+- **Two entries** → the component loads twice: two buttons, two MutationObservers. Delete one.
+
+---
+
+## 3. Term store (in-site)
+
+Managed **in the site**, never the tenant admin centre — the client refuses tenant term-store access.
+Needs Site Collection Administrator, or Contributor on the term group.
+
+1. Site Settings → **Term store management**.
+2. Create the site-collection term group (call it `CRS`).
+3. **Import, do not hand-author.** Per set: **Import term set** → pick the CSV. The set name comes
+   from inside the file, so do not pre-create the sets.
+
+| File | Term set | Depts | Units |
+|---|---|---|---|
+| `2026-08-17-sdg-group-head-office.csv` | Group Head Office | 8 | 63 |
+| `2026-08-17-sdg-minamas-head-office.csv` | Minamas Head Office | 19 | 45 |
+| `2026-08-17-sdg-nbpol-head-office.csv` | NBPOL Head Office | 12 | 20 |
+| `01-document-type.csv` | Document Type | — | 21 |
+| `02-year.csv` | Year | — | 4 |
+| `03-confidentiality.csv` | Confidentiality | — | 5 |
+
+**The three files dated 2026-08-17 are the CLIENT's structure and supersede `05`, `06` and `07`**,
+which are ClarenceDMSTesting's and differ substantially. Do not import the old ones.
+
+**Do not import** `04-vendor.csv` (retired — Vendor/Customer Name is free text and there is no vendor
+term set), nor `08-upstream-malaysia-head-office.csv` / `11-upstream-operations-malaysia.csv`
+(segments the client has not asked for).
+
+**Two gaps in the imported data, both awaiting the client:**
+- **Minamas `Sustainability` and its four units are NOT in the CSV.** The client supplied
+  `MHO_SUS_HSE` alongside `MHO_SC_QM`, `MHO_SC_ESG` and `MHO_SC_HMS` — but `SC` is already Supply
+  Chain, so three Sustainability units would file under Supply Chain's folder. Held back rather than
+  guessed. Add the department and its units once answered; nothing else changes.
+- Two label typos left exactly as supplied: NBPOL's `Environment, Safety ＆ Heath` (*Heath*), and
+  `Value Creation / Value Transformation` serving as both department and unit.
+
+Everything else corrected, with each deviation recorded in the `Note` column of
+`2026-08-17-sdg-abbreviations.csv`: trailing spaces trimmed from 20 labels, `＆` substituted for `&`
+throughout, five missing department codes added (`MHO_CC_*` ×2, `MHO_GCA_PMOPS`, `MHO_PNE_PROD_OPS`,
+`NBPOLHO_CDS_UPSUPPORT`, `NBPOLHO_IT_SAP`), one wrong one fixed (`CEOOA` → `CC`), the space inside
+`GHO_GS_SDGI HSE` replaced with an underscore, and ten single-unit departments given a unit code that
+repeats the department's.
+
+**Validated before use:** no duplicate folder paths, no department carrying two codes, no two
+departments sharing a code within a segment, no sibling unit-code collisions, and every term in the
+three segment CSVs has exactly one row in the abbreviation table — so no term can be skipped for want
+of a code.
+
+**Rules to give the client in writing, because every one of these fails silently:**
+
+- **Rename terms; never delete and re-add.** A re-created term gets a new GUID and orphans the
+  Abbreviation, Folder Map and Group Map rows at once.
+- **Ampersands must be fullwidth `＆`**, not `&`.
+- **Subunits are authored UNDER the unit term**, never in a term set of their own — subunits are
+  unit-specific, and a flat set offers every unit the same list. ⚠ The dropdown source for this is
+  **not built yet** (§15).
+- **Term-set depth must equal the permissioned tier count** (2 for a Head Office: Department, Unit).
+  A mismatch makes reconciliation ACL the wrong tier, with no error.
+
+**Verify:** read each set back and record its GUID —
+
+```
+/_api/v2.1/termStore/sets/{guid}/terms
+```
+
+**GUIDs are per-site.** Every GUID in `CLAUDE.md` belongs to ClarenceDMSTesting and is wrong here.
+They go into `CRS Config` in §9; the code fallbacks are only a safety net.
+
+*(Writes from our own UI would use legacy CSOM — the v2.1 endpoint refuses browser writes with
+`403 notAllowed`. Relevant only once the Term Manager is built.)*
+
+---
+
+## 4. Lists
+
+Create as `CRS <suffix>`.
+
+| List | Key columns |
+|---|---|
+| `CRS Config` | `Title`, `ConfigType`, `SettingValue`, `ModeLabel`, `Category`, `TermSetGuid`, `StagingFolder`, `SortOrder`, `Levels` (Note), `PendingLevels` (Note), **`AllowedFileTypes` (multi-select Choice)** |
+| `CRS Group Map` | `GroupId` (Number), `GroupName` (Text), `Segment` (Text), `UnitTermGuid` (Text), `Role` (**Text**), `Scope` (Text), `Target` (Text) |
+| `CRS Folder Map` | as written by the Folder Map web part |
+| `CRS Term Abbreviation` | keyed by term GUID; `Title` holds the term's label |
+| `CRS Audit Log` | **self-provisioned — do not hand-create** (see below) |
+| `CRS Requests` | **self-provisioned — do not hand-create** (see below) |
+
+**Two of these create themselves, and that changes the order.** `CRS Audit Log` and `CRS Requests`
+are each provisioned by a button on their own page, with the exact columns, types and indexes the
+code expects. Hand-creating either is worse than not creating it: a column of the wrong type — a
+`Choice` where the code writes free text — fails the **whole** write, silently, on every row.
+
+So: **hand-create only `CRS Config`, `CRS Group Map`, `CRS Folder Map` and `CRS Term Abbreviation`
+here.** The other two come after §8, from their pages. Verified 2026-08-17 — Folder Map, Term
+Abbreviation and Group Map create no list of their own, so those three genuinely must be made by
+hand.
+
+**`Role`, `RequestType`, `Status` and `EventType` must be TEXT, never Choice.** Writing a value
+absent from a Choice column's `Choices` fails the **whole** write, silently — so the day someone adds
+a value in code, every row of that kind is lost with no error anywhere.
+
+**`AllowedFileTypes` is the single source of truth for allowed extensions** and is required.
+Choices: `.pdf .doc .docx .xls .xlsx`. Keep **FillInChoice disabled**. Nothing ticked is a deliberate
+hard block; the column absent falls back to code defaults plus an admin-only warning.
+
+**Audit Log permissions are a manual step.** Only Owners and the flow account may write.
+Provisioning deliberately does not set this — breaking inheritance means naming the service account,
+and a wrong guess locks the flows out of the list they write to.
+
+### 4.1 Columns — use the script, not the UI
+
+**`docs/column-provisioning/provision-crs-columns.js`.** Set `SITE`, paste into the console on the
+target site, run. Re-runnable: it skips existing columns and names any list that does not exist yet,
+so run it now for the lists and **again after §5** for the libraries.
+
+**Why not the UI:** the UI cannot set an internal name, and an internal name is frozen at creation
+forever. Create "Document Date" by hand and you get `Document_x0020_Date`; the code reads
+`DocumentDate`. The column then looks right, sorts right and appears in views — and every write
+silently drops it.
+
+Its manifest was read off the live test site rather than inferred from the code, which corrected four
+things: `FolderUrl` is **Note** (a deep path exceeds 255 characters), Folder Map has a `Library`
+column, Term Abbreviation has a `Level` column, and the test site's `Documents` carries `FullName`
+where its three siblings carry `Full_x0020_Name`.
+
+**One deliberate divergence from the test site:** `Role`, `Scope`, `ConfigType`, `Category`, `Library`
+and `Level` are Choice columns there and **Text** here. A Choice column fails the *entire* write when
+a value is missing from its list, silently, and `Role` has gained `DELS`, `SHARE`, `UPLHC` and
+`APRHC` since that column was made. `AllowedFileTypes` stays MultiChoice — its `Choices` *are* the
+setting.
+
+**The three taxonomy columns are created unbound.** REST cannot bind a taxonomy field (verified
+2026-07-27: *"A type named 'SP.TaxonomyField' could not be resolved by the model"*). The script
+creates them with the correct internal names — the permanent, error-prone half — and lists them at
+the end; bind each in Library settings → column → **Term Set Settings** once §3 exists.
+
+**Verify:** every list resolves by title, and `AllowedFileTypes` returns its `Choices`.
+
+---
+
+## 5. Libraries
+
+Four, in two pairs:
+
+| Title | Create as | Then retitle to |
+|---|---|---|
+| Approval Document | `ApprovalDocument` | `Approval Document` |
+| Documents | *(built-in)* | — |
+| HC Approval Document | `HCApprovalDocument` | `HC Approval Document` |
+| HC Documents | `HCDocuments` | `HC Documents` |
+
+**Create without the space, then retitle**, so the URL stays clean. A list's title and its URL are
+independent and only one of them fails loudly: a wrong title 404s; a wrong URL segment makes
+`split("/X/")` return a one-element array, so the caller reads `undefined`, routes the file nowhere,
+and **logs success**.
+
+### 5.1 Columns — all four libraries, identical internal names
+
+Internal names derive from the title a column is **created** with, once, permanently. Create under
+the name that yields the required internal name, then rename.
+
+```
+Document_x0020_Type        <- create as "Document Type"
+Year                       <- create as "Year"  (NOT "Year/Period")
+DocumentDate               <- create as "DocumentDate", then rename to "Document Date"
+Confidentiality_x0020_Level
+LegallyPrivileged          <- Yes/No
+Remark                     <- a dedicated column, not _ExtendedDescription
+Full_x0020_Name            <- create as "Full Name"
+Vendor_x002f_CustomerName  <- create as "Vendor/CustomerName"
+Business_x0020_Segment / BusinessSegmentTid
+Department             / DepartmentTid
+Unit                   / UnitTid
+```
+
+Plus one `<Tier>` + `<Tier>Tid` pair for every tier of every segment onboarded
+(`Region`/`RegionTid`, `EstateMill`/`EstateMillTid`, …). The Add-segment tool creates these in all
+four libraries automatically.
+
+**⚠ Column parity across all four is load-bearing, and its absence produces two failures that look
+nothing like a column problem:**
+
+1. **Bulk upload tags nothing.** One unknown field name fails the whole `validateUpdateListItem`
+   call — every column lost, not just the missing one. Shows only as a "No tags" badge per file.
+2. **Auto-route drops metadata on every approved document.** SharePoint's copy carries only columns
+   that exist at the destination; the rest vanish with no error and a green run.
+
+**Verify:** diff `/fields?$select=Title,InternalName` across all four. A matching display name over a
+*different* internal name fails exactly like an absent column, and looks right.
+
+### 5.2 Content approval
+
+| Library | Require approval | Draft Item Security |
+|---|---|---|
+| Approval Document | **Yes** | Only users who can approve items (and the author) |
+| HC Approval Document | **Yes** | Only users who can approve items (and the author) |
+| Documents | **No** | — |
+| HC Documents | **No** | — |
+
+**Approval left ON in `Documents` is a live outage that presents as a permissions bug.** Every item
+Auto-route creates there arrives Pending and is invisible to read-only viewers; the uploader's own
+approval email link is denied. Tell-tale without a query: the view bar shows *Approve/reject Items*
+and *Show All Files*.
+
+### 5.3 `CRS Folder` content type
+
+Site content type, group `CRS Content Types`, **parent group `Folder Content Types`, parent
+`Folder`**. A Document or Item parent will not attach to a folder.
+
+Add it to **all four** libraries with the `Full Name` column on it, and hide it from the New button.
+On ClarenceDMSTesting the HC pair was missed and reconciliation warned on every run.
+
+### 5.4 Indexes
+
+- `Documents` → index **Created By**. Past 5,000 items My Submissions' `AuthorId` filter starts
+  failing.
+- `CRS Audit Log` → `EventTime`, `EventType`, `ActorEmail`, `ItemUniqueId`.
+
+---
+
+## 6. Permission levels
+
+| Level | Must contain |
+|---|---|
+| `CRS Upload` | Add Items + View |
+| `CRS Approve` | **Approve Items** — draft-item security and the whole approval flow key off this |
+| `CRS Delete` | Read + Delete Items |
+| `CRS Share` | per the deletion-and-share spec |
+| `CRS Request` | copy Contribute, untick **Delete Items** AND **Delete Versions** (added 2026-08-24) |
+
+**Verify `CRS Approve` actually contains Approve Items** — never infer it from the name. Note that
+Approve Items cannot be separated from Edit Items; that is a SharePoint constraint, not a mistake.
+
+**Open question carried from testing:** whether `CRS Approve` also includes **Add Items**. The
+client's rule is that a Head of Unit uploads as well as approves. If the level has no Add Items, the
+Head of Unit persona's `UPL` role supplies it — which is another reason to use the persona rather
+than a hand-made approver group (§11).
+
+---
+
+## 7. Site entry group
+
+Create **`CRS_SITE_MEMBERS`** and grant it **Read at site level**. Everyone who uses the system joins
+it, in addition to their unit group.
+
+Without it a user granted only a folder can reach that folder by direct link and is **denied on
+Home** — which reads as a broken site.
+
+Reconciliation asserts the rest on every run: `CRS_SITE_MEMBERS` holds Read on `Documents` and
+**nothing** on `Approval Document`, `HC Approval Document` or `HC Documents`. Do not hand-adjust
+those — let it do it, and read the log.
+
+---
+
+## 8. Pages
+
+One page per web part. The landing page resolves links from Site Pages **by pattern**, so names
+matter:
+
+| Page | Web part |
+|---|---|
+| `CRS-Settings.aspx` | CRS Settings (the directory) |
+| `Upload-Form.aspx` | Form |
+| `Approval-Document.aspx` | Approval Document |
+| `My-Submissions.aspx` | My Submissions |
+| `Folder-Administration.aspx` | Folder Administration (five tabs) |
+| `Group-Management.aspx` | Group Management |
+| `Site-Access.aspx` | Site Access |
+| `Approval-Library-Access.aspx` | Approval Library Access |
+| `Page-Access.aspx` | Page Access |
+| `Folder-Access.aspx` | Folder Access |
+| `CRS-Audit-Log.aspx` | CRS Audit Log |
+| `Bulk-Upload.aspx` | Bulk Upload |
+| `CRS-Requests.aspx` | CRS Requests |
+| Home | CRS Search |
+
+If a name must differ, use the CRS Settings property-pane override (`link_<key>`) rather than hoping
+the pattern matches. A name the pattern cannot match fails as a **dead link** — no error, no clue —
+on the one page whose job is telling people where to go.
+
+### 8.1 Admin pages — locked automatically, but VERIFY
+
+**Reconciliation now locks these itself** (1.0.129.0, spec
+`2026-08-17-admin-page-lockdown-design.md`), so this is no longer a manual step. It breaks
+inheritance on every page whose name is `adminOnly`, grants site Owners Full Control, and strips
+every other grant — asserted on **every** run, not once:
+
+```
+CRS-Settings · Folder-Administration · Group-Management · Site-Access
+Approval-Library-Access · Page-Access · Folder-Access · CRS-Audit-Log · Bulk-Upload
+```
+
+It runs in §12. Watch the log for `LOCKED to site owners` on the first run and
+`already locked — correct` on the second.
+
+**You must still verify, with a non-admin account.** Not as yourself — you are an owner and will see
+everything regardless. Performing and verifying are different things, and this is the single most
+important verification in this document.
+
+**If a page is missing from the log**, its file name did not match the policy pattern and it is
+**still open**. Either rename it to match the §8 table or add the pattern to `pageAccessPolicy.ts` —
+do not assume the lock covered it. Five admin pages were in exactly that state until 2026-08-17.
+
+Grant the working pages normally: `Upload-Form` to uploader **and approver** groups,
+`Approval-Document` to approver groups, `My-Submissions` to uploader groups.
+
+---
+
+## 9. Config rows
+
+In `CRS Config`:
+
+- **Setting rows** — `termSet_documentType`, `termSet_yearPeriod`, `termSet_confidentiality`,
+  `allowedExtensions` (the Choice column does the work), `legallyPrivilegedFor`,
+  `hcConfidentialityLevel`, `allowExternalSharing`, `tenantDomains`, and the `recon_*` toggles.
+- **Mode rows**, one per segment: `ConfigType=mode`, `Title=mode_<slug>`, `ModeLabel`, `Category`,
+  `TermSetGuid` (from §3), `StagingFolder` (the segment's folder code), `SortOrder`, `Levels` (JSON).
+
+`Levels` for a Head Office is
+`[{"label":"Department","column":"Department"},{"label":"Unit","column":"Unit"}]`.
+
+**Do not carry over a `stagingLibrary` row reading `Staging`** — it is superseded and would 404.
+
+**`allowExternalSharing` fails CLOSED.** Absent, unreadable, or anything but an explicit yes means
+internal only. `tenantDomains` decides what counts as external — **supplying no domains means every
+recipient reads as external**, never as internal.
+
+**Verify:** open the Upload Form as an admin. Every segment is offered; an unready one is labelled
+*"— not fully set up yet"*.
+
+---
+
+## 10. Abbreviations
+
+Folder Administration → **Term Abbreviations**. Fill in a code for **every** term at every
+permissioned tier.
+
+- **A term with no abbreviation is SKIPPED** by reconciliation — no folder, no error, and nobody can
+  upload there. This is the silent failure of the whole system.
+- Codes must be **unique among siblings**, or two units merge into one folder with one ACL.
+  Reconciliation aborts before creating anything if they collide.
+- Changing one later **renames a live folder** on the next run.
+
+**Verify:** the page shows no amber *"no code"* rows at any permissioned tier.
+
+---
+
+## 11. Groups and mappings
+
+1. **Group Management** — create one group per unit per persona. Use the suggested names
+   (`GHO_GF_CORU_UPLOADER`); the suffix is read back to pre-select a role.
+2. **Folder Access** — map each group to its Segment, Tier and **persona**. Picking the persona
+   applies its roles; do not hand-pick roles.
+3. Add people. Everyone also joins `CRS_SITE_MEMBERS` automatically.
+
+Personas: **C-Level (global / segment)**, **Head of Department**, **Head of Unit**, **PIC**,
+**SDG Employee**, plus the HC variants.
+
+**Head of Unit carries `APR`, `DELS`, `UPL`, `DEL`, `SHARE`.** It is the only persona that approves,
+and it uploads too. Do not create a separate approver-only group — that is a pre-persona shape, and
+it produces someone who can approve but not upload.
+
+**Consequences to state to the client rather than bury:**
+
+- A Head of Unit **approves their own uploads**.
+- A Head of Unit is the unit's **sharing authority** — able to share directly, not merely to approve
+  other people's share requests.
+- Every PIC reads **every approved document in their unit**, at any confidentiality level.
+- The **unit is the smallest confidentiality boundary.** Two people who must not see each other's
+  documents belong in different units. See `docs/client/document-visibility-within-a-unit.md`.
+
+---
+
+## 12. Reconciliation
+
+Folder Administration → **Folder Reconciliation**. Run it.
+
+- **Budget an hour and do not close the tab.** It scales with folders × four libraries, has no
+  resume, and gives no "what remains" summary if interrupted (finding #9).
+- Read the log. `⚠ no group-map groups for this unit (locked admin-only)` is expected for units
+  nobody has been assigned to yet.
+- **Run it a second time.** Every line should read `already locked, skipped` or `— correct`. Anything
+  it *does* on the second run that it also did on the first is a defect worth reporting.
+
+**Verify:** the folder trees exist in all four libraries, and a test uploader's unit folder is
+reachable.
+
+---
+
+## 13. Power Automate — **FOURTEEN** flows, all as the SDG account
+
+> **AMENDED 2026-08-24. This section was written when there were two.** The two described below are
+> still the first two to build, and the rest depend on nothing but themselves, so what follows is
+> additive rather than a rewrite.
+>
+> | # | Flow | Runbook |
+> |---|---|---|
+> | 1 | Auto-route | `2026-08-08-auto-route-flow-and-draft-isolation.md` |
+> | 2 | Folder approval | same |
+> | 3 | HC Auto Route | same, pointed at the HC pair |
+> | 4 | HC folder approval | same |
+> | 5 | `CRS — Auto-approve bulk imports` | `2026-08-22-bulk-import-auto-approve-flow-runbook.md` |
+> | 6 | `HC auto-approve` | same |
+> | 7–12 | The six audit flows (3 normal, 3 HC) | `2026-08-23-audit-log-flows-runbook.md`; §7 covers the HC clones |
+> | 13 | `CRS — Notify approvers` | `2026-08-25-approver-notification-flow-runbook.md` — build from §11, not §5 alone |
+> | 14 | `CRS — Notify HC approvers` | same; filter `Role eq 'APRHC'`, NOT `APR` — see below |
+> | — | `CRS — Archive after seven years` | `2026-08-22-seven-year-archive-mover-runbook.md` — safe to defer, nothing archives until 2033 |
+>
+> **BOTH FOLDER-APPROVAL FLOWS MUST STAY ON.** Draft Item Security reads *"Only users who can approve
+> items (and the author)"* on both approval libraries, so a below-Unit folder created by one PIC is
+> invisible to the next — who then cannot reach their own file inside it and cannot self-fix, because
+> that needs ApproveItems.
+>
+> **The auto-approve trigger needs THREE clauses:** `{IsFolder} = false` AND `BulkImport = true` AND
+> `{ModerationStatus} != Approved`. **Drop the marker clause and it approves every file in the
+> approval library on touch — abolishing approval site-wide, silently, on a flow that reports success
+> every time.**
+>
+> **Do NOT set `Hidden: true` on `BulkImport`** on either approval library. A hidden field is absent
+> from the trigger payload, so the write succeeds, the trigger reads null, the flow never fires — and
+> leaves **no run history** at either end to inspect.
+>
+> **After pasting any expression into a flow field, press End and check for a stray line break.** A
+> trailing newline in `ItemUniqueId` silently breaks "History of this file"; the tell is
+> `xml:space="preserve"` in the REST response, invisible in the list view, the web part and the flow
+> designer. Hit twice on 2026-08-23.
+>
+> **`{ModerationStatus}` from the connector is a STRING, and rejection reads `"Denied"`** — not the
+> integers every REST call in this codebase uses, and not `"Rejected"`. Comparing wrongly logs every
+> approval as an upload, or writes nothing at all.
+>
+> **⚠ THE HC NOTIFICATION FLOW'S GROUP MAP FILTER IS A DISCLOSURE BOUNDARY.** `Role eq 'APRHC'`, never
+> `APR`. `APR` is held by the plain `hou` persona and `APRHC` only by `hou_hc`, so filtering the HC
+> flow on `APR` emails **every ordinary Head of Unit** the filename and unit of a Highly Confidential
+> document — the exact disclosure the HC split exists to prevent. It fails in the safe-LOOKING
+> direction: the flow runs green and the emails themselves look correct.
+>
+> **⚠ BOTH NOTIFICATION FLOWS READ THE GROUP MAP BY TITLE**, not by GUID:
+> `_api/web/lists/getbytitle('CRS Group Map')/items`. So they need no entry in the §13.5 replacement
+> map — but **confirm that list's title on SDG before importing**. A wrong title 404s loudly, which is
+> the safe direction, but it stops every notification with nothing else to explain it.
+>
+> **⚠ AN EMPTY APPROVER GROUP FAILS THE RUN UNLESS `HasRecipients` IS PRESENT.** Built from §5 of that
+> runbook alone, the flow returns *"To Field cannot be null or empty"* on any unit whose approver group
+> has nobody in it — which is the normal state of a freshly provisioned segment, i.e. most of SDG on
+> migration day. §11 of the runbook carries the fix. Import rather than rebuild and it comes with it.
+
+**Sign in as the SDG account before creating the first action.** The connection is created implicitly
+by that action and the identity is then permanent.
+
+Build from `docs/superpowers/specs/2026-08-08-auto-route-flow-and-draft-isolation.md` **verbatim** —
+Power Automate config is not in source control and that spec is the only record of it. Several
+settings look cosmetic and are not.
+
+| Flow | Trigger condition | Job |
+|---|---|---|
+| Auto-route | `@equals(triggerOutputs()?['body/{IsFolder}'], false)` | Copy the approved file to `Documents`, stamp Author/Editor/Created, then **delete the source by item id** |
+| Folder approval | `@equals(triggerOutputs()?['body/{IsFolder}'], true)` | MERGE `{"OData__ModerationStatus": 0}` |
+
+**The polarity is the whole thing, and both mistakes have already been made once.** Set Auto-route to
+`true` and no file is ever routed — silently, because a flow that never fires leaves no run history.
+Omit the condition and every ensure-created folder triggers Auto-route, which has already copied a
+file into `Documents` while it was still *Waiting for Approval*: approval bypassed.
+
+**The delete is load-bearing for security, not housekeeping.** An approved file left in the approval
+library is visible to every PIC in the unit, which defeats draft isolation.
+
+**Power Automate header keys must NOT include the colon.** The key box wants `Accept`, not `Accept:`.
+With the colon the header does not exist, and the symptoms look unrelated to one another: responses
+come back `odata=verbose` so every `body('X')?['Field']` is null; `validateUpdateListItem` reports
+`HasException: false` and changes nothing; a MERGE goes as a plain POST. Read the action's raw
+**Inputs** — the colon is visible there and nowhere else.
+
+**Never conclude a field is unwritable from a clean response. Re-read the item.**
+
+If HC is in scope, build the **two HC equivalents** with the same polarity. Nothing HC works without
+them.
+
+---
+
+## 13.5 Migrating the flows by EXPORT / IMPORT (2026-08-24) - VERIFIED 2026-08-26
+
+> **ALL THIRTEEN FLOWS WERE EXPORTED, REPOINTED AND IMPORTED INTO SDG ON 2026-08-26**, and the five
+> SDG list GUIDs in the table below were re-read off the live site and **match this table exactly**.
+> The route works. Three things learned doing it:
+>
+> **WARN: IMPORTING THE RAW EXPORT FAILS, AND THE ERROR NAMES THE WRONG THING.** It returns
+> *"Flow save failed ... 'sharepointonline' operation 'GetTable' failed with status code
+> 'Unauthorized'"*. That is not a permissions problem: the import validates every list reference USING
+> THE CONNECTION YOU SELECTED, and `crs@sdguthrie.com` cannot resolve a list on the TEST tenant. The
+> package must be repointed BEFORE importing.
+>
+> **SET "Create as new" AT EXPORT.** The default is *Update*, which looks for an existing flow with
+> the same id; on a different tenant there is none, and the import ends with *"To import this flow
+> you'll need to save it as a new flow first"*.
+>
+> **WARN: THE SAFETY THAT MATTERS IS REFUSING UNKNOWN LISTS.** Repoint by script, not by hand, and
+> have it find every `lists(guid'...')` in the package and ABORT if one is not in the map. A wrong
+> site URL or list TITLE fails loudly; a wrong list GUID does not - item ids are per-LIST, so a stamp
+> writes onto a different document and a delete removes whatever holds that id there. Occurrence
+> counts differ per flow, so validate by REFERENCE, never by count.
+>
+> Only `definition.json` needs editing, and on these flows the site URL appears in one plain form
+> only - no `%2f`-encoded variants. Two connections are remapped at import (SharePoint AND Office 365
+> Outlook); some flows carry only the first.
+
+
+Rebuilding twelve flows by hand is 2–3 hours and every field is a chance to mistype an expression.
+Exporting each flow as a **package (.zip)** from the test tenant and importing it on SDG's carries the
+structure, the expressions, the trigger conditions and the run-after wiring intact — which is the part
+that is slow and error-prone to retype.
+
+**On the test tenant:** each flow → `⋯` → **Export** → **Package (.zip)**.
+**On SDG, signed in AS `crs@sdguthrie.com`:** My flows → **Import** → Package. The import asks which
+connection to use — **that is the moment the identity is baked in**, so being signed in as the service
+account here satisfies the rule in §13. Flows arrive turned OFF.
+
+⚠ **IMPORT DOES NOT REWRITE SITE OR LIST REFERENCES.** Every action still points at the test site.
+Fastest safe route: unzip the package, find/replace in `definition.json`, re-zip, then import.
+
+### The replacement map
+
+| | test (from) | SDG (to) |
+|---|---|---|
+| Site URL | `https://dcidigitalcom.sharepoint.com/sites/ClarenceDMSTesting` | `https://sdguthrie.sharepoint.com/sites/CRS` |
+| Approval Document | `a9342528-66be-458c-ba70-a6e3248a5133` | `eeb1bb19-ec53-4c41-8dc9-ecf255979c9b` |
+| Documents | `e322e3a5-3687-4da3-94f8-e0b06c01dd7e` | `fbc062dd-fcd0-4458-9161-2bfc19c917fa` |
+| HC Approval Document | `2311cd83-90aa-4077-a647-65d251a5f426` | `d935aa6d-dc48-4832-ba7e-eca485ecdff3` |
+| HC Documents | `e4fb3b2c-6f20-4bbb-a4f2-e9a5301d4080` | `122a4aa9-65fb-479a-90a7-3866d19f51b4` |
+| CRS Audit Log | `84ed065f-14e2-49b2-8b37-d40324587825` | `4ac219e5-b855-46a3-be4b-4e96bba546c5` |
+
+`CRS Requests` is deliberately absent: no flow touches it.
+
+### ⚠ The GUIDs are the dangerous half
+
+A wrong **site URL** or list **title** fails loudly — 403 or 404. A wrong **list GUID** does not.
+**Item ids are per-LIST**, so a GUID that resolves to the wrong list makes a stamp write onto a
+different document and a delete remove whatever holds that id there. That is data loss on a run
+reporting success, and it is exactly the class of fault that produced six wrong references in the HC
+clone of 2026-08-19. Replace every `lists(guid'…')` inside an HTTP action's Uri and every `table`
+field on a SharePoint action.
+
+### After importing each flow
+
+1. **Re-select the connection** if the import did not.
+2. **Verify the trigger condition by eye.** `{IsFolder} = false` on the routing and audit flows;
+   `true` on the two folder-approval flows. **The polarity produces no error either way** — wrong on a
+   routing flow means nothing is ever routed, silently, and a flow that never fires leaves no run
+   history to inspect.
+3. **Check the email actions.** `Send an email from a shared mailbox` names a mailbox that exists on
+   OUR tenant, not SDG's. Repoint it or the action fails at the end of an otherwise correct run.
+4. **Turn it on deliberately**, one flow at a time, and test before importing the next.
+5. **WARN: TURN THE HAND-MADE EQUIVALENT OFF FIRST, AND RENAME IT `Old - ...`.** Import always creates
+   a NEW flow, so you end with two flows of the same name watching one library, both firing - the
+   second one's action hits state the first already changed. Renaming removes the ambiguity at the
+   moment someone switches one on at 1am. Keep the old one until the imported one is proven; it is
+   the rollback.
+6. **WARN: NO SDG SHARED MAILBOX EXISTS.** Both routing flows use `Send an email from a shared mailbox
+   (V2)` pointed at `dms-noreply@trinergydigital.com`, which is on OUR tenant. Replace both actions
+   with plain **`Send an email (V2)`**, which sends as the connection owner (`crs@sdguthrie.com`).
+   Swapping the action BLANKS To, Subject and Body - the originals are in
+   `2026-08-25-approver-notification-flow-runbook.md`. Then DELETE the shared-mailbox action, or
+   every approval sends two emails and one of them fails.
+   - **WARN: WRAP THE `To` IN `trim()`.** A stray newline makes the runtime value end in a line break
+     and the action rejects it as not `string/email`. The original rejection email already used
+     `trim()` for exactly this reason. **Third instance of the invisible-newline trap on this
+     project.**
+   - **WARN: THE REJECTION EMAIL'S `File link` MUST STAY THE RAW `{Link}`.** A rejected file is never
+     routed - it stays in the approval library - so it must NOT get the routed-path swap the approval
+     email uses. The two actions look nearly identical; the body is the half that says which branch
+     you are in.
+7. **WARN: `HC Auto Route` REACHES ITS DESTINATION BY PATH, NOT BY GUID.** `Copy file`'s destination
+   is the literal string `/HCDocuments/...`, so neither the GUID swap nor the site-URL swap touches
+   it. Confirm SDG's HC Documents URL segment really is `HCDocuments` before turning that flow on.
+
+Suggested order: Auto-route, HC Auto Route, the two folder-approval flows, then the six audit flows,
+then bulk auto-approve, then the **two notification flows**, then the archive mover. That way approval
+works end to end before anything optional is added — and the notification flows go last among the
+live ones because they are the only flows that email people, so a mistake there reaches humans
+rather than a log.
+
+---
+
+## 14. Verification — before handing over
+
+Not optional, and **not doable as yourself**. Use two real accounts: one uploader, one Head of Unit.
+
+1. Uploader opens the Upload Form — **only their own path is offered**.
+2. Upload one PDF with Year, Document Type and a Remark.
+3. Head of Unit opens Approval Document, sees the file, approves it.
+4. `Documents/<SEG>/<DEPT>/<UNIT>/<Year>/<Doc Type>` contains it, **Created By is the uploader**, and
+   the Remark survived.
+5. It is **gone** from Approval Document.
+6. A second uploader in a different unit **cannot see** any of it.
+7. A non-admin **cannot open** any page listed in §8.1.
+8. An uncleared user is **never shown** the Highly Confidential level.
+
+Steps 4, 5 and 7 are the ones that have failed before. **This whole sequence has never yet been run
+end to end on any site** — expect to find something.
+
+---
+
+## 15. Known gaps that ship with this
+
+State these to the client rather than letting them be discovered.
+
+| # | Gap | Effect |
+|---|---|---|
+| #1/#6 | Admin pages are not auto-restricted | §8.1 is manual; skipped, every uploader can open every admin tool. |
+| #8 | **SubUnit is not built** | Terms authored under a unit are safe to create, but the dropdown reads from a term-set id and will be **empty**. Tell the client to author the terms; do **not** tell them it works. |
+| #9 | Reconciliation ~1 hour, single tab, no resume | Operational, not correctness. This site is larger than the test site. |
+| #12 | Group Map caches a group's NAME | Renaming a group makes every screen and every log line show a name that no longer exists. Grants stay correct. **Renaming groups at import triggers this across the board.** |
+| — | HC documents already filed | Migrating existing Highly Confidential documents is **out of scope**. Until a sweep runs, HC protection applies only to documents filed after deployment. |
+| — | Share revoke | Not built. Every approved share creates a permanent unique permission scope. |
+| — | CRS Search managed properties | `<InternalName>OWSTEXT` / `OWSDATE` is an **unverified assumption**. Test the search filters live; fall back to mapping `RefinableString00`–`99` in Site Settings → Search Schema, which a site collection admin can do without tenant access. |
+| — | Audit log | Records **admin** activity only until the flow-side writers are built. Do not read an empty file history as "nothing happened to that file". |
+
+---
+
+## 16. Rollback
+
+Nothing here destroys data if it goes wrong part-way:
+
+- Removing the app leaves every list, library, folder, permission and document in place.
+- Reconciliation only adds and corrects. It never deletes a folder whose term is missing.
+- The one destructive action in the system is **Retire a segment** with the folder-delete option
+  ticked, which recycles rather than purges and is restorable for 93 days.
+
+The genuinely hard-to-reverse steps are the **Power Automate flows** — a wrong `{IsFolder}` polarity
+can route an unapproved file — and **granting a group access to the wrong folder**. Verify §13 and
+§11 before letting real documents through.
