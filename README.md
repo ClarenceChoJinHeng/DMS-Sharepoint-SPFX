@@ -52,7 +52,7 @@ This project uses **Heft, not Gulp**. Ignore `gulp` in `package.json`.
    ```
    npm run build
    ```
-   This runs the tests, then creates `sharepoint/solution/sd-gatrie.sppkg`.
+   This runs the tests, then creates `sharepoint/solution/sd-guthrie.sppkg`.
 
 **Always use `npm run build`.** Never run `heft package-solution` on its own: it packages the old JavaScript from the last build.
 
@@ -60,11 +60,13 @@ This project uses **Heft, not Gulp**. Ignore `gulp` in `package.json`.
 
 1. Go to the site's App Catalog: `https://sdguthrie.sharepoint.com/sites/CRS/AppCatalog`
    (a site collection App Catalog, not the tenant one).
-2. Upload `sd-gatrie.sppkg`, replacing the old file. Click **Deploy**.
-3. Go to **Site contents**, find `sd-gatrie-client-side-solution` and click **Update** if it is offered.
+2. Upload `sd-guthrie.sppkg`, replacing the old file. Click **Deploy**.
+3. Go to **Site contents**, find `sd-guthrie-client-side-solution` and click **Update** if it is offered.
 4. Hard refresh (Ctrl+F5) or open a new tab. Check the version in Site contents matches the one you built.
 
 Deploy to your test site first, then to CRS.
+
+**First upload after the rename (1.0.580.0):** the package used to be called `sd-gatrie.sppkg`. In the App Catalog, rename the existing `sd-gatrie.sppkg` to `sd-guthrie.sppkg` first (**…** › **Rename**), then upload, so the upload replaces it. Never delete the old entry: the app's code is served from it.
 
 ## Where things are
 

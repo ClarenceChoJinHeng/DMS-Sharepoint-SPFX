@@ -1,9 +1,9 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
   "solution": {
-    "name": "sd-gatrie-client-side-solution",
+    "name": "sd-guthrie-client-side-solution",
     "id": "4c93b50e-03c1-4005-a280-add0da86c86f",
-    "version": "1.0.578.0",
+    "version": "1.0.580.0",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": false,
     "isDomainIsolated": false,
@@ -17,10 +17,10 @@
     },
     "metadata": {
       "shortDescription": {
-        "default": "sd-gatrie description"
+        "default": "sd-guthrie description"
       },
       "longDescription": {
-        "default": "sd-gatrie description"
+        "default": "sd-guthrie description"
       },
       "screenshotPaths": [],
       "videoUrl": "",
@@ -28,8 +28,8 @@
     },
     "features": [
       {
-        "title": "sd-gatrie Feature",
-        "description": "The feature that activates elements of the sd-gatrie solution.",
+        "title": "sd-guthrie Feature",
+        "description": "The feature that activates elements of the sd-guthrie solution.",
         "id": "cf0be485-9c38-49ac-8bf3-b874346aa7d8",
         "version": "1.0.1.0",
         "componentIds": [
@@ -62,6 +62,6 @@
     ]
   },
   "paths": {
-    "zippedPackage": "solution/sd-gatrie.sppkg"
+    "zippedPackage": "solution/sd-guthrie.sppkg"
   }
 }
