@@ -192,12 +192,14 @@ function BulkApprovePanel(p: PanelProps): React.ReactElement {
     setPhase("running");
     const tierCounts = decision === "approve" ? await loadTierCounts() : {};
     // Checked ONCE for the whole run — `p.listTitle` is fixed for the panel's lifetime, so the
-    // answer cannot change between files. A rejection never approves anything, so it never needs it.
+    // answer cannot change between files.
+    // #code/reject-records-approver
     const stampApprover =
-      decision === "approve" &&
-      (await libraryHasColumns(p.sp, p.webUrl, p.listTitle, [APPROVED_BY_COLUMN]).catch(() => false));
+      await libraryHasColumns(p.sp, p.webUrl, p.listTitle, [APPROVED_BY_COLUMN]).catch(() => false);
     // Asked separately so a library missing only the comment column still gets ApprovedBy.
+    // Approve only: a rejection's reason stays in the moderation comment.
     const stampComment =
+      decision === "approve" &&
       stampApprover &&
       comment.trim().length > 0 &&
       (await libraryHasColumns(p.sp, p.webUrl, p.listTitle, [APPROVAL_COMMENT_COLUMN]).catch(() => false));

@@ -205,6 +205,14 @@ export function filterByTab<T extends Submission>(rows: readonly T[], tab: strin
   return (rows ?? []).filter((r) => r.status === tab);
 }
 
+/** Header of the "who decided" column: the approver on Approved rows, the rejecter on Rejected rows. */
+// #code/ms-decided-by
+export function decidedByHeader(tab: string): string {
+  if (tab === "Rejected") return "Rejected By";
+  if (tab === "Approved" || tab === "Archive") return "Approved By";
+  return "Approved / Rejected By";
+}
+
 /**
  * Newest first.
  *

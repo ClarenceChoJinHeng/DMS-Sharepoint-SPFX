@@ -56,6 +56,7 @@ import {
   isHcRow,
   isArchivedRow,
   librarySegmentOf,
+  decidedByHeader,
 } from "../../../shared/mySubmissions";
 /* The submission RECORD — what keeps a deleted file on this page (2026-08-27).
    Spec: docs/superpowers/specs/2026-08-27-submission-record-design.md
@@ -5397,7 +5398,7 @@ export default function MySubmissions({
                   <th style={s.th}>File</th>
                   <th style={s.th}>Status</th>
                   <th style={s.th}>Uploaded</th>
-                  <th style={s.th}>Approved By</th>
+                  <th style={s.th}>{decidedByHeader(tab)}</th>
                   <th style={s.th}>Comment</th>
                   <th style={s.th} />
                 </tr>
@@ -5522,6 +5523,11 @@ export default function MySubmissions({
                         ) : (
                           <span style={s.dash}>—</span>
                         )
+                      ) : !r.recordState && r.status === "Rejected" && r.approvedBy ? (
+                        // #code/ms-decided-by
+                        <span style={s.apprBy}>
+                          {displayNameFor(r.approvedBy)}
+                        </span>
                       ) : (
                         <span style={s.dash}>—</span>
                       )}

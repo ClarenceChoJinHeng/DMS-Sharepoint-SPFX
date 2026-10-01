@@ -1409,6 +1409,33 @@ const ApprovalDocument: React.FC<IApprovalDocumentProps> = ({ context }) => {
              so a failed stamp must never be reported as a failed approval. */
         }
       } else if (action === "Rejected") {
+        // #code/reject-records-approver
+        try {
+          if (
+            await libraryHasColumns(context.spHttpClient, webUrl, libTitle(), [
+              APPROVED_BY_COLUMN,
+            ])
+          ) {
+            await context.spHttpClient.fetch(
+              itemBase,
+              SPHttpClient.configurations.v1,
+              {
+                method: "POST",
+                headers: {
+                  ...headers,
+                  "X-HTTP-Method": "MERGE",
+                  "IF-MATCH": "*",
+                  "Content-Type": "application/json;odata=nometadata",
+                },
+                body: JSON.stringify({
+                  ApprovedBy: (context.pageContext.user.email ?? "").toLowerCase(),
+                }),
+              },
+            );
+          }
+        } catch {
+          // Best-effort: a failed stamp must never block the rejection itself.
+        }
         // /reject() fails when the item is already Approved; MERGE works regardless of current state.
         const rejectRes = await context.spHttpClient.fetch(
           itemBase,

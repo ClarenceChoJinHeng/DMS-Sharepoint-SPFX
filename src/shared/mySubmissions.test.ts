@@ -16,7 +16,23 @@ import {
   isHcRow,
   isArchivedRow,
   librarySegmentOf,
+  decidedByHeader,
 } from "./mySubmissions";
+
+describe("decidedByHeader", () => {
+  it("names the rejecter on the Rejected tab", () => {
+    expect(decidedByHeader("Rejected")).toBe("Rejected By");
+  });
+  it("names the approver on the Approved and Archive tabs", () => {
+    expect(decidedByHeader("Approved")).toBe("Approved By");
+    expect(decidedByHeader("Archive")).toBe("Approved By");
+  });
+  it("covers both on mixed tabs", () => {
+    expect(decidedByHeader("All")).toBe("Approved / Rejected By");
+    expect(decidedByHeader("Pending")).toBe("Approved / Rejected By");
+    expect(decidedByHeader("Submissions")).toBe("Approved / Rejected By");
+  });
+});
 
 const LIBS = ["ApprovalDocument", "Documents"];
 
